@@ -149,7 +149,13 @@ For the evaluation of IS, FID, sFID, we follow [torch-fidelity](https://github.c
 ## Citation
 If you find this work helpful in your usage, please consider citing our paper:
 ```
-TBD
+@inproceedings{gaomodulated,
+  title={Modulated Diffusion: Accelerating Generative Modeling with Modulated Quantization},
+  author={Gao, Weizhi and Hou, Zhichao and Yin, Junqi and Wang, Feiyi and Peng, Linyu and Liu, Xiaorui},
+  booktitle={Forty-second International Conference on Machine Learning},
+  month={June},
+  year={2025}
+}
 ```
 
 ## Acknowledgements
