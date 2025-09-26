@@ -82,7 +82,7 @@ You can apply the script to other datasets. In practice, we only generate 256 da
      --modulate --quant_mode dynamic --act_tensor
 
     ```
-    **Note:** You can enable the tensor wise activation quantization with ` --act_tensor `. For complete text-guided generation results on Stable Diffusion, please download the annotation of [MSCOCO-2014](https://cocodataset.org/#download) and specify `--from-file` augments. You can also download the annotation from [Huggging Face](https://huggingface.co/datasets/Weizhi98/MoDiff/tree/main/annotation/MS-COCO).
+    **Note:** You can enable the channel wise activation quantization with ` --act_tensor `. For complete text-guided generation results on Stable Diffusion, please download the annotation of [MSCOCO-2014](https://cocodataset.org/#download) and specify `--from-file` augments. You can also download the annotation from [Huggging Face](https://huggingface.co/datasets/Weizhi98/MoDiff/tree/main/annotation/MS-COCO).
 
 2. For Q-Diffusion, please first prepare the calibration dataset following the last step. We recommend to use the min-max initalization, which is both data-efficient and computation-efficient, resulting in comparable results compared to MSE calibration. You can use only 32 calibrated data for each time steps as follows:
     ```
