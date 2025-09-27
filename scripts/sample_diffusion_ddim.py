@@ -299,8 +299,8 @@ class Diffusion(object):
         #         t = torch.ones((32), device='cuda') * i
         
         # exit()
-
-        model.reset_cache()
+        if args.modulate:
+            model.reset_cache()
             
         self.sample_fid(model)
         
@@ -327,6 +327,8 @@ class Diffusion(object):
                     config.data.image_size,
                     device=self.device,
                 )
+                if args.modulate:
+                    model.reset_cache()
 
                 with amp.autocast(enabled=False):
                     x = self.sample_image(x, model)
