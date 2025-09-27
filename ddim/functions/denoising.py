@@ -15,7 +15,6 @@ def generalized_steps(x, seq, model, b, with_t=False, **kwargs):
         xs = [x]
         ts = []
         for i, j in zip(reversed(seq), reversed(seq_next)):
-            model.reset_cache()
             t = (torch.ones(n) * i).to(x.device)
             next_t = (torch.ones(n) * j).to(x.device)
             at = compute_alpha(b, t.long())
