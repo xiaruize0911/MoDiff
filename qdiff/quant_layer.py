@@ -305,12 +305,18 @@ class QuantModule(nn.Module):
         self.o_hat = None
 
     def forward(self, input: torch.Tensor, split: int = 0):
-        if split != 0 and self.split != 0:
-            assert(split == self.split)
-        elif split != 0:
-            logger.info(f"split at {split}!")
-            self.split = split
-            self.set_split()
+        # Fast path: No quantization or modulation (same as original model)
+        if not self.use_weight_quant and not self.use_act_quant and not self.modulate:
+            out = self.fwd_func(input, self.org_weight, self.org_bias, **self.fwd_kwargs)
+            return self.activation_function(out)
+        
+        if split != 0:
+            if self.split != 0:
+                assert(split == self.split)
+            else:
+                logger.info(f"split at {split}!")
+                self.split = split
+                self.set_split()
 
         if not self.disable_act_quant and self.use_act_quant:
             if self.a_hat == None:
@@ -319,13 +325,6 @@ class QuantModule(nn.Module):
             if self.modulate:
                 if self.a_hat is None:
                     self.a_hat = input.clone().detach()
-                    # if self.split != 0:
-                    #     input_0 = self.act_quantizer(input[:, :self.split, :, :])
-                    #     input_1 = self.act_quantizer_0(input[:, self.split:, :, :])
-                    #     input = torch.cat([input_0, input_1], dim=1)
-                    # else:
-                    #     input = self.act_quantizer(input)
-                    # self.a_hat = input.clone().detach()
                 else:
                     input = input - self.a_hat
                     if self.split != 0:
@@ -333,9 +332,6 @@ class QuantModule(nn.Module):
                         input_1 = self.act_quantizer_0(input[:, self.split:, :, :])
                         input = torch.cat([input_0, input_1], dim=1)
                     else:
-                        # if self.act_quantizer.delta is not None:
-                        #     print("uniform", (input.max()-input.min()).item()/15)
-                        #     print("delta", self.act_quantizer.delta.item())
                         input = self.act_quantizer(input)
                     self.a_hat = (self.a_hat + input).clone().detach()
             else:
@@ -345,6 +341,7 @@ class QuantModule(nn.Module):
                     input = torch.cat([input_0, input_1], dim=1)
                 else:
                     input = self.act_quantizer(input)
+        
         if self.use_weight_quant:
             if self.split != 0:
                 weight_0 = self.weight_quantizer(self.weight[:, :self.split, ...])
@@ -367,9 +364,7 @@ class QuantModule(nn.Module):
         else:
             out = self.fwd_func(input, weight, bias, **self.fwd_kwargs)
 
-        out = self.activation_function(out)
-
-        return out
+        return self.activation_function(out)
 
     def set_quant_state(self, weight_quant: bool = False, act_quant: bool = False):
         self.use_weight_quant = weight_quant

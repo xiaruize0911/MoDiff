@@ -368,6 +368,7 @@ class QuantModuleINT4(nn.Module):
         self.weight_int4_packed = None  # uint8 tensor, shape [out, in//2, ...]
         self.weight_scale = None        # float32 scale
         self.weight_zp = None           # float32 zero_point
+        self.weight_fp32_cached = None  # Cached dequantized FP32 weights for performance
         
         # Quantization state flags
         self.use_weight_quant = False
@@ -428,54 +429,75 @@ class QuantModuleINT4(nn.Module):
     def dequantize_weights_from_int4(self):
         """
         Dequantize packed int4 weights back to float32 for computation.
+        Caches the result for performance (avoid repeated dequantization).
         
         Returns:
             weight_fp32: Float32 weight tensor with original shape
         """
+        # Return cached weights if available
+        if self.weight_fp32_cached is not None:
+            return self.weight_fp32_cached
+        
         if self.weight_int4_packed is None:
             raise RuntimeError("Weights not quantized yet. Call quantize_weights_to_int4() first.")
         
-        # Unpack and dequantize using CUDA kernel
+        # Get target shape (either from org_weight or org_weight_shape)
+        if hasattr(self, 'org_weight_shape'):
+            # Shape saved after freeing original weights (memory optimization)
+            target_shape = self.org_weight_shape
+        elif hasattr(self, 'org_weight'):
+            # Original weight still exists
+            target_shape = self.org_weight.shape
+        else:
+            raise RuntimeError("Cannot determine original weight shape for dequantization")
+        
+        # Unpack and dequantize using CUDA kernel with target shape
         weight_fp32 = dequantize_int4_cuda(
             self.weight_int4_packed,
             self.weight_scale,
-            self.weight_zp
+            self.weight_zp,
+            target_shape=target_shape  # Pass original shape for proper reshaping
         )
         
-        # Remove padding if it was added during quantization
-        if weight_fp32.shape[1] != self.org_weight.shape[1]:
-            weight_fp32 = weight_fp32[:, :self.org_weight.shape[1], ...]
+        # Cache for future use
+        self.weight_fp32_cached = weight_fp32
         
         return weight_fp32
 
     def forward(self, input: torch.Tensor, split: int = 0):
         """
-        Forward pass with int4 weight dequantization.
+        Optimized forward pass with int4 weight dequantization.
         
         Flow:
         1. Quantize activations if enabled (fake-quant: float32 → int4 → float32)
-        2. Get weights: either dequantized int4 or original float32
+        2. Get weights: either cached dequantized int4 or original float32
         3. Perform conv/linear operation
         4. Apply activation function
         5. Handle modulation if enabled (for MoDiff)
         """
+        # Fast path: No quantization or modulation (same as original model)
+        if not self.use_weight_quant and not self.use_act_quant and not self.modulate:
+            weight = self.org_weight if hasattr(self, 'org_weight') else self.weight
+            bias = self.org_bias if hasattr(self, 'org_bias') else self.bias
+            out = self.fwd_func(input, weight, bias, **self.fwd_kwargs)
+            return self.activation_function(out)
+        
         # Handle split quantization (rare, mostly for experimentation)
-        if split != 0 and self.split != 0:
-            assert(split == self.split)
-        elif split != 0:
-            logger.info(f"split at {split}!")
-            self.split = split
-            self.set_split()
+        if split != 0:
+            if self.split != 0:
+                assert(split == self.split)
+            else:
+                logger.info(f"split at {split}!")
+                self.split = split
+                self.set_split()
 
         # === Activation quantization (fake-quant, not stored) ===
         if not self.disable_act_quant and self.use_act_quant:
             if self.modulate:
                 # MoDiff modulation: quantize residual activations
                 if self.a_hat is None:
-                    # First pass: cache activation without quantizing
                     self.a_hat = input.clone().detach()
                 else:
-                    # Subsequent passes: quantize residual (input - cached)
                     input = input - self.a_hat
                     if self.split != 0:
                         input_0 = self.act_quantizer(input[:, :self.split, :, :])
@@ -493,19 +515,21 @@ class QuantModuleINT4(nn.Module):
                 else:
                     input = self.act_quantizer(input)
         
-        # === Weight quantization (true int4 storage) ===
+        # === Weight quantization (true int4 storage) - optimized with caching ===
         if self.use_weight_quant:
-            # Quantize weights to int4 if not already done
+            # Quantize if needed and get weights (cached automatically)
             if self.weight_int4_packed is None:
                 self.quantize_weights_to_int4()
-            
-            # Dequantize int4 weights to float32 for computation
-            weight = self.dequantize_weights_from_int4()
+            weight = self.dequantize_weights_from_int4()  # Returns cached if available
             bias = self.bias
         else:
             # Use original float32 weights
-            weight = self.org_weight
-            bias = self.org_bias
+            if hasattr(self, 'org_weight'):
+                weight = self.org_weight
+            else:
+                raise RuntimeError("Original weights have been freed. Cannot use non-quantized mode.")
+            
+            bias = self.org_bias if hasattr(self, 'org_bias') else (self.bias if hasattr(self, 'bias') else None)
         
         # === Perform convolution or linear operation ===
         if self.modulate and self.use_act_quant:
@@ -520,9 +544,7 @@ class QuantModuleINT4(nn.Module):
             out = self.fwd_func(input, weight, bias, **self.fwd_kwargs)
 
         # Apply activation function (e.g., ReLU, or StraightThrough during reconstruction)
-        out = self.activation_function(out)
-
-        return out
+        return self.activation_function(out)
 
     def set_quant_state(self, weight_quant: bool = False, act_quant: bool = False):
         """
