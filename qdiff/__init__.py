@@ -4,9 +4,9 @@ from qdiff.quant_block import BaseQuantBlock
 from qdiff.quant_layer import QuantModule
 from qdiff.quant_model import QuantModel
 
-# INT4 versions
-from qdiff.block_recon_int4 import block_reconstruction_int4
-from qdiff.layer_recon_int4 import layer_reconstruction_int4, layer_reconstruction_modiff_int4
-from qdiff.quant_block_int4 import BaseQuantBlockINT4
-from qdiff.quant_layer_int4 import QuantModuleINT4
-from qdiff.quant_model_int4 import QuantModelINT4
+# INT8 versions (recommended for production - faster inference!)
+from qdiff.block_recon_int8 import block_reconstruction_int8
+from qdiff.layer_recon_int8 import layer_reconstruction_int8, layer_reconstruction_modiff_int8
+from qdiff.quant_block_int8 import BaseQuantBlockINT8
+from qdiff.quant_layer_int8 import QuantModuleINT8
+from qdiff.quant_model_int8 import QuantModelINT8

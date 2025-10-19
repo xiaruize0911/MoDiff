@@ -10,3 +10,6 @@ __pycache__/
 /log
 /doc
 /benchmark_results
+data/cifar-10-python.tar.gz
+*.plan
+*.onnx

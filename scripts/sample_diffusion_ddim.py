@@ -310,16 +310,35 @@ class Diffusion(object):
         img_id = len(glob.glob(f"{self.args.image_folder}/*"))
         logger.info(f"starting from image {img_id}")
         total_n_samples = self.args.max_images
-        n_rounds = math.ceil((total_n_samples - img_id) / config.sampling.batch_size)
+        
+        # Use batch_size=1 for deterministic generation across different implementations
+        # This ensures each image starts with a fresh, deterministic random state
+        use_single_image_mode = getattr(self.args, 'deterministic_mode', True)
+        
+        if use_single_image_mode:
+            logger.info("Using single-image mode for deterministic generation")
+            n_rounds = total_n_samples - img_id
+            batch_size = 1
+        else:
+            n_rounds = math.ceil((total_n_samples - img_id) / config.sampling.batch_size)
+            batch_size = config.sampling.batch_size
 
-        torch.manual_seed(self.args.seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(self.args.seed)
         with torch.no_grad():
-            for i in tqdm.tqdm(
+            for round_idx in tqdm.tqdm(
                 range(n_rounds), desc="Generating image samples for FID evaluation."
             ):
-                n = config.sampling.batch_size
+                # Set seed for each image independently to ensure reproducibility
+                if use_single_image_mode:
+                    torch.manual_seed(self.args.seed + img_id)
+                    if torch.cuda.is_available():
+                        torch.cuda.manual_seed_all(self.args.seed + img_id)
+                else:
+                    if round_idx == 0:
+                        torch.manual_seed(self.args.seed)
+                        if torch.cuda.is_available():
+                            torch.cuda.manual_seed_all(self.args.seed)
+                
+                n = batch_size if use_single_image_mode else config.sampling.batch_size
                 x = torch.randn(
                     n,
                     config.data.channels,
@@ -335,7 +354,6 @@ class Diffusion(object):
                 x = inverse_data_transform(config, x)
 
                 if img_id + x.shape[0] > self.args.max_images:
-                    assert(i == n_rounds - 1)
                     n = self.args.max_images - img_id
                 for i in range(n):
                     tvu.save_image(
@@ -366,8 +384,10 @@ class Diffusion(object):
             from ddim.functions.denoising import generalized_steps
 
             betas = self.betas
+            # Enable deterministic noise generation for reproducibility
             xs = generalized_steps(
-                x, seq, model, betas, eta=self.args.eta, args=self.args, with_t=with_t)
+                x, seq, model, betas, eta=self.args.eta, args=self.args, with_t=with_t,
+                deterministic_noise=True, base_seed=self.args.seed)
             x = xs
         elif self.args.sample_type == "dpm_solver":
             logger.info(f"use dpm-solver with {self.args.timesteps} steps")

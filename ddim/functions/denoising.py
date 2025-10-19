@@ -14,7 +14,13 @@ def generalized_steps(x, seq, model, b, with_t=False, **kwargs):
         x0_preds = []
         xs = [x]
         ts = []
-        for i, j in zip(reversed(seq), reversed(seq_next)):
+        
+        # Create a deterministic random generator if seed is provided
+        generator = kwargs.get("generator", None)
+        use_deterministic_noise = kwargs.get("deterministic_noise", False)
+        base_seed = kwargs.get("base_seed", None)
+        
+        for step_idx, (i, j) in enumerate(zip(reversed(seq), reversed(seq_next))):
             t = (torch.ones(n) * i).to(x.device)
             next_t = (torch.ones(n) * j).to(x.device)
             at = compute_alpha(b, t.long())
@@ -27,7 +33,19 @@ def generalized_steps(x, seq, model, b, with_t=False, **kwargs):
                 kwargs.get("eta", 0) * ((1 - at / at_next) * (1 - at_next) / (1 - at)).sqrt()
             )
             c2 = ((1 - at_next) - c1 ** 2).sqrt()
-            xt_next = at_next.sqrt() * x0_t + c1 * torch.randn_like(x) + c2 * et
+            
+            # Generate noise with deterministic seeding if enabled
+            if use_deterministic_noise and base_seed is not None:
+                # Use per-step seeding to ensure reproducibility across different implementations
+                step_generator = torch.Generator(device=x.device)
+                step_generator.manual_seed(base_seed + step_idx)
+                noise = torch.randn(x.shape, generator=step_generator, device=x.device, dtype=x.dtype)
+            elif generator is not None:
+                noise = torch.randn(x.shape, generator=generator, device=x.device, dtype=x.dtype)
+            else:
+                noise = torch.randn_like(x)
+            
+            xt_next = at_next.sqrt() * x0_t + c1 * noise + c2 * et
             xs.append(xt_next.to('cpu'))
             ts.append(t.to('cpu'))
 
@@ -44,7 +62,13 @@ def ddpm_steps(x, seq, model, b, **kwargs):
         xs = [x]
         x0_preds = []
         betas = b
-        for i, j in zip(reversed(seq), reversed(seq_next)):
+        
+        # Create a deterministic random generator if seed is provided
+        generator = kwargs.get("generator", None)
+        use_deterministic_noise = kwargs.get("deterministic_noise", False)
+        base_seed = kwargs.get("base_seed", None)
+        
+        for step_idx, (i, j) in enumerate(zip(reversed(seq), reversed(seq_next))):
             t = (torch.ones(n) * i).to(x.device)
             next_t = (torch.ones(n) * j).to(x.device)
             at = compute_alpha(betas, t.long())
@@ -63,7 +87,17 @@ def ddpm_steps(x, seq, model, b, **kwargs):
             ) / (1.0 - at)
 
             mean = mean_eps
-            noise = torch.randn_like(x)
+            
+            # Generate noise with deterministic seeding if enabled
+            if use_deterministic_noise and base_seed is not None:
+                step_generator = torch.Generator(device=x.device)
+                step_generator.manual_seed(base_seed + step_idx)
+                noise = torch.randn(x.shape, generator=step_generator, device=x.device, dtype=x.dtype)
+            elif generator is not None:
+                noise = torch.randn(x.shape, generator=generator, device=x.device, dtype=x.dtype)
+            else:
+                noise = torch.randn_like(x)
+            
             mask = 1 - (t == 0).float()
             mask = mask.view(-1, 1, 1, 1)
             logvar = beta_t.log()

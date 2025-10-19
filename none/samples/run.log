@@ -1,16 +1,12 @@
-10/16/2025 13:02:16 - INFO - __main__ -   ===========================================================================
-10/16/2025 13:02:16 - INFO - __main__ -   Host ip-10-192-12-170
-10/16/2025 13:02:16 - INFO - __main__ -   logging to:
-10/16/2025 13:02:16 - INFO - __main__ -   none/samples
-10/16/2025 13:02:16 - INFO - __main__ -   ===========================================================================
-10/16/2025 13:02:16 - INFO - __main__ -   Loading checkpoint /home/zeus/.cache/diffusion_models_converted/ema_diffusion_cifar10_model/model-790000.ckpt
-10/16/2025 13:02:16 - INFO - __main__ -   start to generate calibration imagers: 1024 for 1 steps
-10/16/2025 13:41:07 - INFO - root -   xs size: torch.Size([1, 1024, 3, 32, 32]), ts size: torch.Size([1, 1024]), xs_prev size: torch.Size([1, 1024, 3, 32, 32]), ts_prev size: torch.Size([1, 1024])
-10/16/2025 13:55:34 - INFO - __main__ -   ===========================================================================
-10/16/2025 13:55:34 - INFO - __main__ -   Host ip-10-192-12-170
-10/16/2025 13:55:34 - INFO - __main__ -   logging to:
-10/16/2025 13:55:34 - INFO - __main__ -   none/samples
-10/16/2025 13:55:34 - INFO - __main__ -   ===========================================================================
-10/16/2025 13:55:34 - INFO - __main__ -   Loading checkpoint /home/zeus/.cache/diffusion_models_converted/ema_diffusion_cifar10_model/model-790000.ckpt
-10/16/2025 13:55:35 - INFO - __main__ -   start to generate calibration imagers: 1024 for 1 steps
-10/16/2025 14:34:26 - INFO - root -   xs size: torch.Size([1, 1024, 3, 32, 32]), ts size: torch.Size([1, 1024]), xs_prev size: torch.Size([1, 1024, 3, 32, 32]), ts_prev size: torch.Size([1, 1024])
+10/19/2025 15:12:12 - INFO - __main__ -   ===========================================================================
+10/19/2025 15:12:12 - INFO - __main__ -   Host ip-10-192-12-208
+10/19/2025 15:12:12 - INFO - __main__ -   logging to:
+10/19/2025 15:12:12 - INFO - __main__ -   none/samples
+10/19/2025 15:12:12 - INFO - __main__ -   ===========================================================================
+10/19/2025 15:12:12 - INFO - __main__ -   Loading checkpoint /home/zeus/.cache/diffusion_models_converted/ema_diffusion_cifar10_model/model-790000.ckpt
+10/19/2025 15:12:12 - INFO - __main__ -   Attempting to load TensorRT engine for inference
+10/19/2025 15:12:12 - INFO - __main__ -   Loading TensorRT engine from /teamspace/studios/this_studio/MoDiff/trt/export/modiff_unet_fp32.plan
+10/19/2025 15:12:13 - INFO - __main__ -   TensorRT engine loaded successfully
+10/19/2025 15:12:13 - INFO - __main__ -   Successfully loaded TensorRT engine, using it for fast inference
+10/19/2025 15:12:13 - INFO - __main__ -   starting from image 0
+10/19/2025 15:12:13 - INFO - __main__ -   Using single-image mode for deterministic generation
