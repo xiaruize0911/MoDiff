@@ -1,0 +1,14 @@
+10/20/2025 15:01:12 - INFO - __main__ -   ===========================================================================
+10/20/2025 15:01:12 - INFO - __main__ -   Host ip-10-192-15-164
+10/20/2025 15:01:12 - INFO - __main__ -   logging to:
+10/20/2025 15:01:12 - INFO - __main__ -   scripts/none.samples/int8_calibrated/samples
+10/20/2025 15:01:12 - INFO - __main__ -   ===========================================================================
+10/20/2025 15:01:13 - INFO - __main__ -   Loading checkpoint /home/zeus/.cache/diffusion_models_converted/ema_diffusion_cifar10_model/model-790000.ckpt
+10/20/2025 15:01:13 - INFO - __main__ -   Attempting to load TensorRT engine for inference
+10/20/2025 15:01:13 - INFO - __main__ -   Loading TensorRT engine from /teamspace/studios/this_studio/MoDiff/trt/export/modiff_unet_int8_fixed.plan
+10/20/2025 15:01:13 - INFO - __main__ -   TensorRT engine loaded successfully
+10/20/2025 15:01:13 - INFO - __main__ -   Successfully loaded TensorRT engine, using it for fast inference
+10/20/2025 15:01:13 - INFO - __main__ -   [TensorRT] Calibrating engine outputs against FP32 reference (64 samples, batch=8)
+10/20/2025 15:01:15 - INFO - __main__ -   [TensorRT] Calibration complete: scale mean=0.8328 std=0.0259, bias mean=0.0000 std=0.0000
+10/20/2025 15:01:15 - INFO - __main__ -   starting from image 0
+10/20/2025 15:01:15 - INFO - __main__ -   Using single-image mode for deterministic generation

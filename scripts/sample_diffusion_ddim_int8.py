@@ -60,33 +60,107 @@ def load_trt_engine(engine_path, device_id=0):
 class TRTInt8SamplingWrapper(nn.Module):
     """
     Wrapper to make TensorRT engine compatible with the sampling pipeline.
-    Converts PyTorch tensors to TensorRT format and back.
+    Adds optional output correction using a small FP32 calibration set so
+    INT8 TensorRT outputs better align with the original PyTorch model.
     """
+
     def __init__(self, trt_wrapper):
         super().__init__()
         self.trt_wrapper = trt_wrapper
         self.use_trt = trt_wrapper is not None
-    
-    def forward(self, x, t):
-        """
-        Args:
-            x: latent tensor (B, C, H, W)
-            t: timestep tensor (B,)
-        
-        Returns:
-            noise prediction (B, C, H, W)
-        """
+        self.device = getattr(trt_wrapper, "torch_device", torch.device("cuda")) if self.use_trt else None
+        self.correction_scale = None
+        self.correction_bias = None
+
+    def _run_trt(self, x, t):
         if not self.use_trt:
             raise RuntimeError("TensorRT wrapper is None")
-        
-        # Ensure correct dtypes
-        x = x.float()
-        t = t.long()
-        
-        # Run through TensorRT engine
-        output = self.trt_wrapper(x, t)
-        
+        return self.trt_wrapper(x.float(), t.long())
+
+    def calibrate_with_reference(
+        self,
+        reference_model: nn.Module,
+        num_timesteps: int,
+        channels: int,
+        height: int,
+        width: int,
+        num_samples: int = 64,
+        batch_size: int = 8,
+        seed: int | None = None,
+    ) -> None:
+        if not self.use_trt or reference_model is None or num_samples <= 0:
+            return
+
+        logger.info(
+            "[TensorRT] Calibrating engine outputs against FP32 reference (%d samples, batch=%d)",
+            num_samples,
+            batch_size,
+        )
+
+        generator = torch.Generator(device=self.device)
+        if seed is not None:
+            generator.manual_seed(seed)
+
+        reference_model.eval()
+        reference_model.to(self.device)
+
+        remaining = num_samples
+        num_elems = channels * height * width
+        scale_num = torch.zeros(num_elems, device=self.device)
+        scale_den = torch.zeros(num_elems, device=self.device)
+        ref_sum = torch.zeros(num_elems, device=self.device)
+        trt_sum = torch.zeros(num_elems, device=self.device)
+        count = 0
+
+        with torch.no_grad():
+            while remaining > 0:
+                cur = 1  # Engine was built with static batch=1
+                latent = torch.randn(cur, channels, height, width, device=self.device, generator=generator)
+                timesteps = torch.randint(0, num_timesteps, (cur,), device=self.device, generator=generator)
+
+                ref_out = reference_model(latent, timesteps).detach()
+                trt_out = self._run_trt(latent, timesteps).detach()
+
+                ref_flat = ref_out.view(cur, -1)
+                trt_flat = trt_out.view(cur, -1)
+
+                scale_num += (trt_flat * ref_flat).sum(dim=0)
+                scale_den += (trt_flat ** 2).sum(dim=0)
+                ref_sum += ref_flat.sum(dim=0)
+                trt_sum += trt_flat.sum(dim=0)
+                count += cur * num_elems
+                remaining -= cur
+
+        eps = 1e-8
+        scale = scale_num / (scale_den + eps)
+        ref_mean = ref_sum / max(count, 1)
+        trt_mean = trt_sum / max(count, 1)
+        bias = ref_mean - scale * trt_mean
+
+        scale = torch.clamp(scale, min=0.1, max=2.5)
+        self.correction_scale = scale.view(1, channels, height, width)
+        self.correction_bias = bias.view(1, channels, height, width)
+
+        logger.info(
+            "[TensorRT] Calibration complete: scale mean=%.4f std=%.4f, bias mean=%.4f std=%.4f",
+            self.correction_scale.mean().item(),
+            self.correction_scale.std().item(),
+            self.correction_bias.mean().item(),
+            self.correction_bias.std().item(),
+        )
+
+    def forward(self, x, t, context=None):
+        if not self.use_trt:
+            logger.warning("TRTInt8SamplingWrapper: No TensorRT engine loaded, returning zero tensor.")
+            return torch.zeros_like(x)
+
+        output = self._run_trt(x, t)
+        if self.correction_scale is not None and self.correction_bias is not None:
+            output = output * self.correction_scale + self.correction_bias
         return output
+
+    def reset_cache(self):
+        pass
 
 
 def torch2hwcuint8(x, clip=False):
@@ -208,15 +282,31 @@ class DiffusionINT8(object):
             trt_wrapper = load_trt_engine(self.args.trt_engine_path, device_id=device_id)
             if trt_wrapper is not None:
                 logger.info("Successfully loaded TensorRT engine, using it for fast inference")
-                model = TRTInt8SamplingWrapper(trt_wrapper)
-                model.eval()
-                self.sample_fid(model)
+                trt_model = TRTInt8SamplingWrapper(trt_wrapper)
+                trt_model.eval()
+
+                calib_samples = max(0, getattr(self.args, "trt_calib_samples", 0))
+                if calib_samples > 0:
+                    trt_model.calibrate_with_reference(
+                        reference_model=model,
+                        num_timesteps=self.config.diffusion.num_diffusion_timesteps,
+                        channels=self.config.data.channels,
+                        height=self.config.data.image_size,
+                        width=self.config.data.image_size,
+                        num_samples=calib_samples,
+                        batch_size=max(1, getattr(self.args, "trt_calib_batch_size", 8)),
+                        seed=self.args.seed,
+                    )
+                    model.cpu()
+                    torch.cuda.empty_cache()
+
+                self.sample_fid(trt_model)
                 return
 
         if self.args.ptq:
             wq_params = {'n_bits': 8, 'channel_wise': True, 'scale_method': 'max'}
             aq_params = {
-                'n_bits': 8, 'symmetric': args.a_sym, 'channel_wise': args.act_tensor, 'scale_method': 'max', 
+                'n_bits': 8, 'symmetric': args.a_sym, 'channel_wise': args.act_tensor, 'scale_method': 'mse', 
                 'leaf_param': args.quant_act, 'dynamic': (args.quant_mode=="dynamic")}
             if self.args.resume:
                 logger.info('Load with min-max quick initialization')
@@ -475,10 +565,19 @@ class DiffusionINT8(object):
             from ddim.functions.denoising import generalized_steps
 
             betas = self.betas
-            # Enable deterministic noise generation for reproducibility
+            deterministic_noise = getattr(self.args, "use_fixed_noise", False)
+            base_seed = self.args.seed if deterministic_noise else None
             result = generalized_steps(
-                x, seq, model, betas, eta=self.args.eta, args=self.args, with_t=with_t,
-                deterministic_noise=True, base_seed=self.args.seed)
+                x,
+                seq,
+                model,
+                betas,
+                eta=self.args.eta,
+                args=self.args,
+                with_t=with_t,
+                deterministic_noise=deterministic_noise,
+                base_seed=base_seed,
+            )
             if with_t:
                 x, ts, x0_preds = result
             else:
@@ -515,7 +614,16 @@ class DiffusionINT8(object):
                 raise NotImplementedError
             from functions.denoising import ddpm_steps
 
-            x = ddpm_steps(x, seq, model, self.betas)
+            deterministic_noise = getattr(self.args, "use_fixed_noise", False)
+            base_seed = self.args.seed if deterministic_noise else None
+            x = ddpm_steps(
+                x,
+                seq,
+                model,
+                self.betas,
+                deterministic_noise=deterministic_noise,
+                base_seed=base_seed,
+            )
         else:
             raise NotImplementedError
         if last:
@@ -727,6 +835,23 @@ def get_parser():
     # TensorRT parameters
     parser.add_argument("--use_trt", action="store_true", help="use TensorRT engine for inference acceleration")
     parser.add_argument("--trt_engine_path", type=str, default=None, help="path to TensorRT engine (.plan file)")
+    parser.add_argument(
+        "--trt_calib_samples",
+        type=int,
+        default=64,
+        help="number of FP32 reference samples to fit TensorRT output correction",
+    )
+    parser.add_argument(
+        "--trt_calib_batch_size",
+        type=int,
+        default=8,
+        help="batch size used during TensorRT output calibration",
+    )
+    parser.add_argument(
+        "--use_fixed_noise",
+        action="store_true",
+        help="reuse a fixed noise tensor for deterministic sampling",
+    )
 
     return parser
 

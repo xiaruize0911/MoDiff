@@ -65,6 +65,11 @@ class QuantModel(nn.Module):
         for m in self.model.modules():
             if isinstance(m, (QuantModule, BaseQuantBlock)):
                 m.set_quant_state(weight_quant, act_quant)
+
+    def reset_cache(self):
+        for m in self.model.modules():
+            if isinstance(m, (QuantModule, BaseQuantBlock)):
+                m.reset_cache()
     
     def set_dynamic_state(self, dynamic):
         for m in self.model.modules():

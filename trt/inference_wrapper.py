@@ -64,9 +64,8 @@ class TRTEngineWrapper:
         self.output_shapes = {}
         
         # In TensorRT 10.x, use num_io_tensors instead of num_bindings
-        num_io = self.engine.num_io_tensors
-        for idx in range(num_io):
-            binding = self.engine.get_tensor_name(idx)
+        self.binding_names = [self.engine.get_tensor_name(i) for i in range(self.engine.num_io_tensors)]
+        for binding in self.binding_names:
             shape = tuple(self.context.get_tensor_shape(binding))
             
             if self.engine.get_tensor_mode(binding) == trt.TensorIOMode.INPUT:
@@ -94,15 +93,20 @@ class TRTEngineWrapper:
         Returns:
             Output tensor, shape (B, 3, H, W) for CIFAR10 UNet
         """
-        # Convert to float32 and move to GPU
-        latent_gpu = latent.float().contiguous().to(self.torch_device)
-        timesteps_gpu = timesteps.long().contiguous().to(self.torch_device)
-        
+        # Ensure inputs are on the correct device and have the correct dtype
+        latent_gpu = latent.to(device=self.torch_device, dtype=torch.float32).contiguous()
+        timesteps_gpu = timesteps.to(device=self.torch_device, dtype=torch.int64).contiguous()
+
         # Create output tensor
         output_name = self.output_names[0]
-        output_shape = self.output_shapes[output_name]
+        
+        # The output shape from the engine might have dynamic dimensions (-1).
+        # We need to set the batch size of the output shape to match the input batch size.
+        output_shape = list(self.output_shapes[output_name])
+        output_shape[0] = latent_gpu.shape[0]
+        
         output_gpu = torch.empty(
-            output_shape,
+            tuple(output_shape),
             dtype=torch.float32,
             device=self.torch_device
         )
@@ -110,14 +114,16 @@ class TRTEngineWrapper:
         # Use the custom stream for all CUDA operations
         with torch.cuda.stream(self.stream):
             # Set tensor addresses
-            self.context.set_tensor_address(self.input_names[0], latent_gpu.data_ptr())
-            self.context.set_tensor_address(self.input_names[1], timesteps_gpu.data_ptr())
-            self.context.set_tensor_address(output_name, output_gpu.data_ptr())
+            self.context.set_input_shape('latent', latent_gpu.shape)
+            self.context.set_input_shape('timesteps', timesteps_gpu.shape)
             
-            # Run inference with proper stream handle
-            # Convert PyTorch stream to CUDA stream handle
-            stream_handle = self.stream.cuda_stream
-            self.context.execute_async_v3(stream_handle)
+            bindings = [None] * self.engine.num_io_tensors
+            bindings[self.binding_names.index('latent')] = latent_gpu.data_ptr()
+            bindings[self.binding_names.index('timesteps')] = timesteps_gpu.data_ptr()
+            bindings[self.binding_names.index(output_name)] = output_gpu.data_ptr()
+            
+            # Run inference
+            self.context.execute_v2(bindings=bindings)
         
         # Synchronize the custom stream to ensure completion
         self.stream.synchronize()

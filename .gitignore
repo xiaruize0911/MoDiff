@@ -13,3 +13,5 @@ __pycache__/
 data/cifar-10-python.tar.gz
 *.plan
 *.onnx
+*.png
+*.npz

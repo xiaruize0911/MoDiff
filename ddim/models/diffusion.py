@@ -358,3 +358,6 @@ class Model(nn.Module):
         pre_out = h
         h = self.conv_out(pre_out)
         return h
+    
+    def reset_cache(self):
+        pass
