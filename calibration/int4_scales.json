@@ -1,0 +1,22 @@
+{
+  "latent": {
+    "scale": 0.33792035197798825,
+    "zero_point": 0.0,
+    "n_bits": 4,
+    "symmetric": true,
+    "shape": [
+      64,
+      3,
+      32,
+      32
+    ]
+  },
+  "timesteps": {
+    "min": 11,
+    "max": 999
+  },
+  "metadata": {
+    "num_samples": 2,
+    "scale_method": "mse"
+  }
+}

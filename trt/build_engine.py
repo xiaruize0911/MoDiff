@@ -1,13 +1,20 @@
 import argparse
 import logging
 from pathlib import Path
+import sys
+import os
 
 import tensorrt as trt
+
+# Suppress TensorRT verbose output
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+trt_logger = logging.getLogger('tensorrt')
+trt_logger.setLevel(logging.WARNING)
 
 from entropy_calibrator import MoDiffEntropyCalibrator, MoDiffScaleExtractorCalibrator
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(name)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
 
 def parse_args() -> argparse.Namespace:
@@ -72,6 +79,75 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def inject_scales_to_network(network, scales_file: Path) -> None:
+    """
+    Inject pre-computed quantization scales into the TensorRT network.
+    This overrides the calibrator and ensures we use the exact scales from PyTorch.
+    """
+    import numpy as np
+    if not scales_file.exists():
+        return
+        
+    print(f"[INFO] Loading scales from {scales_file} for injection")
+    try:
+        data = np.load(scales_file, allow_pickle=True)
+        # Convert npz to dict
+        scales_dict = {k: data[k].item() for k in data.files}
+    except Exception as e:
+        print(f"[ERROR] Failed to load scales: {e}")
+        return
+
+    # Build a map from module name to scale
+    # keys are like "layer_123_module.name"
+    module_scales = {}
+    for key, val in scales_dict.items():
+        # Extract module name: layer_123_name -> name
+        parts = key.split('_', 2)
+        if len(parts) > 2:
+            module_name = parts[2]
+            if 'act_scale' in val:
+                module_scales[module_name] = float(val['act_scale'])
+
+    print(f"[INFO] Found {len(module_scales)} layers with activation scales")
+
+    # Iterate over network layers
+    matched = 0
+    for i in range(network.num_layers):
+        layer = network.get_layer(i)
+        
+        # Normalize ONNX name
+        onnx_name = layer.name.replace('/', '.')
+        if onnx_name.startswith('.'): onnx_name = onnx_name[1:]
+        onnx_name = onnx_name.replace('model.diffusion_model.', '')
+        
+        # Find best matching PyTorch module
+        best_match = None
+        for mod_name in module_scales:
+            # Check if ONNX name ends with the module name (e.g. ...conv1 matches conv1)
+            # or if it contains it clearly
+            if mod_name in onnx_name:
+                if best_match is None or len(mod_name) > len(best_match):
+                    best_match = mod_name
+        
+        if best_match:
+            scale = module_scales[best_match]
+            # CRITICAL FIX: scale = maxabs/127, so dynamic_range = scale * 127 = maxabs
+            # This matches how INT4 does it: dynamic_range = scale * 7.5 (for q_max=7)
+            # For INT8, q_max = 127, so we multiply by 127
+            dynamic_range = scale * 127.0
+            
+            # Set dynamic range for INPUTS of this layer (since act_scale is input quantization)
+            for j in range(layer.num_inputs):
+                inp = layer.get_input(j)
+                # Skip weights/constants
+                if not inp.is_network_input and layer.type != trt.LayerType.CONSTANT:
+                     # Assuming symmetric INT8
+                     inp.set_dynamic_range(-dynamic_range, dynamic_range)
+            matched += 1
+
+    print(f"[INFO] Injected scales for {matched} layers (Direct Injection, dynamic_range = scale * 127)")
+
+
 def build_engine(args: argparse.Namespace) -> None:
     onnx_path = Path(args.onnx).expanduser().resolve()
     engine_path = Path(args.engine).expanduser().resolve()
@@ -81,24 +157,21 @@ def build_engine(args: argparse.Namespace) -> None:
     if not onnx_path.exists():
         raise FileNotFoundError(f"ONNX file not found: {onnx_path}")
 
-    trt_logger = trt.Logger(trt.Logger.VERBOSE)
+    trt_logger = trt.Logger(trt.Logger.WARNING)  # Reduced from INFO
     builder = trt.Builder(trt_logger)
     network_flags = 1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
     network = builder.create_network(network_flags)
     parser = trt.OnnxParser(network, trt_logger)
 
-    print(f"[INFO] Parsing ONNX from {onnx_path}")
+    logger.info(f"Parsing ONNX from {onnx_path}")
     with onnx_path.open("rb") as handle:
         if not parser.parse(handle.read()):
-            print("[ERROR] ONNX parser errors:")
+            logger.error("ONNX parser errors:")
             for idx in range(parser.num_errors):
-                print(f"  {parser.get_error(idx)}")
+                logger.error(f"  {parser.get_error(idx)}")
             raise RuntimeError(f"Failed to parse ONNX graph at {onnx_path}")
 
-    print("[INFO] Parsed ONNX graph with the following inputs:")
-    for idx in range(network.num_inputs):
-        tensor = network.get_input(idx)
-        print(f"  - {tensor.name}: shape={tensor.shape}, dtype={tensor.dtype}")
+    logger.info(f"Parsed ONNX graph with {network.num_inputs} inputs")
 
     config = builder.create_builder_config()
     # TensorRT 10.x uses set_memory_pool_limit instead of max_workspace_size
@@ -111,26 +184,25 @@ def build_engine(args: argparse.Namespace) -> None:
         scales_file = scales_dir / "model_scales.npz" if scales_dir.is_dir() else None
         
         if scales_file and scales_file.exists() and not args.use_entropy:
-            print("[INFO] ✓ Using MoDiffScaleExtractorCalibrator (scales from trained model)")
+            logger.info("✓ Using MoDiffScaleExtractorCalibrator (scales from trained model)")
             config.int8_calibrator = MoDiffScaleExtractorCalibrator(
                 calib_data_dir=calib_dir,
                 scales_file=scales_file,
                 cache_path=calib_dir / "modiff_int8_scales.cache"
             )
+            inject_scales_to_network(network, scales_file)
         else:
             if scales_file and not scales_file.exists():
-                print("[WARNING] Extracted scales not found, falling back to entropy calibration")
-                print(f"[INFO] Expected scales at: {scales_file}")
-                print(f"[INFO] Run 'python trt/extract_scales.py' to extract scales from trained model")
-            print("[INFO] Using MoDiffEntropyCalibrator (entropy-based calibration)")
+                logger.warning("Extracted scales not found, falling back to entropy calibration")
+            logger.info("Using MoDiffEntropyCalibrator (entropy-based calibration)")
             config.int8_calibrator = MoDiffEntropyCalibrator(calib_dir)
         
-        print("[INFO] INT8 calibration enabled")
+        logger.info("INT8 calibration enabled")
     else:
-        print("[INFO] Building FP32 engine (INT8 disabled)")
+        logger.info("Building FP32 engine (INT8 disabled)")
 
     profile = builder.create_optimization_profile()
-    print(f"[INFO] Setting optimization profile from ONNX model shapes:")
+    logger.info(f"Setting optimization profile for {network.num_inputs} inputs")
     
     # For each input, replace dynamic dimensions with concrete values
     # TensorRT requires min/opt/max to match for static inputs
@@ -144,15 +216,14 @@ def build_engine(args: argparse.Namespace) -> None:
         
         static_shape = tuple(shape)
         profile.set_shape(tensor.name, static_shape, static_shape, static_shape)
-        print(f"  {tensor.name}: {static_shape}")
     config.add_optimization_profile(profile)
 
-    print("[INFO] Building engine...")
+    logger.info("Building engine...")
     try:
         # TensorRT 10.x uses build_serialized_network instead of build_engine
         serialized_engine = builder.build_serialized_network(network, config)
     except Exception as e:
-        print(f"[ERROR] Engine build failed with exception: {e}")
+        logger.error(f"Engine build failed: {e}")
         raise
     
     if serialized_engine is None:
@@ -161,25 +232,17 @@ def build_engine(args: argparse.Namespace) -> None:
     engine_path.parent.mkdir(parents=True, exist_ok=True)
     with engine_path.open("wb") as handle:
         handle.write(serialized_engine)
-    print(f"[INFO] ✓ Saved engine to {engine_path}")
-    print(f"[INFO] Engine size: {engine_path.stat().st_size / 1e6:.1f} MB")
+    logger.info(f"✓ Saved engine to {engine_path}")
+    logger.info(f"Engine size: {engine_path.stat().st_size / 1e6:.1f} MB")
 
 
 def main() -> None:
     args = parse_args()
     build_engine(args)
     
-    print(f"\n{'='*60}")
-    print(f"✓ INT8 Engine Build Complete!")
-    print(f"{'='*60}")
-    print(f"Engine: {Path(args.engine).resolve()}")
-    print(f"Size: {Path(args.engine).stat().st_size / 1e6:.1f} MB")
-    print(f"\nKey Improvements:")
-    print(f"  ✓ Uses MoDiff's quantization parameters")
-    print(f"  ✓ Fixed MSE vs Entropy calibration mismatch")
-    print(f"  ✓ Better INT8 accuracy and reliability")
-    print(f"\nNext: Use this engine for inference with improved accuracy!")
-    print(f"{'='*60}\n")
+    logger.info(f"✓ Engine build complete!")
+    logger.info(f"Engine: {Path(args.engine).resolve()}")
+    logger.info(f"Size: {Path(args.engine).stat().st_size / 1e6:.1f} MB")
 
 
 if __name__ == "__main__":

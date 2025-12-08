@@ -45,6 +45,7 @@ def generate_calibration_samples(
     image_size: int,
     num_timesteps: int,
     device: torch.device,
+    context_dim: int = None,
 ):
     remaining = num_samples
     while remaining > 0:
@@ -57,15 +58,27 @@ def generate_calibration_samples(
             device=device,
             dtype=torch.long,
         )
-        yield latents.cpu().numpy().astype(np.float32), timesteps.cpu().numpy().astype(np.int64)
+        
+        batch_data = {
+            "latent": latents.cpu().numpy().astype(np.float32),
+            "timesteps": timesteps.cpu().numpy().astype(np.int64),
+        }
+        
+        if context_dim is not None:
+            # Standard sequence length for CLIP text encoder is 77
+            seq_len = 77
+            context = torch.randn(current_bs, seq_len, context_dim, device=device)
+            batch_data["context"] = context.cpu().numpy().astype(np.float32)
+            
+        yield batch_data
         remaining -= current_bs
 
 
 def save_samples_to_dir(output_dir: Path, iterator) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
-    for index, (latent_batch, timestep_batch) in enumerate(iterator):
+    for index, batch_data in enumerate(iterator):
         filename = output_dir / f"sample_{index:04d}.npz"
-        np.savez_compressed(filename, latent=latent_batch, timesteps=timestep_batch)
+        np.savez_compressed(filename, **batch_data)
 
 
 def parse_args() -> argparse.Namespace:
@@ -112,15 +125,59 @@ def main() -> None:
     device = torch.device(args.device)
 
     config = load_cifar_config(config_path)
-    _ = load_pretrained_model(config, args.ckpt_root)
+    
+    # Try to load model if it's CIFAR10, just to verify config
+    try:
+        if hasattr(config, "data") and config.data.dataset == "CIFAR10":
+            _ = load_pretrained_model(config, args.ckpt_root)
+    except Exception as e:
+        print(f"Warning: Could not load pretrained model: {e}")
+
+    # Extract parameters
+    channels = 3
+    image_size = 32
+    num_timesteps = 1000
+    context_dim = None
+
+    # CIFAR10 / DDIM structure
+    if hasattr(config, "data"):
+        channels = getattr(config.data, "channels", channels)
+        image_size = getattr(config.data, "image_size", image_size)
+    if hasattr(config, "diffusion"):
+        num_timesteps = getattr(config.diffusion, "num_diffusion_timesteps", num_timesteps)
+
+    # LDM / Stable Diffusion structure
+    if hasattr(config, "model") and hasattr(config.model, "params"):
+        params = config.model.params
+        if hasattr(params, "timesteps"):
+            num_timesteps = params.timesteps
+        
+        if hasattr(params, "unet_config") and hasattr(params.unet_config, "params"):
+            unet_params = params.unet_config.params
+            if hasattr(unet_params, "in_channels"):
+                channels = unet_params.in_channels
+            if hasattr(unet_params, "image_size"):
+                # LDM usually operates in latent space, so image_size might be latent size
+                # But config might say 32 or 64.
+                image_size = unet_params.image_size
+            if hasattr(unet_params, "context_dim"):
+                context_dim = unet_params.context_dim
+                print(f"Detected LDM/SD config, using context_dim={context_dim}")
+
+    print(f"Generating calibration data: {args.num_samples} samples")
+    print(f"  Shape: {channels}x{image_size}x{image_size}")
+    print(f"  Timesteps: {num_timesteps}")
+    if context_dim:
+        print(f"  Context dim: {context_dim}")
 
     generators = generate_calibration_samples(
         num_samples=args.num_samples,
         batch_size=args.batch_size,
-        channels=config.data.channels,
-        image_size=config.data.image_size,
-        num_timesteps=config.diffusion.num_diffusion_timesteps,
+        channels=channels,
+        image_size=image_size,
+        num_timesteps=num_timesteps,
         device=device,
+        context_dim=context_dim,
     )
 
     save_samples_to_dir(output_dir, generators)

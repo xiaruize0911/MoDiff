@@ -367,6 +367,9 @@ class Diffusion(object):
         except Exception:
             skip = 1
 
+        ts = None
+        x0_preds = None
+
         if self.args.sample_type == "generalized":
             if self.args.skip_type == "uniform":
                 skip = self.num_timesteps // self.args.timesteps
@@ -384,11 +387,24 @@ class Diffusion(object):
             from ddim.functions.denoising import generalized_steps
 
             betas = self.betas
-            # Enable deterministic noise generation for reproducibility
-            xs = generalized_steps(
-                x, seq, model, betas, eta=self.args.eta, args=self.args, with_t=with_t,
-                deterministic_noise=True, base_seed=self.args.seed)
-            x = xs
+            deterministic_noise = getattr(self.args, "use_fixed_noise", True)
+            base_seed = self.args.seed if deterministic_noise else None
+            result = generalized_steps(
+                x,
+                seq,
+                model,
+                betas,
+                eta=self.args.eta,
+                args=self.args,
+                with_t=with_t,
+                deterministic_noise=deterministic_noise,
+                base_seed=base_seed,
+            )
+
+            if with_t:
+                x, ts, x0_preds = result
+            else:
+                x, x0_preds = result
         elif self.args.sample_type == "dpm_solver":
             logger.info(f"use dpm-solver with {self.args.timesteps} steps")
             noise_schedule = NoiseScheduleVP(schedule='discrete', betas=self.betas)
@@ -421,11 +437,27 @@ class Diffusion(object):
                 raise NotImplementedError
             from functions.denoising import ddpm_steps
 
-            x = ddpm_steps(x, seq, model, self.betas)
+            deterministic_noise = getattr(self.args, "use_fixed_noise", False)
+            base_seed = self.args.seed if deterministic_noise else None
+            x, x0_preds = ddpm_steps(
+                x,
+                seq,
+                model,
+                self.betas,
+                deterministic_noise=deterministic_noise,
+                base_seed=base_seed,
+            )
         else:
             raise NotImplementedError
+
         if last:
-            x = x[0][-1]
+            x = x[-1]
+            if with_t:
+                return x, ts, x0_preds
+            return x
+
+        if with_t:
+            return x, ts, x0_preds
         return x
     
     def generate(self, model):

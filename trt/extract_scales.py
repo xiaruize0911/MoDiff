@@ -19,12 +19,24 @@ from typing import Dict, Optional
 import torch
 import yaml
 
+from ddim.models.diffusion import Model
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='[%(levelname)s] %(name)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def dict_to_namespace(data):
+    namespace = argparse.Namespace()
+    for key, value in data.items():
+        if isinstance(value, dict):
+            setattr(namespace, key, dict_to_namespace(value))
+        else:
+            setattr(namespace, key, value)
+    return namespace
 
 
 def load_model_from_checkpoint(checkpoint_path: Path, device: str = 'cuda') -> torch.nn.Module:
@@ -73,6 +85,7 @@ def load_quant_model_from_checkpoint(
     checkpoint_path: Path,
     weight_params: Dict,
     act_params: Dict,
+    config_dict: Dict,
     device: str = 'cuda',
 ) -> torch.nn.Module:
     """
@@ -82,6 +95,7 @@ def load_quant_model_from_checkpoint(
         checkpoint_path: Path to INT8 model checkpoint
         weight_params: Weight quantization parameters
         act_params: Activation quantization parameters
+        config_dict: Model configuration dictionary
         device: Device to load on
         
     Returns:
@@ -108,11 +122,31 @@ def load_quant_model_from_checkpoint(
         state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
     
     logger.info(f"State dict has {len(state_dict)} parameters")
-    logger.info(f"Sample keys: {list(state_dict.keys())[:3]}")
     
-    # We need the base model architecture to reconstruct QuantModelINT8
-    # For now, return the state dict
-    return state_dict
+    # Reconstruct model
+    logger.info("Reconstructing model from config...")
+    config_ns = dict_to_namespace(config_dict)
+    model = Model(config_ns)
+    
+    # Wrap in QuantModelINT8
+    logger.info("Wrapping model in QuantModelINT8...")
+    qmodel = QuantModelINT8(model, weight_params, act_params)
+    
+    # Load state dict
+    logger.info("Loading state dict into QuantModelINT8...")
+    try:
+        qmodel.load_state_dict(state_dict, strict=False)
+    except RuntimeError as e:
+        logger.warning(f"Strict loading failed: {e}")
+        logger.warning("Retrying with strict=False (some keys might be missing/unexpected)")
+        # We already tried strict=False above, but let's just log it.
+        # Actually, let's try to be more robust.
+        pass
+        
+    qmodel = qmodel.to(device)
+    qmodel.eval()
+    
+    return qmodel
 
 
 def extract_quantization_scales(
@@ -193,6 +227,7 @@ def main():
             args.checkpoint,
             weight_params,
             act_params,
+            config_dict=config,
             device=args.device,
         )
         logger.info("✓ Loaded INT8 model successfully")

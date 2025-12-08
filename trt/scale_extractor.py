@@ -56,10 +56,12 @@ def extract_scales_from_quantized_model(
         if isinstance(module, (torch.nn.Sequential, torch.nn.ModuleList, torch.nn.ModuleDict)):
             continue
             
+        current_layer_key = None
+        
         # Extract from QuantModuleINT8 (weight quantization)
         if hasattr(module, 'weight_quantizer'):
-            layer_key = f"layer_{layer_idx}_{module_name}"
-            scales_dict[layer_key] = {}
+            current_layer_key = f"layer_{layer_idx}_{module_name}"
+            scales_dict[current_layer_key] = {}
             
             quantizer = module.weight_quantizer
             
@@ -68,30 +70,25 @@ def extract_scales_from_quantized_model(
                 scale_val = quantizer.scale
                 if isinstance(scale_val, torch.Tensor):
                     scale_val = scale_val.detach().cpu().numpy()
-                scales_dict[layer_key]['weight_scale'] = scale_val
+                scales_dict[current_layer_key]['weight_scale'] = scale_val
                 
-                logger.debug(f"  {layer_key}: weight_scale shape={scale_val.shape if hasattr(scale_val, 'shape') else 'scalar'}")
+                logger.debug(f"  {current_layer_key}: weight_scale shape={scale_val.shape if hasattr(scale_val, 'shape') else 'scalar'}")
             
             if hasattr(quantizer, 'zero_point') and quantizer.zero_point is not None:
                 zp_val = quantizer.zero_point
                 if isinstance(zp_val, torch.Tensor):
                     zp_val = zp_val.detach().cpu().numpy()
-                scales_dict[layer_key]['weight_zero_point'] = zp_val
+                scales_dict[current_layer_key]['weight_zero_point'] = zp_val
             
             layer_idx += 1
         
         # Extract from activation quantizers (if present)
         if hasattr(module, 'act_quantizer'):
-            # Find the corresponding entry or create a new one
-            if not any(k.startswith(f"layer_{layer_idx-1}") for k in scales_dict.keys()) if layer_idx > 0 else True:
-                layer_key = f"layer_{layer_idx}_{module_name}"
-                if layer_key not in scales_dict:
-                    scales_dict[layer_key] = {}
-            else:
-                # Add to existing entry
-                layer_key = [k for k in scales_dict.keys() if module_name in k][-1] if layer_idx > 0 else f"layer_{layer_idx}_{module_name}"
-                if layer_key not in scales_dict:
-                    scales_dict[layer_key] = {}
+            if current_layer_key is None:
+                # No weight quantizer found for this module, create new entry
+                current_layer_key = f"layer_{layer_idx}_{module_name}"
+                scales_dict[current_layer_key] = {}
+                layer_idx += 1
             
             quantizer = module.act_quantizer
             
@@ -99,14 +96,14 @@ def extract_scales_from_quantized_model(
                 scale_val = quantizer.scale
                 if isinstance(scale_val, torch.Tensor):
                     scale_val = scale_val.detach().cpu().numpy()
-                scales_dict[layer_key]['act_scale'] = scale_val
-                logger.debug(f"  {layer_key}: act_scale shape={scale_val.shape if hasattr(scale_val, 'shape') else 'scalar'}")
+                scales_dict[current_layer_key]['act_scale'] = scale_val
+                logger.debug(f"  {current_layer_key}: act_scale shape={scale_val.shape if hasattr(scale_val, 'shape') else 'scalar'}")
             
             if hasattr(quantizer, 'zero_point') and quantizer.zero_point is not None:
                 zp_val = quantizer.zero_point
                 if isinstance(zp_val, torch.Tensor):
                     zp_val = zp_val.detach().cpu().numpy()
-                scales_dict[layer_key]['act_zero_point'] = zp_val
+                scales_dict[current_layer_key]['act_zero_point'] = zp_val
     
     logger.info(f"[ScaleExtractor] Extracted scales from {len(scales_dict)} quantized layers")
     
