@@ -11,14 +11,12 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 trt_logger = logging.getLogger('tensorrt')
 trt_logger.setLevel(logging.WARNING)
 
-from entropy_calibrator import MoDiffEntropyCalibrator, MoDiffScaleExtractorCalibrator
-
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build TensorRT INT8 engine for MoDiff UNet")
+    parser = argparse.ArgumentParser(description="Build TensorRT FP32 engine for MoDiff UNet")
     parser.add_argument(
         "--onnx",
         default=str(Path.home() / "modiff_trt" / "export" / "modiff_unet_fp32_simplified.onnx"),
@@ -30,13 +28,8 @@ def parse_args() -> argparse.Namespace:
         help="Directory containing calibration .npz files",
     )
     parser.add_argument(
-        "--scales-dir",
-        default=str(Path.home() / "modiff_trt" / "export" / "extracted_scales"),
-        help="Directory containing extracted model scales (for MoDiffScaleExtractorCalibrator)",
-    )
-    parser.add_argument(
         "--engine",
-        default="modiff_unet_int8.plan",
+        default="modiff_unet_fp32.plan",
         help="Output path for the TensorRT engine",
     )
     parser.add_argument(
@@ -48,12 +41,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--no-int8",
         action="store_true",
-        help="Disable INT8 calibration (build FP32 engine)",
-    )
-    parser.add_argument(
-        "--use-entropy",
-        action="store_true",
-        help="Use entropy-based calibration (default is scale extraction if available)",
+        default=True,
+        help="Build FP32 engine (default, INT8 removed)",
     )
     parser.add_argument(
         "--min-shape",
@@ -79,76 +68,10 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def inject_scales_to_network(network, scales_file: Path) -> None:
-    """
-    Inject pre-computed quantization scales into the TensorRT network.
-    This overrides the calibrator and ensures we use the exact scales from PyTorch.
-    """
-    import numpy as np
-    if not scales_file.exists():
-        return
-        
-    print(f"[INFO] Loading scales from {scales_file} for injection")
-    try:
-        data = np.load(scales_file, allow_pickle=True)
-        # Convert npz to dict
-        scales_dict = {k: data[k].item() for k in data.files}
-    except Exception as e:
-        print(f"[ERROR] Failed to load scales: {e}")
-        return
-
-    # Build a map from module name to scale
-    # keys are like "layer_123_module.name"
-    module_scales = {}
-    for key, val in scales_dict.items():
-        # Extract module name: layer_123_name -> name
-        parts = key.split('_', 2)
-        if len(parts) > 2:
-            module_name = parts[2]
-            if 'act_scale' in val:
-                module_scales[module_name] = float(val['act_scale'])
-
-    print(f"[INFO] Found {len(module_scales)} layers with activation scales")
-
-    # Iterate over network layers
-    matched = 0
-    for i in range(network.num_layers):
-        layer = network.get_layer(i)
-        
-        # Normalize ONNX name
-        onnx_name = layer.name.replace('/', '.')
-        if onnx_name.startswith('.'): onnx_name = onnx_name[1:]
-        onnx_name = onnx_name.replace('model.diffusion_model.', '')
-        
-        # Find best matching PyTorch module
-        best_match = None
-        for mod_name in module_scales:
-            # Check if ONNX name ends with the module name (e.g. ...conv1 matches conv1)
-            # or if it contains it clearly
-            if mod_name in onnx_name:
-                if best_match is None or len(mod_name) > len(best_match):
-                    best_match = mod_name
-        
-        if best_match:
-            scale = module_scales[best_match]
-            # Set dynamic range for INPUTS of this layer (since act_scale is input quantization)
-            for j in range(layer.num_inputs):
-                inp = layer.get_input(j)
-                # Skip weights/constants
-                if not inp.is_network_input and layer.type != trt.LayerType.CONSTANT:
-                     # Assuming symmetric INT8
-                     # Only set if not already set? TensorRT allows overwriting.
-                     inp.set_dynamic_range(-scale, scale)
-            matched += 1
-
-    print(f"[INFO] Injected scales for {matched} layers (Direct Injection)")
-
-
 def build_engine(args: argparse.Namespace) -> None:
     onnx_path = Path(args.onnx).expanduser().resolve()
     engine_path = Path(args.engine).expanduser().resolve()
     calib_dir = Path(args.calib_dir).expanduser().resolve()
-    scales_dir = Path(args.scales_dir).expanduser().resolve()
 
     if not onnx_path.exists():
         raise FileNotFoundError(f"ONNX file not found: {onnx_path}")
@@ -173,29 +96,8 @@ def build_engine(args: argparse.Namespace) -> None:
     # TensorRT 10.x uses set_memory_pool_limit instead of max_workspace_size
     config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, args.workspace_gb << 30)
     
-    if not args.no_int8:
-        config.set_flag(trt.BuilderFlag.INT8)
-        
-        # Choose calibrator based on available scales
-        scales_file = scales_dir / "model_scales.npz" if scales_dir.is_dir() else None
-        
-        if scales_file and scales_file.exists() and not args.use_entropy:
-            logger.info("✓ Using MoDiffScaleExtractorCalibrator (scales from trained model)")
-            config.int8_calibrator = MoDiffScaleExtractorCalibrator(
-                calib_data_dir=calib_dir,
-                scales_file=scales_file,
-                cache_path=calib_dir / "modiff_int8_scales.cache"
-            )
-            inject_scales_to_network(network, scales_file)
-        else:
-            if scales_file and not scales_file.exists():
-                logger.warning("Extracted scales not found, falling back to entropy calibration")
-            logger.info("Using MoDiffEntropyCalibrator (entropy-based calibration)")
-            config.int8_calibrator = MoDiffEntropyCalibrator(calib_dir)
-        
-        logger.info("INT8 calibration enabled")
-    else:
-        logger.info("Building FP32 engine (INT8 disabled)")
+    # Build FP32 engine (INT8 support removed)
+    logger.info("Building FP32 engine")
 
     profile = builder.create_optimization_profile()
     logger.info(f"Setting optimization profile for {network.num_inputs} inputs")

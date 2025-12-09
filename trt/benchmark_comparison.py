@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Benchmark Comparison: TensorRT FP32 vs INT8 vs INT4 Engines (no PyTorch baseline)
+Benchmark Comparison: TensorRT FP32 vs INT4 Engines
 
 This script compares TensorRT engines:
 1. Inference time (latency)
@@ -273,51 +273,8 @@ def run_benchmark(args):
             logger.warning(f"FP32 TensorRT benchmark failed: {e}")
     else:
         logger.warning(f"FP32 TensorRT engine not found: {fp32_trt_engine}")
-
-    # 2. Benchmark INT8 TensorRT engine
-    int8_engine = Path(args.int8_engine)
-    if int8_engine.exists():
-        try:
-            logger.info("\n" + "="*60)
-            logger.info("Benchmarking INT8 TensorRT Engine")
-            logger.info("="*60)
-            
-            int8_runner = TRTEngineRunner(str(int8_engine), "INT8")
-            
-            # Get output
-            outputs['INT8'] = int8_runner.infer(latent, timesteps)
-            
-            # Benchmark latency
-            latency = int8_runner.benchmark_latency(latent, timesteps,
-                                                     args.warmup, args.iterations)
-            
-            # Compute quality vs FP32 TensorRT baseline if available
-            if baseline_key in outputs:
-                quality = compute_quality_metrics(outputs[baseline_key], outputs['INT8'])
-            else:
-                quality = {'mse': 0, 'psnr_db': 0, 'mae': 0, 'cosine_similarity': 0, 'max_error': 0}
-            
-            engine_size = int8_engine.stat().st_size / (1024 * 1024)
-            
-            results.append({
-                'model': 'INT8 (TensorRT)',
-                'precision': 'INT8',
-                'engine_size_mb': f'{engine_size:.1f}',
-                **latency,
-                **quality,
-            })
-            
-            logger.info(f"  Latency: {latency['mean_ms']:.2f} ± {latency['std_ms']:.2f} ms")
-            logger.info(f"  Throughput: {latency['throughput']:.1f} samples/sec")
-            if baseline_key in outputs:
-                logger.info(f"  Quality vs {baseline_key}: MSE={quality['mse']:.6f}, PSNR={quality['psnr_db']:.2f}dB")
-            
-        except Exception as e:
-            logger.warning(f"INT8 benchmark failed: {e}")
-    else:
-        logger.warning(f"INT8 engine not found: {int8_engine}")
     
-    # 3. Benchmark INT4 TensorRT engine
+    # 2. Benchmark INT4 TensorRT engine
     int4_engine = Path(args.int4_engine)
     if int4_engine.exists():
         try:
@@ -491,9 +448,8 @@ def plot_results(results: List[Dict], output_dir: str):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Benchmark TensorRT FP32 vs INT8 vs INT4 (no PyTorch baseline)")
-    parser.add_argument("--fp32-engine", default="export/modiff_unet_fp32.plan", help="FP32 TensorRT engine path (ordinary model)")
-    parser.add_argument("--int8-engine", default="modiff_unet_int8.plan", help="INT8 engine path")
+    parser = argparse.ArgumentParser(description="Benchmark TensorRT FP32 vs INT4")
+    parser.add_argument("--fp32-engine", default="export/modiff_unet_fp32.plan", help="FP32 TensorRT engine path")
     parser.add_argument("--int4-engine", default="int4_output/modiff_unet_int4.plan", help="INT4 engine path")
     parser.add_argument("--output-dir", default="benchmark_results", help="Output directory")
     parser.add_argument("--batch-size", type=int, default=1, help="Batch size")
@@ -503,7 +459,7 @@ def main():
     
     print("="*60)
     print("MoDiff TensorRT Benchmark")
-    print("FP32 (TensorRT) vs INT8 vs INT4 Comparison")
+    print("FP32 (TensorRT) vs INT4 Comparison")
     print("="*60)
     
     # Create output directory
