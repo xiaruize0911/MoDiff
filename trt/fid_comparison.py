@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-FID Comparison: FP32 vs INT4 TensorRT Engines
+FID Comparison: FP32 vs INT8 vs INT4 TensorRT Engines
 
-Generates samples from both engines and computes FID against CIFAR-10 statistics.
+Generates samples from all engines and computes FID against CIFAR-10 statistics.
 """
 
 import argparse
@@ -366,10 +366,11 @@ def compute_fid_from_stats(fake_dir: str, stats_path: str, device='cuda'):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="FID comparison between FP32 and INT4")
+    parser = argparse.ArgumentParser(description="FID comparison between FP32, INT8, and INT4 vs CIFAR-10")
     parser.add_argument("--fp32-engine", default="export/modiff_unet_fp32.plan", help="FP32 engine path")
+    parser.add_argument("--int8-engine", default="int8_output/modiff_unet_int8.plan", help="INT8 engine path")
     parser.add_argument("--int4-engine", default="int4_output/modiff_unet_int4.plan", help="INT4 engine path")
-    parser.add_argument("--num-samples", type=int, default=1000, help="Number of samples to generate")
+    parser.add_argument("--num-samples", type=int, default=50000, help="Number of samples to generate (default: 50k)")
     parser.add_argument("--num-steps", type=int, default=50, help="DDIM steps")
     parser.add_argument("--output-dir", default="fid_comparison", help="Output directory")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
@@ -381,132 +382,178 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     
     fp32_samples_dir = output_dir / "fp32_samples"
+    int8_samples_dir = output_dir / "int8_samples"
     int4_samples_dir = output_dir / "int4_samples"
+    cifar_real_dir = output_dir / "cifar10_real"
     
     # Load engines
     logger.info("="*60)
-    logger.info("FID Comparison: FP32 vs INT4")
+    logger.info("FID Comparison: FP32 vs INT8 vs INT4 (against CIFAR-10)")
     logger.info("="*60)
     
     logger.info(f"\nGenerating {args.num_samples} samples with {args.num_steps} DDIM steps")
+    logger.info(f"This will take a while for 50k samples...")
+    
+    results = {
+        'num_samples': args.num_samples,
+        'num_steps': args.num_steps,
+        'seed': args.seed,
+    }
+    
+    # First, extract CIFAR-10 images (use all 50k training + 10k test = 60k available)
+    logger.info("\n[Step 1] Preparing CIFAR-10 reference images...")
+    try:
+        import pickle
+        cifar_real_dir.mkdir(parents=True, exist_ok=True)
+        
+        cifar_path = Path(args.cifar_dir)
+        all_images = []
+        
+        # Load all training batches
+        for batch_num in range(1, 6):
+            batch_file = cifar_path / f"data_batch_{batch_num}"
+            if batch_file.exists():
+                with open(batch_file, 'rb') as f:
+                    data = pickle.load(f, encoding='bytes')
+                images = data[b'data'].reshape(-1, 3, 32, 32).transpose(0, 2, 3, 1)
+                all_images.append(images)
+                logger.info(f"  Loaded data_batch_{batch_num}: {len(images)} images")
+        
+        # Load test batch
+        test_batch = cifar_path / "test_batch"
+        if test_batch.exists():
+            with open(test_batch, 'rb') as f:
+                data = pickle.load(f, encoding='bytes')
+            images = data[b'data'].reshape(-1, 3, 32, 32).transpose(0, 2, 3, 1)
+            all_images.append(images)
+            logger.info(f"  Loaded test_batch: {len(images)} images")
+        
+        if not all_images:
+            raise FileNotFoundError(f"No CIFAR-10 data found in {cifar_path}")
+        
+        all_images = np.concatenate(all_images, axis=0)
+        logger.info(f"  Total CIFAR-10 images available: {len(all_images)}")
+        
+        # Save images for FID computation (use all available or num_samples, whichever is smaller)
+        n_real = min(args.num_samples, len(all_images))
+        existing_count = len(list(cifar_real_dir.glob('*.png')))
+        
+        if existing_count >= n_real:
+            logger.info(f"  CIFAR-10 images already extracted ({existing_count} images)")
+        else:
+            logger.info(f"  Saving {n_real} CIFAR-10 images...")
+            for i in tqdm(range(n_real), desc="Saving CIFAR-10"):
+                img = Image.fromarray(all_images[i])
+                img.save(cifar_real_dir / f"cifar_{i:05d}.png")
+            logger.info(f"  Saved {n_real} CIFAR-10 images to {cifar_real_dir}")
+        
+    except Exception as e:
+        logger.error(f"Failed to load CIFAR-10: {e}")
+        raise
     
     # Generate FP32 samples
-    logger.info("\n[1/4] Loading FP32 engine...")
-    fp32_engine = TRTEngine(args.fp32_engine)
+    logger.info("\n[Step 2] Generating FP32 samples...")
+    if not Path(args.fp32_engine).exists():
+        logger.error(f"FP32 engine not found: {args.fp32_engine}")
+        return
     
-    logger.info("[2/4] Generating FP32 samples...")
+    fp32_engine = TRTEngine(args.fp32_engine)
     start = time.time()
     fp32_samples = ddim_sample(fp32_engine, args.num_samples, args.num_steps, seed=args.seed)
     fp32_time = time.time() - start
     save_samples(fp32_samples, fp32_samples_dir, "fp32")
-    logger.info(f"  FP32 generation time: {fp32_time:.1f}s ({fp32_time/args.num_samples:.2f}s/sample)")
+    logger.info(f"  FP32 generation: {fp32_time:.1f}s ({args.num_samples/fp32_time:.2f} samples/s)")
+    results['fp32_time'] = fp32_time
+    del fp32_engine  # Free GPU memory
+    
+    # Generate INT8 samples (if engine exists)
+    int8_time = None
+    if Path(args.int8_engine).exists():
+        logger.info("\n[Step 3] Generating INT8 samples...")
+        int8_engine = TRTEngine(args.int8_engine)
+        start = time.time()
+        int8_samples = ddim_sample(int8_engine, args.num_samples, args.num_steps, seed=args.seed)
+        int8_time = time.time() - start
+        save_samples(int8_samples, int8_samples_dir, "int8")
+        logger.info(f"  INT8 generation: {int8_time:.1f}s ({args.num_samples/int8_time:.2f} samples/s)")
+        results['int8_time'] = int8_time
+        del int8_engine
+    else:
+        logger.warning(f"INT8 engine not found: {args.int8_engine}, skipping...")
     
     # Generate INT4 samples
-    logger.info("\n[3/4] Loading INT4 engine...")
-    int4_engine = TRTEngine(args.int4_engine)
+    int4_time = None
+    if Path(args.int4_engine).exists():
+        logger.info("\n[Step 4] Generating INT4 samples...")
+        int4_engine = TRTEngine(args.int4_engine)
+        start = time.time()
+        int4_samples = ddim_sample(int4_engine, args.num_samples, args.num_steps, seed=args.seed)
+        int4_time = time.time() - start
+        save_samples(int4_samples, int4_samples_dir, "int4")
+        logger.info(f"  INT4 generation: {int4_time:.1f}s ({args.num_samples/int4_time:.2f} samples/s)")
+        results['int4_time'] = int4_time
+        del int4_engine
+    else:
+        logger.warning(f"INT4 engine not found: {args.int4_engine}, skipping...")
     
-    logger.info("[4/4] Generating INT4 samples...")
-    start = time.time()
-    int4_samples = ddim_sample(int4_engine, args.num_samples, args.num_steps, seed=args.seed)
-    int4_time = time.time() - start
-    save_samples(int4_samples, int4_samples_dir, "int4")
-    logger.info(f"  INT4 generation time: {int4_time:.1f}s ({int4_time/args.num_samples:.2f}s/sample)")
-    
-    # Compute FID between FP32 and INT4 (relative FID)
+    # Compute FID scores against CIFAR-10 only
     logger.info("\n" + "="*60)
-    logger.info("Computing FID scores...")
+    logger.info("Computing FID scores against CIFAR-10...")
     logger.info("="*60)
     
-    # FID between FP32 and INT4 (measures quantization degradation)
-    logger.info("\nComputing FID(FP32, INT4) - measures quantization quality...")
-    fid_fp32_int4 = compute_fid(str(fp32_samples_dir), str(int4_samples_dir))
-    logger.info(f"  FID(FP32, INT4) = {fid_fp32_int4:.2f}")
+    # FID(FP32, CIFAR-10)
+    logger.info("\n[Step 5] Computing FID(FP32, CIFAR-10)...")
+    fid_fp32_cifar = compute_fid(str(cifar_real_dir), str(fp32_samples_dir))
+    logger.info(f"  FID(FP32, CIFAR-10) = {fid_fp32_cifar:.2f}")
+    results['fid_fp32_cifar'] = fid_fp32_cifar
     
-    # Try to compute FID against CIFAR-10 if available
-    cifar_real_dir = output_dir / "cifar10_real"
-    if args.cifar_stats and Path(args.cifar_stats).exists():
-        logger.info("\nComputing FID against CIFAR-10 statistics...")
-        fid_fp32_cifar = compute_fid_from_stats(str(fp32_samples_dir), args.cifar_stats)
-        fid_int4_cifar = compute_fid_from_stats(str(int4_samples_dir), args.cifar_stats)
-        logger.info(f"  FID(FP32, CIFAR-10) = {fid_fp32_cifar:.2f}")
+    # FID(INT8, CIFAR-10)
+    fid_int8_cifar = None
+    if int8_time is not None:
+        logger.info("\n[Step 6] Computing FID(INT8, CIFAR-10)...")
+        fid_int8_cifar = compute_fid(str(cifar_real_dir), str(int8_samples_dir))
+        logger.info(f"  FID(INT8, CIFAR-10) = {fid_int8_cifar:.2f}")
+        results['fid_int8_cifar'] = fid_int8_cifar
+    
+    # FID(INT4, CIFAR-10)
+    fid_int4_cifar = None
+    if int4_time is not None:
+        logger.info("\n[Step 7] Computing FID(INT4, CIFAR-10)...")
+        fid_int4_cifar = compute_fid(str(cifar_real_dir), str(int4_samples_dir))
         logger.info(f"  FID(INT4, CIFAR-10) = {fid_int4_cifar:.2f}")
-    else:
-        # Extract CIFAR-10 images for FID computation
-        logger.info("\nExtracting CIFAR-10 test images for FID computation...")
-        try:
-            import pickle
-            cifar_real_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Load CIFAR-10 test batch
-            cifar_path = Path(args.cifar_dir)
-            if cifar_path.exists():
-                test_batch = cifar_path / "test_batch"
-                if test_batch.exists():
-                    with open(test_batch, 'rb') as f:
-                        data = pickle.load(f, encoding='bytes')
-                    
-                    images = data[b'data'].reshape(-1, 3, 32, 32).transpose(0, 2, 3, 1)
-                    
-                    # Save first N images
-                    n_real = min(args.num_samples, len(images))
-                    for i in range(n_real):
-                        img = Image.fromarray(images[i])
-                        img.save(cifar_real_dir / f"cifar_{i:04d}.png")
-                    
-                    logger.info(f"  Saved {n_real} CIFAR-10 images")
-                    
-                    # Compute FID
-                    logger.info("\nComputing FID against CIFAR-10 test set...")
-                    fid_fp32_cifar = compute_fid(str(cifar_real_dir), str(fp32_samples_dir))
-                    fid_int4_cifar = compute_fid(str(cifar_real_dir), str(int4_samples_dir))
-                    logger.info(f"  FID(FP32, CIFAR-10) = {fid_fp32_cifar:.2f}")
-                    logger.info(f"  FID(INT4, CIFAR-10) = {fid_int4_cifar:.2f}")
-                else:
-                    logger.warning("CIFAR-10 test_batch not found, skipping CIFAR-10 FID")
-                    fid_fp32_cifar = None
-                    fid_int4_cifar = None
-            else:
-                logger.warning(f"CIFAR-10 directory not found: {cifar_path}")
-                fid_fp32_cifar = None
-                fid_int4_cifar = None
-        except Exception as e:
-            logger.warning(f"Could not load CIFAR-10: {e}")
-            fid_fp32_cifar = None
-            fid_int4_cifar = None
+        results['fid_int4_cifar'] = fid_int4_cifar
     
     # Summary
     logger.info("\n" + "="*60)
-    logger.info("FID Comparison Results")
+    logger.info("FINAL RESULTS - FID vs CIFAR-10 (lower = better)")
     logger.info("="*60)
     logger.info(f"Number of samples: {args.num_samples}")
     logger.info(f"DDIM steps: {args.num_steps}")
     logger.info(f"Random seed: {args.seed}")
     logger.info("")
-    logger.info(f"Generation time:")
-    logger.info(f"  FP32: {fp32_time:.1f}s ({args.num_samples/fp32_time:.1f} samples/s)")
-    logger.info(f"  INT4: {int4_time:.1f}s ({args.num_samples/int4_time:.1f} samples/s)")
-    logger.info(f"  Speedup: {fp32_time/int4_time:.2f}x")
+    
+    logger.info("Generation Performance:")
+    logger.info(f"  FP32: {fp32_time:.1f}s ({args.num_samples/fp32_time:.2f} samples/s)")
+    if int8_time is not None:
+        speedup_int8 = fp32_time / int8_time
+        logger.info(f"  INT8: {int8_time:.1f}s ({args.num_samples/int8_time:.2f} samples/s) - {speedup_int8:.2f}x speedup")
+        results['speedup_int8'] = speedup_int8
+    if int4_time is not None:
+        speedup_int4 = fp32_time / int4_time
+        logger.info(f"  INT4: {int4_time:.1f}s ({args.num_samples/int4_time:.2f} samples/s) - {speedup_int4:.2f}x speedup")
+        results['speedup_int4'] = speedup_int4
+    
     logger.info("")
-    logger.info(f"FID Scores:")
-    logger.info(f"  FID(FP32, INT4) = {fid_fp32_int4:.2f}  (lower = more similar)")
-    if fid_fp32_cifar is not None:
-        logger.info(f"  FID(FP32, CIFAR-10) = {fid_fp32_cifar:.2f}")
-        logger.info(f"  FID(INT4, CIFAR-10) = {fid_int4_cifar:.2f}")
-        logger.info(f"  FID degradation: {fid_int4_cifar - fid_fp32_cifar:+.2f}")
+    logger.info("FID Scores (vs CIFAR-10, lower = better):")
+    logger.info(f"  FP32: {fid_fp32_cifar:.2f}")
+    if fid_int8_cifar is not None:
+        degradation_int8 = fid_int8_cifar - fid_fp32_cifar
+        logger.info(f"  INT8: {fid_int8_cifar:.2f} (degradation: {degradation_int8:+.2f})")
+    if fid_int4_cifar is not None:
+        degradation_int4 = fid_int4_cifar - fid_fp32_cifar
+        logger.info(f"  INT4: {fid_int4_cifar:.2f} (degradation: {degradation_int4:+.2f})")
     
     # Save results
-    results = {
-        'num_samples': args.num_samples,
-        'num_steps': args.num_steps,
-        'seed': args.seed,
-        'fp32_time': fp32_time,
-        'int4_time': int4_time,
-        'speedup': fp32_time / int4_time,
-        'fid_fp32_int4': fid_fp32_int4,
-        'fid_fp32_cifar': fid_fp32_cifar,
-        'fid_int4_cifar': fid_int4_cifar,
-    }
-    
     with open(output_dir / "fid_results.json", 'w') as f:
         json.dump(results, f, indent=2)
     

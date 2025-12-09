@@ -127,9 +127,20 @@ def build_engine(args: argparse.Namespace) -> None:
     if serialized_engine is None:
         raise RuntimeError("Failed to build TensorRT engine (returned None)")
 
+    # Handle TRT 10.x IHostMemory object
     engine_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    if hasattr(serialized_engine, 'tobytes'):
+        # TRT 10.x: IHostMemory has tobytes()
+        engine_bytes = serialized_engine.tobytes()
+    elif hasattr(serialized_engine, '__bytes__'):
+        engine_bytes = bytes(serialized_engine)
+    else:
+        # Fallback: try direct write (older TRT versions)
+        engine_bytes = serialized_engine
+    
     with engine_path.open("wb") as handle:
-        handle.write(serialized_engine)
+        handle.write(engine_bytes)
     logger.info(f"✓ Saved engine to {engine_path}")
     logger.info(f"Engine size: {engine_path.stat().st_size / 1e6:.1f} MB")
 

@@ -1,0 +1,50 @@
+INT8 Scale Extraction Summary
+==================================================
+
+Total layers: 49
+Scale method: mse
+Symmetric: True
+
+Layer Statistics:
+--------------------------------------------------
+temb.dense.0:
+  scale=0.007854, dynamic_range=0.9975, min=-1.0000, max=1.0000
+temb.dense.1:
+  scale=0.010416, dynamic_range=1.3229, min=-0.2785, max=1.4180
+conv_in:
+  scale=0.028215, dynamic_range=3.5833, min=-5.5804, max=5.1377
+down.0.block.0.conv1:
+  scale=0.030348, dynamic_range=3.8541, min=-0.2785, max=6.1020
+down.0.block.0.temb_proj:
+  scale=0.002066, dynamic_range=0.2624, min=-0.2182, max=0.3607
+down.0.block.0.conv2:
+  scale=0.025048, dynamic_range=3.1811, min=-0.2785, max=6.8548
+down.0.block.1.conv1:
+  scale=0.029999, dynamic_range=3.8099, min=-0.2785, max=6.2164
+down.0.block.1.temb_proj:
+  scale=0.002066, dynamic_range=0.2624, min=-0.2182, max=0.3607
+down.0.block.1.conv2:
+  scale=0.030214, dynamic_range=3.8371, min=-0.2785, max=6.5244
+down.0.downsample.conv:
+  scale=0.019420, dynamic_range=2.4663, min=-4.7967, max=5.0073
+down.1.block.0.conv1:
+  scale=0.030529, dynamic_range=3.8772, min=-0.2785, max=6.2365
+down.1.block.0.temb_proj:
+  scale=0.002066, dynamic_range=0.2624, min=-0.2182, max=0.3607
+down.1.block.0.conv2:
+  scale=0.030513, dynamic_range=3.8751, min=-0.2785, max=7.1673
+down.1.block.0.nin_shortcut:
+  scale=0.013370, dynamic_range=1.6979, min=-2.5456, max=2.5912
+down.1.attn.0.q:
+  scale=0.032146, dynamic_range=4.0825, min=-6.0266, max=6.2065
+down.1.attn.0.k:
+  scale=0.032146, dynamic_range=4.0825, min=-6.0266, max=6.2065
+down.1.attn.0.v:
+  scale=0.032146, dynamic_range=4.0825, min=-6.0266, max=6.2065
+down.1.attn.0.proj_out:
+  scale=0.003490, dynamic_range=0.4432, min=-0.7738, max=0.9338
+down.1.block.1.conv1:
+  scale=0.031241, dynamic_range=3.9676, min=-0.2785, max=5.9483
+down.1.block.1.temb_proj:
+  scale=0.002066, dynamic_range=0.2624, min=-0.2182, max=0.3607
+... and 29 more layers

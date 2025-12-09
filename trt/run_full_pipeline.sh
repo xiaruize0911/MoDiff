@@ -6,9 +6,10 @@
 # This script runs the full pipeline:
 # 1. Export model to ONNX
 # 2. Build FP32 TensorRT engine
-# 3. Build INT4 TensorRT engine (with MSE calibration)
-# 4. Run latency/throughput benchmarks
-# 5. Generate samples and compute FID scores
+# 3. Build INT8 TensorRT engine (native support, MSE calibration)
+# 4. Build INT4 TensorRT engine (via INT8 proxy, MSE calibration)
+# 5. Run latency/throughput benchmarks
+# 6. Generate samples and compute FID scores
 ################################################################################
 
 set -e  # Exit on error
@@ -27,16 +28,18 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 EXPORT_DIR="$SCRIPT_DIR/export"
 CALIB_DIR="$SCRIPT_DIR/calib"
 INT4_DIR="$SCRIPT_DIR/int4_output"
+INT8_DIR="$SCRIPT_DIR/int8_output"
 RESULTS_DIR="$SCRIPT_DIR/benchmark_results"
 FID_DIR="$SCRIPT_DIR/fid_comparison"
 
-# Default parameters
-NUM_SAMPLES=${NUM_SAMPLES:-1000}
+# Default parameters - 50k samples, 50 steps for proper FID evaluation
+NUM_SAMPLES=${NUM_SAMPLES:-50000}
 DDIM_STEPS=${DDIM_STEPS:-50}
 BENCHMARK_ITERS=${BENCHMARK_ITERS:-100}
 SEED=${SEED:-42}
 SKIP_ONNX=${SKIP_ONNX:-0}
 SKIP_FP32=${SKIP_FP32:-0}
+SKIP_INT8=${SKIP_INT8:-0}
 SKIP_INT4=${SKIP_INT4:-0}
 SKIP_BENCHMARK=${SKIP_BENCHMARK:-0}
 SKIP_FID=${SKIP_FID:-0}
@@ -68,6 +71,10 @@ while [[ $# -gt 0 ]]; do
             SKIP_FP32=1
             shift
             ;;
+        --skip-int8)
+            SKIP_INT8=1
+            shift
+            ;;
         --skip-int4)
             SKIP_INT4=1
             shift
@@ -90,6 +97,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --seed N             Random seed (default: 42)"
             echo "  --skip-onnx          Skip ONNX export"
             echo "  --skip-fp32          Skip FP32 engine build"
+            echo "  --skip-int8          Skip INT8 engine build"
             echo "  --skip-int4          Skip INT4 engine build"
             echo "  --skip-benchmark     Skip benchmark comparison"
             echo "  --skip-fid           Skip FID computation"
@@ -128,9 +136,9 @@ print_error() {
 }
 
 # Create directories
-mkdir -p "$EXPORT_DIR" "$CALIB_DIR" "$INT4_DIR" "$RESULTS_DIR" "$FID_DIR"
+mkdir -p "$EXPORT_DIR" "$CALIB_DIR" "$INT4_DIR" "$INT8_DIR" "$RESULTS_DIR" "$FID_DIR"
 
-print_header "MoDiff TensorRT Pipeline - FP32 & INT4"
+print_header "MoDiff TensorRT Pipeline - FP32, INT8 & INT4"
 echo "Configuration:"
 echo "  Project root:     $PROJECT_ROOT"
 echo "  Export directory: $EXPORT_DIR"
@@ -149,9 +157,13 @@ ONNX_FILE="$EXPORT_DIR/modiff_unet_cifar10.onnx"
 
 if [ "$SKIP_ONNX" -eq 1 ]; then
     print_warning "Skipping ONNX export (--skip-onnx)"
-elif [ -f "$ONNX_FILE" ]; then
-    print_success "ONNX file already exists: $ONNX_FILE"
 else
+    # Always re-export ONNX to ensure consistency
+    if [ -f "$ONNX_FILE" ]; then
+        print_step "Removing old ONNX file and re-exporting..."
+        rm -f "$ONNX_FILE"
+    fi
+    
     print_step "Exporting model to ONNX..."
     cd "$PROJECT_ROOT"
     python trt/export_to_onnx.py \
@@ -234,9 +246,86 @@ else
 fi
 
 ################################################################################
-# Step 4: Extract INT4 Scales (Per-Layer from Model)
+# Step 4: Extract INT8 Scales (Per-Layer from Model)
 ################################################################################
-print_header "Step 4: Extract INT4 Quantization Scales"
+print_header "Step 4: Extract INT8 Quantization Scales"
+
+INT8_SCALES_DIR="$EXPORT_DIR/extracted_scales_int8"
+INT8_SCALES="$INT8_SCALES_DIR/model_scales_int8.json"
+
+if [ "$SKIP_INT8" -eq 1 ]; then
+    print_warning "Skipping INT8 scale extraction (--skip-int8)"
+elif [ -f "$INT8_SCALES" ]; then
+    print_success "INT8 per-layer scales already exist: $INT8_SCALES"
+else
+    print_step "Extracting per-layer INT8 scales from model (MSE method)..."
+    cd "$PROJECT_ROOT"
+    
+    if [ -f "trt/extract_scales_int8.py" ]; then
+        python trt/extract_scales_int8.py \
+            --config configs/cifar10.yml \
+            --calib-dir "$CALIB_DIR" \
+            --output "$INT8_SCALES_DIR" \
+            --scale-method mse \
+            --num-samples 64 \
+            --use-pretrained
+        
+        if [ -f "$INT8_SCALES" ]; then
+            NUM_LAYERS=$(python -c "import json; print(len(json.load(open('$INT8_SCALES'))))" 2>/dev/null || echo "?")
+            print_success "INT8 scales extracted for $NUM_LAYERS layers"
+        else
+            print_warning "Layer scales file not found, will use calibrator during engine build"
+        fi
+    else
+        print_warning "extract_scales_int8.py not found, scales will be computed during engine build"
+    fi
+fi
+
+################################################################################
+# Step 5: Build INT8 TensorRT Engine
+################################################################################
+print_header "Step 5: Build INT8 TensorRT Engine"
+
+INT8_ENGINE="$INT8_DIR/modiff_unet_int8.plan"
+
+if [ "$SKIP_INT8" -eq 1 ]; then
+    print_warning "Skipping INT8 engine build (--skip-int8)"
+elif [ -f "$INT8_ENGINE" ]; then
+    SIZE=$(du -h "$INT8_ENGINE" | cut -f1)
+    print_success "INT8 engine already exists: $INT8_ENGINE ($SIZE)"
+else
+    print_step "Building INT8 TensorRT engine..."
+    cd "$PROJECT_ROOT"
+    
+    # Use per-layer scales if available
+    SCALES_ARG=""
+    if [ -f "$INT8_SCALES" ]; then
+        SCALES_ARG="--scales-file $INT8_SCALES"
+        print_step "Using per-layer scales from $INT8_SCALES"
+    fi
+    
+    python trt/build_engine_int8.py \
+        --onnx "$ONNX_FILE" \
+        --calib-dir "$CALIB_DIR" \
+        $SCALES_ARG \
+        --engine "$INT8_ENGINE" \
+        --workspace-gb 8 \
+        --scale-method mse \
+        --fp16
+    
+    if [ -f "$INT8_ENGINE" ]; then
+        SIZE=$(du -h "$INT8_ENGINE" | cut -f1)
+        print_success "INT8 engine built: $INT8_ENGINE ($SIZE)"
+    else
+        print_error "Failed to build INT8 engine"
+        exit 1
+    fi
+fi
+
+################################################################################
+# Step 6: Extract INT4 Scales (Per-Layer from Model)
+################################################################################
+print_header "Step 6: Extract INT4 Quantization Scales"
 
 INT4_SCALES_DIR="$EXPORT_DIR/extracted_scales_int4"
 INT4_SCALES="$INT4_SCALES_DIR/model_scales_int4.json"
@@ -270,9 +359,9 @@ else
 fi
 
 ################################################################################
-# Step 5: Build INT4 TensorRT Engine
+# Step 7: Build INT4 TensorRT Engine
 ################################################################################
-print_header "Step 5: Build INT4 TensorRT Engine"
+print_header "Step 7: Build INT4 TensorRT Engine"
 
 INT4_ENGINE="$INT4_DIR/modiff_unet_int4.plan"
 
@@ -315,18 +404,19 @@ else
 fi
 
 ################################################################################
-# Step 6: Run Benchmark Comparison
+# Step 8: Run Benchmark Comparison
 ################################################################################
-print_header "Step 6: Run Latency/Throughput Benchmark"
+print_header "Step 8: Run Latency/Throughput Benchmark"
 
 if [ "$SKIP_BENCHMARK" -eq 1 ]; then
     print_warning "Skipping benchmark (--skip-benchmark)"
 else
-    print_step "Running benchmark comparison..."
+    print_step "Running benchmark comparison (FP32 vs INT8 vs INT4)..."
     cd "$PROJECT_ROOT"
     
     python trt/benchmark_comparison.py \
         --fp32-engine "$FP32_ENGINE" \
+        --int8-engine "$INT8_ENGINE" \
         --int4-engine "$INT4_ENGINE" \
         --output-dir "$RESULTS_DIR" \
         --warmup 10 \
@@ -344,9 +434,9 @@ else
 fi
 
 ################################################################################
-# Step 7: Compute FID Scores
+# Step 9: Compute FID Scores
 ################################################################################
-print_header "Step 7: Compute FID Scores"
+print_header "Step 9: Compute FID Scores"
 
 if [ "$SKIP_FID" -eq 1 ]; then
     print_warning "Skipping FID computation (--skip-fid)"
@@ -356,6 +446,7 @@ else
     
     python trt/fid_comparison.py \
         --fp32-engine "$FP32_ENGINE" \
+        --int8-engine "$INT8_ENGINE" \
         --int4-engine "$INT4_ENGINE" \
         --num-samples "$NUM_SAMPLES" \
         --num-steps "$DDIM_STEPS" \
@@ -391,6 +482,11 @@ if [ -f "$FP32_ENGINE" ]; then
     echo "  FP32 Engine:    $FP32_ENGINE ($SIZE)"
 fi
 
+if [ -f "$INT8_ENGINE" ]; then
+    SIZE=$(du -h "$INT8_ENGINE" | cut -f1)
+    echo "  INT8 Engine:    $INT8_ENGINE ($SIZE)"
+fi
+
 if [ -f "$INT4_ENGINE" ]; then
     SIZE=$(du -h "$INT4_ENGINE" | cut -f1)
     echo "  INT4 Engine:    $INT4_ENGINE ($SIZE)"
@@ -410,6 +506,7 @@ echo ""
 echo "To re-run specific steps, use:"
 echo "  --skip-onnx       Skip ONNX export"
 echo "  --skip-fp32       Skip FP32 engine build"
+echo "  --skip-int8       Skip INT8 engine build"
 echo "  --skip-int4       Skip INT4 engine build"
 echo "  --skip-benchmark  Skip benchmark"
 echo "  --skip-fid        Skip FID computation"

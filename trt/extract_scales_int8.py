@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-INT4 Scale Extractor for MoDiff - Extract Scales from Trained Model
+INT8 Scale Extractor for MoDiff - Extract Scales from Trained Model
 
-This script extracts INT4 quantization scales from a trained MoDiff model
-and saves them for use with TensorRT INT4 engine building.
+This script extracts INT8 quantization scales from a trained MoDiff model
+and saves them for use with TensorRT INT8 engine building.
 
 The extraction follows the paper's methodology:
 1. MSE-based scale search for optimal quantization
 2. Per-layer scale extraction for Conv2d/Linear layers
-3. MoDiff modulation-aware scale computation
+3. Native TensorRT INT8 support (no proxy hack)
 
 Usage:
-    python extract_scales_int4.py --config configs/cifar10.yml --ckpt model.pth --output scales_int4.npz
+    python extract_scales_int8.py --config configs/cifar10.yml --ckpt model.pth --output scales_int8/
 
 Paper: "Modulated Diffusion: Accelerating Generative Modeling with Modulated Quantization"
 """
@@ -31,7 +31,7 @@ import torch.nn as nn
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from int4_calibrator import INT4ScaleComputer
+from int8_calibrator import INT8ScaleComputer
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
@@ -39,7 +39,7 @@ logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Extract INT4 scales from trained MoDiff model",
+        description="Extract INT8 scales from trained MoDiff model",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -59,15 +59,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output",
-        default="extracted_scales_int4",
+        default="extracted_scales_int8",
         help="Output directory for scales",
-    )
-    parser.add_argument(
-        "--n-bits",
-        type=int,
-        default=4,
-        choices=[3, 4],
-        help="Number of quantization bits",
     )
     parser.add_argument(
         "--scale-method",
@@ -89,29 +82,27 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-class INT4ScaleExtractor:
+class INT8ScaleExtractor:
     """
-    Extract INT4 quantization scales from a PyTorch model.
+    Extract INT8 quantization scales from a PyTorch model.
     
     This class hooks into the model's forward pass to collect activation
-    statistics and compute optimal INT4 scales using MSE search.
+    statistics and compute optimal INT8 scales using MSE search.
     """
     
     def __init__(
         self,
         model: nn.Module,
-        n_bits: int = 4,
         symmetric: bool = True,
         scale_method: str = 'mse',
     ):
         self.model = model
-        self.scale_computer = INT4ScaleComputer(
-            n_bits=n_bits,
+        self.scale_computer = INT8ScaleComputer(
+            n_bits=8,
             symmetric=symmetric,
             scale_method=scale_method,
         )
         
-        self.n_bits = n_bits
         self.symmetric = symmetric
         self.scale_method = scale_method
         
@@ -215,14 +206,14 @@ class INT4ScaleExtractor:
         
     def compute_scales(self) -> Dict[str, Dict]:
         """
-        Compute INT4 scales from collected statistics.
+        Compute INT8 scales from collected statistics.
         
         Returns:
             Dictionary mapping layer names to scale info
         """
         scales = {}
         
-        logger.info(f"Computing INT{self.n_bits} scales using {self.scale_method} method...")
+        logger.info(f"Computing INT8 scales using {self.scale_method} method...")
         
         for name, stats in self.activation_stats.items():
             # Combine all samples for MSE search
@@ -231,14 +222,18 @@ class INT4ScaleExtractor:
             # Compute scale using MSE search
             scale, zero_point = self.scale_computer.compute_scale(all_samples)
             
+            # Compute dynamic range for TensorRT
+            dynamic_range = scale * 127  # q_max for INT8 symmetric
+            
             scales[name] = {
-                'act_scale': float(scale),
-                'act_zero_point': float(zero_point),
+                'scale': float(scale),
+                'zero_point': float(zero_point),
+                'dynamic_range': float(dynamic_range),
                 'min': float(stats['min']),
                 'max': float(stats['max']),
                 'absmax': float(stats['absmax']),
                 'shape': stats['shape'],
-                'n_bits': self.n_bits,
+                'n_bits': 8,
                 'symmetric': self.symmetric,
                 'scale_method': self.scale_method,
             }
@@ -309,7 +304,7 @@ def load_model(config_path: Path, ckpt_path: Optional[Path] = None, use_pretrain
     with open(config_path) as f:
         config_dict = yaml.safe_load(f)
     
-    # Convert to namespace for attribute access (Model expects config.model.ch etc.)
+    # Convert to namespace for attribute access
     config = dict_to_namespace(config_dict)
     
     # Add missing required attributes for model forward pass
@@ -325,7 +320,6 @@ def load_model(config_path: Path, ckpt_path: Optional[Path] = None, use_pretrain
         
         if use_pretrained:
             logger.info("Loading pretrained weights...")
-            # Try to load pretrained weights
             pretrained_paths = [
                 Path.home() / "modiff_trt" / "models" / "cifar10_ema.pth",
                 Path(__file__).parent.parent / "models" / "cifar10" / "model.pth",
@@ -356,21 +350,19 @@ def load_model(config_path: Path, ckpt_path: Optional[Path] = None, use_pretrain
 def save_scales(
     scales: Dict[str, Dict],
     output_dir: Path,
-    n_bits: int,
 ) -> None:
     """Save extracted scales to files."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Save as JSON for human readability
-    json_path = output_dir / f"model_scales_int{n_bits}.json"
+    # Save as JSON for TensorRT and human readability
+    json_path = output_dir / "model_scales_int8.json"
     with open(json_path, 'w') as f:
         json.dump(scales, f, indent=2)
     logger.info(f"Saved scales to {json_path}")
     
     # Save as NPZ for efficient loading
-    npz_path = output_dir / f"model_scales_int{n_bits}.npz"
-    # Convert nested dict to flat arrays
+    npz_path = output_dir / "model_scales_int8.npz"
     flat_scales = {}
     for layer_name, layer_scales in scales.items():
         for key, value in layer_scales.items():
@@ -383,9 +375,9 @@ def save_scales(
     logger.info(f"Saved scales to {npz_path}")
     
     # Save summary
-    summary_path = output_dir / f"extraction_summary_int{n_bits}.txt"
+    summary_path = output_dir / "extraction_summary_int8.txt"
     with open(summary_path, 'w') as f:
-        f.write(f"INT{n_bits} Scale Extraction Summary\n")
+        f.write("INT8 Scale Extraction Summary\n")
         f.write("=" * 50 + "\n\n")
         f.write(f"Total layers: {len(scales)}\n")
         f.write(f"Scale method: {list(scales.values())[0].get('scale_method', 'unknown')}\n")
@@ -395,7 +387,8 @@ def save_scales(
         f.write("-" * 50 + "\n")
         for name, s in list(scales.items())[:20]:  # First 20 layers
             f.write(f"{name}:\n")
-            f.write(f"  scale={s.get('act_scale', 'N/A'):.6f}, ")
+            f.write(f"  scale={s.get('scale', 'N/A'):.6f}, ")
+            f.write(f"dynamic_range={s.get('dynamic_range', 'N/A'):.4f}, ")
             f.write(f"min={s.get('min', 'N/A'):.4f}, ")
             f.write(f"max={s.get('max', 'N/A'):.4f}\n")
         if len(scales) > 20:
@@ -407,8 +400,9 @@ def main():
     args = parse_args()
     
     print("=" * 60)
-    print(f"MoDiff INT{args.n_bits} Scale Extractor")
+    print("MoDiff INT8 Scale Extractor")
     print("Following paper: Modulated Diffusion (ICML 2025)")
+    print("Native TensorRT INT8 Support")
     print("=" * 60)
     
     # Resolve paths
@@ -431,9 +425,8 @@ def main():
         logger.info("Model moved to CUDA")
     
     # Extract scales
-    extractor = INT4ScaleExtractor(
+    extractor = INT8ScaleExtractor(
         model,
-        n_bits=args.n_bits,
         symmetric=True,
         scale_method=args.scale_method,
     )
@@ -441,9 +434,9 @@ def main():
     scales = extractor.extract(calib_data, timesteps)
     
     # Save scales
-    save_scales(scales, output_dir, args.n_bits)
+    save_scales(scales, output_dir)
     
-    print(f"\n✓ Extracted INT{args.n_bits} scales for {len(scales)} layers")
+    print(f"\n✓ Extracted INT8 scales for {len(scales)} layers")
     print(f"  Output: {output_dir}")
 
 

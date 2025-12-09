@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generate samples using TensorRT FP32 and INT4 engines for visual comparison.
+Generate samples using TensorRT FP32, INT8, and INT4 engines for visual comparison.
 
 This script runs the full DDIM sampling process with each engine variant
 and saves the generated images for quality comparison.
@@ -429,6 +429,65 @@ def generate_samples(args):
             logger.warning(f"INT4 engine not found: {args.int4_engine}")
     
     # ====================
+    # INT8 TensorRT Engine
+    # ====================
+    if args.run_int8 and Path(args.int8_engine).exists():
+        logger.info("\n" + "="*60)
+        logger.info("Generating samples with INT8 TensorRT engine")
+        logger.info("="*60)
+        
+        try:
+            int8_model = TRTModelRunner(args.int8_engine, "INT8")
+            
+            torch.manual_seed(args.seed)
+            start_time = time.time()
+            
+            x = initial_noise.clone()
+            timesteps, alphas, alphas_prev = sampler.get_schedule()
+            
+            for i, step in enumerate(reversed(range(len(timesteps)))):
+                t = timesteps[step]
+                t_tensor = torch.full((shape[0],), t, device=device, dtype=torch.long)
+                
+                noise_pred = int8_model(x, t_tensor)
+                if not isinstance(noise_pred, torch.Tensor):
+                    noise_pred = torch.from_numpy(noise_pred)
+                noise_pred = noise_pred.to(device)
+                
+                alpha = alphas[step]
+                alpha_prev = alphas_prev[step]
+                
+                pred_x0 = (x - np.sqrt(1 - alpha) * noise_pred) / np.sqrt(alpha)
+                dir_xt = np.sqrt(1 - alpha_prev) * noise_pred
+                x = np.sqrt(alpha_prev) * pred_x0 + dir_xt
+                
+                if (i + 1) % 10 == 0:
+                    logger.info(f"  Step {i + 1}/{len(timesteps)}")
+            
+            int8_time = time.time() - start_time
+            
+            int8_samples = x
+            all_samples['int8'] = int8_samples.clone()
+            
+            # Save INT8 samples
+            images = samples_to_images(int8_samples)
+            for i, img in enumerate(images):
+                img.save(output_dir / f"int8_sample_{i:03d}.png")
+            save_image_grid(images, str(output_dir / "int8_grid.png"))
+            
+            results['int8'] = {
+                'time': int8_time,
+                'time_per_sample': int8_time / args.num_samples,
+            }
+            logger.info(f"INT8 generation time: {int8_time:.2f}s ({int8_time/args.num_samples:.2f}s/sample)")
+            
+        except Exception as e:
+            logger.warning(f"INT8 generation failed: {e}")
+    else:
+        if args.run_int8:
+            logger.warning(f"INT8 engine not found: {args.int8_engine}")
+    
+    # ====================
     # Create comparison grid
     # ====================
     if len(all_samples) > 1:
@@ -481,7 +540,7 @@ def generate_samples(args):
 
         fp32_flat = all_samples['fp32'].flatten().cpu().numpy()
 
-        for model_name in ['int4']:
+        for model_name in ['int8', 'int4']:
             if model_name in all_samples:
                 other_flat = all_samples[model_name].flatten().cpu().numpy()
 
@@ -533,17 +592,20 @@ def generate_samples(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate samples with TensorRT FP32/INT4 engines")
+    parser = argparse.ArgumentParser(description="Generate samples with TensorRT FP32/INT8/INT4 engines")
     parser.add_argument("--fp32-engine", default="export/modiff_unet_fp32.plan", help="FP32 TensorRT engine path")
     parser.add_argument("--int4-engine", default="int4_output/modiff_unet_int4.plan", help="INT4 engine path")
+    parser.add_argument("--int8-engine", default="int8_output/modiff_unet_int8.plan", help="INT8 engine path")
     parser.add_argument("--output-dir", default="generated_samples", help="Output directory")
     parser.add_argument("--num-samples", type=int, default=4, help="Number of samples to generate")
     parser.add_argument("--ddim-steps", type=int, default=50, help="Number of DDIM steps")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--run-fp32", action="store_true", default=True, help="Run FP32 engine")
     parser.add_argument("--run-int4", action="store_true", default=True, help="Run INT4 engine")
+    parser.add_argument("--run-int8", action="store_true", default=True, help="Run INT8 engine")
     parser.add_argument("--skip-fp32", action="store_true", help="Skip FP32 engine")
     parser.add_argument("--skip-int4", action="store_true", help="Skip INT4 engine")
+    parser.add_argument("--skip-int8", action="store_true", help="Skip INT8 engine")
     args = parser.parse_args()
     
     # Handle skip flags
@@ -551,10 +613,12 @@ def main():
         args.run_fp32 = False
     if args.skip_int4:
         args.run_int4 = False
+    if args.skip_int8:
+        args.run_int8 = False
     
     print("="*60)
     print("MoDiff Sample Generation (TensorRT)")
-    print("FP32 vs INT4 Comparison")
+    print("FP32 vs INT8 vs INT4 Comparison")
     print("="*60)
     
     generate_samples(args)

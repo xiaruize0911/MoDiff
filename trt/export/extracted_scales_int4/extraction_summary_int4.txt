@@ -1,0 +1,50 @@
+INT4 Scale Extraction Summary
+==================================================
+
+Total layers: 49
+Scale method: mse
+Symmetric: True
+
+Layer Statistics:
+--------------------------------------------------
+temb.dense.0:
+  scale=0.139105, min=-1.0000, max=1.0000
+temb.dense.1:
+  scale=0.104172, min=-0.2785, max=1.4682
+conv_in:
+  scale=0.337798, min=-5.5804, max=5.1377
+down.0.block.0.conv1:
+  scale=0.325144, min=-0.2785, max=6.1081
+down.0.block.0.temb_proj:
+  scale=0.024521, min=-0.1948, max=0.4146
+down.0.block.0.conv2:
+  scale=0.323536, min=-0.2785, max=6.3974
+down.0.block.1.conv1:
+  scale=0.318189, min=-0.2785, max=6.5463
+down.0.block.1.temb_proj:
+  scale=0.024521, min=-0.1948, max=0.4146
+down.0.block.1.conv2:
+  scale=0.310109, min=-0.2785, max=6.5578
+down.0.downsample.conv:
+  scale=0.310904, min=-4.9615, max=5.4901
+down.1.block.0.conv1:
+  scale=0.310312, min=-0.2785, max=5.8284
+down.1.block.0.temb_proj:
+  scale=0.024521, min=-0.1948, max=0.4146
+down.1.block.0.conv2:
+  scale=0.324296, min=-0.2785, max=6.4063
+down.1.block.0.nin_shortcut:
+  scale=0.146507, min=-2.7474, max=2.6758
+down.1.attn.0.q:
+  scale=0.359224, min=-6.3988, max=5.9067
+down.1.attn.0.k:
+  scale=0.359224, min=-6.3988, max=5.9067
+down.1.attn.0.v:
+  scale=0.359224, min=-6.3988, max=5.9067
+down.1.attn.0.proj_out:
+  scale=0.041270, min=-0.8379, max=0.9121
+down.1.block.1.conv1:
+  scale=0.309267, min=-0.2785, max=5.8293
+down.1.block.1.temb_proj:
+  scale=0.024521, min=-0.1948, max=0.4146
+... and 29 more layers
