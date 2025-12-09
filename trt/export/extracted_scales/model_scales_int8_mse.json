@@ -1,0 +1,1762 @@
+{
+  "temb.dense.0": {
+    "act_scale": 0.008056947427026168,
+    "act_zero_point": 0.0,
+    "min": -1.0,
+    "max": 1.0,
+    "absmax": 1.0,
+    "shape": [
+      64,
+      128
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "temb.dense.1": {
+    "act_scale": 0.06703677210424373,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 8.194204330444336,
+    "absmax": 8.194204330444336,
+    "shape": [
+      64,
+      512
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "conv_in": {
+    "act_scale": 0.030577396146154897,
+    "act_zero_point": 0.0,
+    "min": -5.580355644226074,
+    "max": 5.557989120483398,
+    "absmax": 5.580355644226074,
+    "shape": [
+      64,
+      3,
+      32,
+      32
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.0.block.0.conv1": {
+    "act_scale": 0.021188987593733114,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 7.075734615325928,
+    "absmax": 7.075734615325928,
+    "shape": [
+      64,
+      128,
+      32,
+      32
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.0.block.0.temb_proj": {
+    "act_scale": 0.12243444260251575,
+    "act_zero_point": 0.0,
+    "min": -0.27846455574035645,
+    "max": 15.774557113647461,
+    "absmax": 15.774557113647461,
+    "shape": [
+      64,
+      512
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.0.block.0.conv2": {
+    "act_scale": 0.014538180066740312,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 11.77772331237793,
+    "absmax": 11.77772331237793,
+    "shape": [
+      64,
+      128,
+      32,
+      32
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.0.block.1.conv1": {
+    "act_scale": 0.03431084279104585,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 8.02025318145752,
+    "absmax": 8.02025318145752,
+    "shape": [
+      64,
+      128,
+      32,
+      32
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.0.block.1.temb_proj": {
+    "act_scale": 0.12243444260251575,
+    "act_zero_point": 0.0,
+    "min": -0.27846455574035645,
+    "max": 15.774557113647461,
+    "absmax": 15.774557113647461,
+    "shape": [
+      64,
+      512
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.0.block.1.conv2": {
+    "act_scale": 0.029962894928480956,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 10.838547706604004,
+    "absmax": 10.838547706604004,
+    "shape": [
+      64,
+      128,
+      32,
+      32
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.0.downsample.conv": {
+    "act_scale": 0.06628618750833512,
+    "act_zero_point": 0.0,
+    "min": -21.3792667388916,
+    "max": 23.173561096191406,
+    "absmax": 23.173561096191406,
+    "shape": [
+      64,
+      128,
+      33,
+      33
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.1.block.0.conv1": {
+    "act_scale": 0.05313703667375131,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 8.931897163391113,
+    "absmax": 8.931897163391113,
+    "shape": [
+      64,
+      128,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.1.block.0.temb_proj": {
+    "act_scale": 0.12243444260251575,
+    "act_zero_point": 0.0,
+    "min": -0.27846455574035645,
+    "max": 15.774557113647461,
+    "absmax": 15.774557113647461,
+    "shape": [
+      64,
+      512
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.1.block.0.conv2": {
+    "act_scale": 0.02305401782758915,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 5.528620719909668,
+    "absmax": 5.528620719909668,
+    "shape": [
+      64,
+      256,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.1.block.0.nin_shortcut": {
+    "act_scale": 0.1795026772044813,
+    "act_zero_point": 0.0,
+    "min": -41.4730339050293,
+    "max": 67.94676971435547,
+    "absmax": 67.94676971435547,
+    "shape": [
+      64,
+      128,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.1.attn.0.q": {
+    "act_scale": 0.009502768199862704,
+    "act_zero_point": 0.0,
+    "min": -3.1733508110046387,
+    "max": 3.1905758380889893,
+    "absmax": 3.1905758380889893,
+    "shape": [
+      64,
+      256,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.1.attn.0.k": {
+    "act_scale": 0.009502768199862704,
+    "act_zero_point": 0.0,
+    "min": -3.1733508110046387,
+    "max": 3.1905758380889893,
+    "absmax": 3.1905758380889893,
+    "shape": [
+      64,
+      256,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.1.attn.0.v": {
+    "act_scale": 0.009502768199862704,
+    "act_zero_point": 0.0,
+    "min": -3.1733508110046387,
+    "max": 3.1905758380889893,
+    "absmax": 3.1905758380889893,
+    "shape": [
+      64,
+      256,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.1.attn.0.proj_out": {
+    "act_scale": 0.012321976672718445,
+    "act_zero_point": 0.0,
+    "min": -8.130783081054688,
+    "max": 5.917191505432129,
+    "absmax": 8.130783081054688,
+    "shape": [
+      64,
+      256,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.1.block.1.conv1": {
+    "act_scale": 0.030648409213805874,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 12.969893455505371,
+    "absmax": 12.969893455505371,
+    "shape": [
+      64,
+      256,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.1.block.1.temb_proj": {
+    "act_scale": 0.12243444260251575,
+    "act_zero_point": 0.0,
+    "min": -0.27846455574035645,
+    "max": 15.774557113647461,
+    "absmax": 15.774557113647461,
+    "shape": [
+      64,
+      512
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.1.block.1.conv2": {
+    "act_scale": 0.01737462605969638,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 6.484951972961426,
+    "absmax": 6.484951972961426,
+    "shape": [
+      64,
+      256,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.1.attn.1.q": {
+    "act_scale": 0.015163124389848685,
+    "act_zero_point": 0.0,
+    "min": -2.564565896987915,
+    "max": 2.577394962310791,
+    "absmax": 2.577394962310791,
+    "shape": [
+      64,
+      256,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.1.attn.1.k": {
+    "act_scale": 0.015163124389848685,
+    "act_zero_point": 0.0,
+    "min": -2.564565896987915,
+    "max": 2.577394962310791,
+    "absmax": 2.577394962310791,
+    "shape": [
+      64,
+      256,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.1.attn.1.v": {
+    "act_scale": 0.015163124389848685,
+    "act_zero_point": 0.0,
+    "min": -2.564565896987915,
+    "max": 2.577394962310791,
+    "absmax": 2.577394962310791,
+    "shape": [
+      64,
+      256,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.1.attn.1.proj_out": {
+    "act_scale": 0.018776896187070728,
+    "act_zero_point": 0.0,
+    "min": -6.472808361053467,
+    "max": 6.42771053314209,
+    "absmax": 6.472808361053467,
+    "shape": [
+      64,
+      256,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.1.downsample.conv": {
+    "act_scale": 0.06782352183851774,
+    "act_zero_point": 0.0,
+    "min": -14.842743873596191,
+    "max": 18.100299835205078,
+    "absmax": 18.100299835205078,
+    "shape": [
+      64,
+      256,
+      17,
+      17
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.2.block.0.conv1": {
+    "act_scale": 0.04537383012173142,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 13.252025604248047,
+    "absmax": 13.252025604248047,
+    "shape": [
+      64,
+      256,
+      8,
+      8
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.2.block.0.temb_proj": {
+    "act_scale": 0.12243444260251575,
+    "act_zero_point": 0.0,
+    "min": -0.27846455574035645,
+    "max": 15.774557113647461,
+    "absmax": 15.774557113647461,
+    "shape": [
+      64,
+      512
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.2.block.0.conv2": {
+    "act_scale": 0.022802367753101915,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 5.805272579193115,
+    "absmax": 5.805272579193115,
+    "shape": [
+      64,
+      256,
+      8,
+      8
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.2.block.1.conv1": {
+    "act_scale": 0.033847939680823565,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 10.204753875732422,
+    "absmax": 10.204753875732422,
+    "shape": [
+      64,
+      256,
+      8,
+      8
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.2.block.1.temb_proj": {
+    "act_scale": 0.12243444260251575,
+    "act_zero_point": 0.0,
+    "min": -0.27846455574035645,
+    "max": 15.774557113647461,
+    "absmax": 15.774557113647461,
+    "shape": [
+      64,
+      512
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.2.block.1.conv2": {
+    "act_scale": 0.021217456611464,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 5.8154072761535645,
+    "absmax": 5.8154072761535645,
+    "shape": [
+      64,
+      256,
+      8,
+      8
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.2.downsample.conv": {
+    "act_scale": 0.1055290296198521,
+    "act_zero_point": 0.0,
+    "min": -27.30423355102539,
+    "max": 23.74290657043457,
+    "absmax": 27.30423355102539,
+    "shape": [
+      64,
+      256,
+      9,
+      9
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.3.block.0.conv1": {
+    "act_scale": 0.03898405828500982,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 7.739020824432373,
+    "absmax": 7.739020824432373,
+    "shape": [
+      64,
+      256,
+      4,
+      4
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.3.block.0.temb_proj": {
+    "act_scale": 0.12243444260251575,
+    "act_zero_point": 0.0,
+    "min": -0.27846455574035645,
+    "max": 15.774557113647461,
+    "absmax": 15.774557113647461,
+    "shape": [
+      64,
+      512
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.3.block.0.conv2": {
+    "act_scale": 0.038701000652041684,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 7.167481899261475,
+    "absmax": 7.167481899261475,
+    "shape": [
+      64,
+      256,
+      4,
+      4
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.3.block.1.conv1": {
+    "act_scale": 0.03421032765330159,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 8.180906295776367,
+    "absmax": 8.180906295776367,
+    "shape": [
+      64,
+      256,
+      4,
+      4
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.3.block.1.temb_proj": {
+    "act_scale": 0.12243444260251575,
+    "act_zero_point": 0.0,
+    "min": -0.27846455574035645,
+    "max": 15.774557113647461,
+    "absmax": 15.774557113647461,
+    "shape": [
+      64,
+      512
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "down.3.block.1.conv2": {
+    "act_scale": 0.0393249642258279,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 9.369084358215332,
+    "absmax": 9.369084358215332,
+    "shape": [
+      64,
+      256,
+      4,
+      4
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "mid.block_1.conv1": {
+    "act_scale": 0.03444294469468227,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 7.487817287445068,
+    "absmax": 7.487817287445068,
+    "shape": [
+      64,
+      256,
+      4,
+      4
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "mid.block_1.temb_proj": {
+    "act_scale": 0.12243444260251575,
+    "act_zero_point": 0.0,
+    "min": -0.27846455574035645,
+    "max": 15.774557113647461,
+    "absmax": 15.774557113647461,
+    "shape": [
+      64,
+      512
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "mid.block_1.conv2": {
+    "act_scale": 0.04561446435713383,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 7.858548164367676,
+    "absmax": 7.858548164367676,
+    "shape": [
+      64,
+      256,
+      4,
+      4
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "mid.attn_1.q": {
+    "act_scale": 0.012649779576518737,
+    "act_zero_point": 0.0,
+    "min": -2.1470701694488525,
+    "max": 1.9349524974822998,
+    "absmax": 2.1470701694488525,
+    "shape": [
+      64,
+      256,
+      4,
+      4
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "mid.attn_1.k": {
+    "act_scale": 0.012649779576518737,
+    "act_zero_point": 0.0,
+    "min": -2.1470701694488525,
+    "max": 1.9349524974822998,
+    "absmax": 2.1470701694488525,
+    "shape": [
+      64,
+      256,
+      4,
+      4
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "mid.attn_1.v": {
+    "act_scale": 0.012649779576518737,
+    "act_zero_point": 0.0,
+    "min": -2.1470701694488525,
+    "max": 1.9349524974822998,
+    "absmax": 2.1470701694488525,
+    "shape": [
+      64,
+      256,
+      4,
+      4
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "mid.attn_1.proj_out": {
+    "act_scale": 0.02047651593425171,
+    "act_zero_point": 0.0,
+    "min": -3.9474287033081055,
+    "max": 4.37182092666626,
+    "absmax": 4.37182092666626,
+    "shape": [
+      64,
+      256,
+      4,
+      4
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "mid.block_2.conv1": {
+    "act_scale": 0.033960194156494726,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 6.222155570983887,
+    "absmax": 6.222155570983887,
+    "shape": [
+      64,
+      256,
+      4,
+      4
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "mid.block_2.temb_proj": {
+    "act_scale": 0.12243444260251575,
+    "act_zero_point": 0.0,
+    "min": -0.27846455574035645,
+    "max": 15.774557113647461,
+    "absmax": 15.774557113647461,
+    "shape": [
+      64,
+      512
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "mid.block_2.conv2": {
+    "act_scale": 0.0452352815981669,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 8.83521842956543,
+    "absmax": 8.83521842956543,
+    "shape": [
+      64,
+      256,
+      4,
+      4
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.3.block.0.conv1": {
+    "act_scale": 0.03903566331801964,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 8.735618591308594,
+    "absmax": 8.735618591308594,
+    "shape": [
+      64,
+      512,
+      4,
+      4
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.3.block.0.temb_proj": {
+    "act_scale": 0.12243444260251575,
+    "act_zero_point": 0.0,
+    "min": -0.27846455574035645,
+    "max": 15.774557113647461,
+    "absmax": 15.774557113647461,
+    "shape": [
+      64,
+      512
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.3.block.0.conv2": {
+    "act_scale": 0.06616876958369032,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 11.755904197692871,
+    "absmax": 11.755904197692871,
+    "shape": [
+      64,
+      256,
+      4,
+      4
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.3.block.0.nin_shortcut": {
+    "act_scale": 0.4683595366535992,
+    "act_zero_point": 0.0,
+    "min": -76.88036346435547,
+    "max": 98.99517059326172,
+    "absmax": 98.99517059326172,
+    "shape": [
+      64,
+      512,
+      4,
+      4
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.3.block.1.conv1": {
+    "act_scale": 0.0450858787544813,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 10.58872127532959,
+    "absmax": 10.58872127532959,
+    "shape": [
+      64,
+      512,
+      4,
+      4
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.3.block.1.temb_proj": {
+    "act_scale": 0.12243444260251575,
+    "act_zero_point": 0.0,
+    "min": -0.27846455574035645,
+    "max": 15.774557113647461,
+    "absmax": 15.774557113647461,
+    "shape": [
+      64,
+      512
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.3.block.1.conv2": {
+    "act_scale": 0.055501172984972834,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 10.630529403686523,
+    "absmax": 10.630529403686523,
+    "shape": [
+      64,
+      256,
+      4,
+      4
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.3.block.1.nin_shortcut": {
+    "act_scale": 0.6796582586600504,
+    "act_zero_point": 0.0,
+    "min": -88.48387908935547,
+    "max": 179.3790283203125,
+    "absmax": 179.3790283203125,
+    "shape": [
+      64,
+      512,
+      4,
+      4
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.3.block.2.conv1": {
+    "act_scale": 0.05373461876243204,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 9.102864265441895,
+    "absmax": 9.102864265441895,
+    "shape": [
+      64,
+      512,
+      4,
+      4
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.3.block.2.temb_proj": {
+    "act_scale": 0.12243444260251575,
+    "act_zero_point": 0.0,
+    "min": -0.27846455574035645,
+    "max": 15.774557113647461,
+    "absmax": 15.774557113647461,
+    "shape": [
+      64,
+      512
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.3.block.2.conv2": {
+    "act_scale": 0.03467249206983511,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 8.76650619506836,
+    "absmax": 8.76650619506836,
+    "shape": [
+      64,
+      256,
+      4,
+      4
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.3.block.2.nin_shortcut": {
+    "act_scale": 0.6693817233333893,
+    "act_zero_point": 0.0,
+    "min": -73.9817123413086,
+    "max": 117.9418716430664,
+    "absmax": 117.9418716430664,
+    "shape": [
+      64,
+      512,
+      4,
+      4
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.3.upsample.conv": {
+    "act_scale": 0.47312065020747585,
+    "act_zero_point": 0.0,
+    "min": -67.32473754882812,
+    "max": 70.57508850097656,
+    "absmax": 70.57508850097656,
+    "shape": [
+      64,
+      256,
+      8,
+      8
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.2.block.0.conv1": {
+    "act_scale": 0.06615147127567,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 10.578763961791992,
+    "absmax": 10.578763961791992,
+    "shape": [
+      64,
+      512,
+      8,
+      8
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.2.block.0.temb_proj": {
+    "act_scale": 0.12243444260251575,
+    "act_zero_point": 0.0,
+    "min": -0.27846455574035645,
+    "max": 15.774557113647461,
+    "absmax": 15.774557113647461,
+    "shape": [
+      64,
+      512
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.2.block.0.conv2": {
+    "act_scale": 0.04507692911303869,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 12.044708251953125,
+    "absmax": 12.044708251953125,
+    "shape": [
+      64,
+      256,
+      8,
+      8
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.2.block.0.nin_shortcut": {
+    "act_scale": 1.2253518882101573,
+    "act_zero_point": 0.0,
+    "min": -164.9146270751953,
+    "max": 258.63153076171875,
+    "absmax": 258.63153076171875,
+    "shape": [
+      64,
+      512,
+      8,
+      8
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.2.block.1.conv1": {
+    "act_scale": 0.05393433920914069,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 13.231293678283691,
+    "absmax": 13.231293678283691,
+    "shape": [
+      64,
+      512,
+      8,
+      8
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.2.block.1.temb_proj": {
+    "act_scale": 0.12243444260251575,
+    "act_zero_point": 0.0,
+    "min": -0.27846455574035645,
+    "max": 15.774557113647461,
+    "absmax": 15.774557113647461,
+    "shape": [
+      64,
+      512
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.2.block.1.conv2": {
+    "act_scale": 0.04530909416983333,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 9.11104679107666,
+    "absmax": 9.11104679107666,
+    "shape": [
+      64,
+      256,
+      8,
+      8
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.2.block.1.nin_shortcut": {
+    "act_scale": 0.4320072097311078,
+    "act_zero_point": 0.0,
+    "min": -56.62851333618164,
+    "max": 121.67769622802734,
+    "absmax": 121.67769622802734,
+    "shape": [
+      64,
+      512,
+      8,
+      8
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.2.block.2.conv1": {
+    "act_scale": 0.0657602789407128,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 13.422935485839844,
+    "absmax": 13.422935485839844,
+    "shape": [
+      64,
+      512,
+      8,
+      8
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.2.block.2.temb_proj": {
+    "act_scale": 0.12243444260251575,
+    "act_zero_point": 0.0,
+    "min": -0.27846455574035645,
+    "max": 15.774557113647461,
+    "absmax": 15.774557113647461,
+    "shape": [
+      64,
+      512
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.2.block.2.conv2": {
+    "act_scale": 0.02756356820375246,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 7.313967227935791,
+    "absmax": 7.313967227935791,
+    "shape": [
+      64,
+      256,
+      8,
+      8
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.2.block.2.nin_shortcut": {
+    "act_scale": 0.29280407091773497,
+    "act_zero_point": 0.0,
+    "min": -41.5108642578125,
+    "max": 69.48541259765625,
+    "absmax": 69.48541259765625,
+    "shape": [
+      64,
+      512,
+      8,
+      8
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.2.upsample.conv": {
+    "act_scale": 0.10936221953537435,
+    "act_zero_point": 0.0,
+    "min": -30.00801658630371,
+    "max": 55.626991271972656,
+    "absmax": 55.626991271972656,
+    "shape": [
+      64,
+      256,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.1.block.0.conv1": {
+    "act_scale": 0.04506508282144362,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 16.82440948486328,
+    "absmax": 16.82440948486328,
+    "shape": [
+      64,
+      512,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.1.block.0.temb_proj": {
+    "act_scale": 0.12243444260251575,
+    "act_zero_point": 0.0,
+    "min": -0.27846455574035645,
+    "max": 15.774557113647461,
+    "absmax": 15.774557113647461,
+    "shape": [
+      64,
+      512
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.1.block.0.conv2": {
+    "act_scale": 0.02725185254569612,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 9.463637351989746,
+    "absmax": 9.463637351989746,
+    "shape": [
+      64,
+      256,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.1.block.0.nin_shortcut": {
+    "act_scale": 0.5004800326687846,
+    "act_zero_point": 0.0,
+    "min": -110.58818817138672,
+    "max": 185.99697875976562,
+    "absmax": 185.99697875976562,
+    "shape": [
+      64,
+      512,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.1.attn.0.q": {
+    "act_scale": 0.016131091878264916,
+    "act_zero_point": 0.0,
+    "min": -3.339895009994507,
+    "max": 3.2423691749572754,
+    "absmax": 3.339895009994507,
+    "shape": [
+      64,
+      256,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.1.attn.0.k": {
+    "act_scale": 0.016131091878264916,
+    "act_zero_point": 0.0,
+    "min": -3.339895009994507,
+    "max": 3.2423691749572754,
+    "absmax": 3.339895009994507,
+    "shape": [
+      64,
+      256,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.1.attn.0.v": {
+    "act_scale": 0.016131091878264916,
+    "act_zero_point": 0.0,
+    "min": -3.339895009994507,
+    "max": 3.2423691749572754,
+    "absmax": 3.339895009994507,
+    "shape": [
+      64,
+      256,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.1.attn.0.proj_out": {
+    "act_scale": 0.034352383681473045,
+    "act_zero_point": 0.0,
+    "min": -12.44865608215332,
+    "max": 10.082298278808594,
+    "absmax": 12.44865608215332,
+    "shape": [
+      64,
+      256,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.1.block.1.conv1": {
+    "act_scale": 0.02750756754412871,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 13.838191032409668,
+    "absmax": 13.838191032409668,
+    "shape": [
+      64,
+      512,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.1.block.1.temb_proj": {
+    "act_scale": 0.12243444260251575,
+    "act_zero_point": 0.0,
+    "min": -0.27846455574035645,
+    "max": 15.774557113647461,
+    "absmax": 15.774557113647461,
+    "shape": [
+      64,
+      512
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.1.block.1.conv2": {
+    "act_scale": 0.03882193327575844,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 9.068827629089355,
+    "absmax": 9.068827629089355,
+    "shape": [
+      64,
+      256,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.1.block.1.nin_shortcut": {
+    "act_scale": 0.40041155659250754,
+    "act_zero_point": 0.0,
+    "min": -94.3365707397461,
+    "max": 91.37928771972656,
+    "absmax": 94.3365707397461,
+    "shape": [
+      64,
+      512,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.1.attn.1.q": {
+    "act_scale": 0.015672826224633295,
+    "act_zero_point": 0.0,
+    "min": -3.8589460849761963,
+    "max": 3.528148651123047,
+    "absmax": 3.8589460849761963,
+    "shape": [
+      64,
+      256,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.1.attn.1.k": {
+    "act_scale": 0.015672826224633295,
+    "act_zero_point": 0.0,
+    "min": -3.8589460849761963,
+    "max": 3.528148651123047,
+    "absmax": 3.8589460849761963,
+    "shape": [
+      64,
+      256,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.1.attn.1.v": {
+    "act_scale": 0.015672826224633295,
+    "act_zero_point": 0.0,
+    "min": -3.8589460849761963,
+    "max": 3.528148651123047,
+    "absmax": 3.8589460849761963,
+    "shape": [
+      64,
+      256,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.1.attn.1.proj_out": {
+    "act_scale": 0.04466707744566531,
+    "act_zero_point": 0.0,
+    "min": -14.010826110839844,
+    "max": 13.6123046875,
+    "absmax": 14.010826110839844,
+    "shape": [
+      64,
+      256,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.1.block.2.conv1": {
+    "act_scale": 0.02739176958773288,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 13.726421356201172,
+    "absmax": 13.726421356201172,
+    "shape": [
+      64,
+      384,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.1.block.2.temb_proj": {
+    "act_scale": 0.12243444260251575,
+    "act_zero_point": 0.0,
+    "min": -0.27846455574035645,
+    "max": 15.774557113647461,
+    "absmax": 15.774557113647461,
+    "shape": [
+      64,
+      512
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.1.block.2.conv2": {
+    "act_scale": 0.030477271948131508,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 11.078285217285156,
+    "absmax": 11.078285217285156,
+    "shape": [
+      64,
+      256,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.1.block.2.nin_shortcut": {
+    "act_scale": 0.3079492612508187,
+    "act_zero_point": 0.0,
+    "min": -129.115966796875,
+    "max": 140.5142364501953,
+    "absmax": 140.5142364501953,
+    "shape": [
+      64,
+      384,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.1.attn.2.q": {
+    "act_scale": 0.01633556071740862,
+    "act_zero_point": 0.0,
+    "min": -5.781214714050293,
+    "max": 5.821432113647461,
+    "absmax": 5.821432113647461,
+    "shape": [
+      64,
+      256,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.1.attn.2.k": {
+    "act_scale": 0.01633556071740862,
+    "act_zero_point": 0.0,
+    "min": -5.781214714050293,
+    "max": 5.821432113647461,
+    "absmax": 5.821432113647461,
+    "shape": [
+      64,
+      256,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.1.attn.2.v": {
+    "act_scale": 0.01633556071740862,
+    "act_zero_point": 0.0,
+    "min": -5.781214714050293,
+    "max": 5.821432113647461,
+    "absmax": 5.821432113647461,
+    "shape": [
+      64,
+      256,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.1.attn.2.proj_out": {
+    "act_scale": 0.06824138152573735,
+    "act_zero_point": 0.0,
+    "min": -16.793699264526367,
+    "max": 13.633122444152832,
+    "absmax": 16.793699264526367,
+    "shape": [
+      64,
+      256,
+      16,
+      16
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.1.upsample.conv": {
+    "act_scale": 0.27328025346381424,
+    "act_zero_point": 0.0,
+    "min": -200.35508728027344,
+    "max": 235.0137176513672,
+    "absmax": 235.0137176513672,
+    "shape": [
+      64,
+      256,
+      32,
+      32
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.0.block.0.conv1": {
+    "act_scale": 0.01836963071939172,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 10.557028770446777,
+    "absmax": 10.557028770446777,
+    "shape": [
+      64,
+      384,
+      32,
+      32
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.0.block.0.temb_proj": {
+    "act_scale": 0.12243444260251575,
+    "act_zero_point": 0.0,
+    "min": -0.27846455574035645,
+    "max": 15.774557113647461,
+    "absmax": 15.774557113647461,
+    "shape": [
+      64,
+      512
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.0.block.0.conv2": {
+    "act_scale": 0.04592491783409692,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 13.917074203491211,
+    "absmax": 13.917074203491211,
+    "shape": [
+      64,
+      128,
+      32,
+      32
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.0.block.0.nin_shortcut": {
+    "act_scale": 1.40643464020705,
+    "act_zero_point": 0.0,
+    "min": -1088.1556396484375,
+    "max": 1280.0596923828125,
+    "absmax": 1280.0596923828125,
+    "shape": [
+      64,
+      384,
+      32,
+      32
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.0.block.1.conv1": {
+    "act_scale": 0.030376770914876165,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 9.401626586914062,
+    "absmax": 9.401626586914062,
+    "shape": [
+      64,
+      256,
+      32,
+      32
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.0.block.1.temb_proj": {
+    "act_scale": 0.12243444260251575,
+    "act_zero_point": 0.0,
+    "min": -0.27846455574035645,
+    "max": 15.774557113647461,
+    "absmax": 15.774557113647461,
+    "shape": [
+      64,
+      512
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.0.block.1.conv2": {
+    "act_scale": 0.027488924521568574,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 15.35515022277832,
+    "absmax": 15.35515022277832,
+    "shape": [
+      64,
+      128,
+      32,
+      32
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.0.block.1.nin_shortcut": {
+    "act_scale": 1.0432469223484848,
+    "act_zero_point": 0.0,
+    "min": -555.9926147460938,
+    "max": 554.3934326171875,
+    "absmax": 555.9926147460938,
+    "shape": [
+      64,
+      256,
+      32,
+      32
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.0.block.2.conv1": {
+    "act_scale": 0.030408140033978907,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 6.974526882171631,
+    "absmax": 6.974526882171631,
+    "shape": [
+      64,
+      256,
+      32,
+      32
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.0.block.2.temb_proj": {
+    "act_scale": 0.12243444260251575,
+    "act_zero_point": 0.0,
+    "min": -0.27846455574035645,
+    "max": 15.774557113647461,
+    "absmax": 15.774557113647461,
+    "shape": [
+      64,
+      512
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.0.block.2.conv2": {
+    "act_scale": 0.06779859586536842,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 16.78175163269043,
+    "absmax": 16.78175163269043,
+    "shape": [
+      64,
+      128,
+      32,
+      32
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "up.0.block.2.nin_shortcut": {
+    "act_scale": 1.0878466440557457,
+    "act_zero_point": 0.0,
+    "min": -483.2929992675781,
+    "max": 393.2911071777344,
+    "absmax": 483.2929992675781,
+    "shape": [
+      64,
+      256,
+      32,
+      32
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  },
+  "conv_out": {
+    "act_scale": 0.011956704038334643,
+    "act_zero_point": 0.0,
+    "min": -0.27846458554267883,
+    "max": 10.187873840332031,
+    "absmax": 10.187873840332031,
+    "shape": [
+      64,
+      128,
+      32,
+      32
+    ],
+    "n_bits": 8,
+    "symmetric": true,
+    "scale_method": "mse"
+  }
+}

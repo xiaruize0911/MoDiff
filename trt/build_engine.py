@@ -131,21 +131,17 @@ def inject_scales_to_network(network, scales_file: Path) -> None:
         
         if best_match:
             scale = module_scales[best_match]
-            # CRITICAL FIX: scale = maxabs/127, so dynamic_range = scale * 127 = maxabs
-            # This matches how INT4 does it: dynamic_range = scale * 7.5 (for q_max=7)
-            # For INT8, q_max = 127, so we multiply by 127
-            dynamic_range = scale * 127.0
-            
             # Set dynamic range for INPUTS of this layer (since act_scale is input quantization)
             for j in range(layer.num_inputs):
                 inp = layer.get_input(j)
                 # Skip weights/constants
                 if not inp.is_network_input and layer.type != trt.LayerType.CONSTANT:
                      # Assuming symmetric INT8
-                     inp.set_dynamic_range(-dynamic_range, dynamic_range)
+                     # Only set if not already set? TensorRT allows overwriting.
+                     inp.set_dynamic_range(-scale, scale)
             matched += 1
 
-    print(f"[INFO] Injected scales for {matched} layers (Direct Injection, dynamic_range = scale * 127)")
+    print(f"[INFO] Injected scales for {matched} layers (Direct Injection)")
 
 
 def build_engine(args: argparse.Namespace) -> None:
