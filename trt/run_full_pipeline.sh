@@ -33,7 +33,7 @@ RESULTS_DIR="$SCRIPT_DIR/benchmark_results"
 FID_DIR="$SCRIPT_DIR/fid_comparison"
 
 # Default parameters - 50k samples, 50 steps for proper FID evaluation
-NUM_SAMPLES=${NUM_SAMPLES:-50000}
+NUM_SAMPLES=${NUM_SAMPLES:-100000}
 DDIM_STEPS=${DDIM_STEPS:-50}
 BENCHMARK_ITERS=${BENCHMARK_ITERS:-100}
 SEED=${SEED:-42}
@@ -196,7 +196,7 @@ else
     if [ -f "trt/create_calib_data.py" ]; then
         python trt/create_calib_data.py \
             --output-dir "$CALIB_DIR" \
-            --num-samples 512
+            --num-samples 2048
         print_success "Calibration data generated"
     else
         print_warning "create_calib_data.py not found, using alternative method"
@@ -205,11 +205,11 @@ else
 import numpy as np
 import os
 os.makedirs('$CALIB_DIR', exist_ok=True)
-for i in range(512):
+for i in range(2048):
     latent = np.random.randn(1, 3, 32, 32).astype(np.float32)
     timesteps = np.array([np.random.randint(0, 1000)], dtype=np.int64)
     np.savez('$CALIB_DIR/sample_{:04d}.npz'.format(i), latent=latent, timesteps=timesteps)
-print('Generated 512 calibration samples')
+print('Generated 2048 calibration samples')
 "
     fi
 fi

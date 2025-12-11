@@ -1,0 +1,12 @@
+{
+  "num_samples": 2,
+  "weight_bits": 8,
+  "act_bits": 8,
+  "modulate": true,
+  "ddim_steps": 5,
+  "eta": 0.0,
+  "seed": 42,
+  "total_time_seconds": 21.519379138946533,
+  "time_per_sample_ms": 10759.689569473267,
+  "throughput_samples_per_sec": 0.0929394843171999
+}

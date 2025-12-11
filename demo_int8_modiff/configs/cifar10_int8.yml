@@ -1,0 +1,71 @@
+# CIFAR-10 INT8 MoDiff Configuration
+# Configuration for INT8 quantized diffusion model with MoDiff
+
+data:
+  dataset: "CIFAR10"
+  image_size: 32
+  channels: 3
+  random_flip: false
+  
+model:
+  type: "simple"
+  in_channels: 3
+  out_channels: 3
+  ch: 128
+  ch_mult: [1, 2, 2, 2]
+  num_res_blocks: 2
+  attn_resolutions: [16]
+  dropout: 0.1
+  var_type: "fixedlarge"
+  ema_rate: 0.9999
+  ema: true
+
+diffusion:
+  beta_schedule: "linear"
+  beta_start: 0.0001
+  beta_end: 0.02
+  num_diffusion_timesteps: 1000
+
+sampling:
+  ddim_steps: 100
+  eta: 0.0
+  batch_size: 64
+  num_samples: 50000
+
+quantization:
+  # Weight quantization settings
+  weight:
+    n_bits: 8
+    symmetric: true
+    channel_wise: true  # Per-channel quantization for better accuracy
+    
+  # Activation quantization settings  
+  activation:
+    n_bits: 8
+    symmetric: true
+    channel_wise: false  # Per-tensor for activations
+    
+  # MoDiff settings
+  modiff:
+    enabled: true
+    # Modulation is applied during inference
+    
+  # Calibration settings
+  calibration:
+    num_samples: 1024
+    num_steps: 8  # Calibration steps for activation ranges
+    batch_size: 32
+    method: "mse"  # MSE-based scale search
+    
+# Training/Fine-tuning (if needed)
+training:
+  lr: 1e-4
+  weight_decay: 0.0
+  ema_decay: 0.9999
+  grad_clip: 1.0
+
+# Logging
+logging:
+  log_dir: "logs/int8_modiff"
+  save_interval: 1000
+  sample_interval: 500
