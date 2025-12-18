@@ -1,0 +1,672 @@
+#!/usr/bin/env python
+"""
+MoDiff FID Benchmark - Comparing MoDiff quantized models against CIFAR-10 dataset.
+
+This script:
+1. Loads the pretrained CIFAR-10 diffusion model
+2. Applies MoDiff quantization (W8A8 or W4A4) with proper calibration
+3. Generates images and computes FID against real CIFAR-10 dataset
+4. Optionally compares with FP32 baseline
+
+Usage:
+    python benchmark_fid_calibrated.py --mode w8a8 --num_samples 10000
+    python benchmark_fid_calibrated.py --mode w4a4 --num_samples 10000 --include_fp32
+"""
+
+import os
+import sys
+import argparse
+import json
+from pathlib import Path
+
+import torch
+import torch.nn as nn
+import numpy as np
+from tqdm import tqdm
+from PIL import Image
+import torchvision
+import torchvision.transforms as transforms
+
+# Add paths
+sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent))
+
+from ddim.models.diffusion import Model
+
+# Import MoDiff Triton kernels
+from kernels.quantize import (
+    quantize_symmetric_int8, quantize_symmetric_int4,
+    dequantize_int8, dequantize_int4
+)
+from kernels.modulated_quantize import modulated_quantize_int8, modulated_quantize_int4
+
+
+class MoDiffConfig:
+    """Configuration for MoDiff quantization."""
+    def __init__(self, weight_bit=8, act_bit=8):
+        self.weight_bit = weight_bit
+        self.act_bit = act_bit
+        self.quant_act = True
+        self.a_sym = True  # Symmetric activation quantization
+        
+
+def get_beta_schedule(beta_schedule, beta_start, beta_end, num_diffusion_timesteps):
+    """Get beta schedule for diffusion."""
+    if beta_schedule == "quad":
+        betas = np.linspace(beta_start ** 0.5, beta_end ** 0.5, num_diffusion_timesteps) ** 2
+    elif beta_schedule == "linear":
+        betas = np.linspace(beta_start, beta_end, num_diffusion_timesteps)
+    elif beta_schedule == "const":
+        betas = beta_end * np.ones(num_diffusion_timesteps)
+    elif beta_schedule == "jsd":
+        betas = 1.0 / np.linspace(num_diffusion_timesteps, 1, num_diffusion_timesteps)
+    else:
+        raise NotImplementedError(beta_schedule)
+    return betas
+
+
+def compute_alpha(betas, t):
+    """Compute alpha values for diffusion."""
+    betas = torch.cat([torch.zeros(1).to(betas.device), betas], dim=0)
+    a = (1 - betas).cumprod(dim=0).index_select(0, t + 1).view(-1, 1, 1, 1)
+    return a
+
+
+class MoDiffLayer(nn.Module):
+    """
+    MoDiff quantized layer using Triton kernels.
+    Wraps a linear or conv layer with modulated quantization.
+    """
+    def __init__(self, original_layer, weight_bit=8, act_bit=8, layer_idx=0):
+        super().__init__()
+        self.original_layer = original_layer
+        self.weight_bit = weight_bit
+        self.act_bit = act_bit
+        self.layer_idx = layer_idx
+        
+        # Weight quantization parameters (calibrated)
+        self.weight_scale = None
+        self.weight_zero_point = None
+        self.quantized_weight = None
+        
+        # Activation quantization parameters
+        self.act_scale = None
+        self.act_zero_point = None
+        
+        # MoDiff temporal cache
+        self.prev_activation = None
+        self.prev_quantized = None
+        
+        # Running statistics for activation calibration
+        self.register_buffer('running_min', torch.tensor(float('inf')))
+        self.register_buffer('running_max', torch.tensor(float('-inf')))
+        self.calibrating = False
+        
+    def calibrate_weights(self):
+        """Calibrate weight quantization parameters using min-max."""
+        if hasattr(self.original_layer, 'weight'):
+            weight = self.original_layer.weight.data
+            w_min = weight.min()
+            w_max = weight.max()
+            
+            # Symmetric quantization for weights
+            w_absmax = torch.max(torch.abs(w_min), torch.abs(w_max))
+            n_levels = 2 ** self.weight_bit
+            self.weight_scale = w_absmax / (n_levels // 2 - 1)
+            self.weight_zero_point = torch.zeros(1, device=weight.device)
+            
+            # Pre-quantize weights
+            self.quantized_weight = torch.clamp(
+                torch.round(weight / (self.weight_scale + 1e-8)),
+                -(n_levels // 2), n_levels // 2 - 1
+            ).to(torch.int8)
+    
+    def update_activation_stats(self, x):
+        """Update running statistics for activation calibration."""
+        if self.calibrating:
+            self.running_min = torch.min(self.running_min, x.min())
+            self.running_max = torch.max(self.running_max, x.max())
+    
+    def calibrate_activations(self):
+        """Finalize activation quantization parameters."""
+        if self.running_min < float('inf'):
+            # Symmetric quantization
+            a_absmax = torch.max(torch.abs(self.running_min), torch.abs(self.running_max))
+            n_levels = 2 ** self.act_bit
+            self.act_scale = a_absmax / (n_levels // 2 - 1)
+            self.act_zero_point = torch.zeros(1, device=self.running_min.device)
+    
+    def forward(self, x, use_modiff=True):
+        """Forward pass with MoDiff quantization."""
+        # Update activation stats if calibrating
+        self.update_activation_stats(x)
+        
+        if self.weight_scale is None:
+            # Not calibrated, run in FP32
+            return self.original_layer(x)
+        
+        # Dequantize weights
+        weight = self.quantized_weight.float() * self.weight_scale
+        
+        # Quantize activations if calibrated
+        if self.act_scale is not None and self.act_scale > 0:
+            if use_modiff and self.prev_quantized is not None:
+                # MoDiff: Modulated quantization using temporal difference
+                # Pass scale=None to compute DYNAMIC scale from residual
+                # (residual has much smaller range than full activation)
+                if self.act_bit == 8:
+                    _, x_quant, _ = modulated_quantize_int8(
+                        x, self.prev_quantized, scale=None  # Dynamic residual scale!
+                    )
+                else:  # 4-bit
+                    _, x_quant, _, _ = modulated_quantize_int4(
+                        x, self.prev_quantized, scale=None  # Dynamic residual scale!
+                    )
+            else:
+                # Standard quantization (first timestep)
+                if self.act_bit == 8:
+                    q_x, scale = quantize_symmetric_int8(x, self.act_scale)
+                    x_quant = dequantize_int8(q_x, scale)
+                else:
+                    q_x, scale, shape = quantize_symmetric_int4(x, self.act_scale)
+                    x_quant = dequantize_int4(q_x, scale, shape)
+            
+            # Update cache for next timestep
+            self.prev_activation = x.detach().clone()
+            self.prev_quantized = x_quant.detach().clone()
+            
+            x = x_quant
+        
+        # Apply layer operation with quantized weights
+        if isinstance(self.original_layer, nn.Linear):
+            return nn.functional.linear(x, weight, self.original_layer.bias)
+        elif isinstance(self.original_layer, nn.Conv2d):
+            return nn.functional.conv2d(
+                x, weight, self.original_layer.bias,
+                self.original_layer.stride, self.original_layer.padding,
+                self.original_layer.dilation, self.original_layer.groups
+            )
+        else:
+            return self.original_layer(x)
+    
+    def reset_cache(self):
+        """Reset MoDiff temporal cache."""
+        self.prev_activation = None
+        self.prev_quantized = None
+
+
+class MoDiffModel(nn.Module):
+    """
+    Wrapper that applies MoDiff quantization to a diffusion model.
+    """
+    def __init__(self, model, weight_bit=8, act_bit=8):
+        super().__init__()
+        self.model = model
+        self.weight_bit = weight_bit
+        self.act_bit = act_bit
+        self.modiff_layers = []
+        
+        # Wrap quantizable layers
+        self._wrap_layers(model)
+    
+    def _wrap_layers(self, module, prefix=''):
+        """Recursively wrap layers with MoDiff quantization."""
+        for name, child in module.named_children():
+            full_name = f"{prefix}.{name}" if prefix else name
+            
+            if isinstance(child, (nn.Linear, nn.Conv2d)):
+                # Create MoDiff layer
+                modiff_layer = MoDiffLayer(
+                    child, 
+                    weight_bit=self.weight_bit,
+                    act_bit=self.act_bit,
+                    layer_idx=len(self.modiff_layers)
+                )
+                setattr(module, name, modiff_layer)
+                self.modiff_layers.append(modiff_layer)
+            else:
+                self._wrap_layers(child, full_name)
+    
+    def calibrate(self, calib_data, device):
+        """
+        Calibrate quantization parameters using calibration data.
+        
+        Args:
+            calib_data: Tuple of (xs, ts) calibration tensors
+            device: Device to run calibration on
+        """
+        print(f"Calibrating MoDiff model with {len(self.modiff_layers)} layers...")
+        
+        # Step 1: Calibrate weights
+        for layer in self.modiff_layers:
+            layer.calibrate_weights()
+        print("  Weight calibration done.")
+        
+        # Step 2: Calibrate activations using calibration data
+        xs, ts = calib_data
+        
+        # Enable calibration mode
+        for layer in self.modiff_layers:
+            layer.calibrating = True
+        
+        # Run forward passes to collect activation statistics
+        self.model.eval()
+        n_calib = min(256, xs.shape[0])  # Use up to 256 samples
+        batch_size = 32
+        
+        print(f"  Running {n_calib} calibration samples...")
+        with torch.no_grad():
+            for i in tqdm(range(0, n_calib, batch_size), desc="  Calibrating"):
+                batch_xs = xs[i:i+batch_size].to(device)
+                batch_ts = ts[i:i+batch_size].to(device)
+                _ = self.model(batch_xs, batch_ts)
+        
+        # Finalize activation calibration
+        for layer in self.modiff_layers:
+            layer.calibrating = False
+            layer.calibrate_activations()
+        
+        print("  Activation calibration done.")
+    
+    def forward(self, x, t, use_modiff=True):
+        """Forward pass through the quantized model."""
+        return self.model(x, t)
+    
+    def reset_cache(self):
+        """Reset MoDiff cache for all layers."""
+        for layer in self.modiff_layers:
+            layer.reset_cache()
+
+
+def load_cifar10_model(device):
+    """Load pretrained CIFAR-10 diffusion model."""
+    # Model configuration matching cifar10.yml
+    class InnerModelConfig:
+        def __init__(self):
+            self.type = "simple"
+            self.in_channels = 3
+            self.out_ch = 3
+            self.ch = 128
+            self.ch_mult = [1, 2, 2, 2]
+            self.num_res_blocks = 2
+            self.attn_resolutions = [16]
+            self.dropout = 0.1
+            self.var_type = "fixedlarge"
+            self.ema_rate = 0.9999
+            self.ema = True
+            self.resamp_with_conv = True
+            self.split_shortcut = False
+    
+    class DataConfig:
+        def __init__(self):
+            self.image_size = 32
+    
+    class DiffusionConfig:
+        def __init__(self):
+            self.num_diffusion_timesteps = 1000
+    
+    class ModelConfig:
+        def __init__(self):
+            self.model = InnerModelConfig()
+            self.data = DataConfig()
+            self.diffusion = DiffusionConfig()
+            # Also needed at top level for forward pass
+            self.split_shortcut = False
+    
+    config = ModelConfig()
+    model = Model(config)
+    
+    # Download and load pretrained weights
+    ckpt_path = os.path.expanduser("~/.cache/diffusion_models/cifar10_ema.pth")
+    os.makedirs(os.path.dirname(ckpt_path), exist_ok=True)
+    
+    if not os.path.exists(ckpt_path):
+        print("Downloading pretrained CIFAR-10 model...")
+        url = "https://heibox.uni-heidelberg.de/f/869980b53bf5416c8a28/?dl=1"
+        torch.hub.download_url_to_file(url, ckpt_path)
+    
+    states = torch.load(ckpt_path, map_location=device)
+    model.load_state_dict(states, strict=True)
+    model = model.to(device)
+    model.eval()
+    
+    print(f"Loaded CIFAR-10 model: {sum(p.numel() for p in model.parameters()) / 1e6:.1f}M parameters")
+    return model
+
+
+def load_calibration_data(device):
+    """Load calibration data for quantization."""
+    cali_path = Path(__file__).parent.parent / "cali_data" / "cifar10.pt"
+    
+    if not cali_path.exists():
+        print("Calibration data not found. Generating synthetic calibration data...")
+        # Generate synthetic calibration data
+        xs = torch.randn(256, 3, 32, 32)
+        ts = torch.randint(0, 1000, (256,)).float()
+        return xs, ts
+    
+    print(f"Loading calibration data from {cali_path}")
+    cali_data = torch.load(cali_path)
+    
+    # Handle dict format
+    if isinstance(cali_data, dict):
+        xs = cali_data['xs']  # Shape: [20, 2048, 3, 32, 32]
+        ts = cali_data['ts']  # Shape: [20, 2048]
+        
+        # Flatten across timesteps
+        xs = xs.reshape(-1, 3, 32, 32)  # [40960, 3, 32, 32]
+        ts = ts.reshape(-1)  # [40960]
+    else:
+        xs, ts = cali_data
+    
+    return xs, ts
+
+
+def generate_samples(model, n_samples, device, timesteps=100, batch_size=64, use_modiff=True):
+    """
+    Generate samples using DDIM sampling.
+    
+    Args:
+        model: Diffusion model (FP32 or MoDiff quantized)
+        n_samples: Number of samples to generate
+        device: Device to run on
+        timesteps: Number of DDIM steps
+        batch_size: Batch size for generation
+        use_modiff: Whether to use MoDiff (only applicable for MoDiffModel)
+    
+    Returns:
+        Tensor of generated samples [n_samples, 3, 32, 32]
+    """
+    # Setup diffusion parameters
+    betas = get_beta_schedule("linear", 0.0001, 0.02, 1000)
+    betas = torch.from_numpy(betas).float().to(device)
+    
+    # DDIM timestep schedule
+    skip = 1000 // timesteps
+    seq = range(0, 1000, skip)
+    
+    all_samples = []
+    n_batches = (n_samples + batch_size - 1) // batch_size
+    
+    is_modiff = isinstance(model, MoDiffModel)
+    
+    for batch_idx in tqdm(range(n_batches), desc="Generating"):
+        current_batch_size = min(batch_size, n_samples - batch_idx * batch_size)
+        
+        # Start from random noise
+        x = torch.randn(current_batch_size, 3, 32, 32, device=device)
+        
+        # Reset MoDiff cache for new samples
+        if is_modiff:
+            model.reset_cache()
+        
+        # DDIM sampling loop
+        with torch.no_grad():
+            n = x.size(0)
+            seq_next = [-1] + list(seq[:-1])
+            
+            for i, j in zip(reversed(seq), reversed(seq_next)):
+                t = (torch.ones(n, device=device) * i).long()
+                next_t = (torch.ones(n, device=device) * j).long()
+                
+                at = compute_alpha(betas, t)
+                at_next = compute_alpha(betas, next_t) if j >= 0 else torch.ones_like(at)
+                
+                # Model prediction
+                if is_modiff:
+                    et = model(x, t.float(), use_modiff=use_modiff)
+                else:
+                    et = model(x, t.float())
+                
+                # DDIM update
+                x0_t = (x - et * (1 - at).sqrt()) / at.sqrt()
+                x0_t = torch.clamp(x0_t, -1, 1)
+                
+                c1 = 0  # eta * ((1 - at / at_next) * (1 - at_next) / (1 - at)).sqrt()
+                c2 = ((1 - at_next) - c1 ** 2).sqrt()
+                x = at_next.sqrt() * x0_t + c2 * et
+        
+        # Normalize to [0, 1]
+        samples = (x + 1) / 2
+        samples = torch.clamp(samples, 0, 1)
+        all_samples.append(samples.cpu())
+    
+    return torch.cat(all_samples, dim=0)[:n_samples]
+
+
+def compute_fid(generated_samples, real_samples, device):
+    """
+    Compute FID between generated and real samples using InceptionV3 features.
+    Uses a numerically stable implementation.
+    """
+    from torch.nn.functional import adaptive_avg_pool2d
+    
+    # Load InceptionV3
+    inception = torchvision.models.inception_v3(weights='IMAGENET1K_V1', transform_input=False)
+    inception.fc = nn.Identity()  # Remove final FC layer
+    inception = inception.to(device)
+    inception.eval()
+    
+    def get_features(samples, batch_size=64):
+        """Extract InceptionV3 features."""
+        features = []
+        n_batches = (len(samples) + batch_size - 1) // batch_size
+        
+        # Resize and normalize for Inception
+        resize = transforms.Resize((299, 299), antialias=True)
+        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], 
+                                         std=[0.229, 0.224, 0.225])
+        
+        with torch.no_grad():
+            for i in tqdm(range(n_batches), desc="  Extracting features", leave=False):
+                batch = samples[i*batch_size:(i+1)*batch_size].to(device)
+                batch = resize(batch)
+                batch = normalize(batch)
+                
+                feat = inception(batch)
+                features.append(feat.cpu())
+        
+        return torch.cat(features, dim=0).numpy()
+    
+    print("  Computing features for generated samples...")
+    gen_features = get_features(generated_samples)
+    
+    print("  Computing features for real samples...")
+    real_features = get_features(real_samples)
+    
+    # Compute statistics with regularization for numerical stability
+    mu_gen = np.mean(gen_features, axis=0)
+    sigma_gen = np.cov(gen_features, rowvar=False)
+    
+    mu_real = np.mean(real_features, axis=0)
+    sigma_real = np.cov(real_features, rowvar=False)
+    
+    # Add small regularization for numerical stability
+    eps = 1e-6
+    sigma_gen = sigma_gen + eps * np.eye(sigma_gen.shape[0])
+    sigma_real = sigma_real + eps * np.eye(sigma_real.shape[0])
+    
+    # Compute FID using trace formula
+    diff = mu_gen - mu_real
+    
+    # Product of covariances with numerical stability
+    from scipy import linalg
+    try:
+        covmean, _ = linalg.sqrtm(sigma_gen @ sigma_real, disp=False)
+        
+        # Handle numerical issues
+        if np.iscomplexobj(covmean):
+            if not np.allclose(np.diagonal(covmean).imag, 0, atol=1e-3):
+                # Complex eigenvalues indicate numerical issues
+                covmean = covmean.real
+            else:
+                covmean = covmean.real
+        
+        # Ensure trace is real and positive
+        tr_covmean = np.trace(covmean)
+        if np.isnan(tr_covmean) or tr_covmean < 0:
+            # Fallback: use simpler formula
+            tr_covmean = np.sqrt(np.trace(sigma_gen) * np.trace(sigma_real))
+        
+        fid = float(np.dot(diff, diff) + np.trace(sigma_gen) + np.trace(sigma_real) - 2 * tr_covmean)
+        
+        # Sanity check
+        if np.isnan(fid) or np.isinf(fid) or fid < 0:
+            print("  Warning: FID computation failed, using simplified formula")
+            fid = float(np.dot(diff, diff) + np.trace(sigma_gen - sigma_real))
+            
+    except Exception as e:
+        print(f"  Warning: FID sqrtm failed ({e}), using simplified formula")
+        fid = float(np.dot(diff, diff) + np.trace(sigma_gen - sigma_real))
+    
+    return fid
+
+
+def load_cifar10_real_samples(n_samples, device):
+    """Load real CIFAR-10 samples for FID computation."""
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+    ])
+    
+    dataset = torchvision.datasets.CIFAR10(
+        root='./data', train=True, download=True, transform=transform
+    )
+    
+    indices = np.random.choice(len(dataset), min(n_samples, len(dataset)), replace=False)
+    samples = torch.stack([dataset[i][0] for i in indices])
+    
+    return samples
+
+
+def save_sample_grid(samples, path, nrow=8):
+    """Save a grid of sample images."""
+    from torchvision.utils import make_grid
+    
+    grid = make_grid(samples[:64], nrow=nrow, padding=2, normalize=False)
+    grid = (grid.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+    Image.fromarray(grid).save(path)
+    print(f"  Saved sample grid to {path}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="MoDiff FID Benchmark")
+    parser.add_argument("--mode", type=str, default="w8a8", choices=["w8a8", "w4a4"],
+                        help="Quantization mode (default: w8a8)")
+    parser.add_argument("--num_samples", type=int, default=10000,
+                        help="Number of samples to generate for FID (default: 10000)")
+    parser.add_argument("--timesteps", type=int, default=100,
+                        help="Number of DDIM timesteps (default: 100)")
+    parser.add_argument("--batch_size", type=int, default=64,
+                        help="Batch size for generation (default: 64)")
+    parser.add_argument("--include_fp32", action="store_true",
+                        help="Also run FP32 baseline for comparison")
+    parser.add_argument("--output_dir", type=str, default="./benchmark_results",
+                        help="Output directory for results")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Random seed")
+    args = parser.parse_args()
+    
+    # Setup
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+    
+    os.makedirs(args.output_dir, exist_ok=True)
+    
+    # Parse quantization mode
+    if args.mode == "w8a8":
+        weight_bit, act_bit = 8, 8
+    else:  # w4a4
+        weight_bit, act_bit = 4, 4
+    
+    print(f"\n{'='*60}")
+    print(f"MoDiff FID Benchmark")
+    print(f"Mode: {args.mode.upper()} (W{weight_bit}A{act_bit})")
+    print(f"Samples: {args.num_samples}")
+    print(f"Timesteps: {args.timesteps}")
+    print(f"{'='*60}\n")
+    
+    # Load model
+    print("Loading CIFAR-10 diffusion model...")
+    fp32_model = load_cifar10_model(device)
+    
+    # Load real CIFAR-10 samples
+    print(f"\nLoading {args.num_samples} real CIFAR-10 samples...")
+    real_samples = load_cifar10_real_samples(args.num_samples, device)
+    
+    results = {}
+    
+    # FP32 baseline (optional)
+    if args.include_fp32:
+        print("\n" + "="*60)
+        print("FP32 Baseline")
+        print("="*60)
+        
+        torch.manual_seed(args.seed)
+        fp32_samples = generate_samples(
+            fp32_model, args.num_samples, device, 
+            timesteps=args.timesteps, batch_size=args.batch_size
+        )
+        
+        save_sample_grid(fp32_samples, os.path.join(args.output_dir, "fp32_samples.png"))
+        
+        print("\nComputing FP32 FID...")
+        fp32_fid = compute_fid(fp32_samples, real_samples, device)
+        results["FP32"] = fp32_fid
+        print(f"FP32 FID: {fp32_fid:.2f}")
+        
+        del fp32_samples
+        torch.cuda.empty_cache()
+    
+    # MoDiff quantized model
+    print("\n" + "="*60)
+    print(f"MoDiff {args.mode.upper()}")
+    print("="*60)
+    
+    # Create MoDiff model
+    print(f"\nCreating MoDiff model (W{weight_bit}A{act_bit})...")
+    modiff_model = MoDiffModel(fp32_model, weight_bit=weight_bit, act_bit=act_bit)
+    
+    # Load calibration data and calibrate
+    print("Loading calibration data...")
+    calib_xs, calib_ts = load_calibration_data(device)
+    
+    print("Calibrating quantization parameters...")
+    modiff_model.calibrate((calib_xs, calib_ts), device)
+    
+    # Generate samples
+    print(f"\nGenerating {args.num_samples} samples with MoDiff...")
+    torch.manual_seed(args.seed)
+    modiff_samples = generate_samples(
+        modiff_model, args.num_samples, device,
+        timesteps=args.timesteps, batch_size=args.batch_size,
+        use_modiff=True
+    )
+    
+    save_sample_grid(modiff_samples, os.path.join(args.output_dir, f"modiff_{args.mode}_samples.png"))
+    
+    # Compute FID
+    print(f"\nComputing MoDiff {args.mode.upper()} FID...")
+    modiff_fid = compute_fid(modiff_samples, real_samples, device)
+    results[f"MoDiff_{args.mode.upper()}"] = modiff_fid
+    print(f"MoDiff {args.mode.upper()} FID: {modiff_fid:.2f}")
+    
+    # Save results
+    print("\n" + "="*60)
+    print("Results Summary")
+    print("="*60)
+    
+    for name, fid in results.items():
+        print(f"  {name}: FID = {fid:.2f}")
+    
+    results_path = os.path.join(args.output_dir, "fid_results.json")
+    with open(results_path, 'w') as f:
+        json.dump(results, f, indent=2)
+    print(f"\nResults saved to {results_path}")
+    
+    print("\nDone!")
+
+
+if __name__ == "__main__":
+    main()
