@@ -18,6 +18,7 @@ import sys
 import argparse
 import json
 from pathlib import Path
+import weakref
 
 import torch
 import torch.nn as nn
@@ -77,12 +78,16 @@ class MoDiffLayer(nn.Module):
     MoDiff quantized layer using Triton kernels.
     Wraps a linear or conv layer with modulated quantization.
     """
-    def __init__(self, original_layer, weight_bit=8, act_bit=8, layer_idx=0):
+    def __init__(self, original_layer, weight_bit=8, act_bit=8, layer_idx=0, parent_model=None):
         super().__init__()
         self.original_layer = original_layer
         self.weight_bit = weight_bit
         self.act_bit = act_bit
         self.layer_idx = layer_idx
+        
+        # Use weakref to avoid circular reference with parent MoDiffModel
+        # This prevents PyTorch's module traversal from getting stuck in infinite recursion
+        object.__setattr__(self, '_parent_model_ref', weakref.ref(parent_model) if parent_model else None)
         
         # Weight quantization parameters (calibrated)
         self.weight_scale = None
@@ -138,6 +143,13 @@ class MoDiffLayer(nn.Module):
     
     def forward(self, x, use_modiff=True):
         """Forward pass with MoDiff quantization."""
+        # Check parent model's flag if available (using weakref)
+        parent_model_ref = object.__getattribute__(self, '_parent_model_ref')
+        if parent_model_ref is not None:
+            parent = parent_model_ref()
+            if parent is not None and hasattr(parent, 'use_modiff_flag'):
+                use_modiff = parent.use_modiff_flag
+        
         # Update activation stats if calibrating
         self.update_activation_stats(x)
         
@@ -205,6 +217,7 @@ class MoDiffModel(nn.Module):
         self.weight_bit = weight_bit
         self.act_bit = act_bit
         self.modiff_layers = []
+        self.use_modiff_flag = True  # Global flag for all layers
         
         # Wrap quantizable layers
         self._wrap_layers(model)
@@ -220,7 +233,8 @@ class MoDiffModel(nn.Module):
                     child, 
                     weight_bit=self.weight_bit,
                     act_bit=self.act_bit,
-                    layer_idx=len(self.modiff_layers)
+                    layer_idx=len(self.modiff_layers),
+                    parent_model=self  # Pass reference to parent
                 )
                 setattr(module, name, modiff_layer)
                 self.modiff_layers.append(modiff_layer)
@@ -270,6 +284,8 @@ class MoDiffModel(nn.Module):
     
     def forward(self, x, t, use_modiff=True):
         """Forward pass through the quantized model."""
+        # Store the flag for layers to access
+        self.use_modiff_flag = use_modiff
         return self.model(x, t)
     
     def reset_cache(self):
@@ -375,8 +391,11 @@ def generate_samples(model, n_samples, device, timesteps=100, batch_size=64, use
         use_modiff: Whether to use MoDiff (only applicable for MoDiffModel)
     
     Returns:
-        Tensor of generated samples [n_samples, 3, 32, 32]
+        samples: Tensor of generated samples [n_samples, 3, 32, 32]
+        elapsed_time: Time taken in seconds
     """
+    import time
+    start_time = time.time()
     # Setup diffusion parameters
     betas = get_beta_schedule("linear", 0.0001, 0.02, 1000)
     betas = torch.from_numpy(betas).float().to(device)
@@ -431,7 +450,8 @@ def generate_samples(model, n_samples, device, timesteps=100, batch_size=64, use
         samples = torch.clamp(samples, 0, 1)
         all_samples.append(samples.cpu())
     
-    return torch.cat(all_samples, dim=0)[:n_samples]
+    elapsed_time = time.time() - start_time
+    return torch.cat(all_samples, dim=0)[:n_samples], elapsed_time
 
 
 def compute_fid(generated_samples, real_samples, device):
@@ -560,6 +580,8 @@ def main():
                         help="Batch size for generation (default: 64)")
     parser.add_argument("--include_fp32", action="store_true",
                         help="Also run FP32 baseline for comparison")
+    parser.add_argument("--include_standard_ptq", action="store_true",
+                        help="Also run standard PTQ (no MoDiff) for comparison")
     parser.add_argument("--output_dir", type=str, default="./benchmark_results",
                         help="Output directory for results")
     parser.add_argument("--seed", type=int, default=42,
@@ -604,7 +626,7 @@ def main():
         print("="*60)
         
         torch.manual_seed(args.seed)
-        fp32_samples = generate_samples(
+        fp32_samples, fp32_time = generate_samples(
             fp32_model, args.num_samples, device, 
             timesteps=args.timesteps, batch_size=args.batch_size
         )
@@ -613,10 +635,51 @@ def main():
         
         print("\nComputing FP32 FID...")
         fp32_fid = compute_fid(fp32_samples, real_samples, device)
-        results["FP32"] = fp32_fid
+        results["FP32"] = {"FID": fp32_fid, "Time": fp32_time}
         print(f"FP32 FID: {fp32_fid:.2f}")
+        print(f"Generation time: {fp32_time:.2f}s ({fp32_time/args.num_samples*1000:.1f}ms per sample)")
         
         del fp32_samples
+        torch.cuda.empty_cache()
+    
+    # Load calibration data (shared by all quantized models)
+    print("\nLoading calibration data...")
+    calib_xs, calib_ts = load_calibration_data(device)
+    
+    # Standard PTQ (no MoDiff temporal caching)
+    if args.include_standard_ptq:
+        print("\n" + "="*60)
+        print(f"Standard PTQ {args.mode.upper()} (No MoDiff)")
+        print("="*60)
+        
+        # Create standard PTQ model (same as MoDiff but without temporal caching)
+        print(f"\nCreating standard PTQ model (W{weight_bit}A{act_bit})...")
+        fp32_model_ptq = load_cifar10_model(device)
+        ptq_model = MoDiffModel(fp32_model_ptq, weight_bit=weight_bit, act_bit=act_bit)
+        
+        # Calibrate
+        print("Calibrating quantization parameters...")
+        ptq_model.calibrate((calib_xs, calib_ts), device)
+        
+        # Generate samples WITHOUT MoDiff (use_modiff=False)
+        print(f"\nGenerating {args.num_samples} samples with standard PTQ...")
+        torch.manual_seed(args.seed)
+        ptq_samples, ptq_time = generate_samples(
+            ptq_model, args.num_samples, device,
+            timesteps=args.timesteps, batch_size=args.batch_size,
+            use_modiff=False  # Disable MoDiff temporal caching
+        )
+        
+        save_sample_grid(ptq_samples, os.path.join(args.output_dir, f"ptq_{args.mode}_samples.png"))
+        
+        # Compute FID
+        print(f"\nComputing Standard PTQ {args.mode.upper()} FID...")
+        ptq_fid = compute_fid(ptq_samples, real_samples, device)
+        results[f"PTQ_{args.mode.upper()}"] = {"FID": ptq_fid, "Time": ptq_time}
+        print(f"Standard PTQ {args.mode.upper()} FID: {ptq_fid:.2f}")
+        print(f"Generation time: {ptq_time:.2f}s ({ptq_time/args.num_samples*1000:.1f}ms per sample)")
+        
+        del ptq_samples, ptq_model, fp32_model_ptq
         torch.cuda.empty_cache()
     
     # MoDiff quantized model
@@ -628,9 +691,8 @@ def main():
     print(f"\nCreating MoDiff model (W{weight_bit}A{act_bit})...")
     modiff_model = MoDiffModel(fp32_model, weight_bit=weight_bit, act_bit=act_bit)
     
-    # Load calibration data and calibrate
-    print("Loading calibration data...")
-    calib_xs, calib_ts = load_calibration_data(device)
+    # Calibrate
+    print("Calibrating quantization parameters...")
     
     print("Calibrating quantization parameters...")
     modiff_model.calibrate((calib_xs, calib_ts), device)
@@ -638,7 +700,7 @@ def main():
     # Generate samples
     print(f"\nGenerating {args.num_samples} samples with MoDiff...")
     torch.manual_seed(args.seed)
-    modiff_samples = generate_samples(
+    modiff_samples, modiff_time = generate_samples(
         modiff_model, args.num_samples, device,
         timesteps=args.timesteps, batch_size=args.batch_size,
         use_modiff=True
@@ -649,16 +711,29 @@ def main():
     # Compute FID
     print(f"\nComputing MoDiff {args.mode.upper()} FID...")
     modiff_fid = compute_fid(modiff_samples, real_samples, device)
-    results[f"MoDiff_{args.mode.upper()}"] = modiff_fid
+    results[f"MoDiff_{args.mode.upper()}"] = {"FID": modiff_fid, "Time": modiff_time}
     print(f"MoDiff {args.mode.upper()} FID: {modiff_fid:.2f}")
+    print(f"Generation time: {modiff_time:.2f}s ({modiff_time/args.num_samples*1000:.1f}ms per sample)")
     
     # Save results
     print("\n" + "="*60)
     print("Results Summary")
     print("="*60)
     
-    for name, fid in results.items():
-        print(f"  {name}: FID = {fid:.2f}")
+    for name, metrics in results.items():
+        if isinstance(metrics, dict):
+            fid = metrics["FID"]
+            time_val = metrics["Time"]
+            print(f"  {name}:")
+            print(f"    FID: {fid:.2f}")
+            print(f"    Time: {time_val:.2f}s ({time_val/args.num_samples*1000:.1f}ms/sample)")
+            if "FP32" in results and name != "FP32":
+                fp32_time = results["FP32"]["Time"]
+                speedup = fp32_time / time_val
+                print(f"    Speedup: {speedup:.2f}x vs FP32")
+        else:
+            # Old format compatibility
+            print(f"  {name}: FID = {metrics:.2f}")
     
     results_path = os.path.join(args.output_dir, "fid_results.json")
     with open(results_path, 'w') as f:
