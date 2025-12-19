@@ -22,6 +22,7 @@ import weakref
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 from tqdm import tqdm
 from PIL import Image
@@ -40,6 +41,53 @@ from kernels.quantize import (
     dequantize_int8, dequantize_int4
 )
 from kernels.modulated_quantize import modulated_quantize_int8, modulated_quantize_int4
+from kernels.gemm_w8a8 import gemm_w8a8 as triton_gemm_w8a8
+from kernels.gemm_w4a4 import gemm_w4a4 as triton_gemm_w4a4
+from kernels.conv_w8a8 import conv2d_int8_triton_direct
+
+
+def conv2d_int8_triton_im2col(
+    x_int8: torch.Tensor,
+    weight_int8: torch.Tensor,
+    act_scale: torch.Tensor,
+    weight_scale: torch.Tensor,
+    bias: torch.Tensor,
+    stride: tuple,
+    padding: tuple,
+    dilation: tuple,
+    groups: int,
+):
+    """INT8 Conv2d via unfold + Triton INT8 GEMM.
+
+    Supports only groups=1, kernel=3x3, stride=1, padding=1, dilation=1.
+    """
+    assert groups == 1, "INT8 conv fast path currently supports groups=1"
+    kH = kW = 3
+    assert weight_int8.shape[2:] == (kH, kW), "Only 3x3 kernels supported"
+    assert stride == (1, 1) and padding == (1, 1) and dilation == (1, 1), "Only stride=1, pad=1, dil=1 supported"
+
+    N, C, H, W = x_int8.shape
+    out_channels = weight_int8.shape[0]
+
+    # Unfold expects floating types; dequant -> unfold -> requant to INT8
+    x_fp = x_int8.float() * act_scale
+    x_cols_fp = F.unfold(x_fp, kernel_size=3, dilation=1, padding=1, stride=1)
+    # Re-quantize using same activation scale
+    x_cols = torch.round(x_cols_fp / act_scale).clamp(-128, 127).to(torch.int8)
+    # Shape: (N, K, L) where K = C*9, L = H*W
+    N_batch, K, L = x_cols.shape
+    x_mat = x_cols.transpose(1, 2).contiguous().view(-1, K)  # [N*L, K]
+
+    # Prepare weights: [out_channels, C, kH, kW] -> [K, out_channels]
+    w_mat = weight_int8.view(out_channels, -1).t().contiguous()
+
+    # GEMM: [N*L, K] @ [K, out_channels] -> [N*L, out_channels]
+    out_mat = triton_gemm_w8a8(x_mat, w_mat, act_scale, weight_scale, bias=bias)
+
+    # Reshape back to NCHW
+    out = out_mat.view(N, L, out_channels).transpose(1, 2).contiguous()
+    out = out.view(N, out_channels, H, W)
+    return out
 
 
 class MoDiffConfig:
@@ -157,49 +205,92 @@ class MoDiffLayer(nn.Module):
             # Not calibrated, run in FP32
             return self.original_layer(x)
         
-        # Dequantize weights
-        weight = self.quantized_weight.float() * self.weight_scale
+        # Dequantize weights for fallback path
+        weight_fp = self.quantized_weight.float() * self.weight_scale
+        
+        # Quantization state
+        act_scale = None
+        x_int8 = None
+        x_fp = x
         
         # Quantize activations if calibrated
         if self.act_scale is not None and self.act_scale > 0:
             if use_modiff and self.prev_quantized is not None:
-                # MoDiff: Modulated quantization using temporal difference
-                # Pass scale=None to compute DYNAMIC scale from residual
-                # (residual has much smaller range than full activation)
                 if self.act_bit == 8:
-                    _, x_quant, _ = modulated_quantize_int8(
-                        x, self.prev_quantized, scale=None  # Dynamic residual scale!
+                    # MoDiff modulated quantization returns INT8 residual and updated cache
+                    x_int8, a_hat_new, act_scale = modulated_quantize_int8(
+                        x, self.prev_quantized, scale=None
                     )
-                else:  # 4-bit
-                    _, x_quant, _, _ = modulated_quantize_int4(
-                        x, self.prev_quantized, scale=None  # Dynamic residual scale!
+                    self.prev_quantized = a_hat_new.detach().clone()
+                    x_fp = a_hat_new  # dequantized activation for fallback paths
+                else:  # 4-bit modulated
+                    res_packed, a_hat_new, act_scale = modulated_quantize_int4(
+                        x, self.prev_quantized, scale=None
                     )
+                    self.prev_quantized = a_hat_new.detach().clone()
+                    x_fp = a_hat_new
             else:
-                # Standard quantization (first timestep)
                 if self.act_bit == 8:
-                    q_x, scale = quantize_symmetric_int8(x, self.act_scale)
-                    x_quant = dequantize_int8(q_x, scale)
+                    x_int8, act_scale = quantize_symmetric_int8(x, self.act_scale)
+                    x_fp = dequantize_int8(x_int8, act_scale)
                 else:
-                    q_x, scale, shape = quantize_symmetric_int4(x, self.act_scale)
-                    x_quant = dequantize_int4(q_x, scale, shape)
+                    x_packed, act_scale, shape = quantize_symmetric_int4(x, self.act_scale)
+                    x_fp = dequantize_int4(x_packed, act_scale, shape)
             
             # Update cache for next timestep
             self.prev_activation = x.detach().clone()
-            self.prev_quantized = x_quant.detach().clone()
-            
-            x = x_quant
+            if self.prev_quantized is None:
+                self.prev_quantized = x_fp.detach().clone()
         
-        # Apply layer operation with quantized weights
+        # Fast INT8 GEMM path for Linear layers on CUDA (non-MoDiff only)
+        if (
+            not use_modiff and
+            isinstance(self.original_layer, nn.Linear) and
+            self.weight_bit == 8 and self.act_bit == 8 and
+            x_int8 is not None and torch.cuda.is_available()
+        ):
+            orig_shape = x_int8.shape
+            K = orig_shape[-1]
+            x_2d = x_int8.view(-1, K).contiguous()
+            # Weight: [out, in] -> [in, out]
+            weight_int8 = self.quantized_weight.contiguous().t()
+            out_2d = triton_gemm_w8a8(
+                x_2d, weight_int8, act_scale, self.weight_scale, bias=self.original_layer.bias
+            )
+            out = out_2d.view(*orig_shape[:-1], weight_int8.shape[1])
+            return out
+
+        # Fast INT8 Conv2d path via direct Triton kernel (MoDiff-safe: uses current quantized activations)
+        if (
+            isinstance(self.original_layer, nn.Conv2d) and
+            self.weight_bit == 8 and self.act_bit == 8 and
+            x_int8 is not None and act_scale is not None and torch.cuda.is_available()
+        ):
+            # Shape guards: only support groups=1, kernel=3x3, stride=1, pad=1, dil=1
+            layer = self.original_layer
+            if (
+                layer.groups == 1 and
+                layer.kernel_size == (3, 3) and
+                layer.stride == (1, 1) and
+                layer.padding == (1, 1) and
+                layer.dilation == (1, 1)
+            ):
+                out = conv2d_int8_triton_direct(
+                    x_int8, self.quantized_weight, act_scale, self.weight_scale, bias=layer.bias
+                )
+                return out
+        
+        # Fallback to FP path (still quantized weights)
         if isinstance(self.original_layer, nn.Linear):
-            return nn.functional.linear(x, weight, self.original_layer.bias)
+            return nn.functional.linear(x_fp, weight_fp, self.original_layer.bias)
         elif isinstance(self.original_layer, nn.Conv2d):
             return nn.functional.conv2d(
-                x, weight, self.original_layer.bias,
+                x_fp, weight_fp, self.original_layer.bias,
                 self.original_layer.stride, self.original_layer.padding,
                 self.original_layer.dilation, self.original_layer.groups
             )
         else:
-            return self.original_layer(x)
+            return self.original_layer(x_fp)
     
     def reset_cache(self):
         """Reset MoDiff temporal cache."""
@@ -548,9 +639,27 @@ def load_cifar10_real_samples(n_samples, device):
         transforms.ToTensor(),
     ])
     
-    dataset = torchvision.datasets.CIFAR10(
-        root='./data', train=True, download=True, transform=transform
-    )
+    # Use absolute path for data directory
+    data_root = Path(__file__).parent / "data"
+    data_root.mkdir(parents=True, exist_ok=True)
+    
+    try:
+        dataset = torchvision.datasets.CIFAR10(
+            root=str(data_root), train=True, download=True, transform=transform
+        )
+    except RuntimeError as e:
+        print(f"Error loading CIFAR-10 dataset: {e}")
+        print("Attempting to download dataset...")
+        # Force download by removing existing corrupted files
+        import shutil
+        cifar_dir = data_root / "cifar-10-batches-py"
+        if cifar_dir.exists():
+            shutil.rmtree(cifar_dir)
+        
+        # Try downloading again
+        dataset = torchvision.datasets.CIFAR10(
+            root=str(data_root), train=True, download=True, transform=transform
+        )
     
     indices = np.random.choice(len(dataset), min(n_samples, len(dataset)), replace=False)
     samples = torch.stack([dataset[i][0] for i in indices])
