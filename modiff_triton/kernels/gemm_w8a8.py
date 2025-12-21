@@ -256,16 +256,24 @@ def gemm_w8a8(
     if not isinstance(scale_b, torch.Tensor):
         scale_b = torch.tensor(scale_b, dtype=torch.float32, device=A_int8.device)
     
-    # Use INT32 accumulation with dequantization at the end
-    # This is the fallback for GPUs without INT8 tensor core support
-    # Convert to float, compute, then dequantize
-    A_fp = A_int8.float() * scale_a
-    B_fp = B_int8.float() * scale_b
+    # Allocate output
+    C = torch.empty((M, N), device=A_int8.device, dtype=torch.float32)
     
-    C = torch.mm(A_fp, B_fp)
+    # Grid
+    grid = lambda META: (
+        triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),
+    )
     
-    if bias is not None:
-        C = C + bias
+    _gemm_w8a8_kernel[grid](
+        A_int8, B_int8, C,
+        scale_a, scale_b,
+        bias if bias is not None else A_int8, # Dummy if None
+        M, N, K,
+        A_int8.stride(0), A_int8.stride(1),
+        B_int8.stride(0), B_int8.stride(1),
+        C.stride(0), C.stride(1),
+        HAS_BIAS=(bias is not None),
+    )
     
     return C
 
@@ -306,12 +314,24 @@ def gemm_w8a8_accum(
     if not isinstance(scale_b, torch.Tensor):
         scale_b = torch.tensor(scale_b, dtype=torch.float32, device=A_int8.device)
     
-    # Use simple PyTorch ops as fallback
-    # Compute: C = A_dequant @ B_dequant + cache
-    A_fp = A_int8.float() * scale_a
-    B_fp = B_int8.float() * scale_b
+    # Allocate output
+    C = torch.empty((M, N), device=A_int8.device, dtype=torch.float32)
     
-    C = torch.mm(A_fp, B_fp) + cache
+    # Grid
+    grid = lambda META: (
+        triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),
+    )
+    
+    _gemm_w8a8_accum_kernel[grid](
+        A_int8, B_int8, C,
+        scale_a, scale_b,
+        cache,
+        M, N, K,
+        A_int8.stride(0), A_int8.stride(1),
+        B_int8.stride(0), B_int8.stride(1),
+        C.stride(0), C.stride(1),
+        cache.stride(0), cache.stride(1),
+    )
     
     return C
 

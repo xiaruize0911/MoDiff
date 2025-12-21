@@ -43,7 +43,7 @@ from kernels.quantize import (
 from kernels.modulated_quantize import modulated_quantize_int8, modulated_quantize_int4
 from kernels.gemm_w8a8 import gemm_w8a8 as triton_gemm_w8a8
 from kernels.gemm_w4a4 import gemm_w4a4 as triton_gemm_w4a4
-from kernels.conv_w8a8 import conv2d_int8_triton_direct
+from kernels.conv_w8a8 import conv2d_int8_triton_direct, conv2d_int8_triton_accumulate
 
 
 def conv2d_int8_triton_im2col(
@@ -146,14 +146,16 @@ class MoDiffLayer(nn.Module):
         self.act_scale = None
         self.act_zero_point = None
         
-        # MoDiff temporal cache
+        # MoDiff temporal cache (static buffers for CUDA Graphs)
         self.prev_activation = None
         self.prev_quantized = None
+        self.prev_output = None
         
         # Running statistics for activation calibration
         self.register_buffer('running_min', torch.tensor(float('inf')))
         self.register_buffer('running_max', torch.tensor(float('-inf')))
         self.calibrating = False
+        self.has_act_scale = False
         
     def calibrate_weights(self):
         """Calibrate weight quantization parameters using min-max."""
@@ -188,6 +190,7 @@ class MoDiffLayer(nn.Module):
             n_levels = 2 ** self.act_bit
             self.act_scale = a_absmax / (n_levels // 2 - 1)
             self.act_zero_point = torch.zeros(1, device=self.running_min.device)
+            self.has_act_scale = (self.act_scale > 0).item()
     
     def forward(self, x, use_modiff=True):
         """Forward pass with MoDiff quantization."""
@@ -214,20 +217,24 @@ class MoDiffLayer(nn.Module):
         x_fp = x
         
         # Quantize activations if calibrated
-        if self.act_scale is not None and self.act_scale > 0:
+        if self.act_scale is not None and self.has_act_scale:
             if use_modiff and self.prev_quantized is not None:
                 if self.act_bit == 8:
                     # MoDiff modulated quantization returns INT8 residual and updated cache
+                    # Use fixed scale to avoid reduction kernel
+                    # Note: Using fixed scale might degrade quality if calibration is poor
+                    # For now, we use dynamic scale to ensure correctness, as fusion didn't improve speed much
                     x_int8, a_hat_new, act_scale = modulated_quantize_int8(
                         x, self.prev_quantized, scale=None
                     )
-                    self.prev_quantized = a_hat_new.detach().clone()
+                    # In-place update for CUDA Graphs
+                    self.prev_quantized.copy_(a_hat_new)
                     x_fp = a_hat_new  # dequantized activation for fallback paths
                 else:  # 4-bit modulated
-                    res_packed, a_hat_new, act_scale = modulated_quantize_int4(
+                    res_packed, a_hat_new, act_scale, _ = modulated_quantize_int4(
                         x, self.prev_quantized, scale=None
                     )
-                    self.prev_quantized = a_hat_new.detach().clone()
+                    self.prev_quantized.copy_(a_hat_new)
                     x_fp = a_hat_new
             else:
                 if self.act_bit == 8:
@@ -238,9 +245,15 @@ class MoDiffLayer(nn.Module):
                     x_fp = dequantize_int4(x_packed, act_scale, shape)
             
             # Update cache for next timestep
-            self.prev_activation = x.detach().clone()
+            if self.prev_activation is None:
+                self.prev_activation = x.detach().clone()
+            else:
+                self.prev_activation.copy_(x)
+            
             if self.prev_quantized is None:
                 self.prev_quantized = x_fp.detach().clone()
+            elif not use_modiff:
+                self.prev_quantized.copy_(x_fp)
         
         # Fast INT8 GEMM path for Linear layers on CUDA (non-MoDiff only)
         if (
@@ -275,9 +288,22 @@ class MoDiffLayer(nn.Module):
                 layer.padding == (1, 1) and
                 layer.dilation == (1, 1)
             ):
-                out = conv2d_int8_triton_direct(
-                    x_int8, self.quantized_weight, act_scale, self.weight_scale, bias=layer.bias
-                )
+                if use_modiff and self.prev_output is not None:
+                    # Fused path: out = prev_output + conv(residual, bias=None)
+                    # We use the fused kernel to avoid allocating delta_out and Python add
+                    out = conv2d_int8_triton_accumulate(
+                        x_int8, self.quantized_weight, self.prev_output, act_scale, self.weight_scale, bias=None
+                    )
+                else:
+                    # Standard path (or first step): out = conv(x, bias)
+                    out = conv2d_int8_triton_direct(
+                        x_int8, self.quantized_weight, act_scale, self.weight_scale, bias=layer.bias
+                    )
+                
+                if self.prev_output is None:
+                    self.prev_output = out.detach().clone()
+                else:
+                    self.prev_output.copy_(out)
                 return out
         
         # Fallback to FP path (still quantized weights)
@@ -296,6 +322,7 @@ class MoDiffLayer(nn.Module):
         """Reset MoDiff temporal cache."""
         self.prev_activation = None
         self.prev_quantized = None
+        self.prev_output = None
 
 
 class MoDiffModel(nn.Module):
@@ -515,6 +542,12 @@ def generate_samples(model, n_samples, device, timesteps=100, batch_size=64, use
             n = x.size(0)
             seq_next = [-1] + list(seq[:-1])
             
+            # CUDA Graph variables
+            graph = None
+            static_x = None
+            static_t = None
+            static_et = None
+            
             for i, j in zip(reversed(seq), reversed(seq_next)):
                 t = (torch.ones(n, device=device) * i).long()
                 next_t = (torch.ones(n, device=device) * j).long()
@@ -523,7 +556,31 @@ def generate_samples(model, n_samples, device, timesteps=100, batch_size=64, use
                 at_next = compute_alpha(betas, next_t) if j >= 0 else torch.ones_like(at)
                 
                 # Model prediction
-                if is_modiff:
+                if is_modiff and use_modiff and current_batch_size == batch_size and torch.cuda.is_available():
+                    # Use CUDA Graphs for MoDiff (except first step)
+                    # First step (i == seq[-1]) uses standard path (no prev_output), so run eagerly
+                    if i == seq[-1]:
+                        et = model(x, t.float(), use_modiff=use_modiff)
+                    else:
+                        # Subsequent steps use fused path (prev_output exists)
+                        if graph is None:
+                            # Capture graph on first fused step
+                            static_x = x.clone()
+                            static_t = t.float().clone()
+                            
+                            # Warmup (optional, but good practice)
+                            # model(static_x, static_t, use_modiff=use_modiff)
+                            
+                            graph = torch.cuda.CUDAGraph()
+                            with torch.cuda.graph(graph):
+                                static_et = model(static_x, static_t, use_modiff=use_modiff)
+                        
+                        # Replay
+                        static_x.copy_(x)
+                        static_t.copy_(t.float())
+                        graph.replay()
+                        et = static_et
+                elif is_modiff:
                     et = model(x, t.float(), use_modiff=use_modiff)
                 else:
                     et = model(x, t.float())

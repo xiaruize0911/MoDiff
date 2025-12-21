@@ -114,12 +114,12 @@ def _gemm_w4a4_kernel(
         
         # Unpack INT4 to INT8
         # A: each element contains 2 values for consecutive K indices
-        a_lo = ((a_packed & 0xF).to(tl.int8) - 8)  # [BLOCK_M, BLOCK_K//2]
-        a_hi = (((a_packed >> 4) & 0xF).to(tl.int8) - 8)
+        a_lo = ((a_packed & 0xF).to(tl.int8) - 8).to(tl.int8)  # [BLOCK_M, BLOCK_K//2]
+        a_hi = (((a_packed >> 4) & 0xF).to(tl.int8) - 8).to(tl.int8)
         
         # B: each element contains 2 values for consecutive K indices  
-        b_lo = ((b_packed & 0xF).to(tl.int8) - 8)  # [BLOCK_K//2, BLOCK_N]
-        b_hi = (((b_packed >> 4) & 0xF).to(tl.int8) - 8)
+        b_lo = ((b_packed & 0xF).to(tl.int8) - 8).to(tl.int8)  # [BLOCK_K//2, BLOCK_N]
+        b_hi = (((b_packed >> 4) & 0xF).to(tl.int8) - 8).to(tl.int8)
         
         # Compute: need to handle the interleaved structure
         # a_lo[i, j] corresponds to K index 2*j
@@ -213,10 +213,10 @@ def _gemm_w4a4_accum_kernel(
         b_ptrs = B_packed_ptr + ((k_packed + offs_k_packed[:, None]) * stride_bk + offs_n[None, :] * stride_bn)
         b_packed = tl.load(b_ptrs, mask=k_mask[:, None] & (offs_n[None, :] < N), other=0)
         
-        a_lo = ((a_packed & 0xF).to(tl.int8) - 8)
-        a_hi = (((a_packed >> 4) & 0xF).to(tl.int8) - 8)
-        b_lo = ((b_packed & 0xF).to(tl.int8) - 8)
-        b_hi = (((b_packed >> 4) & 0xF).to(tl.int8) - 8)
+        a_lo = ((a_packed & 0xF).to(tl.int8) - 8).to(tl.int8)
+        a_hi = (((a_packed >> 4) & 0xF).to(tl.int8) - 8).to(tl.int8)
+        b_lo = ((b_packed & 0xF).to(tl.int8) - 8).to(tl.int8)
+        b_hi = (((b_packed >> 4) & 0xF).to(tl.int8) - 8).to(tl.int8)
         
         acc += tl.dot(a_lo, b_lo, out_dtype=tl.int32)
         acc += tl.dot(a_hi, b_hi, out_dtype=tl.int32)
@@ -319,26 +319,24 @@ def gemm_w4a4(
     if not isinstance(scale_b, torch.Tensor):
         scale_b = torch.tensor(scale_b, dtype=torch.float32, device=A_packed.device)
     
-    # Unpack and dequantize
-    # A_packed: [M, K//2] -> A_unpacked: [M, K]
-    A_lo = ((A_packed & 0xF).float() - 8) * scale_a  # [M, K//2]
-    A_hi = (((A_packed >> 4) & 0xF).float() - 8) * scale_a  # [M, K//2]
-    A_fp = torch.zeros(M, K, dtype=torch.float32, device=A_packed.device)
-    A_fp[:, 0::2] = A_lo
-    A_fp[:, 1::2] = A_hi
+    # Allocate output
+    C = torch.empty((M, N), device=A_packed.device, dtype=torch.float32)
     
-    # B_packed: [K//2, N] -> B_unpacked: [K, N]
-    B_lo = ((B_packed & 0xF).float() - 8) * scale_b  # [K//2, N]
-    B_hi = (((B_packed >> 4) & 0xF).float() - 8) * scale_b  # [K//2, N]
-    B_fp = torch.zeros(K, N, dtype=torch.float32, device=B_packed.device)
-    B_fp[0::2, :] = B_lo
-    B_fp[1::2, :] = B_hi
+    # Grid
+    grid = lambda META: (
+        triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),
+    )
     
-    # Matrix multiplication
-    C = torch.mm(A_fp, B_fp)
-    
-    if bias is not None:
-        C = C + bias
+    _gemm_w4a4_kernel[grid](
+        A_packed, B_packed, C,
+        scale_a, scale_b,
+        bias if bias is not None else A_packed, # Dummy
+        M, N, K,
+        A_packed.stride(0), A_packed.stride(1),
+        B_packed.stride(0), B_packed.stride(1),
+        C.stride(0), C.stride(1),
+        HAS_BIAS=(bias is not None),
+    )
     
     return C
 
@@ -366,21 +364,23 @@ def gemm_w4a4_accum(
     if not isinstance(scale_b, torch.Tensor):
         scale_b = torch.tensor(scale_b, dtype=torch.float32, device=A_packed.device)
     
-    # Unpack and dequantize A
-    A_lo = ((A_packed & 0xF).float() - 8) * scale_a
-    A_hi = (((A_packed >> 4) & 0xF).float() - 8) * scale_a
-    A_fp = torch.zeros(M, K, dtype=torch.float32, device=A_packed.device)
-    A_fp[:, 0::2] = A_lo
-    A_fp[:, 1::2] = A_hi
+    # Allocate output
+    C = torch.empty((M, N), device=A_packed.device, dtype=torch.float32)
     
-    # Unpack and dequantize B
-    B_lo = ((B_packed & 0xF).float() - 8) * scale_b
-    B_hi = (((B_packed >> 4) & 0xF).float() - 8) * scale_b
-    B_fp = torch.zeros(K, N, dtype=torch.float32, device=B_packed.device)
-    B_fp[0::2, :] = B_lo
-    B_fp[1::2, :] = B_hi
+    # Grid
+    grid = lambda META: (
+        triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),
+    )
     
-    # Matrix multiplication with accumulation
-    C = torch.mm(A_fp, B_fp) + cache
+    _gemm_w4a4_accum_kernel[grid](
+        A_packed, B_packed, C,
+        scale_a, scale_b,
+        cache,
+        M, N, K,
+        A_packed.stride(0), A_packed.stride(1),
+        B_packed.stride(0), B_packed.stride(1),
+        C.stride(0), C.stride(1),
+        cache.stride(0), cache.stride(1),
+    )
     
     return C

@@ -31,6 +31,31 @@ def _round(x):
     return tl.floor(x + 0.5)
 
 
+@triton.jit
+def _modulated_max_abs_kernel(
+    a_ptr, b_ptr,
+    out_ptr,
+    n_elements,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """
+    Computes max(|a - b|) for each block.
+    Used to compute dynamic scale without materializing the residual tensor.
+    """
+    pid = tl.program_id(0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    
+    a = tl.load(a_ptr + offsets, mask=mask, other=0.0)
+    b = tl.load(b_ptr + offsets, mask=mask, other=0.0)
+    
+    diff = tl.abs(a - b)
+    max_val = tl.max(diff)
+    
+    tl.store(out_ptr + pid, max_val)
+
+
 # ============================================================================
 # INT8 Modulated Quantization Kernel
 # ============================================================================
@@ -114,7 +139,7 @@ def _modulated_quantize_int8_global_scale_kernel(
     a_hat_prev_ptr,     # Cached â_{t+1} [M, K]
     residual_int_ptr,   # Output: Q(a_t - â_{t+1}) as INT8
     a_hat_new_ptr,      # Output: â_t
-    scale,              # Pre-computed global scale (scalar)
+    scale_ptr,          # Pre-computed global scale (pointer)
     n_elements,
     BLOCK_SIZE: tl.constexpr,
 ):
@@ -130,6 +155,9 @@ def _modulated_quantize_int8_global_scale_kernel(
     # Load inputs
     a_t = tl.load(a_t_ptr + offsets, mask=mask, other=0.0)
     a_hat_prev = tl.load(a_hat_prev_ptr + offsets, mask=mask, other=0.0)
+    
+    # Load scale
+    scale = tl.load(scale_ptr)
     
     # Compute residual
     residual = a_t - a_hat_prev
@@ -247,12 +275,23 @@ def modulated_quantize_int8(
     a_hat_prev_flat = a_hat_prev.contiguous().flatten()
     n_elements = a_t_flat.numel()
     
-    # Compute residual for scale computation
-    residual = a_t_flat - a_hat_prev_flat
-    
     if scale is None:
         # Dynamic scale from residual (paper: residual has smaller range)
-        scale, _ = compute_dynamic_scale_int8(residual, symmetric=True)
+        # Fused max(|a - b|) computation to avoid materializing residual
+        BLOCK_SIZE = 1024
+        grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+        block_maxes = torch.empty(grid[0], dtype=torch.float32, device=a_t.device)
+        
+        _modulated_max_abs_kernel[grid](
+            a_t_flat, a_hat_prev_flat,
+            block_maxes,
+            n_elements,
+            BLOCK_SIZE=BLOCK_SIZE,
+        )
+        
+        max_val = block_maxes.max()
+        scale = max_val / 127.0
+        scale = torch.clamp(scale, min=1e-8)
     
     # Allocate outputs
     residual_int = torch.empty(n_elements, dtype=torch.int8, device=a_t.device)
@@ -262,13 +301,14 @@ def modulated_quantize_int8(
     BLOCK_SIZE = 1024
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
     
-    # Extract scalar value from tensor for Triton
-    scale_value = scale.item() if isinstance(scale, torch.Tensor) else float(scale)
+    # Pass scale tensor directly (or wrap float in tensor)
+    if not isinstance(scale, torch.Tensor):
+        scale = torch.tensor(scale, device=a_t.device, dtype=torch.float32)
     
     _modulated_quantize_int8_global_scale_kernel[grid](
         a_t_flat, a_hat_prev_flat,
         residual_int, a_hat_new_flat,
-        scale_value,
+        scale,
         n_elements,
         BLOCK_SIZE=BLOCK_SIZE,
     )
@@ -313,11 +353,22 @@ def modulated_quantize_int4(
         a_hat_prev_flat = torch.nn.functional.pad(a_hat_prev_flat, (0, 1), value=0)
         n_elements = a_t_flat.numel()
     
-    # Compute residual for scale
-    residual = a_t_flat - a_hat_prev_flat
-    
     if scale is None:
-        scale, _ = compute_dynamic_scale_int4(residual, symmetric=True)
+        # Fused max(|a - b|) computation
+        BLOCK_SIZE = 1024
+        grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+        block_maxes = torch.empty(grid[0], dtype=torch.float32, device=a_t.device)
+        
+        _modulated_max_abs_kernel[grid](
+            a_t_flat, a_hat_prev_flat,
+            block_maxes,
+            n_elements,
+            BLOCK_SIZE=BLOCK_SIZE,
+        )
+        
+        max_val = block_maxes.max()
+        scale = max_val / 7.0  # INT4 symmetric range
+        scale = torch.clamp(scale, min=1e-8)
     
     # Allocate outputs
     n_packed = n_elements // 2

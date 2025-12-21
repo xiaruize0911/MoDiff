@@ -54,7 +54,7 @@ def _quantize_symmetric_int8_kernel(
     
     # Quantize: x_int = clamp(round(x / scale), -128, 127)
     x_scaled = x / scale
-    x_int = tl.libdevice.rint(x_scaled)
+    x_int = tl.floor(x_scaled + 0.5)
     x_int = tl.maximum(tl.minimum(x_int, 127.0), -128.0)
     
     # Store results
@@ -63,6 +63,35 @@ def _quantize_symmetric_int8_kernel(
     # Store scale (only first thread)
     if pid == 0:
         tl.store(scale_ptr, scale)
+
+
+@triton.jit
+def _quantize_symmetric_int8_global_scale_kernel(
+    x_ptr,          # Input tensor
+    out_ptr,        # Output quantized tensor (int8)
+    scale,          # Global scale (scalar)
+    n_elements,     # Total number of elements
+    BLOCK_SIZE: tl.constexpr,
+):
+    """
+    Symmetric INT8 quantization with pre-computed global scale.
+    x_int = clamp(round(x / scale), -128, 127)
+    """
+    pid = tl.program_id(0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    
+    # Load input
+    x = tl.load(x_ptr + offsets, mask=mask, other=0.0)
+    
+    # Quantize
+    x_scaled = x / scale
+    x_int = tl.floor(x_scaled + 0.5)
+    x_int = tl.maximum(tl.minimum(x_int, 127.0), -128.0)
+    
+    # Store results
+    tl.store(out_ptr + offsets, x_int.to(tl.int8), mask=mask)
 
 
 @triton.jit
@@ -95,11 +124,11 @@ def _quantize_asymmetric_int8_kernel(
     # Compute scale and zero point
     scale = (x_max - x_min) / 255.0
     scale = tl.where(scale < 1e-8, 1e-8, scale)
-    zero_point = tl.libdevice.rint(-x_min / scale)
+    zero_point = tl.floor(-x_min / scale + 0.5)
     
     # Quantize
     x_scaled = x / scale + zero_point
-    x_int = tl.libdevice.rint(x_scaled)
+    x_int = tl.floor(x_scaled + 0.5)
     x_int = tl.maximum(tl.minimum(x_int, 255.0), 0.0)
     
     # Convert to signed int8 for storage (subtract 128)
@@ -179,8 +208,8 @@ def _quantize_symmetric_int4_kernel(
     scale = tl.where(scale < 1e-8, 1e-8, scale)
     
     # Quantize to INT4 range [-8, 7]
-    x_lo_int = tl.libdevice.rint(x_lo / scale)
-    x_hi_int = tl.libdevice.rint(x_hi / scale)
+    x_lo_int = tl.floor(x_lo / scale + 0.5)
+    x_hi_int = tl.floor(x_hi / scale + 0.5)
     x_lo_int = tl.maximum(tl.minimum(x_lo_int, 7.0), -8.0)
     x_hi_int = tl.maximum(tl.minimum(x_hi_int, 7.0), -8.0)
     
@@ -347,10 +376,24 @@ def quantize_symmetric_int8(x: torch.Tensor, scale: torch.Tensor = None) -> tupl
     if scale is None:
         scale, _ = compute_dynamic_scale_int8(x, symmetric=True)
     
-    x_scaled = x / scale
-    x_int = torch.round(x_scaled).clamp(-128, 127).to(torch.int8)
+    # Use Triton kernel for quantization
+    x_flat = x.flatten()
+    n_elements = x_flat.numel()
+    x_int = torch.empty(n_elements, dtype=torch.int8, device=x.device)
     
-    return x_int, scale
+    BLOCK_SIZE = 1024
+    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    
+    scale_val = scale.item() if isinstance(scale, torch.Tensor) else float(scale)
+    
+    _quantize_symmetric_int8_global_scale_kernel[grid](
+        x_flat, x_int,
+        scale_val,
+        n_elements,
+        BLOCK_SIZE=BLOCK_SIZE,
+    )
+    
+    return x_int.view(x.shape), scale
 
 
 def quantize_symmetric_int4(x: torch.Tensor, scale: torch.Tensor = None) -> tuple:

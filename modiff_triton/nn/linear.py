@@ -265,9 +265,9 @@ class W8A8MoDiffLinear(nn.Module):
             â_t = Q(a_t - â_{t+1}) + â_{t+1}          -- Eq. (ec5)
             ô_t = A(Q(a_t - â_{t+1})) + ô_{t+1}       -- Eq. (ec6)
         """
-        # Get cached values (convert back to float32 if stored as fp16)
-        a_hat_prev = self.a_hat_cache.float() if self.a_hat_cache.dtype == torch.float16 else self.a_hat_cache
-        o_hat_prev = self.o_hat_cache.float() if self.o_hat_cache.dtype == torch.float16 else self.o_hat_cache
+        # Get cached values (keep as is, kernels handle mixed precision)
+        a_hat_prev = self.a_hat_cache
+        o_hat_prev = self.o_hat_cache
         
         # Handle batch size changes
         if a_hat_prev.shape[0] != x.shape[0]:
@@ -481,8 +481,8 @@ class W4A4MoDiffLinear(nn.Module):
     
     def _forward_modulated(self, x: torch.Tensor) -> torch.Tensor:
         """Modulated forward for W4A4."""
-        a_hat_prev = self.a_hat_cache.float() if self.a_hat_cache.dtype == torch.float16 else self.a_hat_cache
-        o_hat_prev = self.o_hat_cache.float() if self.o_hat_cache.dtype == torch.float16 else self.o_hat_cache
+        a_hat_prev = self.a_hat_cache
+        o_hat_prev = self.o_hat_cache
         
         if a_hat_prev.shape[0] != x.shape[0]:
             return self._forward_first_step(x)
