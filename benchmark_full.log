@@ -1,0 +1,38 @@
+/root/MoDiff/modiff_triton/benchmark_fid_calibrated.py:463: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  states = torch.load(ckpt_path, map_location=device)
+/root/MoDiff/modiff_triton/benchmark_fid_calibrated.py:484: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  cali_data = torch.load(cali_path)
+Using device: cuda
+
+============================================================
+MoDiff FID Benchmark
+Mode: W8A8 (W8A8)
+Samples: 10000
+Timesteps: 100
+============================================================
+
+Loading CIFAR-10 diffusion model...
+Loaded CIFAR-10 model: 35.7M parameters
+
+Loading real CIFAR-10 samples...
+Files already downloaded and verified
+Loading 50000 real CIFAR-10 training samples for FID...
+
+Loading calibration data...
+Loading calibration data from /root/MoDiff/cali_data/cifar10.pt
+
+============================================================
+MoDiff W8A8
+============================================================
+
+Creating MoDiff model (W8A8)...
+Calibrating quantization parameters...
+Calibrating quantization parameters...
+Calibrating MoDiff model with 113 layers...
+  Weight calibration done.
+  Running 256 calibration samples...
+  Calibrating:   0%|          | 0/8 [00:00<?, ?it/s]  Calibrating:  12%|█▎        | 1/8 [00:00<00:01,  5.87it/s]  Calibrating:  75%|███████▌  | 6/8 [00:00<00:00, 24.45it/s]  Calibrating: 100%|██████████| 8/8 [00:00<00:00, 24.24it/s]
+  Activation calibration done.
+
+Generating 10000 samples with MoDiff...
+Generating:   0%|          | 0/79 [00:00<?, ?it/s]Generating:   1%|▏         | 1/79 [00:15<20:17, 15.61s/it]Generating:   3%|▎         | 2/79 [00:23<14:17, 11.13s/it]Generating:   4%|▍         | 3/79 [00:31<12:17,  9.70s/it]Generating:   5%|▌         | 4/79 [00:39<11:17,  9.03s/it]Generating:   6%|▋         | 5/79 [00:47<10:40,  8.66s/it]Generating:   8%|▊         | 6/79 [00:55<10:15,  8.43s/it]Generating:   9%|▉         | 7/79 [01:03<09:57,  8.29s/it]Generating:  10%|█         | 8/79 [01:11<09:42,  8.20s/it]Generating:  11%|█▏        | 9/79 [01:19<09:29,  8.14s/it]Generating:  13%|█▎        | 10/79 [01:27<09:18,  8.09s/it]Generating:  14%|█▍        | 11/79 [01:35<09:08,  8.07s/it]Generating:  15%|█▌        | 12/79 [01:43<08:59,  8.05s/it]Generating:  16%|█▋        | 13/79 [01:51<08:50,  8.03s/it]Generating:  18%|█▊        | 14/79 [01:59<08:41,  8.02s/it]Generating:  19%|█▉        | 15/79 [02:07<08:33,  8.02s/it]Generating:  20%|██        | 16/79 [02:15<08:24,  8.01s/it]Generating:  22%|██▏       | 17/79 [02:23<08:16,  8.01s/it]Generating:  23%|██▎       | 18/79 [02:31<08:08,  8.01s/it]Generating:  24%|██▍       | 19/79 [02:39<08:00,  8.00s/it]Generating:  25%|██▌       | 20/79 [02:47<07:52,  8.00s/it]Generating:  27%|██▋       | 21/79 [02:55<07:44,  8.00s/it]Generating:  28%|██▊       | 22/79 [03:03<07:36,  8.00s/it]Generating:  29%|██▉       | 23/79 [03:11<07:28,  8.00s/it]Generating:  30%|███       | 24/79 [03:19<07:20,  8.00s/it]Generating:  32%|███▏      | 25/79 [03:27<07:12,  8.01s/it]Generating:  33%|███▎      | 26/79 [03:35<07:04,  8.01s/it]Generating:  34%|███▍      | 27/79 [03:43<06:56,  8.01s/it]Generating:  35%|███▌      | 28/79 [03:51<06:48,  8.01s/it]Generating:  37%|███▋      | 29/79 [03:59<06:40,  8.01s/it]Generating:  38%|███▊      | 30/79 [04:07<06:32,  8.01s/it]Generating:  39%|███▉      | 31/79 [04:15<06:24,  8.01s/it]Generating:  41%|████      | 32/79 [04:23<06:16,  8.01s/it]Generating:  42%|████▏     | 33/79 [04:31<06:08,  8.01s/it]Generating:  43%|████▎     | 34/79 [04:39<06:00,  8.01s/it]Generating:  44%|████▍     | 35/79 [04:47<05:52,  8.01s/it]Generating:  46%|████▌     | 36/79 [04:55<05:44,  8.01s/it]Generating:  47%|████▋     | 37/79 [05:03<05:36,  8.01s/it]Generating:  48%|████▊     | 38/79 [05:11<05:28,  8.01s/it]Generating:  49%|████▉     | 39/79 [05:19<05:20,  8.01s/it]Generating:  51%|█████     | 40/79 [05:27<05:12,  8.01s/it]Generating:  52%|█████▏    | 41/79 [05:35<05:04,  8.01s/it]Generating:  53%|█████▎    | 42/79 [05:43<04:56,  8.01s/it]Generating:  54%|█████▍    | 43/79 [05:51<04:48,  8.01s/it]Generating:  56%|█████▌    | 44/79 [05:59<04:40,  8.01s/it]Generating:  57%|█████▋    | 45/79 [06:07<04:32,  8.01s/it]Generating:  58%|█████▊    | 46/79 [06:15<04:24,  8.01s/it]Generating:  59%|█████▉    | 47/79 [06:23<04:16,  8.01s/it]Generating:  61%|██████    | 48/79 [06:31<04:08,  8.01s/it]Generating:  62%|██████▏   | 49/79 [06:39<04:00,  8.01s/it]Generating:  63%|██████▎   | 50/79 [06:47<03:52,  8.01s/it]Generating:  65%|██████▍   | 51/79 [06:55<03:44,  8.01s/it]Generating:  66%|██████▌   | 52/79 [07:03<03:36,  8.01s/it]Generating:  67%|██████▋   | 53/79 [07:11<03:28,  8.01s/it]Generating:  68%|██████▊   | 54/79 [07:19<03:20,  8.01s/it]Generating:  70%|██████▉   | 55/79 [07:27<03:12,  8.01s/it]Generating:  71%|███████   | 56/79 [07:35<03:04,  8.01s/it]Generating:  72%|███████▏  | 57/79 [07:43<02:56,  8.01s/it]Generating:  73%|███████▎  | 58/79 [07:51<02:48,  8.01s/it]Generating:  75%|███████▍  | 59/79 [07:59<02:40,  8.01s/it]Generating:  76%|███████▌  | 60/79 [08:07<02:32,  8.01s/it]Generating:  77%|███████▋  | 61/79 [08:15<02:24,  8.01s/it]Generating:  78%|███████▊  | 62/79 [08:23<02:16,  8.01s/it]Generating:  80%|███████▉  | 63/79 [08:31<02:08,  8.01s/it]Generating:  81%|████████  | 64/79 [08:39<02:00,  8.01s/it]

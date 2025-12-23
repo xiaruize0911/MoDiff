@@ -644,7 +644,7 @@ def generate_samples(model, n_samples, device, timesteps=100, batch_size=64, use
 def compute_fid(generated_samples, real_samples, device):
     """
     Compute FID between generated and real samples using InceptionV3 features.
-    Uses a numerically stable implementation.
+    Uses the original implementation from scripts/evaluate.py
     """
     from torch.nn.functional import adaptive_avg_pool2d
     
@@ -700,7 +700,7 @@ def compute_fid(generated_samples, real_samples, device):
     real_features = get_features(real_samples, desc="  Real features")
     
     print("  Computing statistics...")
-    # Compute statistics with regularization for numerical stability
+    # Compute statistics
     mu_gen = np.mean(gen_features, axis=0)
     sigma_gen = np.cov(gen_features, rowvar=False)
     
@@ -714,49 +714,51 @@ def compute_fid(generated_samples, real_samples, device):
     if np.any(np.isnan(sigma_gen)) or np.any(np.isinf(sigma_gen)):
         return float('nan')
     
-    # Add small regularization for numerical stability
-    eps = 1e-6
-    sigma_gen = sigma_gen + eps * np.eye(sigma_gen.shape[0])
-    sigma_real = sigma_real + eps * np.eye(sigma_real.shape[0])
-    
-    # Compute FID using trace formula
+    # Compute FID using original method from scripts/evaluate.py
+    # https://github.com/bioinf-jku/TTUR/blob/73ab375cdf952a12686d9aa7978567771084da42/fid.py#L132
     print("  Computing FID score...")
-    diff = mu_gen - mu_real
+    mu1, sigma1 = mu_gen, sigma_gen
+    mu2, sigma2 = mu_real, sigma_real
     
-    # Use eigenvalue decomposition for faster and more stable sqrtm
-    # Instead of scipy.linalg.sqrtm which can be very slow on large matrices
+    mu1 = np.atleast_1d(mu1)
+    mu2 = np.atleast_1d(mu2)
+    
+    sigma1 = np.atleast_2d(sigma1)
+    sigma2 = np.atleast_2d(sigma2)
+    
+    diff = mu1 - mu2
+    
+    # Product might be almost singular
     from scipy import linalg
+    eps = 1e-6
+    covmean, _ = linalg.sqrtm(sigma1.dot(sigma2), disp=False)
+    if not np.isfinite(covmean).all():
+        print(f"  Warning: FID calculation produces singular product; adding {eps} to diagonal")
+        offset = np.eye(sigma1.shape[0]) * eps
+        covmean = linalg.sqrtm((sigma1 + offset).dot(sigma2 + offset))
     
-    try:
-        # Compute sqrt of product using eigenvalue decomposition
-        # This is much faster than sqrtm for large matrices
-        product = sigma_gen @ sigma_real
-        
-        # Use eigh for symmetric matrices (faster than eig)
-        # Add small eps to ensure positive semi-definite
-        offset = np.trace(product) * 1e-6 / product.shape[0]
-        eigenvalues, eigenvectors = linalg.eigh(product + offset * np.eye(product.shape[0]))
-        
-        # Clip negative eigenvalues (numerical errors)
-        eigenvalues = np.maximum(eigenvalues, 0)
-        
-        # Compute trace of sqrt
-        tr_covmean = np.sqrt(eigenvalues).sum()
-        
-        fid = float(np.dot(diff, diff) + np.trace(sigma_gen) + np.trace(sigma_real) - 2 * tr_covmean)
-        
-        # Sanity check
-        if np.isnan(fid) or np.isinf(fid) or fid < 0:
-            fid = float(np.dot(diff, diff) + np.trace(sigma_gen) + np.trace(sigma_real))
-            
-    except Exception as e:
-        fid = float(np.dot(diff, diff) + np.trace(sigma_gen) + np.trace(sigma_real))
+    # Numerical error might give slight imaginary component
+    if np.iscomplexobj(covmean):
+        if not np.allclose(np.diagonal(covmean).imag, 0, atol=1e-3):
+            m = np.max(np.abs(covmean.imag))
+            raise ValueError(f"Imaginary component {m}")
+        covmean = covmean.real
     
-    return fid
+    tr_covmean = np.trace(covmean)
+    
+    fid = diff.dot(diff) + np.trace(sigma1) + np.trace(sigma2) - 2 * tr_covmean
+    
+    return float(fid)
 
 
 def load_cifar10_real_samples(n_samples, device):
-    """Load real CIFAR-10 samples for FID computation."""
+    """
+    Load real CIFAR-10 samples for FID computation.
+    
+    For proper FID evaluation, we use the full training set (50k images)
+    regardless of how many samples are generated. This matches the standard
+    protocol for FID evaluation.
+    """
     transform = transforms.Compose([
         transforms.ToTensor(),
     ])
@@ -783,8 +785,10 @@ def load_cifar10_real_samples(n_samples, device):
             root=str(data_root), train=True, download=True, transform=transform
         )
     
-    indices = np.random.choice(len(dataset), min(n_samples, len(dataset)), replace=False)
-    samples = torch.stack([dataset[i][0] for i in indices])
+    # Use full training set for FID (standard protocol)
+    # This gives more stable statistics than random subsampling
+    print(f"Loading {len(dataset)} real CIFAR-10 training samples for FID...")
+    samples = torch.stack([dataset[i][0] for i in range(len(dataset))])
     
     return samples
 
@@ -849,7 +853,7 @@ def main():
     fp32_model = load_cifar10_model(device)
     
     # Load real CIFAR-10 samples
-    print(f"\nLoading {args.num_samples} real CIFAR-10 samples...")
+    print(f"\nLoading real CIFAR-10 samples...")
     real_samples = load_cifar10_real_samples(args.num_samples, device)
     
     results = {}
