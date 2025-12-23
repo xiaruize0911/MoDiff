@@ -38,6 +38,7 @@ from ..kernels.modulated_quantize import (
     modulated_quantize_first_step_int4,
 )
 from ..kernels.gemm_w8a8 import gemm_w8a8, gemm_w8a8_accum
+from ..kernels.gemm_w8a8_fused import gemm_w8a8_fused
 from ..kernels.gemm_w4a4 import gemm_w4a4, gemm_w4a4_accum, pack_int4_weight
 
 
@@ -73,10 +74,10 @@ class W8A8MoDiffLinear(nn.Module):
         self.out_features = out_features
         self.config = config or MoDiffConfig(weight_bits=8, act_bits=8)
         
-        # Weight buffer (INT8)
+        # Weight buffer (INT8) - store transposed for GEMM efficiency
         self.register_buffer(
             "weight_int8",
-            torch.empty(out_features, in_features, dtype=torch.int8)
+            torch.empty(in_features, out_features, dtype=torch.int8)
         )
         
         # Weight scale (per-channel or per-tensor)
@@ -108,6 +109,9 @@ class W8A8MoDiffLinear(nn.Module):
         self.is_first_step = True
         self.modulation_enabled = self.config.modulation_enabled
         
+        # Use fused kernel for better performance
+        self.use_fused_kernel = True
+        
     @classmethod
     def from_linear(
         cls,
@@ -128,6 +132,9 @@ class W8A8MoDiffLinear(nn.Module):
             config=config,
         )
         
+        # Move to same device as linear
+        q_linear = q_linear.to(linear.weight.device)
+        
         # Quantize weights
         weight = linear.weight.data.float()
         
@@ -144,7 +151,8 @@ class W8A8MoDiffLinear(nn.Module):
             weight_scale = torch.clamp(weight_scale, min=1e-8)
             weight_int = torch.round(weight / weight_scale).clamp(-128, 127)
         
-        q_linear.weight_int8.copy_(weight_int.to(torch.int8))
+        # Store transposed for GEMM efficiency
+        q_linear.weight_int8.copy_(weight_int.t().contiguous().to(torch.int8))
         q_linear.weight_scale.copy_(weight_scale)
         
         if linear.bias is not None:
@@ -195,20 +203,31 @@ class W8A8MoDiffLinear(nn.Module):
     
     def _forward_standard(self, x: torch.Tensor) -> torch.Tensor:
         """Standard W8A8 forward without modulation."""
-        # Quantize activation
-        x_int, scale_a = quantize_symmetric_int8(x)
         
-        # Use stored per-channel or per-tensor scale directly
-        scale_w = self.weight_scale
-        
-        # GEMM
-        output = gemm_w8a8(
-            x_int,
-            self.weight_int8.t().contiguous(),
-            scale_a,
-            scale_w,
-            self.bias,
-        )
+        # Use fused kernel if enabled (faster for small matrices)
+        if self.use_fused_kernel and not self.config.weight_channel_wise:
+            # Fused quantization + GEMM kernel
+            output = gemm_w8a8_fused(
+                x,
+                self.weight_int8,
+                self.weight_scale,
+                self.bias,
+            )
+        else:
+            # Separate quantization + GEMM (fallback for per-channel quantization)
+            x_int, scale_a = quantize_symmetric_int8(x)
+            
+            # Use stored per-channel or per-tensor scale directly
+            scale_w = self.weight_scale
+            
+            # GEMM (weight is pre-transposed)
+            output = gemm_w8a8(
+                x_int,
+                self.weight_int8,
+                scale_a,
+                scale_w,
+                self.bias,
+            )
         
         return output
     
@@ -231,10 +250,10 @@ class W8A8MoDiffLinear(nn.Module):
         
         scale_w = self.weight_scale
         
-        # Eq. (ec2): ô_T = A(â_T) + bias
+        # Eq. (ec2): ô_T = A(â_T) + bias (weight is pre-transposed)
         output = gemm_w8a8(
             x_int,
-            self.weight_int8.t().contiguous(),
+            self.weight_int8,
             scale_a,
             scale_w,
             self.bias,
@@ -277,11 +296,11 @@ class W8A8MoDiffLinear(nn.Module):
         
         scale_w = self.weight_scale
         
-        # Eq. (ec6): ô_t = A(Q(a_t - â_{t+1})) + ô_{t+1}
+        # Eq. (ec6): ô_t = A(Q(a_t - â_{t+1})) + ô_{t+1} (weight is pre-transposed)
         # Note: NO bias added here (only at first timestep)
         output = gemm_w8a8_accum(
             residual_int,
-            self.weight_int8.t().contiguous(),
+            self.weight_int8,
             scale_a,
             scale_w,
             o_hat_prev,

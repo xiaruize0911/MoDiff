@@ -38,6 +38,10 @@ from ..kernels.conv_w8a8 import (
     conv2d_int8_triton_direct,
     conv2d_int8_triton_accumulate,
 )
+from ..kernels.conv_w8a8_fused import (
+    conv2d_w8a8_3x3_fused,
+    conv2d_w8a8_3x3_standard,
+)
 from ..kernels.gemm_w8a8 import gemm_w8a8, gemm_w8a8_accum
 from ..kernels.gemm_w4a4 import gemm_w4a4, gemm_w4a4_accum, pack_int4_weight
 
@@ -208,6 +212,39 @@ class W8A8MoDiffConv2d(nn.Module):
             self.dilation == (1, 1)
         )
     
+    def _can_use_fused_conv(self):
+        """Check if we can use the fused direct conv kernel (fastest path)."""
+        return (
+            torch.cuda.is_available() and
+            self.groups == 1 and
+            self.kernel_size == (3, 3) and
+            self.stride == (1, 1) and
+            self.padding == (1, 1) and
+            self.dilation == (1, 1)
+        )
+    
+    def _can_use_fused_conv(self):
+        """Check if we can use the fused direct conv kernel."""
+        return (
+            torch.cuda.is_available() and
+            self.groups == 1 and
+            self.kernel_size == (3, 3) and
+            self.stride == (1, 1) and
+            self.padding == (1, 1) and
+            self.dilation == (1, 1)
+        )
+    
+    def _can_use_fused_conv(self):
+        """Check if we can use fused direct conv kernel"""
+        return (
+            torch.cuda.is_available() and
+            self.groups == 1 and
+            self.kernel_size == (3, 3) and
+            self.stride == (1, 1) and
+            self.padding == (1, 1) and
+            self.dilation == (1, 1)
+        )
+    
     def _conv2d_int8(
         self,
         x_int: torch.Tensor,
@@ -292,6 +329,11 @@ class W8A8MoDiffConv2d(nn.Module):
     
     def _forward_standard(self, x: torch.Tensor) -> torch.Tensor:
         """Standard W8A8 forward without modulation."""
+        # Use fused direct conv kernel (no quantization overhead, no im2col)
+        if self._can_use_fused_conv():
+            return conv2d_w8a8_3x3_standard(x, self.weight_int8, self.weight_scale, self.bias)
+        
+        # Fallback: quantize then conv
         x_int, scale_a = self._quantize_activation_int8(x)
         self._last_act_scale = scale_a
 
@@ -354,28 +396,43 @@ class W8A8MoDiffConv2d(nn.Module):
             self.reset_cache()
             return self._forward_first_step(x)
 
-        # Eq. (ec5): quantize residual with optional scale reuse
-        reuse_scale = self.config.reuse_act_scale and (self._last_act_scale is not None)
-        residual_int, a_hat_new, scale_a = modulated_quantize_int8(
-            x, a_hat_prev, scale=self._last_act_scale if reuse_scale else None
-        )
-        self._last_act_scale = scale_a
+        # Use fused direct conv kernel (eliminates im2col, fuses all ops)
+        if self._can_use_fused_conv():
+            conv_output = conv2d_w8a8_3x3_fused(
+                x, a_hat_prev, self.weight_int8, o_hat_prev,
+                self.weight_scale, bias=None
+            )
+            # Update caches (fused kernel doesn't return a_hat, so compute it)
+            residual = x - a_hat_prev
+            scale_a = residual.abs().max() / 127.0
+            scale_a = torch.clamp(scale_a, min=1e-8)
+            residual_int = torch.round(residual / scale_a).clamp(-128, 127)
+            a_hat_new = residual_int * scale_a + a_hat_prev
+            self._last_act_scale = scale_a
+        else:
+            # Fallback: separate quantization + conv
+            # Eq. (ec5): quantize residual with optional scale reuse
+            reuse_scale = self.config.reuse_act_scale and (self._last_act_scale is not None)
+            residual_int, a_hat_new, scale_a = modulated_quantize_int8(
+                x, a_hat_prev, scale=self._last_act_scale if reuse_scale else None
+            )
+            self._last_act_scale = scale_a
+            
+            # Conv WITHOUT bias
+            if torch.cuda.is_available() and self._can_use_triton_conv():
+                conv_output = conv2d_int8_triton_accumulate(
+                    residual_int, self.weight_int8, o_hat_prev,
+                    scale_a, self.weight_scale, bias=None
+                )
+            else:
+                conv_output = self._conv2d_int8_im2col_gemm(residual_int, scale_a, add_bias=False)
+                conv_output = conv_output + o_hat_prev
 
         # Update activation cache
         if self.config.store_cache_fp16:
             self.a_hat_cache = a_hat_new.half()
         else:
             self.a_hat_cache = a_hat_new
-        
-        # Conv WITHOUT bias
-        if torch.cuda.is_available() and self._can_use_triton_conv():
-            conv_output = conv2d_int8_triton_accumulate(
-                residual_int, self.weight_int8, o_hat_prev,
-                scale_a, self.weight_scale, bias=None
-            )
-        else:
-            conv_output = self._conv2d_int8_im2col_gemm(residual_int, scale_a, add_bias=False)
-            conv_output = conv_output + o_hat_prev
         
         # Update output cache
         if self.config.store_cache_fp16:

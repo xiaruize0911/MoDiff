@@ -28,6 +28,11 @@ from .gemm_w4a4 import (
     pack_int4_weight,
 )
 
+from .conv_w8a8_fused import (
+    conv2d_w8a8_3x3_fused,
+    conv2d_w8a8_3x3_standard,
+)
+
 __all__ = [
     # Quantization
     "quantize_symmetric_int8",
@@ -49,4 +54,7 @@ __all__ = [
     "gemm_w4a4",
     "gemm_w4a4_accum",
     "pack_int4_weight",
+    # Fused Conv2d
+    "conv2d_w8a8_3x3_fused",
+    "conv2d_w8a8_3x3_standard",
 ]

@@ -363,7 +363,7 @@ def compute_dynamic_scale_int4(x: torch.Tensor, symmetric: bool = True) -> tuple
 
 def quantize_symmetric_int8(x: torch.Tensor, scale: torch.Tensor = None) -> tuple:
     """
-    Symmetric INT8 quantization.
+    Symmetric INT8 quantization - optimized with PyTorch ops.
     
     Args:
         x: Input tensor (FP16/FP32)
@@ -373,27 +373,21 @@ def quantize_symmetric_int8(x: torch.Tensor, scale: torch.Tensor = None) -> tupl
         x_int: Quantized tensor (INT8)
         scale: Quantization scale
     """
+    # Fast path: Use PyTorch's vectorized operations
     if scale is None:
-        scale, _ = compute_dynamic_scale_int8(x, symmetric=True)
+        # Use aminmax for single-pass min/max
+        x_min, x_max = torch.aminmax(x)
+        abs_max = torch.maximum(x_max.abs(), x_min.abs())
+        scale = abs_max * (1.0 / 127.0)  # Multiply by reciprocal is faster
+        scale = torch.clamp(scale, min=1e-8)
     
-    # Use Triton kernel for quantization
-    x_flat = x.flatten()
-    n_elements = x_flat.numel()
-    x_int = torch.empty(n_elements, dtype=torch.int8, device=x.device)
+    # Compute reciprocal once
+    scale_inv = 1.0 / scale if isinstance(scale, (float, int)) else (1.0 / scale)
     
-    BLOCK_SIZE = 1024
-    grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
+    # Quantize using PyTorch operations (vectorized on GPU)
+    x_int = torch.clamp((x * scale_inv).round_(), -128, 127).to(torch.int8)
     
-    scale_val = scale.item() if isinstance(scale, torch.Tensor) else float(scale)
-    
-    _quantize_symmetric_int8_global_scale_kernel[grid](
-        x_flat, x_int,
-        scale_val,
-        n_elements,
-        BLOCK_SIZE=BLOCK_SIZE,
-    )
-    
-    return x_int.view(x.shape), scale
+    return x_int, scale
 
 
 def quantize_symmetric_int4(x: torch.Tensor, scale: torch.Tensor = None) -> tuple:

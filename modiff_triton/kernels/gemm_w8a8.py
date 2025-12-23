@@ -29,11 +29,15 @@ import triton.language as tl
 
 @triton.autotune(
     configs=[
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_M': 8}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_M': 8}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 32, 'GROUP_M': 8}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'BLOCK_K': 32, 'GROUP_M': 8}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 32, 'BLOCK_K': 32, 'GROUP_M': 8}, num_stages=4, num_warps=4),
+        # Optimized configs for different tensor sizes
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 256, 'BLOCK_K': 64, 'GROUP_M': 8}, num_stages=3, num_warps=8),
+        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 128, 'BLOCK_K': 64, 'GROUP_M': 8}, num_stages=3, num_warps=8),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 64, 'GROUP_M': 8}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 64, 'GROUP_M': 8}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 64, 'GROUP_M': 8}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'BLOCK_K': 32, 'GROUP_M': 8}, num_stages=5, num_warps=2),
+        # Smaller configs for small matrices
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 64, 'BLOCK_K': 32, 'GROUP_M': 8}, num_stages=5, num_warps=2),
     ],
     key=['M', 'N', 'K'],
 )
@@ -129,11 +133,13 @@ def _gemm_w8a8_kernel(
 
 @triton.autotune(
     configs=[
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_M': 8}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_M': 8}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 32, 'GROUP_M': 8}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'BLOCK_K': 32, 'GROUP_M': 8}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 32, 'BLOCK_K': 32, 'GROUP_M': 8}, num_stages=4, num_warps=4),
+        # Optimized configs for accumulation variant
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 256, 'BLOCK_K': 64, 'GROUP_M': 8}, num_stages=3, num_warps=8),
+        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 128, 'BLOCK_K': 64, 'GROUP_M': 8}, num_stages=3, num_warps=8),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 64, 'GROUP_M': 8}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 64, 'GROUP_M': 8}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 64, 'GROUP_M': 8}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'BLOCK_K': 32, 'GROUP_M': 8}, num_stages=5, num_warps=2),
     ],
     key=['M', 'N', 'K'],
 )
@@ -264,10 +270,33 @@ def gemm_w8a8(
     if not isinstance(scale_b, torch.Tensor):
         scale_b = torch.tensor(scale_b, dtype=torch.float32, device=A_int8.device)
     
-    # Allocate output
-    C = torch.empty((M, N), device=A_int8.device, dtype=torch.float32)
-    
     is_vector_scale_b = (scale_b.numel() > 1)
+    
+    # Fast path: Use PyTorch's optimized INT8 matmul when possible
+    # This is significantly faster on modern GPUs with INT8 tensor cores
+    use_pytorch_fast_path = (
+        A_int8.is_cuda and 
+        not is_vector_scale_b and  # PyTorch path doesn't support per-channel easily
+        hasattr(torch, '_int_mm') and  # Check if INT8 matmul is available
+        M >= 32 and N >= 32  # Beneficial for larger matrices
+    )
+    
+    if use_pytorch_fast_path:
+        try:
+            # Use PyTorch's native INT8 @ INT8 -> INT32 matmul
+            # This uses cuBLAS/cutlass optimized kernels
+            C_int32 = torch._int_mm(A_int8, B_int8)
+            # Dequantize
+            C = C_int32.to(torch.float32) * scale_a * scale_b
+            if bias is not None:
+                C += bias
+            return C
+        except Exception:
+            # Fall back to Triton if PyTorch path fails
+            pass
+    
+    # Triton path (original implementation)
+    C = torch.empty((M, N), device=A_int8.device, dtype=torch.float32)
 
     # Grid
     grid = lambda META: (
@@ -325,10 +354,28 @@ def gemm_w8a8_accum(
     if not isinstance(scale_b, torch.Tensor):
         scale_b = torch.tensor(scale_b, dtype=torch.float32, device=A_int8.device)
     
-    # Allocate output
-    C = torch.empty((M, N), device=A_int8.device, dtype=torch.float32)
-    
     is_vector_scale_b = (scale_b.numel() > 1)
+    
+    # Fast path: Use PyTorch's optimized INT8 matmul + manual accumulation
+    use_pytorch_fast_path = (
+        A_int8.is_cuda and 
+        not is_vector_scale_b and
+        hasattr(torch, '_int_mm') and
+        M >= 32 and N >= 32
+    )
+    
+    if use_pytorch_fast_path:
+        try:
+            # INT8 @ INT8 -> INT32 matmul (fast)
+            C_int32 = torch._int_mm(A_int8, B_int8)
+            # Dequantize and accumulate
+            C = C_int32.to(torch.float32) * scale_a * scale_b + cache
+            return C
+        except Exception:
+            pass
+    
+    # Triton path (original implementation)
+    C = torch.empty((M, N), device=A_int8.device, dtype=torch.float32)
 
     # Grid
     grid = lambda META: (

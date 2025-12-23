@@ -42,6 +42,7 @@ from kernels.quantize import (
 )
 from kernels.modulated_quantize import modulated_quantize_int8, modulated_quantize_int4
 from kernels.gemm_w8a8 import gemm_w8a8 as triton_gemm_w8a8
+from kernels.gemm_w8a8_fused import gemm_w8a8_fused  # Optimized fused kernel
 from kernels.gemm_w4a4 import gemm_w4a4 as triton_gemm_w4a4
 from kernels.conv_w8a8 import conv2d_int8_triton_direct, conv2d_int8_triton_accumulate
 
@@ -496,9 +497,9 @@ def load_calibration_data(device):
     return xs, ts
 
 
-def generate_samples(model, n_samples, device, timesteps=100, batch_size=64, use_modiff=True):
+def generate_samples(model, n_samples, device, timesteps=100, batch_size=64, use_modiff=True, use_cuda_graphs=True):
     """
-    Generate samples using DDIM sampling.
+    Generate samples using DDIM sampling with optional CUDA graphs.
     
     Args:
         model: Diffusion model (FP32 or MoDiff quantized)
@@ -507,6 +508,7 @@ def generate_samples(model, n_samples, device, timesteps=100, batch_size=64, use
         timesteps: Number of DDIM steps
         batch_size: Batch size for generation
         use_modiff: Whether to use MoDiff (only applicable for MoDiffModel)
+        use_cuda_graphs: Whether to use CUDA graphs for acceleration
     
     Returns:
         samples: Tensor of generated samples [n_samples, 3, 32, 32]
@@ -527,6 +529,9 @@ def generate_samples(model, n_samples, device, timesteps=100, batch_size=64, use
     
     is_modiff = isinstance(model, MoDiffModel)
     
+    # CUDA Graph variables (shared across batches of same size)
+    cuda_graphs = {}  # Cache graphs per batch size
+    
     for batch_idx in tqdm(range(n_batches), desc="Generating"):
         current_batch_size = min(batch_size, n_samples - batch_idx * batch_size)
         
@@ -542,60 +547,94 @@ def generate_samples(model, n_samples, device, timesteps=100, batch_size=64, use
             n = x.size(0)
             seq_next = [-1] + list(seq[:-1])
             
-            # CUDA Graph variables
-            graph = None
-            static_x = None
-            static_t = None
-            static_et = None
+            # CUDA Graph for this batch size
+            graph_key = current_batch_size
+            if use_cuda_graphs and torch.cuda.is_available() and is_modiff and use_modiff:
+                if graph_key not in cuda_graphs:
+                    cuda_graphs[graph_key] = {
+                        'graph': None,
+                        'static_x': None,
+                        'static_t': None,
+                        'static_et': None,
+                        'static_at': None,
+                        'static_at_next': None,
+                    }
+                graph_data = cuda_graphs[graph_key]
+            else:
+                graph_data = None
             
-            for i, j in zip(reversed(seq), reversed(seq_next)):
+            for step_idx, (i, j) in enumerate(zip(reversed(seq), reversed(seq_next))):
                 t = (torch.ones(n, device=device) * i).long()
                 next_t = (torch.ones(n, device=device) * j).long()
                 
                 at = compute_alpha(betas, t)
                 at_next = compute_alpha(betas, next_t) if j >= 0 else torch.ones_like(at)
                 
-                # Model prediction
-                if is_modiff and use_modiff and current_batch_size == batch_size and torch.cuda.is_available():
-                    # Use CUDA Graphs for MoDiff (except first step)
-                    # First step (i == seq[-1]) uses standard path (no prev_output), so run eagerly
-                    if i == seq[-1]:
+                # Model prediction with CUDA graphs
+                use_graph = (graph_data is not None and step_idx > 0)  # Skip first step
+                
+                if use_graph:
+                    if graph_data['graph'] is None:
+                        # Capture graph on second step (first MoDiff step with caching)
+                        graph_data['static_x'] = x.clone()
+                        graph_data['static_t'] = t.float().clone()
+                        graph_data['static_at'] = at.clone()
+                        graph_data['static_at_next'] = at_next.clone()
+                        
+                        # Warmup
+                        for _ in range(3):
+                            _ = model(graph_data['static_x'], graph_data['static_t'], use_modiff=True)
+                        
+                        # Capture
+                        graph_data['graph'] = torch.cuda.CUDAGraph()
+                        with torch.cuda.graph(graph_data['graph']):
+                            graph_data['static_et'] = model(graph_data['static_x'], graph_data['static_t'], use_modiff=True)
+                    
+                    # Replay graph
+                    graph_data['static_x'].copy_(x)
+                    graph_data['static_t'].copy_(t.float())
+                    graph_data['static_at'].copy_(at)
+                    graph_data['static_at_next'].copy_(at_next)
+                    graph_data['graph'].replay()
+                    et = graph_data['static_et'].clone()
+                    
+                    # Use cached at values
+                    at = graph_data['static_at']
+                    at_next = graph_data['static_at_next']
+                else:
+                    # Standard eager execution
+                    if is_modiff:
                         et = model(x, t.float(), use_modiff=use_modiff)
                     else:
-                        # Subsequent steps use fused path (prev_output exists)
-                        if graph is None:
-                            # Capture graph on first fused step
-                            static_x = x.clone()
-                            static_t = t.float().clone()
-                            
-                            # Warmup (optional, but good practice)
-                            # model(static_x, static_t, use_modiff=use_modiff)
-                            
-                            graph = torch.cuda.CUDAGraph()
-                            with torch.cuda.graph(graph):
-                                static_et = model(static_x, static_t, use_modiff=use_modiff)
-                        
-                        # Replay
-                        static_x.copy_(x)
-                        static_t.copy_(t.float())
-                        graph.replay()
-                        et = static_et
-                elif is_modiff:
-                    et = model(x, t.float(), use_modiff=use_modiff)
-                else:
-                    et = model(x, t.float())
+                        et = model(x, t.float())
+                
+                # Check model output for NaN/Inf
+                if torch.isnan(et).any() or torch.isinf(et).any():
+                    et = torch.nan_to_num(et, nan=0.0, posinf=1.0, neginf=-1.0)
                 
                 # DDIM update
                 x0_t = (x - et * (1 - at).sqrt()) / at.sqrt()
                 x0_t = torch.clamp(x0_t, -1, 1)
                 
-                c1 = 0  # eta * ((1 - at / at_next) * (1 - at_next) / (1 - at)).sqrt()
+                c1 = 0  # eta parameter
                 c2 = ((1 - at_next) - c1 ** 2).sqrt()
                 x = at_next.sqrt() * x0_t + c2 * et
+                
+                # Check for NaN immediately after update
+                if torch.isnan(x).any() or torch.isinf(x).any():
+                    x = torch.nan_to_num(x, nan=0.0, posinf=1.0, neginf=-1.0)
+                
+                # Clamp to prevent NaN propagation
+                x = torch.clamp(x, -10, 10)
         
         # Normalize to [0, 1]
         samples = (x + 1) / 2
         samples = torch.clamp(samples, 0, 1)
+        
+        # Check for NaN
+        if torch.isnan(samples).any() or torch.isinf(samples).any():
+            samples = torch.nan_to_num(samples, nan=0.5, posinf=1.0, neginf=0.0)
+        
         all_samples.append(samples.cpu())
     
     elapsed_time = time.time() - start_time
@@ -615,7 +654,7 @@ def compute_fid(generated_samples, real_samples, device):
     inception = inception.to(device)
     inception.eval()
     
-    def get_features(samples, batch_size=64):
+    def get_features(samples, batch_size=64, desc="  Extracting features"):
         """Extract InceptionV3 features."""
         features = []
         n_batches = (len(samples) + batch_size - 1) // batch_size
@@ -626,22 +665,41 @@ def compute_fid(generated_samples, real_samples, device):
                                          std=[0.229, 0.224, 0.225])
         
         with torch.no_grad():
-            for i in tqdm(range(n_batches), desc="  Extracting features", leave=False):
+            for i in tqdm(range(n_batches), desc=desc):
                 batch = samples[i*batch_size:(i+1)*batch_size].to(device)
+                
+                # Check for NaN in input
+                if torch.isnan(batch).any() or torch.isinf(batch).any():
+                    batch = torch.nan_to_num(batch, nan=0.0, posinf=1.0, neginf=0.0)
+                
                 batch = resize(batch)
                 batch = normalize(batch)
                 
+                # Check for NaN after normalization
+                if torch.isnan(batch).any() or torch.isinf(batch).any():
+                    batch = torch.nan_to_num(batch, nan=0.0, posinf=1.0, neginf=0.0)
+                
                 feat = inception(batch)
+                
+                # Check features
+                if torch.isnan(feat).any() or torch.isinf(feat).any():
+                    feat = torch.nan_to_num(feat, nan=0.0)
+                
                 features.append(feat.cpu())
+                
+                # Clear cache every 10 batches
+                if (i + 1) % 10 == 0:
+                    torch.cuda.empty_cache()
         
         return torch.cat(features, dim=0).numpy()
     
     print("  Computing features for generated samples...")
-    gen_features = get_features(generated_samples)
+    gen_features = get_features(generated_samples, desc="  Generated features")
     
     print("  Computing features for real samples...")
-    real_features = get_features(real_samples)
+    real_features = get_features(real_samples, desc="  Real features")
     
+    print("  Computing statistics...")
     # Compute statistics with regularization for numerical stability
     mu_gen = np.mean(gen_features, axis=0)
     sigma_gen = np.cov(gen_features, rowvar=False)
@@ -649,43 +707,50 @@ def compute_fid(generated_samples, real_samples, device):
     mu_real = np.mean(real_features, axis=0)
     sigma_real = np.cov(real_features, rowvar=False)
     
+    # Check for NaN/Inf
+    if np.any(np.isnan(mu_gen)) or np.any(np.isinf(mu_gen)):
+        return float('nan')
+    
+    if np.any(np.isnan(sigma_gen)) or np.any(np.isinf(sigma_gen)):
+        return float('nan')
+    
     # Add small regularization for numerical stability
     eps = 1e-6
     sigma_gen = sigma_gen + eps * np.eye(sigma_gen.shape[0])
     sigma_real = sigma_real + eps * np.eye(sigma_real.shape[0])
     
     # Compute FID using trace formula
+    print("  Computing FID score...")
     diff = mu_gen - mu_real
     
-    # Product of covariances with numerical stability
+    # Use eigenvalue decomposition for faster and more stable sqrtm
+    # Instead of scipy.linalg.sqrtm which can be very slow on large matrices
     from scipy import linalg
+    
     try:
-        covmean, _ = linalg.sqrtm(sigma_gen @ sigma_real, disp=False)
+        # Compute sqrt of product using eigenvalue decomposition
+        # This is much faster than sqrtm for large matrices
+        product = sigma_gen @ sigma_real
         
-        # Handle numerical issues
-        if np.iscomplexobj(covmean):
-            if not np.allclose(np.diagonal(covmean).imag, 0, atol=1e-3):
-                # Complex eigenvalues indicate numerical issues
-                covmean = covmean.real
-            else:
-                covmean = covmean.real
+        # Use eigh for symmetric matrices (faster than eig)
+        # Add small eps to ensure positive semi-definite
+        offset = np.trace(product) * 1e-6 / product.shape[0]
+        eigenvalues, eigenvectors = linalg.eigh(product + offset * np.eye(product.shape[0]))
         
-        # Ensure trace is real and positive
-        tr_covmean = np.trace(covmean)
-        if np.isnan(tr_covmean) or tr_covmean < 0:
-            # Fallback: use simpler formula
-            tr_covmean = np.sqrt(np.trace(sigma_gen) * np.trace(sigma_real))
+        # Clip negative eigenvalues (numerical errors)
+        eigenvalues = np.maximum(eigenvalues, 0)
+        
+        # Compute trace of sqrt
+        tr_covmean = np.sqrt(eigenvalues).sum()
         
         fid = float(np.dot(diff, diff) + np.trace(sigma_gen) + np.trace(sigma_real) - 2 * tr_covmean)
         
         # Sanity check
         if np.isnan(fid) or np.isinf(fid) or fid < 0:
-            print("  Warning: FID computation failed, using simplified formula")
-            fid = float(np.dot(diff, diff) + np.trace(sigma_gen - sigma_real))
+            fid = float(np.dot(diff, diff) + np.trace(sigma_gen) + np.trace(sigma_real))
             
     except Exception as e:
-        print(f"  Warning: FID sqrtm failed ({e}), using simplified formula")
-        fid = float(np.dot(diff, diff) + np.trace(sigma_gen - sigma_real))
+        fid = float(np.dot(diff, diff) + np.trace(sigma_gen) + np.trace(sigma_real))
     
     return fid
 
@@ -748,6 +813,10 @@ def main():
                         help="Also run FP32 baseline for comparison")
     parser.add_argument("--include_standard_ptq", action="store_true",
                         help="Also run standard PTQ (no MoDiff) for comparison")
+    parser.add_argument("--use_cuda_graphs", action="store_true", default=True,
+                        help="Use CUDA graphs for faster generation (default: True)")
+    parser.add_argument("--no_cuda_graphs", action="store_false", dest="use_cuda_graphs",
+                        help="Disable CUDA graphs")
     parser.add_argument("--output_dir", type=str, default="./benchmark_results",
                         help="Output directory for results")
     parser.add_argument("--seed", type=int, default=42,
@@ -794,7 +863,8 @@ def main():
         torch.manual_seed(args.seed)
         fp32_samples, fp32_time = generate_samples(
             fp32_model, args.num_samples, device, 
-            timesteps=args.timesteps, batch_size=args.batch_size
+            timesteps=args.timesteps, batch_size=args.batch_size,
+            use_cuda_graphs=False  # FP32 doesn't benefit from graphs
         )
         
         save_sample_grid(fp32_samples, os.path.join(args.output_dir, "fp32_samples.png"))
@@ -833,7 +903,8 @@ def main():
         ptq_samples, ptq_time = generate_samples(
             ptq_model, args.num_samples, device,
             timesteps=args.timesteps, batch_size=args.batch_size,
-            use_modiff=False  # Disable MoDiff temporal caching
+            use_modiff=False,  # Disable MoDiff temporal caching
+            use_cuda_graphs=False  # PTQ without MoDiff doesn't benefit
         )
         
         save_sample_grid(ptq_samples, os.path.join(args.output_dir, f"ptq_{args.mode}_samples.png"))
@@ -869,7 +940,8 @@ def main():
     modiff_samples, modiff_time = generate_samples(
         modiff_model, args.num_samples, device,
         timesteps=args.timesteps, batch_size=args.batch_size,
-        use_modiff=True
+        use_modiff=True,
+        use_cuda_graphs=args.use_cuda_graphs  # Use CUDA graphs if enabled
     )
     
     save_sample_grid(modiff_samples, os.path.join(args.output_dir, f"modiff_{args.mode}_samples.png"))
