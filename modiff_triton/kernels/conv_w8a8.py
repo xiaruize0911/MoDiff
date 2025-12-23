@@ -34,7 +34,7 @@ def _conv3x3_w8a8_implicit_gemm_kernel(
     y_ptr,          # fp32 [N, O, H, W]
     prev_y_ptr,     # fp32 [N, O, H, W] or nullptr
     act_scale_ptr,  # fp32 scalar
-    weight_scale_ptr,  # fp32 scalar
+    weight_scale_ptr,  # fp32 scalar or vector
     N, C, H, W, O,
     stride_xn, stride_xc, stride_xh, stride_xw,
     stride_wo, stride_wc, stride_wk1, stride_wk2,
@@ -43,6 +43,7 @@ def _conv3x3_w8a8_implicit_gemm_kernel(
     BLOCK_M: tl.constexpr,
     BLOCK_N: tl.constexpr,
     BLOCK_K: tl.constexpr,
+    SCALE_W_IS_VECTOR: tl.constexpr,
 ):
     """
     Implicit GEMM Convolution Kernel.
@@ -124,8 +125,11 @@ def _conv3x3_w8a8_implicit_gemm_kernel(
 
     # --- Epilogue ---
     scale_a = tl.load(act_scale_ptr)
-    scale_w = tl.load(weight_scale_ptr)
-    
+    if SCALE_W_IS_VECTOR:
+        scale_w = tl.load(weight_scale_ptr + offs_n, mask=mask_n, other=0.0)
+    else:
+        scale_w = tl.load(weight_scale_ptr)
+
     # Convert to float and scale
     out = acc.to(tl.float32) * scale_a * scale_w
     
@@ -179,6 +183,8 @@ def conv2d_int8_triton_accumulate(
 
     y = torch.empty((N, O, H, W), device=x_int8.device, dtype=torch.float32)
     
+    is_vector_scale_w = (weight_scale.numel() > 1)
+
     # Grid dimensions
     # M = N*H*W
     # N = O
@@ -194,6 +200,7 @@ def conv2d_int8_triton_accumulate(
         x_int8.stride(0), x_int8.stride(1), x_int8.stride(2), x_int8.stride(3),
         weight_int8.stride(0), weight_int8.stride(1), weight_int8.stride(2), weight_int8.stride(3),
         y.stride(0), y.stride(1), y.stride(2), y.stride(3),
+        SCALE_W_IS_VECTOR=is_vector_scale_w,
     )
 
     return y

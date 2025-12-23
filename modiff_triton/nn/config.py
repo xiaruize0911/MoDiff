@@ -31,7 +31,8 @@ class MoDiffConfig:
     act_dynamic: bool = True
     modulation_enabled: bool = True
     use_accumulation: bool = True
-    store_cache_fp16: bool = True
+    store_cache_fp16: bool = False
+    reuse_act_scale: bool = True
     eps: float = 1e-8
     
     def __post_init__(self):

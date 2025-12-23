@@ -53,6 +53,7 @@ def _gemm_w8a8_kernel(
     stride_cm, stride_cn,
     # Flags
     HAS_BIAS: tl.constexpr,
+    SCALE_B_IS_VECTOR: tl.constexpr,
     # Block sizes
     BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
     GROUP_M: tl.constexpr,
@@ -103,7 +104,10 @@ def _gemm_w8a8_kernel(
     
     # Load scales
     scale_a = tl.load(scale_a_ptr)
-    scale_b = tl.load(scale_b_ptr)
+    if SCALE_B_IS_VECTOR:
+        scale_b = tl.load(scale_b_ptr + offs_n, mask=offs_n < N, other=0.0)
+    else:
+        scale_b = tl.load(scale_b_ptr)
     
     # Dequantize: FP = INT32 * scale_a * scale_b
     c = acc.to(tl.float32) * scale_a * scale_b
@@ -151,6 +155,7 @@ def _gemm_w8a8_accum_kernel(
     # Block sizes
     BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
     GROUP_M: tl.constexpr,
+    SCALE_B_IS_VECTOR: tl.constexpr,
 ):
     """
     MoDiff GEMM with output accumulation.
@@ -202,7 +207,10 @@ def _gemm_w8a8_accum_kernel(
     
     # Load scales and dequantize
     scale_a = tl.load(scale_a_ptr)
-    scale_b = tl.load(scale_b_ptr)
+    if SCALE_B_IS_VECTOR:
+        scale_b = tl.load(scale_b_ptr + offs_n, mask=offs_n < N, other=0.0)
+    else:
+        scale_b = tl.load(scale_b_ptr)
     c = acc.to(tl.float32) * scale_a * scale_b
     
     # Load and add cached output ô_{t+1} (MoDiff accumulation)
@@ -259,6 +267,8 @@ def gemm_w8a8(
     # Allocate output
     C = torch.empty((M, N), device=A_int8.device, dtype=torch.float32)
     
+    is_vector_scale_b = (scale_b.numel() > 1)
+
     # Grid
     grid = lambda META: (
         triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),
@@ -273,6 +283,7 @@ def gemm_w8a8(
         B_int8.stride(0), B_int8.stride(1),
         C.stride(0), C.stride(1),
         HAS_BIAS=(bias is not None),
+        SCALE_B_IS_VECTOR=is_vector_scale_b,
     )
     
     return C
@@ -317,6 +328,8 @@ def gemm_w8a8_accum(
     # Allocate output
     C = torch.empty((M, N), device=A_int8.device, dtype=torch.float32)
     
+    is_vector_scale_b = (scale_b.numel() > 1)
+
     # Grid
     grid = lambda META: (
         triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),
@@ -331,6 +344,7 @@ def gemm_w8a8_accum(
         B_int8.stride(0), B_int8.stride(1),
         C.stride(0), C.stride(1),
         cache.stride(0), cache.stride(1),
+        SCALE_B_IS_VECTOR=is_vector_scale_b,
     )
     
     return C

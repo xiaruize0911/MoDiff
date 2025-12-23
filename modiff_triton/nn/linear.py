@@ -198,13 +198,8 @@ class W8A8MoDiffLinear(nn.Module):
         # Quantize activation
         x_int, scale_a = quantize_symmetric_int8(x)
         
-        # Get weight scale (handle per-channel)
-        if self.config.weight_channel_wise:
-            # For per-channel weights, we need to handle differently
-            # Use average scale for simplicity in GEMM
-            scale_w = self.weight_scale.mean()
-        else:
-            scale_w = self.weight_scale
+        # Use stored per-channel or per-tensor scale directly
+        scale_w = self.weight_scale
         
         # GEMM
         output = gemm_w8a8(
@@ -234,11 +229,7 @@ class W8A8MoDiffLinear(nn.Module):
         else:
             self.a_hat_cache = a_hat
         
-        # Get weight scale
-        if self.config.weight_channel_wise:
-            scale_w = self.weight_scale.mean()
-        else:
-            scale_w = self.weight_scale
+        scale_w = self.weight_scale
         
         # Eq. (ec2): ô_T = A(â_T) + bias
         output = gemm_w8a8(
@@ -284,11 +275,7 @@ class W8A8MoDiffLinear(nn.Module):
         else:
             self.a_hat_cache = a_hat_new
         
-        # Get weight scale
-        if self.config.weight_channel_wise:
-            scale_w = self.weight_scale.mean()
-        else:
-            scale_w = self.weight_scale
+        scale_w = self.weight_scale
         
         # Eq. (ec6): ô_t = A(Q(a_t - â_{t+1})) + ô_{t+1}
         # Note: NO bias added here (only at first timestep)
