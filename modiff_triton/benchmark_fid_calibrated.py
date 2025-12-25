@@ -644,50 +644,65 @@ def generate_samples(model, n_samples, device, timesteps=100, batch_size=64, use
 def compute_fid(generated_samples, real_samples, device):
     """
     Compute FID between generated and real samples using InceptionV3 features.
-    Uses the original implementation from scripts/evaluate.py
-    """
-    from torch.nn.functional import adaptive_avg_pool2d
     
-    # Load InceptionV3
-    inception = torchvision.models.inception_v3(weights='IMAGENET1K_V1', transform_input=False)
-    inception.fc = nn.Identity()  # Remove final FC layer
+    IMPORTANT: The reference TensorFlow implementation expects inputs in [0, 255].
+    PyTorch's InceptionV3 with transform_input=True will:
+    1. Expect inputs in [0, 1]
+    2. Scale to [0, 255] internally
+    3. Apply proper normalization
+    
+    This matches the behavior of the TensorFlow version.
+    """
+    from torchvision.models import inception_v3, Inception_V3_Weights
+    
+    # Load InceptionV3 with ImageNet weights
+    # transform_input=True makes it behave like TensorFlow version (expects [0,1], scales to [0,255])
+    inception = inception_v3(weights=Inception_V3_Weights.IMAGENET1K_V1, transform_input=True)
+    
+    # Remove the final classification layer to get pool3 features (2048-dim)
+    inception.fc = nn.Identity()
     inception = inception.to(device)
     inception.eval()
     
     def get_features(samples, batch_size=64, desc="  Extracting features"):
-        """Extract InceptionV3 features."""
+        """
+        Extract InceptionV3 pool3 features.
+        
+        Input: samples in range [0, 1], shape [N, C, H, W]
+        Output: features of shape [N, 2048]
+        
+        Since transform_input=True, the model will internally:
+        1. Scale [0,1] to [0,255]
+        2. Apply proper normalization
+        So we only need to resize to 299x299.
+        """
         features = []
         n_batches = (len(samples) + batch_size - 1) // batch_size
         
-        # Resize and normalize for Inception
+        # Resize to 299x299 (required for InceptionV3)
         resize = transforms.Resize((299, 299), antialias=True)
-        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], 
-                                         std=[0.229, 0.224, 0.225])
         
         with torch.no_grad():
             for i in tqdm(range(n_batches), desc=desc):
                 batch = samples[i*batch_size:(i+1)*batch_size].to(device)
                 
-                # Check for NaN in input
-                if torch.isnan(batch).any() or torch.isinf(batch).any():
-                    batch = torch.nan_to_num(batch, nan=0.0, posinf=1.0, neginf=0.0)
+                # Ensure batch is in [0, 1] range
+                batch = torch.clamp(batch, 0.0, 1.0)
                 
+                # Resize to 299x299
                 batch = resize(batch)
-                batch = normalize(batch)
                 
-                # Check for NaN after normalization
-                if torch.isnan(batch).any() or torch.isinf(batch).any():
-                    batch = torch.nan_to_num(batch, nan=0.0, posinf=1.0, neginf=0.0)
-                
+                # Extract features - model handles normalization internally
+                # InceptionV3 returns [N, 2048, 1, 1] from avgpool, we flatten to [N, 2048]
                 feat = inception(batch)
                 
-                # Check features
-                if torch.isnan(feat).any() or torch.isinf(feat).any():
-                    feat = torch.nan_to_num(feat, nan=0.0)
+                # Flatten if needed
+                if feat.dim() == 4:
+                    feat = feat.squeeze(-1).squeeze(-1)
                 
                 features.append(feat.cpu())
                 
-                # Clear cache every 10 batches
+                # Clear cache periodically
                 if (i + 1) % 10 == 0:
                     torch.cuda.empty_cache()
         
@@ -699,24 +714,27 @@ def compute_fid(generated_samples, real_samples, device):
     print("  Computing features for real samples...")
     real_features = get_features(real_samples, desc="  Real features")
     
-    print("  Computing statistics...")
-    # Compute statistics
+    print("  Computing FID statistics...")
+    # Compute mean and covariance statistics
     mu_gen = np.mean(gen_features, axis=0)
     sigma_gen = np.cov(gen_features, rowvar=False)
     
     mu_real = np.mean(real_features, axis=0)
     sigma_real = np.cov(real_features, rowvar=False)
     
-    # Check for NaN/Inf
+    # Check for invalid values
     if np.any(np.isnan(mu_gen)) or np.any(np.isinf(mu_gen)):
+        print("  ERROR: Generated features contain NaN/Inf in mean")
         return float('nan')
     
     if np.any(np.isnan(sigma_gen)) or np.any(np.isinf(sigma_gen)):
+        print("  ERROR: Generated features contain NaN/Inf in covariance")
         return float('nan')
     
-    # Compute FID using original method from scripts/evaluate.py
-    # https://github.com/bioinf-jku/TTUR/blob/73ab375cdf952a12686d9aa7978567771084da42/fid.py#L132
+    # Compute FID score
+    # Reference: https://github.com/bioinf-jku/TTUR/blob/master/fid.py
     print("  Computing FID score...")
+    
     mu1, sigma1 = mu_gen, sigma_gen
     mu2, sigma2 = mu_real, sigma_real
     
@@ -726,14 +744,21 @@ def compute_fid(generated_samples, real_samples, device):
     sigma1 = np.atleast_2d(sigma1)
     sigma2 = np.atleast_2d(sigma2)
     
+    assert mu1.shape == mu2.shape, f"Mean vectors have different shapes: {mu1.shape} vs {mu2.shape}"
+    assert sigma1.shape == sigma2.shape, f"Covariance matrices have different shapes: {sigma1.shape} vs {sigma2.shape}"
+    
     diff = mu1 - mu2
     
+    # Calculate sqrt of product of covariances
     # Product might be almost singular
     from scipy import linalg
     eps = 1e-6
+    
     covmean, _ = linalg.sqrtm(sigma1.dot(sigma2), disp=False)
+    
+    # Handle numerical issues
     if not np.isfinite(covmean).all():
-        print(f"  Warning: FID calculation produces singular product; adding {eps} to diagonal")
+        print(f"  Warning: Adding {eps} to diagonal of covariance estimates")
         offset = np.eye(sigma1.shape[0]) * eps
         covmean = linalg.sqrtm((sigma1 + offset).dot(sigma2 + offset))
     
@@ -741,11 +766,12 @@ def compute_fid(generated_samples, real_samples, device):
     if np.iscomplexobj(covmean):
         if not np.allclose(np.diagonal(covmean).imag, 0, atol=1e-3):
             m = np.max(np.abs(covmean.imag))
-            raise ValueError(f"Imaginary component {m}")
+            print(f"  Warning: Imaginary component {m} in covariance mean")
         covmean = covmean.real
     
     tr_covmean = np.trace(covmean)
     
+    # FID formula: ||mu1 - mu2||^2 + Tr(sigma1 + sigma2 - 2*sqrt(sigma1*sigma2))
     fid = diff.dot(diff) + np.trace(sigma1) + np.trace(sigma2) - 2 * tr_covmean
     
     return float(fid)

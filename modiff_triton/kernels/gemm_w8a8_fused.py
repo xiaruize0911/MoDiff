@@ -16,12 +16,14 @@ import triton.language as tl
 
 @triton.autotune(
     configs=[
-        # Optimized for small matrices (512×512)
+        # INT8-optimized configs with larger BLOCK_K
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 128}, num_stages=3, num_warps=8),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'BLOCK_K': 128}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 64}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 64}, num_stages=4, num_warps=4),
         triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'BLOCK_K': 64}, num_stages=4, num_warps=4),
         triton.Config({'BLOCK_M': 32, 'BLOCK_N': 64, 'BLOCK_K': 64}, num_stages=5, num_warps=2),
         triton.Config({'BLOCK_M': 64, 'BLOCK_N': 32, 'BLOCK_K': 64}, num_stages=5, num_warps=2),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 32}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 32}, num_stages=4, num_warps=4),
     ],
     key=['M', 'N', 'K'],
 )
@@ -63,9 +65,11 @@ def _fused_quantize_gemm_w8a8_kernel(
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
     
+    # Compiler hints for optimization
+    
     # Block offsets
-    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs_m = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M)) % M
+    offs_n = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N)) % N
     offs_k = tl.arange(0, BLOCK_K)
     
     # ========================================================================
@@ -80,9 +84,10 @@ def _fused_quantize_gemm_w8a8_kernel(
     
     # Compute max absolute value across all K for this M block
     abs_max = tl.zeros((BLOCK_M,), dtype=tl.float32)
-    for k in range(0, K, BLOCK_K):
-        k_mask = (k + offs_k) < K
-        x_block = tl.load(x_ptrs + k * stride_xk, mask=mask_m & k_mask[None, :], other=0.0)
+    for k in range(0, tl.cdiv(K, BLOCK_K)):
+        k_remaining = K - k * BLOCK_K
+        k_mask = offs_k < k_remaining
+        x_block = tl.load(x_ptrs + k * BLOCK_K * stride_xk, mask=mask_m & k_mask[None, :], other=0.0)
         x_abs = tl.abs(x_block)
         block_max = tl.max(x_abs, axis=1)
         abs_max = tl.maximum(abs_max, block_max)
@@ -104,8 +109,9 @@ def _fused_quantize_gemm_w8a8_kernel(
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.int32)
     
     # Main GEMM loop with fused quantization
-    for k in range(0, K, BLOCK_K):
-        k_mask = (k + offs_k) < K
+    for k in range(0, tl.cdiv(K, BLOCK_K)):
+        k_remaining = K - k * BLOCK_K
+        k_mask = offs_k < k_remaining
         
         # Load FP32/FP16 activation
         x_fp = tl.load(x_ptrs, mask=mask_m & k_mask[None, :], other=0.0)
@@ -116,10 +122,10 @@ def _fused_quantize_gemm_w8a8_kernel(
         x_int = tl.maximum(tl.minimum(x_int, 127.0), -128.0)  # Clamp
         
         # Load INT8 weight
-        w_int = tl.load(w_ptrs, mask=k_mask[:, None] & (offs_n[None, :] < N), other=0)
+        w_int = tl.load(w_ptrs, mask=k_mask[:, None], other=0)
         
-        # INT8 GEMM (accumulate in INT32)
-        acc += tl.dot(x_int.to(tl.int8), w_int.to(tl.int8), out_dtype=tl.int32)
+        # INT8 GEMM with accumulator
+        acc = tl.dot(x_int.to(tl.int8), w_int.to(tl.int8), acc, out_dtype=tl.int32)
         
         # Advance pointers
         x_ptrs += BLOCK_K * stride_xk

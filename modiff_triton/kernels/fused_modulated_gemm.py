@@ -16,10 +16,13 @@ import triton.language as tl
 
 @triton.autotune(
     configs=[
+        # INT8 optimized configs with larger BLOCK_K
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 128}, num_stages=3, num_warps=8),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'BLOCK_K': 128}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 64}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 64}, num_stages=4, num_warps=4),
         triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'BLOCK_K': 64}, num_stages=4, num_warps=4),
         triton.Config({'BLOCK_M': 32, 'BLOCK_N': 64, 'BLOCK_K': 64}, num_stages=5, num_warps=2),
-        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 32, 'BLOCK_K': 64}, num_stages=5, num_warps=2),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 32}, num_stages=4, num_warps=4),
     ],
     key=['M', 'N', 'K'],
 )
@@ -73,9 +76,11 @@ def _fused_modulated_gemm_kernel(
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
     
+    # Compiler hints
+    
     # Block offsets
-    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs_m = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M)) % M
+    offs_n = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N)) % N
     offs_k = tl.arange(0, BLOCK_K)
     
     # ========================================================================
@@ -86,8 +91,9 @@ def _fused_modulated_gemm_kernel(
     mask_m = offs_m[:, None] < M
     
     abs_max = tl.zeros((BLOCK_M,), dtype=tl.float32)
-    for k in range(0, K, BLOCK_K):
-        k_mask = (k + offs_k) < K
+    for k in range(0, tl.cdiv(K, BLOCK_K)):
+        k_remaining = K - k * BLOCK_K
+        k_mask = offs_k < k_remaining
         a = tl.load(a_ptrs + k * stride_ak, mask=mask_m & k_mask[None, :], other=0.0)
         a_prev = tl.load(aprev_ptrs + k * stride_apk, mask=mask_m & k_mask[None, :], other=0.0)
         
@@ -115,9 +121,10 @@ def _fused_modulated_gemm_kernel(
     # For updating â_t, we need to accumulate dequantized residuals
     a_hat_accum = tl.zeros((BLOCK_M, BLOCK_K), dtype=tl.float32)
     
-    # Main loop
-    for k in range(0, K, BLOCK_K):
-        k_mask = (k + offs_k) < K
+    # Main loop - optimized iteration
+    for k in range(0, tl.cdiv(K, BLOCK_K)):
+        k_remaining = K - k * BLOCK_K
+        k_mask = offs_k < k_remaining
         
         # Load current and previous activations
         a = tl.load(a_ptrs, mask=mask_m & k_mask[None, :], other=0.0)
@@ -135,15 +142,15 @@ def _fused_modulated_gemm_kernel(
         residual_dequant = residual_int * scale_a[:, None]
         
         # Store for later (we'll add a_prev after the GEMM loop)
-        if k < BLOCK_K:
+        if k < 1:
             # Only store first block for now (simplified)
             a_hat_accum = residual_dequant
         
         # Load INT8 weight
-        w_int = tl.load(w_ptrs, mask=k_mask[:, None] & (offs_n[None, :] < N), other=0)
+        w_int = tl.load(w_ptrs, mask=k_mask[:, None], other=0)
         
-        # INT8 GEMM
-        acc += tl.dot(residual_int.to(tl.int8), w_int.to(tl.int8), out_dtype=tl.int32)
+        # INT8 GEMM with accumulator
+        acc = tl.dot(residual_int.to(tl.int8), w_int.to(tl.int8), acc, out_dtype=tl.int32)
         
         # Advance pointers
         a_ptrs += BLOCK_K * stride_ak

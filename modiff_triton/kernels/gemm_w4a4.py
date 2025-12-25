@@ -84,12 +84,14 @@ def _gemm_w4a4_kernel(
     group_id = pid // num_pid_in_group
     first_pid_m = group_id * GROUP_M
     group_size_m = min(num_pid_m - first_pid_m, GROUP_M)
-    pid_m = first_pid_m + (pid % group_size_m)
+    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
     
+    # Compiler hints
+    
     # Offsets for output
-    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs_m = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M)) % M
+    offs_n = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N)) % N
     
     # For packed K dimension (K//2)
     BLOCK_K_PACKED: tl.constexpr = BLOCK_K // 2
@@ -100,9 +102,11 @@ def _gemm_w4a4_kernel(
     
     K_packed = K // 2
     
-    # Main loop over K (packed)
-    for k_packed in range(0, K_packed, BLOCK_K_PACKED):
-        k_mask = (k_packed + offs_k_packed) < K_packed
+    # Main loop over K (packed) - optimized iteration
+    for k in range(0, tl.cdiv(K_packed, BLOCK_K_PACKED)):
+        k_packed = k * BLOCK_K_PACKED
+        k_remaining = K_packed - k_packed
+        k_mask = offs_k_packed < k_remaining
         
         # Load packed A: [BLOCK_M, BLOCK_K//2]
         a_ptrs = A_packed_ptr + (offs_m[:, None] * stride_am + (k_packed + offs_k_packed[None, :]) * stride_ak)
@@ -126,10 +130,10 @@ def _gemm_w4a4_kernel(
         # a_hi[i, j] corresponds to K index 2*j+1
         # Similarly for B
         
-        # Method: compute separately and sum
+        # Method: compute separately and sum using accumulator
         # acc += a_lo @ b_lo + a_hi @ b_hi
-        acc += tl.dot(a_lo, b_lo, out_dtype=tl.int32)
-        acc += tl.dot(a_hi, b_hi, out_dtype=tl.int32)
+        acc = tl.dot(a_lo, b_lo, acc, out_dtype=tl.int32)
+        acc = tl.dot(a_hi, b_hi, acc, out_dtype=tl.int32)
     
     # Dequantize
     scale_a = tl.load(scale_a_ptr)

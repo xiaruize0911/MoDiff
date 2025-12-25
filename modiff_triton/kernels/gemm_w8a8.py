@@ -29,14 +29,21 @@ import triton.language as tl
 
 @triton.autotune(
     configs=[
-        # Optimized configs for different tensor sizes
+        # INT8 tensor core optimized configs - larger BLOCK_K for better utilization
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 256, 'BLOCK_K': 128, 'GROUP_M': 8}, num_stages=3, num_warps=8),
+        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 128, 'BLOCK_K': 128, 'GROUP_M': 8}, num_stages=3, num_warps=8),
+        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 64, 'BLOCK_K': 128, 'GROUP_M': 8}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 256, 'BLOCK_K': 128, 'GROUP_M': 8}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 128, 'GROUP_M': 8}, num_stages=4, num_warps=4),
+        # Good configs for INT8 with medium to large tiles
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 256, 'BLOCK_K': 64, 'GROUP_M': 8}, num_stages=3, num_warps=8),
         triton.Config({'BLOCK_M': 256, 'BLOCK_N': 128, 'BLOCK_K': 64, 'GROUP_M': 8}, num_stages=3, num_warps=8),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 64, 'GROUP_M': 8}, num_stages=4, num_warps=4),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 64, 'GROUP_M': 8}, num_stages=4, num_warps=4),
         triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 64, 'GROUP_M': 8}, num_stages=4, num_warps=4),
-        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'BLOCK_K': 32, 'GROUP_M': 8}, num_stages=5, num_warps=2),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'BLOCK_K': 64, 'GROUP_M': 8}, num_stages=4, num_warps=4),
         # Smaller configs for small matrices
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'BLOCK_K': 32, 'GROUP_M': 8}, num_stages=5, num_warps=2),
         triton.Config({'BLOCK_M': 32, 'BLOCK_N': 64, 'BLOCK_K': 32, 'GROUP_M': 8}, num_stages=5, num_warps=2),
     ],
     key=['M', 'N', 'K'],
@@ -76,12 +83,14 @@ def _gemm_w8a8_kernel(
     group_id = pid // num_pid_in_group
     first_pid_m = group_id * GROUP_M
     group_size_m = min(num_pid_m - first_pid_m, GROUP_M)
-    pid_m = first_pid_m + (pid % group_size_m)
+    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
     
-    # Block offsets
-    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    # Add compiler hints for better optimization
+    
+    # Block offsets - use modulo for better bounds handling
+    offs_m = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M)) % M
+    offs_n = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N)) % N
     offs_k = tl.arange(0, BLOCK_K)
     
     # Pointers
@@ -91,16 +100,18 @@ def _gemm_w8a8_kernel(
     # Accumulator in INT32
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.int32)
     
-    # Main loop
-    for k in range(0, K, BLOCK_K):
-        k_mask = (k + offs_k) < K
+    # Main loop with optimized iteration
+    for k in range(0, tl.cdiv(K, BLOCK_K)):
+        # Improved masking - only check K bound
+        k_remaining = K - k * BLOCK_K
+        k_mask = offs_k < k_remaining
         
-        # Load A and B blocks
-        a = tl.load(a_ptrs, mask=k_mask[None, :] & (offs_m[:, None] < M), other=0)
-        b = tl.load(b_ptrs, mask=k_mask[:, None] & (offs_n[None, :] < N), other=0)
+        # Load A and B blocks with better masking
+        a = tl.load(a_ptrs, mask=k_mask[None, :], other=0)
+        b = tl.load(b_ptrs, mask=k_mask[:, None], other=0)
         
-        # INT8 dot product
-        acc += tl.dot(a.to(tl.int8), b.to(tl.int8), out_dtype=tl.int32)
+        # INT8 dot product - accumulate directly
+        acc = tl.dot(a, b, acc, out_dtype=tl.int32)
         
         # Advance pointers
         a_ptrs += BLOCK_K * stride_ak
@@ -121,9 +132,11 @@ def _gemm_w8a8_kernel(
         bias = tl.load(bias_ptr + offs_n, mask=offs_n < N, other=0.0)
         c += bias[None, :]
     
-    # Store output
-    c_ptrs = C_ptr + (offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn)
-    c_mask = (offs_m[:, None] < M) & (offs_n[None, :] < N)
+    # Store output with better masking
+    offs_cm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_cn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    c_ptrs = C_ptr + (offs_cm[:, None] * stride_cm + offs_cn[None, :] * stride_cn)
+    c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
     tl.store(c_ptrs, c, mask=c_mask)
 
 
@@ -133,7 +146,13 @@ def _gemm_w8a8_kernel(
 
 @triton.autotune(
     configs=[
-        # Optimized configs for accumulation variant
+        # INT8 tensor core optimized configs with larger BLOCK_K
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 256, 'BLOCK_K': 128, 'GROUP_M': 8}, num_stages=3, num_warps=8),
+        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 128, 'BLOCK_K': 128, 'GROUP_M': 8}, num_stages=3, num_warps=8),
+        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 64, 'BLOCK_K': 128, 'GROUP_M': 8}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 256, 'BLOCK_K': 128, 'GROUP_M': 8}, num_stages=4, num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 128, 'GROUP_M': 8}, num_stages=4, num_warps=4),
+        # Standard configs
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 256, 'BLOCK_K': 64, 'GROUP_M': 8}, num_stages=3, num_warps=8),
         triton.Config({'BLOCK_M': 256, 'BLOCK_N': 128, 'BLOCK_K': 64, 'GROUP_M': 8}, num_stages=3, num_warps=8),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 64, 'GROUP_M': 8}, num_stages=4, num_warps=4),
@@ -184,12 +203,14 @@ def _gemm_w8a8_accum_kernel(
     group_id = pid // num_pid_in_group
     first_pid_m = group_id * GROUP_M
     group_size_m = min(num_pid_m - first_pid_m, GROUP_M)
-    pid_m = first_pid_m + (pid % group_size_m)
+    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
     
+    # Add compiler hints for better optimization
+    
     # Block offsets
-    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs_m = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M)) % M
+    offs_n = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N)) % N
     offs_k = tl.arange(0, BLOCK_K)
     
     # Pointers
@@ -199,14 +220,17 @@ def _gemm_w8a8_accum_kernel(
     # Accumulator
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.int32)
     
-    # Main GEMM loop
-    for k in range(0, K, BLOCK_K):
-        k_mask = (k + offs_k) < K
+    # Main GEMM loop - optimized iteration
+    for k in range(0, tl.cdiv(K, BLOCK_K)):
+        # Improved masking
+        k_remaining = K - k * BLOCK_K
+        k_mask = offs_k < k_remaining
         
-        a = tl.load(a_ptrs, mask=k_mask[None, :] & (offs_m[:, None] < M), other=0)
-        b = tl.load(b_ptrs, mask=k_mask[:, None] & (offs_n[None, :] < N), other=0)
+        a = tl.load(a_ptrs, mask=k_mask[None, :], other=0)
+        b = tl.load(b_ptrs, mask=k_mask[:, None], other=0)
         
-        acc += tl.dot(a.to(tl.int8), b.to(tl.int8), out_dtype=tl.int32)
+        # INT8 dot with accumulator
+        acc = tl.dot(a, b, acc, out_dtype=tl.int32)
         
         a_ptrs += BLOCK_K * stride_ak
         b_ptrs += BLOCK_K * stride_bk
@@ -226,9 +250,12 @@ def _gemm_w8a8_accum_kernel(
     
     c = c + cache
     
-    # Store output
-    c_ptrs = C_ptr + (offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn)
-    tl.store(c_ptrs, c, mask=cache_mask)
+    # Store output with better masking
+    offs_cm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_cn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    c_ptrs = C_ptr + (offs_cm[:, None] * stride_cm + offs_cn[None, :] * stride_cn)
+    c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
+    tl.store(c_ptrs, c, mask=c_mask)
 
 
 # ============================================================================

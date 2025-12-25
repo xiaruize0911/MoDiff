@@ -17,6 +17,8 @@ import torch
 
 @triton.autotune(
     configs=[
+        # INT8 conv optimized - larger BLOCK_K for better tensor core usage
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 128}, num_stages=3, num_warps=8),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 64}, num_stages=3, num_warps=8),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 64}, num_stages=4, num_warps=4),
         triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 64}, num_stages=4, num_warps=4),
@@ -121,7 +123,7 @@ def _conv3x3_w8a8_implicit_gemm_kernel(
                 # --- Matrix Multiply ---
                 # a: [BLOCK_M, BLOCK_K]
                 # b: [BLOCK_K, BLOCK_N] (transposed load effectively)
-                acc += tl.dot(a, b)
+                acc = tl.dot(a, b, acc)
 
     # --- Epilogue ---
     scale_a = tl.load(act_scale_ptr)
