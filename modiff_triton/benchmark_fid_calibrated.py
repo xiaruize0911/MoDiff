@@ -42,53 +42,8 @@ from kernels.quantize import (
 )
 from kernels.modulated_quantize import modulated_quantize_int8, modulated_quantize_int4
 from kernels.gemm_w8a8 import gemm_w8a8 as triton_gemm_w8a8
-from kernels.gemm_w8a8_fused import gemm_w8a8_fused  # Optimized fused kernel
 from kernels.gemm_w4a4 import gemm_w4a4 as triton_gemm_w4a4
 from kernels.conv_w8a8 import conv2d_int8_triton_direct, conv2d_int8_triton_accumulate
-
-
-def conv2d_int8_triton_im2col(
-    x_int8: torch.Tensor,
-    weight_int8: torch.Tensor,
-    act_scale: torch.Tensor,
-    weight_scale: torch.Tensor,
-    bias: torch.Tensor,
-    stride: tuple,
-    padding: tuple,
-    dilation: tuple,
-    groups: int,
-):
-    """INT8 Conv2d via unfold + Triton INT8 GEMM.
-
-    Supports only groups=1, kernel=3x3, stride=1, padding=1, dilation=1.
-    """
-    assert groups == 1, "INT8 conv fast path currently supports groups=1"
-    kH = kW = 3
-    assert weight_int8.shape[2:] == (kH, kW), "Only 3x3 kernels supported"
-    assert stride == (1, 1) and padding == (1, 1) and dilation == (1, 1), "Only stride=1, pad=1, dil=1 supported"
-
-    N, C, H, W = x_int8.shape
-    out_channels = weight_int8.shape[0]
-
-    # Unfold expects floating types; dequant -> unfold -> requant to INT8
-    x_fp = x_int8.float() * act_scale
-    x_cols_fp = F.unfold(x_fp, kernel_size=3, dilation=1, padding=1, stride=1)
-    # Re-quantize using same activation scale
-    x_cols = torch.round(x_cols_fp / act_scale).clamp(-128, 127).to(torch.int8)
-    # Shape: (N, K, L) where K = C*9, L = H*W
-    N_batch, K, L = x_cols.shape
-    x_mat = x_cols.transpose(1, 2).contiguous().view(-1, K)  # [N*L, K]
-
-    # Prepare weights: [out_channels, C, kH, kW] -> [K, out_channels]
-    w_mat = weight_int8.view(out_channels, -1).t().contiguous()
-
-    # GEMM: [N*L, K] @ [K, out_channels] -> [N*L, out_channels]
-    out_mat = triton_gemm_w8a8(x_mat, w_mat, act_scale, weight_scale, bias=bias)
-
-    # Reshape back to NCHW
-    out = out_mat.view(N, L, out_channels).transpose(1, 2).contiguous()
-    out = out.view(N, out_channels, H, W)
-    return out
 
 
 class MoDiffConfig:
@@ -209,22 +164,20 @@ class MoDiffLayer(nn.Module):
             # Not calibrated, run in FP32
             return self.original_layer(x)
         
-        # Dequantize weights for fallback path
-        weight_fp = self.quantized_weight.float() * self.weight_scale
-        
         # Quantization state
         act_scale = None
         x_int8 = None
         x_fp = x
+        
+        # --------------------------------------------------------------------
+        # Standard MoDiff Path
+        # --------------------------------------------------------------------
         
         # Quantize activations if calibrated
         if self.act_scale is not None and self.has_act_scale:
             if use_modiff and self.prev_quantized is not None:
                 if self.act_bit == 8:
                     # MoDiff modulated quantization returns INT8 residual and updated cache
-                    # Use fixed scale to avoid reduction kernel
-                    # Note: Using fixed scale might degrade quality if calibration is poor
-                    # For now, we use dynamic scale to ensure correctness, as fusion didn't improve speed much
                     x_int8, a_hat_new, act_scale = modulated_quantize_int8(
                         x, self.prev_quantized, scale=None
                     )
@@ -246,19 +199,18 @@ class MoDiffLayer(nn.Module):
                     x_fp = dequantize_int4(x_packed, act_scale, shape)
             
             # Update cache for next timestep
-            if self.prev_activation is None:
+            if self.prev_activation is None or self.prev_activation.shape != x.shape:
                 self.prev_activation = x.detach().clone()
             else:
                 self.prev_activation.copy_(x)
             
-            if self.prev_quantized is None:
+            if self.prev_quantized is None or self.prev_quantized.shape != x_fp.shape:
                 self.prev_quantized = x_fp.detach().clone()
             elif not use_modiff:
                 self.prev_quantized.copy_(x_fp)
         
-        # Fast INT8 GEMM path for Linear layers on CUDA (non-MoDiff only)
+        # Fast INT8 GEMM path for Linear layers on CUDA
         if (
-            not use_modiff and
             isinstance(self.original_layer, nn.Linear) and
             self.weight_bit == 8 and self.act_bit == 8 and
             x_int8 is not None and torch.cuda.is_available()
@@ -268,19 +220,29 @@ class MoDiffLayer(nn.Module):
             x_2d = x_int8.view(-1, K).contiguous()
             # Weight: [out, in] -> [in, out]
             weight_int8 = self.quantized_weight.contiguous().t()
+            
             out_2d = triton_gemm_w8a8(
                 x_2d, weight_int8, act_scale, self.weight_scale, bias=self.original_layer.bias
             )
             out = out_2d.view(*orig_shape[:-1], weight_int8.shape[1])
+            
+            if use_modiff and self.prev_output is not None:
+                out = out + self.prev_output
+            
+            # Update output cache
+            if self.prev_output is None or self.prev_output.shape != out.shape:
+                self.prev_output = out.detach().clone()
+            else:
+                self.prev_output.copy_(out)
+                
             return out
 
-        # Fast INT8 Conv2d path via direct Triton kernel (MoDiff-safe: uses current quantized activations)
+        # Fast INT8 Conv2d path via direct Triton kernel
         if (
             isinstance(self.original_layer, nn.Conv2d) and
             self.weight_bit == 8 and self.act_bit == 8 and
             x_int8 is not None and act_scale is not None and torch.cuda.is_available()
         ):
-            # Shape guards: only support groups=1, kernel=3x3, stride=1, pad=1, dil=1
             layer = self.original_layer
             if (
                 layer.groups == 1 and
@@ -291,7 +253,6 @@ class MoDiffLayer(nn.Module):
             ):
                 if use_modiff and self.prev_output is not None:
                     # Fused path: out = prev_output + conv(residual, bias=None)
-                    # We use the fused kernel to avoid allocating delta_out and Python add
                     out = conv2d_int8_triton_accumulate(
                         x_int8, self.quantized_weight, self.prev_output, act_scale, self.weight_scale, bias=None
                     )
@@ -301,13 +262,16 @@ class MoDiffLayer(nn.Module):
                         x_int8, self.quantized_weight, act_scale, self.weight_scale, bias=layer.bias
                     )
                 
-                if self.prev_output is None:
+                if self.prev_output is None or self.prev_output.shape != out.shape:
                     self.prev_output = out.detach().clone()
                 else:
                     self.prev_output.copy_(out)
                 return out
         
-        # Fallback to FP path (still quantized weights)
+        # Fallback to FP path (Lazy weight dequantization)
+        # This path should ideally not be reached for supported layers in this benchmark
+        weight_fp = self.quantized_weight.float() * self.weight_scale
+        
         if isinstance(self.original_layer, nn.Linear):
             return nn.functional.linear(x_fp, weight_fp, self.original_layer.bias)
         elif isinstance(self.original_layer, nn.Conv2d):
@@ -320,10 +284,17 @@ class MoDiffLayer(nn.Module):
             return self.original_layer(x_fp)
     
     def reset_cache(self):
-        """Reset MoDiff temporal cache."""
-        self.prev_activation = None
-        self.prev_quantized = None
-        self.prev_output = None
+        """
+        Reset MoDiff temporal cache.
+        
+        NOTE: For CUDA Graphs compatibility, we do NOT free the memory (set to None).
+        Instead, we rely on the sampling loop to disable use_modiff for the first step,
+        which will overwrite these buffers with new values.
+        """
+        # self.prev_activation = None
+        # self.prev_quantized = None
+        # self.prev_output = None
+        pass
 
 
 class MoDiffModel(nn.Module):
@@ -515,7 +486,7 @@ def generate_samples(model, n_samples, device, timesteps=100, batch_size=64, use
         elapsed_time: Time taken in seconds
     """
     import time
-    start_time = time.time()
+    
     # Setup diffusion parameters
     betas = get_beta_schedule("linear", 0.0001, 0.02, 1000)
     betas = torch.from_numpy(betas).float().to(device)
@@ -532,6 +503,10 @@ def generate_samples(model, n_samples, device, timesteps=100, batch_size=64, use
     # CUDA Graph variables (shared across batches of same size)
     cuda_graphs = {}  # Cache graphs per batch size
     
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    start_time = time.time()
+
     for batch_idx in tqdm(range(n_batches), desc="Generating"):
         current_batch_size = min(batch_size, n_samples - batch_idx * batch_size)
         
@@ -604,7 +579,11 @@ def generate_samples(model, n_samples, device, timesteps=100, batch_size=64, use
                 else:
                     # Standard eager execution
                     if is_modiff:
-                        et = model(x, t.float(), use_modiff=use_modiff)
+                        # For the first step, we must not use MoDiff temporal caching
+                        # because there is no valid history. This also ensures we overwrite
+                        # the persistent cache buffers (reusing memory) for CUDA graphs.
+                        current_use_modiff = use_modiff and (step_idx > 0)
+                        et = model(x, t.float(), use_modiff=current_use_modiff)
                     else:
                         et = model(x, t.float())
                 
@@ -628,16 +607,41 @@ def generate_samples(model, n_samples, device, timesteps=100, batch_size=64, use
                 x = torch.clamp(x, -10, 10)
         
         # Normalize to [0, 1]
+        # # Debug statistics before normalization
+        # if batch_idx == 0:
+        #     print(f"\n  Batch 0 stats (pre-norm): min={x.min():.3f}, max={x.max():.3f}, mean={x.mean():.3f}, std={x.std():.3f}")
+            
         samples = (x + 1) / 2
         samples = torch.clamp(samples, 0, 1)
+        
+        # if batch_idx == 0:
+        #     print(f"  Batch 0 stats (post-norm): min={samples.min():.3f}, max={samples.max():.3f}, mean={samples.mean():.3f}, std={samples.std():.3f}")
         
         # Check for NaN
         if torch.isnan(samples).any() or torch.isinf(samples).any():
             samples = torch.nan_to_num(samples, nan=0.5, posinf=1.0, neginf=0.0)
         
+        # Debug stats for every batch
+        # print(f"  Batch {batch_idx} stats: min={samples.min():.3f}, max={samples.max():.3f}, mean={samples.mean():.3f}, std={samples.std():.3f}")
+        
         all_samples.append(samples.cpu())
     
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
     elapsed_time = time.time() - start_time
+    
+    # Concatenate
+    full_samples = torch.cat(all_samples, dim=0)[:n_samples]
+    
+    # Check if later samples are different from earlier ones
+    n_batches_gen = len(all_samples)
+    if n_batches_gen > 1:
+        first_batch = all_samples[0]
+        last_batch = all_samples[-1]
+        print(f"  First batch mean: {first_batch.mean():.3f}, std: {first_batch.std():.3f}")
+        print(f"  Last batch mean:  {last_batch.mean():.3f}, std: {last_batch.std():.3f}")
+        
+    return full_samples, elapsed_time
     return torch.cat(all_samples, dim=0)[:n_samples], elapsed_time
 
 
@@ -645,24 +649,22 @@ def compute_fid(generated_samples, real_samples, device):
     """
     Compute FID between generated and real samples using InceptionV3 features.
     
-    IMPORTANT: The reference TensorFlow implementation expects inputs in [0, 255].
-    PyTorch's InceptionV3 with transform_input=True will:
-    1. Expect inputs in [0, 1]
-    2. Scale to [0, 255] internally
-    3. Apply proper normalization
-    
-    This matches the behavior of the TensorFlow version.
+    We use standard ImageNet normalization for the PyTorch InceptionV3 model.
     """
     from torchvision.models import inception_v3, Inception_V3_Weights
     
     # Load InceptionV3 with ImageNet weights
-    # transform_input=True makes it behave like TensorFlow version (expects [0,1], scales to [0,255])
-    inception = inception_v3(weights=Inception_V3_Weights.IMAGENET1K_V1, transform_input=True)
+    # transform_input=False because we will manually normalize
+    inception = inception_v3(weights=Inception_V3_Weights.IMAGENET1K_V1, transform_input=False)
     
     # Remove the final classification layer to get pool3 features (2048-dim)
     inception.fc = nn.Identity()
     inception = inception.to(device)
     inception.eval()
+    
+    # ImageNet normalization statistics
+    mean = torch.tensor([0.485, 0.456, 0.406], device=device).view(1, 3, 1, 1)
+    std = torch.tensor([0.229, 0.224, 0.225], device=device).view(1, 3, 1, 1)
     
     def get_features(samples, batch_size=64, desc="  Extracting features"):
         """
@@ -671,16 +673,11 @@ def compute_fid(generated_samples, real_samples, device):
         Input: samples in range [0, 1], shape [N, C, H, W]
         Output: features of shape [N, 2048]
         
-        Since transform_input=True, the model will internally:
-        1. Scale [0,1] to [0,255]
-        2. Apply proper normalization
-        So we only need to resize to 299x299.
+        For CIFAR-10 (32x32), we use bicubic upsampling to 299x299.
+        This matches the standard FID protocol for low-resolution images.
         """
         features = []
         n_batches = (len(samples) + batch_size - 1) // batch_size
-        
-        # Resize to 299x299 (required for InceptionV3)
-        resize = transforms.Resize((299, 299), antialias=True)
         
         with torch.no_grad():
             for i in tqdm(range(n_batches), desc=desc):
@@ -689,10 +686,16 @@ def compute_fid(generated_samples, real_samples, device):
                 # Ensure batch is in [0, 1] range
                 batch = torch.clamp(batch, 0.0, 1.0)
                 
-                # Resize to 299x299
-                batch = resize(batch)
+                # Upsample to 299x299 using BICUBIC interpolation
+                batch = F.interpolate(batch, size=(299, 299), mode='bicubic', align_corners=False)
                 
-                # Extract features - model handles normalization internally
+                # Clamp again after interpolation to ensure valid range
+                batch = torch.clamp(batch, 0.0, 1.0)
+                
+                # Normalize with ImageNet statistics
+                batch = (batch - mean) / std
+                
+                # Extract features
                 # InceptionV3 returns [N, 2048, 1, 1] from avgpool, we flatten to [N, 2048]
                 feat = inception(batch)
                 
@@ -781,9 +784,11 @@ def load_cifar10_real_samples(n_samples, device):
     """
     Load real CIFAR-10 samples for FID computation.
     
-    For proper FID evaluation, we use the full training set (50k images)
-    regardless of how many samples are generated. This matches the standard
-    protocol for FID evaluation.
+    For FID evaluation, we match the number of real samples to generated samples.
+    This is the standard protocol when evaluating with limited generated samples.
+    
+    When generating 50k samples, use all 50k training images.
+    For smaller evaluations, randomly sample from the training set.
     """
     transform = transforms.Compose([
         transforms.ToTensor(),
@@ -811,10 +816,23 @@ def load_cifar10_real_samples(n_samples, device):
             root=str(data_root), train=True, download=True, transform=transform
         )
     
-    # Use full training set for FID (standard protocol)
-    # This gives more stable statistics than random subsampling
-    print(f"Loading {len(dataset)} real CIFAR-10 training samples for FID...")
-    samples = torch.stack([dataset[i][0] for i in range(len(dataset))])
+    # For proper FID: use same number of real samples as generated samples
+    # If generating 50k, use all training data. Otherwise, random subset.
+    total_available = len(dataset)
+    
+    if n_samples >= total_available:
+        # Use all available training samples
+        print(f"Loading all {total_available} real CIFAR-10 training samples for FID...")
+        samples = torch.stack([dataset[i][0] for i in range(total_available)])
+    else:
+        # Randomly sample n_samples from training set
+        # Use a fixed seed for reproducibility in FID evaluation
+        print(f"Loading {n_samples} randomly sampled real CIFAR-10 training samples for FID...")
+        rng_state = torch.random.get_rng_state()
+        torch.manual_seed(42)  # Fixed seed for consistent real sample selection
+        indices = torch.randperm(total_available)[:n_samples]
+        torch.random.set_rng_state(rng_state)  # Restore original RNG state
+        samples = torch.stack([dataset[i][0] for i in indices.tolist()])
     
     return samples
 
@@ -975,6 +993,10 @@ def main():
     )
     
     save_sample_grid(modiff_samples, os.path.join(args.output_dir, f"modiff_{args.mode}_samples.png"))
+    
+    # Save the last batch as well to check for degradation
+    if len(modiff_samples) > 64:
+        save_sample_grid(modiff_samples[-64:], os.path.join(args.output_dir, f"modiff_{args.mode}_samples_last.png"))
     
     # Compute FID
     print(f"\nComputing MoDiff {args.mode.upper()} FID...")

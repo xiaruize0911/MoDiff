@@ -6,10 +6,6 @@ for the MoDiff framework (Equations ec5-ec6).
 
 Key optimization: Eliminate im2col intermediate buffer by computing convolution
 directly in shared memory using a sliding window approach.
-
-Paper compliance: Preserves exact math from Eq. ec5-ec6:
-    â_t = Q(a_t - â_{t+1}) + â_{t+1}
-    ô_t = Conv(Q(a_t - â_{t+1})) + ô_{t+1}
 """
 
 import torch
@@ -29,6 +25,7 @@ def _conv2d_w8a8_3x3_s1_kernel(
     O_ptr,
     # Scales
     scale_w_ptr,
+    bias_ptr,
     # Shapes
     batch, in_channels, height, width,
     out_channels,
@@ -40,19 +37,13 @@ def _conv2d_w8a8_3x3_s1_kernel(
     stride_ob, stride_oc, stride_oh, stride_ow,
     # Config
     HAS_PREV: tl.constexpr,  # True for MoDiff modulated path
+    HAS_BIAS: tl.constexpr,
+    SCALE_W_IS_VECTOR: tl.constexpr,
     BLOCK_OUT: tl.constexpr,
     BLOCK_IN: tl.constexpr,
 ):
     """
     Direct 3x3 conv2d kernel for W8A8 with optional MoDiff modulation.
-    
-    Optimized for:
-    - kernel_size = 3
-    - stride = 1
-    - padding = 1
-    - dilation = 1
-    
-    This covers ~80% of conv layers in diffusion models.
     """
     # Program IDs
     pid_batch = tl.program_id(0)
@@ -67,69 +58,56 @@ def _conv2d_w8a8_3x3_s1_kernel(
     h_in = h_out  # Center of 3x3 kernel
     w_in = w_out
     
-    # ========================================================================
-    # Step 1: Load 3×3 input window and compute residual (if MoDiff)
-    # ========================================================================
-    
-    # Allocate shared memory for input window [BLOCK_IN, 3, 3]
-    window = tl.zeros((BLOCK_IN, 3, 3), dtype=tl.float32)
-    
     # Offsets for input channels
     offs_in = tl.arange(0, BLOCK_IN)
     
-    # Load 3×3 window for each input channel
-    for kh in range(3):
-        for kw in range(3):
-            h_idx = h_in + kh - 1  # -1 for padding
-            w_idx = w_in + kw - 1
-            
-            # Boundary check
-            valid = (h_idx >= 0) & (h_idx < height) & (w_idx >= 0) & (w_idx < width)
-            
-            # Load current input
-            x_ptrs = (
-                X_ptr + 
-                pid_batch * stride_xb + 
-                offs_in * stride_xc + 
-                h_idx * stride_xh + 
-                w_idx * stride_xw
-            )
-            x_val = tl.load(x_ptrs, mask=(offs_in < in_channels) & valid, other=0.0)
-            
-            # Load previous input (if MoDiff)
-            if HAS_PREV:
-                xp_ptrs = (
-                    X_prev_ptr + 
-                    pid_batch * stride_xpb + 
-                    offs_in * stride_xpc + 
-                    h_idx * stride_xph + 
-                    w_idx * stride_xpw
-                )
-                xp_val = tl.load(xp_ptrs, mask=(offs_in < in_channels) & valid, other=0.0)
+    # ========================================================================
+    # Step 1: Compute quantization scale (per-pixel)
+    # ========================================================================
+    # We need to find max(|x - x_prev|) over ALL input channels and 3x3 window
+    
+    max_val = 0.0
+    
+    for c_start in range(0, in_channels, BLOCK_IN):
+        # Load 3x3 window for this block of channels
+        for kh in range(3):
+            for kw in range(3):
+                h_idx = h_in + kh - 1
+                w_idx = w_in + kw - 1
                 
-                # Compute residual: a_t - â_{t+1}
-                x_val = x_val - xp_val
-            
-            # Store in window
-            window[:, kh, kw] = x_val
+                valid = (h_idx >= 0) & (h_idx < height) & (w_idx >= 0) & (w_idx < width)
+                mask = (c_start + offs_in < in_channels) & valid
+                
+                # Load current input
+                x_ptrs = (
+                    X_ptr + 
+                    pid_batch * stride_xb + 
+                    (c_start + offs_in) * stride_xc + 
+                    h_idx * stride_xh + 
+                    w_idx * stride_xw
+                )
+                x_val = tl.load(x_ptrs, mask=mask, other=0.0)
+                
+                if HAS_PREV:
+                    xp_ptrs = (
+                        X_prev_ptr + 
+                        pid_batch * stride_xpb + 
+                        (c_start + offs_in) * stride_xpc + 
+                        h_idx * stride_xph + 
+                        w_idx * stride_xpw
+                    )
+                    xp_val = tl.load(xp_ptrs, mask=mask, other=0.0)
+                    x_val = x_val - xp_val
+                
+                # Update max
+                max_val = tl.maximum(max_val, tl.max(tl.abs(x_val)))
+    
+    # Compute scale
+    scale_a = max_val / 127.0
+    scale_a = tl.where(scale_a < 1e-8, 1e-8, scale_a)
     
     # ========================================================================
-    # Step 2: Quantize entire window
-    # ========================================================================
-    
-    # Compute scale: max(|window|) / 127
-    window_abs = tl.abs(window)
-    abs_max = tl.max(window_abs)
-    scale_x = abs_max / 127.0
-    scale_x = tl.where(scale_x < 1e-8, 1e-8, scale_x)
-    
-    # Quantize
-    window_scaled = window / scale_x
-    window_int = tl.floor(window_scaled + 0.5)
-    window_int = tl.maximum(tl.minimum(window_int, 127.0), -128.0)
-    
-    # ========================================================================
-    # Step 3: Compute INT8 convolution
+    # Step 2: Compute Convolution
     # ========================================================================
     
     # Accumulator
@@ -137,52 +115,92 @@ def _conv2d_w8a8_3x3_s1_kernel(
     
     # Offsets for output channels
     offs_out = pid_out_ch * BLOCK_OUT + tl.arange(0, BLOCK_OUT)
+    mask_out = offs_out < out_channels
     
-    # Loop over input channels
     for c_start in range(0, in_channels, BLOCK_IN):
-        c_end = tl.minimum(c_start + BLOCK_IN, in_channels)
-        c_offs = tl.arange(0, BLOCK_IN)
-        c_mask = (c_start + c_offs) < in_channels
+        c_mask = (c_start + offs_in) < in_channels
         
-        # Load weights: [out_ch, in_ch, kh=3, kw=3]
-        # For each output channel in this block
-        for out_idx in range(BLOCK_OUT):
-            out_ch = pid_out_ch * BLOCK_OUT + out_idx
-            if out_ch >= out_channels:
-                continue
-            
-            # Accumulate over 3×3 kernel and input channels
-            for kh in range(3):
-                for kw in range(3):
-                    # Load weight [in_ch]
-                    w_ptrs = (
-                        W_ptr + 
-                        out_ch * stride_wout + 
-                        (c_start + c_offs) * stride_win + 
-                        kh * stride_wkh + 
-                        kw * stride_wkw
+        # Load 3x3 window and quantize
+        # We store quantized values in registers: [BLOCK_IN, 3, 3]
+        # Flattened to [BLOCK_IN, 9] for easier access? Or just loop.
+        # Since we need to multiply with weights [BLOCK_OUT, BLOCK_IN, 3, 3],
+        # we can iterate 3x3 inside.
+        
+        for kh in range(3):
+            for kw in range(3):
+                h_idx = h_in + kh - 1
+                w_idx = w_in + kw - 1
+                
+                valid = (h_idx >= 0) & (h_idx < height) & (w_idx >= 0) & (w_idx < width)
+                mask = c_mask & valid
+                
+                # Load input (re-load)
+                x_ptrs = (
+                    X_ptr + 
+                    pid_batch * stride_xb + 
+                    (c_start + offs_in) * stride_xc + 
+                    h_idx * stride_xh + 
+                    w_idx * stride_xw
+                )
+                x_val = tl.load(x_ptrs, mask=mask, other=0.0)
+                
+                if HAS_PREV:
+                    xp_ptrs = (
+                        X_prev_ptr + 
+                        pid_batch * stride_xpb + 
+                        (c_start + offs_in) * stride_xpc + 
+                        h_idx * stride_xph + 
+                        w_idx * stride_xpw
                     )
-                    w_int = tl.load(w_ptrs, mask=c_mask, other=0).to(tl.int8)
-                    
-                    # Get input window values [in_ch]
-                    x_int = window_int[c_offs, kh, kw].to(tl.int8)
-                    
-                    # INT8 multiply-accumulate
-                    # Note: Triton doesn't have dot product for 1D, so we sum manually
-                    prod = (x_int * w_int).to(tl.int32)
-                    acc[out_idx] += tl.sum(tl.where(c_mask, prod, 0))
-    
+                    xp_val = tl.load(xp_ptrs, mask=mask, other=0.0)
+                    x_val = x_val - xp_val
+                
+                # Quantize
+                x_q = tl.floor(x_val / scale_a + 0.5)
+                x_q = tl.maximum(tl.minimum(x_q, 127.0), -128.0).to(tl.int8)
+                
+                # Load weights: [BLOCK_OUT, BLOCK_IN] for this kh, kw
+                # Weight shape: [out, in, 3, 3]
+                # Stride: out*s_wout + in*s_win + kh*s_wkh + kw*s_wkw
+                
+                w_base = W_ptr + kh * stride_wkh + kw * stride_wkw
+                
+                # We need to load [BLOCK_OUT, BLOCK_IN] matrix
+                # But Triton load requires pointers.
+                # w_ptrs: [BLOCK_OUT, BLOCK_IN]
+                w_ptrs = (
+                    w_base + 
+                    offs_out[:, None] * stride_wout + 
+                    (c_start + offs_in)[None, :] * stride_win
+                )
+                
+                w_val = tl.load(w_ptrs, mask=mask_out[:, None] & c_mask[None, :], other=0).to(tl.int8)
+                
+                # Multiply accumulate: [BLOCK_OUT, BLOCK_IN] * [BLOCK_IN] (broadcast) -> [BLOCK_OUT]
+                # x_q is [BLOCK_IN]
+                # w_val is [BLOCK_OUT, BLOCK_IN]
+                
+                prod = w_val * x_q[None, :]
+                acc += tl.sum(prod, axis=1)
+
     # ========================================================================
-    # Step 4: Dequantize and accumulate with previous output
+    # Step 3: Dequantize and Store
     # ========================================================================
     
-    # Load weight scale (per-channel)
-    scale_w = tl.load(scale_w_ptr + offs_out, mask=offs_out < out_channels, other=1.0)
+    # Load weight scale
+    if SCALE_W_IS_VECTOR:
+        scale_w = tl.load(scale_w_ptr + offs_out, mask=mask_out, other=1.0)
+    else:
+        scale_w = tl.load(scale_w_ptr)
+        
+    out_fp = acc.to(tl.float32) * scale_a * scale_w
     
-    # Dequantize
-    out_fp = acc.to(tl.float32) * scale_x * scale_w
-    
-    # Add previous output (if MoDiff)
+    # Add bias
+    if HAS_BIAS:
+        bias = tl.load(bias_ptr + offs_out, mask=mask_out, other=0.0)
+        out_fp += bias
+        
+    # Add previous output
     if HAS_PREV:
         oprev_ptrs = (
             O_prev_ptr + 
@@ -191,13 +209,10 @@ def _conv2d_w8a8_3x3_s1_kernel(
             h_out * stride_oph + 
             w_out * stride_opw
         )
-        o_prev = tl.load(oprev_ptrs, mask=offs_out < out_channels, other=0.0)
-        out_fp = out_fp + o_prev
-    
-    # ========================================================================
-    # Step 5: Write output
-    # ========================================================================
-    
+        o_prev = tl.load(oprev_ptrs, mask=mask_out, other=0.0)
+        out_fp += o_prev
+        
+    # Store
     out_ptrs = (
         O_ptr + 
         pid_batch * stride_ob + 
@@ -205,7 +220,7 @@ def _conv2d_w8a8_3x3_s1_kernel(
         h_out * stride_oh + 
         w_out * stride_ow
     )
-    tl.store(out_ptrs, out_fp, mask=offs_out < out_channels)
+    tl.store(out_ptrs, out_fp, mask=mask_out)
 
 
 def conv2d_w8a8_3x3_fused(
@@ -217,66 +232,42 @@ def conv2d_w8a8_3x3_fused(
     bias: torch.Tensor = None,
 ) -> torch.Tensor:
     """
-    Fused W8A8 3×3 Conv2d with MoDiff modulation (PyTorch implementation).
-    
-    Implements:
-        residual = x - x_prev
-        residual_q = Q(residual)
-        output = Conv(residual_q) + o_prev
-        
-    Args:
-        x: Current input [B, C_in, H, W]
-        x_prev: Previous quantized input â_{t+1} [B, C_in, H, W]
-        weight_int8: Pre-quantized weight [C_out, C_in, 3, 3]
-        o_prev: Previous output ô_{t+1} [B, C_out, H, W]
-        scale_w: Weight scale [C_out] or scalar
-        bias: Optional bias [C_out]
-        
-    Returns:
-        output: [B, C_out, H, W]
+    Fused W8A8 3×3 Conv2d with MoDiff modulation.
     """
-    # Compute residual
-    residual = x - x_prev
+    # Shapes
+    N, C, H, W = x.shape
+    OutC = weight_int8.shape[0]
     
-    # Check for NaN/Inf in inputs
-    if torch.isnan(x).any() or torch.isinf(x).any():
-        x = torch.nan_to_num(x, nan=0.0, posinf=1.0, neginf=-1.0)
-    if torch.isnan(x_prev).any() or torch.isinf(x_prev).any():
-        x_prev = torch.nan_to_num(x_prev, nan=0.0, posinf=1.0, neginf=-1.0)
-        residual = x - x_prev
+    # Output
+    out = torch.empty((N, OutC, H, W), device=x.device, dtype=torch.float32)
     
-    # Quantize residual
-    scale_a = residual.abs().amax() / 127.0
-    if torch.isnan(scale_a) or torch.isinf(scale_a) or scale_a == 0:
-        scale_a = torch.tensor(1e-8, device=x.device)
-    scale_a = torch.clamp(scale_a, min=1e-8)
-    residual_int = torch.round(residual / scale_a).clamp(-128, 127)
+    # Config
+    BLOCK_OUT = 32
+    BLOCK_IN = 32
     
-    # INT8 convolution (simulated with FP32 for now)
-    residual_fp = residual_int.float()
-    weight_fp = weight_int8.float()
+    grid = (N, triton.cdiv(OutC, BLOCK_OUT), H * W)
     
-    output = torch.nn.functional.conv2d(
-        residual_fp, weight_fp, bias=None,
-        stride=1, padding=1, dilation=1
+    _conv2d_w8a8_3x3_s1_kernel[grid](
+        x, x_prev,
+        weight_int8,
+        o_prev,
+        out,
+        scale_w,
+        bias if bias is not None else x, # Dummy
+        N, C, H, W, OutC,
+        x.stride(0), x.stride(1), x.stride(2), x.stride(3),
+        x_prev.stride(0), x_prev.stride(1), x_prev.stride(2), x_prev.stride(3),
+        weight_int8.stride(0), weight_int8.stride(1), weight_int8.stride(2), weight_int8.stride(3),
+        o_prev.stride(0), o_prev.stride(1), o_prev.stride(2), o_prev.stride(3),
+        out.stride(0), out.stride(1), out.stride(2), out.stride(3),
+        HAS_PREV=True,
+        HAS_BIAS=(bias is not None),
+        SCALE_W_IS_VECTOR=(scale_w.numel() > 1),
+        BLOCK_OUT=BLOCK_OUT,
+        BLOCK_IN=BLOCK_IN,
     )
     
-    # Dequantize
-    if scale_w.numel() > 1:
-        scale_combined = scale_a * scale_w.view(1, -1, 1, 1)
-    else:
-        scale_combined = scale_a * scale_w
-    
-    output = output * scale_combined
-    
-    # Add previous output
-    output = output + o_prev
-    
-    # Add bias if needed
-    if bias is not None:
-        output = output + bias.view(1, -1, 1, 1)
-    
-    return output
+    return out
 
 
 def conv2d_w8a8_3x3_standard(
@@ -286,47 +277,41 @@ def conv2d_w8a8_3x3_standard(
     bias: torch.Tensor = None,
 ) -> torch.Tensor:
     """
-    Standard W8A8 3×3 Conv2d without MoDiff modulation (PyTorch implementation).
-    
-    Args:
-        x: Input [B, C_in, H, W]
-        weight_int8: Pre-quantized weight [C_out, C_in, 3, 3]
-        scale_w: Weight scale [C_out] or scalar
-        bias: Optional bias [C_out]
-        
-    Returns:
-        output: [B, C_out, H, W]
+    Standard W8A8 3×3 Conv2d without MoDiff modulation.
     """
-    # Check for NaN/Inf in input
-    if torch.isnan(x).any() or torch.isinf(x).any():
-        x = torch.nan_to_num(x, nan=0.0, posinf=1.0, neginf=-1.0)
+    # Shapes
+    N, C, H, W = x.shape
+    OutC = weight_int8.shape[0]
     
-    # Quantize input
-    scale_a = x.abs().amax() / 127.0
-    if torch.isnan(scale_a) or torch.isinf(scale_a) or scale_a == 0:
-        scale_a = torch.tensor(1e-8, device=x.device)
-    scale_a = torch.clamp(scale_a, min=1e-8)
-    x_int = torch.round(x / scale_a).clamp(-128, 127)
+    # Output
+    out = torch.empty((N, OutC, H, W), device=x.device, dtype=torch.float32)
     
-    # INT8 convolution (simulated with FP32 for now)
-    x_fp = x_int.float()
-    weight_fp = weight_int8.float()
+    # Config
+    BLOCK_OUT = 32
+    BLOCK_IN = 32
     
-    output = torch.nn.functional.conv2d(
-        x_fp, weight_fp, bias=None,
-        stride=1, padding=1, dilation=1
+    grid = (N, triton.cdiv(OutC, BLOCK_OUT), H * W)
+    
+    # Use same kernel with HAS_PREV=False
+    # Pass x as x_prev (unused) and out as o_prev (unused)
+    _conv2d_w8a8_3x3_s1_kernel[grid](
+        x, x, # x_prev unused
+        weight_int8,
+        out, # o_prev unused
+        out,
+        scale_w,
+        bias if bias is not None else x,
+        N, C, H, W, OutC,
+        x.stride(0), x.stride(1), x.stride(2), x.stride(3),
+        x.stride(0), x.stride(1), x.stride(2), x.stride(3), # x_prev strides
+        weight_int8.stride(0), weight_int8.stride(1), weight_int8.stride(2), weight_int8.stride(3),
+        out.stride(0), out.stride(1), out.stride(2), out.stride(3), # o_prev strides
+        out.stride(0), out.stride(1), out.stride(2), out.stride(3),
+        HAS_PREV=False,
+        HAS_BIAS=(bias is not None),
+        SCALE_W_IS_VECTOR=(scale_w.numel() > 1),
+        BLOCK_OUT=BLOCK_OUT,
+        BLOCK_IN=BLOCK_IN,
     )
     
-    # Dequantize
-    if scale_w.numel() > 1:
-        scale_combined = scale_a * scale_w.view(1, -1, 1, 1)
-    else:
-        scale_combined = scale_a * scale_w
-    
-    output = output * scale_combined
-    
-    # Add bias
-    if bias is not None:
-        output = output + bias.view(1, -1, 1, 1)
-    
-    return output
+    return out

@@ -205,7 +205,7 @@ class W8A8MoDiffLinear(nn.Module):
         """Standard W8A8 forward without modulation."""
         
         # Use fused kernel if enabled (faster for small matrices)
-        if self.use_fused_kernel and not self.config.weight_channel_wise:
+        if self.use_fused_kernel:
             # Fused quantization + GEMM kernel
             output = gemm_w8a8_fused(
                 x,

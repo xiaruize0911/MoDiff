@@ -223,28 +223,6 @@ class W8A8MoDiffConv2d(nn.Module):
             self.dilation == (1, 1)
         )
     
-    def _can_use_fused_conv(self):
-        """Check if we can use the fused direct conv kernel."""
-        return (
-            torch.cuda.is_available() and
-            self.groups == 1 and
-            self.kernel_size == (3, 3) and
-            self.stride == (1, 1) and
-            self.padding == (1, 1) and
-            self.dilation == (1, 1)
-        )
-    
-    def _can_use_fused_conv(self):
-        """Check if we can use fused direct conv kernel"""
-        return (
-            torch.cuda.is_available() and
-            self.groups == 1 and
-            self.kernel_size == (3, 3) and
-            self.stride == (1, 1) and
-            self.padding == (1, 1) and
-            self.dilation == (1, 1)
-        )
-    
     def _conv2d_int8(
         self,
         x_int: torch.Tensor,
