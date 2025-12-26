@@ -1,0 +1,62 @@
+/workspace/MoDiff/modiff_fused/scripts/./benchmark_fid_fused.py:485: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  states = torch.load(ckpt_path, map_location=device)
+Using device: cuda
+
+============================================================
+MoDiff FID Benchmark
+Mode: W8A8 (W8A8)
+Samples: 100
+Timesteps: 100
+============================================================
+
+Loading CIFAR-10 diffusion model...
+Loaded CIFAR-10 model: 35.7M parameters
+
+Loading real CIFAR-10 samples...
+Files already downloaded and verified
+Loading 100 randomly sampled real CIFAR-10 training samples for FID...
+
+============================================================
+FP32 Baseline
+============================================================
+Generating:   0%|          | 0/2 [00:00<?, ?it/s]Generating:  50%|█████     | 1/2 [00:02<00:02,  2.60s/it]Generating:  50%|█████     | 1/2 [00:03<00:03,  3.68s/it]
+Traceback (most recent call last):
+  File "/workspace/MoDiff/modiff_fused/scripts/./benchmark_fid_fused.py", line 1088, in <module>
+    main()
+  File "/workspace/MoDiff/modiff_fused/scripts/./benchmark_fid_fused.py", line 963, in main
+    fp32_samples, fp32_time = generate_samples(
+                              ^^^^^^^^^^^^^^^^^
+  File "/workspace/MoDiff/modiff_fused/scripts/./benchmark_fid_fused.py", line 639, in generate_samples
+    et = model(x, t.float())
+         ^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/dist-packages/torch/nn/modules/module.py", line 1553, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/dist-packages/torch/nn/modules/module.py", line 1562, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/MoDiff/ddim/models/diffusion.py", line 333, in forward
+    h = self.mid.block_1(h, temb)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/dist-packages/torch/nn/modules/module.py", line 1553, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/dist-packages/torch/nn/modules/module.py", line 1562, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/MoDiff/ddim/models/diffusion.py", line 121, in forward
+    h = self.norm1(h)
+        ^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/dist-packages/torch/nn/modules/module.py", line 1553, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/dist-packages/torch/nn/modules/module.py", line 1562, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/dist-packages/torch/nn/modules/normalization.py", line 288, in forward
+    return F.group_norm(
+           ^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/dist-packages/torch/nn/functional.py", line 2606, in group_norm
+    return torch.group_norm(input, num_groups, weight, bias, eps, torch.backends.cudnn.enabled)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt

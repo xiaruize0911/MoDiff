@@ -1,0 +1,189 @@
+================================================================================
+MoDiff Model Profiling - Ablation Study Report
+================================================================================
+
+Total Forward Pass Time:
+  Mean: 51.277 ms
+  Std:  0.402 ms
+  Min:  50.488 ms
+  Max:  52.312 ms
+
+================================================================================
+Model Section Summary (Total Time)
+================================================================================
+
+UPSAMPLING:
+  Total Time: 136.846 ms
+  Num Layers: 102
+  Percentage: 56.17%
+
+DOWNSAMPLING:
+  Total Time: 78.859 ms
+  Num Layers: 62
+  Percentage: 32.37%
+
+MIDDLE:
+  Total Time: 21.414 ms
+  Num Layers: 17
+  Percentage: 8.79%
+
+OUTPUT:
+  Total Time: 3.259 ms
+  Num Layers: 2
+  Percentage: 1.34%
+
+TIMESTEP_EMBEDDING:
+  Total Time: 1.898 ms
+  Num Layers: 2
+  Percentage: 0.78%
+
+INPUT:
+  Total Time: 1.361 ms
+  Num Layers: 1
+  Percentage: 0.56%
+
+================================================================================
+Operation Type Summary
+================================================================================
+
+Conv2d:
+  Total Time: 144.949 ms
+  Count: 89
+  Total Params: 32,828,291
+  Avg Time per Call: 1.629 ms
+
+GroupNorm:
+  Total Time: 65.528 ms
+  Count: 51
+  Total Params: 0
+  Avg Time per Call: 1.285 ms
+
+Linear:
+  Total Time: 24.582 ms
+  Count: 24
+  Total Params: 2,889,600
+  Avg Time per Call: 1.024 ms
+
+Dropout:
+  Total Time: 8.578 ms
+  Count: 22
+  Total Params: 0
+  Avg Time per Call: 0.390 ms
+
+================================================================================
+Top 10 Slowest Layers (by total time)
+================================================================================
+
+1. up.0.block.0.conv1
+   Type: Conv2d
+   Total Time: 2.697 ms
+   Mean Time: 0.135 ms
+   Num Calls: 20
+
+2. up.1.upsample.conv
+   Type: Conv2d
+   Total Time: 2.558 ms
+   Mean Time: 0.128 ms
+   Num Calls: 20
+
+3. up.0.block.2.conv1
+   Type: Conv2d
+   Total Time: 2.500 ms
+   Mean Time: 0.125 ms
+   Num Calls: 20
+
+4. up.0.block.1.conv1
+   Type: Conv2d
+   Total Time: 2.500 ms
+   Mean Time: 0.125 ms
+   Num Calls: 20
+
+5. up.1.block.0.conv1
+   Type: Conv2d
+   Total Time: 2.463 ms
+   Mean Time: 0.123 ms
+   Num Calls: 20
+
+6. up.1.block.1.conv1
+   Type: Conv2d
+   Total Time: 2.444 ms
+   Mean Time: 0.122 ms
+   Num Calls: 20
+
+7. up.1.block.2.conv1
+   Type: Conv2d
+   Total Time: 2.021 ms
+   Mean Time: 0.101 ms
+   Num Calls: 20
+
+8. conv_out
+   Type: Conv2d
+   Total Time: 1.990 ms
+   Mean Time: 0.099 ms
+   Num Calls: 20
+
+9. up.0.block.0.conv2
+   Type: Conv2d
+   Total Time: 1.783 ms
+   Mean Time: 0.089 ms
+   Num Calls: 20
+
+10. up.0.block.1.conv2
+   Type: Conv2d
+   Total Time: 1.782 ms
+   Mean Time: 0.089 ms
+   Num Calls: 20
+
+================================================================================
+Top 10 Memory-Intensive Layers (by total memory change)
+================================================================================
+
+1. up.0.block.0.norm1
+   Type: GroupNorm
+   Total Memory: 120.000 MB
+   Mean Memory: 6.000 MB
+
+2. up.1.upsample.conv
+   Type: Conv2d
+   Total Memory: 80.000 MB
+   Mean Memory: 4.000 MB
+
+3. up.0.block.1.norm1
+   Type: GroupNorm
+   Total Memory: 80.000 MB
+   Mean Memory: 4.000 MB
+
+4. up.0.block.2.norm1
+   Type: GroupNorm
+   Total Memory: 80.000 MB
+   Mean Memory: 4.000 MB
+
+5. conv_in
+   Type: Conv2d
+   Total Memory: 40.000 MB
+   Mean Memory: 2.000 MB
+
+6. down.0.block.0.norm1
+   Type: GroupNorm
+   Total Memory: 40.000 MB
+   Mean Memory: 2.000 MB
+
+7. down.0.block.0.conv1
+   Type: Conv2d
+   Total Memory: 40.000 MB
+   Mean Memory: 2.000 MB
+
+8. down.0.block.0.norm2
+   Type: GroupNorm
+   Total Memory: 40.000 MB
+   Mean Memory: 2.000 MB
+
+9. down.0.block.0.conv2
+   Type: Conv2d
+   Total Memory: 40.000 MB
+   Mean Memory: 2.000 MB
+
+10. down.0.block.1.norm1
+   Type: GroupNorm
+   Total Memory: 40.000 MB
+   Mean Memory: 2.000 MB

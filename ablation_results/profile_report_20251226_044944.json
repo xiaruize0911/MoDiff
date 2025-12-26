@@ -1,0 +1,1958 @@
+{
+  "layer_statistics": {
+    "temb.dense.0": {
+      "mean_time_ms": 0.05138469859957695,
+      "std_time_ms": 0.0025213451990402586,
+      "total_time_ms": 1.027693971991539,
+      "num_calls": 20,
+      "layer_type": "Linear",
+      "mean_memory_mb": 0.0078125,
+      "total_memory_mb": 0.15625
+    },
+    "temb.dense.1": {
+      "mean_time_ms": 0.04574758931994438,
+      "std_time_ms": 0.0026869242487978983,
+      "total_time_ms": 0.9149517863988876,
+      "num_calls": 20,
+      "layer_type": "Linear",
+      "mean_memory_mb": 0.0078125,
+      "total_memory_mb": 0.15625
+    },
+    "conv_in": {
+      "mean_time_ms": 0.06825905293226242,
+      "std_time_ms": 0.0028454202901174773,
+      "total_time_ms": 1.3651810586452484,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    "down.0.block.0.norm1": {
+      "mean_time_ms": 0.06492733955383301,
+      "std_time_ms": 0.0027272186217803538,
+      "total_time_ms": 1.2985467910766602,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    "down.0.block.0.conv1": {
+      "mean_time_ms": 0.087741669267416,
+      "std_time_ms": 0.0029496019858569573,
+      "total_time_ms": 1.75483338534832,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    "down.0.block.0.temb_proj": {
+      "mean_time_ms": 0.04954133182764053,
+      "std_time_ms": 0.0009078332776844173,
+      "total_time_ms": 0.9908266365528107,
+      "num_calls": 20,
+      "layer_type": "Linear",
+      "mean_memory_mb": 0.001953125,
+      "total_memory_mb": 0.0390625
+    },
+    "down.0.block.0.norm2": {
+      "mean_time_ms": 0.06278809159994125,
+      "std_time_ms": 0.0022603743321251606,
+      "total_time_ms": 1.255761831998825,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    "down.0.block.0.dropout": {
+      "mean_time_ms": 0.01717042177915573,
+      "std_time_ms": 0.000441732531439738,
+      "total_time_ms": 0.3434084355831146,
+      "num_calls": 20,
+      "layer_type": "Dropout",
+      "mean_memory_mb": 0.0,
+      "total_memory_mb": 0.0
+    },
+    "down.0.block.0.conv2": {
+      "mean_time_ms": 0.08794181048870087,
+      "std_time_ms": 0.001669938861772618,
+      "total_time_ms": 1.7588362097740173,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    "down.0.block.1.norm1": {
+      "mean_time_ms": 0.06181234493851662,
+      "std_time_ms": 0.0018841379712862397,
+      "total_time_ms": 1.2362468987703323,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    "down.0.block.1.conv1": {
+      "mean_time_ms": 0.0863892026245594,
+      "std_time_ms": 0.0025340703862771724,
+      "total_time_ms": 1.727784052491188,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    "down.0.block.1.temb_proj": {
+      "mean_time_ms": 0.05094846710562706,
+      "std_time_ms": 0.003314439049266123,
+      "total_time_ms": 1.0189693421125412,
+      "num_calls": 20,
+      "layer_type": "Linear",
+      "mean_memory_mb": 0.001953125,
+      "total_memory_mb": 0.0390625
+    },
+    "down.0.block.1.norm2": {
+      "mean_time_ms": 0.06278464570641518,
+      "std_time_ms": 0.0036920154252431826,
+      "total_time_ms": 1.2556929141283035,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    "down.0.block.1.dropout": {
+      "mean_time_ms": 0.0169496051967144,
+      "std_time_ms": 0.0004481126580021809,
+      "total_time_ms": 0.338992103934288,
+      "num_calls": 20,
+      "layer_type": "Dropout",
+      "mean_memory_mb": 0.0,
+      "total_memory_mb": 0.0
+    },
+    "down.0.block.1.conv2": {
+      "mean_time_ms": 0.08841222152113914,
+      "std_time_ms": 0.002105890532395659,
+      "total_time_ms": 1.768244430422783,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    "down.0.downsample.conv": {
+      "mean_time_ms": 0.07948214188218117,
+      "std_time_ms": 0.0031005359903144127,
+      "total_time_ms": 1.5896428376436234,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.5,
+      "total_memory_mb": 10.0
+    },
+    "down.1.block.0.norm1": {
+      "mean_time_ms": 0.06385594606399536,
+      "std_time_ms": 0.002152740831630275,
+      "total_time_ms": 1.2771189212799072,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 0.5,
+      "total_memory_mb": 10.0
+    },
+    "down.1.block.0.conv1": {
+      "mean_time_ms": 0.07926728576421738,
+      "std_time_ms": 0.00300221351433009,
+      "total_time_ms": 1.5853457152843475,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "down.1.block.0.temb_proj": {
+      "mean_time_ms": 0.0507173128426075,
+      "std_time_ms": 0.004541828277408405,
+      "total_time_ms": 1.01434625685215,
+      "num_calls": 20,
+      "layer_type": "Linear",
+      "mean_memory_mb": 0.00390625,
+      "total_memory_mb": 0.078125
+    },
+    "down.1.block.0.norm2": {
+      "mean_time_ms": 0.06261244416236877,
+      "std_time_ms": 0.0018097323197436696,
+      "total_time_ms": 1.2522488832473755,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "down.1.block.0.dropout": {
+      "mean_time_ms": 0.017140060663223267,
+      "std_time_ms": 0.0006538383282817963,
+      "total_time_ms": 0.34280121326446533,
+      "num_calls": 20,
+      "layer_type": "Dropout",
+      "mean_memory_mb": 0.0,
+      "total_memory_mb": 0.0
+    },
+    "down.1.block.0.conv2": {
+      "mean_time_ms": 0.08595157414674759,
+      "std_time_ms": 0.0018976848628992546,
+      "total_time_ms": 1.7190314829349518,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "down.1.block.0.nin_shortcut": {
+      "mean_time_ms": 0.07048109546303749,
+      "std_time_ms": 0.0026505147838345746,
+      "total_time_ms": 1.4096219092607498,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "down.1.attn.0.norm": {
+      "mean_time_ms": 0.06262930110096931,
+      "std_time_ms": 0.003167643347957636,
+      "total_time_ms": 1.2525860220193863,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "down.1.attn.0.q": {
+      "mean_time_ms": 0.07033422589302063,
+      "std_time_ms": 0.0023951788955567147,
+      "total_time_ms": 1.4066845178604126,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "down.1.attn.0.k": {
+      "mean_time_ms": 0.0661817379295826,
+      "std_time_ms": 0.0030658796542579097,
+      "total_time_ms": 1.323634758591652,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "down.1.attn.0.v": {
+      "mean_time_ms": 0.06494466215372086,
+      "std_time_ms": 0.0018938459462372942,
+      "total_time_ms": 1.2988932430744171,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "down.1.attn.0.proj_out": {
+      "mean_time_ms": 0.07018707692623138,
+      "std_time_ms": 0.002211402843879599,
+      "total_time_ms": 1.4037415385246277,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "down.1.block.1.norm1": {
+      "mean_time_ms": 0.06277374923229218,
+      "std_time_ms": 0.002299109273405187,
+      "total_time_ms": 1.2554749846458435,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "down.1.block.1.conv1": {
+      "mean_time_ms": 0.08396804332733154,
+      "std_time_ms": 0.0008045605111959377,
+      "total_time_ms": 1.6793608665466309,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "down.1.block.1.temb_proj": {
+      "mean_time_ms": 0.04990454763174057,
+      "std_time_ms": 0.0010604601899247151,
+      "total_time_ms": 0.9980909526348114,
+      "num_calls": 20,
+      "layer_type": "Linear",
+      "mean_memory_mb": 0.00390625,
+      "total_memory_mb": 0.078125
+    },
+    "down.1.block.1.norm2": {
+      "mean_time_ms": 0.06132777780294418,
+      "std_time_ms": 0.0011103892967367398,
+      "total_time_ms": 1.2265555560588837,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "down.1.block.1.dropout": {
+      "mean_time_ms": 0.0177774578332901,
+      "std_time_ms": 0.0016545110124178506,
+      "total_time_ms": 0.355549156665802,
+      "num_calls": 20,
+      "layer_type": "Dropout",
+      "mean_memory_mb": 0.0,
+      "total_memory_mb": 0.0
+    },
+    "down.1.block.1.conv2": {
+      "mean_time_ms": 0.08543524891138077,
+      "std_time_ms": 0.002180100794952384,
+      "total_time_ms": 1.7087049782276154,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "down.1.attn.1.norm": {
+      "mean_time_ms": 0.06171008571982384,
+      "std_time_ms": 0.0032994605784516674,
+      "total_time_ms": 1.2342017143964767,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "down.1.attn.1.q": {
+      "mean_time_ms": 0.07115630432963371,
+      "std_time_ms": 0.0019853349032669973,
+      "total_time_ms": 1.4231260865926743,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "down.1.attn.1.k": {
+      "mean_time_ms": 0.08095316588878632,
+      "std_time_ms": 0.06213035437498801,
+      "total_time_ms": 1.6190633177757263,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "down.1.attn.1.v": {
+      "mean_time_ms": 0.06503965705633163,
+      "std_time_ms": 0.0022067437856897864,
+      "total_time_ms": 1.3007931411266327,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "down.1.attn.1.proj_out": {
+      "mean_time_ms": 0.06979424506425858,
+      "std_time_ms": 0.00240275755375764,
+      "total_time_ms": 1.3958849012851715,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "down.1.downsample.conv": {
+      "mean_time_ms": 0.08539184927940369,
+      "std_time_ms": 0.0031867344976332216,
+      "total_time_ms": 1.7078369855880737,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.25,
+      "total_memory_mb": 5.0
+    },
+    "down.2.block.0.norm1": {
+      "mean_time_ms": 0.06440887227654457,
+      "std_time_ms": 0.0020213580901357335,
+      "total_time_ms": 1.2881774455308914,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 0.25,
+      "total_memory_mb": 5.0
+    },
+    "down.2.block.0.conv1": {
+      "mean_time_ms": 0.08367588743567467,
+      "std_time_ms": 0.002033241063942378,
+      "total_time_ms": 1.6735177487134933,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.25,
+      "total_memory_mb": 5.0
+    },
+    "down.2.block.0.temb_proj": {
+      "mean_time_ms": 0.05075354129076004,
+      "std_time_ms": 0.002401597743621472,
+      "total_time_ms": 1.0150708258152008,
+      "num_calls": 20,
+      "layer_type": "Linear",
+      "mean_memory_mb": 0.00390625,
+      "total_memory_mb": 0.078125
+    },
+    "down.2.block.0.norm2": {
+      "mean_time_ms": 0.06318259984254837,
+      "std_time_ms": 0.003378973370583045,
+      "total_time_ms": 1.2636519968509674,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 0.25,
+      "total_memory_mb": 5.0
+    },
+    "down.2.block.0.dropout": {
+      "mean_time_ms": 0.01764930784702301,
+      "std_time_ms": 0.0007174930874677889,
+      "total_time_ms": 0.3529861569404602,
+      "num_calls": 20,
+      "layer_type": "Dropout",
+      "mean_memory_mb": 0.0,
+      "total_memory_mb": 0.0
+    },
+    "down.2.block.0.conv2": {
+      "mean_time_ms": 0.08574211969971657,
+      "std_time_ms": 0.0013222188966131292,
+      "total_time_ms": 1.7148423939943314,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.25,
+      "total_memory_mb": 5.0
+    },
+    "down.2.block.1.norm1": {
+      "mean_time_ms": 0.06211958825588226,
+      "std_time_ms": 0.0018005550657014177,
+      "total_time_ms": 1.2423917651176453,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 0.25,
+      "total_memory_mb": 5.0
+    },
+    "down.2.block.1.conv1": {
+      "mean_time_ms": 0.08428217843174934,
+      "std_time_ms": 0.002966196535760243,
+      "total_time_ms": 1.6856435686349869,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.25,
+      "total_memory_mb": 5.0
+    },
+    "down.2.block.1.temb_proj": {
+      "mean_time_ms": 0.04954105243086815,
+      "std_time_ms": 0.0008498738267081024,
+      "total_time_ms": 0.990821048617363,
+      "num_calls": 20,
+      "layer_type": "Linear",
+      "mean_memory_mb": 0.00390625,
+      "total_memory_mb": 0.078125
+    },
+    "down.2.block.1.norm2": {
+      "mean_time_ms": 0.06208671256899834,
+      "std_time_ms": 0.0023288262409129263,
+      "total_time_ms": 1.2417342513799667,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 0.25,
+      "total_memory_mb": 5.0
+    },
+    "down.2.block.1.dropout": {
+      "mean_time_ms": 0.01713186502456665,
+      "std_time_ms": 0.0006536118171655981,
+      "total_time_ms": 0.342637300491333,
+      "num_calls": 20,
+      "layer_type": "Dropout",
+      "mean_memory_mb": 0.0,
+      "total_memory_mb": 0.0
+    },
+    "down.2.block.1.conv2": {
+      "mean_time_ms": 0.08604535833001137,
+      "std_time_ms": 0.001650137288112687,
+      "total_time_ms": 1.7209071666002274,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.25,
+      "total_memory_mb": 5.0
+    },
+    "down.2.downsample.conv": {
+      "mean_time_ms": 0.08302293717861176,
+      "std_time_ms": 0.0025616193853673238,
+      "total_time_ms": 1.660458743572235,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "down.3.block.0.norm1": {
+      "mean_time_ms": 0.0646655447781086,
+      "std_time_ms": 0.002344938084188579,
+      "total_time_ms": 1.293310895562172,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "down.3.block.0.conv1": {
+      "mean_time_ms": 0.08388739079236984,
+      "std_time_ms": 0.0031922115655165805,
+      "total_time_ms": 1.6777478158473969,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "down.3.block.0.temb_proj": {
+      "mean_time_ms": 0.05064001306891441,
+      "std_time_ms": 0.0029187277001617557,
+      "total_time_ms": 1.0128002613782883,
+      "num_calls": 20,
+      "layer_type": "Linear",
+      "mean_memory_mb": 0.00390625,
+      "total_memory_mb": 0.078125
+    },
+    "down.3.block.0.norm2": {
+      "mean_time_ms": 0.06335945799946785,
+      "std_time_ms": 0.00329877239235839,
+      "total_time_ms": 1.267189159989357,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "down.3.block.0.dropout": {
+      "mean_time_ms": 0.029608793556690216,
+      "std_time_ms": 0.05453890990645499,
+      "total_time_ms": 0.5921758711338043,
+      "num_calls": 20,
+      "layer_type": "Dropout",
+      "mean_memory_mb": 0.0,
+      "total_memory_mb": 0.0
+    },
+    "down.3.block.0.conv2": {
+      "mean_time_ms": 0.08741514757275581,
+      "std_time_ms": 0.00330009516198735,
+      "total_time_ms": 1.7483029514551163,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "down.3.block.1.norm1": {
+      "mean_time_ms": 0.06295721977949142,
+      "std_time_ms": 0.0028850159446530406,
+      "total_time_ms": 1.2591443955898285,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "down.3.block.1.conv1": {
+      "mean_time_ms": 0.08325716480612755,
+      "std_time_ms": 0.003143208213145731,
+      "total_time_ms": 1.665143296122551,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "down.3.block.1.temb_proj": {
+      "mean_time_ms": 0.06182380020618439,
+      "std_time_ms": 0.051152660275300126,
+      "total_time_ms": 1.2364760041236877,
+      "num_calls": 20,
+      "layer_type": "Linear",
+      "mean_memory_mb": 0.00390625,
+      "total_memory_mb": 0.078125
+    },
+    "down.3.block.1.norm2": {
+      "mean_time_ms": 0.06259726360440254,
+      "std_time_ms": 0.002482083326667975,
+      "total_time_ms": 1.2519452720880508,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "down.3.block.1.dropout": {
+      "mean_time_ms": 0.0169266015291214,
+      "std_time_ms": 0.0006099815634043307,
+      "total_time_ms": 0.338532030582428,
+      "num_calls": 20,
+      "layer_type": "Dropout",
+      "mean_memory_mb": 0.0,
+      "total_memory_mb": 0.0
+    },
+    "down.3.block.1.conv2": {
+      "mean_time_ms": 0.08693942800164223,
+      "std_time_ms": 0.00407721922343946,
+      "total_time_ms": 1.7387885600328445,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "mid.block_1.norm1": {
+      "mean_time_ms": 0.06343647837638855,
+      "std_time_ms": 0.00452446182584008,
+      "total_time_ms": 1.268729567527771,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "mid.block_1.conv1": {
+      "mean_time_ms": 0.083946343511343,
+      "std_time_ms": 0.0028849677435564144,
+      "total_time_ms": 1.67892687022686,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "mid.block_1.temb_proj": {
+      "mean_time_ms": 0.050209835171699524,
+      "std_time_ms": 0.0031203487524393077,
+      "total_time_ms": 1.0041967034339905,
+      "num_calls": 20,
+      "layer_type": "Linear",
+      "mean_memory_mb": 0.00390625,
+      "total_memory_mb": 0.078125
+    },
+    "mid.block_1.norm2": {
+      "mean_time_ms": 0.07583172991871834,
+      "std_time_ms": 0.058617336702285146,
+      "total_time_ms": 1.5166345983743668,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "mid.block_1.dropout": {
+      "mean_time_ms": 0.016926508396863937,
+      "std_time_ms": 0.0006296336498654929,
+      "total_time_ms": 0.33853016793727875,
+      "num_calls": 20,
+      "layer_type": "Dropout",
+      "mean_memory_mb": 0.0,
+      "total_memory_mb": 0.0
+    },
+    "mid.block_1.conv2": {
+      "mean_time_ms": 0.08646538481116295,
+      "std_time_ms": 0.0025220989032117276,
+      "total_time_ms": 1.729307696223259,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "mid.attn_1.norm": {
+      "mean_time_ms": 0.06147371605038643,
+      "std_time_ms": 0.0020895543538459603,
+      "total_time_ms": 1.2294743210077286,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "mid.attn_1.q": {
+      "mean_time_ms": 0.07195165380835533,
+      "std_time_ms": 0.0031376106257255654,
+      "total_time_ms": 1.4390330761671066,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "mid.attn_1.k": {
+      "mean_time_ms": 0.06573619320988655,
+      "std_time_ms": 0.0021479560193445983,
+      "total_time_ms": 1.314723864197731,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "mid.attn_1.v": {
+      "mean_time_ms": 0.06638988852500916,
+      "std_time_ms": 0.0034152126615790593,
+      "total_time_ms": 1.327797770500183,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "mid.attn_1.proj_out": {
+      "mean_time_ms": 0.07025934755802155,
+      "std_time_ms": 0.003067687758710558,
+      "total_time_ms": 1.405186951160431,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "mid.block_2.norm1": {
+      "mean_time_ms": 0.06303638219833374,
+      "std_time_ms": 0.0023992652128752403,
+      "total_time_ms": 1.2607276439666748,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "mid.block_2.conv1": {
+      "mean_time_ms": 0.08466755971312523,
+      "std_time_ms": 0.0024191078669857998,
+      "total_time_ms": 1.6933511942625046,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "mid.block_2.temb_proj": {
+      "mean_time_ms": 0.050187576562166214,
+      "std_time_ms": 0.0025569506232392012,
+      "total_time_ms": 1.0037515312433243,
+      "num_calls": 20,
+      "layer_type": "Linear",
+      "mean_memory_mb": 0.00390625,
+      "total_memory_mb": 0.078125
+    },
+    "mid.block_2.norm2": {
+      "mean_time_ms": 0.06315615028142929,
+      "std_time_ms": 0.003262081676365523,
+      "total_time_ms": 1.2631230056285858,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "mid.block_2.dropout": {
+      "mean_time_ms": 0.01771906390786171,
+      "std_time_ms": 0.0018355924510751302,
+      "total_time_ms": 0.3543812781572342,
+      "num_calls": 20,
+      "layer_type": "Dropout",
+      "mean_memory_mb": 0.0,
+      "total_memory_mb": 0.0
+    },
+    "mid.block_2.conv2": {
+      "mean_time_ms": 0.08743926882743835,
+      "std_time_ms": 0.004367584442363825,
+      "total_time_ms": 1.748785376548767,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "up.3.block.0.norm1": {
+      "mean_time_ms": 0.06334930658340454,
+      "std_time_ms": 0.0036308056712410016,
+      "total_time_ms": 1.2669861316680908,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 0.125,
+      "total_memory_mb": 2.5
+    },
+    "up.3.block.0.conv1": {
+      "mean_time_ms": 0.08519990369677544,
+      "std_time_ms": 0.002615916399344089,
+      "total_time_ms": 1.7039980739355087,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "up.3.block.0.temb_proj": {
+      "mean_time_ms": 0.06402693688869476,
+      "std_time_ms": 0.058108598293043066,
+      "total_time_ms": 1.2805387377738953,
+      "num_calls": 20,
+      "layer_type": "Linear",
+      "mean_memory_mb": 0.00390625,
+      "total_memory_mb": 0.078125
+    },
+    "up.3.block.0.norm2": {
+      "mean_time_ms": 0.062246061861515045,
+      "std_time_ms": 0.0012434081938756778,
+      "total_time_ms": 1.244921237230301,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "up.3.block.0.dropout": {
+      "mean_time_ms": 0.01705717295408249,
+      "std_time_ms": 0.000500086575891159,
+      "total_time_ms": 0.3411434590816498,
+      "num_calls": 20,
+      "layer_type": "Dropout",
+      "mean_memory_mb": 0.0,
+      "total_memory_mb": 0.0
+    },
+    "up.3.block.0.conv2": {
+      "mean_time_ms": 0.08713416755199432,
+      "std_time_ms": 0.0036699802641114894,
+      "total_time_ms": 1.7426833510398865,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "up.3.block.0.nin_shortcut": {
+      "mean_time_ms": 0.07178680971264839,
+      "std_time_ms": 0.003797861194311511,
+      "total_time_ms": 1.4357361942529678,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "up.3.block.1.norm1": {
+      "mean_time_ms": 0.077031459659338,
+      "std_time_ms": 0.05441394774458034,
+      "total_time_ms": 1.54062919318676,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 0.125,
+      "total_memory_mb": 2.5
+    },
+    "up.3.block.1.conv1": {
+      "mean_time_ms": 0.08585359901189804,
+      "std_time_ms": 0.0035908254204453554,
+      "total_time_ms": 1.7170719802379608,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "up.3.block.1.temb_proj": {
+      "mean_time_ms": 0.06478223949670792,
+      "std_time_ms": 0.05788688258135135,
+      "total_time_ms": 1.2956447899341583,
+      "num_calls": 20,
+      "layer_type": "Linear",
+      "mean_memory_mb": 0.00390625,
+      "total_memory_mb": 0.078125
+    },
+    "up.3.block.1.norm2": {
+      "mean_time_ms": 0.06320029497146606,
+      "std_time_ms": 0.0030791516144574654,
+      "total_time_ms": 1.2640058994293213,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "up.3.block.1.dropout": {
+      "mean_time_ms": 0.017241016030311584,
+      "std_time_ms": 0.0006359455168975924,
+      "total_time_ms": 0.3448203206062317,
+      "num_calls": 20,
+      "layer_type": "Dropout",
+      "mean_memory_mb": 0.0,
+      "total_memory_mb": 0.0
+    },
+    "up.3.block.1.conv2": {
+      "mean_time_ms": 0.08617602288722992,
+      "std_time_ms": 0.002254528591747068,
+      "total_time_ms": 1.7235204577445984,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "up.3.block.1.nin_shortcut": {
+      "mean_time_ms": 0.07033869624137878,
+      "std_time_ms": 0.0023289970476406364,
+      "total_time_ms": 1.4067739248275757,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "up.3.block.2.norm1": {
+      "mean_time_ms": 0.06373338401317596,
+      "std_time_ms": 0.0024073502412334602,
+      "total_time_ms": 1.2746676802635193,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 0.125,
+      "total_memory_mb": 2.5
+    },
+    "up.3.block.2.conv1": {
+      "mean_time_ms": 0.08568400517106056,
+      "std_time_ms": 0.0033610508059760116,
+      "total_time_ms": 1.7136801034212112,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "up.3.block.2.temb_proj": {
+      "mean_time_ms": 0.05022836849093437,
+      "std_time_ms": 0.002246239329129576,
+      "total_time_ms": 1.0045673698186874,
+      "num_calls": 20,
+      "layer_type": "Linear",
+      "mean_memory_mb": 0.00390625,
+      "total_memory_mb": 0.078125
+    },
+    "up.3.block.2.norm2": {
+      "mean_time_ms": 0.06261644884943962,
+      "std_time_ms": 0.0026620450775855335,
+      "total_time_ms": 1.2523289769887924,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "up.3.block.2.dropout": {
+      "mean_time_ms": 0.01704813912510872,
+      "std_time_ms": 0.0007269010043139918,
+      "total_time_ms": 0.3409627825021744,
+      "num_calls": 20,
+      "layer_type": "Dropout",
+      "mean_memory_mb": 0.0,
+      "total_memory_mb": 0.0
+    },
+    "up.3.block.2.conv2": {
+      "mean_time_ms": 0.08607730269432068,
+      "std_time_ms": 0.002256456444679308,
+      "total_time_ms": 1.7215460538864136,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "up.3.block.2.nin_shortcut": {
+      "mean_time_ms": 0.07058335468173027,
+      "std_time_ms": 0.002052055565954417,
+      "total_time_ms": 1.4116670936346054,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.0625,
+      "total_memory_mb": 1.25
+    },
+    "up.3.upsample.conv": {
+      "mean_time_ms": 0.08294330909848213,
+      "std_time_ms": 0.003996348652671346,
+      "total_time_ms": 1.6588661819696426,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.25,
+      "total_memory_mb": 5.0
+    },
+    "up.2.block.0.norm1": {
+      "mean_time_ms": 0.06405878812074661,
+      "std_time_ms": 0.005092190461118785,
+      "total_time_ms": 1.2811757624149323,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 0.5,
+      "total_memory_mb": 10.0
+    },
+    "up.2.block.0.conv1": {
+      "mean_time_ms": 0.0840512104332447,
+      "std_time_ms": 0.001985955915875653,
+      "total_time_ms": 1.681024208664894,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.25,
+      "total_memory_mb": 5.0
+    },
+    "up.2.block.0.temb_proj": {
+      "mean_time_ms": 0.05148928612470627,
+      "std_time_ms": 0.0028256309662566424,
+      "total_time_ms": 1.0297857224941254,
+      "num_calls": 20,
+      "layer_type": "Linear",
+      "mean_memory_mb": 0.00390625,
+      "total_memory_mb": 0.078125
+    },
+    "up.2.block.0.norm2": {
+      "mean_time_ms": 0.06288988515734673,
+      "std_time_ms": 0.004892296677952819,
+      "total_time_ms": 1.2577977031469345,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 0.25,
+      "total_memory_mb": 5.0
+    },
+    "up.2.block.0.dropout": {
+      "mean_time_ms": 0.01703733578324318,
+      "std_time_ms": 0.000584687331197606,
+      "total_time_ms": 0.3407467156648636,
+      "num_calls": 20,
+      "layer_type": "Dropout",
+      "mean_memory_mb": 0.0,
+      "total_memory_mb": 0.0
+    },
+    "up.2.block.0.conv2": {
+      "mean_time_ms": 0.08700480684638023,
+      "std_time_ms": 0.002584547524532268,
+      "total_time_ms": 1.7400961369276047,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.25,
+      "total_memory_mb": 5.0
+    },
+    "up.2.block.0.nin_shortcut": {
+      "mean_time_ms": 0.0709150917828083,
+      "std_time_ms": 0.002944366730970838,
+      "total_time_ms": 1.418301835656166,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.25,
+      "total_memory_mb": 5.0
+    },
+    "up.2.block.1.norm1": {
+      "mean_time_ms": 0.06255367770791054,
+      "std_time_ms": 0.002073727011512078,
+      "total_time_ms": 1.2510735541582108,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 0.5,
+      "total_memory_mb": 10.0
+    },
+    "up.2.block.1.conv1": {
+      "mean_time_ms": 0.08523641154170036,
+      "std_time_ms": 0.003101528883956901,
+      "total_time_ms": 1.7047282308340073,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.25,
+      "total_memory_mb": 5.0
+    },
+    "up.2.block.1.temb_proj": {
+      "mean_time_ms": 0.051851943135261536,
+      "std_time_ms": 0.003631425164252646,
+      "total_time_ms": 1.0370388627052307,
+      "num_calls": 20,
+      "layer_type": "Linear",
+      "mean_memory_mb": 0.00390625,
+      "total_memory_mb": 0.078125
+    },
+    "up.2.block.1.norm2": {
+      "mean_time_ms": 0.06308583542704582,
+      "std_time_ms": 0.004079902554115916,
+      "total_time_ms": 1.2617167085409164,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 0.25,
+      "total_memory_mb": 5.0
+    },
+    "up.2.block.1.dropout": {
+      "mean_time_ms": 0.01724185422062874,
+      "std_time_ms": 0.000791011749361561,
+      "total_time_ms": 0.34483708441257477,
+      "num_calls": 20,
+      "layer_type": "Dropout",
+      "mean_memory_mb": 0.0,
+      "total_memory_mb": 0.0
+    },
+    "up.2.block.1.conv2": {
+      "mean_time_ms": 0.0858343206346035,
+      "std_time_ms": 0.0018722745786197295,
+      "total_time_ms": 1.71668641269207,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.25,
+      "total_memory_mb": 5.0
+    },
+    "up.2.block.1.nin_shortcut": {
+      "mean_time_ms": 0.07082782685756683,
+      "std_time_ms": 0.002992124979778353,
+      "total_time_ms": 1.4165565371513367,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.25,
+      "total_memory_mb": 5.0
+    },
+    "up.2.block.2.norm1": {
+      "mean_time_ms": 0.06817551329731941,
+      "std_time_ms": 0.023443781144217225,
+      "total_time_ms": 1.3635102659463882,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 0.5,
+      "total_memory_mb": 10.0
+    },
+    "up.2.block.2.conv1": {
+      "mean_time_ms": 0.08502937853336334,
+      "std_time_ms": 0.0029521858893829856,
+      "total_time_ms": 1.7005875706672668,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.25,
+      "total_memory_mb": 5.0
+    },
+    "up.2.block.2.temb_proj": {
+      "mean_time_ms": 0.05030650645494461,
+      "std_time_ms": 0.002099113477534389,
+      "total_time_ms": 1.0061301290988922,
+      "num_calls": 20,
+      "layer_type": "Linear",
+      "mean_memory_mb": 0.00390625,
+      "total_memory_mb": 0.078125
+    },
+    "up.2.block.2.norm2": {
+      "mean_time_ms": 0.06188955157995224,
+      "std_time_ms": 0.002602764591626682,
+      "total_time_ms": 1.2377910315990448,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 0.25,
+      "total_memory_mb": 5.0
+    },
+    "up.2.block.2.dropout": {
+      "mean_time_ms": 0.01687910407781601,
+      "std_time_ms": 0.0005551900943442213,
+      "total_time_ms": 0.3375820815563202,
+      "num_calls": 20,
+      "layer_type": "Dropout",
+      "mean_memory_mb": 0.0,
+      "total_memory_mb": 0.0
+    },
+    "up.2.block.2.conv2": {
+      "mean_time_ms": 0.08691120892763138,
+      "std_time_ms": 0.003010589666978103,
+      "total_time_ms": 1.7382241785526276,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.25,
+      "total_memory_mb": 5.0
+    },
+    "up.2.block.2.nin_shortcut": {
+      "mean_time_ms": 0.0714518129825592,
+      "std_time_ms": 0.003471835623691188,
+      "total_time_ms": 1.429036259651184,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.25,
+      "total_memory_mb": 5.0
+    },
+    "up.2.upsample.conv": {
+      "mean_time_ms": 0.08235089480876923,
+      "std_time_ms": 0.000963687599037038,
+      "total_time_ms": 1.6470178961753845,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "up.1.block.0.norm1": {
+      "mean_time_ms": 0.06406307220458984,
+      "std_time_ms": 0.00292907345419385,
+      "total_time_ms": 1.2812614440917969,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    "up.1.block.0.conv1": {
+      "mean_time_ms": 0.12182332575321198,
+      "std_time_ms": 0.0018517646170821969,
+      "total_time_ms": 2.4364665150642395,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "up.1.block.0.temb_proj": {
+      "mean_time_ms": 0.050280243158340454,
+      "std_time_ms": 0.0013156072475568195,
+      "total_time_ms": 1.005604863166809,
+      "num_calls": 20,
+      "layer_type": "Linear",
+      "mean_memory_mb": 0.00390625,
+      "total_memory_mb": 0.078125
+    },
+    "up.1.block.0.norm2": {
+      "mean_time_ms": 0.06274627521634102,
+      "std_time_ms": 0.002825546082274938,
+      "total_time_ms": 1.2549255043268204,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "up.1.block.0.dropout": {
+      "mean_time_ms": 0.02904050052165985,
+      "std_time_ms": 0.05131787048003626,
+      "total_time_ms": 0.580810010433197,
+      "num_calls": 20,
+      "layer_type": "Dropout",
+      "mean_memory_mb": 0.0,
+      "total_memory_mb": 0.0
+    },
+    "up.1.block.0.conv2": {
+      "mean_time_ms": 0.08539417758584023,
+      "std_time_ms": 0.0006910866033781683,
+      "total_time_ms": 1.7078835517168045,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "up.1.block.0.nin_shortcut": {
+      "mean_time_ms": 0.06977589800953865,
+      "std_time_ms": 0.0014236298470158878,
+      "total_time_ms": 1.395517960190773,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "up.1.attn.0.norm": {
+      "mean_time_ms": 0.06271377205848694,
+      "std_time_ms": 0.0027935739080720283,
+      "total_time_ms": 1.2542754411697388,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "up.1.attn.0.q": {
+      "mean_time_ms": 0.06989585235714912,
+      "std_time_ms": 0.0012519976167768248,
+      "total_time_ms": 1.3979170471429825,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "up.1.attn.0.k": {
+      "mean_time_ms": 0.06630746647715569,
+      "std_time_ms": 0.002787587676869521,
+      "total_time_ms": 1.3261493295431137,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "up.1.attn.0.v": {
+      "mean_time_ms": 0.0651688314974308,
+      "std_time_ms": 0.002716638473011359,
+      "total_time_ms": 1.303376629948616,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "up.1.attn.0.proj_out": {
+      "mean_time_ms": 0.07039075717329979,
+      "std_time_ms": 0.002729455202486836,
+      "total_time_ms": 1.4078151434659958,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "up.1.block.1.norm1": {
+      "mean_time_ms": 0.06482740864157677,
+      "std_time_ms": 0.003771850194224974,
+      "total_time_ms": 1.2965481728315353,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    "up.1.block.1.conv1": {
+      "mean_time_ms": 0.12260321527719498,
+      "std_time_ms": 0.0014381092135324048,
+      "total_time_ms": 2.4520643055438995,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "up.1.block.1.temb_proj": {
+      "mean_time_ms": 0.051140040159225464,
+      "std_time_ms": 0.0022025604753304917,
+      "total_time_ms": 1.0228008031845093,
+      "num_calls": 20,
+      "layer_type": "Linear",
+      "mean_memory_mb": 0.00390625,
+      "total_memory_mb": 0.078125
+    },
+    "up.1.block.1.norm2": {
+      "mean_time_ms": 0.06226925179362297,
+      "std_time_ms": 0.0022624647866237024,
+      "total_time_ms": 1.2453850358724594,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "up.1.block.1.dropout": {
+      "mean_time_ms": 0.018166471272706985,
+      "std_time_ms": 0.0016772511405709436,
+      "total_time_ms": 0.3633294254541397,
+      "num_calls": 20,
+      "layer_type": "Dropout",
+      "mean_memory_mb": 0.0,
+      "total_memory_mb": 0.0
+    },
+    "up.1.block.1.conv2": {
+      "mean_time_ms": 0.08614109829068184,
+      "std_time_ms": 0.0023626398785316473,
+      "total_time_ms": 1.7228219658136368,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "up.1.block.1.nin_shortcut": {
+      "mean_time_ms": 0.06980635225772858,
+      "std_time_ms": 0.0012692801265538215,
+      "total_time_ms": 1.3961270451545715,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "up.1.attn.1.norm": {
+      "mean_time_ms": 0.06267046555876732,
+      "std_time_ms": 0.0026066104371297843,
+      "total_time_ms": 1.2534093111753464,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "up.1.attn.1.q": {
+      "mean_time_ms": 0.07060915231704712,
+      "std_time_ms": 0.0024583642717553,
+      "total_time_ms": 1.4121830463409424,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "up.1.attn.1.k": {
+      "mean_time_ms": 0.06552888080477715,
+      "std_time_ms": 0.0015552052440747002,
+      "total_time_ms": 1.310577616095543,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "up.1.attn.1.v": {
+      "mean_time_ms": 0.06560944020748138,
+      "std_time_ms": 0.0032750826468977206,
+      "total_time_ms": 1.3121888041496277,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "up.1.attn.1.proj_out": {
+      "mean_time_ms": 0.08404366672039032,
+      "std_time_ms": 0.059056243125148844,
+      "total_time_ms": 1.6808733344078064,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "up.1.block.2.norm1": {
+      "mean_time_ms": 0.06374558433890343,
+      "std_time_ms": 0.0024994376619116854,
+      "total_time_ms": 1.2749116867780685,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 1.5,
+      "total_memory_mb": 30.0
+    },
+    "up.1.block.2.conv1": {
+      "mean_time_ms": 0.10105045512318611,
+      "std_time_ms": 0.002326159715067868,
+      "total_time_ms": 2.0210091024637222,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "up.1.block.2.temb_proj": {
+      "mean_time_ms": 0.050534214824438095,
+      "std_time_ms": 0.00284118810157146,
+      "total_time_ms": 1.010684296488762,
+      "num_calls": 20,
+      "layer_type": "Linear",
+      "mean_memory_mb": 0.00390625,
+      "total_memory_mb": 0.078125
+    },
+    "up.1.block.2.norm2": {
+      "mean_time_ms": 0.06197560578584671,
+      "std_time_ms": 0.0015701162727987962,
+      "total_time_ms": 1.2395121157169342,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "up.1.block.2.dropout": {
+      "mean_time_ms": 0.017323065549135208,
+      "std_time_ms": 0.000473745723470767,
+      "total_time_ms": 0.34646131098270416,
+      "num_calls": 20,
+      "layer_type": "Dropout",
+      "mean_memory_mb": 0.0,
+      "total_memory_mb": 0.0
+    },
+    "up.1.block.2.conv2": {
+      "mean_time_ms": 0.08511161431670189,
+      "std_time_ms": 0.000871538706445702,
+      "total_time_ms": 1.7022322863340378,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "up.1.block.2.nin_shortcut": {
+      "mean_time_ms": 0.06969748064875603,
+      "std_time_ms": 0.0020374267465289434,
+      "total_time_ms": 1.3939496129751205,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "up.1.attn.2.norm": {
+      "mean_time_ms": 0.06242785602807999,
+      "std_time_ms": 0.002906909932623493,
+      "total_time_ms": 1.2485571205615997,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "up.1.attn.2.q": {
+      "mean_time_ms": 0.0699981115758419,
+      "std_time_ms": 0.0026502615905730415,
+      "total_time_ms": 1.399962231516838,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "up.1.attn.2.k": {
+      "mean_time_ms": 0.06567379459738731,
+      "std_time_ms": 0.0017499968284620507,
+      "total_time_ms": 1.3134758919477463,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "up.1.attn.2.v": {
+      "mean_time_ms": 0.06494587287306786,
+      "std_time_ms": 0.0030362568003900426,
+      "total_time_ms": 1.2989174574613571,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "up.1.attn.2.proj_out": {
+      "mean_time_ms": 0.0705944374203682,
+      "std_time_ms": 0.0035517259843317124,
+      "total_time_ms": 1.411888748407364,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    "up.1.upsample.conv": {
+      "mean_time_ms": 0.12911008670926094,
+      "std_time_ms": 0.002493706131062542,
+      "total_time_ms": 2.582201734185219,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 4.0,
+      "total_memory_mb": 80.0
+    },
+    "up.0.block.0.norm1": {
+      "mean_time_ms": 0.06502736359834671,
+      "std_time_ms": 0.002977247723982059,
+      "total_time_ms": 1.3005472719669342,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 6.0,
+      "total_memory_mb": 120.0
+    },
+    "up.0.block.0.conv1": {
+      "mean_time_ms": 0.13476526364684105,
+      "std_time_ms": 0.0019696064168183303,
+      "total_time_ms": 2.695305272936821,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    "up.0.block.0.temb_proj": {
+      "mean_time_ms": 0.05030278116464615,
+      "std_time_ms": 0.0008807489373657772,
+      "total_time_ms": 1.006055623292923,
+      "num_calls": 20,
+      "layer_type": "Linear",
+      "mean_memory_mb": 0.001953125,
+      "total_memory_mb": 0.0390625
+    },
+    "up.0.block.0.norm2": {
+      "mean_time_ms": 0.06252191960811615,
+      "std_time_ms": 0.0017994750166156746,
+      "total_time_ms": 1.250438392162323,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    "up.0.block.0.dropout": {
+      "mean_time_ms": 0.01761326566338539,
+      "std_time_ms": 0.0004913877049083189,
+      "total_time_ms": 0.3522653132677078,
+      "num_calls": 20,
+      "layer_type": "Dropout",
+      "mean_memory_mb": 0.0,
+      "total_memory_mb": 0.0
+    },
+    "up.0.block.0.conv2": {
+      "mean_time_ms": 0.08925972506403923,
+      "std_time_ms": 0.0008314015211540719,
+      "total_time_ms": 1.7851945012807846,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    "up.0.block.0.nin_shortcut": {
+      "mean_time_ms": 0.0709114596247673,
+      "std_time_ms": 0.0030199905149226316,
+      "total_time_ms": 1.418229192495346,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    "up.0.block.1.norm1": {
+      "mean_time_ms": 0.06304988637566566,
+      "std_time_ms": 0.0034256558760359097,
+      "total_time_ms": 1.2609977275133133,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 4.0,
+      "total_memory_mb": 80.0
+    },
+    "up.0.block.1.conv1": {
+      "mean_time_ms": 0.12528561055660248,
+      "std_time_ms": 0.0026415902955423654,
+      "total_time_ms": 2.5057122111320496,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    "up.0.block.1.temb_proj": {
+      "mean_time_ms": 0.05097631365060806,
+      "std_time_ms": 0.00317830582263803,
+      "total_time_ms": 1.0195262730121613,
+      "num_calls": 20,
+      "layer_type": "Linear",
+      "mean_memory_mb": 0.001953125,
+      "total_memory_mb": 0.0390625
+    },
+    "up.0.block.1.norm2": {
+      "mean_time_ms": 0.06300648674368858,
+      "std_time_ms": 0.002890941101030942,
+      "total_time_ms": 1.2601297348737717,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    "up.0.block.1.dropout": {
+      "mean_time_ms": 0.029415637254714966,
+      "std_time_ms": 0.053561996499811214,
+      "total_time_ms": 0.5883127450942993,
+      "num_calls": 20,
+      "layer_type": "Dropout",
+      "mean_memory_mb": 0.0,
+      "total_memory_mb": 0.0
+    },
+    "up.0.block.1.conv2": {
+      "mean_time_ms": 0.08885553106665611,
+      "std_time_ms": 0.0019287641930459934,
+      "total_time_ms": 1.7771106213331223,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    "up.0.block.1.nin_shortcut": {
+      "mean_time_ms": 0.0701339915394783,
+      "std_time_ms": 0.002002105180628741,
+      "total_time_ms": 1.402679830789566,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    "up.0.block.2.norm1": {
+      "mean_time_ms": 0.06297007203102112,
+      "std_time_ms": 0.0019776055040050273,
+      "total_time_ms": 1.2594014406204224,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 4.0,
+      "total_memory_mb": 80.0
+    },
+    "up.0.block.2.conv1": {
+      "mean_time_ms": 0.12515978887677193,
+      "std_time_ms": 0.0019887802767786945,
+      "total_time_ms": 2.5031957775354385,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    "up.0.block.2.temb_proj": {
+      "mean_time_ms": 0.05152607336640358,
+      "std_time_ms": 0.005489909081805164,
+      "total_time_ms": 1.0305214673280716,
+      "num_calls": 20,
+      "layer_type": "Linear",
+      "mean_memory_mb": 0.001953125,
+      "total_memory_mb": 0.0390625
+    },
+    "up.0.block.2.norm2": {
+      "mean_time_ms": 0.061675626784563065,
+      "std_time_ms": 0.0009393850186093706,
+      "total_time_ms": 1.2335125356912613,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    "up.0.block.2.dropout": {
+      "mean_time_ms": 0.01706983894109726,
+      "std_time_ms": 0.0006375443085824702,
+      "total_time_ms": 0.3413967788219452,
+      "num_calls": 20,
+      "layer_type": "Dropout",
+      "mean_memory_mb": 0.0,
+      "total_memory_mb": 0.0
+    },
+    "up.0.block.2.conv2": {
+      "mean_time_ms": 0.0894973985850811,
+      "std_time_ms": 0.0028518421783731854,
+      "total_time_ms": 1.789947971701622,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    "up.0.block.2.nin_shortcut": {
+      "mean_time_ms": 0.08177822455763817,
+      "std_time_ms": 0.052760958015586785,
+      "total_time_ms": 1.6355644911527634,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    "norm_out": {
+      "mean_time_ms": 0.06307996809482574,
+      "std_time_ms": 0.002690724897521149,
+      "total_time_ms": 1.261599361896515,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    "conv_out": {
+      "mean_time_ms": 0.10042740032076836,
+      "std_time_ms": 0.0030854215375868996,
+      "total_time_ms": 2.008548006415367,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.046875,
+      "total_memory_mb": 0.9375
+    }
+  },
+  "operation_type_summary": {
+    "Linear": {
+      "time": 24.97689425945282,
+      "count": 24,
+      "params": 2889600
+    },
+    "Conv2d": {
+      "time": 145.90360037982464,
+      "count": 89,
+      "params": 32828291
+    },
+    "GroupNorm": {
+      "time": 64.86268527805805,
+      "count": 51,
+      "params": 0
+    },
+    "Dropout": {
+      "time": 8.322661742568016,
+      "count": 22,
+      "params": 0
+    }
+  },
+  "top_10_slowest_layers": [
+    {
+      "name": "up.0.block.0.conv1",
+      "mean_time_ms": 0.13476526364684105,
+      "std_time_ms": 0.0019696064168183303,
+      "total_time_ms": 2.695305272936821,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    {
+      "name": "up.1.upsample.conv",
+      "mean_time_ms": 0.12911008670926094,
+      "std_time_ms": 0.002493706131062542,
+      "total_time_ms": 2.582201734185219,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 4.0,
+      "total_memory_mb": 80.0
+    },
+    {
+      "name": "up.0.block.1.conv1",
+      "mean_time_ms": 0.12528561055660248,
+      "std_time_ms": 0.0026415902955423654,
+      "total_time_ms": 2.5057122111320496,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    {
+      "name": "up.0.block.2.conv1",
+      "mean_time_ms": 0.12515978887677193,
+      "std_time_ms": 0.0019887802767786945,
+      "total_time_ms": 2.5031957775354385,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    {
+      "name": "up.1.block.1.conv1",
+      "mean_time_ms": 0.12260321527719498,
+      "std_time_ms": 0.0014381092135324048,
+      "total_time_ms": 2.4520643055438995,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    {
+      "name": "up.1.block.0.conv1",
+      "mean_time_ms": 0.12182332575321198,
+      "std_time_ms": 0.0018517646170821969,
+      "total_time_ms": 2.4364665150642395,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    {
+      "name": "up.1.block.2.conv1",
+      "mean_time_ms": 0.10105045512318611,
+      "std_time_ms": 0.002326159715067868,
+      "total_time_ms": 2.0210091024637222,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 1.0,
+      "total_memory_mb": 20.0
+    },
+    {
+      "name": "conv_out",
+      "mean_time_ms": 0.10042740032076836,
+      "std_time_ms": 0.0030854215375868996,
+      "total_time_ms": 2.008548006415367,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 0.046875,
+      "total_memory_mb": 0.9375
+    },
+    {
+      "name": "up.0.block.2.conv2",
+      "mean_time_ms": 0.0894973985850811,
+      "std_time_ms": 0.0028518421783731854,
+      "total_time_ms": 1.789947971701622,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    {
+      "name": "up.0.block.0.conv2",
+      "mean_time_ms": 0.08925972506403923,
+      "std_time_ms": 0.0008314015211540719,
+      "total_time_ms": 1.7851945012807846,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    }
+  ],
+  "top_10_memory_layers": [
+    {
+      "name": "up.0.block.0.norm1",
+      "mean_time_ms": 0.06502736359834671,
+      "std_time_ms": 0.002977247723982059,
+      "total_time_ms": 1.3005472719669342,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 6.0,
+      "total_memory_mb": 120.0
+    },
+    {
+      "name": "up.1.upsample.conv",
+      "mean_time_ms": 0.12911008670926094,
+      "std_time_ms": 0.002493706131062542,
+      "total_time_ms": 2.582201734185219,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 4.0,
+      "total_memory_mb": 80.0
+    },
+    {
+      "name": "up.0.block.1.norm1",
+      "mean_time_ms": 0.06304988637566566,
+      "std_time_ms": 0.0034256558760359097,
+      "total_time_ms": 1.2609977275133133,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 4.0,
+      "total_memory_mb": 80.0
+    },
+    {
+      "name": "up.0.block.2.norm1",
+      "mean_time_ms": 0.06297007203102112,
+      "std_time_ms": 0.0019776055040050273,
+      "total_time_ms": 1.2594014406204224,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 4.0,
+      "total_memory_mb": 80.0
+    },
+    {
+      "name": "conv_in",
+      "mean_time_ms": 0.06825905293226242,
+      "std_time_ms": 0.0028454202901174773,
+      "total_time_ms": 1.3651810586452484,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    {
+      "name": "down.0.block.0.norm1",
+      "mean_time_ms": 0.06492733955383301,
+      "std_time_ms": 0.0027272186217803538,
+      "total_time_ms": 1.2985467910766602,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    {
+      "name": "down.0.block.0.conv1",
+      "mean_time_ms": 0.087741669267416,
+      "std_time_ms": 0.0029496019858569573,
+      "total_time_ms": 1.75483338534832,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    {
+      "name": "down.0.block.0.norm2",
+      "mean_time_ms": 0.06278809159994125,
+      "std_time_ms": 0.0022603743321251606,
+      "total_time_ms": 1.255761831998825,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    {
+      "name": "down.0.block.0.conv2",
+      "mean_time_ms": 0.08794181048870087,
+      "std_time_ms": 0.001669938861772618,
+      "total_time_ms": 1.7588362097740173,
+      "num_calls": 20,
+      "layer_type": "Conv2d",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    },
+    {
+      "name": "down.0.block.1.norm1",
+      "mean_time_ms": 0.06181234493851662,
+      "std_time_ms": 0.0018841379712862397,
+      "total_time_ms": 1.2362468987703323,
+      "num_calls": 20,
+      "layer_type": "GroupNorm",
+      "mean_memory_mb": 2.0,
+      "total_memory_mb": 40.0
+    }
+  ],
+  "section_summary": {
+    "timestep_embedding": {
+      "time": 1.9426457583904266,
+      "count": 2
+    },
+    "input": {
+      "time": 1.3651810586452484,
+      "count": 1
+    },
+    "downsampling": {
+      "time": 78.80287989974022,
+      "count": 62
+    },
+    "middle": {
+      "time": 21.576661616563797,
+      "count": 17
+    },
+    "upsampling": {
+      "time": 137.10832595825195,
+      "count": 102
+    },
+    "output": {
+      "time": 3.270147368311882,
+      "count": 2
+    }
+  },
+  "total_forward_time": {
+    "mean": 51.74227664247155,
+    "std": 0.4041378185900472,
+    "min": 51.162904128432274,
+    "max": 52.56034806370735,
+    "all_runs": [
+      51.694510504603386,
+      51.45281367003918,
+      51.87784135341644,
+      51.71169154345989,
+      51.78751051425934,
+      51.82629078626633,
+      51.90628953278065,
+      51.261331886053085,
+      51.162904128432274,
+      51.42943188548088,
+      51.2902420014143,
+      51.39317363500595,
+      51.58055201172829,
+      51.32429301738739,
+      51.61680094897747,
+      51.84454098343849,
+      52.4448174983263,
+      52.4615291506052,
+      52.21861973404884,
+      52.56034806370735
+    ]
+  }
+}
