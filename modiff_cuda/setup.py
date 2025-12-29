@@ -24,7 +24,9 @@ setup(
                 'nvcc': [
                     '-O3',
                     '-gencode=arch=compute_80,code=sm_80', # Ampere
+                    '-gencode=arch=compute_89,code=sm_89', # Ada
                     '-gencode=arch=compute_90,code=sm_90', # Hopper
+                    '-gencode=arch=compute_80,code=compute_80', # PTX for JIT
                     '--use_fast_math',
                     '-U__CUDA_NO_HALF_OPERATORS__',
                     '-U__CUDA_NO_HALF_CONVERSIONS__',

@@ -21,6 +21,47 @@ class W8A8MoDiffConv2dCUDA(nn.Module):
         # Weight is [out_channels, in_channels * k * k] for Implicit GEMM
         self.register_buffer('weight', torch.zeros((out_channels, in_channels * self.kernel_size[0] * self.kernel_size[1]), dtype=torch.int8))
         self.register_buffer('weight_scales', torch.zeros((out_channels,), dtype=torch.float32))
+
+    @classmethod
+    def from_float(cls, conv2d, weight_scales=None):
+        """
+        Create a W8A8MoDiffConv2dCUDA from a float nn.Conv2d module.
+        """
+        assert isinstance(conv2d, nn.Conv2d)
+        
+        modiff_conv = cls(
+            conv2d.in_channels,
+            conv2d.out_channels,
+            conv2d.kernel_size[0], # Assuming square kernel
+            stride=conv2d.stride[0],
+            padding=conv2d.padding[0],
+            dilation=conv2d.dilation[0],
+            groups=conv2d.groups,
+            bias=(conv2d.bias is not None)
+        )
+        
+        # Quantize weights
+        # This is a simplified quantization for demonstration. 
+        # Real implementation should use proper calibration/quantization logic.
+        w = conv2d.weight.data
+        if weight_scales is None:
+             # Simple per-channel max
+             weight_scales = w.abs().view(w.shape[0], -1).max(dim=1)[0] / 127.0
+        
+        modiff_conv.weight_scales.copy_(weight_scales)
+        
+        # Quantize weights to int8
+        # Reshape for broadcasting: [Out, In, K, K] / [Out, 1, 1, 1]
+        w_int8 = (w / weight_scales.view(-1, 1, 1, 1)).round().clamp(-128, 127).to(torch.int8)
+        
+        # Rearrange for Implicit GEMM: [Out, In*K*K]
+        # Note: The backend expects specific layout. 
+        # Usually standard Conv2d is [Out, In, K, K].
+        # We need to flatten In, K, K.
+        w_flat = w_int8.view(conv2d.out_channels, -1)
+        modiff_conv.weight.copy_(w_flat)
+        
+        return modiff_conv
         
     def forward(self, x, prev_output=None, input_scale=None, output_layout='NCHW'):
         # x: [N, C, H, W] or [N, H, W, C] if _layout='NHWC'
