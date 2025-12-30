@@ -1,0 +1,195 @@
+// PyTorch C++ interface for CUTLASS INT8 convolution kernel
+#include <torch/extension.h>
+#include <c10/cuda/CUDAStream.h>
+
+// Forward declarations of CUDA functions
+extern "C" {
+cudaError_t conv2d_int8_cutlass(
+    const int8_t* input,
+    const int8_t* weight,
+    int32_t* output,
+    int N, int H, int W, int C,
+    int K, int R, int S,
+    int pad_h, int pad_w,
+    int stride_h, int stride_w,
+    int dilation_h, int dilation_w,
+    cudaStream_t stream
+);
+
+void quantize_input_cutlass(
+    const float* input,
+    int8_t* output,
+    float* scale,
+    int N, int C, int H, int W,
+    cudaStream_t stream
+);
+
+void quantize_weight_cutlass(
+    const float* weight,
+    int8_t* output,
+    const float* scales,
+    int K, int C, int R, int S,
+    cudaStream_t stream
+);
+
+void dequantize_output_cutlass(
+    const int32_t* input,
+    float* output,
+    const float* input_scale,
+    const float* weight_scales,
+    const float* bias,
+    int N, int K, int H, int W,
+    bool has_bias,
+    cudaStream_t stream
+);
+}
+
+// ============================================================================
+// Python-facing functions
+// ============================================================================
+
+// Main INT8 convolution function using CUTLASS
+// Input: FP32 tensor [N, C, H, W] (NCHW format)
+// Weight: INT8 tensor [K, C, R, S] (already quantized, will be permuted to KRSC)
+// Weight scales: FP32 tensor [K] (per-channel scales)
+// Returns: FP32 output tensor [N, K, H_out, W_out]
+torch::Tensor conv2d_int8(
+    torch::Tensor input,           // FP32 [N, C, H, W]
+    torch::Tensor weight_int8,     // INT8 [K, C, R, S]
+    torch::Tensor weight_scales,   // FP32 [K]
+    torch::Tensor bias,            // FP32 [K] or empty
+    int stride_h, int stride_w,
+    int pad_h, int pad_w,
+    int dilation_h = 1, int dilation_w = 1
+) {
+    TORCH_CHECK(input.is_cuda(), "Input must be CUDA tensor");
+    TORCH_CHECK(weight_int8.is_cuda(), "Weight must be CUDA tensor");
+    TORCH_CHECK(input.dtype() == torch::kFloat32, "Input must be FP32");
+    TORCH_CHECK(weight_int8.dtype() == torch::kInt8, "Weight must be INT8");
+    
+    // Get dimensions
+    int N = input.size(0);
+    int C = input.size(1);
+    int H = input.size(2);
+    int W = input.size(3);
+    
+    int K = weight_int8.size(0);
+    int R = weight_int8.size(2);  // kernel height
+    int S = weight_int8.size(3);  // kernel width
+    
+    // Calculate output dimensions
+    int H_out = (H + 2 * pad_h - dilation_h * (R - 1) - 1) / stride_h + 1;
+    int W_out = (W + 2 * pad_w - dilation_w * (S - 1) - 1) / stride_w + 1;
+    
+    cudaStream_t stream = c10::cuda::getCurrentCUDAStream().stream();
+    
+    // Quantize input (NCHW -> NHWC INT8)
+    auto input_int8 = torch::empty({N, H, W, C}, torch::dtype(torch::kInt8).device(input.device()));
+    auto input_scale = torch::empty({1}, torch::dtype(torch::kFloat32).device(input.device()));
+    
+    quantize_input_cutlass(
+        input.contiguous().data_ptr<float>(),
+        input_int8.data_ptr<int8_t>(),
+        input_scale.data_ptr<float>(),
+        N, C, H, W,
+        stream
+    );
+    
+    // Convert weight from KCRS to KRSC format
+    // weight_int8 is [K, C, R, S], need [K, R, S, C]
+    auto weight_krsc = weight_int8.permute({0, 2, 3, 1}).contiguous();
+    
+    // Allocate INT32 output in NHWC format
+    auto output_int32 = torch::empty({N, H_out, W_out, K}, torch::dtype(torch::kInt32).device(input.device()));
+    
+    // Run CUTLASS INT8 convolution
+    cudaError_t status = conv2d_int8_cutlass(
+        input_int8.data_ptr<int8_t>(),
+        weight_krsc.data_ptr<int8_t>(),
+        output_int32.data_ptr<int32_t>(),
+        N, H, W, C,
+        K, R, S,
+        pad_h, pad_w,
+        stride_h, stride_w,
+        dilation_h, dilation_w,
+        stream
+    );
+    
+    // Check if CUTLASS kernel succeeded
+    if (status != cudaSuccess) {
+        // Fallback to FP32 PyTorch conv if CUTLASS fails
+        // (e.g., unsupported problem size)
+        auto weight_fp32 = weight_int8.to(torch::kFloat32) * weight_scales.view({K, 1, 1, 1});
+        return torch::conv2d(input, weight_fp32, bias.numel() > 0 ? bias : torch::Tensor(),
+                            {stride_h, stride_w}, {pad_h, pad_w}, {dilation_h, dilation_w});
+    }
+    
+    // Dequantize output (NHWC INT32 -> NCHW FP32)
+    auto output_fp32 = torch::empty({N, K, H_out, W_out}, torch::dtype(torch::kFloat32).device(input.device()));
+    
+    bool has_bias = bias.numel() > 0;
+    const float* bias_ptr = has_bias ? bias.data_ptr<float>() : nullptr;
+    
+    dequantize_output_cutlass(
+        output_int32.data_ptr<int32_t>(),
+        output_fp32.data_ptr<float>(),
+        input_scale.data_ptr<float>(),
+        weight_scales.data_ptr<float>(),
+        bias_ptr,
+        N, K, H_out, W_out,
+        has_bias,
+        stream
+    );
+    
+    return output_fp32;
+}
+
+// Quantize FP32 tensor to INT8 with per-tensor symmetric quantization
+std::tuple<torch::Tensor, torch::Tensor> quantize_tensor(torch::Tensor input) {
+    TORCH_CHECK(input.is_cuda(), "Input must be CUDA tensor");
+    TORCH_CHECK(input.dtype() == torch::kFloat32, "Input must be FP32");
+    
+    // Find max absolute value
+    auto max_val = input.abs().max();
+    auto scale = max_val / 127.0f;
+    scale = torch::where(scale > 0, scale, torch::ones_like(scale) * 1e-8f);
+    
+    // Quantize
+    auto output = (input / scale).round().clamp(-127, 127).to(torch::kInt8);
+    
+    return std::make_tuple(output, scale);
+}
+
+// Quantize weight tensor with per-channel scales
+std::tuple<torch::Tensor, torch::Tensor> quantize_weight(torch::Tensor weight) {
+    TORCH_CHECK(weight.is_cuda(), "Weight must be CUDA tensor");
+    TORCH_CHECK(weight.dtype() == torch::kFloat32, "Weight must be FP32");
+    TORCH_CHECK(weight.dim() == 4, "Weight must be 4D [K, C, R, S]");
+    
+    int K = weight.size(0);
+    
+    // Per-channel quantization: find max for each output channel
+    auto weight_flat = weight.view({K, -1});
+    auto max_result = weight_flat.abs().max(1);
+    auto max_vals = std::get<0>(max_result);  // [K]
+    auto scales = max_vals / 127.0f;
+    
+    // Avoid division by zero
+    scales = torch::where(scales > 0, scales, torch::ones_like(scales) * 1e-8f);
+    
+    // Quantize
+    auto scales_expanded = scales.view({K, 1, 1, 1});
+    auto weight_q = (weight / scales_expanded).round().clamp(-127, 127).to(torch::kInt8);
+    
+    return std::make_tuple(weight_q, scales);
+}
+
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+    m.def("conv2d_int8", &conv2d_int8, "INT8 Convolution using CUTLASS",
+          py::arg("input"), py::arg("weight_int8"), py::arg("weight_scales"),
+          py::arg("bias"), py::arg("stride_h"), py::arg("stride_w"),
+          py::arg("pad_h"), py::arg("pad_w"),
+          py::arg("dilation_h") = 1, py::arg("dilation_w") = 1);
+    m.def("quantize_tensor", &quantize_tensor, "Quantize FP32 tensor to INT8 (per-tensor)");
+    m.def("quantize_weight", &quantize_weight, "Quantize FP32 weight to INT8 (per-channel)");
+}

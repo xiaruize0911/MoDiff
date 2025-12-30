@@ -40,6 +40,10 @@ class W8A8MoDiffConv2dCUDA(nn.Module):
             bias=(conv2d.bias is not None)
         )
         
+        # Move to the same device as the input conv2d
+        device = conv2d.weight.device
+        modiff_conv = modiff_conv.to(device)
+        
         # Quantize weights
         # This is a simplified quantization for demonstration. 
         # Real implementation should use proper calibration/quantization logic.
@@ -105,11 +109,12 @@ class W8A8MoDiffConv2dCUDA(nn.Module):
                 compute_max
             )
         else:
-            # prev_output handling
+            # prev_output handling - convert to half if needed
+            prev_output_half = prev_output.half() if prev_output.dtype != torch.float16 else prev_output
             if getattr(prev_output, '_layout', 'NCHW') == 'NHWC':
-                prev_output_nhwc = prev_output
+                prev_output_nhwc = prev_output_half
             else:
-                prev_output_nhwc = prev_output.permute(0, 2, 3, 1).contiguous()
+                prev_output_nhwc = prev_output_half.permute(0, 2, 3, 1).contiguous()
                 
             out_nhwc, out_max = modiff_cuda_backend.conv2d_fast_w8a8_accum(
                 input_int8,
@@ -131,7 +136,11 @@ class W8A8MoDiffConv2dCUDA(nn.Module):
         else:
             # Convert back to NCHW using fast kernel
             # Compute max for next layer
-            out_nchw, out_max = modiff_cuda_backend.permute_half_nhwc_nchw(out_nhwc, True)
+            # print(f"Permuting: {out_nhwc.shape}, {out_nhwc.dtype}, {out_nhwc.device}")
+            # Workaround for CUDA error: use PyTorch permute
+            # out_nchw, _ = modiff_cuda_backend.permute_half_nhwc_nchw(out_nhwc, False)
+            out_nchw = out_nhwc.permute(0, 3, 1, 2).contiguous().float()
+            out_max = out_nchw.abs().max()
             
             # Attach next scale to output
             out_nchw.next_scale = out_max / 127.0
