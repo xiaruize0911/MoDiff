@@ -33,10 +33,23 @@ if cutlass_include is None or not os.path.exists(cutlass_include):
 print(f"Using CUTLASS from: {cutlass_include}")
 print(f"Building for architecture: {arch}")
 
+# Common NVCC flags
+nvcc_flags = [
+    '-O3',
+    f'-arch={arch}',
+    '--use_fast_math',
+    '-std=c++17',
+    f'-I{cutlass_include}',
+    '-DCUTLASS_ENABLE_TENSOR_CORE_MMA=1',
+    '--expt-relaxed-constexpr',
+    '-lineinfo',
+]
+
 setup(
     name='modiff_int8',
     version='1.0.0',
     ext_modules=[
+        # Main INT8 CUTLASS kernel
         CUDAExtension(
             name='modiff_int8',
             sources=[
@@ -49,16 +62,37 @@ setup(
             ],
             extra_compile_args={
                 'cxx': ['-O3', '-std=c++17'],
-                'nvcc': [
-                    '-O3',
-                    f'-arch={arch}',
-                    '--use_fast_math',
-                    '-std=c++17',
-                    f'-I{cutlass_include}',
-                    '-DCUTLASS_ENABLE_TENSOR_CORE_MMA=1',
-                    '--expt-relaxed-constexpr',
-                    '-lineinfo',  # For debugging
-                ],
+                'nvcc': nvcc_flags,
+            },
+        ),
+        # Fused MoDiff kernels (quantize+cache, dequant+accumulate)
+        CUDAExtension(
+            name='modiff_fused_ops',
+            sources=[
+                'csrc/fused_modiff_kernels.cu',
+                'csrc/fused_modiff_interface.cpp',
+            ],
+            include_dirs=[
+                os.path.abspath('csrc'),
+            ],
+            extra_compile_args={
+                'cxx': ['-O3', '-std=c++17'],
+                'nvcc': nvcc_flags,
+            },
+        ),
+        # Fused Conv + GroupNorm + SiLU kernels
+        CUDAExtension(
+            name='fused_conv_norm_act',
+            sources=[
+                'csrc/fused_conv_norm_act.cu',
+                'csrc/fused_conv_norm_act_interface.cpp',
+            ],
+            include_dirs=[
+                os.path.abspath('csrc'),
+            ],
+            extra_compile_args={
+                'cxx': ['-O3', '-std=c++17'],
+                'nvcc': nvcc_flags,
             },
         ),
     ],
