@@ -1,289 +1,292 @@
 """
-Benchmark LDM with different precision modes.
+Unified LDM Benchmark with Multiple Precision Modes.
 
-Modes:
-- FP32: Standard FP32 baseline
+Supports:
+- FP32: Standard baseline
+- FP16/BF16: Half precision with autocast
+- INT8: Optimized CUTLASS INT8 with static quantization
 
-- FP16: Half precision with autocast
-- INT8: CUTLASS INT8 with MoDiff modulation
+Usage:
+    python integration/benchmark_ldm.py --mode all --steps 50
+    python integration/benchmark_ldm.py --mode int8 --num_samples 100 --eval_fid
 """
 import argparse
 import os
 import sys
 import time
+import json
 import torch
+import torch.nn as nn
 import numpy as np
 from omegaconf import OmegaConf
-from PIL import Image
 import torchvision.utils as tvu
+from tqdm import tqdm
 
-# Add MoDiff to path
 sys.path.append(os.getcwd())
 
 from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 
-# Optional MoDiff imports
+# INT8 imports
 try:
-    from integration.modiff_layers import (
-        convert_model_to_int8_fused,
+    from integration.int8_optimized import (
+        OptimizedInt8Conv2d,
+        convert_model_to_optimized_int8,
         enable_modiff_mode,
-        reset_modiff_state
+        reset_modiff_state,
+        set_calibrating,
+        get_calibration_config,
+        reset_calibration,
     )
-    HAS_MODIFF = True
+    HAS_INT8 = True
 except ImportError:
-    HAS_MODIFF = False
-    print("MoDiff layers not available")
+    HAS_INT8 = False
+    print("Warning: INT8 not available")
+
+# FID (optional)
+try:
+    from pytorch_fid import fid_score
+    HAS_FID = True
+except ImportError:
+    HAS_FID = False
 
 
-def load_model_from_config(config, ckpt, verbose=False):
-    print(f"Loading model from {ckpt}")
-    pl_sd = torch.load(ckpt, map_location="cpu", weights_only=False)
-    if "state_dict" in pl_sd:
-        sd = pl_sd["state_dict"]
-    else:
-        sd = pl_sd
-    model = instantiate_from_config(config.model)
+def load_model(config_path: str, ckpt_path: str, verbose: bool = False):
+    """Load LDM model from config and checkpoint."""
+    print(f"Loading model from {ckpt_path}")
+    conf = OmegaConf.load(config_path)
+    pl_sd = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    sd = pl_sd.get("state_dict", pl_sd)
+    
+    model = instantiate_from_config(conf.model)
     m, u = model.load_state_dict(sd, strict=False)
-    if len(m) > 0 and verbose:
-        print("missing keys:", m)
-    if len(u) > 0 and verbose:
-        print("unexpected keys:", u)
-    model.cuda()
-    model.eval()
-    return model
+    if verbose and m:
+        print("Missing keys:", m)
+    if verbose and u:
+        print("Unexpected keys:", u)
+    
+    return model.cuda().eval(), conf
 
 
-def benchmark_sampling(sampler, steps, batch_size, shape, warmup=2, iterations=3, 
-                      model=None, use_autocast=False, autocast_dtype=torch.float16):
-    """Run sampling and return average time."""
-    # Warmup
-    for _ in range(warmup):
-        if model is not None and HAS_MODIFF:
-            reset_modiff_state(model.model.diffusion_model)
-        with torch.cuda.amp.autocast(enabled=use_autocast, dtype=autocast_dtype):
-            sampler.sample(S=min(steps, 5), batch_size=batch_size, shape=shape, verbose=False)
-    torch.cuda.synchronize()
-    
-    # Timed runs
-    times = []
-    for _ in range(iterations):
-        if model is not None and HAS_MODIFF:
-            reset_modiff_state(model.model.diffusion_model)
-        torch.cuda.synchronize()
-        start = time.time()
-        with torch.cuda.amp.autocast(enabled=use_autocast, dtype=autocast_dtype):
-            samples, _ = sampler.sample(S=steps, batch_size=batch_size, shape=shape,
-                                        eta=0.0, verbose=False)
-        torch.cuda.synchronize()
-        times.append(time.time() - start)
-    
-    return np.mean(times), np.std(times), samples
+def count_conv_layers(model: nn.Module) -> int:
+    """Count Conv2d layers in model."""
+    return sum(1 for m in model.modules() if isinstance(m, (nn.Conv2d, OptimizedInt8Conv2d)))
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--config', type=str, default='configs/latent-diffusion/lsun_churches-ldm-kl-8.yaml')
-    parser.add_argument('--ckpt', type=str, default='models/ldm/lsun_churches256/model.ckpt')
-    parser.add_argument('--batch_size', type=int, default=4)
-    parser.add_argument('--steps', type=int, default=20)
-    parser.add_argument('--output_dir', type=str, default='integration/results_ldm_benchmark')
-    parser.add_argument('--mode', type=str, choices=['all', 'fp32', 'fp16', 'bf16', 'int8'], default='all')
-    args = parser.parse_args()
+class BenchmarkRunner:
+    """Unified benchmark runner for all precision modes."""
     
-    os.makedirs(args.output_dir, exist_ok=True)
-    
-    device = torch.device("cuda")
-    print(f"Using device: {device}")
-    print(f"GPU: {torch.cuda.get_device_name()}")
-    
-    # Load Config
-    conf = OmegaConf.load(args.config)
-    
-    # Shape for LDM latent space
-    shape = (4, 32, 32)  # 256/8 = 32
-    
-    results = {}
-    
-    # =========================================================================
-    # FP32 Baseline
-    # =========================================================================
-    if args.mode in ['all', 'fp32']:
-        print("\n" + "="*60)
-        print("FP32 Baseline")
-        print("="*60)
+    def __init__(self, config_path: str, ckpt_path: str, output_dir: str,
+                 batch_size: int = 4, steps: int = 50, shape: tuple = (4, 32, 32)):
+        self.config_path = config_path
+        self.ckpt_path = ckpt_path
+        self.output_dir = output_dir
+        self.batch_size = batch_size
+        self.steps = steps
+        self.shape = shape
+        self.results = {}
         
-        torch.backends.cuda.matmul.allow_tf32 = False
-        torch.backends.cudnn.allow_tf32 = False
-
-        model = load_model_from_config(conf, args.ckpt)
-        sampler = DDIMSampler(model)
-        
-        time_mean, time_std, samples = benchmark_sampling(
-            sampler, args.steps, args.batch_size, shape
-        )
-        results['fp32'] = {'time': time_mean, 'std': time_std}
-        print(f"FP32 Time: {time_mean:.3f} ± {time_std:.3f} s")
-        print(f"  Per-step: {time_mean/args.steps*1000:.2f} ms")
-        
-        # Decode and save
-        x_samples = model.decode_first_stage(samples)
-        x_samples = torch.clamp((x_samples + 1.0) / 2.0, 0.0, 1.0)
-        
-        fp32_dir = os.path.join(args.output_dir, 'fp32')
-        os.makedirs(fp32_dir, exist_ok=True)
-        for i in range(min(args.batch_size, 4)):
-            tvu.save_image(x_samples[i], os.path.join(fp32_dir, f'{i}.png'))
-        
-        del model, sampler
-        torch.cuda.empty_cache()
+        os.makedirs(output_dir, exist_ok=True)
     
-    # =========================================================================
-    # FP16 with autocast
-    # =========================================================================
-    if args.mode in ['all', 'fp16']:
-        print("\n" + "="*60)
-        print("FP16 (torch.cuda.amp.autocast)")
-        print("="*60)
+    def _setup_model(self, mode: str):
+        """Load and setup model for given mode."""
+        model, _ = load_model(self.config_path, self.ckpt_path)
         
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
+        # Configure backends
+        torch.backends.cuda.matmul.allow_tf32 = (mode != 'fp32')
+        torch.backends.cudnn.allow_tf32 = (mode != 'fp32')
         torch.backends.cudnn.benchmark = True
         
-        model = load_model_from_config(conf, args.ckpt)
-        sampler = DDIMSampler(model)
+        if mode == 'int8' and HAS_INT8:
+            print(f"Converting UNet to INT8 ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
+            convert_model_to_optimized_int8(model.model.diffusion_model)
+            enable_modiff_mode(model.model.diffusion_model, True)
         
-        time_mean, time_std, samples = benchmark_sampling(
-            sampler, args.steps, args.batch_size, shape,
-            use_autocast=True, autocast_dtype=torch.float16
-        )
-        results['fp16'] = {'time': time_mean, 'std': time_std}
-        print(f"FP16 Time: {time_mean:.3f} ± {time_std:.3f} s")
-        print(f"  Per-step: {time_mean/args.steps*1000:.2f} ms")
-        
-        if 'fp32' in results:
-            speedup = results['fp32']['time'] / time_mean
-            print(f"Speedup vs FP32: {speedup:.2f}x")
-        
-        # Decode and save
-        with torch.cuda.amp.autocast(dtype=torch.float16):
-            x_samples = model.decode_first_stage(samples)
-        x_samples = torch.clamp((x_samples.float() + 1.0) / 2.0, 0.0, 1.0)
-        
-        fp16_dir = os.path.join(args.output_dir, 'fp16')
-        os.makedirs(fp16_dir, exist_ok=True)
-        for i in range(min(args.batch_size, 4)):
-            tvu.save_image(x_samples[i], os.path.join(fp16_dir, f'{i}.png'))
-        
-        del model, sampler
-        torch.cuda.empty_cache()
+        return model, DDIMSampler(model)
     
-    # =========================================================================
-    # BF16 with autocast (if supported)
-    # =========================================================================
-    if args.mode in ['all', 'bf16']:
-        print("\n" + "="*60)
-        print("BF16 (torch.cuda.amp.autocast)")
-        print("="*60)
+    def _calibrate_int8(self, model, sampler, num_runs: int = 10):
+        """Calibrate INT8 quantization scales."""
+        print(f"Calibrating INT8 ({num_runs} runs)...")
+        reset_calibration()
+        set_calibrating(model.model.diffusion_model, True)
         
-        if not torch.cuda.is_bf16_supported():
-            print("BF16 not supported on this GPU, skipping...")
-        else:
-            torch.backends.cuda.matmul.allow_tf32 = True
-            torch.backends.cudnn.allow_tf32 = True
-            torch.backends.cudnn.benchmark = True
+        with torch.no_grad():
+            for _ in range(num_runs):
+                reset_modiff_state(model.model.diffusion_model)
+                sampler.sample(S=5, batch_size=2, shape=self.shape, eta=0.0, verbose=False)
+        
+        get_calibration_config().finalize()
+        set_calibrating(model.model.diffusion_model, False)
+        print(f"Calibrated {len(get_calibration_config().scales)} layers")
+    
+    def _generate_samples(self, model, sampler, mode: str, num_samples: int,
+                          use_autocast: bool = False, dtype: torch.dtype = None):
+        """Generate samples and measure time."""
+        mode_dir = os.path.join(self.output_dir, mode)
+        os.makedirs(mode_dir, exist_ok=True)
+        
+        total_time = 0.0
+        generated = 0
+        
+        pbar = tqdm(total=num_samples, desc=f"Generating {mode}")
+        while generated < num_samples:
+            batch = min(self.batch_size, num_samples - generated)
             
-            model = load_model_from_config(conf, args.ckpt)
-            sampler = DDIMSampler(model)
+            if mode == 'int8' and HAS_INT8:
+                reset_modiff_state(model.model.diffusion_model)
             
-            time_mean, time_std, samples = benchmark_sampling(
-                sampler, args.steps, args.batch_size, shape,
-                use_autocast=True, autocast_dtype=torch.bfloat16
-            )
-            results['bf16'] = {'time': time_mean, 'std': time_std}
-            print(f"BF16 Time: {time_mean:.3f} ± {time_std:.3f} s")
-            print(f"  Per-step: {time_mean/args.steps*1000:.2f} ms")
+            torch.cuda.synchronize()
+            start = time.time()
             
-            if 'fp32' in results:
-                speedup = results['fp32']['time'] / time_mean
-                print(f"Speedup vs FP32: {speedup:.2f}x")
+            with torch.amp.autocast('cuda', enabled=use_autocast, dtype=dtype):
+                samples, _ = sampler.sample(S=self.steps, batch_size=batch,
+                                           shape=self.shape, eta=0.0, verbose=False)
+            
+            torch.cuda.synchronize()
+            total_time += time.time() - start
             
             # Decode and save
-            with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+            with torch.amp.autocast('cuda', enabled=use_autocast, dtype=dtype):
                 x_samples = model.decode_first_stage(samples)
             x_samples = torch.clamp((x_samples.float() + 1.0) / 2.0, 0.0, 1.0)
             
-            bf16_dir = os.path.join(args.output_dir, 'bf16')
-            os.makedirs(bf16_dir, exist_ok=True)
-            for i in range(min(args.batch_size, 4)):
-                tvu.save_image(x_samples[i], os.path.join(bf16_dir, f'{i}.png'))
+            for i in range(batch):
+                tvu.save_image(x_samples[i], os.path.join(mode_dir, f'{generated + i:05d}.png'))
             
-            del model, sampler
-            torch.cuda.empty_cache()
+            generated += batch
+            pbar.update(batch)
+        
+        pbar.close()
+        return total_time, generated
     
-    # =========================================================================
-    # INT8 MoDiff (CUTLASS + Error Compensation)
-    # =========================================================================
-    if args.mode in ['all', 'int8'] and HAS_MODIFF:
-        print("\n" + "="*60)
-        print("INT8 MoDiff (CUTLASS + Error Compensation)")
-        print("="*60)
+    def run_mode(self, mode: str, num_samples: int = 16, calibrate: bool = True):
+        """Run benchmark for a specific mode."""
+        print(f"\n{'='*60}\n{mode.upper()}\n{'='*60}")
         
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
-        torch.backends.cudnn.benchmark = True
+        model, sampler = self._setup_model(mode)
         
-        model = load_model_from_config(conf, args.ckpt)
+        # INT8 calibration
+        if mode == 'int8' and HAS_INT8 and calibrate:
+            self._calibrate_int8(model, sampler)
         
-        print("Converting UNet to INT8 MoDiff...")
-        convert_model_to_int8_fused(model.model.diffusion_model)
-        enable_modiff_mode(model.model.diffusion_model, True)
+        # Configure autocast
+        use_autocast = mode in ('fp16', 'bf16')
+        dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16}.get(mode)
         
-        sampler = DDIMSampler(model)
-        
-        time_mean, time_std, samples = benchmark_sampling(
-            sampler, args.steps, args.batch_size, shape, model=model
+        # Generate samples
+        total_time, num_gen = self._generate_samples(
+            model, sampler, mode, num_samples, use_autocast, dtype
         )
-        results['int8'] = {'time': time_mean, 'std': time_std}
-        print(f"INT8 Time: {time_mean:.3f} ± {time_std:.3f} s")
-        print(f"  Per-step: {time_mean/args.steps*1000:.2f} ms")
         
-        if 'fp32' in results:
-            speedup = results['fp32']['time'] / time_mean
-            print(f"Speedup vs FP32: {speedup:.2f}x")
+        # Record results
+        time_per_sample = total_time / num_gen
+        time_per_step = total_time / (num_gen * self.steps) * 1000
         
-        # Decode and save
-        x_samples = model.decode_first_stage(samples)
-        x_samples = torch.clamp((x_samples + 1.0) / 2.0, 0.0, 1.0)
+        self.results[mode] = {
+            'total_time': total_time,
+            'num_samples': num_gen,
+            'time_per_sample': time_per_sample,
+            'time_per_step_ms': time_per_step,
+        }
         
-        int8_dir = os.path.join(args.output_dir, 'int8')
-        os.makedirs(int8_dir, exist_ok=True)
-        for i in range(min(args.batch_size, 4)):
-            tvu.save_image(x_samples[i], os.path.join(int8_dir, f'{i}.png'))
+        print(f"\n{mode.upper()} Results:")
+        print(f"  Total: {total_time:.2f}s for {num_gen} samples")
+        print(f"  Per-sample: {time_per_sample:.3f}s")
+        print(f"  Per-step: {time_per_step:.2f}ms")
+        
+        if 'fp32' in self.results and mode != 'fp32':
+            speedup = self.results['fp32']['time_per_sample'] / time_per_sample
+            self.results[mode]['speedup'] = speedup
+            print(f"  Speedup vs FP32: {speedup:.2f}x")
         
         del model, sampler
         torch.cuda.empty_cache()
+    
+    def compute_fid(self, reference_mode: str = 'fp32'):
+        """Compute FID between modes."""
+        if not HAS_FID:
+            print("pytorch_fid not available")
+            return
+        
+        ref_dir = os.path.join(self.output_dir, reference_mode)
+        if not os.path.exists(ref_dir):
+            print(f"Reference directory not found: {ref_dir}")
+            return
+        
+        print(f"\nFID (vs {reference_mode}):")
+        for mode in self.results:
+            if mode == reference_mode:
+                continue
+            mode_dir = os.path.join(self.output_dir, mode)
+            if os.path.exists(mode_dir):
+                try:
+                    fid = fid_score.calculate_fid_given_paths(
+                        [ref_dir, mode_dir], batch_size=50, device='cuda', dims=2048
+                    )
+                    self.results[mode]['fid'] = fid
+                    print(f"  {mode}: {fid:.2f}")
+                except Exception as e:
+                    print(f"  {mode}: Error - {e}")
+    
+    def print_summary(self):
+        """Print benchmark summary."""
+        print(f"\n{'='*60}\nSUMMARY\n{'='*60}")
+        print(f"\n{'Mode':<15} {'Time/Sample':<15} {'Speedup':<12} {'FID':<10}")
+        print("-" * 55)
+        
+        baseline = self.results.get('fp32', {}).get('time_per_sample', 1.0)
+        for mode in ['fp32', 'fp16', 'bf16', 'int8']:
+            if mode in self.results:
+                r = self.results[mode]
+                t = f"{r['time_per_sample']:.3f}s"
+                speedup = baseline / r['time_per_sample'] if r['time_per_sample'] > 0 else 0
+                s = "(baseline)" if mode == 'fp32' else f"{speedup:.2f}x"
+                fid = f"{r.get('fid', '-'):.2f}" if 'fid' in r else "-"
+                print(f"{mode:<15} {t:<15} {s:<12} {fid:<10}")
+        
+        # Save results
+        with open(os.path.join(self.output_dir, 'results.json'), 'w') as f:
+            json.dump(self.results, f, indent=2)
+        print(f"\nResults saved to: {self.output_dir}/")
 
-    # =========================================================================
-    # Summary
-    # =========================================================================
-    print("\n" + "="*60)
-    print("SUMMARY")
-    print("="*60)
+
+def main():
+    parser = argparse.ArgumentParser(description="LDM Benchmark")
+    parser.add_argument('--config', type=str, default='configs/latent-diffusion/lsun_churches-ldm-kl-8.yaml')
+    parser.add_argument('--ckpt', type=str, default='models/ldm/lsun_churches256/model.ckpt')
+    parser.add_argument('--output_dir', type=str, default='integration/results_ldm_benchmark')
+    parser.add_argument('--batch_size', type=int, default=4)
+    parser.add_argument('--steps', type=int, default=50)
+    parser.add_argument('--num_samples', type=int, default=16)
+    parser.add_argument('--mode', type=str, choices=['all', 'fp32', 'fp16', 'bf16', 'int8'], default='all')
+    parser.add_argument('--eval_fid', action='store_true', help='Compute FID between modes')
+    parser.add_argument('--skip_calibration', action='store_true')
+    args = parser.parse_args()
     
-    baseline = results.get('fp32', {}).get('time', 1.0)
+    print(f"GPU: {torch.cuda.get_device_name()}")
+    print(f"Config: {args.config}")
+    print(f"Steps: {args.steps} | Batch: {args.batch_size} | Samples: {args.num_samples}")
     
-    for mode in ['fp32', 'fp16', 'bf16', 'int8']:
-        if mode in results:
-            t = results[mode]['time']
-            std = results[mode]['std']
-            speedup = baseline / t if t > 0 else 0
-            per_step = t / args.steps * 1000
-            label = "(baseline)" if mode == 'fp32' else f"({speedup:.2f}x)"
-            print(f"{mode.upper():8s}: {t:.3f} ± {std:.3f} s | {per_step:.2f} ms/step {label}")
+    runner = BenchmarkRunner(
+        args.config, args.ckpt, args.output_dir,
+        args.batch_size, args.steps, shape=(4, 32, 32)
+    )
     
-    print("="*60)
-    print(f"\nImages saved to: {args.output_dir}/")
+    modes = ['fp32', 'fp16', 'bf16', 'int8'] if args.mode == 'all' else [args.mode]
+    
+    for mode in modes:
+        if mode == 'int8' and not HAS_INT8:
+            print(f"Skipping {mode}: not available")
+            continue
+        if mode == 'bf16' and not torch.cuda.is_bf16_supported():
+            print(f"Skipping {mode}: not supported")
+            continue
+        runner.run_mode(mode, args.num_samples, calibrate=not args.skip_calibration)
+    
+    if args.eval_fid and len(runner.results) > 1:
+        runner.compute_fid()
+    
+    runner.print_summary()
 
 
 if __name__ == '__main__':

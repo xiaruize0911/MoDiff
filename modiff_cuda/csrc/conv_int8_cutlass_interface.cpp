@@ -272,10 +272,114 @@ std::tuple<torch::Tensor, torch::Tensor> quantize_weight(torch::Tensor weight) {
     return std::make_tuple(weight_q, scales);
 }
 
+// INT8 convolution with STATIC scale (no find_max - for calibrated inference)
+// This variant accepts a pre-computed input_scale, skipping the find_max overhead
+torch::Tensor conv2d_int8_static(
+    torch::Tensor input,           // FP32 [N, C, H, W]
+    torch::Tensor weight_int8,     // INT8 [K, C, R, S]
+    torch::Tensor weight_scales,   // FP32 [K]
+    torch::Tensor bias,            // FP32 [K] or empty
+    float input_scale,             // Pre-computed input scale (max/127)
+    int stride_h, int stride_w,
+    int pad_h, int pad_w,
+    int dilation_h = 1, int dilation_w = 1
+) {
+    TORCH_CHECK(input.is_cuda(), "Input must be CUDA tensor");
+    TORCH_CHECK(weight_int8.is_cuda(), "Weight must be CUDA tensor");
+    TORCH_CHECK(input.dtype() == torch::kFloat32, "Input must be FP32");
+    TORCH_CHECK(weight_int8.dtype() == torch::kInt8, "Weight must be INT8");
+    
+    // Get dimensions
+    int N = input.size(0);
+    int C = input.size(1);
+    int H = input.size(2);
+    int W = input.size(3);
+    
+    int K = weight_int8.size(0);
+    int R = weight_int8.size(2);
+    int S = weight_int8.size(3);
+    
+    int H_out = (H + 2 * pad_h - dilation_h * (R - 1) - 1) / stride_h + 1;
+    int W_out = (W + 2 * pad_w - dilation_w * (S - 1) - 1) / stride_w + 1;
+    
+    cudaStream_t stream = c10::cuda::getCurrentCUDAStream().stream();
+    
+    auto opts_int8 = torch::dtype(torch::kInt8).device(input.device());
+    auto opts_int32 = torch::dtype(torch::kInt32).device(input.device());
+    auto opts_fp32 = torch::dtype(torch::kFloat32).device(input.device());
+    
+    // Allocate buffers
+    auto input_int8_nhwc = torch::empty({N, H, W, C}, opts_int8);
+    auto output_int32_nhwc = torch::empty({N, H_out, W_out, K}, opts_int32);
+    auto scale_tensor = torch::empty({1}, opts_fp32);
+    scale_tensor.fill_(input_scale);
+    
+    // Compute inverse scale for quantization
+    float inv_scale = 127.0f / (input_scale * 127.0f + 1e-8f);
+    
+    // Convert input to NHWC and quantize with static scale
+    // Using NCHW->NHWC conversion + quantization fused kernel
+    auto input_nhwc = input.permute({0, 2, 3, 1}).contiguous();
+    
+    // Quantize with pre-computed scale (no find_max!)
+    fast_quantize_with_scale(
+        input_nhwc.data_ptr<float>(),
+        input_int8_nhwc.data_ptr<int8_t>(),
+        inv_scale,
+        N * H * W * C,
+        stream
+    );
+    
+    // Convert weight to KRSC
+    auto weight_krsc = weight_int8.permute({0, 2, 3, 1}).contiguous();
+    
+    // Run CUTLASS convolution
+    cudaError_t status = conv2d_int8_cutlass(
+        input_int8_nhwc.data_ptr<int8_t>(),
+        weight_krsc.data_ptr<int8_t>(),
+        output_int32_nhwc.data_ptr<int32_t>(),
+        N, H, W, C,
+        K, R, S,
+        pad_h, pad_w,
+        stride_h, stride_w,
+        dilation_h, dilation_w,
+        stream
+    );
+    
+    if (status != cudaSuccess) {
+        auto weight_fp32 = weight_int8.to(torch::kFloat32) * weight_scales.view({K, 1, 1, 1});
+        return torch::conv2d(input, weight_fp32, bias.numel() > 0 ? bias : torch::Tensor(),
+                            {stride_h, stride_w}, {pad_h, pad_w}, {dilation_h, dilation_w});
+    }
+    
+    // Dequantize output
+    auto output_fp32 = torch::empty({N, K, H_out, W_out}, opts_fp32);
+    bool has_bias = bias.numel() > 0;
+    
+    dequantize_output_cutlass(
+        output_int32_nhwc.data_ptr<int32_t>(),
+        output_fp32.data_ptr<float>(),
+        scale_tensor.data_ptr<float>(),
+        weight_scales.data_ptr<float>(),
+        has_bias ? bias.data_ptr<float>() : nullptr,
+        N, K, H_out, W_out,
+        has_bias,
+        stream
+    );
+    
+    return output_fp32;
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("conv2d_int8", &conv2d_int8, "INT8 Convolution using CUTLASS (optimized)",
           py::arg("input"), py::arg("weight_int8"), py::arg("weight_scales"),
           py::arg("bias"), py::arg("stride_h"), py::arg("stride_w"),
+          py::arg("pad_h"), py::arg("pad_w"),
+          py::arg("dilation_h") = 1, py::arg("dilation_w") = 1);
+    m.def("conv2d_int8_static", &conv2d_int8_static, "INT8 Convolution with static scale (skip find_max)",
+          py::arg("input"), py::arg("weight_int8"), py::arg("weight_scales"),
+          py::arg("bias"), py::arg("input_scale"),
+          py::arg("stride_h"), py::arg("stride_w"),
           py::arg("pad_h"), py::arg("pad_w"),
           py::arg("dilation_h") = 1, py::arg("dilation_w") = 1);
     m.def("quantize_tensor", &quantize_tensor, "Quantize FP32 tensor to INT8 (per-tensor)");
