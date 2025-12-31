@@ -200,7 +200,8 @@ class OptimizedInt8Conv2d(nn.Module):
         # INT8 is faster when: large channels AND reasonable spatial
         max_ch = max(C, self.out_channels)
         min_spatial = min(H, W)
-        return (max_ch >= 768 and min_spatial >= 8) or (max_ch >= 512 and min_spatial >= 16)
+        # Aggressive heuristics for L40S: Enable INT8 for almost all layers
+        return (max_ch >= 384 and min_spatial >= 4) or (max_ch >= 192 and min_spatial >= 8)
     
     def _nchw_to_nhwc(self, x: torch.Tensor) -> torch.Tensor:
         """Convert NCHW to NHWC with buffer reuse."""
