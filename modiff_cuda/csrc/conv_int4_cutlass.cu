@@ -22,8 +22,9 @@
 // For sm_89 (Ada Lovelace / L40S), use the appropriate architecture tag
 using SmArch = cutlass::arch::Sm89;
 
-// Forward declaration of INT8 CUTLASS convolution
-extern cudaError_t conv2d_int8_cutlass(
+// Forward declaration of INT8 CUTLASS convolution (extern "C" to match definition)
+extern "C" {
+cudaError_t conv2d_int8_cutlass(
     const int8_t* input,      // NHWC [N, H, W, C]
     const int8_t* weight,     // KRSC [K, R, S, C]
     int32_t* output,          // NHWC [N, H_out, W_out, K]
@@ -34,6 +35,7 @@ extern cudaError_t conv2d_int8_cutlass(
     int dilation_h, int dilation_w,
     cudaStream_t stream
 );
+}
 
 // ============================================================================
 // INT4 Unpacking Kernel
@@ -237,8 +239,8 @@ __global__ void dequantize_int4_to_fp32_kernel(
     output[idx] = static_cast<float>(quant) * scale;
 }
 
-// Find max for dynamic quantization
-__global__ void find_max_abs_kernel(
+// Find max for dynamic quantization (static to avoid symbol collision with INT8 version)
+static __global__ void find_max_abs_kernel_int4(
     const float* __restrict__ input,
     float* __restrict__ max_val,
     int total
@@ -402,7 +404,7 @@ void conv2d_int4_forward(
     
     int threads = 256;
     int blocks = (input_size + threads - 1) / threads;
-    find_max_abs_kernel<<<blocks, threads, 0, stream>>>(input, d_input_max, input_size);
+    find_max_abs_kernel_int4<<<blocks, threads, 0, stream>>>(input, d_input_max, input_size);
     
     float input_max;
     cudaMemcpy(&input_max, d_input_max, sizeof(float), cudaMemcpyDeviceToHost);

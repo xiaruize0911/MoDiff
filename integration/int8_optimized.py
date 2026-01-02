@@ -18,14 +18,28 @@ from collections import OrderedDict
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'modiff_cuda'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
+# Try to load CUTLASS INT8 kernels
 try:
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'modiff_cuda'))
     import modiff_int8 as cutlass_int8
     HAS_CUTLASS = True
 except ImportError:
     HAS_CUTLASS = False
     print("Warning: CUTLASS INT8 not available")
+
+# Try to load Triton fused kernels (30-50% faster than CUTLASS for 3x3)
+try:
+    from modiff_triton.kernels.conv_w8a8_fused import (
+        conv2d_w8a8_3x3_fused,
+        conv2d_w8a8_3x3_standard
+    )
+    HAS_TRITON_FUSED = True
+    print("✓ Triton fused INT8 kernels loaded - 30-50% speedup for 3×3 conv")
+except ImportError as e:
+    HAS_TRITON_FUSED = False
+    print(f"Warning: Triton fused kernels not available ({e})")
 
 
 class CalibrationConfig:
@@ -146,15 +160,13 @@ class OptimizedInt8Conv2d(nn.Module):
             weight_int8, weight_scales = cutlass_int8.quantize_weight(w_fp32)
             self.register_buffer('weight_int8', weight_int8)
             self.register_buffer('weight_scales', weight_scales)
-            # Pre-compute weight in NHWC (KRSC) layout for faster access
-            self.register_buffer('weight_krsc', weight_int8.permute(0, 2, 3, 1).contiguous())
         else:
             self.register_buffer('weight_int8', None)
             self.register_buffer('weight_scales', None)
-            self.register_buffer('weight_krsc', None)
         
-        # FP16 weight for fallback
-        self.register_buffer('weight_fp16', conv.weight.data.half())
+        # FP16 weight for fallback (keep in channels_last for memory efficiency)
+        weight_fp16 = conv.weight.data.half().to(memory_format=torch.channels_last)
+        self.register_buffer('weight_fp16', weight_fp16)
         
         # Bias
         if conv.bias is not None:
@@ -162,11 +174,7 @@ class OptimizedInt8Conv2d(nn.Module):
         else:
             self.register_buffer('bias', torch.empty(0))
         
-        # Pre-allocated buffers for NHWC conversion (avoid allocation during forward)
-        self._input_nhwc_buffer: Optional[torch.Tensor] = None
-        self._output_nchw_buffer: Optional[torch.Tensor] = None
-        
-        # MoDiff state
+        # MoDiff state (caches will be in channels_last format for efficiency)
         self.modiff_enabled = False
         self.is_first_step = True
         self.a_hat_cache: Optional[torch.Tensor] = None
@@ -174,6 +182,10 @@ class OptimizedInt8Conv2d(nn.Module):
         
         # Calibration state
         self.calibrating = False
+        
+        # Static quantization scale (eliminates find_max overhead)
+        # When set, uses this pre-computed scale instead of dynamic max
+        self.activation_scale: Optional[float] = None
     
     def enable_modiff(self, enabled: bool = True):
         """Enable/disable MoDiff temporal caching."""
@@ -197,44 +209,28 @@ class OptimizedInt8Conv2d(nn.Module):
             return False
         if self.groups != 1:
             return False
-        # INT8 is faster when: large channels AND reasonable spatial
-        max_ch = max(C, self.out_channels)
-        min_spatial = min(H, W)
-        # Enable INT8 for medium-large layers (384+ channels)
-        # Based on profiling: INT8 is faster than FP16 for 384+ channels with 8x8+ spatial
-        return (max_ch >= 384 and min_spatial >= 8) or (max_ch >= 192 and min_spatial >= 16)
+        
+        # ONLY use INT8 if we have fused kernels (avoids CUTLASS overhead)
+        # Non-3×3 layers (like 1×1 skip connections) fall back to FP16
+        if HAS_TRITON_FUSED and self._can_use_fused():
+            # Fused kernels are fast even for 128+ channels
+            return max(C, self.out_channels) >= 128 and min(H, W) >= 4
+        
+        # Without fused kernels, FP16 is faster than CUTLASS
+        # CUTLASS has dynamic quantization overhead (find_max every step)
+        return False
     
-    def _nchw_to_nhwc(self, x: torch.Tensor) -> torch.Tensor:
-        """Convert NCHW to NHWC with buffer reuse."""
-        return x.permute(0, 2, 3, 1).contiguous()
-    
-    def _nhwc_to_nchw(self, x: torch.Tensor) -> torch.Tensor:
-        """Convert NHWC to NCHW with buffer reuse."""
-        return x.permute(0, 3, 1, 2).contiguous()
-    
-    def _forward_int8_static(self, x: torch.Tensor) -> torch.Tensor:
+    def _can_use_fused(self) -> bool:
         """
-        INT8 forward with STATIC quantization scale (no find_max!).
-        
-        This is the fast path when calibration is complete.
-        Uses conv2d_int8_static which accepts a pre-computed scale.
+        Check if we can use the optimized fused 3×3 kernel.
+        Fused kernel eliminates im2col and is 30-50% faster.
         """
-        config = get_calibration_config()
-        
-        # Get pre-calibrated scale (max/127 format)
-        scale = config.get_scale(self.layer_name)
-        
-        # Run CUTLASS INT8 conv with static scale - no find_max overhead!
-        bias = self.bias if self.bias.numel() > 0 else torch.empty(0, device=x.device)
-        out = cutlass_int8.conv2d_int8_static(
-            x, self.weight_int8, self.weight_scales, bias,
-            scale,  # Pre-computed input scale
-            self.stride, self.stride,
-            self.padding, self.padding,
-            self.dilation, self.dilation
-        )
-        
-        return out
+        return (HAS_TRITON_FUSED and 
+                self.kernel_size == (3, 3) and
+                self.stride == (1, 1) and
+                self.padding == (1, 1) and
+                self.dilation == (1, 1) and
+                self.groups == 1)
     
     def _forward_int8_dynamic(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -246,6 +242,10 @@ class OptimizedInt8Conv2d(nn.Module):
         if self.calibrating:
             get_calibration_config().update(self.layer_name, x)
         
+        # Use static scale if available (much faster!)
+        if self.activation_scale is not None:
+            return self._forward_int8_static(x)
+        
         # Use standard INT8 path (includes find_max internally)
         bias = self.bias if self.bias.numel() > 0 else torch.empty(0, device=x.device)
         return cutlass_int8.conv2d_int8(
@@ -254,6 +254,60 @@ class OptimizedInt8Conv2d(nn.Module):
             self.padding, self.padding,
             self.dilation, self.dilation
         )
+    
+    def _forward_int8_dynamic_no_bias(self, x: torch.Tensor) -> torch.Tensor:
+        """INT8 forward without bias (for residual computation)."""
+        if self.calibrating:
+            get_calibration_config().update(self.layer_name, x)
+        
+        # Use static scale if available
+        if self.activation_scale is not None:
+            return self._forward_int8_static_no_bias(x)
+        
+        bias_empty = torch.empty(0, device=x.device)
+        return cutlass_int8.conv2d_int8(
+            x, self.weight_int8, self.weight_scales, bias_empty,
+            self.stride, self.stride,
+            self.padding, self.padding,
+            self.dilation, self.dilation
+        )
+    
+    def _forward_int8_static(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        INT8 forward with STATIC quantization (uses pre-computed scale).
+        
+        Eliminates find_max overhead - significantly faster!
+        """
+        # Quantize with static scale
+        scale_a = self.activation_scale
+        x_int8 = torch.clamp(torch.round(x / scale_a), -128, 127).to(torch.int8)
+        
+        # INT8 convolution
+        bias = self.bias if self.bias.numel() > 0 else torch.empty(0, device=x.device)
+        out_int32 = cutlass_int8.conv2d_int8_precomputed(
+            x_int8, self.weight_int8, bias,
+            self.stride, self.stride,
+            self.padding, self.padding,
+            self.dilation, self.dilation
+        )
+        
+        # Dequantize
+        return out_int32.float() * scale_a * self.weight_scales.view(1, -1, 1, 1)
+    
+    def _forward_int8_static_no_bias(self, x: torch.Tensor) -> torch.Tensor:
+        """INT8 static forward without bias (for residual computation)."""
+        scale_a = self.activation_scale
+        x_int8 = torch.clamp(torch.round(x / scale_a), -128, 127).to(torch.int8)
+        
+        bias_empty = torch.empty(0, device=x.device)
+        out_int32 = cutlass_int8.conv2d_int8_precomputed(
+            x_int8, self.weight_int8, bias_empty,
+            self.stride, self.stride,
+            self.padding, self.padding,
+            self.dilation, self.dilation
+        )
+        
+        return out_int32.float() * scale_a * self.weight_scales.view(1, -1, 1, 1)
     
     def _forward_fp16(self, x: torch.Tensor) -> torch.Tensor:
         """FP16 forward (fallback for small tensors)."""
@@ -264,39 +318,52 @@ class OptimizedInt8Conv2d(nn.Module):
         return out.float()
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass with automatic precision selection."""
+        """Forward pass with automatic precision selection and optional fused kernels."""
         N, C, H, W = x.shape
+        
+        # Ensure input is channels_last for optimal memory access
+        if not x.is_contiguous(memory_format=torch.channels_last):
+            x = x.to(memory_format=torch.channels_last)
         
         # Choose precision based on tensor size
         use_int8 = self._should_use_int8(C, H, W)
+        can_fuse = self._can_use_fused()
         
         if not self.modiff_enabled:
             # Standard forward (no temporal caching)
-            if use_int8:
-                config = get_calibration_config()
-                if config.is_calibrated and not self.calibrating:
-                    return self._forward_int8_static(x)
-                else:
-                    return self._forward_int8_dynamic(x)
+            if use_int8 and can_fuse:
+                # Use fused kernel (30-50% faster for 3×3)
+                bias = self.bias if self.bias.numel() > 0 else None
+                static_scale = self.activation_scale if self.activation_scale else 0.0
+                return conv2d_w8a8_3x3_standard(
+                    x, self.weight_int8, self.weight_scales, bias, static_scale
+                )
+            elif use_int8:
+                # Fall back to CUTLASS for non-3×3
+                return self._forward_int8_dynamic(x)
             else:
                 return self._forward_fp16(x)
         
         # MoDiff forward with temporal caching
         if self.is_first_step:
             # First step: full computation + cache
-            if use_int8:
-                config = get_calibration_config()
-                if config.is_calibrated and not self.calibrating:
-                    out = self._forward_int8_static(x)
-                else:
-                    out = self._forward_int8_dynamic(x)
+            if use_int8 and can_fuse:
+                # Use fused kernel
+                bias = self.bias if self.bias.numel() > 0 else None
+                static_scale = self.activation_scale if self.activation_scale else 0.0
+                out = conv2d_w8a8_3x3_standard(
+                    x, self.weight_int8, self.weight_scales, bias, static_scale
+                )
+            elif use_int8:
+                # Fall back to CUTLASS
+                out = self._forward_int8_dynamic(x)
             else:
                 out = self._forward_fp16(x)
             
-            # Initialize/update caches
+            # Initialize/update caches (store in channels_last for consistency)
             if self.a_hat_cache is None or self.a_hat_cache.shape != x.shape:
-                self.a_hat_cache = x.clone()
-                self.o_hat_cache = out.clone()
+                self.a_hat_cache = x.clone().to(memory_format=torch.channels_last)
+                self.o_hat_cache = out.clone().to(memory_format=torch.channels_last)
             else:
                 self.a_hat_cache.copy_(x)
                 self.o_hat_cache.copy_(out)
@@ -304,52 +371,49 @@ class OptimizedInt8Conv2d(nn.Module):
             self.is_first_step = False
             return out
         else:
-            # Subsequent steps: incremental update
-            residual = x - self.a_hat_cache
-            self.a_hat_cache.copy_(x)
-            
-            # Compute conv on residual (no bias)
-            if use_int8:
-                config = get_calibration_config()
-                bias_empty = torch.empty(0, device=x.device)
-                if config.is_calibrated and not self.calibrating:
-                    # Use DYNAMIC quantization for residual to preserve precision
-                    # Residuals have much smaller range than full activations
-                    conv_residual = cutlass_int8.conv2d_int8(
-                        residual, self.weight_int8, self.weight_scales, bias_empty,
-                        self.stride, self.stride,
-                        self.padding, self.padding,
-                        self.dilation, self.dilation
-                    )
-                else:
-                    if self.calibrating:
-                        get_calibration_config().update(self.layer_name, residual)
-                    conv_residual = cutlass_int8.conv2d_int8(
-                        residual, self.weight_int8, self.weight_scales, bias_empty,
-                        self.stride, self.stride,
-                        self.padding, self.padding,
-                        self.dilation, self.dilation
-                    )
+            # Subsequent steps: incremental update with FUSED KERNEL
+            # Compute conv on residual (no bias) - stays in channels_last
+            if use_int8 and can_fuse:
+                # Fused kernel: computes conv(x - x_prev) + o_prev internally
+                # IMPORTANT: Pass OLD cache before updating!
+                static_scale = self.activation_scale if self.activation_scale else 0.0
+                conv_residual = conv2d_w8a8_3x3_fused(
+                    x, self.a_hat_cache,  # a_hat_cache is STILL the old value here
+                    self.weight_int8, 
+                    self.o_hat_cache, self.weight_scales, None, static_scale
+                )
+                # The fused kernel already computed: conv(x - a_hat_old) + o_hat_old
+                # Now update caches for next iteration
+                self.a_hat_cache.copy_(x)
+                self.o_hat_cache.copy_(conv_residual)
+                return conv_residual
+            elif use_int8:
+                # Fall back to CUTLASS for non-3×3 layers
+                residual = x - self.a_hat_cache
+                conv_residual = self._forward_int8_dynamic_no_bias(residual)
+                self.a_hat_cache.copy_(x)
+                self.o_hat_cache.add_(conv_residual)
+                return self.o_hat_cache.clone()
             else:
+                residual = x - self.a_hat_cache
                 residual_fp16 = residual.half()
                 conv_residual = F.conv2d(residual_fp16, self.weight_fp16, None,
                                         self.stride, self.padding, self.dilation, self.groups).float()
-            
-            # Update cache with residual
-            self.o_hat_cache.add_(conv_residual)
-            return self.o_hat_cache.clone()
+                self.a_hat_cache.copy_(x)
+                self.o_hat_cache.add_(conv_residual)
+                return self.o_hat_cache.clone()
 
 
 def convert_model_to_optimized_int8(model: nn.Module, prefix: str = "") -> nn.Module:
     """
-    Convert all Conv2d layers to OptimizedInt8Conv2d.
+    Convert all Conv2d layers to OptimizedInt8Conv2d with channels_last layout.
     
     Args:
         model: PyTorch model to convert
         prefix: Prefix for layer naming (used for calibration keys)
     
     Returns:
-        Model with Conv2d replaced by OptimizedInt8Conv2d
+        Model with Conv2d replaced by OptimizedInt8Conv2d (channels_last enabled)
     """
     for name, child in list(model.named_children()):
         full_name = f"{prefix}.{name}" if prefix else name
@@ -359,6 +423,11 @@ def convert_model_to_optimized_int8(model: nn.Module, prefix: str = "") -> nn.Mo
             setattr(model, name, optimized_conv)
         else:
             convert_model_to_optimized_int8(child, prefix=full_name)
+    
+    # Convert entire model to channels_last for optimal memory layout
+    # This eliminates NCHW->NHWC permutations and improves Tensor Core utilization
+    model = model.to(memory_format=torch.channels_last)
+    print(f"✓ Model converted to channels_last layout (NHWC) for {torch.cuda.get_device_name()}")
     
     return model
 
@@ -428,6 +497,138 @@ def calibrate_model(model: nn.Module, dataloader, num_batches: int = 100, device
     set_calibrating(model, False)
     
     return config
+
+
+def calibrate_int8_static_scales(
+    model: nn.Module,
+    sample_inputs: list,
+    num_timesteps: int = 50,
+    device: str = 'cuda'
+) -> Dict[str, float]:
+    """
+    Calibrate static activation scales for INT8 quantization.
+    
+    This eliminates the find_max overhead during inference by pre-computing
+    activation scales on representative data.
+    
+    Args:
+        model: UNet model to calibrate
+        sample_inputs: List of sample latent tensors for calibration
+        num_timesteps: Number of diffusion timesteps to use
+        device: Device to run calibration on
+    
+    Returns:
+        Dictionary mapping layer names to activation scales
+    """
+    print(f"Calibrating static INT8 scales on {len(sample_inputs)} samples...")
+    
+    # Collect activation statistics
+    activation_stats = {}
+    
+    def register_hook(name: str):
+        def hook(module, input, output):
+            x = input[0]
+            max_val = x.abs().max().item()
+            if name not in activation_stats:
+                activation_stats[name] = []
+            activation_stats[name].append(max_val)
+        return hook
+    
+    # Register hooks on all INT8 layers
+    hooks = []
+    for name, module in model.named_modules():
+        if isinstance(module, OptimizedInt8Conv2d):
+            hook = module.register_forward_hook(register_hook(name))
+            hooks.append(hook)
+    
+    # Run calibration
+    model.eval()
+    with torch.no_grad():
+        for i, x_t in enumerate(sample_inputs):
+            x_t = x_t.to(device)
+            
+            # Simulate diffusion sampling
+            t = torch.randint(0, num_timesteps, (x_t.shape[0],), device=device)
+            _ = model(x_t, t)
+            
+            if (i + 1) % 10 == 0:
+                print(f"  Calibrated {i + 1}/{len(sample_inputs)} samples")
+    
+    # Remove hooks
+    for hook in hooks:
+        hook.remove()
+    
+    # Compute scales (use 99.9th percentile for robustness)
+    scales = {}
+    for name, max_vals in activation_stats.items():
+        max_vals = sorted(max_vals)
+        idx_999 = int(len(max_vals) * 0.999)
+        scale = max_vals[idx_999] / 127.0
+        scales[name] = scale
+        
+    print(f"Computed {len(scales)} static activation scales")
+    return scales
+
+
+def apply_static_scales(model: nn.Module, scales: Dict[str, float]):
+    """
+    Apply pre-computed static activation scales to model.
+    
+    Args:
+        model: Model with OptimizedInt8Conv2d layers
+        scales: Dictionary mapping layer names to activation scales
+    """
+    applied = 0
+    for name, module in model.named_modules():
+        if isinstance(module, OptimizedInt8Conv2d):
+            if name in scales:
+                module.activation_scale = scales[name]
+                applied += 1
+    
+    print(f"Applied {applied} static activation scales")
+
+
+def convert_model_to_optimized_int8_static(
+    model: nn.Module,
+    sample_inputs: list = None,
+    num_timesteps: int = 50,
+    device: str = 'cuda'
+) -> nn.Module:
+    """
+    Convert model to optimized INT8 with STATIC quantization.
+    
+    This version:
+    1. Converts Conv2d layers to OptimizedInt8Conv2d
+    2. Calibrates static activation scales (eliminates find_max overhead)
+    3. Applies channels_last memory format
+    
+    Args:
+        model: Model to convert
+        sample_inputs: Sample latent tensors for calibration (required!)
+        num_timesteps: Number of diffusion timesteps
+        device: Device to run calibration on
+    
+    Returns:
+        Converted model with static INT8 quantization
+    """
+    if sample_inputs is None:
+        raise ValueError("sample_inputs required for static quantization calibration")
+    
+    print("Converting model to optimized INT8 (static quantization)...")
+    
+    # Step 1: Convert Conv2d layers
+    model = convert_model_to_optimized_int8(model)
+    
+    # Step 2: Calibrate static scales
+    scales = calibrate_int8_static_scales(
+        model, sample_inputs, num_timesteps, device
+    )
+    
+    # Step 3: Apply static scales
+    apply_static_scales(model, scales)
+    
+    print("✓ Model converted to static INT8")
+    return model
 
 
 def calibrate_model_with_sampler(model, sampler, num_samples: int = 100, 

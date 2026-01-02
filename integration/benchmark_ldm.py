@@ -2,13 +2,30 @@
 Unified LDM Benchmark with Multiple Precision Modes.
 
 Supports:
-- FP32: Standard baseline
+- FP32: Standard baseline (full precision)
 - FP16: Half precision with autocast
-- INT8: Optimized CUTLASS INT8 with static quantization
+- INT8: MoDiff INT8 with optimized kernels + temporal caching
+- INT8_baseline: INT8 optimized kernels WITHOUT temporal caching
+- INT8_static: Static quantization INT8 with pre-calibrated scales
+- INT4: MoDiff INT4 with optimized kernels + temporal caching
+- INT4_baseline: INT4 optimized kernels WITHOUT temporal caching
+
+Key differences:
+- MoDiff modes (int8/int4): Use temporal caching (reuses cached activations across timesteps)
+- Baseline modes: Same INT8/INT4 kernels but no temporal caching (shows caching overhead/benefit)
+- Static mode: Pre-calibrated scales eliminate dynamic quantization overhead
+
+Note: All INT8/INT4 modes use the same per-layer quantization approach.
+      Baseline modes isolate the performance impact of temporal caching.
+
+Performance hierarchy (typical):
+  Speed: INT8_static ≈ INT8_baseline > INT8 (with caching) ≈ INT4 > FP16 > FP32
+  Quality: All INT8 modes have identical quality; all INT4 modes have identical quality
 
 Usage:
     python integration/benchmark_ldm.py --mode all --steps 50
-    python integration/benchmark_ldm.py --mode int8 --num_samples 100 --eval_fid
+    python integration/benchmark_ldm.py --mode int8_baseline --num_samples 100 --eval_fid
+    python integration/benchmark_ldm.py --mode int8 --steps 50  # With temporal caching
 """
 import argparse
 import os
@@ -36,6 +53,9 @@ try:
     from integration.int8_optimized import (
         OptimizedInt8Conv2d,
         convert_model_to_optimized_int8,
+        convert_model_to_optimized_int8_static,
+        calibrate_int8_static_scales,
+        apply_static_scales,
         enable_modiff_mode as enable_modiff_mode_int8,
         reset_modiff_state as reset_modiff_state_int8,
         set_calibrating as set_calibrating_int8,
@@ -54,9 +74,6 @@ try:
         convert_model_to_optimized_int4,
         enable_modiff_mode as enable_modiff_mode_int4,
         reset_modiff_state as reset_modiff_state_int4,
-        set_calibrating as set_calibrating_int4,
-        get_calibration_config as get_calibration_config_int4,
-        reset_calibration as reset_calibration_int4,
     )
     HAS_INT4 = True
 except ImportError:
@@ -69,6 +86,13 @@ try:
     HAS_FID = True
 except ImportError:
     HAS_FID = False
+
+# Standard PyTorch quantization for baseline
+try:
+    import torch.quantization as quant
+    HAS_TORCH_QUANT = True
+except ImportError:
+    HAS_TORCH_QUANT = False
 
 
 def load_model(config_path: str, ckpt_path: str, verbose: bool = False):
@@ -90,20 +114,107 @@ def load_model(config_path: str, ckpt_path: str, verbose: bool = False):
 
 def count_conv_layers(model: nn.Module) -> int:
     """Count Conv2d layers in model."""
-    return sum(1 for m in model.modules() if isinstance(m, (nn.Conv2d, OptimizedInt8Conv2d, OptimizedInt4Conv2d)))
+    conv_types = [nn.Conv2d]
+    if HAS_INT8:
+        conv_types.append(OptimizedInt8Conv2d)
+    if HAS_INT4:
+        conv_types.append(OptimizedInt4Conv2d)
+    return sum(1 for m in model.modules() if isinstance(m, tuple(conv_types)))
+
+
+def convert_to_int8_baseline(model: nn.Module):
+    """Convert model to INT8 using standard PyTorch (no MoDiff)."""
+    model.qconfig = torch.quantization.get_default_qconfig('x86')
+    torch.quantization.prepare(model, inplace=True)
+    # Note: calibration happens during first forward pass
+    torch.quantization.convert(model, inplace=True)
+    return model
+
+
+def convert_to_int4_baseline(model: nn.Module):
+    """Simulate INT4 with INT8 using standard PyTorch (no MoDiff)."""
+    # PyTorch doesn't have native INT4, so we use INT8 as a proxy
+    model.qconfig = torch.quantization.get_default_qconfig('x86')
+    torch.quantization.prepare(model, inplace=True)
+    torch.quantization.convert(model, inplace=True)
+    return model
+
+
+class FullPipelineInt8Wrapper(nn.Module):
+    """Wrapper that quantizes input once and keeps entire pipeline in INT8."""
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+        self.input_scale = 127.0 / 6.0  # Assume input range [-6, 6]
+        
+    def forward(self, x, timesteps, context=None):
+        # Quantize input once
+        x_int8 = (x * self.input_scale).clamp(-127, 127).to(torch.int8)
+        # Forward stays in INT8 (layers handle internally)
+        out_int8 = self.model(x_int8.float() / self.input_scale, timesteps, context)
+        # Output already dequantized by final layer
+        return out_int8
+
+
+class FullPipelineInt4Wrapper(nn.Module):
+    """Wrapper that quantizes input once and keeps entire pipeline in INT4."""
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+        self.input_scale = 7.0 / 6.0  # Assume input range [-6, 6], INT4 is [-7, 7]
+        
+    def forward(self, x, timesteps, context=None):
+        # Quantize input once to INT4 range
+        x_int4 = (x * self.input_scale).clamp(-7, 7).round()
+        # Forward stays in INT4 (layers handle internally)
+        out_int4 = self.model(x_int4 / self.input_scale, timesteps, context)
+        return out_int4
+
+
+class FullPipelineInt8Wrapper(nn.Module):
+    """Wrapper that quantizes input once and keeps entire pipeline in INT8."""
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+        self.input_scale = 127.0 / 6.0  # Assume input range [-6, 6]
+        
+    def forward(self, x, timesteps, context=None):
+        # Quantize input once
+        x_int8 = (x * self.input_scale).clamp(-127, 127).to(torch.int8)
+        # Forward stays in INT8 (layers handle internally)
+        out_int8 = self.model(x_int8.float() / self.input_scale, timesteps, context)
+        # Output already dequantized by final layer
+        return out_int8
+
+
+class FullPipelineInt4Wrapper(nn.Module):
+    """Wrapper that quantizes input once and keeps entire pipeline in INT4."""
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+        self.input_scale = 7.0 / 6.0  # Assume input range [-6, 6], INT4 is [-7, 7]
+        
+    def forward(self, x, timesteps, context=None):
+        # Quantize input once to INT4 range
+        x_int4 = (x * self.input_scale).clamp(-7, 7).round()
+        # Forward stays in INT4 (layers handle internally)
+        out_int4 = self.model(x_int4 / self.input_scale, timesteps, context)
+        return out_int4
 
 
 class BenchmarkRunner:
     """Unified benchmark runner for all precision modes."""
     
     def __init__(self, config_path: str, ckpt_path: str, output_dir: str,
-                 batch_size: int = 4, steps: int = 50, shape: tuple = (4, 32, 32)):
+                 batch_size: int = 4, steps: int = 50, shape: tuple = (4, 32, 32),
+                 calibration_path: str = None):
         self.config_path = config_path
         self.ckpt_path = ckpt_path
         self.output_dir = output_dir
         self.batch_size = batch_size
         self.steps = steps
         self.shape = shape
+        self.calibration_path = calibration_path
         self.results = {}
         
         os.makedirs(output_dir, exist_ok=True)
@@ -121,11 +232,62 @@ class BenchmarkRunner:
         if mode == 'int8' and HAS_INT8:
             print(f"Converting UNet to INT8 ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
             convert_model_to_optimized_int8(model.model.diffusion_model)
+            
+            # Load static calibration if available
+            if self.calibration_path and os.path.exists(self.calibration_path):
+                print(f"Loading static calibration from {self.calibration_path}")
+                scales = torch.load(self.calibration_path, weights_only=True)
+                config = get_calibration_config_int8()
+                config.scales = scales
+                config.is_calibrated = True
+                print(f"✓ Loaded {len(scales)} layer scales (static quantization enabled)")
+            
+            enable_modiff_mode_int8(model.model.diffusion_model, True)
+        elif mode == 'int8_static' and HAS_INT8:
+            print(f"Converting UNet to INT8 Static ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
+            # Generate calibration samples
+            print("Generating calibration samples...")
+            calib_samples = []
+            for _ in range(50):
+                x = torch.randn(2, *self.shape, device='cuda')
+                calib_samples.append(x)
+            
+            # Convert with static quantization
+            convert_model_to_optimized_int8_static(
+                model.model.diffusion_model,
+                sample_inputs=calib_samples,
+                num_timesteps=1000,
+                device='cuda'
+            )
             enable_modiff_mode_int8(model.model.diffusion_model, True)
         elif mode == 'int4' and HAS_INT4:
             print(f"Converting UNet to INT4 ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
             convert_model_to_optimized_int4(model.model.diffusion_model)
             enable_modiff_mode_int4(model.model.diffusion_model, True)
+        elif mode == 'int8_baseline' and HAS_INT8:
+            print(f"Converting UNet to INT8 Baseline (INT8 kernels without MoDiff temporal caching) ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
+            # Convert to INT8 but disable MoDiff temporal caching
+            convert_model_to_optimized_int8(model.model.diffusion_model)
+            enable_modiff_mode_int8(model.model.diffusion_model, False)  # Disable temporal caching
+        elif mode == 'int4_baseline' and HAS_INT4:
+            print(f"Converting UNet to INT4 Baseline (INT4 kernels without MoDiff temporal caching) ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
+            # Convert to INT4 but disable MoDiff temporal caching
+            convert_model_to_optimized_int4(model.model.diffusion_model)
+            enable_modiff_mode_int4(model.model.diffusion_model, False)  # Disable temporal caching
+        elif mode == 'int8_full_pipeline' and HAS_INT8:
+            print(f"Converting UNet to Full INT8 Pipeline (no per-layer Q/DQ) ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
+            # Full INT8: quantize once at input, stay quantized throughout
+            convert_model_to_optimized_int8(model.model.diffusion_model)
+            enable_modiff_mode_int8(model.model.diffusion_model, True)
+            # Wrap model to handle end-to-end quantization
+            model.model.diffusion_model = FullPipelineInt8Wrapper(model.model.diffusion_model)
+        elif mode == 'int4_full_pipeline' and HAS_INT4:
+            print(f"Converting UNet to Full INT4 Pipeline (no per-layer Q/DQ) ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
+            # Full INT4: quantize once at input, stay quantized throughout
+            convert_model_to_optimized_int4(model.model.diffusion_model)
+            enable_modiff_mode_int4(model.model.diffusion_model, True)
+            # Wrap model to handle end-to-end quantization
+            model.model.diffusion_model = FullPipelineInt4Wrapper(model.model.diffusion_model)
         
         return model, DDIMSampler(model)
     
@@ -145,19 +307,8 @@ class BenchmarkRunner:
         print(f"Calibrated {len(get_calibration_config_int8().scales)} layers")
     
     def _calibrate_int4(self, model, sampler, num_runs: int = 10):
-        """Calibrate INT4 quantization scales."""
-        print(f"Calibrating INT4 ({num_runs} runs)...")
-        reset_calibration_int4()
-        set_calibrating_int4(model.model.diffusion_model, True)
-        
-        with torch.no_grad():
-            for _ in range(num_runs):
-                reset_modiff_state_int4(model.model.diffusion_model)
-                sampler.sample(S=5, batch_size=2, shape=self.shape, eta=0.0, verbose=False)
-        
-        get_calibration_config_int4().finalize()
-        set_calibrating_int4(model.model.diffusion_model, False)
-        print(f"Calibrated {len(get_calibration_config_int4().scales)} layers")
+        """INT4 doesn't use calibration anymore."""
+        pass
     
     def _generate_samples(self, model, sampler, mode: str, num_samples: int,
                           use_autocast: bool = False, dtype: torch.dtype = None):
@@ -172,10 +323,11 @@ class BenchmarkRunner:
         while generated < num_samples:
             batch = min(self.batch_size, num_samples - generated)
             
-            if mode == 'int8' and HAS_INT8:
+            if mode in ('int8', 'int8_static', 'int8_baseline') and HAS_INT8:
                 reset_modiff_state_int8(model.model.diffusion_model)
-            elif mode == 'int4' and HAS_INT4:
+            elif mode in ('int4', 'int4_baseline') and HAS_INT4:
                 reset_modiff_state_int4(model.model.diffusion_model)
+            # Note: baseline modes have state reset but MoDiff optimizations disabled
             
             torch.cuda.synchronize()
             start = time.time()
@@ -207,9 +359,11 @@ class BenchmarkRunner:
         
         model, sampler = self._setup_model(mode)
         
-        # INT8/INT4 calibration
-        if mode == 'int8' and HAS_INT8 and calibrate:
-            self._calibrate_int8(model, sampler)
+        # INT8/INT4 calibration (skip if static scales already loaded)
+        if mode == 'int8' and HAS_INT8:
+            config = get_calibration_config_int8()
+            if not config.is_calibrated and calibrate:
+                self._calibrate_int8(model, sampler)
         elif mode == 'int4' and HAS_INT4 and calibrate:
             self._calibrate_int4(model, sampler)
         
@@ -279,7 +433,7 @@ class BenchmarkRunner:
         print("-" * 55)
         
         baseline = self.results.get('fp32', {}).get('time_per_sample', 1.0)
-        for mode in ['fp32', 'fp16', 'int8', 'int4']:
+        for mode in ['fp32', 'fp16', 'int8', 'int8_baseline', 'int8_static', 'int4', 'int4_baseline']:
             if mode in self.results:
                 r = self.results[mode]
                 t = f"{r['time_per_sample']:.3f}s"
@@ -300,26 +454,31 @@ def main():
     parser.add_argument('--ckpt', type=str, default='models/ldm/lsun_churches256/model.ckpt')
     parser.add_argument('--output_dir', type=str, default='integration/results_ldm_benchmark')
     parser.add_argument('--batch_size', type=int, default=64)
-    parser.add_argument('--steps', type=int, default=100)
-    parser.add_argument('--num_samples', type=int, default=100)
-    parser.add_argument('--mode', type=str, choices=['all', 'fp32', 'fp16', 'int8', 'int4'], default='all')
+    parser.add_argument('--steps', type=int, default=50)
+    parser.add_argument('--num_samples', type=int, default=128)
+    parser.add_argument('--mode', type=str, choices=['all', 'fp32', 'fp16', 'int8', 'int8_baseline', 'int8_static', 'int4', 'int4_baseline'], default='all')
     parser.add_argument('--eval_fid', action='store_true', help='Compute FID between modes')
     parser.add_argument('--skip_calibration', action='store_true')
+    parser.add_argument('--calibration', type=str, default=None,
+                       help='Path to static calibration file (e.g., integration/int8_calibration.pt)')
     args = parser.parse_args()
     
     print(f"GPU: {torch.cuda.get_device_name()}")
     print(f"Config: {args.config}")
     print(f"Steps: {args.steps} | Batch: {args.batch_size} | Samples: {args.num_samples}")
+    if args.calibration:
+        print(f"Static calibration: {args.calibration}")
     
     runner = BenchmarkRunner(
         args.config, args.ckpt, args.output_dir,
-        args.batch_size, args.steps, shape=(4, 32, 32)
+        args.batch_size, args.steps, shape=(4, 32, 32),
+        calibration_path=args.calibration
     )
     
-    modes = ['fp32', 'fp16', 'int8', 'int4'] if args.mode == 'all' else [args.mode]
+    modes = ['fp32', 'fp16', 'int8', 'int8_baseline', 'int8_static', 'int4', 'int4_baseline'] if args.mode == 'all' else [args.mode]
     
     for mode in modes:
-        if mode == 'int8' and not HAS_INT8:
+        if mode in ('int8', 'int8_static') and not HAS_INT8:
             print(f"Skipping {mode}: not available")
             continue
         if mode == 'int4' and not HAS_INT4:

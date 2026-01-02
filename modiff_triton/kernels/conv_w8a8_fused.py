@@ -26,6 +26,7 @@ def _conv2d_w8a8_3x3_s1_kernel(
     # Scales
     scale_w_ptr,
     bias_ptr,
+    static_scale,  # NEW: pre-computed activation scale (0.0 = dynamic)
     # Shapes
     batch, in_channels, height, width,
     out_channels,
@@ -62,49 +63,53 @@ def _conv2d_w8a8_3x3_s1_kernel(
     offs_in = tl.arange(0, BLOCK_IN)
     
     # ========================================================================
-    # Step 1: Compute quantization scale (per-pixel)
+    # Step 1: Compute activation quantization scale
     # ========================================================================
-    # We need to find max(|x - x_prev|) over ALL input channels and 3x3 window
-    
-    max_val = 0.0
-    
-    for c_start in range(0, in_channels, BLOCK_IN):
-        # Load 3x3 window for this block of channels
-        for kh in range(3):
-            for kw in range(3):
-                h_idx = h_in + kh - 1
-                w_idx = w_in + kw - 1
-                
-                valid = (h_idx >= 0) & (h_idx < height) & (w_idx >= 0) & (w_idx < width)
-                mask = (c_start + offs_in < in_channels) & valid
-                
-                # Load current input
-                x_ptrs = (
-                    X_ptr + 
-                    pid_batch * stride_xb + 
-                    (c_start + offs_in) * stride_xc + 
-                    h_idx * stride_xh + 
-                    w_idx * stride_xw
-                )
-                x_val = tl.load(x_ptrs, mask=mask, other=0.0)
-                
-                if HAS_PREV:
-                    xp_ptrs = (
-                        X_prev_ptr + 
-                        pid_batch * stride_xpb + 
-                        (c_start + offs_in) * stride_xpc + 
-                        h_idx * stride_xph + 
-                        w_idx * stride_xpw
+    # If static_scale provided, use it directly (eliminates find_max overhead!)
+    if static_scale > 0.0:
+        scale_a = static_scale
+    else:
+        # Dynamic quantization: find max over all activations
+        # We need to find max(|x - x_prev|) over ALL input channels and 3x3 window
+        max_val = 0.0
+        
+        for c_start in range(0, in_channels, BLOCK_IN):
+            # Load 3x3 window for this block of channels
+            for kh in range(3):
+                for kw in range(3):
+                    h_idx = h_in + kh - 1
+                    w_idx = w_in + kw - 1
+                    
+                    valid = (h_idx >= 0) & (h_idx < height) & (w_idx >= 0) & (w_idx < width)
+                    mask = (c_start + offs_in < in_channels) & valid
+                    
+                    # Load current input
+                    x_ptrs = (
+                        X_ptr + 
+                        pid_batch * stride_xb + 
+                        (c_start + offs_in) * stride_xc + 
+                        h_idx * stride_xh + 
+                        w_idx * stride_xw
                     )
-                    xp_val = tl.load(xp_ptrs, mask=mask, other=0.0)
-                    x_val = x_val - xp_val
-                
-                # Update max
-                max_val = tl.maximum(max_val, tl.max(tl.abs(x_val)))
-    
-    # Compute scale
-    scale_a = max_val / 127.0
-    scale_a = tl.where(scale_a < 1e-8, 1e-8, scale_a)
+                    x_val = tl.load(x_ptrs, mask=mask, other=0.0)
+                    
+                    if HAS_PREV:
+                        xp_ptrs = (
+                            X_prev_ptr + 
+                            pid_batch * stride_xpb + 
+                            (c_start + offs_in) * stride_xpc + 
+                            h_idx * stride_xph + 
+                            w_idx * stride_xpw
+                        )
+                        xp_val = tl.load(xp_ptrs, mask=mask, other=0.0)
+                        x_val = x_val - xp_val
+                    
+                    # Update max
+                    max_val = tl.maximum(max_val, tl.max(tl.abs(x_val)))
+        
+        # Compute scale from dynamic max
+        scale_a = max_val / 127.0
+        scale_a = tl.where(scale_a < 1e-8, 1e-8, scale_a)
     
     # ========================================================================
     # Step 2: Compute Convolution
@@ -230,9 +235,14 @@ def conv2d_w8a8_3x3_fused(
     o_prev: torch.Tensor,
     scale_w: torch.Tensor,
     bias: torch.Tensor = None,
+    static_scale: float = 0.0,  # NEW: 0.0 means dynamic quantization
 ) -> torch.Tensor:
     """
     Fused W8A8 3×3 Conv2d with MoDiff modulation.
+    
+    Args:
+        static_scale: Pre-computed activation scale. If > 0, skips find_max.
+                     If == 0.0, uses dynamic quantization (default).
     """
     # Shapes
     N, C, H, W = x.shape
@@ -254,6 +264,7 @@ def conv2d_w8a8_3x3_fused(
         out,
         scale_w,
         bias if bias is not None else x, # Dummy
+        static_scale,  # NEW
         N, C, H, W, OutC,
         x.stride(0), x.stride(1), x.stride(2), x.stride(3),
         x_prev.stride(0), x_prev.stride(1), x_prev.stride(2), x_prev.stride(3),
@@ -275,9 +286,13 @@ def conv2d_w8a8_3x3_standard(
     weight_int8: torch.Tensor,
     scale_w: torch.Tensor,
     bias: torch.Tensor = None,
+    static_scale: float = 0.0,  # NEW: 0.0 means dynamic quantization
 ) -> torch.Tensor:
     """
     Standard W8A8 3×3 Conv2d without MoDiff modulation.
+    
+    Args:
+        static_scale: Pre-computed activation scale. If > 0, skips find_max.
     """
     # Shapes
     N, C, H, W = x.shape
@@ -301,6 +316,7 @@ def conv2d_w8a8_3x3_standard(
         out,
         scale_w,
         bias if bias is not None else x,
+        static_scale,  # NEW
         N, C, H, W, OutC,
         x.stride(0), x.stride(1), x.stride(2), x.stride(3),
         x.stride(0), x.stride(1), x.stride(2), x.stride(3), # x_prev strides

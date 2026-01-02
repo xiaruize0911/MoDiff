@@ -1,6 +1,7 @@
 torch>=2.4.1
 torchvision>=0.19.1
 torchaudio>=2.4.1
+triton>=2.1.0
 numpy>=1.26.3
 albumentations==0.4.3
 diffusers==0.3.0

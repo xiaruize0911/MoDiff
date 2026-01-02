@@ -65,11 +65,14 @@ setup(
                 'nvcc': nvcc_flags,
             },
         ),
-        # INT4 CUTLASS kernel
+        # INT4 CUTLASS kernel with TRUE INT4 support (arithmetic + native convolution)
         CUDAExtension(
             name='modiff_int4',
             sources=[
-                'csrc/conv_int4_cutlass.cu',
+                'csrc/conv_int8_cutlass.cu',  # Include INT8 for fallback compatibility
+                'csrc/conv_int4_cutlass.cu',  # Old INT4→INT8 unpacking (fallback)
+                'csrc/int4_arithmetic.cu',    # NEW: INT4 packed arithmetic
+                'csrc/conv_int4_cutlass_native.cu',  # NEW: Native INT4 convolution
                 'csrc/conv_int4_cutlass_interface.cpp',
             ],
             include_dirs=[

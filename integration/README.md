@@ -182,8 +182,29 @@ This builds:
 - **Convolution**: CUTLASS implicit GEMM (INT8 × INT8 → INT32)
 - **Calibration**: Percentile-based (99.99%) for optimal scales
 
-### INT4 Implementation  
-- **Strategy**: Unpack INT4→INT8, use INT8 Tensor Cores
-- **Packing**: 2 INT4 values per byte (range: -8 to 7)
-- **Scale adjustment**: INT4 range is 16× vs INT8's 128×
-- **Performance**: Fastest mode (1.19× speedup) with quality preservation
+### INT4 Implementation ⚠️ **Incomplete - Not True INT4 MoDiff**
+
+**Current Status**: Uses INT8 CUTLASS backend with INT4 weights (not native INT4 Tensor Cores)
+
+**Critical Limitations**:
+- ❌ **FP32 caches**: MoDiff temporal caches stored in FP32 (wastes 4× memory)
+- ❌ **FP32 residuals**: Residual computation in FP32, then re-quantized each step
+- ❌ **INT8 backend**: Unpacks INT4→INT8 before computation (adds overhead)
+- ❌ **No native INT4**: Doesn't use CUTLASS INT4 Tensor Cores (sm_89 supports this)
+
+**What it actually does**:
+1. Pack weights to INT4 (2 values per byte)
+2. **Unpack INT4→INT8** at runtime
+3. Call INT8 CUTLASS convolution
+4. Store caches in **FP32** (not INT4!)
+
+**Expected behavior** (when properly implemented):
+- ✓ Store caches as `uint8` (INT4 packed) → 4× memory savings
+- ✓ Compute residuals in INT4 precision → less overhead  
+- ✓ Use native INT4 CUTLASS Tensor Cores → ~1.5-1.8× speedup vs INT8
+
+**Current performance**: 1.19× speedup (only from INT8 backend, INT4 adds overhead)
+
+**Recommendation**: **Use INT8 mode for production** (fully optimized, 1.18× speedup, FID=8.20)
+
+**See**: [INT4_ANALYSIS.md](../INT4_ANALYSIS.md) for detailed explanation and fix roadmap.
