@@ -200,8 +200,9 @@ class OptimizedInt8Conv2d(nn.Module):
         # INT8 is faster when: large channels AND reasonable spatial
         max_ch = max(C, self.out_channels)
         min_spatial = min(H, W)
-        # Aggressive heuristics for L40S: Enable INT8 for almost all layers
-        return (max_ch >= 384 and min_spatial >= 4) or (max_ch >= 192 and min_spatial >= 8)
+        # Enable INT8 for medium-large layers (384+ channels)
+        # Based on profiling: INT8 is faster than FP16 for 384+ channels with 8x8+ spatial
+        return (max_ch >= 384 and min_spatial >= 8) or (max_ch >= 192 and min_spatial >= 16)
     
     def _nchw_to_nhwc(self, x: torch.Tensor) -> torch.Tensor:
         """Convert NCHW to NHWC with buffer reuse."""
@@ -312,11 +313,10 @@ class OptimizedInt8Conv2d(nn.Module):
                 config = get_calibration_config()
                 bias_empty = torch.empty(0, device=x.device)
                 if config.is_calibrated and not self.calibrating:
-                    # Static path for residual - use same scale (residual has similar range)
-                    scale = config.get_scale(self.layer_name)
-                    conv_residual = cutlass_int8.conv2d_int8_static(
+                    # Use DYNAMIC quantization for residual to preserve precision
+                    # Residuals have much smaller range than full activations
+                    conv_residual = cutlass_int8.conv2d_int8(
                         residual, self.weight_int8, self.weight_scales, bias_empty,
-                        scale,
                         self.stride, self.stride,
                         self.padding, self.padding,
                         self.dilation, self.dilation

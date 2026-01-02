@@ -1,0 +1,36 @@
+// Dequantize INT32 accumulator from INT8 convolution to FP32
+// Adjusts for INT4 scale factor (16x vs INT8)
+__global__ void dequantize_output_int4_from_int32_kernel(
+    const int32_t* __restrict__ input_int32,
+    float* __restrict__ output_fp32,
+    float input_scale,
+    const float* __restrict__ weight_scales,
+    const float* __restrict__ bias,
+    int N, int K, int P, int Q
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int output_size = N * K * P * Q;
+    
+    if (idx >= output_size) return;
+    
+    // Decode NHWK indices
+    int k = idx % K;
+    int q = (idx / K) % Q;
+    int p = (idx / (K * Q)) % P;
+    int n = idx / (K * Q * P);
+    
+    // INT32 accumulator contains sum of INT8 * INT8
+    // INT8 values were unpacked from INT4
+    // INT4 range: -8..7 (vs INT8's -128..127)
+    // Scale factor: 16x (because 128/8 = 16)
+    
+    float scale_factor = (input_scale * 16.0f) * (weight_scales[k] * 16.0f);
+    float fp32_val = static_cast<float>(input_int32[idx]) * scale_factor;
+    
+    // Add bias if present
+    if (bias != nullptr) {
+        fp32_val += bias[k];
+    }
+    
+    output_fp32[idx] = fp32_val;
+}

@@ -46,7 +46,7 @@ nvcc_flags = [
 ]
 
 setup(
-    name='modiff_int8',
+    name='modiff_cuda_kernels',
     version='1.0.0',
     ext_modules=[
         # Main INT8 CUTLASS kernel
@@ -55,6 +55,22 @@ setup(
             sources=[
                 'csrc/conv_int8_cutlass.cu',
                 'csrc/conv_int8_cutlass_interface.cpp',
+            ],
+            include_dirs=[
+                os.path.abspath('csrc'),
+                cutlass_include,
+            ],
+            extra_compile_args={
+                'cxx': ['-O3', '-std=c++17'],
+                'nvcc': nvcc_flags,
+            },
+        ),
+        # INT4 CUTLASS kernel
+        CUDAExtension(
+            name='modiff_int4',
+            sources=[
+                'csrc/conv_int4_cutlass.cu',
+                'csrc/conv_int4_cutlass_interface.cpp',
             ],
             include_dirs=[
                 os.path.abspath('csrc'),

@@ -3,7 +3,7 @@ Unified LDM Benchmark with Multiple Precision Modes.
 
 Supports:
 - FP32: Standard baseline
-- FP16/BF16: Half precision with autocast
+- FP16: Half precision with autocast
 - INT8: Optimized CUTLASS INT8 with static quantization
 
 Usage:
@@ -22,6 +22,10 @@ from omegaconf import OmegaConf
 import torchvision.utils as tvu
 from tqdm import tqdm
 
+# Disable TF32 globally for consistent benchmarking
+torch.backends.cuda.matmul.allow_tf32 = False
+torch.backends.cudnn.allow_tf32 = False
+
 sys.path.append(os.getcwd())
 
 from ldm.util import instantiate_from_config
@@ -32,16 +36,32 @@ try:
     from integration.int8_optimized import (
         OptimizedInt8Conv2d,
         convert_model_to_optimized_int8,
-        enable_modiff_mode,
-        reset_modiff_state,
-        set_calibrating,
-        get_calibration_config,
-        reset_calibration,
+        enable_modiff_mode as enable_modiff_mode_int8,
+        reset_modiff_state as reset_modiff_state_int8,
+        set_calibrating as set_calibrating_int8,
+        get_calibration_config as get_calibration_config_int8,
+        reset_calibration as reset_calibration_int8,
     )
     HAS_INT8 = True
 except ImportError:
     HAS_INT8 = False
     print("Warning: INT8 not available")
+
+# INT4 imports
+try:
+    from integration.int4_optimized import (
+        OptimizedInt4Conv2d,
+        convert_model_to_optimized_int4,
+        enable_modiff_mode as enable_modiff_mode_int4,
+        reset_modiff_state as reset_modiff_state_int4,
+        set_calibrating as set_calibrating_int4,
+        get_calibration_config as get_calibration_config_int4,
+        reset_calibration as reset_calibration_int4,
+    )
+    HAS_INT4 = True
+except ImportError:
+    HAS_INT4 = False
+    print("Warning: INT4 not available")
 
 # FID (optional)
 try:
@@ -70,7 +90,7 @@ def load_model(config_path: str, ckpt_path: str, verbose: bool = False):
 
 def count_conv_layers(model: nn.Module) -> int:
     """Count Conv2d layers in model."""
-    return sum(1 for m in model.modules() if isinstance(m, (nn.Conv2d, OptimizedInt8Conv2d)))
+    return sum(1 for m in model.modules() if isinstance(m, (nn.Conv2d, OptimizedInt8Conv2d, OptimizedInt4Conv2d)))
 
 
 class BenchmarkRunner:
@@ -93,31 +113,51 @@ class BenchmarkRunner:
         model, _ = load_model(self.config_path, self.ckpt_path)
         
         # Configure backends
-        torch.backends.cuda.matmul.allow_tf32 = (mode != 'fp32')
-        torch.backends.cudnn.allow_tf32 = (mode != 'fp32')
+        # Disable TF32 to ensure pure FP32 baseline and consistent comparisons
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
         torch.backends.cudnn.benchmark = True
         
         if mode == 'int8' and HAS_INT8:
             print(f"Converting UNet to INT8 ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
             convert_model_to_optimized_int8(model.model.diffusion_model)
-            enable_modiff_mode(model.model.diffusion_model, True)
+            enable_modiff_mode_int8(model.model.diffusion_model, True)
+        elif mode == 'int4' and HAS_INT4:
+            print(f"Converting UNet to INT4 ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
+            convert_model_to_optimized_int4(model.model.diffusion_model)
+            enable_modiff_mode_int4(model.model.diffusion_model, True)
         
         return model, DDIMSampler(model)
     
     def _calibrate_int8(self, model, sampler, num_runs: int = 10):
         """Calibrate INT8 quantization scales."""
         print(f"Calibrating INT8 ({num_runs} runs)...")
-        reset_calibration()
-        set_calibrating(model.model.diffusion_model, True)
+        reset_calibration_int8()
+        set_calibrating_int8(model.model.diffusion_model, True)
         
         with torch.no_grad():
             for _ in range(num_runs):
-                reset_modiff_state(model.model.diffusion_model)
+                reset_modiff_state_int8(model.model.diffusion_model)
                 sampler.sample(S=5, batch_size=2, shape=self.shape, eta=0.0, verbose=False)
         
-        get_calibration_config().finalize()
-        set_calibrating(model.model.diffusion_model, False)
-        print(f"Calibrated {len(get_calibration_config().scales)} layers")
+        get_calibration_config_int8().finalize()
+        set_calibrating_int8(model.model.diffusion_model, False)
+        print(f"Calibrated {len(get_calibration_config_int8().scales)} layers")
+    
+    def _calibrate_int4(self, model, sampler, num_runs: int = 10):
+        """Calibrate INT4 quantization scales."""
+        print(f"Calibrating INT4 ({num_runs} runs)...")
+        reset_calibration_int4()
+        set_calibrating_int4(model.model.diffusion_model, True)
+        
+        with torch.no_grad():
+            for _ in range(num_runs):
+                reset_modiff_state_int4(model.model.diffusion_model)
+                sampler.sample(S=5, batch_size=2, shape=self.shape, eta=0.0, verbose=False)
+        
+        get_calibration_config_int4().finalize()
+        set_calibrating_int4(model.model.diffusion_model, False)
+        print(f"Calibrated {len(get_calibration_config_int4().scales)} layers")
     
     def _generate_samples(self, model, sampler, mode: str, num_samples: int,
                           use_autocast: bool = False, dtype: torch.dtype = None):
@@ -133,7 +173,9 @@ class BenchmarkRunner:
             batch = min(self.batch_size, num_samples - generated)
             
             if mode == 'int8' and HAS_INT8:
-                reset_modiff_state(model.model.diffusion_model)
+                reset_modiff_state_int8(model.model.diffusion_model)
+            elif mode == 'int4' and HAS_INT4:
+                reset_modiff_state_int4(model.model.diffusion_model)
             
             torch.cuda.synchronize()
             start = time.time()
@@ -165,13 +207,15 @@ class BenchmarkRunner:
         
         model, sampler = self._setup_model(mode)
         
-        # INT8 calibration
+        # INT8/INT4 calibration
         if mode == 'int8' and HAS_INT8 and calibrate:
             self._calibrate_int8(model, sampler)
+        elif mode == 'int4' and HAS_INT4 and calibrate:
+            self._calibrate_int4(model, sampler)
         
         # Configure autocast
-        use_autocast = mode in ('fp16', 'bf16')
-        dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16}.get(mode)
+        use_autocast = mode == 'fp16'
+        dtype = torch.float16 if mode == 'fp16' else None
         
         # Generate samples
         total_time, num_gen = self._generate_samples(
@@ -235,7 +279,7 @@ class BenchmarkRunner:
         print("-" * 55)
         
         baseline = self.results.get('fp32', {}).get('time_per_sample', 1.0)
-        for mode in ['fp32', 'fp16', 'bf16', 'int8']:
+        for mode in ['fp32', 'fp16', 'int8', 'int4']:
             if mode in self.results:
                 r = self.results[mode]
                 t = f"{r['time_per_sample']:.3f}s"
@@ -255,10 +299,10 @@ def main():
     parser.add_argument('--config', type=str, default='configs/latent-diffusion/lsun_churches-ldm-kl-8.yaml')
     parser.add_argument('--ckpt', type=str, default='models/ldm/lsun_churches256/model.ckpt')
     parser.add_argument('--output_dir', type=str, default='integration/results_ldm_benchmark')
-    parser.add_argument('--batch_size', type=int, default=16)
+    parser.add_argument('--batch_size', type=int, default=64)
     parser.add_argument('--steps', type=int, default=100)
     parser.add_argument('--num_samples', type=int, default=100)
-    parser.add_argument('--mode', type=str, choices=['all', 'fp32', 'fp16', 'bf16', 'int8'], default='all')
+    parser.add_argument('--mode', type=str, choices=['all', 'fp32', 'fp16', 'int8', 'int4'], default='all')
     parser.add_argument('--eval_fid', action='store_true', help='Compute FID between modes')
     parser.add_argument('--skip_calibration', action='store_true')
     args = parser.parse_args()
@@ -272,14 +316,14 @@ def main():
         args.batch_size, args.steps, shape=(4, 32, 32)
     )
     
-    modes = ['fp32', 'fp16', 'bf16', 'int8'] if args.mode == 'all' else [args.mode]
+    modes = ['fp32', 'fp16', 'int8', 'int4'] if args.mode == 'all' else [args.mode]
     
     for mode in modes:
         if mode == 'int8' and not HAS_INT8:
             print(f"Skipping {mode}: not available")
             continue
-        if mode == 'bf16' and not torch.cuda.is_bf16_supported():
-            print(f"Skipping {mode}: not supported")
+        if mode == 'int4' and not HAS_INT4:
+            print(f"Skipping {mode}: not available")
             continue
         runner.run_mode(mode, args.num_samples, calibrate=not args.skip_calibration)
     

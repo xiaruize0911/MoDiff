@@ -1,0 +1,68 @@
+    // 3. Unpack INT4 → INT8 for both input and weights
+    // This allows us to use the INT8 CUTLASS Tensor Core path
+    
+    // Unpack input: INT4 → INT8
+    int input_int8_size = input_size;
+    int8_t* d_input_int8;
+    cudaMalloc(&d_input_int8, input_int8_size * sizeof(int8_t));
+    
+    int unpack_blocks = (input_int8_size + threads - 1) / threads;
+    unpack_int4_to_int8_kernel<<<unpack_blocks, threads, 0, stream>>>(
+        d_input_int4, d_input_int8, input_int8_size
+    );
+    
+    // Unpack weights: INT4 → INT8
+    int weight_size = K * R * S * C;
+    int8_t* d_weight_int8;
+    cudaMalloc(&d_weight_int8, weight_size * sizeof(int8_t));
+    
+    unpack_blocks = (weight_size + threads - 1) / threads;
+    unpack_int4_to_int8_kernel<<<unpack_blocks, threads, 0, stream>>>(
+        weight_int4, d_weight_int8, weight_size
+    );
+    
+    // 4. Call INT8 CUTLASS convolution
+    // Output is INT32 accumulator (sum of INT8 * INT8)
+    int output_size = N * P * Q * K;
+    int32_t* d_output_int32;
+    cudaMalloc(&d_output_int32, output_size * sizeof(int32_t));
+    
+    cudaError_t conv_result = conv2d_int8_cutlass(
+        d_input_int8,      // INT8 input (NHWC)
+        d_weight_int8,     // INT8 weights (KRSC)
+        d_output_int32,    // INT32 output
+        N, H, W, C,
+        K, R, S,
+        pad_h, pad_w,
+        stride_h, stride_w,
+        dilation_h, dilation_w,
+        stream
+    );
+    
+    if (conv_result != cudaSuccess) {
+        cudaFree(d_input_int8);
+        cudaFree(d_weight_int8);
+        cudaFree(d_output_int32);
+        cudaFree(d_input_int4);
+        cudaFree(d_input_max);
+        return;
+    }
+    
+    // 5. Dequantize INT32 → FP32
+    // Scale factor: INT4 range is -8..7 (vs INT8's -128..127)
+    // So INT4 scale is 16x larger (8-bit / 4-bit = 2^4 = 16)
+    // Final scale = (input_scale * 16) * (weight_scale * 16) / (INT8 factor)
+    // Simplified: scale = input_scale * weight_scale * 256 / (128 * 128)
+    //           = input_scale * weight_scale * 256 / 16384
+    //           = input_scale * weight_scale / 64
+    
+    int dequant_blocks = (output_size + threads - 1) / threads;
+    dequantize_output_int4_from_int32_kernel<<<dequant_blocks, threads, 0, stream>>>(
+        d_output_int32, output, input_scale, weight_scales, bias,
+        N, K, P, Q
+    );
+    
+    // Cleanup
+    cudaFree(d_input_int8);
+    cudaFree(d_weight_int8);
+    cudaFree(d_output_int32);
