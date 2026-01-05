@@ -10,7 +10,7 @@ invisible-watermark
 imageio==2.9.0
 imageio-ffmpeg==0.4.2
 test-tube>=0.7.5
-streamlit>=0.73.1
+blinker>=1.5
 torch-fidelity==0.3.0
 torchmetrics==0.6.0
 streamlit-drawable-canvas==0.8

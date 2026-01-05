@@ -22,12 +22,29 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 # Try to load CUTLASS INT8 kernels
 try:
+    # Ensure proper library paths for CUDA dependencies
+    import glob
+    torch_lib = os.path.dirname(__import__('torch').__file__) + '/lib'
+    cuda_lib_dirs = glob.glob('/usr/local/cuda*/lib64')
+    cuda_target_dirs = glob.glob('/usr/local/cuda*/targets/x86_64-linux/lib')
+    nvidia_lib_dirs = glob.glob('/usr/local/lib/python*/dist-packages/nvidia/*/lib')
+    
+    lib_path_parts = [torch_lib]
+    lib_path_parts.extend(cuda_lib_dirs)
+    lib_path_parts.extend(cuda_target_dirs)
+    lib_path_parts.extend(nvidia_lib_dirs)
+    
+    if 'LD_LIBRARY_PATH' in os.environ:
+        lib_path_parts.append(os.environ['LD_LIBRARY_PATH'])
+    
+    os.environ['LD_LIBRARY_PATH'] = ':'.join(lib_path_parts)
+    
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'modiff_cuda'))
     import modiff_int8 as cutlass_int8
     HAS_CUTLASS = True
-except ImportError:
+except (ImportError, OSError) as e:
     HAS_CUTLASS = False
-    print("Warning: CUTLASS INT8 not available")
+    print(f"Warning: CUTLASS INT8 not available ({e})")
 
 # Try to load Triton fused kernels (30-50% faster than CUTLASS for 3x3)
 try:
