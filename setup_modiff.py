@@ -173,6 +173,37 @@ def download_first_stage_models():
             print_error(f"Failed to download kl-f8: {e}")
             return False
     
+    # LSUN Churches LDM model
+    ldm_dir = Path(__file__).parent / "models" / "ldm" / "lsun_churches256"
+    ldm_ckpt = ldm_dir / "model.ckpt"
+    
+    if ldm_ckpt.exists():
+        print_success(f"LSUN Churches model already exists at {ldm_ckpt}")
+    else:
+        print(f"  Downloading LSUN Churches LDM model (~1.5GB)...")
+        ldm_dir.mkdir(parents=True, exist_ok=True)
+        
+        url = "https://ommer-lab.com/files/latent-diffusion/lsun_churches.zip"
+        zip_path = ldm_dir / "lsun_churches.zip"
+        
+        try:
+            # Download
+            urllib.request.urlretrieve(url, zip_path)
+            print_success(f"Downloaded lsun_churches.zip")
+            
+            # Extract
+            print("  Extracting lsun_churches.zip...")
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(ldm_dir)
+            print_success(f"Extracted to {ldm_dir}")
+            
+            # Clean up zip file
+            zip_path.unlink()
+            
+        except Exception as e:
+            print_error(f"Failed to download LSUN Churches model: {e}")
+            return False
+    
     return True
 
 def setup_taming_transformers():
@@ -187,11 +218,19 @@ def setup_taming_transformers():
     except ImportError:
         pass
     
-    # Install from git
-    run_command(
+    # Install from git with real-time output
+    print("  Installing taming-transformers from git (this may take a few minutes)...")
+    result = subprocess.run(
         "pip install -e git+https://github.com/CompVis/taming-transformers.git@master#egg=taming-transformers",
-        "Installing taming-transformers from git"
+        shell=True,
+        check=False,
+        text=True
     )
+    
+    if result.returncode == 0:
+        print_success("Installing taming-transformers from git")
+    else:
+        print_warning("pip install had issues, continuing anyway...")
     
     # Find where it was installed
     src_dir = Path(__file__).parent / "src" / "taming-transformers"
@@ -286,6 +325,15 @@ def verify_setup():
     else:
         print_error(f"kl-f8 model not found at {kl_f8_model}")
     
+    # Check LSUN Churches LDM model
+    checks_total += 1
+    ldm_model = Path(__file__).parent / "models" / "ldm" / "lsun_churches256" / "model.ckpt"
+    if ldm_model.exists():
+        print_success(f"LSUN Churches model exists")
+        checks_passed += 1
+    else:
+        print_error(f"LSUN Churches model not found at {ldm_model}")
+    
     print(f"\n{Colors.BLUE}Setup verification: {checks_passed}/{checks_total} checks passed{Colors.RESET}")
     
     return checks_passed == checks_total
@@ -294,6 +342,7 @@ def main():
     parser = argparse.ArgumentParser(description="Setup MoDiff for benchmarking")
     parser.add_argument("--skip-cuda", action="store_true", help="Skip CUDA extension rebuild")
     parser.add_argument("--skip-models", action="store_true", help="Skip model downloads")
+    parser.add_argument("--skip-dependencies", action="store_true", help="Skip dependency installation")
     args = parser.parse_args()
     
     print(f"{Colors.GREEN}╔═══════════════════════════════════════╗{Colors.RESET}")
@@ -302,8 +351,11 @@ def main():
     
     try:
         # Step 1: Install dependencies
-        install_dependencies()
-        
+        if not args.skip_dependencies:
+            install_dependencies()
+        else:
+            print_warning("Skipping dependency installation (--skip-dependencies)")
+            
         # Step 2: Rebuild CUDA extensions
         if not args.skip_cuda:
             rebuild_cuda_extensions()

@@ -32,6 +32,7 @@ import os
 import sys
 import time
 import json
+import warnings
 import torch
 import torch.nn as nn
 import numpy as np
@@ -39,9 +40,16 @@ from omegaconf import OmegaConf
 import torchvision.utils as tvu
 from tqdm import tqdm
 
+# Suppress NNPACK warnings (not needed for GPU)
+warnings.filterwarnings('ignore', message='Could not initialize NNPACK')
+warnings.filterwarnings('ignore', category=UserWarning, module='torchmetrics')
+
 # Disable TF32 globally for consistent benchmarking
 torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False
+
+# Fix cuDNN sublibrary loading issues - disable cuDNN entirely
+torch.backends.cudnn.enabled = False
 
 sys.path.append(os.getcwd())
 
