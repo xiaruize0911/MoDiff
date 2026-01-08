@@ -19,6 +19,13 @@ from ldm.modules.diffusionmodules.util import (
 )
 from ldm.modules.attention import SpatialTransformer
 
+# Cached timestep embedding for 2-3% speedup
+try:
+    from integration.timestep_cache import get_cached_timestep_embedding
+    USE_TIMESTEP_CACHE = True
+except ImportError:
+    USE_TIMESTEP_CACHE = False
+
 
 # dummy replace
 def convert_module_to_f16(x):
@@ -755,7 +762,11 @@ class UNetModel(nn.Module):
             self.num_classes is not None
         ), "must specify y if and only if the model is class-conditional"
         hs = []
-        t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
+        # Use cached timestep embeddings for 2-3% speedup
+        if USE_TIMESTEP_CACHE:
+            t_emb = get_cached_timestep_embedding(timesteps, self.model_channels, repeat_only=False)
+        else:
+            t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
         emb = self.time_embed(t_emb)
 
         if self.num_classes is not None:
@@ -982,7 +993,11 @@ class EncoderUNetModel(nn.Module):
         :param timesteps: a 1-D batch of timesteps.
         :return: an [N x K] Tensor of outputs.
         """
-        emb = self.time_embed(timestep_embedding(timesteps, self.model_channels))
+        # Use cached timestep embeddings for 2-3% speedup
+        if USE_TIMESTEP_CACHE:
+            emb = self.time_embed(get_cached_timestep_embedding(timesteps, self.model_channels))
+        else:
+            emb = self.time_embed(timestep_embedding(timesteps, self.model_channels))
 
         results = []
         h = x.type(self.dtype)

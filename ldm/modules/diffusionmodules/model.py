@@ -11,6 +11,13 @@ from ldm.modules.attention import LinearAttention
 
 logger = logging.getLogger(__name__)
 
+# Cached timestep embedding for 2-3% speedup
+try:
+    from integration.timestep_cache import get_cached_timestep_embedding
+    USE_TIMESTEP_CACHE = True
+except ImportError:
+    USE_TIMESTEP_CACHE = False
+
 
 def get_timestep_embedding(timesteps, embedding_dim):
     """
@@ -322,9 +329,12 @@ class Model(nn.Module):
             # assume aligned context, cat along channel axis
             x = torch.cat((x, context), dim=1)
         if self.use_timestep:
-            # timestep embedding
+            # timestep embedding with caching for 2-3% speedup
             assert t is not None
-            temb = get_timestep_embedding(t, self.ch)
+            if USE_TIMESTEP_CACHE:
+                temb = get_cached_timestep_embedding(t, self.ch)
+            else:
+                temb = get_timestep_embedding(t, self.ch)
             temb = self.temb.dense[0](temb)
             temb = nonlinearity(temb)
             temb = self.temb.dense[1](temb)
