@@ -15,3 +15,6 @@ modiff_triton/data
 /benchmark_results
 results*/
 integration/results_ldm_benchmark
+*.so
+modiff_cuda/build/
+PHASE2_PLAN.md

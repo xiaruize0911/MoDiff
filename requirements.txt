@@ -24,9 +24,10 @@ opencv-python-headless
 pandas
 Pillow>=9.3.0
 pytorch-lightning==1.4.2
-PyYAML==6.0
+PyYAML>=6.0.1
 six==1.16.0
 tqdm==4.64.0
 transformers>=4.22.2
+omegaconf
 git+https://github.com/openai/CLIP.git@main#egg=clip
 git+https://github.com/CompVis/taming-transformers.git@master#egg=taming-transformers
