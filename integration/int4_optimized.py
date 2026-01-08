@@ -94,7 +94,7 @@ class OptimizedInt4Conv2d(nn.Module):
         self.is_first_step = True
         self.a_hat: Optional[torch.Tensor] = None  # FP32 activation cache
         self.o_hat: Optional[torch.Tensor] = None  # FP32 output cache
-        self._residual_buffer: Optional[torch.Tensor] = None  # Step 3: Reusable buffer
+        self._residual_buffer: Optional[torch.Tensor] = None  # Reusable buffer (from pool or lazy-allocated)
         
         # Compile forward method for 15-25% speedup
         if self.use_compile:
@@ -222,8 +222,8 @@ class OptimizedInt4Conv2d(nn.Module):
             return output
         else:
             # Subsequent steps: Incremental update via FP16 residuals
-            # Step 3: Use in-place subtraction to avoid allocation
-            if not hasattr(self, '_residual_buffer') or self._residual_buffer is None:
+            # Use reusable buffer to avoid allocation
+            if self._residual_buffer is None or self._residual_buffer.shape != x.shape:
                 self._residual_buffer = torch.empty_like(x)
             torch.sub(x, self.a_hat, out=self._residual_buffer)
             self.a_hat.copy_(x)
@@ -233,7 +233,7 @@ class OptimizedInt4Conv2d(nn.Module):
                                     self.stride, self.padding, self.dilation, self.groups).float()
             
             self.o_hat.add_(conv_residual)
-            # Step 3: Return cache directly (safe since not modified until next call)
+            # Return cache directly (safe since not modified until next call)
             return self.o_hat
     
     def _dequantize_int4_weights(self) -> torch.Tensor:

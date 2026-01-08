@@ -200,7 +200,7 @@ class OptimizedInt8Conv2d(nn.Module):
         self.is_first_step = True
         self.a_hat_cache: Optional[torch.Tensor] = None
         self.o_hat_cache: Optional[torch.Tensor] = None
-        self._residual_buffer: Optional[torch.Tensor] = None  # Step 3: Reusable buffer
+        self._residual_buffer: Optional[torch.Tensor] = None  # Reusable buffer (from pool or lazy-allocated)
         
         # Calibration state
         self.calibrating = False
@@ -424,18 +424,18 @@ class OptimizedInt8Conv2d(nn.Module):
                 return conv_residual
             elif use_int8:
                 # Fall back to CUTLASS for non-3×3 layers
-                # Step 3: Use in-place subtraction with out parameter (eliminates allocation)
-                if not hasattr(self, '_residual_buffer') or self._residual_buffer is None:
+                # Use reusable buffer to avoid allocation
+                if self._residual_buffer is None or self._residual_buffer.shape != x.shape:
                     self._residual_buffer = torch.empty_like(x)
                 torch.sub(x, self.a_hat_cache, out=self._residual_buffer)
                 conv_residual = self._forward_int8_dynamic_no_bias(self._residual_buffer)
                 self.a_hat_cache.copy_(x)
                 self.o_hat_cache.add_(conv_residual)
-                # Step 3: Return cache directly (safe since not modified until next call)
+                # Return cache directly (safe since not modified until next call)
                 return self.o_hat_cache
             else:
-                # Step 3: Reuse residual buffer, return cache directly
-                if not hasattr(self, '_residual_buffer') or self._residual_buffer is None:
+                # Reuse residual buffer, return cache directly
+                if self._residual_buffer is None or self._residual_buffer.shape != x.shape:
                     self._residual_buffer = torch.empty_like(x)
                 torch.sub(x, self.a_hat_cache, out=self._residual_buffer)
                 residual_fp16 = self._residual_buffer.half()

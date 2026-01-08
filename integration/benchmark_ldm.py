@@ -241,6 +241,10 @@ class BenchmarkRunner:
             print(f"Converting UNet to INT8 ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
             convert_model_to_optimized_int8(model.model.diffusion_model)
             
+            # Initialize buffer pool for pre-allocated buffers
+            from integration.buffer_pool import initialize_buffer_pool
+            initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
+            
             # Load static calibration if available
             if self.calibration_path and os.path.exists(self.calibration_path):
                 print(f"Loading static calibration from {self.calibration_path}")
@@ -267,10 +271,20 @@ class BenchmarkRunner:
                 num_timesteps=1000,
                 device='cuda'
             )
+            
+            # Initialize buffer pool for pre-allocated buffers
+            from integration.buffer_pool import initialize_buffer_pool
+            initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
+            
             enable_modiff_mode_int8(model.model.diffusion_model, True)
         elif mode == 'int4' and HAS_INT4:
             print(f"Converting UNet to INT4 ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
             convert_model_to_optimized_int4(model.model.diffusion_model)
+            
+            # Initialize buffer pool for pre-allocated buffers
+            from integration.buffer_pool import initialize_buffer_pool
+            initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
+            
             enable_modiff_mode_int4(model.model.diffusion_model, True)
         elif mode == 'int8_baseline' and HAS_INT8:
             print(f"Converting UNet to INT8 Baseline (INT8 kernels without MoDiff temporal caching) ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
