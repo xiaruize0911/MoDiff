@@ -22,10 +22,13 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 try:
     from modiff_triton.kernels.gemm_w4a4 import gemm_w4a4, gemm_w4a4_accum
+    from modiff_triton.kernels.modulated_quantize import modulated_quantize_int4
     HAS_TRITON_INT4 = True
     print("✓ Triton INT4 kernels loaded - True INT4 computation enabled")
+    print("✓ Modulated quantization INT4 kernels loaded - correct error compensation")
 except ImportError as e:
     HAS_TRITON_INT4 = False
+    modulated_quantize_int4 = None
     print(f"Warning: Triton INT4 kernels not available ({e}), falling back to FP16")
 
 
@@ -228,24 +231,67 @@ class OptimizedInt4Conv2d(nn.Module):
             #   â_t = Q(a_t - â_{t+1}) + â_{t+1}
             #   ô_t = A(Q(a_t - â_{t+1})) + ô_{t+1}
             
-            # Compute residual: a_t - â_{t+1}
-            if self._residual_buffer is None or self._residual_buffer.shape != x.shape:
-                self._residual_buffer = torch.empty_like(x)
-            torch.sub(x, self.a_hat, out=self._residual_buffer)
+            if HAS_TRITON_INT4 and modulated_quantize_int4 is not None:
+                # Use correct error compensation with INT4 quantization
+                residual_packed, a_hat_new, scale, original_shape = modulated_quantize_int4(
+                    x, self.a_hat
+                )
+                
+                # Unpack INT4 to FP32 for convolution
+                # modulated_quantize_int4 returns packed INT4 values
+                # We need to unpack and reshape to original shape
+                residual_fp32 = self._unpack_int4_to_fp32(residual_packed, scale, original_shape)
+                
+                # Compute conv on quantized residual
+                residual_fp16 = residual_fp32.half()
+                conv_residual = F.conv2d(residual_fp16, self.weight_fp16, None,
+                                        self.stride, self.padding, self.dilation, self.groups).float()
+                
+                # Update caches
+                self.o_hat.add_(conv_residual)
+                self.a_hat.copy_(a_hat_new)  # Correct â_t with error compensation
+                
+                return self.o_hat
+            else:
+                # Fallback: no INT4 quantization (use FP16)
+                if self._residual_buffer is None or self._residual_buffer.shape != x.shape:
+                    self._residual_buffer = torch.empty_like(x)
+                torch.sub(x, self.a_hat, out=self._residual_buffer)
+                
+                residual_fp16 = self._residual_buffer.half()
+                conv_residual = F.conv2d(residual_fp16, self.weight_fp16, None,
+                                        self.stride, self.padding, self.dilation, self.groups).float()
+                
+                self.o_hat.add_(conv_residual)
+                self.a_hat.copy_(x)  # No quantization
+                
+                return self.o_hat
+    
+    def _unpack_int4_to_fp32(self, packed: torch.Tensor, scale: torch.Tensor, original_shape: tuple) -> torch.Tensor:
+        """Unpack INT4 values (2 per byte) back to FP32.
+        
+        Args:
+            packed: Packed INT4 tensor (N//2 elements)
+            scale: Quantization scale
+            original_shape: Original tensor shape before packing
             
-            # Compute A(residual) - no quantization for INT4 activations (FP16 used)
-            residual_fp16 = self._residual_buffer.half()
-            conv_residual = F.conv2d(residual_fp16, self.weight_fp16, None,
-                                    self.stride, self.padding, self.dilation, self.groups).float()
-            
-            # Update ô_t = ô_{t+1} + A(residual)
-            self.o_hat.add_(conv_residual)
-            
-            # Update â_t cache (eq ec5)
-            # For INT4: â_t ≈ a_t (no activation quantization, using FP16)
-            self.a_hat.copy_(x)
-            
-            return self.o_hat
+        Returns:
+            Unpacked FP32 tensor with original_shape
+        """
+        # Unpack: each byte contains 2 INT4 values
+        lo = (packed & 0xF).to(torch.int8) - 8  # Lower 4 bits: [-8, 7]
+        hi = ((packed >> 4) & 0xF).to(torch.int8) - 8  # Upper 4 bits: [-8, 7]
+        
+        # Interleave lo and hi to reconstruct original order
+        unpacked = torch.stack([lo, hi], dim=-1).flatten()
+        
+        # Trim to original size (modulated_quantize may have padded)
+        original_numel = torch.tensor(original_shape).prod().item()
+        unpacked = unpacked[:original_numel]
+        
+        # Dequantize and reshape
+        scale_value = scale.item() if isinstance(scale, torch.Tensor) else float(scale)
+        return (unpacked.float() * scale_value).view(original_shape)
     
     def _dequantize_int4_weights(self) -> torch.Tensor:
         """Dequantize packed INT4 weights to FP32."""

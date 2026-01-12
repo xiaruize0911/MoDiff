@@ -52,11 +52,14 @@ try:
         conv2d_w8a8_3x3_fused,
         conv2d_w8a8_3x3_standard
     )
+    from modiff_triton.kernels.modulated_quantize import modulated_quantize_int8
     HAS_TRITON_FUSED = True
     print("✓ Triton fused INT8 kernels loaded - 30-50% speedup for 3×3 conv")
+    print("✓ Modulated quantization kernels loaded - correct error compensation")
 except ImportError as e:
     HAS_TRITON_FUSED = False
     print(f"Warning: Triton fused kernels not available ({e})")
+    modulated_quantize_int8 = None
 
 
 class CalibrationConfig:
@@ -417,68 +420,100 @@ class OptimizedInt8Conv2d(nn.Module):
             #   â_t = Q(a_t - â_{t+1}) + â_{t+1}
             #   ô_t = A(Q(a_t - â_{t+1})) + ô_{t+1}
             if use_int8 and can_fuse:
-                # Fused kernel: computes conv(x - x_prev) + o_prev internally
-                # This computes: conv(Q(a_t - â_{t+1})) + ô_{t+1}
-                static_scale = self.activation_scale if self.activation_scale else 0.0
-                conv_residual = conv2d_w8a8_3x3_fused(
-                    x, self.a_hat_cache,  # â_{t+1}
-                    self.weight_int8, 
-                    self.o_hat_cache, self.weight_scales, None, static_scale
-                )
-                
-                # Update â_t cache with error compensation (eq ec5)
-                # â_t = Q(a_t - â_{t+1}) + â_{t+1}
-                # The quantized residual is implicitly: (x - a_hat_cache) quantized in kernel
-                # We need to reconstruct â_t from the quantized residual
-                # Approximation: â_t ≈ a_t (since quantization error is small)
-                # For exact implementation, kernel would need to return quantized residual
-                # TODO: Return Q(a_t - â_{t+1}) from kernel for exact â_t reconstruction
-                if self._residual_buffer is None or self._residual_buffer.shape != x.shape:
-                    self._residual_buffer = torch.empty_like(x)
-                torch.sub(x, self.a_hat_cache, out=self._residual_buffer)
-                # Approximate â_t by adding back quantized residual
-                # This is not exact but close enough for practical purposes
-                self.a_hat_cache.copy_(x)  # Simplified: â_t ≈ a_t
-                self.o_hat_cache.copy_(conv_residual)
-                return conv_residual
+                # Use modulated quantization for CORRECT error compensation
+                if HAS_TRITON_FUSED and modulated_quantize_int8 is not None:
+                    # Compute Q(a_t - â_{t+1}) and get correct â_t (eq ec5)
+                    static_scale = self.activation_scale if self.activation_scale else None
+                    residual_int, a_hat_new, scale = modulated_quantize_int8(
+                        x, self.a_hat_cache, scale=static_scale
+                    )
+                    
+                    # Dequantize residual for convolution
+                    residual_fp32 = residual_int.float() * scale.item()
+                    
+                    # Compute conv(Q(residual)) + ô_{t+1}
+                    # Note: We pass the dequantized residual as "current", and zeros as "prev"
+                    # so the kernel computes conv(residual) without subtracting anything
+                    static_scale_val = self.activation_scale if self.activation_scale else 0.0
+                    zeros = torch.zeros_like(residual_fp32)
+                    conv_residual = conv2d_w8a8_3x3_fused(
+                        residual_fp32, zeros,
+                        self.weight_int8, 
+                        self.o_hat_cache, self.weight_scales, None, static_scale_val
+                    )
+                    
+                    # Update caches with CORRECT error-compensated values
+                    self.a_hat_cache.copy_(a_hat_new)  # â_t = Q(a_t - â_{t+1}) + â_{t+1}
+                    self.o_hat_cache.copy_(conv_residual)  # ô_t
+                    return conv_residual
+                else:
+                    # Fallback: approximate error compensation (old behavior)
+                    static_scale = self.activation_scale if self.activation_scale else 0.0
+                    conv_residual = conv2d_w8a8_3x3_fused(
+                        x, self.a_hat_cache,
+                        self.weight_int8, 
+                        self.o_hat_cache, self.weight_scales, None, static_scale
+                    )
+                    self.a_hat_cache.copy_(x)  # Approximation: â_t ≈ a_t
+                    self.o_hat_cache.copy_(conv_residual)
+                    return conv_residual
             elif use_int8:
                 # Fall back to CUTLASS for non-3×3 layers
-                # Compute residual: a_t - â_{t+1}
-                if self._residual_buffer is None or self._residual_buffer.shape != x.shape:
-                    self._residual_buffer = torch.empty_like(x)
-                torch.sub(x, self.a_hat_cache, out=self._residual_buffer)
-                
-                # Quantize and compute: A(Q(a_t - â_{t+1}))
-                conv_residual = self._forward_int8_dynamic_no_bias(self._residual_buffer)
-                
-                # Update ô_t = ô_{t+1} + A(Q(residual))
-                self.o_hat_cache.add_(conv_residual)
-                
-                # Update â_t cache (eq ec5)
-                # For exact: â_t = Q(residual) + â_{t+1}
-                # Simplified: â_t ≈ a_t (quantization error small)
-                self.a_hat_cache.copy_(x)
-                
-                return self.o_hat_cache
+                if HAS_TRITON_FUSED and modulated_quantize_int8 is not None:
+                    # Use correct error compensation
+                    static_scale = self.activation_scale if self.activation_scale else None
+                    residual_int, a_hat_new, scale = modulated_quantize_int8(
+                        x, self.a_hat_cache, scale=static_scale
+                    )
+                    
+                    # Dequantize for convolution
+                    residual_fp32 = residual_int.float() * scale.item()
+                    
+                    # Compute conv on residual
+                    conv_residual = self._forward_int8_dynamic_no_bias(residual_fp32)
+                    
+                    # Update caches
+                    self.o_hat_cache.add_(conv_residual)
+                    self.a_hat_cache.copy_(a_hat_new)  # Correct â_t
+                    
+                    return self.o_hat_cache
+                else:
+                    # Fallback: approximate (old behavior)
+                    if self._residual_buffer is None or self._residual_buffer.shape != x.shape:
+                        self._residual_buffer = torch.empty_like(x)
+                    torch.sub(x, self.a_hat_cache, out=self._residual_buffer)
+                    conv_residual = self._forward_int8_dynamic_no_bias(self._residual_buffer)
+                    self.o_hat_cache.add_(conv_residual)
+                    self.a_hat_cache.copy_(x)  # Approximation
+                    return self.o_hat_cache
             else:
                 # FP16 fallback path
-                # Compute residual: a_t - â_{t+1}
-                if self._residual_buffer is None or self._residual_buffer.shape != x.shape:
-                    self._residual_buffer = torch.empty_like(x)
-                torch.sub(x, self.a_hat_cache, out=self._residual_buffer)
-                
-                # Compute conv on residual (no bias, no quantization in FP16)
-                residual_fp16 = self._residual_buffer.half()
-                conv_residual = F.conv2d(residual_fp16, self.weight_fp16, None,
-                                        self.stride, self.padding, self.dilation, self.groups).float()
-                
-                # Update ô_t = ô_{t+1} + A(residual)
-                self.o_hat_cache.add_(conv_residual)
-                
-                # Update â_t ≈ a_t (no quantization in FP16 mode)
-                self.a_hat_cache.copy_(x)
-                
-                return self.o_hat_cache
+                if HAS_TRITON_FUSED and modulated_quantize_int8 is not None:
+                    # Use error compensation even in FP16 mode
+                    residual_int, a_hat_new, scale = modulated_quantize_int8(
+                        x, self.a_hat_cache, scale=None
+                    )
+                    residual_fp32 = residual_int.float() * scale.item()
+                    
+                    # FP16 conv
+                    residual_fp16 = residual_fp32.half()
+                    conv_residual = F.conv2d(residual_fp16, self.weight_fp16, None,
+                                            self.stride, self.padding, self.dilation, self.groups).float()
+                    
+                    self.o_hat_cache.add_(conv_residual)
+                    self.a_hat_cache.copy_(a_hat_new)  # Correct â_t
+                    return self.o_hat_cache
+                else:
+                    # Fallback: no quantization
+                    if self._residual_buffer is None or self._residual_buffer.shape != x.shape:
+                        self._residual_buffer = torch.empty_like(x)
+                    torch.sub(x, self.a_hat_cache, out=self._residual_buffer)
+                    residual_fp16 = self._residual_buffer.half()
+                    conv_residual = F.conv2d(residual_fp16, self.weight_fp16, None,
+                                            self.stride, self.padding, self.dilation, self.groups).float()
+                    self.o_hat_cache.add_(conv_residual)
+                    self.a_hat_cache.copy_(x)  # No quantization
+                    return self.o_hat_cache
 
 
 def convert_model_to_optimized_int8(model: nn.Module, prefix: str = "", use_compile: bool = False) -> nn.Module:
