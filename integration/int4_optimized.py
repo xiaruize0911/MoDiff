@@ -208,32 +208,43 @@ class OptimizedInt4Conv2d(nn.Module):
         
         # MoDiff mode with FP16 (INT4 activations too coarse for residuals)
         if self.is_first_step:
-            # First step: Full forward pass (Step 2: x already channels_last)
+            # First step: Full forward pass WITHOUT bias (paper requirement)
+            # Paper eq(ec1-ec2): â_T = Q(a_T), ô_T = A(â_T)
+            # Warm-up step: â_T ≈ a_T (no quantization)
             self.a_hat = x.clone()
             x_fp16 = x.half()
             if self.use_int4 and not hasattr(self, 'weight_fp16'):
                 weight_dequant = self._dequantize_int4_weights()
                 self.register_buffer('weight_fp16', weight_dequant.half())
-            bias = self.bias.half() if self.bias.numel() > 0 else None
-            output = F.conv2d(x_fp16, self.weight_fp16, bias,
+            # CRITICAL: No bias in first step to prevent accumulation
+            output = F.conv2d(x_fp16, self.weight_fp16, None,
                              self.stride, self.padding, self.dilation, self.groups).float()
             self.o_hat = output.clone()
             self.is_first_step = False
             return output
         else:
             # Subsequent steps: Incremental update via FP16 residuals
-            # Use reusable buffer to avoid allocation
+            # Paper eq(ec5-ec6):
+            #   â_t = Q(a_t - â_{t+1}) + â_{t+1}
+            #   ô_t = A(Q(a_t - â_{t+1})) + ô_{t+1}
+            
+            # Compute residual: a_t - â_{t+1}
             if self._residual_buffer is None or self._residual_buffer.shape != x.shape:
                 self._residual_buffer = torch.empty_like(x)
             torch.sub(x, self.a_hat, out=self._residual_buffer)
-            self.a_hat.copy_(x)
             
+            # Compute A(residual) - no quantization for INT4 activations (FP16 used)
             residual_fp16 = self._residual_buffer.half()
             conv_residual = F.conv2d(residual_fp16, self.weight_fp16, None,
                                     self.stride, self.padding, self.dilation, self.groups).float()
             
+            # Update ô_t = ô_{t+1} + A(residual)
             self.o_hat.add_(conv_residual)
-            # Return cache directly (safe since not modified until next call)
+            
+            # Update â_t cache (eq ec5)
+            # For INT4: â_t ≈ a_t (no activation quantization, using FP16)
+            self.a_hat.copy_(x)
+            
             return self.o_hat
     
     def _dequantize_int4_weights(self) -> torch.Tensor:

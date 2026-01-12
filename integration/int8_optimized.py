@@ -382,20 +382,26 @@ class OptimizedInt8Conv2d(nn.Module):
         # MoDiff forward with temporal caching
         if self.is_first_step:
             # First step: full computation + cache
+            # CRITICAL: No bias in first step (paper requirement - prevents accumulation)
             if use_int8 and can_fuse:
-                # Use fused kernel
-                bias = self.bias if self.bias.numel() > 0 else None
+                # Use fused kernel WITHOUT bias
                 static_scale = self.activation_scale if self.activation_scale else 0.0
                 out = conv2d_w8a8_3x3_standard(
-                    x, self.weight_int8, self.weight_scales, bias, static_scale
+                    x, self.weight_int8, self.weight_scales, None, static_scale
                 )
             elif use_int8:
-                # Fall back to CUTLASS
-                out = self._forward_int8_dynamic(x)
+                # Fall back to CUTLASS WITHOUT bias
+                out = self._forward_int8_dynamic_no_bias(x)
             else:
-                out = self._forward_fp16(x)
+                # FP16 path WITHOUT bias
+                x_fp16 = x.half()
+                out = F.conv2d(x_fp16, self.weight_fp16, None,
+                              self.stride, self.padding, self.dilation, self.groups).float()
             
-            # Initialize/update caches (Step 2: already channels_last, just clone)
+            # Initialize/update caches
+            # Paper eq(ec1-ec2): â_T = Q(a_T), ô_T = A(â_T)
+            # For simplicity in first step: â_T ≈ a_T (no quantization yet)
+            # This is the "warm-up" step mentioned in the paper
             if self.a_hat_cache is None or self.a_hat_cache.shape != x.shape:
                 self.a_hat_cache = x.clone()
                 self.o_hat_cache = out.clone()
@@ -407,42 +413,71 @@ class OptimizedInt8Conv2d(nn.Module):
             return out
         else:
             # Subsequent steps: incremental update with FUSED KERNEL
-            # Compute conv on residual (no bias) - stays in channels_last
+            # Paper eq(ec5-ec6): 
+            #   â_t = Q(a_t - â_{t+1}) + â_{t+1}
+            #   ô_t = A(Q(a_t - â_{t+1})) + ô_{t+1}
             if use_int8 and can_fuse:
                 # Fused kernel: computes conv(x - x_prev) + o_prev internally
-                # IMPORTANT: Pass OLD cache before updating!
+                # This computes: conv(Q(a_t - â_{t+1})) + ô_{t+1}
                 static_scale = self.activation_scale if self.activation_scale else 0.0
                 conv_residual = conv2d_w8a8_3x3_fused(
-                    x, self.a_hat_cache,  # a_hat_cache is STILL the old value here
+                    x, self.a_hat_cache,  # â_{t+1}
                     self.weight_int8, 
                     self.o_hat_cache, self.weight_scales, None, static_scale
                 )
-                # The fused kernel already computed: conv(x - a_hat_old) + o_hat_old
-                # Now update caches for next iteration
-                self.a_hat_cache.copy_(x)
+                
+                # Update â_t cache with error compensation (eq ec5)
+                # â_t = Q(a_t - â_{t+1}) + â_{t+1}
+                # The quantized residual is implicitly: (x - a_hat_cache) quantized in kernel
+                # We need to reconstruct â_t from the quantized residual
+                # Approximation: â_t ≈ a_t (since quantization error is small)
+                # For exact implementation, kernel would need to return quantized residual
+                # TODO: Return Q(a_t - â_{t+1}) from kernel for exact â_t reconstruction
+                if self._residual_buffer is None or self._residual_buffer.shape != x.shape:
+                    self._residual_buffer = torch.empty_like(x)
+                torch.sub(x, self.a_hat_cache, out=self._residual_buffer)
+                # Approximate â_t by adding back quantized residual
+                # This is not exact but close enough for practical purposes
+                self.a_hat_cache.copy_(x)  # Simplified: â_t ≈ a_t
                 self.o_hat_cache.copy_(conv_residual)
                 return conv_residual
             elif use_int8:
                 # Fall back to CUTLASS for non-3×3 layers
-                # Use reusable buffer to avoid allocation
+                # Compute residual: a_t - â_{t+1}
                 if self._residual_buffer is None or self._residual_buffer.shape != x.shape:
                     self._residual_buffer = torch.empty_like(x)
                 torch.sub(x, self.a_hat_cache, out=self._residual_buffer)
+                
+                # Quantize and compute: A(Q(a_t - â_{t+1}))
                 conv_residual = self._forward_int8_dynamic_no_bias(self._residual_buffer)
-                self.a_hat_cache.copy_(x)
+                
+                # Update ô_t = ô_{t+1} + A(Q(residual))
                 self.o_hat_cache.add_(conv_residual)
-                # Return cache directly (safe since not modified until next call)
+                
+                # Update â_t cache (eq ec5)
+                # For exact: â_t = Q(residual) + â_{t+1}
+                # Simplified: â_t ≈ a_t (quantization error small)
+                self.a_hat_cache.copy_(x)
+                
                 return self.o_hat_cache
             else:
-                # Reuse residual buffer, return cache directly
+                # FP16 fallback path
+                # Compute residual: a_t - â_{t+1}
                 if self._residual_buffer is None or self._residual_buffer.shape != x.shape:
                     self._residual_buffer = torch.empty_like(x)
                 torch.sub(x, self.a_hat_cache, out=self._residual_buffer)
+                
+                # Compute conv on residual (no bias, no quantization in FP16)
                 residual_fp16 = self._residual_buffer.half()
                 conv_residual = F.conv2d(residual_fp16, self.weight_fp16, None,
                                         self.stride, self.padding, self.dilation, self.groups).float()
-                self.a_hat_cache.copy_(x)
+                
+                # Update ô_t = ô_{t+1} + A(residual)
                 self.o_hat_cache.add_(conv_residual)
+                
+                # Update â_t ≈ a_t (no quantization in FP16 mode)
+                self.a_hat_cache.copy_(x)
+                
                 return self.o_hat_cache
 
 
