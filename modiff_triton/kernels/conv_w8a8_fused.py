@@ -21,8 +21,9 @@ def _conv2d_w8a8_3x3_s1_kernel(
     W_ptr,
     # Previous output (FP32) - for accumulation
     O_prev_ptr,
-    # Output
+    # Outputs
     O_ptr,
+    A_hat_new_ptr,  # NEW: Output updated a_hat cache
     # Scales
     scale_w_ptr,
     bias_ptr,
@@ -36,9 +37,11 @@ def _conv2d_w8a8_3x3_s1_kernel(
     stride_wout, stride_win, stride_wkh, stride_wkw,
     stride_opb, stride_opc, stride_oph, stride_opw,
     stride_ob, stride_oc, stride_oh, stride_ow,
+    stride_ahnewb, stride_ahnewc, stride_ahnewh, stride_ahneww, # NEW
     # Config
     HAS_PREV: tl.constexpr,  # True for MoDiff modulated path
     HAS_BIAS: tl.constexpr,
+    UPDATE_A_HAT: tl.constexpr, # NEW
     SCALE_W_IS_VECTOR: tl.constexpr,
     BLOCK_OUT: tl.constexpr,
     BLOCK_IN: tl.constexpr,
@@ -227,6 +230,52 @@ def _conv2d_w8a8_3x3_s1_kernel(
     )
     tl.store(out_ptrs, out_fp, mask=mask_out)
 
+    # ========================================================================
+    # Step 4: Update a_hat Cache (NEW)
+    # ========================================================================
+    if UPDATE_A_HAT:
+        # Only one output channel block needs to update the activation cache
+        if pid_out_ch == 0:
+            for c_start in range(0, in_channels, BLOCK_IN):
+                c_mask = (c_start + offs_in) < in_channels
+                
+                # Load current input at (h_in, w_in)
+                x_ptrs = (
+                    X_ptr + 
+                    pid_batch * stride_xb + 
+                    (c_start + offs_in) * stride_xc + 
+                    h_in * stride_xh + 
+                    w_in * stride_xw
+                )
+                x_val = tl.load(x_ptrs, mask=c_mask, other=0.0)
+                
+                xp_val = 0.0
+                if HAS_PREV:
+                    xp_ptrs = (
+                        X_prev_ptr + 
+                        pid_batch * stride_xpb + 
+                        (c_start + offs_in) * stride_xpc + 
+                        h_in * stride_xph + 
+                        w_in * stride_xpw
+                    )
+                    xp_val = tl.load(xp_ptrs, mask=c_mask, other=0.0)
+                
+                # Compute Q(a_t - a_hat_prev) + a_hat_prev
+                diff = x_val - xp_val
+                q_diff = tl.floor(diff / scale_a + 0.5)
+                q_diff = tl.maximum(tl.minimum(q_diff, 127.0), -128.0)
+                a_hat_new = q_diff * scale_a + xp_val
+                
+                # Store new cache
+                ahnew_ptrs = (
+                    A_hat_new_ptr + 
+                    pid_batch * stride_ahnewb + 
+                    (c_start + offs_in) * stride_ahnewc + 
+                    h_in * stride_ahnewh + 
+                    w_in * stride_ahneww
+                )
+                tl.store(ahnew_ptrs, a_hat_new, mask=c_mask)
+
 
 def conv2d_w8a8_3x3_fused(
     x: torch.Tensor,
@@ -234,8 +283,10 @@ def conv2d_w8a8_3x3_fused(
     weight_int8: torch.Tensor,
     o_prev: torch.Tensor,
     scale_w: torch.Tensor,
+    a_hat_new: torch.Tensor = None,
     bias: torch.Tensor = None,
-    static_scale: float = 0.0,  # NEW: 0.0 means dynamic quantization
+    static_scale: float = 0.0,
+    output: torch.Tensor = None, # NEW
 ) -> torch.Tensor:
     """
     Fused W8A8 3×3 Conv2d with MoDiff modulation.
@@ -243,13 +294,17 @@ def conv2d_w8a8_3x3_fused(
     Args:
         static_scale: Pre-computed activation scale. If > 0, skips find_max.
                      If == 0.0, uses dynamic quantization (default).
+        output: Optional output tensor to avoid allocation.
     """
     # Shapes
     N, C, H, W = x.shape
     OutC = weight_int8.shape[0]
     
     # Output
-    out = torch.empty((N, OutC, H, W), device=x.device, dtype=torch.float32)
+    if output is None:
+        out = torch.empty((N, OutC, H, W), device=x.device, dtype=torch.float32)
+    else:
+        out = output
     
     # Config
     BLOCK_OUT = 32
@@ -262,17 +317,20 @@ def conv2d_w8a8_3x3_fused(
         weight_int8,
         o_prev,
         out,
+        a_hat_new if a_hat_new is not None else x,
         scale_w,
-        bias if bias is not None else x, # Dummy
-        static_scale,  # NEW
+        bias if bias is not None else x,
+        static_scale,
         N, C, H, W, OutC,
         x.stride(0), x.stride(1), x.stride(2), x.stride(3),
         x_prev.stride(0), x_prev.stride(1), x_prev.stride(2), x_prev.stride(3),
         weight_int8.stride(0), weight_int8.stride(1), weight_int8.stride(2), weight_int8.stride(3),
         o_prev.stride(0), o_prev.stride(1), o_prev.stride(2), o_prev.stride(3),
         out.stride(0), out.stride(1), out.stride(2), out.stride(3),
+        a_hat_new.stride(0), a_hat_new.stride(1), a_hat_new.stride(2), a_hat_new.stride(3),
         HAS_PREV=True,
         HAS_BIAS=(bias is not None),
+        UPDATE_A_HAT=(a_hat_new is not None),
         SCALE_W_IS_VECTOR=(scale_w.numel() > 1),
         BLOCK_OUT=BLOCK_OUT,
         BLOCK_IN=BLOCK_IN,
@@ -286,20 +344,25 @@ def conv2d_w8a8_3x3_standard(
     weight_int8: torch.Tensor,
     scale_w: torch.Tensor,
     bias: torch.Tensor = None,
-    static_scale: float = 0.0,  # NEW: 0.0 means dynamic quantization
+    static_scale: float = 0.0,
+    output: torch.Tensor = None, # NEW
 ) -> torch.Tensor:
     """
     Standard W8A8 3×3 Conv2d without MoDiff modulation.
     
     Args:
         static_scale: Pre-computed activation scale. If > 0, skips find_max.
+        output: Optional output tensor to avoid allocation.
     """
     # Shapes
     N, C, H, W = x.shape
     OutC = weight_int8.shape[0]
     
     # Output
-    out = torch.empty((N, OutC, H, W), device=x.device, dtype=torch.float32)
+    if output is None:
+        out = torch.empty((N, OutC, H, W), device=x.device, dtype=torch.float32)
+    else:
+        out = output
     
     # Config
     BLOCK_OUT = 32
@@ -308,23 +371,25 @@ def conv2d_w8a8_3x3_standard(
     grid = (N, triton.cdiv(OutC, BLOCK_OUT), H * W)
     
     # Use same kernel with HAS_PREV=False
-    # Pass x as x_prev (unused) and out as o_prev (unused)
     _conv2d_w8a8_3x3_s1_kernel[grid](
-        x, x, # x_prev unused
+        x, x,
         weight_int8,
-        out, # o_prev unused
         out,
+        out,
+        x, # a_hat_new unused
         scale_w,
         bias if bias is not None else x,
-        static_scale,  # NEW
+        static_scale,
         N, C, H, W, OutC,
         x.stride(0), x.stride(1), x.stride(2), x.stride(3),
-        x.stride(0), x.stride(1), x.stride(2), x.stride(3), # x_prev strides
+        x.stride(0), x.stride(1), x.stride(2), x.stride(3),
         weight_int8.stride(0), weight_int8.stride(1), weight_int8.stride(2), weight_int8.stride(3),
-        out.stride(0), out.stride(1), out.stride(2), out.stride(3), # o_prev strides
         out.stride(0), out.stride(1), out.stride(2), out.stride(3),
+        out.stride(0), out.stride(1), out.stride(2), out.stride(3),
+        x.stride(0), x.stride(1), x.stride(2), x.stride(3),
         HAS_PREV=False,
         HAS_BIAS=(bias is not None),
+        UPDATE_A_HAT=False,
         SCALE_W_IS_VECTOR=(scale_w.numel() > 1),
         BLOCK_OUT=BLOCK_OUT,
         BLOCK_IN=BLOCK_IN,

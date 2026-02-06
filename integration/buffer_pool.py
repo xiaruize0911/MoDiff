@@ -182,6 +182,26 @@ def get_global_buffer_pool() -> BufferPool:
     return _global_buffer_pool
 
 
+def get_buffer(shape: tuple, device: torch.device, dtype: torch.dtype = torch.float32) -> torch.Tensor:
+    """
+    Get a generic buffer of specified shape and dtype.
+    
+    If global pool is initialized, it tries to find a matching buffer.
+    Otherwise, it allocates a new one as a fallback.
+    """
+    pool = get_global_buffer_pool()
+    # Simple shape-based caching for generic buffers
+    key = f"{shape}_{dtype}"
+    if not hasattr(pool, '_generic_buffers'):
+        pool._generic_buffers = {}
+    
+    if key not in pool._generic_buffers:
+        pool._generic_buffers[key] = torch.empty(
+            shape, device=device, dtype=dtype, memory_format=torch.channels_last
+        )
+    return pool._generic_buffers[key]
+
+
 def initialize_buffer_pool(model: nn.Module, max_batch_size: int = 64, device: str = 'cuda'):
     """
     Initialize global buffer pool for a model.

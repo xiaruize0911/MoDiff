@@ -30,6 +30,10 @@ Usage:
 import argparse
 import os
 import sys
+
+# Set memory management policy BEFORE any torch.cuda calls
+os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
+
 import time
 import json
 import warnings
@@ -336,9 +340,21 @@ class BenchmarkRunner:
         set_calibrating_int8(model.model.diffusion_model, False)
         print(f"Calibrated {len(get_calibration_config_int8().scales)} layers")
     
-    def _calibrate_int4(self, model, sampler, num_runs: int = 10):
-        """INT4 doesn't use calibration anymore."""
-        pass
+    def _calibrate_int4(self, model, sampler, num_runs: int = 5):
+        """Calibrate INT4 quantization scales (dynamic to static transition)."""
+        print(f"Calibrating INT4 ({num_runs} runs for speed)...")
+        from integration.int4_optimized import set_calibrating_int4
+        
+        set_calibrating_int4(model.model.diffusion_model, True)
+        
+        with torch.no_grad():
+            for _ in range(num_runs):
+                reset_modiff_state_int4(model.model.diffusion_model)
+                # Sample a few steps to get representative activations
+                sampler.sample(S=5, batch_size=self.batch_size, shape=self.shape, eta=0.0, verbose=False)
+        
+        set_calibrating_int4(model.model.diffusion_model, False)
+        print("✓ INT4 Calibration finished (Static scales locked)")
     
     def _generate_samples(self, model, sampler, mode: str, num_samples: int,
                           use_autocast: bool = False, dtype: torch.dtype = None):
@@ -397,9 +413,14 @@ class BenchmarkRunner:
         elif mode == 'int4' and HAS_INT4 and calibrate:
             self._calibrate_int4(model, sampler)
         
-        # Configure autocast
-        use_autocast = mode == 'fp16'
-        dtype = torch.float16 if mode == 'fp16' else None
+        # Initialize Buffer Pool for zero-copy MoDiff
+        if mode in ('int8', 'int4'):
+            from integration.buffer_pool import initialize_buffer_pool
+            initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size)
+        
+        # Configure autocast - enable for all modes except fp32 to maximize bandwidth
+        use_autocast = mode != 'fp32'
+        dtype = torch.float16 if use_autocast else None
         
         # Generate samples
         total_time, num_gen = self._generate_samples(
@@ -483,7 +504,7 @@ def main():
     parser.add_argument('--config', type=str, default='configs/latent-diffusion/lsun_churches-ldm-kl-8.yaml')
     parser.add_argument('--ckpt', type=str, default='models/ldm/lsun_churches256/model.ckpt')
     parser.add_argument('--output_dir', type=str, default='integration/results_ldm_benchmark')
-    parser.add_argument('--batch_size', type=int, default=64)
+    parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--steps', type=int, default=50)
     parser.add_argument('--num_samples', type=int, default=128)
     parser.add_argument('--mode', type=str, choices=['all', 'fp32', 'fp16', 'int8', 'int8_baseline', 'int8_static', 'int4', 'int4_baseline'], default='all')

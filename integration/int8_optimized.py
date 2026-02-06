@@ -164,7 +164,7 @@ class OptimizedInt8Conv2d(nn.Module):
     
     def __init__(self, conv: nn.Conv2d, layer_name: str = "", use_compile: bool = False):
         super().__init__()
-        self.layer_name = layer_name
+        self.layer_name = getattr(conv, 'layer_name', layer_name)
         # torch.compile() causes recompilation overhead with MoDiff's dynamic state
         # Disabled by default - channels_last and copy elimination give better gains
         self.use_compile = use_compile and hasattr(torch, 'compile')
@@ -276,9 +276,17 @@ class OptimizedInt8Conv2d(nn.Module):
         
         Used during calibration or as fallback.
         """
-        # Update calibration if in calibration mode
+        # CRITICAL: Always update calibration if global calibrating flag is set
         if self.calibrating:
             get_calibration_config().update(self.layer_name, x)
+        
+        # LOGGING: Print first few calls globally to see if any layer is actually running
+        global _debug_call_count
+        if '_debug_call_count' not in globals():
+            _debug_call_count = 0
+        if _debug_call_count < 10:
+            print(f"DEBUG CALL: {self.layer_name} (calib={self.calibrating})")
+            globals()['_debug_call_count'] += 1
         
         # Use static scale if available (much faster!)
         if self.activation_scale is not None:
@@ -357,12 +365,18 @@ class OptimizedInt8Conv2d(nn.Module):
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass with automatic precision selection and optional fused kernels."""
+        # Update calibration if in calibration mode
+        if self.calibrating:
+            get_calibration_config().update(self.layer_name, x)
+            # Fetch updated scale immediately for current step
+            self.activation_scale = get_calibration_config().get_scale(self.layer_name)
+
         N, C, H, W = x.shape
         
-        # Step 2 Optimization: Remove redundant layout conversion
-        # Assume input is already channels_last (enforced at model level)
-        # This eliminates 5-10% overhead from repeated conversions
-        
+        # Ensure scale is loaded if calibrated but not in module
+        if not self.activation_scale and get_calibration_config().is_calibrated:
+            self.activation_scale = get_calibration_config().get_scale(self.layer_name)
+            
         # Choose precision based on tensor size
         use_int8 = self._should_use_int8(C, H, W)
         can_fuse = self._can_use_fused()
@@ -385,20 +399,23 @@ class OptimizedInt8Conv2d(nn.Module):
         # MoDiff forward with temporal caching
         if self.is_first_step:
             # First step: full computation + cache
-            # CRITICAL: No bias in first step (paper requirement - prevents accumulation)
+            # ADD BIAS in the first step so it's part of the persistent cache (o_hat_cache)
+            # Subsequent residual updates will then automatically include the bias.
             if use_int8 and can_fuse:
-                # Use fused kernel WITHOUT bias
+                # Use fused kernel WITH bias
+                bias = self.bias if self.bias.numel() > 0 else None
                 static_scale = self.activation_scale if self.activation_scale else 0.0
                 out = conv2d_w8a8_3x3_standard(
-                    x, self.weight_int8, self.weight_scales, None, static_scale
+                    x, self.weight_int8, self.weight_scales, bias, static_scale
                 )
             elif use_int8:
-                # Fall back to CUTLASS WITHOUT bias
-                out = self._forward_int8_dynamic_no_bias(x)
+                # Fall back to CUTLASS WITH bias
+                out = self._forward_int8_dynamic(x)
             else:
-                # FP16 path WITHOUT bias
+                # FP16 path WITH bias
                 x_fp16 = x.half()
-                out = F.conv2d(x_fp16, self.weight_fp16, None,
+                bias = self.bias.half() if self.bias.numel() > 0 else None
+                out = F.conv2d(x_fp16, self.weight_fp16, bias,
                               self.stride, self.padding, self.dilation, self.groups).float()
             
             # Initialize/update caches
@@ -420,32 +437,27 @@ class OptimizedInt8Conv2d(nn.Module):
             #   â_t = Q(a_t - â_{t+1}) + â_{t+1}
             #   ô_t = A(Q(a_t - â_{t+1})) + ô_{t+1}
             if use_int8 and can_fuse:
-                # Use modulated quantization for CORRECT error compensation
-                if HAS_TRITON_FUSED and modulated_quantize_int8 is not None:
-                    # Compute Q(a_t - â_{t+1}) and get correct â_t (eq ec5)
-                    static_scale = self.activation_scale if self.activation_scale else None
-                    residual_int, a_hat_new, scale = modulated_quantize_int8(
-                        x, self.a_hat_cache, scale=static_scale
-                    )
+                # Use fully FUSED kernel: Residual + Quant + Conv + Accum + Cache Update
+                if HAS_TRITON_FUSED:
+                    if not hasattr(self, '_a_hat_new_buf') or self._a_hat_new_buf is None:
+                        from integration.buffer_pool import get_buffer
+                        self._a_hat_new_buf = get_buffer(x.shape, x.device, dtype=x.dtype)
+                        self._o_hat_new_buf = get_buffer(self.o_hat_cache.shape, x.device, dtype=x.dtype)
                     
-                    # Dequantize residual for convolution
-                    residual_fp32 = residual_int.float() * scale.item()
-                    
-                    # Compute conv(Q(residual)) + ô_{t+1}
-                    # Note: We pass the dequantized residual as "current", and zeros as "prev"
-                    # so the kernel computes conv(residual) without subtracting anything
-                    static_scale_val = self.activation_scale if self.activation_scale else 0.0
-                    zeros = torch.zeros_like(residual_fp32)
-                    conv_residual = conv2d_w8a8_3x3_fused(
-                        residual_fp32, zeros,
+                    static_scale = self.activation_scale if self.activation_scale else 0.0
+                    out = conv2d_w8a8_3x3_fused(
+                        x, self.a_hat_cache,
                         self.weight_int8, 
-                        self.o_hat_cache, self.weight_scales, None, static_scale_val
+                        self.o_hat_cache, self.weight_scales,
+                        a_hat_new=self._a_hat_new_buf,
+                        bias=None, static_scale=static_scale,
+                        output=self._o_hat_new_buf
                     )
                     
-                    # Update caches with CORRECT error-compensated values
-                    self.a_hat_cache.copy_(a_hat_new)  # â_t = Q(a_t - â_{t+1}) + â_{t+1}
-                    self.o_hat_cache.copy_(conv_residual)  # ô_t
-                    return conv_residual
+                    # Zero-copy swap
+                    self.a_hat_cache, self._a_hat_new_buf = self._a_hat_new_buf, self.a_hat_cache
+                    self.o_hat_cache, self._o_hat_new_buf = self._o_hat_new_buf, self.o_hat_cache
+                    return self.o_hat_cache
                 else:
                     # Fallback: approximate error compensation (old behavior)
                     static_scale = self.activation_scale if self.activation_scale else 0.0
@@ -519,28 +531,52 @@ class OptimizedInt8Conv2d(nn.Module):
 def convert_model_to_optimized_int8(model: nn.Module, prefix: str = "", use_compile: bool = False) -> nn.Module:
     """
     Convert all Conv2d layers to OptimizedInt8Conv2d with channels_last layout.
-    
-    Args:
-        model: PyTorch model to convert
-        prefix: Prefix for layer naming (used for calibration keys)
-        use_compile: Enable torch.compile() (currently disabled due to overhead)
-    
-    Returns:
-        Model with Conv2d replaced by OptimizedInt8Conv2d (channels_last enabled)
     """
+    # Force apply to top-level if it's a Conv2d and not converted
+    if isinstance(model, nn.Conv2d) and not isinstance(model, OptimizedInt8Conv2d):
+        return OptimizedInt8Conv2d(model, layer_name=prefix, use_compile=use_compile)
+
+    # Use a dictionary of name -> module to handle both children and list members
+    # (some containers use list index as name which might be shadowed or lost)
+    
+    # CASE 1: Standard children
     for name, child in list(model.named_children()):
         full_name = f"{prefix}.{name}" if prefix else name
         
-        if isinstance(child, nn.Conv2d):
-            optimized_conv = OptimizedInt8Conv2d(child, layer_name=full_name)
+        if isinstance(child, nn.Conv2d) and not isinstance(child, OptimizedInt8Conv2d):
+            optimized_conv = OptimizedInt8Conv2d(child, layer_name=full_name, use_compile=use_compile)
             setattr(model, name, optimized_conv)
-        else:
+        elif not isinstance(child, OptimizedInt8Conv2d):
             convert_model_to_optimized_int8(child, prefix=full_name, use_compile=use_compile)
+
+    # CASE 2: Special handling for modules hidden in attributes (e.g. FusedResBlock)
+    # Recursively check ALL attributes if they are modules
+    for attr_name, attr_val in list(model.__dict__.items()):
+        if isinstance(attr_val, nn.Module) and not attr_name.startswith('_'):
+            # Only process if not already processed in Case 1
+            if attr_name not in dict(model.named_children()):
+                full_name = f"{prefix}.{attr_name}" if prefix else attr_name
+                if isinstance(attr_val, nn.Conv2d) and not isinstance(attr_val, OptimizedInt8Conv2d):
+                    optimized_conv = OptimizedInt8Conv2d(attr_val, layer_name=full_name, use_compile=use_compile)
+                    setattr(model, attr_name, optimized_conv)
+                elif not isinstance(attr_val, OptimizedInt8Conv2d):
+                    convert_model_to_optimized_int8(attr_val, prefix=full_name, use_compile=use_compile)
+    
+    return model
+
+
+def count_conv_layers(model: nn.Module) -> int:
+    """Count number of Conv2d layers in model."""
+    count = 0
+    for m in model.modules():
+        if isinstance(m, (nn.Conv2d, OptimizedInt8Conv2d)):
+            count += 1
+    return count
     
     # Convert entire model to channels_last for optimal memory layout
     # This eliminates NCHW->NHWC permutations and improves Tensor Core utilization
     model = model.to(memory_format=torch.channels_last)
-    print(f"✓ Model converted to channels_last layout (NHWC) for {torch.cuda.get_device_name()}")
+    # print(f"✓ Model converted to channels_last layout (NHWC) for {torch.cuda.get_device_name()}")
     
     return model
 
@@ -561,9 +597,12 @@ def reset_modiff_state(model: nn.Module):
 
 def set_calibrating(model: nn.Module, calibrating: bool):
     """Set calibration mode for all OptimizedInt8Conv2d layers."""
+    count = 0
     for module in model.modules():
         if isinstance(module, OptimizedInt8Conv2d):
             module.set_calibrating(calibrating)
+            count += 1
+    print(f"DEBUG: set_calibrating({calibrating}) for {count} layers")
 
 
 def calibrate_model(model: nn.Module, dataloader, num_batches: int = 100, device: str = 'cuda'):

@@ -23,9 +23,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 try:
     from modiff_triton.kernels.gemm_w4a4 import gemm_w4a4, gemm_w4a4_accum
     from modiff_triton.kernels.modulated_quantize import modulated_quantize_int4
+    from modiff_triton.kernels.conv_w4a4_fused import conv2d_w4a4_modiff
     HAS_TRITON_INT4 = True
     print("✓ Triton INT4 kernels loaded - True INT4 computation enabled")
     print("✓ Modulated quantization INT4 kernels loaded - correct error compensation")
+    print("✓ Fused W4A4 Conv2d MoDiff kernel loaded - max performance enabled")
 except ImportError as e:
     HAS_TRITON_INT4 = False
     modulated_quantize_int4 = None
@@ -97,7 +99,15 @@ class OptimizedInt4Conv2d(nn.Module):
         self.is_first_step = True
         self.a_hat: Optional[torch.Tensor] = None  # FP32 activation cache
         self.o_hat: Optional[torch.Tensor] = None  # FP32 output cache
-        self._residual_buffer: Optional[torch.Tensor] = None  # Reusable buffer (from pool or lazy-allocated)
+        
+        # Calibration / Static Quantization
+        self.calibrating = False
+        self.activation_scale = 0.0
+        self.running_max = 0.0
+        
+        # Buffers for zero-copy MoDiff
+        self._a_hat_new_buf = None
+        self._o_hat_new_buf = None
         
         # Compile forward method for 15-25% speedup
         if self.use_compile:
@@ -183,88 +193,102 @@ class OptimizedInt4Conv2d(nn.Module):
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """MoDiff forward with INT4 weights and FP16 activations."""
-        # Step 2 Optimization: Assume input already channels_last (enforced at model level)
-        # This eliminates 5-10% overhead from repeated layout conversions
+        # Use dtype of input (expected to be FP16 from model-level autocast)
+        dtype = x.dtype
         
         # Standard forward (no MoDiff)
         if not self.modiff_enabled:
             if self.use_int4:
-                # Use FP16 conv with FP16-dequantized INT4 weights
-                # This gives us INT4 weight storage but FP16 computation
-                x_fp16 = x.half()
-                # Dequantize INT4 weights to FP16 for computation
-                # For simplicity, fall back to FP16 weights
+                # Dequantize INT4 weights to FP16 for computation if not done
                 if not hasattr(self, 'weight_fp16'):
-                    # Create FP16 weights from INT4 on first use
                     weight_dequant = self._dequantize_int4_weights()
-                    self.register_buffer('weight_fp16', weight_dequant.half().to(memory_format=torch.channels_last))
-                bias = self.bias.half() if self.bias.numel() > 0 else None
-                out = F.conv2d(x_fp16, self.weight_fp16, bias,
+                    self.register_buffer('weight_fp16', weight_dequant.to(dtype=dtype, memory_format=torch.channels_last))
+                
+                bias = self.bias.to(dtype=dtype) if self.bias.numel() > 0 else None
+                # Standard FP16 convolution (very fast on L4/H100)
+                return F.conv2d(x, self.weight_fp16, bias,
                               self.stride, self.padding, self.dilation, self.groups)
-                return out.float()
             else:
-                x_fp16 = x.half()
-                bias = self.bias.half() if self.bias.numel() > 0 else None
-                out = F.conv2d(x_fp16, self.weight_fp16, bias,
+                bias = self.bias.to(dtype=dtype) if self.bias.numel() > 0 else None
+                return F.conv2d(x, self.weight_fp16, bias,
                               self.stride, self.padding, self.dilation, self.groups)
-                return out.float()
         
-        # MoDiff mode with FP16 (INT4 activations too coarse for residuals)
+        # MoDiff mode
         if self.is_first_step:
-            # First step: Full forward pass WITHOUT bias (paper requirement)
-            # Paper eq(ec1-ec2): â_T = Q(a_T), ô_T = A(â_T)
-            # Warm-up step: â_T ≈ a_T (no quantization)
-            self.a_hat = x.clone()
-            x_fp16 = x.half()
+            # First step: Full forward pass WITH bias
+            self.a_hat = x.clone().to(memory_format=torch.channels_last)
+            
             if self.use_int4 and not hasattr(self, 'weight_fp16'):
                 weight_dequant = self._dequantize_int4_weights()
-                self.register_buffer('weight_fp16', weight_dequant.half())
-            # CRITICAL: No bias in first step to prevent accumulation
-            output = F.conv2d(x_fp16, self.weight_fp16, None,
-                             self.stride, self.padding, self.dilation, self.groups).float()
-            self.o_hat = output.clone()
+                self.register_buffer('weight_fp16', weight_dequant.to(dtype=dtype))
+            
+            bias = self.bias.to(dtype=dtype) if self.bias.numel() > 0 else None
+            output = F.conv2d(x, self.weight_fp16, bias,
+                             self.stride, self.padding, self.dilation, self.groups)
+            self.o_hat = output.clone().to(memory_format=torch.channels_last)
             self.is_first_step = False
             return output
         else:
-            # Subsequent steps: Incremental update via FP16 residuals
-            # Paper eq(ec5-ec6):
-            #   â_t = Q(a_t - â_{t+1}) + â_{t+1}
-            #   ô_t = A(Q(a_t - â_{t+1})) + ô_{t+1}
+            # Subsequent steps: Incremental update via residuals
+            if HAS_TRITON_INT4 and self.kernel_size == (3, 3) and self.stride == (1, 1) and self.padding == (1, 1):
+                # USE FUSED KERNEL: 3-5x faster than non-fused path
+                
+                # Fetch pre-allocated buffers and cache them on the module to avoid dict lookups
+                if not hasattr(self, '_a_hat_new_buf') or self._a_hat_new_buf is None:
+                    from integration.buffer_pool import get_buffer
+                    self._a_hat_new_buf = get_buffer(x.shape, x.device, dtype=x.dtype)
+                    self._o_hat_new_buf = get_buffer(self.o_hat.shape, x.device, dtype=x.dtype)
+                
+                # Calibration: compute running max of residuals
+                static_scale = 0.0
+                if self.calibrating:
+                    # Residual = x - a_hat
+                    # We compute max here during calibration (slow but once)
+                    res_max = (x - self.a_hat).abs().max().item()
+                    self.running_max = 0.9 * self.running_max + 0.1 * res_max
+                    self.activation_scale = self.running_max / 7.0
+                else:
+                    static_scale = self.activation_scale
+                
+                # Fused kernel: Residual + Quantize + Conv + Cache Update in ONE pass
+                # If static_scale > 0, it turns off the expensive dynamic max pass
+                conv2d_w4a4_modiff(
+                    x, self.a_hat, self.weight_packed, 
+                    self.weight_scale, self.bias, self.o_hat,
+                    a_hat_new=self._a_hat_new_buf, output=self._o_hat_new_buf,
+                    static_scale=static_scale
+                )
+                
+                # Zero-copy swap
+                self.a_hat, self._a_hat_new_buf = self._a_hat_new_buf, self.a_hat
+                self.o_hat, self._o_hat_new_buf = self._o_hat_new_buf, self.o_hat
+                return self.o_hat
             
+            # Non-3x3 layers or fallback
             if HAS_TRITON_INT4 and modulated_quantize_int4 is not None:
-                # Use correct error compensation with INT4 quantization
+                from integration.buffer_pool import get_buffer
                 residual_packed, a_hat_new, scale, original_shape = modulated_quantize_int4(
                     x, self.a_hat
                 )
                 
-                # Unpack INT4 to FP32 for convolution
-                # modulated_quantize_int4 returns packed INT4 values
-                # We need to unpack and reshape to original shape
                 residual_fp32 = self._unpack_int4_to_fp32(residual_packed, scale, original_shape)
+                residual = residual_fp32.to(dtype=dtype)
                 
-                # Compute conv on quantized residual
-                residual_fp16 = residual_fp32.half()
-                conv_residual = F.conv2d(residual_fp16, self.weight_fp16, None,
-                                        self.stride, self.padding, self.dilation, self.groups).float()
+                conv_residual = F.conv2d(residual, self.weight_fp16, None,
+                                        self.stride, self.padding, self.dilation, self.groups)
                 
-                # Update caches
+                # Update caches (in-place)
                 self.o_hat.add_(conv_residual)
-                self.a_hat.copy_(a_hat_new)  # Correct â_t with error compensation
-                
+                self.a_hat = a_hat_new
                 return self.o_hat
             else:
                 # Fallback: no INT4 quantization (use FP16)
-                if self._residual_buffer is None or self._residual_buffer.shape != x.shape:
-                    self._residual_buffer = torch.empty_like(x)
-                torch.sub(x, self.a_hat, out=self._residual_buffer)
-                
-                residual_fp16 = self._residual_buffer.half()
-                conv_residual = F.conv2d(residual_fp16, self.weight_fp16, None,
-                                        self.stride, self.padding, self.dilation, self.groups).float()
+                residual = x - self.a_hat
+                conv_residual = F.conv2d(residual, self.weight_fp16, None,
+                                        self.stride, self.padding, self.dilation, self.groups)
                 
                 self.o_hat.add_(conv_residual)
-                self.a_hat.copy_(x)  # No quantization
-                
+                self.a_hat = x
                 return self.o_hat
     
     def _unpack_int4_to_fp32(self, packed: torch.Tensor, scale: torch.Tensor, original_shape: tuple) -> torch.Tensor:
@@ -318,21 +342,35 @@ class OptimizedInt4Conv2d(nn.Module):
         return weight_fp
 
 
+def set_calibrating_int4(model: nn.Module, calibrating: bool):
+    """Set calibration mode for all OptimizedInt4Conv2d layers."""
+    for module in model.modules():
+        if isinstance(module, OptimizedInt4Conv2d):
+            module.calibrating = calibrating
+
 def convert_model_to_optimized_int4(model: nn.Module, prefix: str = "", use_compile: bool = False) -> nn.Module:
     """Convert all Conv2d layers to OptimizedInt4Conv2d with channels_last layout."""
-    for name, child in list(model.named_children()):
+    # Use list of attributes to avoid modification issues during iteration
+    for name in dir(model):
+        try:
+            child = getattr(model, name)
+        except AttributeError:
+            continue
+            
+        if not isinstance(child, nn.Module) or name.startswith('__'):
+            continue
+            
         full_name = f"{prefix}.{name}" if prefix else name
         
-        if isinstance(child, nn.Conv2d):
+        if isinstance(child, nn.Conv2d) and not isinstance(child, OptimizedInt4Conv2d):
             optimized_conv = OptimizedInt4Conv2d(child, layer_name=full_name, use_compile=use_compile)
             setattr(model, name, optimized_conv)
         else:
+            # Recurse into all modules
             convert_model_to_optimized_int4(child, prefix=full_name, use_compile=use_compile)
     
     # Convert entire model to channels_last for optimal memory layout
     model = model.to(memory_format=torch.channels_last)
-    print(f"✓ Model converted to channels_last layout (NHWC) for {torch.cuda.get_device_name()}")
-    
     return model
 
 
