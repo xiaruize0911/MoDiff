@@ -5,14 +5,13 @@ MoDiff Setup Script
 This script automates the setup process for running MoDiff benchmarks on a new machine.
 
 It performs the following steps:
-1. Installs required dependencies (nvidia-cutlass, blinker)
-2. Rebuilds CUDA extensions (modiff_cuda) with CUTLASS support
-3. Downloads and extracts first-stage autoencoder models
-4. Sets up taming-transformers package
-5. Patches PyTorch 2.6+ compatibility issues
+1. Installs required dependencies (blinker)
+2. Downloads and extracts first-stage autoencoder models
+3. Sets up taming-transformers package
+4. Patches PyTorch 2.6+ compatibility issues
 
 Usage:
-    python setup_modiff.py [--skip-cuda] [--skip-models]
+    python setup_modiff.py [--skip-models]
 """
 
 import os
@@ -80,60 +79,11 @@ def install_dependencies():
         "Installing blinker>=1.5"
     )
     
-    # Install nvidia-cutlass for CUDA kernels
-    run_command(
-        "pip install nvidia-cutlass",
-        "Installing nvidia-cutlass"
-    )
-    
     # Install requirements with --ignore-installed for blinker
     run_command(
         "pip install -r requirements.txt --ignore-installed blinker",
         "Installing requirements.txt"
     )
-
-def rebuild_cuda_extensions():
-    """Rebuild CUDA extensions with CUTLASS support."""
-    print_step("Rebuilding CUDA extensions")
-    
-    modiff_cuda_dir = Path(__file__).parent / "modiff_cuda"
-    
-    if not modiff_cuda_dir.exists():
-        print_warning("modiff_cuda directory not found, skipping CUDA build")
-        return False
-    
-    # Set CUDA environment variables
-    cuda_home = "/usr/local/cuda-12.4"
-    if not Path(cuda_home).exists():
-        # Try to find CUDA installation
-        cuda_dirs = glob.glob("/usr/local/cuda*")
-        if cuda_dirs:
-            cuda_home = sorted(cuda_dirs)[-1]  # Use latest version
-            print(f"  Using CUDA from: {cuda_home}")
-        else:
-            print_warning("CUDA not found, skipping CUDA build")
-            return False
-    
-    env = os.environ.copy()
-    env['CUDA_HOME'] = cuda_home
-    env['LD_LIBRARY_PATH'] = f"{cuda_home}/lib64:{cuda_home}/targets/x86_64-linux/lib:" + env.get('LD_LIBRARY_PATH', '')
-    
-    # Build CUDA extensions
-    build_cmd = f"cd {modiff_cuda_dir} && python setup.py build_ext --inplace"
-    result = subprocess.run(
-        build_cmd,
-        shell=True,
-        env=env,
-        capture_output=True,
-        text=True
-    )
-    
-    if result.returncode == 0:
-        print_success("CUDA extensions built successfully")
-        return True
-    else:
-        print_warning(f"CUDA build failed (non-critical): {result.stderr[:200]}")
-        return False
 
 def download_first_stage_models():
     """Download and extract first-stage autoencoder models."""
@@ -304,17 +254,17 @@ def verify_setup():
     except ImportError as e:
         print_error(f"taming import failed: {e}")
     
-    # Check CUTLASS INT8
+    # Check Triton INT8
     checks_total += 1
     try:
-        from integration.int8_optimized import HAS_CUTLASS
-        if HAS_CUTLASS:
-            print_success("CUTLASS INT8 kernels available")
+        from integration.int8_optimized import HAS_TRITON_FUSED
+        if HAS_TRITON_FUSED:
+            print_success("Triton fused INT8 kernels available")
             checks_passed += 1
         else:
-            print_warning("CUTLASS INT8 kernels not available (non-critical)")
+            print_warning("Triton fused INT8 kernels not available")
     except Exception as e:
-        print_warning(f"Could not check CUTLASS: {e}")
+        print_warning(f"Could not check Triton INT8: {e}")
     
     # Check first stage model
     checks_total += 1
@@ -340,7 +290,6 @@ def verify_setup():
 
 def main():
     parser = argparse.ArgumentParser(description="Setup MoDiff for benchmarking")
-    parser.add_argument("--skip-cuda", action="store_true", help="Skip CUDA extension rebuild")
     parser.add_argument("--skip-models", action="store_true", help="Skip model downloads")
     parser.add_argument("--skip-dependencies", action="store_true", help="Skip dependency installation")
     args = parser.parse_args()
@@ -356,22 +305,16 @@ def main():
         else:
             print_warning("Skipping dependency installation (--skip-dependencies)")
             
-        # Step 2: Rebuild CUDA extensions
-        if not args.skip_cuda:
-            rebuild_cuda_extensions()
-        else:
-            print_warning("Skipping CUDA rebuild (--skip-cuda)")
-        
-        # Step 3: Download first stage models
+        # Step 2: Download first stage models
         if not args.skip_models:
             download_first_stage_models()
         else:
             print_warning("Skipping model downloads (--skip-models)")
         
-        # Step 4: Setup taming-transformers
+        # Step 3: Setup taming-transformers
         setup_taming_transformers()
         
-        # Step 5: Patch compatibility issues
+        # Step 4: Patch compatibility issues
         patch_pytorch_compatibility()
         
         # Verify setup

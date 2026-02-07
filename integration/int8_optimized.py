@@ -27,6 +27,11 @@ try:
     torch_lib = os.path.dirname(__import__('torch').__file__) + '/lib'
     cuda_lib_dirs = glob.glob('/usr/local/cuda*/lib64')
     cuda_target_dirs = glob.glob('/usr/local/cuda*/targets/x86_64-linux/lib')
+try:
+    import glob
+    torch_lib = os.path.join(os.path.dirname(torch.__file__), 'lib')
+    cuda_lib_dirs = glob.glob('/usr/local/cuda/lib64') + glob.glob('/usr/local/cuda/targets/x86_64-linux/lib')
+    cuda_target_dirs = glob.glob('/usr/local/cuda-12.*/targets/x86_64-linux/lib')
     nvidia_lib_dirs = glob.glob('/usr/local/lib/python*/dist-packages/nvidia/*/lib')
     
     lib_path_parts = [torch_lib]
@@ -39,9 +44,8 @@ try:
     
     os.environ['LD_LIBRARY_PATH'] = ':'.join(lib_path_parts)
     
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'modiff_cuda'))
-    import modiff_int8 as cutlass_int8
-    HAS_CUTLASS = True
+    # CUTLASS INT8 backend (modiff_cuda) is deprecated and removed
+    HAS_CUTLASS = False
 except (ImportError, OSError) as e:
     HAS_CUTLASS = False
     print(f"Warning: CUTLASS INT8 not available ({e})")
@@ -143,6 +147,37 @@ def reset_calibration():
     _calib_config = CalibrationConfig()
 
 
+def quantize_weight(weight: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Quantize weight tensor with per-channel scales.
+    Alternative to cutlass_int8.quantize_weight.
+    """
+    if weight.dim() != 4:
+        # Fallback for linear or other layers
+        K = weight.size(0)
+        weight_flat = weight.view(K, -1)
+        max_vals = weight_flat.abs().max(dim=1)[0]
+        scales = max_vals / 127.0
+        scales = torch.where(scales > 0, scales, torch.ones_like(scales) * 1e-8)
+        weight_q = (weight / scales.view(-1, 1)).round().clamp(-128, 127).to(torch.int8)
+        return weight_q, scales
+        
+    K = weight.size(0)
+    # Per-channel quantization: find max for each output channel
+    weight_flat = weight.view(K, -1)
+    max_vals = weight_flat.abs().max(dim=1)[0]  # [K]
+    scales = max_vals / 127.0
+    
+    # Avoid division by zero
+    scales = torch.where(scales > 0, scales, torch.ones_like(scales) * 1e-8)
+    
+    # Quantize
+    scales_expanded = scales.view(K, 1, 1, 1)
+    weight_q = (weight / scales_expanded).round().clamp(-128, 127).to(torch.int8)
+    
+    return weight_q, scales
+
+
 class OptimizedInt8Conv2d(nn.Module):
     """
     Optimized INT8 Conv2d with:
@@ -177,11 +212,11 @@ class OptimizedInt8Conv2d(nn.Module):
         self.groups = conv.groups
         
         # Quantize weights once at initialization
-        if HAS_CUTLASS and self.groups == 1:
+        if self.groups == 1:
             w_fp32 = conv.weight.data.float()
             if w_fp32.device.type != 'cuda':
                 w_fp32 = w_fp32.cuda()
-            weight_int8, weight_scales = cutlass_int8.quantize_weight(w_fp32)
+            weight_int8, weight_scales = quantize_weight(w_fp32)
             self.register_buffer('weight_int8', weight_int8)
             self.register_buffer('weight_scales', weight_scales)
         else:
@@ -243,19 +278,18 @@ class OptimizedInt8Conv2d(nn.Module):
     
     def _should_use_int8(self, C: int, H: int, W: int) -> bool:
         """Determine if INT8 would be faster than FP16 for this tensor size."""
-        if not HAS_CUTLASS or self.weight_int8 is None:
+        if self.weight_int8 is None:
             return False
         if self.groups != 1:
             return False
         
-        # ONLY use INT8 if we have fused kernels (avoids CUTLASS overhead)
+        # ONLY use INT8 if we have fused kernels (modiff_triton)
         # Non-3×3 layers (like 1×1 skip connections) fall back to FP16
         if HAS_TRITON_FUSED and self._can_use_fused():
             # Fused kernels are fast even for 128+ channels
             return max(C, self.out_channels) >= 128 and min(H, W) >= 4
         
-        # Without fused kernels, FP16 is faster than CUTLASS
-        # CUTLASS has dynamic quantization overhead (find_max every step)
+        # Fall back to FP16 for everything else
         return False
     
     def _can_use_fused(self) -> bool:
@@ -269,91 +303,6 @@ class OptimizedInt8Conv2d(nn.Module):
                 self.padding == (1, 1) and
                 self.dilation == (1, 1) and
                 self.groups == 1)
-    
-    def _forward_int8_dynamic(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        INT8 forward with DYNAMIC quantization (finds max per layer).
-        
-        Used during calibration or as fallback.
-        """
-        # CRITICAL: Always update calibration if global calibrating flag is set
-        if self.calibrating:
-            get_calibration_config().update(self.layer_name, x)
-        
-        # LOGGING: Print first few calls globally to see if any layer is actually running
-        global _debug_call_count
-        if '_debug_call_count' not in globals():
-            _debug_call_count = 0
-        if _debug_call_count < 10:
-            print(f"DEBUG CALL: {self.layer_name} (calib={self.calibrating})")
-            globals()['_debug_call_count'] += 1
-        
-        # Use static scale if available (much faster!)
-        if self.activation_scale is not None:
-            return self._forward_int8_static(x)
-        
-        # Use standard INT8 path (includes find_max internally)
-        bias = self.bias if self.bias.numel() > 0 else torch.empty(0, device=x.device)
-        return cutlass_int8.conv2d_int8(
-            x, self.weight_int8, self.weight_scales, bias,
-            self.stride, self.stride,
-            self.padding, self.padding,
-            self.dilation, self.dilation
-        )
-    
-    def _forward_int8_dynamic_no_bias(self, x: torch.Tensor) -> torch.Tensor:
-        """INT8 forward without bias (for residual computation)."""
-        if self.calibrating:
-            get_calibration_config().update(self.layer_name, x)
-        
-        # Use static scale if available
-        if self.activation_scale is not None:
-            return self._forward_int8_static_no_bias(x)
-        
-        bias_empty = torch.empty(0, device=x.device)
-        return cutlass_int8.conv2d_int8(
-            x, self.weight_int8, self.weight_scales, bias_empty,
-            self.stride, self.stride,
-            self.padding, self.padding,
-            self.dilation, self.dilation
-        )
-    
-    def _forward_int8_static(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        INT8 forward with STATIC quantization (uses pre-computed scale).
-        
-        Eliminates find_max overhead - significantly faster!
-        """
-        # Quantize with static scale
-        scale_a = self.activation_scale
-        x_int8 = torch.clamp(torch.round(x / scale_a), -128, 127).to(torch.int8)
-        
-        # INT8 convolution
-        bias = self.bias if self.bias.numel() > 0 else torch.empty(0, device=x.device)
-        out_int32 = cutlass_int8.conv2d_int8_precomputed(
-            x_int8, self.weight_int8, bias,
-            self.stride, self.stride,
-            self.padding, self.padding,
-            self.dilation, self.dilation
-        )
-        
-        # Dequantize
-        return out_int32.float() * scale_a * self.weight_scales.view(1, -1, 1, 1)
-    
-    def _forward_int8_static_no_bias(self, x: torch.Tensor) -> torch.Tensor:
-        """INT8 static forward without bias (for residual computation)."""
-        scale_a = self.activation_scale
-        x_int8 = torch.clamp(torch.round(x / scale_a), -128, 127).to(torch.int8)
-        
-        bias_empty = torch.empty(0, device=x.device)
-        out_int32 = cutlass_int8.conv2d_int8_precomputed(
-            x_int8, self.weight_int8, bias_empty,
-            self.stride, self.stride,
-            self.padding, self.padding,
-            self.dilation, self.dilation
-        )
-        
-        return out_int32.float() * scale_a * self.weight_scales.view(1, -1, 1, 1)
     
     def _forward_fp16(self, x: torch.Tensor) -> torch.Tensor:
         """FP16 forward (fallback for small tensors)."""
@@ -390,9 +339,6 @@ class OptimizedInt8Conv2d(nn.Module):
                 return conv2d_w8a8_3x3_standard(
                     x, self.weight_int8, self.weight_scales, bias, static_scale
                 )
-            elif use_int8:
-                # Fall back to CUTLASS for non-3×3
-                return self._forward_int8_dynamic(x)
             else:
                 return self._forward_fp16(x)
         
@@ -408,9 +354,6 @@ class OptimizedInt8Conv2d(nn.Module):
                 out = conv2d_w8a8_3x3_standard(
                     x, self.weight_int8, self.weight_scales, bias, static_scale
                 )
-            elif use_int8:
-                # Fall back to CUTLASS WITH bias
-                out = self._forward_int8_dynamic(x)
             else:
                 # FP16 path WITH bias
                 x_fp16 = x.half()

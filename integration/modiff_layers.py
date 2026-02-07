@@ -29,25 +29,14 @@ import os
 import sys
 from typing import Optional, Tuple, Dict, Any
 
-# Add modiff_cuda to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'modiff_cuda'))
-
-try:
-    import modiff_int8 as cutlass_int8
-    HAS_CUTLASS_INT8 = True
-    print("CUTLASS INT8 kernel loaded successfully")
-except ImportError as e:
-    print(f"Warning: CUTLASS INT8 kernel not available: {e}")
-    print("Falling back to PyTorch FP16")
-    HAS_CUTLASS_INT8 = False
+# CUTLASS INT8 backend (modiff_cuda) is deprecated and removed
+HAS_CUTLASS_INT8 = False
 
 # Try to load fused kernels
 try:
-    import modiff_fused_ops
-    HAS_FUSED_OPS = True
-    print("Fused MoDiff operations loaded successfully")
+    # modiff_fused_ops is also part of modiff_cuda
+    HAS_FUSED_OPS = False
 except ImportError as e:
-    print(f"Fused MoDiff operations not available: {e}")
     HAS_FUSED_OPS = False
 
 

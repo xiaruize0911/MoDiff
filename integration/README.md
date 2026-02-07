@@ -155,24 +155,18 @@ cat results/int8_50k/fid_score.txt
 
 ## Dependencies
 
-- PyTorch 2.0+
+- PyTorch 2.6+
 - CUDA 12.x with Tensor Core support
-- CUTLASS 3.x (included in `modiff_cuda/`)
+- Triton 2.1+ (for optimized INT8/INT4 kernels)
 - OmegaConf
 - pytorch-fid (for FID evaluation)
 - scipy (for FID calculation)
 - lmdb (for LSUN dataset)
 
-## Build CUDA Extensions
+## Build Fused Kernels
 
-```bash
-cd /workspace/MoDiff/modiff_cuda
-python setup.py install
-```
-
-This builds:
-- `modiff_int8`: INT8 CUTLASS Tensor Core kernels
-- `modiff_int4`: INT4 kernels (unpacks to INT8)
+Triton kernels are JIT compiled and do not require separate build step.
+Just ensure Triton is installed: `pip install triton`.
 
 ## Technical Details
 
