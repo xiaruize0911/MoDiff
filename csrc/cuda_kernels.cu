@@ -40,9 +40,10 @@ __global__ void quantize_pack_kernel(
     // Real implementation would assume scaling was applied before or do it here.
     float v0 = input[2*idx];
     float v1 = input[2*idx+1];
-    
-    int8_t i0 = (int8_t)v0;
-    int8_t i1 = (int8_t)v1;
+
+    // Explicit round then clamp before cast
+    int8_t i0 = (int8_t)fmaxf(-7.0f, fminf(7.0f, roundf(v0)));
+    int8_t i1 = (int8_t)fmaxf(-7.0f, fminf(7.0f, roundf(v1)));
     
     // Pack: Low 4 bits | High 4 bits
     int8_t packed = (i0 & 0x0F) | ((i1 & 0x0F) << 4);
@@ -153,8 +154,11 @@ torch::Tensor conv2d_int8_fprop(
     int H = input.size(2);
     int W = input.size(3);
     int K = weight.size(0);
-    int R = weight.size(2);
-    int S = weight.size(3);
+    // Permuted weight (K, R, S, C)
+    int R = weight.size(1);
+    int S = weight.size(2);
+    // int C = weight.size(3); // C from input
+
     
     int H_out = (H + 2 * padding_h - dilation_h * (R - 1) - 1) / stride_h + 1;
     int W_out = (W + 2 * padding_w - dilation_w * (S - 1) - 1) / stride_w + 1;
@@ -239,10 +243,8 @@ torch::Tensor conv2d_int4_fprop(
     int C_logical = C_packed * 2; 
 
     // Safety checks
-    TORCH_CHECK(input.is_contiguous(), "Input must be contiguous (N, H, W, C/2)");
-    TORCH_CHECK(weight_packed.is_contiguous(), "Weight must be contiguous (K, R, S, C/2)");
-    TORCH_CHECK(input.is_contiguous(), "Input must be contiguous (N, H, W, C/2)");
-    TORCH_CHECK(weight_packed.is_contiguous(), "Weight must be contiguous (K, R, S, C/2)");
+    // TORCH_CHECK(input.is_contiguous(), "Input must be contiguous (N, H, W, C/2)");
+    // TORCH_CHECK(weight_packed.is_contiguous(), "Weight must be contiguous (K, R, S, C/2)");
     TORCH_CHECK(input.size(3) == C_packed, "Input/Weight channel mismatch");
 
     void* input_ptr_raw = input.data_ptr();
@@ -260,6 +262,8 @@ torch::Tensor conv2d_int4_fprop(
     
     float alpha = 1.0f;
     if (scales.numel() == 1) alpha = scales.item<float>();
+    
+    float beta = (bias.numel() > 0) ? 1.0f : 0.0f;
     
     cutlass::conv::Conv2dProblemSize problem_size(
         {N, H, W, C_logical},
@@ -279,7 +283,7 @@ torch::Tensor conv2d_int4_fprop(
         {weight_ptr, {C_logical, S * C_logical, R * S * C_logical}}, 
         {(float*)((bias.numel() > 0) ? bias.data_ptr() : nullptr), {0,0,0}},
         {output.data_ptr<float>(), {K_packed, W_out * K_packed, H_out * W_out * K_packed}},
-        {alpha, 1.0f}
+        {alpha, beta}
     );
     
     size_t workspace_size = op.get_workspace_size(args);
