@@ -431,16 +431,9 @@ class BenchmarkRunner:
         dtype = torch.float16 if use_autocast else None
         
         # Generate samples
-        try:
-            total_time, num_gen = self._generate_samples(
-                model, sampler, mode, num_samples, use_autocast, dtype
-            )
-        except Exception as e:
-            print(f"Error during generation: {e}")
-            if mode in ['int8', 'int4']:
-                print(f"\nProfiler Summary ({mode.upper()}) BEFORE CRASH:")
-                profiler.print_summary()
-            raise e
+        total_time, num_gen = self._generate_samples(
+            model, sampler, mode, num_samples, use_autocast, dtype
+        )
         
         # Record results
         time_per_sample = total_time / num_gen

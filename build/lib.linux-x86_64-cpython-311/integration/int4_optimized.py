@@ -49,6 +49,9 @@ class OptimizedInt4Conv2d(nn.Module):
     """
     def __init__(self, conv: nn.Conv2d, layer_name: str = "", use_compile: bool = False):
         super().__init__()
+        if not hasattr(OptimizedInt4Conv2d, '_init_printed'):
+             print(f"DEBUG: OptimizedInt4Conv2d init for {layer_name}")
+             OptimizedInt4Conv2d._init_printed = True
         self.layer_name = layer_name
         self.in_channels = conv.in_channels
         self.out_channels = conv.out_channels
@@ -87,6 +90,7 @@ class OptimizedInt4Conv2d(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Measure total layer time
+        # print(f"DEBUG: OptimizedInt4Conv2d.forward called for {self.layer_name}")
         fwd_start = profiler.start("Layer: OptimizedInt4Conv2d.forward")
 
         # Overhead: Setup
@@ -139,9 +143,10 @@ def convert_model_to_optimized_int4(model: nn.Module, prefix: str = "", use_comp
             # Skip very small channel counts (e.g. input layer C=4) as they break Tensor Core alignment
             # and provide negligible speedup.
             if child.in_channels < 32:
-                 # print(f"Skipping INT4 conversion for {full_name} (in_channels={child.in_channels})")
+                 print(f"Skipping INT4 conversion for {full_name} (in_channels={child.in_channels})")
                  continue
                  
+            print(f"Initializing INT4 conversion for {full_name} (in_channels={child.in_channels})")
             optimized_conv = OptimizedInt4Conv2d(child, layer_name=full_name, use_compile=use_compile)
             
             # Special handling for Sequential/ModuleList/ModuleDict if needed?

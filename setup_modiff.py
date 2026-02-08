@@ -85,6 +85,45 @@ def install_dependencies():
         "Installing requirements.txt"
     )
 
+def setup_cutlass():
+    """Clone CUTLASS repository if not present."""
+    print_step("Setting up CUTLASS")
+    
+    cutlass_path = Path("/workspace/cutlass")
+    if cutlass_path.exists():
+        print_success(f"CUTLASS already exists at {cutlass_path}")
+        return True
+    
+    return run_command(
+        "git clone https://github.com/NVIDIA/cutlass.git /workspace/cutlass",
+        "Cloning CUTLASS from GitHub"
+    )
+
+def build_modiff_extension():
+    """Build and install the MoDiff C++ extension."""
+    print_step("Building MoDiff C++ extension")
+    
+    # Set CUTLASS_PATH environment variable
+    os.environ["CUTLASS_PATH"] = "/workspace/cutlass"
+    
+    return run_command(
+        "pip install .",
+        "Building and installing MoDiff package",
+        cwd=str(Path(__file__).parent)
+    )
+
+def run_benchmark():
+    """Run the default LDM benchmark."""
+    print_step("Running LDM Benchmark")
+    
+    benchmark_script = Path(__file__).parent / "integration" / "benchmark_ldm.py"
+    
+    return run_command(
+        f"python {benchmark_script}",
+        "Running integration/benchmark_ldm.py",
+        cwd=str(Path(__file__).parent)
+    )
+
 def download_first_stage_models():
     """Download and extract first-stage autoencoder models."""
     print_step("Downloading first-stage autoencoder models")
@@ -254,17 +293,17 @@ def verify_setup():
     except ImportError as e:
         print_error(f"taming import failed: {e}")
     
-    # Check Triton INT8
+    # Check CUTLASS extension
     checks_total += 1
     try:
-        from integration.int8_optimized import HAS_TRITON_FUSED
-        if HAS_TRITON_FUSED:
-            print_success("Triton fused INT8 kernels available")
+        from integration.int8_optimized import HAS_CUTLASS
+        if HAS_CUTLASS:
+            print_success("CUTLASS backend available")
             checks_passed += 1
         else:
-            print_warning("Triton fused INT8 kernels not available")
+            print_warning("CUTLASS backend not available (did build fail?)")
     except Exception as e:
-        print_warning(f"Could not check Triton INT8: {e}")
+        print_warning(f"Could not check CUTLASS backend: {e}")
     
     # Check first stage model
     checks_total += 1
@@ -305,38 +344,40 @@ def main():
         else:
             print_warning("Skipping dependency installation (--skip-dependencies)")
             
-        # Step 2: Download first stage models
+        # Step 2: Setup CUTLASS (Required for extension build)
+        setup_cutlass()
+
+        # Step 3: Build MoDiff C++ Extension
+        build_modiff_extension()
+
+        # Step 4: Download models
         if not args.skip_models:
             download_first_stage_models()
         else:
             print_warning("Skipping model downloads (--skip-models)")
         
-        # Step 3: Setup taming-transformers
+        # Step 5: Taming Transformers
         setup_taming_transformers()
         
-        # Step 4: Patch compatibility issues
+        # Step 6: Patch PyTorch compatibility
         patch_pytorch_compatibility()
         
-        # Verify setup
+        # Step 7: Verify
         if verify_setup():
-            print(f"\n{Colors.GREEN}╔═══════════════════════════════════════╗{Colors.RESET}")
-            print(f"{Colors.GREEN}║   Setup completed successfully!      ║{Colors.RESET}")
-            print(f"{Colors.GREEN}╚═══════════════════════════════════════╝{Colors.RESET}")
-            print(f"\nYou can now run benchmarks with:")
-            print(f"  python integration/benchmark_ldm.py --batch_size 16")
-            return 0
+            print(f"\n{Colors.GREEN}Setup complete! Running benchmark...{Colors.RESET}\n")
+            run_benchmark()
         else:
-            print_warning("\nSetup completed with warnings. Some features may not work.")
-            return 1
+            print(f"\n{Colors.RED}Setup verification failed. Please check errors above.{Colors.RESET}")
+            sys.exit(1)
             
     except KeyboardInterrupt:
-        print_error("\n\nSetup interrupted by user")
-        return 130
+        print("\nSetup interrupted by user.")
+        sys.exit(1)
     except Exception as e:
-        print_error(f"\n\nSetup failed with error: {e}")
+        print_error(f"Setup failed: {e}")
         import traceback
         traceback.print_exc()
-        return 1
+        sys.exit(1)
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
