@@ -625,27 +625,13 @@ class W4A4MoDiffConv2d(nn.Module):
         scale_a: torch.Tensor,
         add_bias: bool = True,
     ) -> torch.Tensor:
-        """INT4 Conv2d (simulated)."""
-        x_float = x_int.float()
-        weight_float = self.weight_int4.float()
-        
-        output = F.conv2d(
-            x_float,
-            weight_float,
-            bias=None,
-            stride=self.stride,
-            padding=self.padding,
-            dilation=self.dilation,
-            groups=self.groups,
-        )
-        
-        weight_scale_bc = self.weight_scale.view(1, -1, 1, 1)
-        output = output * scale_a * weight_scale_bc
-        
-        if add_bias and self.bias is not None:
-            output = output + self.bias.view(1, -1, 1, 1)
-        
-        return output
+        """INT4 Conv2d via im2col + packed INT4 GEMM.
+
+        Delegates to the im2col GEMM path which correctly uses
+        self.weight_packed (the old simulated path referenced a
+        non-existent self.weight_int4 buffer).
+        """
+        return self._conv2d_int4_im2col_gemm(x_int, scale_a, add_bias=add_bias)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if not self.modulation_enabled:
