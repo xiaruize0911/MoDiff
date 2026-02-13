@@ -23,9 +23,23 @@ torch::Tensor conv2d_int8_fprop(
 );
 
 torch::Tensor quantize_and_pack(torch::Tensor input);
+torch::Tensor scale_quantize_and_pack(torch::Tensor input, torch::Tensor scale);
+torch::Tensor scale_quantize_int8(torch::Tensor input, torch::Tensor scale);
+void dequant_accumulate_int4(torch::Tensor residual, torch::Tensor a_hat_cache, torch::Tensor scale);
+void dequant_accumulate_int8(torch::Tensor residual, torch::Tensor a_hat_cache, torch::Tensor scale);
+void sub_absmax_scale(torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor residual,
+                      torch::Tensor absmax_buf, torch::Tensor scale_out, torch::Tensor inv_scale_out,
+                      torch::Tensor retire_count, float Q_level, torch::Tensor smooth_inv);
+void scale_accumulate(torch::Tensor conv_output, torch::Tensor weight_scale, torch::Tensor o_hat_cache);
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("conv2d_int4_fprop", &conv2d_int4_fprop, "Conv2d INT4 Forward (CUTLASS)");
     m.def("conv2d_int8_fprop", &conv2d_int8_fprop, "Conv2d INT8 Forward (CUTLASS)");
     m.def("quantize_and_pack", &quantize_and_pack, "Fast Quantization and Packing for INT4");
+    m.def("scale_quantize_and_pack", &scale_quantize_and_pack, "Fused Scale + Quantize + Pack for INT4");
+    m.def("scale_quantize_int8", &scale_quantize_int8, "Fused Scale + Quantize for INT8");
+    m.def("dequant_accumulate_int4", &dequant_accumulate_int4, "Fused Dequant + Accumulate for INT4 cache");
+    m.def("dequant_accumulate_int8", &dequant_accumulate_int8, "Fused Dequant + Accumulate for INT8 cache");
+    m.def("sub_absmax_scale", &sub_absmax_scale, "Fused Subtract + AbsMax + Scale computation");
+    m.def("scale_accumulate", &scale_accumulate, "Fused Scale + Accumulate (o_hat += conv * weight_scale)");
 }

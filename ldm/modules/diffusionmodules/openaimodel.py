@@ -390,27 +390,22 @@ class QKVAttentionLegacy(nn.Module):
 
     def forward(self, qkv):
         """
-        Apply QKV attention.
+        Apply QKV attention using F.scaled_dot_product_attention for fused
+        Q@K, softmax, attn@V in a single kernel (FlashAttention/MemEfficientAttn).
         :param qkv: an [N x (H * 3 * C) x T] tensor of Qs, Ks, and Vs.
         :return: an [N x (H * C) x T] tensor after attention.
         """
         bs, width, length = qkv.shape
         assert width % (3 * self.n_heads) == 0
         ch = width // (3 * self.n_heads)
-        q, k, v = qkv.reshape(bs * self.n_heads, ch * 3, length).split(ch, dim=1)
-        scale = 1 / math.sqrt(math.sqrt(ch))
-        # weight = th.einsum(
-            # "bct,bcs->bts", q * scale, k * scale
-        # )  # More stable with f16 than dividing afterwards
-        if self.qkv_matmul.scale is not None:
-            assert self.qkv_matmul.scale == scale
-        else:
-            self.qkv_matmul.scale = scale
-        weight = self.qkv_matmul(q, k)
-        weight = th.softmax(weight.float(), dim=-1).type(weight.dtype)
-        # a = th.einsum("bts,bcs->bct", weight, v)
-        a = self.smv_matmul(weight, v)
-        return a.reshape(bs, -1, length)
+        scale = 1 / math.sqrt(ch)
+        # Reshape and transpose QKV in a single contiguous call instead of 3 separate ones.
+        # After permute: (bs, H, T, 3*C) has stride[-1]==1, suitable for FlashAttention.
+        qkv_4d = qkv.reshape(bs, self.n_heads, 3 * ch, length).permute(0, 1, 3, 2).contiguous()
+        q, k, v = qkv_4d.split(ch, dim=3)
+        a = th.nn.functional.scaled_dot_product_attention(q, k, v, scale=scale)
+        # (bs, H, T, C) -> (bs, H*C, T)
+        return a.permute(0, 1, 3, 2).reshape(bs, -1, length)
 
     @staticmethod
     def count_flops(model, _x, y):

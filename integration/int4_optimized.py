@@ -1,9 +1,9 @@
 
 import torch
 import torch.nn as nn
-from typing import Optional
+import torch.nn.functional as F
+from typing import Dict, Optional
 from integration.profiler import profiler
-print(f"DEBUG: int4_optimized loaded. Profiler ID: {id(profiler)}")
 
 # Try to import the compiled extension
 try:
@@ -38,24 +38,33 @@ def pack_int4(tensor: torch.Tensor) -> torch.Tensor:
 
 class OptimizedInt4Conv2d(nn.Module):
     """
-    CUTLASS-based INT4 Conv2d with MoDiff Error-Compensated Modulation.
+    CUTLASS-based INT4 Conv2d with SmoothQuant + MoDiff Error-Compensated Modulation.
 
-    Implements the MoDiff paper's core equations:
-        First step (t=T):
-            â_T = Q(a_T)                              -- Eq. (ec1)
-            ô_T = Conv(â_T) + bias                     -- Eq. (ec2)
-        Subsequent steps (t<T):
-            â_t = Q(a_t - â_{t+1}) + â_{t+1}          -- Eq. (ec5)
-            ô_t = Conv(Q(a_t - â_{t+1})) + ô_{t+1}    -- Eq. (ec6)
+    Architecture follows the MoDiff paper (Gao et al., ICML 2025):
+    - INT4 weight x INT4 activation via CUTLASS tensor core kernels
+    - SmoothQuant migrates per-channel activation range differences into
+      the weights, so per-tensor activation quantization (needed by the
+      INT4 matmul HW) becomes nearly as accurate as per-channel.
+    - MoDiff error-compensated modulation across diffusion timesteps
+      prevents temporal error accumulation.
 
-    Key insight: The residual (a_t - â_{t+1}) has ~10x smaller range,
-    enabling INT4 quantization with much less error.
+    Equations (from the paper):
+        t=T (first step):
+            a_hat_T = Q(a_T)                                    -- Eq. (ec1)
+            o_hat_T = A(a_hat_T) + bias                         -- Eq. (ec2)
+        t<T (modulated steps):
+            a_hat_t = Q(a_t - a_hat_{t+1}) + a_hat_{t+1}        -- Eq. (ec5)
+            o_hat_t = A(Q(a_t - a_hat_{t+1})) + o_hat_{t+1}     -- Eq. (ec6)
+
+    The residual (a_t - a_hat_{t+1}) has ~10x smaller range than a_t, so
+    INT4 quantization error is dramatically reduced on modulated steps.
     """
     def __init__(self, conv: nn.Conv2d, layer_name: str = "", use_compile: bool = False):
         super().__init__()
         self.layer_name = layer_name
         self.in_channels = conv.in_channels
         self.out_channels = conv.out_channels
+        K = self.out_channels
         
         self.kernel_size = conv.kernel_size if isinstance(conv.kernel_size, tuple) else (conv.kernel_size, conv.kernel_size)
         self.stride = conv.stride if isinstance(conv.stride, tuple) else (conv.stride, conv.stride)
@@ -63,125 +72,204 @@ class OptimizedInt4Conv2d(nn.Module):
         self.dilation = conv.dilation if isinstance(conv.dilation, tuple) else (conv.dilation, conv.dilation)
         self.groups = conv.groups
 
-        # 1. Weight quantization and packing
-        # Conv weight is (K, C, R, S).
-        w_data = conv.weight.data
-        K = self.out_channels
+        w_data = conv.weight.data  # [K, C_in, R, S]
 
-        # Per-channel max-based weight quantization (along output channel dim).
-        # Real model weights have very different scales per output channel —
-        # per-tensor max wastes INT4 bins on outlier channels (cos drops to 0.85),
-        # per-tensor 3-sigma clips outliers. Per-channel max gives each channel
-        # its own scale so every channel uses the full INT4 dynamic range.
-        w_flat = w_data.view(K, -1)  # [K, C*R*S]
+        # --- SmoothQuant ---
+        self.register_buffer('smooth_scale', torch.ones(1, self.in_channels, 1, 1))
+        self.register_buffer('_smooth_inv', torch.ones(1, self.in_channels, 1, 1))
+        self.register_buffer('_orig_weight', w_data.clone(), persistent=False)
+
+        # --- Per-output-channel symmetric INT4 weight quantization ---
+        w_flat = w_data.reshape(K, -1)
         ch_max = w_flat.abs().max(dim=1).values  # [K]
         ch_scale = torch.clamp(ch_max / 7.0, min=1e-8)  # [K]
-
-        # Store per-channel scale for 2-step dequantization
-        self.register_buffer('weight_scale_channel', ch_scale)  # [K]
+        self.register_buffer('weight_scale_channel', ch_scale.view(1, K, 1, 1))
 
         w_quant = (w_flat / ch_scale.unsqueeze(1)).round().clamp(-7, 7).to(torch.int8)
-        w_quant = w_quant.view_as(w_data)
-
-        # Permute to Physical NHWC (K, R, S, C)
+        w_quant = w_quant.reshape_as(w_data)
         w_nhwc = w_quant.permute(0, 2, 3, 1).contiguous()
-        
-        # Pack
+
+        # Pack INT4 (2 values per byte) — registered buffer so .to() moves it
         if self.in_channels % 2 == 0:
-            self.weight_packed = pack_int4(w_nhwc)
+            self.register_buffer('weight_packed', pack_int4(w_nhwc))
         else:
-            raise ValueError(f"Input channels {self.in_channels} not divisible by 2")
+            self.register_buffer('weight_packed', torch.empty(0, dtype=torch.int8))
 
+        # --- Bias ---
         if conv.bias is not None:
-             self.register_buffer('bias', conv.bias.data)
+            self.register_buffer('bias', conv.bias.data.view(1, -1, 1, 1))
         else:
-             self.bias = None
+            self.bias = None
 
-        # MoDiff state
+        self._empty_bias = None
+        self.use_cutlass = HAS_CUTLASS and self.groups == 1 and self.in_channels % 2 == 0
+
+        # --- MoDiff state ---
         self.modiff_enabled = False
         self.is_first_step = True
-        self.a_hat_cache: Optional[torch.Tensor] = None  # â_{t+1}: dequantized activation cache
-        self.o_hat_cache: Optional[torch.Tensor] = None  # ô_{t+1}: output cache
+        self.a_hat_cache: Optional[torch.Tensor] = None
+        self.o_hat_cache: Optional[torch.Tensor] = None
         self.step_count = 0
-        self.reset_interval = 10  # Periodic cache reset every K steps to cap error accumulation
+        self.warmup_steps = 3  # Reduced from 5: 3 steps sufficient for convergence
 
-    def _compute_activation_scale(self, x: torch.Tensor) -> float:
-        """Compute per-tensor activation scale using max-based quantization.
+        # --- Calibration state ---
+        self.calibrating = False
+        self.is_calibrated = False
+        self._scale_sum = 0.0
+        self._scale_count = 0
+        self.register_buffer('static_input_scale', torch.tensor(1.0, dtype=torch.float32))
+        self._act_channel_max: Optional[torch.Tensor] = None
+        self._cached_scale_float: Optional[float] = None
+        self._cached_alpha_tensor: Optional[torch.Tensor] = None
 
-        Max-based avoids clipping any values, which is important for INT4
-        where each clipped value loses significant signal. The slightly wider
-        bins are compensated by MoDiff's residual quantization at subsequent
-        timesteps (residuals have ~10x smaller range).
+        # --- SmoothQuant identity flag for fast path ---
+        self._smooth_is_identity = True
+
+        # --- Fused kernel persistent buffers (lazy-initialized) ---
+        self._residual_buf: Optional[torch.Tensor] = None
+        self._scale_buf: Optional[torch.Tensor] = None
+        self._inv_scale_buf: Optional[torch.Tensor] = None
+        self._absmax_buf: Optional[torch.Tensor] = None
+        self._retire_count: Optional[torch.Tensor] = None
+
+    # ==================================================================
+    # Quantization helpers
+    # ==================================================================
+
+    def _compute_activation_scale(self, x: torch.Tensor, is_residual: bool = False) -> float:
+        """Per-tensor symmetric activation scale: 7 / max(|x|).
+        Used during calibration and first-step only (slow path with .item() sync).
         """
-        abs_max = x.abs().max().item()
-        return 7.0 / max(abs_max, 1e-6)
+        if self.calibrating:
+            abs_max = x.abs().max().item()
+            scale = 7.0 / max(abs_max, 1e-6)
+            if not is_residual:
+                self._scale_sum += scale
+                self._scale_count += 1
+                with torch.no_grad():
+                    ch_max = x.abs().amax(dim=(0, 2, 3))
+                    if self._act_channel_max is None:
+                        self._act_channel_max = ch_max.clone()
+                    else:
+                        torch.max(self._act_channel_max, ch_max, out=self._act_channel_max)
+            return scale
 
-    def _int4_conv(self, x: torch.Tensor, input_scale: float, with_bias: bool = True) -> torch.Tensor:
-        """Core INT4 quantize + CUTLASS conv + per-channel dequantization.
+        if is_residual or not self.is_calibrated:
+            abs_max = x.abs().max().item()
+            return 7.0 / max(abs_max, 1e-6)
 
-        Uses 2-step dequantization for per-channel weight quantization:
-          Step 1 (CUTLASS): out_raw = (1/input_scale) * int32_accum
-          Step 2 (PyTorch): out = out_raw * weight_scale_channel + bias
+        if self._cached_scale_float is None:
+            self._cached_scale_float = float(self.static_input_scale.item())
+        return self._cached_scale_float
 
-        This is mathematically equivalent to:
-          out[k] = sum_{c,r,s} (a_q / input_scale) * (w_q * ch_scale[k]) + bias[k]
-        which gives exact per-channel dequantization.
+    def _compute_scale_tensor(self, x: torch.Tensor) -> torch.Tensor:
+        """GPU-only per-tensor scale computation. No .item() sync.
+        Returns 1-element GPU tensor = 7.0 / max(|x|, 1e-6).
+        Used on the modulated hot path to avoid CPU-GPU synchronization.
         """
-        # Step 1: CUTLASS with alpha = 1/input_scale (undo activation scaling)
-        # No bias — handled in Step 2 for per-channel correctness
-        alpha = 1.0 / input_scale
-        scale_tensor = torch.tensor([alpha], device=x.device, dtype=torch.float32)
+        abs_max = x.abs().amax()
+        return 7.0 / torch.clamp(abs_max, min=1e-6)
 
-        x_scaled = x * input_scale
-        x_packed = modiff_cutlass.quantize_and_pack(x_scaled)
-
-        out_raw = modiff_cutlass.conv2d_int4_fprop(
-             x_packed,
-             self.weight_packed,
-             scale_tensor,
-             torch.empty(0, device=x.device),  # no bias in CUTLASS
-             self.stride[0], self.stride[1],
-             self.padding[0], self.padding[1],
-             self.dilation[0], self.dilation[1]
-        )
-
-        # Step 2: Per-channel weight dequantization + bias
-        # out_raw[k] = (1/input_scale) * sum(a_q * w_q[k])
-        # out[k] = out_raw[k] * ch_scale[k] + bias[k]
-        out = out_raw * self.weight_scale_channel.view(1, -1, 1, 1)
-        if with_bias and self.bias is not None:
-            out = out + self.bias.view(1, -1, 1, 1)
-        return out
-
-    def _dequantize_activation(self, x: torch.Tensor, input_scale: float) -> torch.Tensor:
-        """Simulate quantize-dequantize to get â = Q(x) in FP32.
-
-        Matches the rounding behaviour of the CUDA quantize_and_pack kernel
-        so the cache accurately tracks what CUTLASS actually computed with.
+    def _dequantize_activation(self, x: torch.Tensor, input_scale) -> torch.Tensor:
+        """Simulate quantize-then-dequantize: a_hat = Q(x) in FP32.
+        input_scale can be float or 1-element tensor.
         """
         return (x * input_scale).round().clamp(-7, 7) / input_scale
+
+    def _int4_conv(self, x: torch.Tensor, input_scale, with_bias: bool = True) -> torch.Tensor:
+        """INT4 x INT4 convolution via CUTLASS tensor core kernel.
+        input_scale can be float or 1-element GPU tensor.
+        """
+        if self.use_cutlass:
+            if isinstance(input_scale, (int, float)):
+                alpha = 1.0 / input_scale
+                if (self._cached_alpha_tensor is not None
+                        and self._cached_scale_float is not None
+                        and input_scale == self._cached_scale_float):
+                    scale_tensor = self._cached_alpha_tensor
+                else:
+                    scale_tensor = torch.tensor([alpha], device=x.device, dtype=torch.float32)
+                x_scaled = x * input_scale
+                if not x_scaled.is_contiguous(memory_format=torch.channels_last):
+                    x_scaled = x_scaled.contiguous(memory_format=torch.channels_last)
+                x_packed = modiff_cutlass.quantize_and_pack(x_scaled)
+            else:
+                # Tensor path: use fused scale+quantize+pack kernel (no CPU sync)
+                scale_tensor = (1.0 / input_scale).view(1)
+                if not x.is_contiguous(memory_format=torch.channels_last):
+                    x = x.contiguous(memory_format=torch.channels_last)
+                x_packed = modiff_cutlass.scale_quantize_and_pack(x, input_scale)
+
+            if self._empty_bias is None or self._empty_bias.device != x.device:
+                self._empty_bias = torch.empty(0, device=x.device)
+
+            out_raw = modiff_cutlass.conv2d_int4_fprop(
+                x_packed,
+                self.weight_packed,
+                scale_tensor,
+                self._empty_bias,
+                self.stride[0], self.stride[1],
+                self.padding[0], self.padding[1],
+                self.dilation[0], self.dilation[1]
+            )
+            out = out_raw * self.weight_scale_channel
+        else:
+            raise RuntimeError(
+                f"CUTLASS INT4 kernel unavailable for layer {self.layer_name} "
+                f"(groups={self.groups}, in_ch={self.in_channels}). "
+                f"Build modiff_cutlass extension."
+            )
+
+        if with_bias and self.bias is not None:
+            out = out + self.bias
+        return out
+
+    def _int4_conv_fused(self, x: torch.Tensor, scale: torch.Tensor, inv_scale: torch.Tensor) -> torch.Tensor:
+        """Optimized INT4 conv for modulated path: scale and inv_scale already computed on GPU.
+        No .item() sync, no 1/scale computation kernel. Uses device pointer alpha for CUTLASS.
+        Returns RAW (unscaled) CUTLASS output — caller applies weight_scale_channel via scale_accumulate.
+        """
+        if not x.is_contiguous(memory_format=torch.channels_last):
+            x = x.contiguous(memory_format=torch.channels_last)
+        x_packed = modiff_cutlass.scale_quantize_and_pack(x, scale)
+
+        if self._empty_bias is None or self._empty_bias.device != x.device:
+            self._empty_bias = torch.empty(0, device=x.device)
+
+        return modiff_cutlass.conv2d_int4_fprop(
+            x_packed,
+            self.weight_packed,
+            inv_scale.view(1),
+            self._empty_bias,
+            self.stride[0], self.stride[1],
+            self.padding[0], self.padding[1],
+            self.dilation[0], self.dilation[1]
+        )
+
+    # ==================================================================
+    # Forward paths
+    # ==================================================================
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         fwd_start = profiler.start("Layer: OptimizedInt4Conv2d.forward")
 
-        if not HAS_CUTLASS:
-             raise RuntimeError("modiff_cutlass backend missing.")
-
-        # Ensure FP32 — autocast may feed FP16 from upstream ops and the
-        # CUTLASS kernel calls data_ptr<float>() which would crash or
-        # silently reinterpret FP16 bits as garbage FP32 values.
-        x = x.float()
-
-        # Ensure channels_last for CUTLASS NHWC path
+        if x.dtype != torch.float32:
+            x = x.float()
         if not x.is_contiguous(memory_format=torch.channels_last):
-             x = x.contiguous(memory_format=torch.channels_last)
+            x = x.contiguous(memory_format=torch.channels_last)
 
         if not self.modiff_enabled:
+            # SmoothQuant: equalize per-channel activation ranges
+            if not self._smooth_is_identity:
+                x = x * self._smooth_inv
             output = self._forward_standard(x)
         elif self.is_first_step:
+            if not self._smooth_is_identity:
+                x = x * self._smooth_inv
             output = self._forward_first_step(x)
             self.is_first_step = False
         else:
+            # Modulated path: SmoothQuant is fused into sub_absmax_scale kernel
             output = self._forward_modulated(x)
 
         profiler.stop("Layer: OptimizedInt4Conv2d.forward", fwd_start)
@@ -193,114 +281,251 @@ class OptimizedInt4Conv2d(nn.Module):
         return self._int4_conv(x, input_scale, with_bias=True)
 
     def _forward_first_step(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        First timestep (t=T):
-            â_T = Q(a_T)                   -- Eq. (ec1)
-            ô_T = Conv(â_T) + bias          -- Eq. (ec2)
+        """First timestep (t=T): warm-up with repeated quantisation.
+
+        Paper Appendix B.6: 4-5 warm-up steps converge error.
         """
         input_scale = self._compute_activation_scale(x)
-        out = self._int4_conv(x, input_scale, with_bias=True)
+        a_hat = self._dequantize_activation(x, input_scale)
+        o_hat = self._int4_conv(x, input_scale, with_bias=True)
 
-        # Cache dequantized activation and output for next step
-        self.a_hat_cache = self._dequantize_activation(x, input_scale)
-        self.o_hat_cache = out.clone()
-        return out
+        for _ in range(self.warmup_steps - 1):
+            residual = x - a_hat
+            r_scale = self._compute_activation_scale(residual, is_residual=True)
+            conv_r  = self._int4_conv(residual, r_scale, with_bias=False)
+            r_dq    = self._dequantize_activation(residual, r_scale)
+            a_hat   = a_hat + r_dq
+            o_hat   = o_hat + conv_r
+
+        self.a_hat_cache = a_hat
+        self.o_hat_cache = o_hat
+        return o_hat.clone()
 
     def _forward_modulated(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        MoDiff modulated step (t<T):
-            â_t = Q(a_t - â_{t+1}) + â_{t+1}           -- Eq. (ec5)
-            ô_t = Conv(Q(a_t - â_{t+1})) + ô_{t+1}     -- Eq. (ec6)
-
-        Key insight: the residual (a_t - â_{t+1}) has ~10x smaller range than
-        a_t, so INT4 quantization on the residual has ~10x less quantization
-        error.  This is the core benefit of MoDiff.
-
-        Periodic cache reset: Every `reset_interval` steps, the caches are
-        discarded and a fresh first-step is computed. This caps accumulated
-        quantization error at O(√K) instead of O(√N) where K << N.
+        """MoDiff modulated step (t<T).  No periodic reset per paper.
+        Uses fused sub+absmax+scale kernel and device pointer alpha to minimize
+        kernel launches and avoid CPU-GPU synchronization.
+        SmoothQuant multiply is fused into sub_absmax_scale when applicable.
         """
         self.step_count += 1
 
-        # Periodic cache reset to prevent unbounded error accumulation.
-        # After K modulated steps, accumulated error grows as O(√K).
-        # Resetting every reset_interval steps caps the max error.
-        if self.step_count % self.reset_interval == 0:
-            out = self._forward_first_step(x)
-            return out
-
-        # Shape mismatch → fall back to first-step (handles batch size changes)
         if self.a_hat_cache is None or self.a_hat_cache.shape != x.shape:
             self.is_first_step = True
+            if not self._smooth_is_identity:
+                x = x * self._smooth_inv
             out = self._forward_first_step(x)
             self.is_first_step = False
             return out
 
-        # Eq. (ec5) — compute residual, which has ~10x smaller range
-        residual = x - self.a_hat_cache
+        # Lazy-init persistent buffers (reused across timesteps, never reallocated)
+        if self._residual_buf is None or self._residual_buf.shape != x.shape:
+            self._residual_buf = torch.empty_like(x)
+            self._scale_buf = torch.empty(1, device=x.device, dtype=torch.float32)
+            self._inv_scale_buf = torch.empty(1, device=x.device, dtype=torch.float32)
+            self._absmax_buf = torch.zeros(1, device=x.device, dtype=torch.float32)
+            self._retire_count = torch.zeros(1, device=x.device, dtype=torch.int32)
 
-        # Quantize residual + conv (no bias — bias was already added at t=T)
-        input_scale = self._compute_activation_scale(residual)
-        conv_residual = self._int4_conv(residual, input_scale, with_bias=False)
+        # Lazy-init smooth_inv flat tensor (1-D contiguous for kernel)
+        if not hasattr(self, '_smooth_inv_flat'):
+            if not self._smooth_is_identity:
+                self._smooth_inv_flat = self._smooth_inv.view(-1).contiguous()
+            else:
+                self._smooth_inv_flat = torch.empty(0, device=x.device, dtype=torch.float32)
 
-        # Update activation cache: â_t = Q(residual) + â_{t+1}
-        residual_dequant = self._dequantize_activation(residual, input_scale)
-        self.a_hat_cache = self.a_hat_cache + residual_dequant
+        # Fused: [smooth * x] - cache, absmax reduction, scale + inv_scale
+        # SmoothQuant is fused into the kernel (no extra element-wise multiply)
+        modiff_cutlass.sub_absmax_scale(
+            x, self.a_hat_cache, self._residual_buf,
+            self._absmax_buf, self._scale_buf, self._inv_scale_buf,
+            self._retire_count, 7.0, self._smooth_inv_flat
+        )
 
-        # Eq. (ec6) — accumulate output: ô_t = conv(Q(residual)) + ô_{t+1}
-        self.o_hat_cache = self.o_hat_cache + conv_residual
-        return self.o_hat_cache.clone()
+        # Quantize + CUTLASS conv: uses inv_scale directly as device pointer alpha
+        conv_residual = self._int4_conv_fused(self._residual_buf, self._scale_buf, self._inv_scale_buf)
+
+        # Fused dequant + cache accumulate: 5 kernel launches → 1
+        modiff_cutlass.dequant_accumulate_int4(self._residual_buf, self.a_hat_cache, self._scale_buf)
+
+        # Fused: o_hat_cache += conv_raw * weight_scale_channel (2 kernels → 1)
+        modiff_cutlass.scale_accumulate(conv_residual, self.weight_scale_channel.view(-1), self.o_hat_cache)
+        return self.o_hat_cache
+
+    # ==================================================================
+    # MoDiff controls
+    # ==================================================================
 
     def enable_modiff(self, enabled: bool = True):
-        """Enable/disable MoDiff temporal caching."""
         self.modiff_enabled = enabled
         if not enabled:
             self.reset_state()
 
     def reset_state(self):
-        """Reset MoDiff state (call between diffusion samples)."""
         self.is_first_step = True
         self.a_hat_cache = None
         self.o_hat_cache = None
+        self.step_count = 0
+
+    # ==================================================================
+    # Calibration + SmoothQuant
+    # ==================================================================
+
+    def begin_calibration(self):
+        self.calibrating = True
+        self.is_calibrated = False
+        self._scale_sum = 0.0
+        self._scale_count = 0
+        self._act_channel_max = None
+
+    def end_calibration(self):
+        self.calibrating = False
+        if self._scale_count == 0:
+            return
+
+        if self._act_channel_max is not None and self._orig_weight is not None:
+            self._apply_smoothquant()
+
+        if self._act_channel_max is not None:
+            s = self.smooth_scale.view(-1)
+            smoothed_ch_max = self._act_channel_max / s
+            smoothed_global_max = smoothed_ch_max.max().item()
+            static_scale = 7.0 / max(smoothed_global_max, 1e-6)
+        else:
+            static_scale = self._scale_sum / self._scale_count
+
+        self.static_input_scale.fill_(float(static_scale))
+        self.is_calibrated = True
+        self._cached_scale_float = float(static_scale)
+        alpha = 1.0 / float(static_scale)
+        self._cached_alpha_tensor = torch.tensor(
+            [alpha], device=self.static_input_scale.device, dtype=torch.float32
+        )
+        self._smooth_inv.copy_(1.0 / self.smooth_scale)
+        self._smooth_is_identity = bool(torch.allclose(
+            self._smooth_inv,
+            torch.ones_like(self._smooth_inv),
+            atol=1e-6
+        ))
+        self._orig_weight = None
+
+    def _apply_smoothquant(self):
+        """SmoothQuant: fold per-channel activation scales into weights."""
+        act_max = self._act_channel_max
+        w = self._orig_weight
+        K = self.out_channels
+
+        w_dev = w.to(act_max.device)
+        w_by_cin = w_dev.reshape(K, self.in_channels, -1)
+        w_max = w_by_cin.abs().amax(dim=(0, 2))
+
+        ratio = act_max / torch.clamp(w_max, min=1e-8)
+        s = ratio.sqrt().clamp(min=1e-4, max=1e4)
+
+        self.smooth_scale.copy_(s.view(1, -1, 1, 1))
+
+        w_smoothed = w_dev * s.view(1, -1, 1, 1)
+        w_flat = w_smoothed.reshape(K, -1)
+        ch_max = w_flat.abs().max(dim=1).values
+        ch_scale = torch.clamp(ch_max / 7.0, min=1e-8)
+
+        self.weight_scale_channel.copy_(ch_scale.view(1, K, 1, 1))
+
+        w_quant = (w_flat / ch_scale.unsqueeze(1)).round().clamp(-7, 7).to(torch.int8)
+        w_quant = w_quant.reshape(K, self.in_channels, *self.kernel_size)
+        w_nhwc = w_quant.permute(0, 2, 3, 1).contiguous()
+
+        if self.in_channels % 2 == 0:
+            self.weight_packed.data = pack_int4(w_nhwc).to(self.weight_packed.device)
+
+    def set_calibrating(self, calibrating: bool):
+        if calibrating:
+            self.begin_calibration()
+        else:
+            self.end_calibration()
+
+    def set_static_scale(self, scale: float):
+        self.static_input_scale.fill_(float(scale))
+        self.is_calibrated = True
+        self._cached_scale_float = float(scale)
+        alpha = 1.0 / float(scale)
+        self._cached_alpha_tensor = torch.tensor(
+            [alpha], device=self.static_input_scale.device, dtype=torch.float32
+        )
+
+
+# ---------------------------------------------------------------------------
+# Model conversion
+# ---------------------------------------------------------------------------
 
 def convert_model_to_optimized_int4(model: nn.Module, prefix: str = "", use_compile: bool = False) -> nn.Module:
     for name, child in model.named_children():
         full_name = f"{prefix}.{name}" if prefix else name
         if isinstance(child, nn.Conv2d) and not isinstance(child, OptimizedInt4Conv2d):
             if child.in_channels < 32:
-                 continue
-            # Skip sensitive layers that destroy signal quality when quantized:
-            # 1. Skip connections (residual path - critical for signal preservation)
-            # 2. Final output projection (directly affects output quality)
-            # 3. First input projection (sets the initial signal range)
-            is_skip = 'skip' in name
-            is_output = (prefix == '' and name == 'out') or name == 'out'
-            # Check if this is the top-level output conv (e.g. model.out.2)
-            is_final_out = full_name.startswith('out.')
-            
-            if is_skip or is_final_out:
                 continue
-                
+            is_skip = 'skip' in name
+            is_final_out = full_name.startswith('out.')
+            is_pointwise = child.kernel_size == (1, 1)
+            is_grouped = child.groups != 1
+
+            if is_skip or is_final_out or is_pointwise or is_grouped:
+                continue
+
             optimized_conv = OptimizedInt4Conv2d(child, layer_name=full_name, use_compile=use_compile)
+            target_device = child.weight.device
+            if target_device.type != 'cpu':
+                optimized_conv = optimized_conv.to(target_device)
             setattr(model, name, optimized_conv)
         else:
             convert_model_to_optimized_int4(child, prefix=full_name, use_compile=use_compile)
-    return model.to(memory_format=torch.channels_last)
+
+    # Convert remaining layers to channels_last for PyTorch perf,
+    # then restore weight_packed buffers which must stay standard-contiguous
+    # (CUTLASS reads raw memory in packed NHWC row-major order).
+    model = model.to(memory_format=torch.channels_last)
+    for m in model.modules():
+        if isinstance(m, OptimizedInt4Conv2d):
+            m.weight_packed.data = m.weight_packed.data.contiguous()
+    return model
+
+
+# ---------------------------------------------------------------------------
+# Global helpers
+# ---------------------------------------------------------------------------
 
 def enable_modiff_mode(model: nn.Module, enabled: bool = True):
-    """Enable/disable MoDiff temporal caching for all INT4 layers."""
     for module in model.modules():
         if isinstance(module, OptimizedInt4Conv2d):
             module.enable_modiff(enabled)
 
 
 def reset_modiff_state(model: nn.Module):
-    """Reset MoDiff state for all INT4 layers (call between samples)."""
     for module in model.modules():
         if isinstance(module, OptimizedInt4Conv2d):
             module.reset_state()
 
 
 def set_calibrating_int4(model: nn.Module, calibrating: bool):
-    """Set calibration mode (INT4 uses dynamic per-tensor quantization)."""
-    pass  # INT4 uses dynamic quantization — no static calibration needed
+    for module in model.modules():
+        if isinstance(module, OptimizedInt4Conv2d):
+            if calibrating:
+                module.begin_calibration()
+            else:
+                module.end_calibration()
+
+
+def export_int4_static_scales(model: nn.Module) -> Dict[str, float]:
+    scales = {}
+    for module in model.modules():
+        if isinstance(module, OptimizedInt4Conv2d) and module.is_calibrated:
+            scales[module.layer_name] = float(module.static_input_scale.item())
+    return scales
+
+
+def apply_int4_static_scales(model: nn.Module, scales: Dict[str, float]) -> int:
+    loaded = 0
+    for module in model.modules():
+        if isinstance(module, OptimizedInt4Conv2d):
+            if module.layer_name in scales:
+                module.set_static_scale(scales[module.layer_name])
+                loaded += 1
+    return loaded

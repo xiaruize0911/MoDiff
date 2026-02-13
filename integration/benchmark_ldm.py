@@ -48,17 +48,17 @@ from tqdm import tqdm
 warnings.filterwarnings('ignore', message='Could not initialize NNPACK')
 warnings.filterwarnings('ignore', category=UserWarning, module='torchmetrics')
 
-# Disable TF32 globally for consistent benchmarking
-torch.backends.cuda.matmul.allow_tf32 = False
-torch.backends.cudnn.allow_tf32 = False
+# Enable TF32 for faster FP32 operations on Ampere+ GPUs
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
 
-# Fix cuDNN sublibrary loading issues - disable cuDNN entirely
-torch.backends.cudnn.enabled = False
+# Enable cuDNN for optimized convolution kernels
+torch.backends.cudnn.enabled = True
+torch.backends.cudnn.benchmark = True
 
-sys.path.append(os.getcwd())
+sys.path.insert(0, os.getcwd())
 
 from integration.profiler import profiler
-print(f"DEBUG: benchmark_ldm loaded. Profiler ID: {id(profiler)}")
 from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 
@@ -89,6 +89,8 @@ try:
         convert_model_to_optimized_int4,
         enable_modiff_mode as enable_modiff_mode_int4,
         reset_modiff_state as reset_modiff_state_int4,
+        apply_int4_static_scales,
+        export_int4_static_scales,
     )
     HAS_INT4 = True
 except ImportError:
@@ -238,11 +240,22 @@ class BenchmarkRunner:
         """Load and setup model for given mode."""
         model, _ = load_model(self.config_path, self.ckpt_path)
         
-        # Configure backends
-        # Disable TF32 to ensure pure FP32 baseline and consistent comparisons
-        torch.backends.cuda.matmul.allow_tf32 = False
-        torch.backends.cudnn.allow_tf32 = False
+        # Configure backends for maximum speed
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
         torch.backends.cudnn.benchmark = True
+        
+        # Use channels_last memory format to eliminate NCHW↔NHWC conversions
+        # cuDNN and CUTLASS both prefer NHWC; this avoids costly layout transposes
+        model = model.to(memory_format=torch.channels_last)
+        
+        # Disable gradient checkpointing for inference (eliminates autograd overhead)
+        for m in model.modules():
+            if hasattr(m, 'use_checkpoint'):
+                m.use_checkpoint = False
+        # Patch AttentionBlock to bypass checkpoint (it hardcodes flag=True)
+        from ldm.modules.diffusionmodules.openaimodel import AttentionBlock
+        AttentionBlock.forward = lambda self, x: self._forward(x)
         
         # Apply ResBlock fusion for all modes (8-12% speedup)
         from integration.fused_resblock import fuse_resblocks_in_module, print_fusion_summary
@@ -267,7 +280,8 @@ class BenchmarkRunner:
                 config = get_calibration_config_int8()
                 config.scales = scales
                 config.is_calibrated = True
-                print(f"✓ Loaded {len(scales)} layer scales (static quantization enabled)")
+                loaded = apply_static_scales(model.model.diffusion_model, scales)
+                print(f"✓ Loaded {loaded} INT8 layer scales (static quantization enabled)")
             
             enable_modiff_mode_int8(model.model.diffusion_model, True)
         elif mode == 'int8_static' and HAS_INT8:
@@ -299,6 +313,13 @@ class BenchmarkRunner:
             # Initialize buffer pool for pre-allocated buffers
             from integration.buffer_pool import initialize_buffer_pool
             initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
+
+            # Load static INT4 activation scales if provided
+            if self.calibration_path and os.path.exists(self.calibration_path):
+                print(f"Loading INT4 calibration from {self.calibration_path}")
+                scales = torch.load(self.calibration_path, weights_only=True)
+                loaded = apply_int4_static_scales(model.model.diffusion_model, scales)
+                print(f"✓ Loaded static scales for {loaded} INT4 layers")
             
             enable_modiff_mode_int4(model.model.diffusion_model, True)
         elif mode == 'int8_baseline' and HAS_INT8:
@@ -328,6 +349,18 @@ class BenchmarkRunner:
         
         return model, DDIMSampler(model)
     
+    def _try_compile_unet(self, model):
+        """Try to torch.compile the UNet for fused element-wise kernels."""
+        try:
+            model.model.diffusion_model = torch.compile(
+                model.model.diffusion_model, 
+                mode='reduce-overhead',
+                fullgraph=False,
+            )
+            print("✓ torch.compile applied to UNet (reduce-overhead mode)")
+        except Exception as e:
+            print(f"✗ torch.compile failed: {e}")
+    
     def _calibrate_int8(self, model, sampler, num_runs: int = 10):
         """Calibrate INT8 quantization scales."""
         print(f"Calibrating INT8 ({num_runs} runs)...")
@@ -341,7 +374,11 @@ class BenchmarkRunner:
         
         get_calibration_config_int8().finalize()
         set_calibrating_int8(model.model.diffusion_model, False)
-        print(f"Calibrated {len(get_calibration_config_int8().scales)} layers")
+        num_layers = len(get_calibration_config_int8().scales)
+        if self.calibration_path:
+            torch.save(get_calibration_config_int8().scales, self.calibration_path)
+            print(f"✓ Saved INT8 static scales: {self.calibration_path}")
+        print(f"Calibrated {num_layers} layers")
     
     def _calibrate_int4(self, model, sampler, num_runs: int = 5):
         """Calibrate INT4 quantization scales (dynamic to static transition)."""
@@ -357,6 +394,13 @@ class BenchmarkRunner:
                 sampler.sample(S=5, batch_size=self.batch_size, shape=self.shape, eta=0.0, verbose=False)
         
         set_calibrating_int4(model.model.diffusion_model, False)
+        scales = export_int4_static_scales(model.model.diffusion_model)
+        if len(scales) == 0:
+            print("Warning: INT4 calibration exported 0 scales; falling back to dynamic scaling")
+        if self.calibration_path:
+            torch.save(scales, self.calibration_path)
+            print(f"✓ Saved INT4 static scales: {self.calibration_path}")
+        print(f"✓ Calibrated INT4 layers: {len(scales)}")
         print("✓ INT4 Calibration finished (Static scales locked)")
     
     def _generate_samples(self, model, sampler, mode: str, num_samples: int,
@@ -364,6 +408,18 @@ class BenchmarkRunner:
         """Generate samples and measure time."""
         mode_dir = os.path.join(self.output_dir, mode)
         os.makedirs(mode_dir, exist_ok=True)
+        
+        # Full warmup at actual batch size + step count to let cuDNN benchmark
+        # select optimal kernels. Without this, first timed run includes kernel selection.
+        print(f"Warming up cuDNN (full {self.steps}-step pass at batch_size={self.batch_size})...")
+        if mode in ('int8', 'int8_static', 'int8_baseline') and HAS_INT8:
+            reset_modiff_state_int8(model.model.diffusion_model)
+        elif mode in ('int4', 'int4_baseline') and HAS_INT4:
+            reset_modiff_state_int4(model.model.diffusion_model)
+        with torch.inference_mode():
+            sampler.sample(S=self.steps, batch_size=self.batch_size, shape=self.shape, eta=0.0, verbose=False)
+        torch.cuda.synchronize()
+        print("Warmup complete.")
         
         total_time = 0.0
         generated = 0
@@ -381,7 +437,7 @@ class BenchmarkRunner:
             torch.cuda.synchronize()
             start = time.time()
             
-            with torch.amp.autocast('cuda', enabled=use_autocast, dtype=dtype):
+            with torch.inference_mode(), torch.amp.autocast('cuda', enabled=use_autocast, dtype=dtype):
                 samples, _ = sampler.sample(S=self.steps, batch_size=batch,
                                            shape=self.shape, eta=0.0, verbose=False)
             
@@ -402,10 +458,24 @@ class BenchmarkRunner:
         pbar.close()
         return total_time, generated
     
-    def run_mode(self, mode: str, num_samples: int = 16, calibrate: bool = True):
+    def run_mode(self, mode: str, num_samples: int = 16, calibrate: bool = True, force_recalibrate: bool = False):
         """Run benchmark for a specific mode."""
         print(f"\n{'='*60}\n{mode.upper()}\n{'='*60}")
         
+        # Determine calibration path if not explicitly provided
+        original_calib_path = self.calibration_path
+        if not self.calibration_path:
+            if mode == 'int8':
+                self.calibration_path = 'integration/int8_calibration.pt'
+            elif mode == 'int4':
+                self.calibration_path = 'integration/int4_calibration.pt'
+
+        # If forcing recalibration, ignore existing file during setup
+        actual_calib_file = self.calibration_path
+        if force_recalibrate and self.calibration_path and os.path.exists(self.calibration_path):
+            print(f"Force recalibrate: ignoring existing {self.calibration_path}")
+            self.calibration_path = None
+
         # Reset profiler
         if mode in ['int8', 'int4']:
             profiler.reset()
@@ -413,13 +483,25 @@ class BenchmarkRunner:
 
         model, sampler = self._setup_model(mode)
         
-        # INT8/INT4 calibration (skip if static scales already loaded)
+        # Restore calibration path for potential saving if we cleared it for force_recalibrate
+        if force_recalibrate:
+            self.calibration_path = actual_calib_file
+
+        # INT8/INT4 calibration (skip if static scales already loaded or force_recalibrate is False)
         if mode == 'int8' and HAS_INT8:
             config = get_calibration_config_int8()
-            if not config.is_calibrated and calibrate:
+            if calibrate and (force_recalibrate or not config.is_calibrated):
                 self._calibrate_int8(model, sampler)
-        elif mode == 'int4' and HAS_INT4 and calibrate:
-            self._calibrate_int4(model, sampler)
+        elif mode == 'int4' and HAS_INT4:
+            # Check if we already have static scales loaded
+            # Note: _setup_model already called apply_int4_static_scales if path existed
+            # but if we are forcing recalibration, we want to run _calibrate_int4
+            if calibrate and (force_recalibrate or not (self.calibration_path and os.path.exists(self.calibration_path))):
+                self._calibrate_int4(model, sampler)
+        
+        # Reset profiler AFTER calibration so generation-only timing is accurate
+        if mode in ['int8', 'int4']:
+            profiler.reset()
         
         # Initialize Buffer Pool for zero-copy MoDiff
         if mode in ('int8', 'int4'):
@@ -452,6 +534,9 @@ class BenchmarkRunner:
             'time_per_sample': time_per_sample,
             'time_per_step_ms': time_per_step,
         }
+        
+        # Restore original path for next mode in 'all' loop
+        self.calibration_path = original_calib_path
         
         print(f"\n{mode.upper()} Results:")
         print(f"  Total: {total_time:.2f}s for {num_gen} samples")
@@ -525,11 +610,12 @@ def main():
     parser.add_argument('--ckpt', type=str, default='models/ldm/lsun_churches256/model.ckpt')
     parser.add_argument('--output_dir', type=str, default='integration/results_ldm_benchmark')
     parser.add_argument('--batch_size', type=int, default=32)
-    parser.add_argument('--steps', type=int, default=50)
+    parser.add_argument('--steps', type=int, default=200)
     parser.add_argument('--num_samples', type=int, default=128)
     parser.add_argument('--mode', type=str, choices=['all', 'fp32', 'fp16', 'int8', 'int8_baseline', 'int8_static', 'int4', 'int4_baseline'], default='all')
     parser.add_argument('--eval_fid', action='store_true', help='Compute FID between modes')
     parser.add_argument('--skip_calibration', action='store_true')
+    parser.add_argument('--force_recalibrate', action='store_true', help='Force regeneration of calibration scales')
     parser.add_argument('--calibration', type=str, default=None,
                        help='Path to static calibration file (e.g., integration/int8_calibration.pt)')
     args = parser.parse_args()
@@ -555,7 +641,7 @@ def main():
         if mode == 'int4' and not HAS_INT4:
             print(f"Skipping {mode}: not available")
             continue
-        runner.run_mode(mode, args.num_samples, calibrate=not args.skip_calibration)
+        runner.run_mode(mode, args.num_samples, calibrate=not args.skip_calibration, force_recalibrate=args.force_recalibrate)
     
     if args.eval_fid and len(runner.results) > 1:
         runner.compute_fid()

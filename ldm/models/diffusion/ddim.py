@@ -1,5 +1,6 @@
 """SAMPLING ONLY."""
 
+import math
 import torch
 import numpy as np
 from tqdm import tqdm
@@ -133,22 +134,19 @@ class DDIMSampler(object):
             subset_end = int(min(timesteps / self.ddim_timesteps.shape[0], 1) * self.ddim_timesteps.shape[0]) - 1
             timesteps = self.ddim_timesteps[:subset_end]
 
-        intermediates = {'x_inter': [img.to('cpu')], 'pred_x0': [img.to('cpu')], 'ts': []}
+        intermediates = {'x_inter': [img.detach().clone()], 'pred_x0': [img.detach().clone()], 'ts': []}
         time_range = reversed(range(0,timesteps)) if ddim_use_original_steps else np.flip(timesteps)
         total_steps = timesteps if ddim_use_original_steps else timesteps.shape[0]
         print(f"Running DDIM Sampling with {total_steps} timesteps")
 
         iterator = tqdm(time_range, desc='DDIM Sampler', total=total_steps)
 
-        # weight_dict = self.model.state_dict()
-        # delta_dict = {}
-        # for key in weight_dict.keys():
-        #     if 'act' in key:
-        #         delta_dict[key] = []
+        # Pre-allocate timestep tensor (reused each step via fill_)
+        ts = torch.empty((b,), device=device, dtype=torch.long)
 
         for i, step in enumerate(iterator):
             index = total_steps - i - 1
-            ts = torch.full((b,), step, device=device, dtype=torch.long)
+            ts.fill_(step)
 
             if mask is not None:
                 assert x0 is not None
@@ -171,9 +169,9 @@ class DDIMSampler(object):
             if img_callback: img_callback(pred_x0, i)
 
             if index % log_every_t == 0 or index == total_steps - 1:
-                intermediates['x_inter'].append(img.to('cpu'))
-                intermediates['pred_x0'].append(pred_x0.to('cpu'))
-                intermediates['ts'].append(ts.to('cpu'))
+                intermediates['x_inter'].append(img.detach().clone())
+                intermediates['pred_x0'].append(pred_x0.detach().clone())
+                intermediates['ts'].append(ts.detach().clone())
         
         # import ipdb
         # ipdb.set_trace()
@@ -215,22 +213,27 @@ class DDIMSampler(object):
         alphas_prev = self.model.alphas_cumprod_prev if use_original_steps else self.ddim_alphas_prev
         sqrt_one_minus_alphas = self.model.sqrt_one_minus_alphas_cumprod if use_original_steps else self.ddim_sqrt_one_minus_alphas
         sigmas = self.model.ddim_sigmas_for_original_num_steps if use_original_steps else self.ddim_sigmas
+
         # select parameters corresponding to the currently considered timestep
-        a_t = torch.full((b, 1, 1, 1), alphas[index], device=device)
-        a_prev = torch.full((b, 1, 1, 1), alphas_prev[index], device=device)
-        sigma_t = torch.full((b, 1, 1, 1), sigmas[index], device=device)
-        sqrt_one_minus_at = torch.full((b, 1, 1, 1), sqrt_one_minus_alphas[index],device=device)
+        # Use scalar indexing and in-place broadcast to avoid per-step torch.full allocations
+        a_t_val = float(alphas[index])
+        a_prev_val = float(alphas_prev[index])
+        sigma_t_val = float(sigmas[index])
+        sqrt_one_minus_at_val = float(sqrt_one_minus_alphas[index])
 
         # current prediction for x_0
-        pred_x0 = (x - sqrt_one_minus_at * e_t) / a_t.sqrt()
+        pred_x0 = (x - sqrt_one_minus_at_val * e_t) * (1.0 / (a_t_val ** 0.5))
         if quantize_denoised:
             pred_x0, _, *_ = self.model.first_stage_model.quantize(pred_x0)
         # direction pointing to x_t
-        dir_xt = (1. - a_prev - sigma_t**2).sqrt() * e_t
-        noise = sigma_t * noise_like(x.shape, device, repeat_noise) * temperature
-        if noise_dropout > 0.:
-            noise = torch.nn.functional.dropout(noise, p=noise_dropout)
-        x_prev = a_prev.sqrt() * pred_x0 + dir_xt + noise
+        dir_xt = ((1. - a_prev_val - sigma_t_val**2) ** 0.5) * e_t
+        if sigma_t_val > 0.:
+            noise = sigma_t_val * noise_like(x.shape, device, repeat_noise) * temperature
+            if noise_dropout > 0.:
+                noise = torch.nn.functional.dropout(noise, p=noise_dropout)
+            x_prev = (a_prev_val ** 0.5) * pred_x0 + dir_xt + noise
+        else:
+            x_prev = (a_prev_val ** 0.5) * pred_x0 + dir_xt
         return x_prev, pred_x0
 
     @torch.no_grad()
