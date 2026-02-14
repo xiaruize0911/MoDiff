@@ -1,0 +1,278 @@
+{
+  "fp32": {
+    "mode": "fp32",
+    "total_time_s": 4.4539430141448975,
+    "num_batches": 2,
+    "batch_size": 8,
+    "steps": 50,
+    "total_samples": 16,
+    "time_per_sample_s": 0.2783714383840561,
+    "time_per_step_ms": 5.567428767681122,
+    "internal_profiler": {},
+    "layer_profiler": {
+      "Linear": {
+        "total_ms": 113.7444800119847,
+        "count": 3700,
+        "avg_ms": 0.030741751354590462
+      },
+      "SiLU": {
+        "total_ms": 23.834816048154607,
+        "count": 3700,
+        "avg_ms": 0.006441842175176921
+      },
+      "Conv2d_other": {
+        "total_ms": 1872.4250566251576,
+        "count": 8900,
+        "avg_ms": 0.21038483782305142
+      },
+      "GroupNorm": {
+        "total_ms": 128.3379199374467,
+        "count": 2200,
+        "avg_ms": 0.05833541815338487
+      },
+      "Attention": {
+        "total_ms": 1074.3792640827596,
+        "count": 2100,
+        "avg_ms": 0.5116091733727427
+      }
+    }
+  },
+  "fp16": {
+    "mode": "fp16",
+    "total_time_s": 17.813225269317627,
+    "num_batches": 2,
+    "batch_size": 8,
+    "steps": 50,
+    "total_samples": 16,
+    "time_per_sample_s": 1.1133265793323517,
+    "time_per_step_ms": 22.266531586647034,
+    "internal_profiler": {},
+    "layer_profiler": {
+      "Linear": {
+        "total_ms": 405.1310438485816,
+        "count": 3700,
+        "avg_ms": 0.10949487671583287
+      },
+      "SiLU": {
+        "total_ms": 72.01167997834273,
+        "count": 3700,
+        "avg_ms": 0.0194626162103629
+      },
+      "Conv2d_other": {
+        "total_ms": 14831.204624794424,
+        "count": 8900,
+        "avg_ms": 1.6664274859319577
+      },
+      "GroupNorm": {
+        "total_ms": 232.6086398512125,
+        "count": 2200,
+        "avg_ms": 0.10573119993236932
+      },
+      "Attention": {
+        "total_ms": 307.09209614247084,
+        "count": 2100,
+        "avg_ms": 0.14623433149641468
+      }
+    }
+  },
+  "int8": {
+    "mode": "int8",
+    "total_time_s": 4.096390008926392,
+    "num_batches": 2,
+    "batch_size": 8,
+    "steps": 50,
+    "total_samples": 16,
+    "time_per_sample_s": 0.2560243755578995,
+    "time_per_step_ms": 5.1204875111579895,
+    "internal_profiler": {
+      "Layer: OptimizedInt8Conv2d.forward": {
+        "total_s": 1.2248485119491817,
+        "count": 7000,
+        "avg_ms": 0.17497835884988308,
+        "pct_of_total": 29.900681069920825
+      }
+    },
+    "layer_profiler": {
+      "Linear": {
+        "total_ms": 170.78793598432094,
+        "count": 3700,
+        "avg_ms": 0.046158901617384035
+      },
+      "SiLU": {
+        "total_ms": 67.47532803099602,
+        "count": 3700,
+        "avg_ms": 0.01823657514351244
+      },
+      "Conv2d_other": {
+        "total_ms": 185.45791982114315,
+        "count": 1900,
+        "avg_ms": 0.09760943148481219
+      },
+      "OptimizedInt8Conv2d": {
+        "total_ms": 1339.3274876326323,
+        "count": 7000,
+        "avg_ms": 0.19133249823323317
+      },
+      "GroupNorm": {
+        "total_ms": 177.0424320101738,
+        "count": 2200,
+        "avg_ms": 0.08047383273189718
+      },
+      "Attention": {
+        "total_ms": 432.38828529417515,
+        "count": 2100,
+        "avg_ms": 0.20589918347341674
+      }
+    }
+  },
+  "int8_baseline": {
+    "mode": "int8_baseline",
+    "total_time_s": 5.053472995758057,
+    "num_batches": 2,
+    "batch_size": 8,
+    "steps": 50,
+    "total_samples": 16,
+    "time_per_sample_s": 0.31584206223487854,
+    "time_per_step_ms": 6.316841244697571,
+    "internal_profiler": {
+      "Layer: OptimizedInt8Conv2d.forward": {
+        "total_s": 2.022169442862272,
+        "count": 7000,
+        "avg_ms": 0.2888813489803246,
+        "pct_of_total": 40.015439769040114
+      }
+    },
+    "layer_profiler": {
+      "Linear": {
+        "total_ms": 206.196832023561,
+        "count": 3700,
+        "avg_ms": 0.05572887351988135
+      },
+      "SiLU": {
+        "total_ms": 90.60992010333575,
+        "count": 3700,
+        "avg_ms": 0.024489167595496148
+      },
+      "Conv2d_other": {
+        "total_ms": 194.31251210719347,
+        "count": 1900,
+        "avg_ms": 0.10226974321431236
+      },
+      "OptimizedInt8Conv2d": {
+        "total_ms": 2172.5880317538977,
+        "count": 7000,
+        "avg_ms": 0.3103697188219854
+      },
+      "GroupNorm": {
+        "total_ms": 191.89270409196615,
+        "count": 2200,
+        "avg_ms": 0.08722395640543916
+      },
+      "Attention": {
+        "total_ms": 302.1971519961953,
+        "count": 2100,
+        "avg_ms": 0.14390340571247395
+      }
+    }
+  },
+  "int4": {
+    "mode": "int4",
+    "total_time_s": 4.127083778381348,
+    "num_batches": 2,
+    "batch_size": 8,
+    "steps": 50,
+    "total_samples": 16,
+    "time_per_sample_s": 0.25794273614883423,
+    "time_per_step_ms": 5.158854722976685,
+    "internal_profiler": {
+      "Layer: OptimizedInt4Conv2d.forward": {
+        "total_s": 1.028455999866128,
+        "count": 7000,
+        "avg_ms": 0.14692228569516114,
+        "pct_of_total": 24.91967827872617
+      }
+    },
+    "layer_profiler": {
+      "Linear": {
+        "total_ms": 336.59846674185246,
+        "count": 3700,
+        "avg_ms": 0.09097255857887904
+      },
+      "SiLU": {
+        "total_ms": 90.37670398270711,
+        "count": 3700,
+        "avg_ms": 0.02442613621154246
+      },
+      "Conv2d_other": {
+        "total_ms": 189.1569920256734,
+        "count": 1900,
+        "avg_ms": 0.09955631159245967
+      },
+      "OptimizedInt4Conv2d": {
+        "total_ms": 1184.4599364995956,
+        "count": 7000,
+        "avg_ms": 0.1692085623570851
+      },
+      "GroupNorm": {
+        "total_ms": 180.49951988458633,
+        "count": 2200,
+        "avg_ms": 0.0820452363111756
+      },
+      "Attention": {
+        "total_ms": 303.36694383621216,
+        "count": 2100,
+        "avg_ms": 0.14446044944581532
+      }
+    }
+  },
+  "int4_baseline": {
+    "mode": "int4_baseline",
+    "total_time_s": 4.738473653793335,
+    "num_batches": 2,
+    "batch_size": 8,
+    "steps": 50,
+    "total_samples": 16,
+    "time_per_sample_s": 0.29615460336208344,
+    "time_per_step_ms": 5.923092067241669,
+    "internal_profiler": {
+      "Layer: OptimizedInt4Conv2d.forward": {
+        "total_s": 1.5166264008432626,
+        "count": 7000,
+        "avg_ms": 0.21666091440618035,
+        "pct_of_total": 32.006644157009156
+      }
+    },
+    "layer_profiler": {
+      "Linear": {
+        "total_ms": 207.48444787878543,
+        "count": 3700,
+        "avg_ms": 0.05607687780507714
+      },
+      "SiLU": {
+        "total_ms": 105.74534401809797,
+        "count": 3700,
+        "avg_ms": 0.028579822707594044
+      },
+      "Conv2d_other": {
+        "total_ms": 191.8314879015088,
+        "count": 1900,
+        "avg_ms": 0.10096394100079412
+      },
+      "OptimizedInt4Conv2d": {
+        "total_ms": 1718.0902082026005,
+        "count": 7000,
+        "avg_ms": 0.24544145831465722
+      },
+      "GroupNorm": {
+        "total_ms": 188.03721595555544,
+        "count": 2200,
+        "avg_ms": 0.08547146179797975
+      },
+      "Attention": {
+        "total_ms": 297.2717758193612,
+        "count": 2100,
+        "avg_ms": 0.1415579884854101
+      }
+    }
+  }
+}
