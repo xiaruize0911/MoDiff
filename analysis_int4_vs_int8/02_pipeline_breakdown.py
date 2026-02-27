@@ -261,6 +261,10 @@ def run_pipeline_breakdown(mode, steps=50, num_batches=4, batch_size=8):
         reset_fn = lambda: reset_int4(model.model.diffusion_model)
         
     elif mode == 'fp16':
+        # Convert model weights to fp16 so that CUDA kernels run in fp16.
+        # Without this, weights stay in fp32 and autocast must cast them on
+        # every forward pass, causing significant overhead (~5x slowdown).
+        model = model.half()
         reset_fn = lambda: None
     elif mode == 'fp32':
         reset_fn = lambda: None
@@ -268,6 +272,10 @@ def run_pipeline_breakdown(mode, steps=50, num_batches=4, batch_size=8):
         raise ValueError(f"Unknown mode: {mode}")
     
     sampler = DDIMSampler(model)
+    
+    # Determine autocast settings once so warmup and timed runs are consistent
+    use_autocast = mode != 'fp32'
+    dtype = torch.float16 if use_autocast else None
     
     # Enable detailed profiling via the existing Profiler class
     Profiler.enabled = True
@@ -277,10 +285,11 @@ def run_pipeline_breakdown(mode, steps=50, num_batches=4, batch_size=8):
     layer_profiler = LayerProfiler()
     layer_profiler.register(model.model.diffusion_model)
     
-    # Warmup
+    # Warmup — use the same autocast context as timed runs to avoid
+    # first-run type-conversion overhead skewing the measurement
     print("Warming up...")
     reset_fn()
-    with torch.inference_mode():
+    with torch.inference_mode(), torch.amp.autocast('cuda', enabled=use_autocast, dtype=dtype):
         sampler.sample(S=steps, batch_size=batch_size, shape=shape, eta=0.0, verbose=False)
     torch.cuda.synchronize()
     
@@ -290,8 +299,6 @@ def run_pipeline_breakdown(mode, steps=50, num_batches=4, batch_size=8):
     
     # Timed runs
     print(f"Running {num_batches} batches...")
-    use_autocast = mode != 'fp32'
-    dtype = torch.float16 if use_autocast else None
     
     torch.cuda.synchronize()
     total_start = time.time()

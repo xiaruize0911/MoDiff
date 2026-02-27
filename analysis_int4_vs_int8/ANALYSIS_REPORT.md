@@ -1,219 +1,167 @@
-# INT4 vs INT8 Performance Analysis: Why INT4 Isn't 4x Faster
+# INT4 vs INT8 Performance Analysis
 
-**GPU:** NVIDIA L4 (SM 8.9, Ada Lovelace)  
-**CUDA:** 12.8 | **PyTorch:** 2.10.0  
-**Date:** Feb 2026  
+**GPU:** NVIDIA GeForce RTX 4090
+**CUDA:** 12.8
+**PyTorch:** 2.10.0+cu128
 
----
-
-## Executive Summary
-
-**Q: Why doesn't INT4 show a 4x speedup over INT8?**
-
-**A: Three compounding factors:**
-1. **Pure kernel speedup is ~1.8-2x, not 4x** — NVIDIA's tensor cores deliver ~2x INT4/INT8 throughput (confirmed by our microbenchmark), not 4x. The NVIDIA blog cites ~50% faster, not 4x.
-2. **Non-quantized layers consume ~48% of pipeline time** — Attention, GroupNorm, SiLU, Linear, and skip connections run identically in INT8 and INT4 modes. This is Amdahl's Law.
-3. **Quantization overhead is proportionally higher for INT4** — INT4 requires packing (2 values per byte), which adds a fixed cost that dilutes the compute savings.
-
-**Net result:** INT4 achieves a **1.76x** speedup vs FP32 in the full LDM pipeline, vs INT8's **1.65x** — only ~7% faster. This is consistent with expectations.
-
----
-
-## 1. Full LDM Benchmark Results (200 steps, 128 samples, batch=32)
+## 1. LDM Benchmark Results (Full Pipeline)
 
 | Mode | Time/Sample (s) | Time/Step (ms) | Speedup vs FP32 |
 |------|----------------|---------------|-----------------|
-| fp32 | 0.919 | 4.59 | 1.00x |
-| fp16 | 0.583 | 2.91 | 1.58x |
-| **int8_baseline** | 0.646 | 3.23 | **1.42x** |
-| **int8 (MoDiff)** | 0.558 | 2.79 | **1.65x** |
-| int8_static | 0.561 | 2.80 | 1.64x |
-| **int4_baseline** | 0.567 | 2.84 | **1.62x** |
-| **int4 (MoDiff)** | 0.522 | 2.61 | **1.76x** |
+| fp32 | 0.306 | 1.53 | 1.00x |
+| fp16 | 0.309 | 1.55 | 0.99x |
+| int8_baseline | 0.190 | 0.95 | 1.61x |
+| int8 | 0.208 | 1.04 | 1.47x |
+| int8_static | 0.211 | 1.06 | 1.45x |
+| int4_baseline | 0.183 | 0.92 | 1.67x |
+| int4 | 0.206 | 1.03 | 1.49x |
 
-**Good news:** MoDiff modulation does NOT hurt speedup — in fact it helps (+16% for INT8, +9% for INT4 vs their baselines).
+**Key Observation:** INT4 baseline achieves ~1.67x speedup vs FP32, while INT8 baseline achieves ~1.61x.
+The speedup gap between INT4 and INT8 baselines is ~3.5%, far from the theoretical ~50% expected due to quantization overhead, non-quantized layers, and memory-bound operations.
 
 ![LDM Speedups](plot_ldm_speedups.png)
 
----
+## 2. Raw CUTLASS Kernel Throughput
 
-## 2. Root Cause Analysis: Pure Kernel Microbenchmarks
-
-### 2.1 Raw CUTLASS Conv2d Throughput (INT8 vs INT4, no quant overhead)
-
-We isolated the pure CUTLASS convolution kernel by pre-quantizing inputs:
-
-| Shape | INT8 (ms) | INT4 (ms) | INT4 Speedup | INT8 TOPS | INT4 TOPS |
-|-------|----------|----------|-------------|----------|----------|
-| N=32, C=128, H=64, W=64, K=128 | 0.350 | 0.308 | **1.14x** | 110.3 | 125.4 |
-| N=32, C=256, H=32, W=32, K=256 | 0.310 | 0.166 | **1.87x** | 124.6 | 232.9 |
-| N=32, C=512, H=16, W=16, K=512 | 0.357 | 0.162 | **2.21x** | 108.1 | 238.6 |
-| N=32, C=512, H=8, W=8, K=512 | 0.127 | 0.062 | **2.06x** | 75.9 | 156.0 |
-| N=32, C=128, H=64, W=64, K=256 | 0.241 | 0.117 | **2.07x** | 80.2 | 165.8 |
-| N=32, C=256, H=32, W=32, K=512 | 0.217 | 0.098 | **2.20x** | 89.3 | 196.6 |
-
-**Key finding:** Pure INT4 kernel IS ~1.1-2.2x faster than INT8! The speedup varies by shape:
-- **Large spatial dims (H=64,W=64) with small channels (C=128):** Only 1.1x — memory-bound, not compute-bound
-- **Small spatial dims with large channels (C=512):** ~2x — compute-bound, tensor cores dominate
-
-This matches NVIDIA's blog claim of ~50% faster (≈1.5x average across workloads).
+| Shape | INT8 (ms) | INT4 (ms) | INT4/INT8 Speedup | INT8 TOPS | INT4 TOPS |
+|-------|----------|----------|-------------------|----------|----------|
+| N=32,C=128,H=64,W=64,K=128,R=3,S=3 | 0.099 | 0.080 | 1.24x | 389.2 | 484.0 |
+| N=32,C=256,H=32,W=32,K=256,R=3,S=3 | 0.078 | 0.044 | 1.77x | 496.7 | 877.9 |
+| N=32,C=512,H=16,W=16,K=512,R=3,S=3 | 0.069 | 0.038 | 1.81x | 563.4 | 1020.2 |
+| N=32,C=512,H=8,W=8,K=512,R=3,S=3 | 0.035 | 0.027 | 1.31x | 277.6 | 363.0 |
+| N=8,C=128,H=128,W=128,K=128,R=3,S=3 | 0.099 | 0.080 | 1.24x | 389.2 | 484.0 |
+| N=8,C=256,H=64,W=64,K=256,R=3,S=3 | 0.078 | 0.044 | 1.77x | 496.7 | 877.9 |
+| N=32,C=128,H=64,W=64,K=256,R=3,S=3 | 0.052 | 0.033 | 1.60x | 368.3 | 589.8 |
+| N=32,C=256,H=32,W=32,K=512,R=3,S=3 | 0.043 | 0.028 | 1.56x | 449.4 | 699.1 |
 
 ![CUTLASS Throughput](plot_cutlass_conv_throughput.png)
 
-### 2.2 End-to-End Per-Layer Breakdown (Quantize + Conv)
+## 3. End-to-End Convolution Breakdown
 
-Including quantization overhead changes the picture:
+This shows time split between quantization overhead and actual compute:
 
-| Shape | FP32 (ms) | INT8 E2E (ms) | INT4 E2E (ms) | INT4/INT8 E2E |
-|-------|----------|--------------|--------------|--------------|
-| C=128,H=64 | 1.944 | 0.737 | 0.598 | **1.23x** |
-| C=256,H=32 | 1.547 | 0.496 | 0.301 | **1.65x** |
-| C=512,H=16 | 1.429 | 0.331 | 0.165 | **2.00x** |
-| C=512,H=8 | 0.304 | 0.134 | 0.066 | **2.03x** |
+### N=32,C=128,H=64,W=64,K=128,R=3,S=3
 
-### 2.3 Where Time Goes: Quantization Overhead
+| Component | INT8 (ms) | INT4 (ms) |
+|-----------|----------|----------|
+| quant_only | 0.0727 | 0.0471 |
+| conv_only | 0.1034 | 0.0758 |
+| **Total** | **0.1966** | **0.1597** |
+| Quant % of total | 37.0% | 29.5% |
 
-| Shape | INT8 Quant (ms) | INT8 Quant% | INT4 Quant (ms) | INT4 Quant% |
-|-------|----------------|------------|----------------|------------|
-| C=128,H=64 | 0.328 | **44.5%** | 0.284 | **47.5%** |
-| C=256,H=32 | 0.026 | 5.3% | 0.032 | 10.6% |
-| C=512,H=16 | 0.019 | 5.8% | 0.023 | 13.6% |
-| C=512,H=8 | 0.018 | 13.5% | 0.020 | **30.2%** |
+### N=32,C=256,H=32,W=32,K=256,R=3,S=3
 
-**Critical:** For the first conv layer (C=128, H=64), quantization takes ~45-48% of time! Since quant cost is nearly identical for INT8 and INT4, the INT4 compute savings get diluted.
+| Component | INT8 (ms) | INT4 (ms) |
+|-----------|----------|----------|
+| quant_only | 0.0183 | 0.0195 |
+| conv_only | 0.0770 | 0.0430 |
+| **Total** | **0.1005** | **0.0543** |
+| Quant % of total | 18.2% | 35.8% |
+
+### N=32,C=512,H=16,W=16,K=512,R=3,S=3
+
+| Component | INT8 (ms) | INT4 (ms) |
+|-----------|----------|----------|
+| quant_only | 0.0174 | 0.0195 |
+| conv_only | 0.0686 | 0.0379 |
+| **Total** | **0.0737** | **0.0440** |
+| Quant % of total | 23.6% | 44.2% |
+
+### N=32,C=512,H=8,W=8,K=512,R=3,S=3
+
+| Component | INT8 (ms) | INT4 (ms) |
+|-----------|----------|----------|
+| quant_only | 0.0174 | 0.0192 |
+| conv_only | 0.0338 | 0.0265 |
+| **Total** | **0.0369** | **0.0338** |
+| Quant % of total | 47.2% | 56.8% |
 
 ![E2E Breakdown](plot_e2e_breakdown.png)
 ![Quant Overhead](plot_quant_overhead.png)
 
----
+## 4. Why INT4 Doesn't Show Expected Speedup
 
-## 3. Full Pipeline Breakdown
+### Root Causes:
 
-### 3.1 INT8 Pipeline Time Distribution (50 steps, batch=8)
+1. **Quantization + Packing Overhead (Amdahl's Law)**
+   - INT4 requires packing (2 values per byte), adding overhead that INT8 doesn't have
+   - Dynamic scale computation (absmax + division) is identical cost for both precisions
+   - For small/medium convolutions, quant overhead can be 15-40% of total time
+
+2. **Memory-Bound Operations Dominate**
+   - Many conv layers in LDM have small spatial dimensions (8x8, 16x16) with many channels
+   - These are memory-bound, not compute-bound — reducing precision helps less
+   - INT4 only halves the activation memory (weights already packed), but CUTLASS data movement overhead remains similar
+
+3. **Non-Quantized Overhead**
+   - GroupNorm, SiLU, attention, skip connections, etc. run at FP32/FP16 regardless of quantization
+   - These operations are identical between INT8 and INT4 modes
+   - They represent a significant fraction of total pipeline time
+
+4. **CUTLASS INT4 Kernel Maturity**
+   - INT4 tensor core support varies by GPU architecture
+   - On some GPUs, INT4 CUTLASS kernels may not achieve peak theoretical throughput
+   - The packing/unpacking within the GEMM kernel adds instruction overhead
+
+5. **MoDiff Overhead is Constant**
+   - The sub_absmax_scale, dequant_accumulate, and scale_accumulate operations
+     have similar cost for INT4 and INT8 (they operate on FP32 accumulators)
+   - These fused kernels are a fixed overhead regardless of quantization level
+
+### Theoretical vs Practical
+
+| Factor | Theory | Practice |
+|--------|--------|----------|
+| Tensor core throughput | INT4 ~2x INT8 | Depends on kernel efficiency |
+| Memory bandwidth | INT4 reads ~0.5x INT8 | Only for packed activations/weights |
+| Quantize overhead | N/A | INT4 packing adds cost |
+| Non-conv layers | N/A | Same cost for both |
+| Overall pipeline | ~50% faster | ~3.5% faster |
+
+### NVIDIA Blog Reference
+
+The NVIDIA blog (https://developer.nvidia.com/blog/int4-for-ai-inference/) shows ~50% speedup
+for INT4 vs INT8, but this is for **pure GEMM throughput on large matrices** where the
+operation is compute-bound and quantization overhead is negligible.
+
+### What This Means for MoDiff
+
+1. **Baseline quantization is good:** Both INT8 and INT4 show solid speedups over FP32
+2. **MoDiff adds modest runtime overhead:** Compared to baseline, MoDiff INT8 is ~9.7% slower and MoDiff INT4 is ~12.1% slower. This overhead comes from storing intermediate activations and computing residuals (`a_t - â_{t+1}`). Per the paper, the benefit is **quantization quality** (FID/IS scores at lower bits), not raw throughput.
+3. **INT4 gap is real but modest:** INT4 baseline is ~3.5% faster than INT8 baseline, far below the theoretical ~50%. Overhead-dominated pipelines limit the gain.
+4. **Paper focus:** MoDiff's core contribution is enabling 3-bit (or lower) activation quantization without FID degradation — not raw speed. On CIFAR-10, LCQ+MoDiff at W8/A3 achieves a similar sFID to full-precision, while vanilla quant degrades significantly at even 6-bit activation.
+5. **For bigger models:** INT4 should show larger relative gains where conv is a bigger fraction of total compute time
+
+## 5. Detailed Pipeline Breakdown
+
+### INT8 Pipeline
+
+- Total time: 3.88s
+- Time/sample: 0.243s
+- Time/step: 4.85ms
 
 | Layer Type | Total (ms) | Calls | Avg (ms) | % of Total |
 |-----------|-----------|-------|---------|-----------|
-| **OptimizedInt8Conv2d** | **1339** | 7000 | 0.191 | **56.5%** |
-| Attention | 432 | 2100 | 0.206 | 18.2% |
-| Conv2d_other (non-quantized) | 185 | 1900 | 0.098 | 7.8% |
-| GroupNorm | 177 | 2200 | 0.080 | 7.5% |
-| Linear | 171 | 3700 | 0.046 | 7.2% |
-| SiLU | 67 | 3700 | 0.018 | 2.8% |
+| OptimizedInt8Conv2d | 1022.2 | 7000 | 0.146 | 52.4% |
+| Attention | 263.7 | 2100 | 0.126 | 13.5% |
+| Linear | 206.3 | 3700 | 0.056 | 10.6% |
+| GroupNorm | 184.0 | 2200 | 0.084 | 9.4% |
+| Conv2d_other | 178.0 | 1900 | 0.094 | 9.1% |
+| SiLU | 96.3 | 3700 | 0.026 | 4.9% |
 
-### 3.2 INT4 Pipeline Time Distribution (50 steps, batch=8)
+### INT4 Pipeline
+
+- Total time: 3.84s
+- Time/sample: 0.240s
+- Time/step: 4.80ms
 
 | Layer Type | Total (ms) | Calls | Avg (ms) | % of Total |
 |-----------|-----------|-------|---------|-----------|
-| **OptimizedInt4Conv2d** | **1184** | 7000 | 0.169 | **51.8%** |
-| Linear | 337 | 3700 | 0.091 | 14.7% |
-| Attention | 303 | 2100 | 0.144 | 13.3% |
-| Conv2d_other (non-quantized) | 189 | 1900 | 0.100 | 8.3% |
-| GroupNorm | 181 | 2200 | 0.082 | 7.9% |
-| SiLU | 90 | 3700 | 0.024 | 4.0% |
-
-### 3.3 The Amdahl's Law Picture
-
-```
-INT8 Pipeline:  [=====Quantized Conv (56.5%)=====][===Non-quantized (43.5%)===]
-INT4 Pipeline:  [====Quantized Conv (51.8%)====][=====Non-quantized (48.2%)=====]
-                                                |
-                                                v
-                        INT4 saves ~155ms on conv (1339→1184ms)
-                        But non-quantized part stays at ~1100ms
-                        
-Theoretical max speedup from INT4 over INT8 on conv only:
-  Saved: 1339 - 1184 = 155ms out of 2372ms total
-  Max pipeline speedup: 2372 / (2372-155) = 1.07x  ← matches the ~7% we see!
-```
+| OptimizedInt4Conv2d | 957.8 | 7000 | 0.137 | 47.5% |
+| Attention | 385.7 | 2100 | 0.184 | 19.1% |
+| Linear | 204.6 | 3700 | 0.055 | 10.1% |
+| GroupNorm | 183.8 | 2200 | 0.084 | 9.1% |
+| Conv2d_other | 176.9 | 1900 | 0.093 | 8.8% |
+| SiLU | 107.9 | 3700 | 0.029 | 5.3% |
 
 ![Pipeline Breakdown](plot_pipeline_breakdown.png)
-
----
-
-## 4. Answering the Two Key Questions
-
-### Q1: Is the quantization baseline good?
-
-**YES.** Our CUTLASS INT4 kernels achieve:
-- **Up to 238 TOPS** (vs INT8's 124 TOPS) — approaching 2x theoretical ratio
-- **Consistent with NVIDIA's blog claim** of ~50% faster for compute-bound shapes
-- **INT8 achieves 1.42x baseline speedup**, INT4 achieves **1.62x baseline speedup** vs FP32
-
-For reference, ViDiT-Q's W4A4 kernels target similar CUTLASS-based INT4 GEMM with packed 4-bit layout, and our implementation follows the same approach.
-
-### Q2: Does MoDiff modulated quantization hurt speed?
-
-**After fixing the comparison, baseline should be marginally FASTER than MoDiff.**
-
-| Mode | Speedup vs FP32 | vs Baseline |
-|------|-----------------|-------------|
-| INT8 baseline | 1.42x | — |
-| INT8 MoDiff | 1.65x | **+16% faster** |
-| INT4 baseline | 1.62x | — |
-| INT4 MoDiff | 1.76x | **+9% faster** |
-
-> **⚠️ These numbers are from an unfair comparison — two bugs stacked:**
->
-> **Bug 1 (fixed previously):** `initialize_buffer_pool` was called only for MoDiff modes,
-> giving baseline an extra ~3-5% `cudaMalloc/cudaFree` penalty per forward pass.
->
-> **Bug 2 (fixed now, the real cause of the +16%/+9%):** `apply_static_scales` was called
-> only for MoDiff modes. Without static scales, `_forward_standard` (baseline path) calls
-> `_compute_activation_scale` → `x.abs().max().item()` on every layer every step — this is
-> a **CPU-GPU synchronization** that serializes the entire GPU pipeline. MoDiff's modulated
-> path uses the fused `sub_absmax_scale` GPU kernel instead, avoiding this sync entirely.
-> This CPU-GPU sync is the dominant cause of the performance gap, not temporal caching.
->
-> **After both fixes,** both modes use identical: CUTLASS kernels + buffer pool +
-> static pre-calibrated scales. The **only remaining variable is temporal caching.**
-> Since temporal caching adds subtract + accumulate operations per step without skipping
-> any convolutions, the corrected expectation is:
-> **baseline ≥ MoDiff in speed** (baseline is marginally faster; MoDiff's benefit is
-> accuracy, not throughput).
-
-MoDiff's temporal caching (`ô_t = A(Q(a_t - â_{t+1})) + ô_{t+1}`) reduces the effective
-dynamic range of activations fed to the quantizer, which improves quantization accuracy
-at the cost of the extra subtract and accumulate operations per step.
-
----
-
-## 5. Conclusion
-
-| Factor | Contribution to Gap |
-|--------|-------------------|
-| Tensor core throughput (INT4 ~2x INT8, not 4x) | Limited theoretical ceiling |
-| Non-quantized layers (48% of pipeline) | Amdahl's Law — can't speed these up |
-| Quantization packing overhead (INT4 slightly more expensive) | Dilutes compute savings |
-| Small conv shapes (early layers, memory-bound) | INT4 gets less benefit here |
-| **Overall pipeline speedup** | **~7% (INT4 vs INT8)** |
-
-**Bottom line:** The INT4 implementation is working correctly and achieving near-theoretical speedup on the actual convolution kernels. The modest overall pipeline improvement is an inherent consequence of Amdahl's Law — the non-quantized portion of the pipeline limits the achievable acceleration.
-
----
-
-## Files in this analysis
-
-| File | Description |
-|------|-------------|
-| `01_gemm_microbenchmark.py` | Raw GEMM/Conv kernel benchmarks |
-| `02_pipeline_breakdown.py` | Full LDM pipeline profiling |
-| `03_generate_plots.py` | Plot and report generation |
-| `gemm_benchmark_results.json` | Raw microbenchmark data |
-| `gemm_benchmark_summary.csv` | CSV summary for external tools |
-| `pipeline_breakdown_results.json` | Raw pipeline profiling data |
-| `plot_*.png` | Visualization plots |
-
-## How to Reproduce
-
-```bash
-cd /workspace/MoDiff
-
-# 1. Run GEMM microbenchmark (no model needed)
-python analysis_int4_vs_int8/01_gemm_microbenchmark.py
-
-# 2. Run pipeline breakdown (needs LDM checkpoint)
-python analysis_int4_vs_int8/02_pipeline_breakdown.py
-
-# 3. Generate plots and report
-python analysis_int4_vs_int8/03_generate_plots.py
-```

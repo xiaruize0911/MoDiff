@@ -453,8 +453,18 @@ def generate_report(ldm_results, gemm_results, pipeline_results):
                 spd = fp32_t / r['time_per_sample'] if r['time_per_sample'] > 0 else 0
                 report.append(f"| {mode} | {r['time_per_sample']:.3f} | {r['time_per_step_ms']:.2f} | {spd:.2f}x |")
         report.append("")
-        report.append("**Key Observation:** INT4 achieves only ~1.76x speedup vs FP32, while INT8 achieves ~1.65x.")
-        report.append("The speedup gap between INT4 and INT8 is only ~7%, far from the theoretical ~50% expected.")
+        # Dynamically compute key observation numbers from actual data
+        fp32_t = ldm_results.get('fp32', {}).get('time_per_sample', 1.0)
+        int4_bl_t = ldm_results.get('int4_baseline', {}).get('time_per_sample', fp32_t)
+        int8_bl_t = ldm_results.get('int8_baseline', {}).get('time_per_sample', fp32_t)
+        int4_bl_spd = fp32_t / int4_bl_t if int4_bl_t > 0 else 1.0
+        int8_bl_spd = fp32_t / int8_bl_t if int8_bl_t > 0 else 1.0
+        gap_pct = abs(int4_bl_spd - int8_bl_spd) / int8_bl_spd * 100 if int8_bl_spd > 0 else 0
+        report.append(f"**Key Observation:** INT4 baseline achieves ~{int4_bl_spd:.2f}x speedup vs FP32, "
+                      f"while INT8 baseline achieves ~{int8_bl_spd:.2f}x.")
+        report.append(f"The speedup gap between INT4 and INT8 baselines is ~{gap_pct:.1f}%, "
+                      f"far from the theoretical ~50% expected due to quantization overhead, "
+                      f"non-quantized layers, and memory-bound operations.")
         report.append("")
         report.append("![LDM Speedups](plot_ldm_speedups.png)")
         report.append("")
@@ -544,6 +554,14 @@ def generate_report(ldm_results, gemm_results, pipeline_results):
     report.append("     have similar cost for INT4 and INT8 (they operate on FP32 accumulators)")
     report.append("   - These fused kernels are a fixed overhead regardless of quantization level")
     report.append("")
+    # Compute measured gap for the table (safe even if ldm_results is None)
+    _fp32_t = ldm_results.get('fp32', {}).get('time_per_sample', 1.0) if ldm_results else 1.0
+    _i4_bl  = ldm_results.get('int4_baseline', {}).get('time_per_sample', _fp32_t) if ldm_results else _fp32_t
+    _i8_bl  = ldm_results.get('int8_baseline', {}).get('time_per_sample', _fp32_t) if ldm_results else _fp32_t
+    _i4_spd = _fp32_t / _i4_bl if _i4_bl > 0 else 1.0
+    _i8_spd = _fp32_t / _i8_bl if _i8_bl > 0 else 1.0
+    _gap    = abs(_i4_spd - _i8_spd) / _i8_spd * 100 if _i8_spd > 0 else 0.0
+
     report.append("### Theoretical vs Practical")
     report.append("")
     report.append("| Factor | Theory | Practice |")
@@ -552,7 +570,7 @@ def generate_report(ldm_results, gemm_results, pipeline_results):
     report.append("| Memory bandwidth | INT4 reads ~0.5x INT8 | Only for packed activations/weights |")
     report.append("| Quantize overhead | N/A | INT4 packing adds cost |")
     report.append("| Non-conv layers | N/A | Same cost for both |")
-    report.append("| Overall pipeline | ~50% faster | ~7% faster |")
+    report.append(f"| Overall pipeline | ~50% faster | ~{_gap:.1f}% faster |")
     report.append("")
     report.append("### NVIDIA Blog Reference")
     report.append("")
@@ -562,12 +580,39 @@ def generate_report(ldm_results, gemm_results, pipeline_results):
     report.append("")
     report.append("### What This Means for MoDiff")
     report.append("")
+    if ldm_results:
+        fp32_t = ldm_results.get('fp32', {}).get('time_per_sample', 1.0)
+        int4_bl_t = ldm_results.get('int4_baseline', {}).get('time_per_sample', fp32_t)
+        int8_bl_t = ldm_results.get('int8_baseline', {}).get('time_per_sample', fp32_t)
+        int4_mdf_t = ldm_results.get('int4', {}).get('time_per_sample', fp32_t)
+        int8_mdf_t = ldm_results.get('int8', {}).get('time_per_sample', fp32_t)
+        int4_bl_spd = fp32_t / int4_bl_t if int4_bl_t > 0 else 1.0
+        int8_bl_spd = fp32_t / int8_bl_t if int8_bl_t > 0 else 1.0
+        int4_mdf_spd = fp32_t / int4_mdf_t if int4_mdf_t > 0 else 1.0
+        int8_mdf_spd = fp32_t / int8_mdf_t if int8_mdf_t > 0 else 1.0
+        gap_pct = abs(int4_bl_spd - int8_bl_spd) / int8_bl_spd * 100 if int8_bl_spd > 0 else 0
+        modiff_overhead_int8_pct = (int8_bl_t - int8_mdf_t) / int8_bl_t * -100 if int8_bl_t > 0 else 0
+        modiff_overhead_int4_pct = (int4_bl_t - int4_mdf_t) / int4_bl_t * -100 if int4_bl_t > 0 else 0
+    else:
+        gap_pct = 0.0
+        modiff_overhead_int8_pct = 0.0
+        modiff_overhead_int4_pct = 0.0
     report.append("1. **Baseline quantization is good:** Both INT8 and INT4 show solid speedups over FP32")
-    report.append("2. **MoDiff doesn't hurt speed:** MoDiff modes are faster than baseline (temporal caching helps)")
-    report.append("3. **INT4 benefit is real but modest:** The additional ~7% speedup from INT4 vs INT8 is expected")
-    report.append("   given the overhead-dominated pipeline")
-    report.append("4. **For bigger models:** INT4 should show larger relative gains where conv is a bigger fraction")
-    report.append("   of total compute time")
+    report.append(f"2. **MoDiff adds modest runtime overhead:** Compared to baseline, MoDiff INT8 is "
+                  f"~{abs(modiff_overhead_int8_pct):.1f}% slower and MoDiff INT4 is "
+                  f"~{abs(modiff_overhead_int4_pct):.1f}% slower. This overhead comes from storing "
+                  f"intermediate activations and computing residuals (`a_t - â_{{t+1}}`). "
+                  f"Per the paper, the benefit is **quantization quality** (FID/IS scores at lower bits), "
+                  f"not raw throughput.")
+    report.append(f"3. **INT4 gap is real but modest:** INT4 baseline is ~{gap_pct:.1f}% faster than "
+                  f"INT8 baseline, far below the theoretical ~50%. "
+                  f"Overhead-dominated pipelines limit the gain.")
+    report.append("4. **Paper focus:** MoDiff's core contribution is enabling 3-bit (or lower) activation "
+                  "quantization without FID degradation — not raw speed. On CIFAR-10, LCQ+MoDiff "
+                  "at W8/A3 achieves a similar sFID to full-precision, while vanilla quant degrades "
+                  "significantly at even 6-bit activation.")
+    report.append("5. **For bigger models:** INT4 should show larger relative gains where conv is a bigger "
+                  "fraction of total compute time")
     report.append("")
     
     # Section 5: Pipeline Breakdown
