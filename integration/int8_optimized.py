@@ -91,6 +91,7 @@ class OptimizedInt8Conv2d(nn.Module):
         self._act_channel_max: Optional[torch.Tensor] = None
         self._cached_scale_float: Optional[float] = None
         self._cached_alpha_tensor: Optional[torch.Tensor] = None
+        self._cached_scale_tensor: Optional[torch.Tensor] = None  # for _forward_standard fused path
 
         # --- SmoothQuant identity flag for fast path ---
         self._smooth_is_identity = True
@@ -245,7 +246,45 @@ class OptimizedInt8Conv2d(nn.Module):
         return output
 
     def _forward_standard(self, x: torch.Tensor) -> torch.Tensor:
-        """Standard INT8 forward without MoDiff modulation."""
+        """Standard INT8 forward without MoDiff modulation.
+
+        When static scales are available (is_calibrated=True), uses the same
+        fused CUDA kernels as the MoDiff modulated path:
+            scale_quantize_int8 → conv2d_int8_fprop
+        This avoids separate PyTorch round/clamp/cast kernels and is the
+        only fair baseline against which to measure temporal caching overhead.
+
+        When not calibrated, falls back to the naive PyTorch path (which
+        includes a CPU-GPU sync via .item() in _compute_activation_scale).
+        """
+        if self.is_calibrated and HAS_CUTLASS and self.use_cutlass:
+            # Use fused scale+quantize kernel — no CPU sync, no intermediate allocations.
+            # Lazy init the cached scale/inv_scale tensors (re-used every step).
+            if self._cached_scale_float is None:
+                self._cached_scale_float = float(self.static_input_scale.item())
+            if self._cached_alpha_tensor is None:
+                alpha = 1.0 / self._cached_scale_float
+                self._cached_alpha_tensor = torch.tensor(
+                    [alpha], device=x.device, dtype=torch.float32)
+            if self._cached_scale_tensor is None:
+                self._cached_scale_tensor = torch.tensor(
+                    [self._cached_scale_float], device=x.device, dtype=torch.float32)
+            if not x.is_contiguous(memory_format=torch.channels_last):
+                x = x.contiguous(memory_format=torch.channels_last)
+            x_int8 = modiff_cutlass.scale_quantize_int8(x, self._cached_scale_tensor)
+            if self._empty_bias is None or self._empty_bias.device != x.device:
+                self._empty_bias = torch.empty(0, device=x.device)
+            out_raw = modiff_cutlass.conv2d_int8_fprop(
+                x_int8, self.weight_int8, self._cached_alpha_tensor, self._empty_bias,
+                self.stride[0], self.stride[1],
+                self.padding[0], self.padding[1],
+                self.dilation[0], self.dilation[1]
+            )
+            out = out_raw * self.weight_scale_channel
+            if self.bias is not None:
+                out = out + self.bias
+            return out
+        # Fallback: naive PyTorch path (dynamic scale, includes CPU-GPU sync)
         input_scale = self._compute_activation_scale(x)
         return self._int8_conv(x, input_scale, with_bias=True)
 

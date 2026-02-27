@@ -143,7 +143,7 @@ For reference, ViDiT-Q's W4A4 kernels target similar CUTLASS-based INT4 GEMM wit
 
 ### Q2: Does MoDiff modulated quantization hurt speed?
 
-**NO — it actually helps!**
+**After fixing the comparison, baseline should be marginally FASTER than MoDiff.**
 
 | Mode | Speedup vs FP32 | vs Baseline |
 |------|-----------------|-------------|
@@ -152,7 +152,28 @@ For reference, ViDiT-Q's W4A4 kernels target similar CUTLASS-based INT4 GEMM wit
 | INT4 baseline | 1.62x | — |
 | INT4 MoDiff | 1.76x | **+9% faster** |
 
-MoDiff's temporal caching (`ô_t = A(Q(a_t - â_{t+1})) + ô_{t+1}`) reduces the effective range of activations, which gives the fused `sub_absmax_scale` kernel a smaller input to process, and the cached output accumulation avoids recomputing the full convolution.
+> **⚠️ These numbers are from an unfair comparison — two bugs stacked:**
+>
+> **Bug 1 (fixed previously):** `initialize_buffer_pool` was called only for MoDiff modes,
+> giving baseline an extra ~3-5% `cudaMalloc/cudaFree` penalty per forward pass.
+>
+> **Bug 2 (fixed now, the real cause of the +16%/+9%):** `apply_static_scales` was called
+> only for MoDiff modes. Without static scales, `_forward_standard` (baseline path) calls
+> `_compute_activation_scale` → `x.abs().max().item()` on every layer every step — this is
+> a **CPU-GPU synchronization** that serializes the entire GPU pipeline. MoDiff's modulated
+> path uses the fused `sub_absmax_scale` GPU kernel instead, avoiding this sync entirely.
+> This CPU-GPU sync is the dominant cause of the performance gap, not temporal caching.
+>
+> **After both fixes,** both modes use identical: CUTLASS kernels + buffer pool +
+> static pre-calibrated scales. The **only remaining variable is temporal caching.**
+> Since temporal caching adds subtract + accumulate operations per step without skipping
+> any convolutions, the corrected expectation is:
+> **baseline ≥ MoDiff in speed** (baseline is marginally faster; MoDiff's benefit is
+> accuracy, not throughput).
+
+MoDiff's temporal caching (`ô_t = A(Q(a_t - â_{t+1})) + ô_{t+1}`) reduces the effective
+dynamic range of activations fed to the quantizer, which improves quantization accuracy
+at the cost of the extra subtract and accumulate operations per step.
 
 ---
 

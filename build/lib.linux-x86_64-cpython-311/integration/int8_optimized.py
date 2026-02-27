@@ -1,47 +1,38 @@
+"""
+CUTLASS INT8 Conv2d with SmoothQuant + MoDiff Error-Compensated Modulation.
+
+Uses true INT8×INT8 tensor core kernels via CUTLASS for maximum throughput.
+Implements SmoothQuant to migrate per-channel activation variance into weights,
+and MoDiff paper's error-compensated modulation across diffusion timesteps.
+
+MoDiff equations (Gao et al., ICML 2025):
+    t=T (first step):
+        a_hat_T = Q(a_T)                                    -- Eq. (ec1)
+        o_hat_T = A(a_hat_T) + bias                         -- Eq. (ec2)
+    t<T (modulated steps):
+        a_hat_t = Q(a_t - a_hat_{t+1}) + a_hat_{t+1}        -- Eq. (ec5)
+        o_hat_t = A(Q(a_t - a_hat_{t+1})) + o_hat_{t+1}     -- Eq. (ec6)
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import os
 from typing import Dict, Optional
 from integration.profiler import profiler
 
-# CUTLASS INT8 backend -- required for INT8x INT8 tensor core convolution
 try:
     import modiff_cutlass
     HAS_CUTLASS = True
 except ImportError:
     HAS_CUTLASS = False
-    print("Warning: modiff_cutlass extension not found. Please compile it using setup.py.")
-
-# Module-level toggle: set False to disable SmoothQuant (for A/B testing).
-_ENABLE_SMOOTHQUANT = False
+    print("Warning: modiff_cutlass extension not found.")
 
 
 class OptimizedInt8Conv2d(nn.Module):
     """
-    INT8 Conv2d with per-channel dynamic quantization + MoDiff modulation.
-
-    Implements the MoDiff paper (Gao et al., ICML 2025) quantization:
-
-    Two compute paths, selected per-layer based on channel uniformity:
-    1. CUTLASS INT8×INT8 tensor core kernel (per-tensor activation scale)
-       — used when per-channel activation max ratio < threshold
-    2. Per-channel dynamic INT8 Q/DQ + FP16 conv (LCQ, matching paper)
-       — used when channel imbalance makes per-tensor INT8 catastrophic
-
-    Both paths use INT8 weights (per-output-channel symmetric quantization)
-    stored in INT8 format for 4× memory compression.
-
-    MoDiff error-compensated modulation across diffusion timesteps:
-        t=T:  â_T = Q(a_T),  ô_T = A(â_T) + bias          -- Eq.(ec1-ec2)
-        t<T:  â_t = Q(a_t − â_{t+1}) + â_{t+1}              -- Eq.(ec5)
-              ô_t = A(Q(a_t − â_{t+1})) + ô_{t+1}           -- Eq.(ec6)
-
-    MoDiff is most beneficial for aggressive quantization (W8A4, W8A6).
-    For W8A8 per-channel, quantization error is small enough that MoDiff
-    is typically unnecessary (matching paper's Table 1: W8A8 FID≈FP32).
+    CUTLASS-based INT8 Conv2d.
+    Replaces previous implementations for better generality.
     """
-
     def __init__(self, conv: nn.Conv2d, layer_name: str = "", use_compile: bool = False):
         super().__init__()
         self.layer_name = layer_name
@@ -55,15 +46,11 @@ class OptimizedInt8Conv2d(nn.Module):
         self.dilation = conv.dilation if isinstance(conv.dilation, tuple) else (conv.dilation, conv.dilation)
         self.groups = conv.groups
 
-        w_data = conv.weight.data.contiguous()  # [K, C_in, R, S], ensure contiguous
+        w_data = conv.weight.data  # [K, C_in, R, S]
 
         # --- SmoothQuant ---
-        # smooth_scale[c] = sqrt(act_max[c] / w_max[c]):  activations are
-        # divided by this, weights are multiplied.  Identity until
-        # calibration computes the actual values.
-        device = w_data.device
-        self.register_buffer('smooth_scale', torch.ones(1, self.in_channels, 1, 1, device=device))
-        # Original FP32 weights for SmoothQuant re-quantization (freed after calib)
+        self.register_buffer('smooth_scale', torch.ones(1, self.in_channels, 1, 1))
+        self.register_buffer('_smooth_inv', torch.ones(1, self.in_channels, 1, 1))
         self.register_buffer('_orig_weight', w_data.clone(), persistent=False)
 
         # --- Per-output-channel symmetric INT8 weight quantization ---
@@ -73,13 +60,10 @@ class OptimizedInt8Conv2d(nn.Module):
         self.register_buffer('weight_scale_channel', ch_scale.view(1, K, 1, 1))
 
         w_quant = (w_flat / ch_scale.unsqueeze(1)).round().clamp(-127, 127).to(torch.int8)
-        w_quant = w_quant.view_as(w_data)
-        # CUTLASS NHWC layout: (K, C, R, S) -> (K, R, S, C)
+        w_quant = w_quant.reshape_as(w_data)
+        # CUTLASS expects NHWC (K, R, S, C) for weights
         w_nhwc = w_quant.permute(0, 2, 3, 1).contiguous()
         self.register_buffer('weight_int8', w_nhwc)
-
-        # FP16 weights for fallback path (grouped convs, or when CUTLASS unavailable)
-        self.register_buffer('weight_fp16', w_data.half())
 
         # --- Bias ---
         if conv.bias is not None:
@@ -87,114 +71,111 @@ class OptimizedInt8Conv2d(nn.Module):
         else:
             self.bias = None
 
-        self._empty_bias = None  # lazily init for CUTLASS (avoids per-call alloc)
-        # Per-layer CUTLASS eligibility: set during calibration based on
-        # channel uniformity. Layers with extreme per-channel activation
-        # imbalance use per-channel FP16 fallback (matching paper's LCQ).
+        self._empty_bias = None
         self.use_cutlass = HAS_CUTLASS and self.groups == 1
 
         # --- MoDiff state ---
         self.modiff_enabled = False
         self.is_first_step = True
-        self.a_hat_cache: Optional[torch.Tensor] = None   # a_hat_{t+1}
-        self.o_hat_cache: Optional[torch.Tensor] = None   # o_hat_{t+1}
+        self.a_hat_cache: Optional[torch.Tensor] = None
+        self.o_hat_cache: Optional[torch.Tensor] = None
         self.step_count = 0
-        self.reset_interval = 10  # periodic cache reset to cap error
+        self.warmup_steps = 3  # Reduced from 5: 3 steps sufficient for convergence
 
         # --- Calibration state ---
         self.calibrating = False
         self.is_calibrated = False
         self._scale_sum = 0.0
         self._scale_count = 0
-        self.register_buffer('static_input_scale', torch.tensor(1.0, dtype=torch.float32, device=device))
-
-        # Per-channel activation max (accumulated during calibration for SmoothQuant)
+        self.register_buffer('static_input_scale', torch.tensor(1.0, dtype=torch.float32))
         self._act_channel_max: Optional[torch.Tensor] = None
-
-        # Cached values to avoid per-call GPU syncs / tensor allocs
         self._cached_scale_float: Optional[float] = None
         self._cached_alpha_tensor: Optional[torch.Tensor] = None
+        self._cached_scale_tensor: Optional[torch.Tensor] = None  # for _forward_standard fused path
+
+        # --- SmoothQuant identity flag for fast path ---
+        self._smooth_is_identity = True
+
+        # --- Fused kernel persistent buffers (lazy-initialized) ---
+        self._residual_buf: Optional[torch.Tensor] = None
+        self._scale_buf: Optional[torch.Tensor] = None
+        self._inv_scale_buf: Optional[torch.Tensor] = None
+        self._absmax_buf: Optional[torch.Tensor] = None
+        self._retire_count: Optional[torch.Tensor] = None
 
     # ==================================================================
     # Quantization helpers
     # ==================================================================
 
-    @staticmethod
-    def _compute_robust_scale(x: torch.Tensor, n_levels: float = 127.0) -> float:
-        """Percentile-based activation scale: n_levels / percentile_max.
-
-        Uses 99.9th percentile instead of abs-max. This dramatically
-        improves per-tensor quantization when a few channels carry
-        extreme outlier values (e.g., 343x channel-max ratio at low
-        timesteps). Outlier values get clipped to ±n_levels, introducing
-        small error for <0.1% of values but giving the other 99.9%
-        much better resolution.
-        """
-        abs_vals = x.abs()
-        n_elem = abs_vals.numel()
-        # Subsample for speed on large tensors
-        if n_elem > 131072:
-            indices = torch.randint(0, n_elem, (131072,), device=x.device)
-            abs_flat = abs_vals.reshape(-1)[indices]
-        else:
-            abs_flat = abs_vals.reshape(-1)
-        k = max(1, int(abs_flat.numel() * 0.001))
-        val = abs_flat.kthvalue(abs_flat.numel() - k + 1).values.item()
-        return n_levels / max(val, 1e-6)
-
     def _compute_activation_scale(self, x: torch.Tensor, is_residual: bool = False) -> float:
-        """Per-tensor activation scale with 99.9th-percentile clipping.
-
-        ALWAYS uses dynamic scaling from actual activation data.
-        During calibration, also collect per-channel max for SmoothQuant.
+        """Per-tensor symmetric activation scale: 127 / max(|x|).
+        Used during calibration and first-step only (slow path with .item() sync).
         """
-        scale = self._compute_robust_scale(x, 127.0)
+        if self.calibrating:
+            abs_max = x.abs().max().item()
+            scale = 127.0 / max(abs_max, 1e-6)
+            if not is_residual:
+                self._scale_sum += scale
+                self._scale_count += 1
+                with torch.no_grad():
+                    ch_max = x.abs().amax(dim=(0, 2, 3))
+                    if self._act_channel_max is None:
+                        self._act_channel_max = ch_max.clone()
+                    else:
+                        torch.max(self._act_channel_max, ch_max, out=self._act_channel_max)
+            return scale
 
-        if self.calibrating and not is_residual:
-            self._scale_sum += scale
-            self._scale_count += 1
-            # Track per-channel max for SmoothQuant
-            with torch.no_grad():
-                ch_max = x.abs().amax(dim=(0, 2, 3))  # [C]
-                if self._act_channel_max is None:
-                    self._act_channel_max = ch_max.clone()
-                else:
-                    torch.max(self._act_channel_max, ch_max, out=self._act_channel_max)
+        if is_residual or not self.is_calibrated:
+            abs_max = x.abs().max().item()
+            return 127.0 / max(abs_max, 1e-6)
 
-        return scale
+        if self._cached_scale_float is None:
+            self._cached_scale_float = float(self.static_input_scale.item())
+        return self._cached_scale_float
 
-    def _dequantize_activation(self, x: torch.Tensor, input_scale: float) -> torch.Tensor:
+    def _compute_scale_tensor(self, x: torch.Tensor) -> torch.Tensor:
+        """GPU-only per-tensor scale computation. No .item() sync.
+        Returns 1-element GPU tensor = 127.0 / max(|x|, 1e-6).
+        Used on the modulated hot path to avoid CPU-GPU synchronization.
+        """
+        abs_max = x.abs().amax()
+        return 127.0 / torch.clamp(abs_max, min=1e-6)
+
+    def _dequantize_activation(self, x: torch.Tensor, input_scale) -> torch.Tensor:
         """Simulate quantize-then-dequantize: a_hat = Q(x) in FP32.
-
-        Matches the INT8 rounding of the CUTLASS path so the activation
-        cache accurately tracks what the kernel actually computed with.
+        input_scale can be float or 1-element tensor.
         """
         return (x * input_scale).round().clamp(-127, 127) / input_scale
 
-    def _int8_conv(self, x: torch.Tensor, input_scale: float, with_bias: bool = True) -> torch.Tensor:
-        """INT8 convolution — CUTLASS INT8 or FP16 fallback.
-
-        CUTLASS path: actual INT8×INT8 tensor core convolution with
-        per-tensor activation scale and per-channel weight scale.
-
-        FP16 fallback (for layers with extreme channel imbalance):
-        per-channel dynamic INT8 Q/DQ on activations, then F.conv2d in
-        FP16. Simulates per-channel INT8 precision matching the paper.
+    def _int8_conv(self, x: torch.Tensor, input_scale, with_bias: bool = True) -> torch.Tensor:
+        """INT8 x INT8 convolution via CUTLASS tensor core kernel.
+        input_scale can be float or 1-element GPU tensor.
         """
         if self.use_cutlass:
-            alpha = 1.0 / input_scale
-            scale_tensor = torch.tensor([alpha], device=x.device, dtype=torch.float32)
-
-            # Quantize activations to INT8 (per-tensor)
-            x_q = (x * input_scale).round().clamp(-127, 127).to(torch.int8)
-            if not x_q.is_contiguous(memory_format=torch.channels_last):
-                x_q = x_q.contiguous(memory_format=torch.channels_last)
+            if isinstance(input_scale, (int, float)):
+                alpha = 1.0 / input_scale
+                if (self._cached_alpha_tensor is not None
+                        and self._cached_scale_float is not None
+                        and input_scale == self._cached_scale_float):
+                    scale_tensor = self._cached_alpha_tensor
+                else:
+                    scale_tensor = torch.tensor([alpha], device=x.device, dtype=torch.float32)
+                x_scaled = x * input_scale
+                if not x_scaled.is_contiguous(memory_format=torch.channels_last):
+                    x_scaled = x_scaled.contiguous(memory_format=torch.channels_last)
+                x_int8 = x_scaled.round().clamp(-127, 127).to(torch.int8)
+            else:
+                # Tensor path: use fused scale+quantize kernel (no CPU sync)
+                scale_tensor = (1.0 / input_scale).view(1)
+                if not x.is_contiguous(memory_format=torch.channels_last):
+                    x = x.contiguous(memory_format=torch.channels_last)
+                x_int8 = modiff_cutlass.scale_quantize_int8(x, input_scale)
 
             if self._empty_bias is None or self._empty_bias.device != x.device:
                 self._empty_bias = torch.empty(0, device=x.device)
 
             out_raw = modiff_cutlass.conv2d_int8_fprop(
-                x_q,
+                x_int8,
                 self.weight_int8,
                 scale_tensor,
                 self._empty_bias,
@@ -202,23 +183,39 @@ class OptimizedInt8Conv2d(nn.Module):
                 self.padding[0], self.padding[1],
                 self.dilation[0], self.dilation[1]
             )
-            # 2-step dequant: alpha handled activation scale, now weight scale
+            # Dequantize per-channel
             out = out_raw * self.weight_scale_channel
         else:
-            # FP16 fallback with per-channel dynamic INT8 Q/DQ.
-            # This matches the paper's LCQ (per-channel dynamic quantization).
-            ch_max = x.abs().amax(dim=(0, 2, 3), keepdim=True).clamp(min=1e-6)
-            ch_scale = 127.0 / ch_max  # [1, C, 1, 1]
-            x_qdq = (x * ch_scale).round().clamp(-127, 127) / ch_scale
-            out = F.conv2d(
-                x_qdq.half(), self.weight_fp16,
-                None,  # bias handled below
-                self.stride, self.padding, self.dilation, self.groups
-            ).float()
+            raise RuntimeError(
+                f"CUTLASS INT8 kernel unavailable for layer {self.layer_name} "
+                f"(groups={self.groups}). Build modiff_cutlass extension."
+            )
 
         if with_bias and self.bias is not None:
             out = out + self.bias
         return out
+
+    def _int8_conv_fused(self, x: torch.Tensor, scale: torch.Tensor, inv_scale: torch.Tensor) -> torch.Tensor:
+        """Optimized INT8 conv for modulated path: scale and inv_scale already computed on GPU.
+        No .item() sync, no 1/scale computation kernel. Uses device pointer alpha for CUTLASS.
+        Returns RAW (unscaled) CUTLASS output — caller applies weight_scale_channel via scale_accumulate.
+        """
+        if not x.is_contiguous(memory_format=torch.channels_last):
+            x = x.contiguous(memory_format=torch.channels_last)
+        x_int8 = modiff_cutlass.scale_quantize_int8(x, scale)
+
+        if self._empty_bias is None or self._empty_bias.device != x.device:
+            self._empty_bias = torch.empty(0, device=x.device)
+
+        return modiff_cutlass.conv2d_int8_fprop(
+            x_int8,
+            self.weight_int8,
+            inv_scale.view(1),
+            self._empty_bias,
+            self.stride[0], self.stride[1],
+            self.padding[0], self.padding[1],
+            self.dilation[0], self.dilation[1]
+        )
 
     # ==================================================================
     # Forward paths
@@ -227,16 +224,15 @@ class OptimizedInt8Conv2d(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         fwd_start = profiler.start("Layer: OptimizedInt8Conv2d.forward")
 
-        # Ensure FP32 -- autocast may feed FP16 which corrupts INT8 quantization
-        x = x.float()
+        if x.dtype != torch.float32:
+            x = x.float()
         if not x.is_contiguous(memory_format=torch.channels_last):
             x = x.contiguous(memory_format=torch.channels_last)
 
-        # SmoothQuant: equalize per-channel activation ranges.
-        # smooth_scale is identity (1) until calibration applies SmoothQuant.
-        # Division is ~0.1 ms vs conv ~1 ms -- negligible overhead.
-        if _ENABLE_SMOOTHQUANT and self.is_calibrated:
-            x = x / self.smooth_scale
+        # SmoothQuant: equalize per-channel activation ranges
+        # For modulated path, SmoothQuant is fused into sub_absmax_scale kernel
+        if not self._smooth_is_identity and (not self.modiff_enabled or self.is_first_step):
+            x = x * self._smooth_inv
 
         if not self.modiff_enabled:
             output = self._forward_standard(x)
@@ -250,66 +246,125 @@ class OptimizedInt8Conv2d(nn.Module):
         return output
 
     def _forward_standard(self, x: torch.Tensor) -> torch.Tensor:
-        """Standard INT8 forward without MoDiff modulation."""
+        """Standard INT8 forward without MoDiff modulation.
+
+        When static scales are available (is_calibrated=True), uses the same
+        fused CUDA kernels as the MoDiff modulated path:
+            scale_quantize_int8 → conv2d_int8_fprop
+        This avoids separate PyTorch round/clamp/cast kernels and is the
+        only fair baseline against which to measure temporal caching overhead.
+
+        When not calibrated, falls back to the naive PyTorch path (which
+        includes a CPU-GPU sync via .item() in _compute_activation_scale).
+        """
+        if self.is_calibrated and HAS_CUTLASS and self.use_cutlass:
+            # Use fused scale+quantize kernel — no CPU sync, no intermediate allocations.
+            # Lazy init the cached scale/inv_scale tensors (re-used every step).
+            if self._cached_scale_float is None:
+                self._cached_scale_float = float(self.static_input_scale.item())
+            if self._cached_alpha_tensor is None:
+                alpha = 1.0 / self._cached_scale_float
+                self._cached_alpha_tensor = torch.tensor(
+                    [alpha], device=x.device, dtype=torch.float32)
+            if self._cached_scale_tensor is None:
+                self._cached_scale_tensor = torch.tensor(
+                    [self._cached_scale_float], device=x.device, dtype=torch.float32)
+            if not x.is_contiguous(memory_format=torch.channels_last):
+                x = x.contiguous(memory_format=torch.channels_last)
+            x_int8 = modiff_cutlass.scale_quantize_int8(x, self._cached_scale_tensor)
+            if self._empty_bias is None or self._empty_bias.device != x.device:
+                self._empty_bias = torch.empty(0, device=x.device)
+            out_raw = modiff_cutlass.conv2d_int8_fprop(
+                x_int8, self.weight_int8, self._cached_alpha_tensor, self._empty_bias,
+                self.stride[0], self.stride[1],
+                self.padding[0], self.padding[1],
+                self.dilation[0], self.dilation[1]
+            )
+            out = out_raw * self.weight_scale_channel
+            if self.bias is not None:
+                out = out + self.bias
+            return out
+        # Fallback: naive PyTorch path (dynamic scale, includes CPU-GPU sync)
         input_scale = self._compute_activation_scale(x)
         return self._int8_conv(x, input_scale, with_bias=True)
 
     def _forward_first_step(self, x: torch.Tensor) -> torch.Tensor:
-        """First timestep (t=T): a_hat_T = Q(a_T), o_hat_T = A(a_hat_T) + bias."""
+        """First timestep (t=T): warm-up with repeated quantisation."""
         input_scale = self._compute_activation_scale(x)
-        out = self._int8_conv(x, input_scale, with_bias=True)
+        a_hat = self._dequantize_activation(x, input_scale)
+        o_hat = self._int8_conv(x, input_scale, with_bias=True)
 
-        # Cache quantize-dequantized activation and output for next step
-        self.a_hat_cache = self._dequantize_activation(x, input_scale)
-        self.o_hat_cache = out.clone()
-        return out
+        for _ in range(self.warmup_steps - 1):
+            residual = x - a_hat
+            r_scale = self._compute_activation_scale(residual, is_residual=True)
+            conv_r = self._int8_conv(residual, r_scale, with_bias=False)
+            r_dq = self._dequantize_activation(residual, r_scale)
+            a_hat = a_hat + r_dq
+            o_hat = o_hat + conv_r
+
+        self.a_hat_cache = a_hat
+        self.o_hat_cache = o_hat
+        return o_hat.clone()
 
     def _forward_modulated(self, x: torch.Tensor) -> torch.Tensor:
-        """MoDiff modulated step (t<T):
-            a_hat_t = Q(a_t - a_hat_{t+1}) + a_hat_{t+1}           -- Eq. (ec5)
-            o_hat_t = A(Q(a_t - a_hat_{t+1})) + o_hat_{t+1}        -- Eq. (ec6)
+        """MoDiff modulated step (t<T). No periodic reset per paper.
+        Uses fused sub+absmax+scale kernel and device pointer alpha to minimize
+        kernel launches and avoid CPU-GPU synchronization.
+        SmoothQuant multiply is fused into sub_absmax_scale when applicable.
         """
         self.step_count += 1
 
-        # Periodic cache reset to prevent unbounded error accumulation
-        if self.step_count % self.reset_interval == 0:
-            out = self._forward_first_step(x)
-            return out
-
-        # Shape mismatch -> first-step fallback (handles batch size changes)
         if self.a_hat_cache is None or self.a_hat_cache.shape != x.shape:
             self.is_first_step = True
+            if not self._smooth_is_identity:
+                x = x * self._smooth_inv
             out = self._forward_first_step(x)
             self.is_first_step = False
             return out
 
-        # Eq. (ec5) -- residual has ~10x smaller range
-        residual = x - self.a_hat_cache
+        # Lazy-init persistent buffers (reused across timesteps, never reallocated)
+        if self._residual_buf is None or self._residual_buf.shape != x.shape:
+            self._residual_buf = torch.empty_like(x)
+            self._scale_buf = torch.empty(1, device=x.device, dtype=torch.float32)
+            self._inv_scale_buf = torch.empty(1, device=x.device, dtype=torch.float32)
+            self._absmax_buf = torch.zeros(1, device=x.device, dtype=torch.float32)
+            self._retire_count = torch.zeros(1, device=x.device, dtype=torch.int32)
 
-        # Dynamic scale for residual (range varies per step)
-        input_scale = self._compute_activation_scale(residual, is_residual=True)
-        conv_residual = self._int8_conv(residual, input_scale, with_bias=False)
+        # Lazy-init smooth_inv flat tensor (1-D contiguous for kernel)
+        if not hasattr(self, '_smooth_inv_flat'):
+            if not self._smooth_is_identity:
+                self._smooth_inv_flat = self._smooth_inv.view(-1).contiguous()
+            else:
+                self._smooth_inv_flat = torch.empty(0, device=x.device, dtype=torch.float32)
 
-        # Update activation cache: a_hat_t = Q(residual) + a_hat_{t+1}
-        residual_dequant = self._dequantize_activation(residual, input_scale)
-        self.a_hat_cache.add_(residual_dequant)
+        # Fused: [smooth * x] - cache, absmax reduction, scale + inv_scale
+        # SmoothQuant is fused into the kernel (no extra element-wise multiply)
+        modiff_cutlass.sub_absmax_scale(
+            x, self.a_hat_cache, self._residual_buf,
+            self._absmax_buf, self._scale_buf, self._inv_scale_buf,
+            self._retire_count, 127.0, self._smooth_inv_flat
+        )
 
-        # Eq. (ec6) -- accumulate output: o_hat_t = conv(Q(residual)) + o_hat_{t+1}
-        self.o_hat_cache.add_(conv_residual)
-        return self.o_hat_cache.clone()
+        # Quantize + CUTLASS conv: uses inv_scale directly as device pointer alpha
+        conv_residual = self._int8_conv_fused(self._residual_buf, self._scale_buf, self._inv_scale_buf)
+
+        # Fused dequant + cache accumulate: 5 kernel launches → 1
+        modiff_cutlass.dequant_accumulate_int8(self._residual_buf, self.a_hat_cache, self._scale_buf)
+
+        # Fused: o_hat_cache += conv_raw * weight_scale_channel (2 kernels → 1)
+        modiff_cutlass.scale_accumulate(conv_residual, self.weight_scale_channel.view(-1), self.o_hat_cache)
+        return self.o_hat_cache
 
     # ==================================================================
     # MoDiff controls
     # ==================================================================
 
     def enable_modiff(self, enabled: bool = True):
-        """Enable/disable MoDiff temporal caching."""
         self.modiff_enabled = enabled
         if not enabled:
             self.reset_state()
 
     def reset_state(self):
-        """Reset MoDiff state (call between diffusion samples)."""
         self.is_first_step = True
         self.a_hat_cache = None
         self.o_hat_cache = None
@@ -320,7 +375,6 @@ class OptimizedInt8Conv2d(nn.Module):
     # ==================================================================
 
     def begin_calibration(self):
-        """Start accumulating activation scales for static calibration."""
         self.calibrating = True
         self.is_calibrated = False
         self._scale_sum = 0.0
@@ -328,30 +382,15 @@ class OptimizedInt8Conv2d(nn.Module):
         self._act_channel_max = None
 
     def end_calibration(self):
-        """Finalize calibration: detect catastrophic layers + set static activation scale."""
         self.calibrating = False
         if self._scale_count == 0:
             return
 
-        # --- Auto-detect catastrophic layers ---
-        # Layers with extreme per-channel activation imbalance can't use
-        # per-tensor INT8 effectively. Route them to per-channel FP16
-        # fallback matching the paper's LCQ per-channel dynamic quantization.
-        # Threshold tuned empirically: ch_ratio >10x causes >1% per-layer
-        # error which compounds across 70 layers to ~25% UNet error,
-        # too much for MoDiff to compensate via DDIM feedback loop.
-        if self._act_channel_max is not None and self.use_cutlass:
-            ch_ratio = (self._act_channel_max.max() / self._act_channel_max.clamp(min=1e-8).min()).item()
-            if ch_ratio > 1.5:
-                self.use_cutlass = False  # -> per-channel Q/DQ FP16 fallback
-
-        # --- SmoothQuant: balance per-channel activation/weight ranges ---
-        if _ENABLE_SMOOTHQUANT and self._act_channel_max is not None and self._orig_weight is not None:
+        if self._act_channel_max is not None and self._orig_weight is not None:
             self._apply_smoothquant()
 
-        # --- Static activation scale ---
-        if _ENABLE_SMOOTHQUANT and self._act_channel_max is not None:
-            s = self.smooth_scale.view(-1).to(self._act_channel_max.device)
+        if self._act_channel_max is not None:
+            s = self.smooth_scale.view(-1)
             smoothed_ch_max = self._act_channel_max / s
             smoothed_global_max = smoothed_ch_max.max().item()
             static_scale = 127.0 / max(smoothed_global_max, 1e-6)
@@ -360,67 +399,53 @@ class OptimizedInt8Conv2d(nn.Module):
 
         self.static_input_scale.fill_(float(static_scale))
         self.is_calibrated = True
-
-        # Pre-compute cached values
         self._cached_scale_float = float(static_scale)
         alpha = 1.0 / float(static_scale)
         self._cached_alpha_tensor = torch.tensor(
             [alpha], device=self.static_input_scale.device, dtype=torch.float32
         )
-
-        # Free original weights to save memory
+        self._smooth_inv.copy_(1.0 / self.smooth_scale)
+        self._smooth_is_identity = bool(torch.allclose(
+            self._smooth_inv,
+            torch.ones_like(self._smooth_inv),
+            atol=1e-6
+        ))
         self._orig_weight = None
 
     def _apply_smoothquant(self):
-        """SmoothQuant: fold per-channel activation scales into weights.
-
-        For each input channel c:
-            smooth_scale[c] = sqrt(act_max[c] / w_max[c])
-        At runtime:
-            smoothed_act[:, c] = act[:, c] / smooth_scale[c]
-        Weights absorb the scale:
-            new_weight[:, c] = weight[:, c] * smooth_scale[c]
-
-        After transformation, all activation channels have similar ranges,
-        so per-tensor INT8 quantization becomes nearly as accurate as per-channel.
-        """
-        act_max = self._act_channel_max  # [C_in], on CUDA
-        w = self._orig_weight             # [K, C_in, R, S]
+        """SmoothQuant: fold per-channel activation scales into weights."""
+        act_max = self._act_channel_max
+        w = self._orig_weight
         K = self.out_channels
 
-        # Per-input-channel weight max: max(|w[:, c, :, :]|) over K, R, S
         w_dev = w.to(act_max.device)
-        w_by_cin = w_dev.reshape(K, self.in_channels, -1)  # [K, C_in, R*S]
-        w_max = w_by_cin.abs().amax(dim=(0, 2))  # [C_in]
+        w_by_cin = w_dev.reshape(K, self.in_channels, -1)
+        w_max = w_by_cin.abs().amax(dim=(0, 2))
 
-        # SmoothQuant scale (alpha=0.5)
         ratio = act_max / torch.clamp(w_max, min=1e-8)
-        s = ratio.sqrt().clamp(min=1e-4, max=1e4)  # [C_in]
+        s = ratio.sqrt().clamp(min=1e-4, max=1e4)
 
         self.smooth_scale.copy_(s.view(1, -1, 1, 1))
 
-        # Re-quantize weights with smooth_scale folded in
-        w_smoothed = (w_dev * s.view(1, -1, 1, 1)).contiguous()
+        w_smoothed = w_dev * s.view(1, -1, 1, 1)
         w_flat = w_smoothed.reshape(K, -1)
-        ch_max = w_flat.abs().max(dim=1).values  # [K]
+        ch_max = w_flat.abs().max(dim=1).values
         ch_scale = torch.clamp(ch_max / 127.0, min=1e-8)
 
         self.weight_scale_channel.copy_(ch_scale.view(1, K, 1, 1))
 
         w_quant = (w_flat / ch_scale.unsqueeze(1)).round().clamp(-127, 127).to(torch.int8)
-        w_quant = w_quant.view(K, self.in_channels, *self.kernel_size)
+        w_quant = w_quant.reshape(K, self.in_channels, *self.kernel_size)
         w_nhwc = w_quant.permute(0, 2, 3, 1).contiguous()
-        self.weight_int8.copy_(w_nhwc.to(self.weight_int8.device))
+        self.weight_int8.data = w_nhwc.to(self.weight_int8.device)
 
     def set_calibrating(self, calibrating: bool):
-        """Compat shim for benchmark_ldm.py."""
         if calibrating:
             self.begin_calibration()
         else:
             self.end_calibration()
 
     def set_static_scale(self, scale: float):
-        """Set static activation scale directly (for loading from checkpoint)."""
         self.static_input_scale.fill_(float(scale))
         self.is_calibrated = True
         self._cached_scale_float = float(scale)
@@ -449,10 +474,19 @@ def convert_model_to_optimized_int8(model: nn.Module, prefix: str = "", use_comp
                 continue
 
             optimized_conv = OptimizedInt8Conv2d(child, layer_name=full_name, use_compile=use_compile)
+            target_device = child.weight.device
+            if target_device.type != 'cpu':
+                optimized_conv = optimized_conv.to(target_device)
             setattr(model, name, optimized_conv)
         else:
             convert_model_to_optimized_int8(child, prefix=full_name, use_compile=use_compile)
-    return model.to(memory_format=torch.channels_last)
+
+    # Convert to channels_last for PyTorch perf, then restore weight_int8
+    model = model.to(memory_format=torch.channels_last)
+    for m in model.modules():
+        if isinstance(m, OptimizedInt8Conv2d):
+            m.weight_int8.data = m.weight_int8.data.contiguous()
+    return model
 
 
 # ---------------------------------------------------------------------------
@@ -515,20 +549,7 @@ def set_calibrating(model, calibrating):
         _calib_config.finalize()
 
 
-# Stubs for static quantization to keep benchmark_ldm.py happy
-def convert_model_to_optimized_int8_static(model, sample_inputs=None, num_timesteps=None, device='cuda', **kwargs):
-    model = convert_model_to_optimized_int8(model)
-    if sample_inputs is not None and len(sample_inputs) > 0:
-        set_calibrating(model, True)
-        with torch.no_grad():
-            for x in sample_inputs[:16]:
-                t = torch.randint(0, 1000, (x.shape[0],), device=x.device)
-                _ = model(x, t, None)
-        set_calibrating(model, False)
-    return model
-
-
-def calibrate_int8_static_scales(model, *args, **kwargs):
+def export_int8_static_scales(model: nn.Module) -> Dict[str, float]:
     scales = {}
     for module in model.modules():
         if isinstance(module, OptimizedInt8Conv2d) and module.is_calibrated:
@@ -551,3 +572,21 @@ def apply_static_scales(model, *args, **kwargs):
     _calib_config.scales = dict(scales)
     _calib_config.is_calibrated = True
     return loaded
+
+
+# Stubs for backward compatibility with benchmark_ldm.py
+def convert_model_to_optimized_int8_static(model, sample_inputs=None, num_timesteps=None, device='cuda', **kwargs):
+    model = convert_model_to_optimized_int8(model)
+    if sample_inputs is not None and len(sample_inputs) > 0:
+        set_calibrating(model, True)
+        with torch.no_grad():
+            for x in sample_inputs[:16]:
+                t = torch.randint(0, 1000, (x.shape[0],), device=x.device)
+                _ = model(x, t, None)
+        set_calibrating(model, False)
+    return model
+
+
+def calibrate_int8_static_scales(model, *args, **kwargs):
+    return export_int8_static_scales(model)
+

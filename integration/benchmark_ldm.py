@@ -12,15 +12,20 @@ Supports:
 
 Key differences:
 - MoDiff modes (int8/int4): Use temporal caching (reuses cached activations across timesteps)
-- Baseline modes: Same INT8/INT4 kernels but no temporal caching (shows caching overhead/benefit)
-- Static mode: Pre-calibrated scales eliminate dynamic quantization overhead
+                           + static pre-calibrated scales (no per-step absmax sync)
+- Baseline modes: Same INT8/INT4 kernels + buffer pool + static scales, but no temporal caching
+                  After fixing both unfair advantages (buffer pool + static scales), baseline
+                  should be marginally FASTER than MoDiff (temporal caching adds subtract/accumulate
+                  overhead per step without skipping any convolutions)
+- Static mode: Same as int8 but always uses static scales (explicit calibration flow)
 
 Note: All INT8/INT4 modes use the same per-layer quantization approach.
       Baseline modes isolate the performance impact of temporal caching.
 
-Performance hierarchy (typical):
-  Speed: INT8_static ≈ INT8_baseline > INT8 (with caching) ≈ INT4 > FP16 > FP32
-  Quality: All INT8 modes have identical quality; all INT4 modes have identical quality
+Performance hierarchy (expected after fair comparison fix):
+  Speed: INT8_baseline ≥ INT8 (MoDiff) > INT4_baseline ≥ INT4 (MoDiff) > FP16 > FP32
+  (Baseline is slightly faster than MoDiff because temporal caching adds sub+accumulate overhead
+   without skipping any convolutions; the quality benefit of MoDiff is accuracy, not speed)
 
 Usage:
     python integration/benchmark_ldm.py --mode all --steps 50
@@ -324,13 +329,35 @@ class BenchmarkRunner:
             enable_modiff_mode_int4(model.model.diffusion_model, True)
         elif mode == 'int8_baseline' and HAS_INT8:
             print(f"Converting UNet to INT8 Baseline (INT8 kernels without MoDiff temporal caching) ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
-            # Convert to INT8 but disable MoDiff temporal caching
             convert_model_to_optimized_int8(model.model.diffusion_model)
+            from integration.buffer_pool import initialize_buffer_pool
+            initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
+            # Load static scales (same as MoDiff mode) so that _compute_activation_scale
+            # returns a cached float instead of calling abs().max().item() (CPU-GPU sync).
+            # Without this, baseline serializes GPU execution on every layer every step,
+            # making it appear slower than MoDiff for reasons unrelated to temporal caching.
+            # After this fix the ONLY difference vs int8 (MoDiff) is temporal caching.
+            if self.calibration_path and os.path.exists(self.calibration_path):
+                print(f"Loading static calibration from {self.calibration_path}")
+                scales = torch.load(self.calibration_path, weights_only=True)
+                config = get_calibration_config_int8()
+                config.scales = scales
+                config.is_calibrated = True
+                loaded = apply_static_scales(model.model.diffusion_model, scales)
+                print(f"✓ Loaded {loaded} INT8 layer scales for baseline (static quantization enabled)")
             enable_modiff_mode_int8(model.model.diffusion_model, False)  # Disable temporal caching
         elif mode == 'int4_baseline' and HAS_INT4:
             print(f"Converting UNet to INT4 Baseline (INT4 kernels without MoDiff temporal caching) ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
-            # Convert to INT4 but disable MoDiff temporal caching
             convert_model_to_optimized_int4(model.model.diffusion_model)
+            from integration.buffer_pool import initialize_buffer_pool
+            initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
+            # Load static scales (same as MoDiff mode) — eliminates abs().max().item() sync.
+            # Without this, baseline is slower than MoDiff for reasons unrelated to temporal caching.
+            if self.calibration_path and os.path.exists(self.calibration_path):
+                print(f"Loading INT4 calibration from {self.calibration_path}")
+                scales = torch.load(self.calibration_path, weights_only=True)
+                loaded = apply_int4_static_scales(model.model.diffusion_model, scales)
+                print(f"✓ Loaded static scales for {loaded} INT4 baseline layers")
             enable_modiff_mode_int4(model.model.diffusion_model, False)  # Disable temporal caching
         elif mode == 'int8_full_pipeline' and HAS_INT8:
             print(f"Converting UNet to Full INT8 Pipeline (no per-layer Q/DQ) ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
@@ -465,9 +492,9 @@ class BenchmarkRunner:
         # Determine calibration path if not explicitly provided
         original_calib_path = self.calibration_path
         if not self.calibration_path:
-            if mode == 'int8':
+            if mode in ('int8', 'int8_baseline', 'int8_static'):
                 self.calibration_path = 'integration/int8_calibration.pt'
-            elif mode == 'int4':
+            elif mode in ('int4', 'int4_baseline'):
                 self.calibration_path = 'integration/int4_calibration.pt'
 
         # If forcing recalibration, ignore existing file during setup

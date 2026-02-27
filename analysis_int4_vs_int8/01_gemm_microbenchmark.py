@@ -458,8 +458,17 @@ def main():
                 int8_conv = r['int8_conv_only']['median_ms']
                 int4_conv = r['int4_conv_only']['median_ms']
                 
-                print(f"    INT8 total = {int8_total:.4f} ms (quant: {int8_quant:.4f} ms [{100*int8_quant/int8_total:.1f}%] + conv: {int8_conv:.4f} ms [{100*int8_conv/int8_total:.1f}%])")
-                print(f"    INT4 total = {int4_total:.4f} ms (quant: {int4_quant:.4f} ms [{100*int4_quant/int4_total:.1f}%] + conv: {int4_conv:.4f} ms [{100*int4_conv/int4_total:.1f}%])")
+                # Overhead = (total - conv_only) / total
+                # This captures ALL non-compute cost (quant + kernel scheduling + alloc).
+                # Using quant_only / total is WRONG: quant_only + conv_only != total
+                # because they are measured independently; the gap is real pipeline overhead
+                # that would be silently dropped.
+                int8_overhead_pct  = 100 * (int8_total - int8_conv) / int8_total if int8_total > 0 else 0
+                int4_overhead_pct  = 100 * (int4_total - int4_conv) / int4_total if int4_total > 0 else 0
+                int8_check_gap_pct = 100 * (int8_total - int8_quant - int8_conv) / int8_total if int8_total > 0 else 0
+                int4_check_gap_pct = 100 * (int4_total - int4_quant - int4_conv) / int4_total if int4_total > 0 else 0
+                print(f"    INT8 total = {int8_total:.4f} ms | conv: {int8_conv:.4f} ms [{100*int8_conv/int8_total:.1f}%] | quant: {int8_quant:.4f} ms [{100*int8_quant/int8_total:.1f}%] | gap: {int8_check_gap_pct:.1f}% | overhead(total-conv)/total: {int8_overhead_pct:.1f}%")
+                print(f"    INT4 total = {int4_total:.4f} ms | conv: {int4_conv:.4f} ms [{100*int4_conv/int4_total:.1f}%] | quant: {int4_quant:.4f} ms [{100*int4_quant/int4_total:.1f}%] | gap: {int4_check_gap_pct:.1f}% | overhead(total-conv)/total: {int4_overhead_pct:.1f}%")
                 
                 if int8_conv > 0:
                     conv_speedup = int8_conv / int4_conv
@@ -516,13 +525,20 @@ def main():
             
             conv_ratio = int8_conv / int4_conv if int4_conv > 0 else 0
             total_ratio = int8_total / int4_total if int4_total > 0 else 0
-            quant_overhead_int4 = 100 * int4_quant / int4_total if int4_total > 0 else 0
-            quant_overhead_int8 = 100 * int8_quant / int8_total if int8_total > 0 else 0
+            # Correct overhead: (total - conv_only) / total
+            # Captures ALL non-compute cost in the real pipeline (quant + scheduling + alloc).
+            # Wrong formula was: quant_only / total — it misses the gap caused by
+            # measuring quant_only and conv_only independently vs running them together.
+            quant_overhead_int8 = 100 * (int8_total - int8_conv) / int8_total if int8_total > 0 else 0
+            quant_overhead_int4 = 100 * (int4_total - int4_conv) / int4_total if int4_total > 0 else 0
+            quant_only_frac_int8 = 100 * int8_quant / int8_total if int8_total > 0 else 0
+            quant_only_frac_int4 = 100 * int4_quant / int4_total if int4_total > 0 else 0
             
-            print(f"\n  {shape}:")
+            print(f"  {shape}:")
             print(f"    Pure conv: INT4 is {conv_ratio:.2f}x of INT8")
             print(f"    E2E:       INT4 is {total_ratio:.2f}x of INT8")
-            print(f"    Quant overhead: INT8={quant_overhead_int8:.1f}%, INT4={quant_overhead_int4:.1f}%")
+            print(f"    Overhead (total-conv)/total: INT8={quant_overhead_int8:.1f}%, INT4={quant_overhead_int4:.1f}%")
+            print(f"    [Old formula] quant_only/total: INT8={quant_only_frac_int8:.1f}%, INT4={quant_only_frac_int4:.1f}%  (underestimates by gap)")
 
 
 if __name__ == "__main__":

@@ -274,8 +274,12 @@ def plot_quant_overhead_pct(gemm_results):
         int4_c = entry.get('int4_conv_only', {}).get('median_ms', 1)
         fp32_ms = entry.get('fp32', {}).get('median_ms', 1)
         
-        int8_quant_pct.append(100 * int8_q / int8_total if int8_total > 0 else 0)
-        int4_quant_pct.append(100 * int4_q / int4_total if int4_total > 0 else 0)
+        # Correct overhead: (total - conv_only) / total
+        # Captures ALL non-compute cost in the actual pipeline.
+        # The old formula (quant_only / total) underestimates because
+        # quant_only + conv_only != total (gap = kernel scheduling + alloc overhead).
+        int8_quant_pct.append(100 * (int8_total - int8_c) / int8_total if int8_total > 0 else 0)
+        int4_quant_pct.append(100 * (int4_total - int4_c) / int4_total if int4_total > 0 else 0)
         int8_conv_speedup.append(fp32_ms / int8_c if int8_c > 0 else 0)
         int4_conv_speedup.append(fp32_ms / int4_c if int4_c > 0 else 0)
     
@@ -287,8 +291,8 @@ def plot_quant_overhead_pct(gemm_results):
     # Quant overhead percentage
     ax1.bar(x - width/2, int8_quant_pct, width, label='INT8', color='#FF5722')
     ax1.bar(x + width/2, int4_quant_pct, width, label='INT4', color='#673AB7')
-    ax1.set_ylabel('Quantization Overhead (%)')
-    ax1.set_title('Quantize+Pack Time as % of Total E2E Time')
+    ax1.set_ylabel('Overhead = (total − conv_only) / total (%)')
+    ax1.set_title('True Quant Overhead: (total − conv_only) / total\n[includes quant + kernel scheduling + alloc]')
     ax1.set_xticks(x)
     ax1.set_xticklabels(shapes)
     ax1.legend()

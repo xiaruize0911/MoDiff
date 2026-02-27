@@ -12,15 +12,20 @@ Supports:
 
 Key differences:
 - MoDiff modes (int8/int4): Use temporal caching (reuses cached activations across timesteps)
-- Baseline modes: Same INT8/INT4 kernels but no temporal caching (shows caching overhead/benefit)
-- Static mode: Pre-calibrated scales eliminate dynamic quantization overhead
+                           + static pre-calibrated scales (no per-step absmax sync)
+- Baseline modes: Same INT8/INT4 kernels + buffer pool + static scales, but no temporal caching
+                  After fixing both unfair advantages (buffer pool + static scales), baseline
+                  should be marginally FASTER than MoDiff (temporal caching adds subtract/accumulate
+                  overhead per step without skipping any convolutions)
+- Static mode: Same as int8 but always uses static scales (explicit calibration flow)
 
 Note: All INT8/INT4 modes use the same per-layer quantization approach.
       Baseline modes isolate the performance impact of temporal caching.
 
-Performance hierarchy (typical):
-  Speed: INT8_static ≈ INT8_baseline > INT8 (with caching) ≈ INT4 > FP16 > FP32
-  Quality: All INT8 modes have identical quality; all INT4 modes have identical quality
+Performance hierarchy (expected after fair comparison fix):
+  Speed: INT8_baseline ≥ INT8 (MoDiff) > INT4_baseline ≥ INT4 (MoDiff) > FP16 > FP32
+  (Baseline is slightly faster than MoDiff because temporal caching adds sub+accumulate overhead
+   without skipping any convolutions; the quality benefit of MoDiff is accuracy, not speed)
 
 Usage:
     python integration/benchmark_ldm.py --mode all --steps 50
@@ -48,12 +53,13 @@ from tqdm import tqdm
 warnings.filterwarnings('ignore', message='Could not initialize NNPACK')
 warnings.filterwarnings('ignore', category=UserWarning, module='torchmetrics')
 
-# Disable TF32 globally for consistent benchmarking
-torch.backends.cuda.matmul.allow_tf32 = False
-torch.backends.cudnn.allow_tf32 = False
+# Enable TF32 for faster FP32 operations on Ampere+ GPUs
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
 
-# Fix cuDNN sublibrary loading issues - disable cuDNN entirely
-torch.backends.cudnn.enabled = False
+# Enable cuDNN for optimized convolution kernels
+torch.backends.cudnn.enabled = True
+torch.backends.cudnn.benchmark = True
 
 sys.path.insert(0, os.getcwd())
 
@@ -239,11 +245,22 @@ class BenchmarkRunner:
         """Load and setup model for given mode."""
         model, _ = load_model(self.config_path, self.ckpt_path)
         
-        # Configure backends
-        # Disable TF32 to ensure pure FP32 baseline and consistent comparisons
-        torch.backends.cuda.matmul.allow_tf32 = False
-        torch.backends.cudnn.allow_tf32 = False
+        # Configure backends for maximum speed
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
         torch.backends.cudnn.benchmark = True
+        
+        # Use channels_last memory format to eliminate NCHW↔NHWC conversions
+        # cuDNN and CUTLASS both prefer NHWC; this avoids costly layout transposes
+        model = model.to(memory_format=torch.channels_last)
+        
+        # Disable gradient checkpointing for inference (eliminates autograd overhead)
+        for m in model.modules():
+            if hasattr(m, 'use_checkpoint'):
+                m.use_checkpoint = False
+        # Patch AttentionBlock to bypass checkpoint (it hardcodes flag=True)
+        from ldm.modules.diffusionmodules.openaimodel import AttentionBlock
+        AttentionBlock.forward = lambda self, x: self._forward(x)
         
         # Apply ResBlock fusion for all modes (8-12% speedup)
         from integration.fused_resblock import fuse_resblocks_in_module, print_fusion_summary
@@ -312,13 +329,35 @@ class BenchmarkRunner:
             enable_modiff_mode_int4(model.model.diffusion_model, True)
         elif mode == 'int8_baseline' and HAS_INT8:
             print(f"Converting UNet to INT8 Baseline (INT8 kernels without MoDiff temporal caching) ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
-            # Convert to INT8 but disable MoDiff temporal caching
             convert_model_to_optimized_int8(model.model.diffusion_model)
+            from integration.buffer_pool import initialize_buffer_pool
+            initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
+            # Load static scales (same as MoDiff mode) so that _compute_activation_scale
+            # returns a cached float instead of calling abs().max().item() (CPU-GPU sync).
+            # Without this, baseline serializes GPU execution on every layer every step,
+            # making it appear slower than MoDiff for reasons unrelated to temporal caching.
+            # After this fix the ONLY difference vs int8 (MoDiff) is temporal caching.
+            if self.calibration_path and os.path.exists(self.calibration_path):
+                print(f"Loading static calibration from {self.calibration_path}")
+                scales = torch.load(self.calibration_path, weights_only=True)
+                config = get_calibration_config_int8()
+                config.scales = scales
+                config.is_calibrated = True
+                loaded = apply_static_scales(model.model.diffusion_model, scales)
+                print(f"✓ Loaded {loaded} INT8 layer scales for baseline (static quantization enabled)")
             enable_modiff_mode_int8(model.model.diffusion_model, False)  # Disable temporal caching
         elif mode == 'int4_baseline' and HAS_INT4:
             print(f"Converting UNet to INT4 Baseline (INT4 kernels without MoDiff temporal caching) ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
-            # Convert to INT4 but disable MoDiff temporal caching
             convert_model_to_optimized_int4(model.model.diffusion_model)
+            from integration.buffer_pool import initialize_buffer_pool
+            initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
+            # Load static scales (same as MoDiff mode) — eliminates abs().max().item() sync.
+            # Without this, baseline is slower than MoDiff for reasons unrelated to temporal caching.
+            if self.calibration_path and os.path.exists(self.calibration_path):
+                print(f"Loading INT4 calibration from {self.calibration_path}")
+                scales = torch.load(self.calibration_path, weights_only=True)
+                loaded = apply_int4_static_scales(model.model.diffusion_model, scales)
+                print(f"✓ Loaded static scales for {loaded} INT4 baseline layers")
             enable_modiff_mode_int4(model.model.diffusion_model, False)  # Disable temporal caching
         elif mode == 'int8_full_pipeline' and HAS_INT8:
             print(f"Converting UNet to Full INT8 Pipeline (no per-layer Q/DQ) ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
@@ -336,6 +375,18 @@ class BenchmarkRunner:
             model.model.diffusion_model = FullPipelineInt4Wrapper(model.model.diffusion_model)
         
         return model, DDIMSampler(model)
+    
+    def _try_compile_unet(self, model):
+        """Try to torch.compile the UNet for fused element-wise kernels."""
+        try:
+            model.model.diffusion_model = torch.compile(
+                model.model.diffusion_model, 
+                mode='reduce-overhead',
+                fullgraph=False,
+            )
+            print("✓ torch.compile applied to UNet (reduce-overhead mode)")
+        except Exception as e:
+            print(f"✗ torch.compile failed: {e}")
     
     def _calibrate_int8(self, model, sampler, num_runs: int = 10):
         """Calibrate INT8 quantization scales."""
@@ -385,6 +436,18 @@ class BenchmarkRunner:
         mode_dir = os.path.join(self.output_dir, mode)
         os.makedirs(mode_dir, exist_ok=True)
         
+        # Full warmup at actual batch size + step count to let cuDNN benchmark
+        # select optimal kernels. Without this, first timed run includes kernel selection.
+        print(f"Warming up cuDNN (full {self.steps}-step pass at batch_size={self.batch_size})...")
+        if mode in ('int8', 'int8_static', 'int8_baseline') and HAS_INT8:
+            reset_modiff_state_int8(model.model.diffusion_model)
+        elif mode in ('int4', 'int4_baseline') and HAS_INT4:
+            reset_modiff_state_int4(model.model.diffusion_model)
+        with torch.inference_mode():
+            sampler.sample(S=self.steps, batch_size=self.batch_size, shape=self.shape, eta=0.0, verbose=False)
+        torch.cuda.synchronize()
+        print("Warmup complete.")
+        
         total_time = 0.0
         generated = 0
         
@@ -401,7 +464,7 @@ class BenchmarkRunner:
             torch.cuda.synchronize()
             start = time.time()
             
-            with torch.amp.autocast('cuda', enabled=use_autocast, dtype=dtype):
+            with torch.inference_mode(), torch.amp.autocast('cuda', enabled=use_autocast, dtype=dtype):
                 samples, _ = sampler.sample(S=self.steps, batch_size=batch,
                                            shape=self.shape, eta=0.0, verbose=False)
             
@@ -429,9 +492,9 @@ class BenchmarkRunner:
         # Determine calibration path if not explicitly provided
         original_calib_path = self.calibration_path
         if not self.calibration_path:
-            if mode == 'int8':
+            if mode in ('int8', 'int8_baseline', 'int8_static'):
                 self.calibration_path = 'integration/int8_calibration.pt'
-            elif mode == 'int4':
+            elif mode in ('int4', 'int4_baseline'):
                 self.calibration_path = 'integration/int4_calibration.pt'
 
         # If forcing recalibration, ignore existing file during setup
