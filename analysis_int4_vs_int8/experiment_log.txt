@@ -1,0 +1,1284 @@
+GPU: NVIDIA A40 (SM 8.6)
+PyTorch: 2.4.1+cu124, CUDA: 12.4
+======================================================================
+
+======================================================================
+EXPERIMENT 1: Full Pipeline Speedup
+======================================================================
+
+--- Mode: fp32 ---
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+Data shape for DDIM sampling is (8, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   2%|▏         | 1/50 [00:01<00:58,  1.20s/it]DDIM Sampler:   8%|▊         | 4/50 [00:01<00:11,  3.93it/s]DDIM Sampler:  16%|█▌        | 8/50 [00:01<00:05,  8.36it/s]DDIM Sampler:  24%|██▍       | 12/50 [00:01<00:03, 12.65it/s]DDIM Sampler:  32%|███▏      | 16/50 [00:01<00:02, 16.56it/s]DDIM Sampler:  40%|████      | 20/50 [00:01<00:01, 19.91it/s]DDIM Sampler:  48%|████▊     | 24/50 [00:01<00:01, 22.66it/s]DDIM Sampler:  56%|█████▌    | 28/50 [00:02<00:00, 24.85it/s]DDIM Sampler:  64%|██████▍   | 32/50 [00:02<00:00, 26.54it/s]DDIM Sampler:  72%|███████▏  | 36/50 [00:02<00:00, 27.64it/s]DDIM Sampler:  80%|████████  | 40/50 [00:02<00:00, 28.61it/s]DDIM Sampler:  88%|████████▊ | 44/50 [00:02<00:00, 29.07it/s]DDIM Sampler:  96%|█████████▌| 48/50 [00:02<00:00, 29.63it/s]DDIM Sampler: 100%|██████████| 50/50 [00:02<00:00, 17.89it/s]
+Data shape for DDIM sampling is (8, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   8%|▊         | 4/50 [00:00<00:01, 31.07it/s]DDIM Sampler:  16%|█▌        | 8/50 [00:00<00:01, 31.03it/s]DDIM Sampler:  24%|██▍       | 12/50 [00:00<00:01, 31.05it/s]DDIM Sampler:  32%|███▏      | 16/50 [00:00<00:01, 31.05it/s]DDIM Sampler:  40%|████      | 20/50 [00:00<00:00, 30.93it/s]DDIM Sampler:  48%|████▊     | 24/50 [00:00<00:00, 30.99it/s]DDIM Sampler:  56%|█████▌    | 28/50 [00:00<00:00, 30.99it/s]DDIM Sampler:  64%|██████▍   | 32/50 [00:01<00:00, 31.00it/s]DDIM Sampler:  72%|███████▏  | 36/50 [00:01<00:00, 30.93it/s]DDIM Sampler:  80%|████████  | 40/50 [00:01<00:00, 30.99it/s]DDIM Sampler:  88%|████████▊ | 44/50 [00:01<00:00, 31.03it/s]DDIM Sampler:  96%|█████████▌| 48/50 [00:01<00:00, 31.03it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 31.01it/s]
+  Time/sample: 0.202s  |  Time/step: 4.04ms
+
+--- Mode: int8_baseline ---
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+Initializing buffer pool for batch_size=8, resolution=256
+✓ Buffer pool initialized: 140 layers, 0.0 MB
+Data shape for DDIM sampling is (8, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   2%|▏         | 1/50 [00:00<00:08,  6.01it/s]DDIM Sampler:   8%|▊         | 4/50 [00:00<00:03, 14.87it/s]DDIM Sampler:  14%|█▍        | 7/50 [00:00<00:02, 18.47it/s]DDIM Sampler:  20%|██        | 10/50 [00:00<00:01, 20.35it/s]DDIM Sampler:  26%|██▌       | 13/50 [00:00<00:01, 21.19it/s]DDIM Sampler:  32%|███▏      | 16/50 [00:00<00:01, 21.35it/s]DDIM Sampler:  38%|███▊      | 19/50 [00:00<00:01, 21.40it/s]DDIM Sampler:  44%|████▍     | 22/50 [00:01<00:01, 21.45it/s]DDIM Sampler:  50%|█████     | 25/50 [00:01<00:01, 21.36it/s]DDIM Sampler:  56%|█████▌    | 28/50 [00:01<00:01, 21.44it/s]DDIM Sampler:  62%|██████▏   | 31/50 [00:01<00:00, 21.50it/s]DDIM Sampler:  68%|██████▊   | 34/50 [00:01<00:00, 21.41it/s]DDIM Sampler:  74%|███████▍  | 37/50 [00:01<00:00, 21.48it/s]DDIM Sampler:  80%|████████  | 40/50 [00:01<00:00, 21.53it/s]DDIM Sampler:  86%|████████▌ | 43/50 [00:02<00:00, 21.57it/s]DDIM Sampler:  92%|█████████▏| 46/50 [00:02<00:00, 21.51it/s]DDIM Sampler:  98%|█████████▊| 49/50 [00:02<00:00, 21.56it/s]DDIM Sampler: 100%|██████████| 50/50 [00:02<00:00, 20.78it/s]
+Data shape for DDIM sampling is (8, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   6%|▌         | 3/50 [00:00<00:02, 21.67it/s]DDIM Sampler:  12%|█▏        | 6/50 [00:00<00:02, 21.37it/s]DDIM Sampler:  18%|█▊        | 9/50 [00:00<00:01, 21.48it/s]DDIM Sampler:  24%|██▍       | 12/50 [00:00<00:01, 22.01it/s]DDIM Sampler:  30%|███       | 15/50 [00:00<00:01, 22.33it/s]DDIM Sampler:  36%|███▌      | 18/50 [00:00<00:01, 22.72it/s]DDIM Sampler:  42%|████▏     | 21/50 [00:00<00:01, 22.97it/s]DDIM Sampler:  48%|████▊     | 24/50 [00:01<00:01, 23.14it/s]DDIM Sampler:  54%|█████▍    | 27/50 [00:01<00:00, 23.15it/s]DDIM Sampler:  60%|██████    | 30/50 [00:01<00:00, 23.26it/s]DDIM Sampler:  66%|██████▌   | 33/50 [00:01<00:00, 23.32it/s]DDIM Sampler:  72%|███████▏  | 36/50 [00:01<00:00, 23.37it/s]DDIM Sampler:  78%|███████▊  | 39/50 [00:01<00:00, 23.25it/s]DDIM Sampler:  84%|████████▍ | 42/50 [00:01<00:00, 23.33it/s]DDIM Sampler:  90%|█████████ | 45/50 [00:01<00:00, 23.39it/s]DDIM Sampler:  96%|█████████▌| 48/50 [00:02<00:00, 23.19it/s]DDIM Sampler: 100%|██████████| 50/50 [00:02<00:00, 22.94it/s]
+  Time/sample: 0.273s  |  Time/step: 5.45ms
+
+--- Mode: int8 ---
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+⚠️  Buffer pool already initialized, skipping
+Data shape for DDIM sampling is (8, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   2%|▏         | 1/50 [00:00<00:05,  9.36it/s]DDIM Sampler:   8%|▊         | 4/50 [00:00<00:02, 20.91it/s]DDIM Sampler:  16%|█▌        | 8/50 [00:00<00:01, 26.13it/s]DDIM Sampler:  24%|██▍       | 12/50 [00:00<00:01, 28.25it/s]DDIM Sampler:  32%|███▏      | 16/50 [00:00<00:01, 29.31it/s]DDIM Sampler:  40%|████      | 20/50 [00:00<00:01, 29.96it/s]DDIM Sampler:  48%|████▊     | 24/50 [00:00<00:00, 30.31it/s]DDIM Sampler:  56%|█████▌    | 28/50 [00:00<00:00, 30.47it/s]DDIM Sampler:  64%|██████▍   | 32/50 [00:01<00:00, 30.67it/s]DDIM Sampler:  72%|███████▏  | 36/50 [00:01<00:00, 30.82it/s]DDIM Sampler:  80%|████████  | 40/50 [00:01<00:00, 30.98it/s]DDIM Sampler:  88%|████████▊ | 44/50 [00:01<00:00, 31.09it/s]DDIM Sampler:  96%|█████████▌| 48/50 [00:01<00:00, 31.11it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 29.64it/s]
+Data shape for DDIM sampling is (8, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   2%|▏         | 1/50 [00:00<00:05,  9.19it/s]DDIM Sampler:  10%|█         | 5/50 [00:00<00:01, 23.04it/s]DDIM Sampler:  18%|█▊        | 9/50 [00:00<00:01, 26.86it/s]DDIM Sampler:  26%|██▌       | 13/50 [00:00<00:01, 28.64it/s]DDIM Sampler:  34%|███▍      | 17/50 [00:00<00:01, 29.63it/s]DDIM Sampler:  42%|████▏     | 21/50 [00:00<00:00, 30.25it/s]DDIM Sampler:  50%|█████     | 25/50 [00:00<00:00, 30.61it/s]DDIM Sampler:  58%|█████▊    | 29/50 [00:01<00:00, 30.87it/s]DDIM Sampler:  66%|██████▌   | 33/50 [00:01<00:00, 31.06it/s]DDIM Sampler:  74%|███████▍  | 37/50 [00:01<00:00, 31.09it/s]DDIM Sampler:  82%|████████▏ | 41/50 [00:01<00:00, 31.02it/s]DDIM Sampler:  90%|█████████ | 45/50 [00:01<00:00, 31.04it/s]DDIM Sampler:  98%|█████████▊| 49/50 [00:01<00:00, 31.12it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 29.83it/s]
+  Time/sample: 0.210s  |  Time/step: 4.19ms
+
+--- Mode: int4_baseline ---
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+⚠️  Buffer pool already initialized, skipping
+Data shape for DDIM sampling is (8, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   6%|▌         | 3/50 [00:00<00:02, 22.67it/s]DDIM Sampler:  12%|█▏        | 6/50 [00:00<00:01, 22.89it/s]DDIM Sampler:  18%|█▊        | 9/50 [00:00<00:01, 22.95it/s]DDIM Sampler:  24%|██▍       | 12/50 [00:00<00:01, 22.99it/s]DDIM Sampler:  30%|███       | 15/50 [00:00<00:01, 23.01it/s]DDIM Sampler:  36%|███▌      | 18/50 [00:00<00:01, 23.02it/s]DDIM Sampler:  42%|████▏     | 21/50 [00:00<00:01, 23.02it/s]DDIM Sampler:  48%|████▊     | 24/50 [00:01<00:01, 23.02it/s]DDIM Sampler:  54%|█████▍    | 27/50 [00:01<00:00, 23.02it/s]DDIM Sampler:  60%|██████    | 30/50 [00:01<00:00, 23.02it/s]DDIM Sampler:  66%|██████▌   | 33/50 [00:01<00:00, 22.99it/s]DDIM Sampler:  72%|███████▏  | 36/50 [00:01<00:00, 23.00it/s]DDIM Sampler:  78%|███████▊  | 39/50 [00:01<00:00, 23.02it/s]DDIM Sampler:  84%|████████▍ | 42/50 [00:01<00:00, 23.04it/s]DDIM Sampler:  90%|█████████ | 45/50 [00:01<00:00, 23.05it/s]DDIM Sampler:  96%|█████████▌| 48/50 [00:02<00:00, 23.07it/s]DDIM Sampler: 100%|██████████| 50/50 [00:02<00:00, 23.02it/s]
+Data shape for DDIM sampling is (8, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   6%|▌         | 3/50 [00:00<00:02, 23.06it/s]DDIM Sampler:  12%|█▏        | 6/50 [00:00<00:01, 23.05it/s]DDIM Sampler:  18%|█▊        | 9/50 [00:00<00:01, 23.04it/s]DDIM Sampler:  24%|██▍       | 12/50 [00:00<00:01, 23.05it/s]DDIM Sampler:  30%|███       | 15/50 [00:00<00:01, 23.06it/s]DDIM Sampler:  36%|███▌      | 18/50 [00:00<00:01, 23.07it/s]DDIM Sampler:  42%|████▏     | 21/50 [00:00<00:01, 23.05it/s]DDIM Sampler:  48%|████▊     | 24/50 [00:01<00:01, 23.06it/s]DDIM Sampler:  54%|█████▍    | 27/50 [00:01<00:00, 23.08it/s]DDIM Sampler:  60%|██████    | 30/50 [00:01<00:00, 23.08it/s]DDIM Sampler:  66%|██████▌   | 33/50 [00:01<00:00, 23.07it/s]DDIM Sampler:  72%|███████▏  | 36/50 [00:01<00:00, 23.06it/s]DDIM Sampler:  78%|███████▊  | 39/50 [00:01<00:00, 23.64it/s]DDIM Sampler:  84%|████████▍ | 42/50 [00:01<00:00, 24.04it/s]DDIM Sampler:  90%|█████████ | 45/50 [00:01<00:00, 24.35it/s]DDIM Sampler:  96%|█████████▌| 48/50 [00:02<00:00, 24.56it/s]DDIM Sampler: 100%|██████████| 50/50 [00:02<00:00, 23.59it/s]
+  Time/sample: 0.265s  |  Time/step: 5.30ms
+
+--- Mode: int4 ---
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+⚠️  Buffer pool already initialized, skipping
+Data shape for DDIM sampling is (8, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   4%|▍         | 2/50 [00:00<00:03, 15.23it/s]DDIM Sampler:  12%|█▏        | 6/50 [00:00<00:01, 24.88it/s]DDIM Sampler:  20%|██        | 10/50 [00:00<00:01, 28.07it/s]DDIM Sampler:  28%|██▊       | 14/50 [00:00<00:01, 29.60it/s]DDIM Sampler:  36%|███▌      | 18/50 [00:00<00:01, 30.46it/s]DDIM Sampler:  44%|████▍     | 22/50 [00:00<00:00, 30.98it/s]DDIM Sampler:  52%|█████▏    | 26/50 [00:00<00:00, 31.32it/s]DDIM Sampler:  60%|██████    | 30/50 [00:01<00:00, 31.53it/s]DDIM Sampler:  68%|██████▊   | 34/50 [00:01<00:00, 31.67it/s]DDIM Sampler:  76%|███████▌  | 38/50 [00:01<00:00, 31.78it/s]DDIM Sampler:  84%|████████▍ | 42/50 [00:01<00:00, 31.85it/s]DDIM Sampler:  92%|█████████▏| 46/50 [00:01<00:00, 31.89it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 31.92it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 30.64it/s]
+Data shape for DDIM sampling is (8, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   4%|▍         | 2/50 [00:00<00:02, 16.03it/s]DDIM Sampler:  12%|█▏        | 6/50 [00:00<00:01, 25.27it/s]DDIM Sampler:  20%|██        | 10/50 [00:00<00:01, 28.02it/s]DDIM Sampler:  28%|██▊       | 14/50 [00:00<00:01, 29.46it/s]DDIM Sampler:  36%|███▌      | 18/50 [00:00<00:01, 30.38it/s]DDIM Sampler:  44%|████▍     | 22/50 [00:00<00:00, 30.99it/s]DDIM Sampler:  52%|█████▏    | 26/50 [00:00<00:00, 31.31it/s]DDIM Sampler:  60%|██████    | 30/50 [00:01<00:00, 31.50it/s]DDIM Sampler:  68%|██████▊   | 34/50 [00:01<00:00, 31.41it/s]DDIM Sampler:  76%|███████▌  | 38/50 [00:01<00:00, 31.52it/s]DDIM Sampler:  84%|████████▍ | 42/50 [00:01<00:00, 31.67it/s]DDIM Sampler:  92%|█████████▏| 46/50 [00:01<00:00, 31.80it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 31.88it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 30.61it/s]
+  Time/sample: 0.204s  |  Time/step: 4.09ms
+
+======================================================================
+EXPERIMENT 2: Per-Component Pipeline Breakdown
+======================================================================
+
+--- Mode: fp32 ---
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+Data shape for DDIM sampling is (8, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   8%|▊         | 4/50 [00:00<00:01, 32.00it/s]DDIM Sampler:  16%|█▌        | 8/50 [00:00<00:01, 32.06it/s]DDIM Sampler:  24%|██▍       | 12/50 [00:00<00:01, 32.08it/s]DDIM Sampler:  32%|███▏      | 16/50 [00:00<00:01, 32.09it/s]DDIM Sampler:  40%|████      | 20/50 [00:00<00:00, 32.11it/s]DDIM Sampler:  48%|████▊     | 24/50 [00:00<00:00, 32.11it/s]DDIM Sampler:  56%|█████▌    | 28/50 [00:00<00:00, 32.12it/s]DDIM Sampler:  64%|██████▍   | 32/50 [00:00<00:00, 32.12it/s]DDIM Sampler:  72%|███████▏  | 36/50 [00:01<00:00, 32.12it/s]DDIM Sampler:  80%|████████  | 40/50 [00:01<00:00, 32.07it/s]DDIM Sampler:  88%|████████▊ | 44/50 [00:01<00:00, 32.08it/s]DDIM Sampler:  96%|█████████▌| 48/50 [00:01<00:00, 32.09it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 32.09it/s]
+Data shape for DDIM sampling is (8, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   6%|▌         | 3/50 [00:00<00:01, 27.47it/s]DDIM Sampler:  12%|█▏        | 6/50 [00:00<00:01, 27.67it/s]DDIM Sampler:  18%|█▊        | 9/50 [00:00<00:01, 27.74it/s]DDIM Sampler:  24%|██▍       | 12/50 [00:00<00:01, 27.79it/s]DDIM Sampler:  30%|███       | 15/50 [00:00<00:01, 27.81it/s]DDIM Sampler:  36%|███▌      | 18/50 [00:00<00:01, 27.83it/s]DDIM Sampler:  42%|████▏     | 21/50 [00:00<00:01, 27.85it/s]DDIM Sampler:  48%|████▊     | 24/50 [00:00<00:00, 27.87it/s]DDIM Sampler:  54%|█████▍    | 27/50 [00:00<00:00, 27.89it/s]DDIM Sampler:  60%|██████    | 30/50 [00:01<00:00, 27.90it/s]DDIM Sampler:  66%|██████▌   | 33/50 [00:01<00:00, 27.90it/s]DDIM Sampler:  72%|███████▏  | 36/50 [00:01<00:00, 27.92it/s]DDIM Sampler:  78%|███████▊  | 39/50 [00:01<00:00, 27.90it/s]DDIM Sampler:  84%|████████▍ | 42/50 [00:01<00:00, 27.89it/s]DDIM Sampler:  90%|█████████ | 45/50 [00:01<00:00, 27.91it/s]DDIM Sampler:  96%|█████████▌| 48/50 [00:01<00:00, 27.62it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 27.80it/s]
+Data shape for DDIM sampling is (8, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   6%|▌         | 3/50 [00:00<00:01, 27.86it/s]DDIM Sampler:  12%|█▏        | 6/50 [00:00<00:01, 27.84it/s]DDIM Sampler:  18%|█▊        | 9/50 [00:00<00:01, 27.84it/s]DDIM Sampler:  24%|██▍       | 12/50 [00:00<00:01, 27.87it/s]DDIM Sampler:  30%|███       | 15/50 [00:00<00:01, 27.84it/s]DDIM Sampler:  36%|███▌      | 18/50 [00:00<00:01, 27.87it/s]DDIM Sampler:  42%|████▏     | 21/50 [00:00<00:01, 21.42it/s]DDIM Sampler:  48%|████▊     | 24/50 [00:00<00:01, 23.08it/s]DDIM Sampler:  54%|█████▍    | 27/50 [00:01<00:00, 24.38it/s]DDIM Sampler:  60%|██████    | 30/50 [00:01<00:00, 25.30it/s]DDIM Sampler:  66%|██████▌   | 33/50 [00:01<00:00, 25.99it/s]DDIM Sampler:  72%|███████▏  | 36/50 [00:01<00:00, 26.50it/s]DDIM Sampler:  78%|███████▊  | 39/50 [00:01<00:00, 26.85it/s]DDIM Sampler:  84%|████████▍ | 42/50 [00:01<00:00, 27.13it/s]DDIM Sampler:  90%|█████████ | 45/50 [00:01<00:00, 27.31it/s]DDIM Sampler:  96%|█████████▌| 48/50 [00:01<00:00, 27.46it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 26.27it/s]
+  Wall time: 3.70s  |  Time/step: 4.63ms
+  Component                  Total(ms)    Calls    Avg(ms)      %
+  Conv2d(FP32)                  1390.4     8900     0.1562  54.5%
+  Attention                      961.2     2100     0.4577  37.7%
+  GroupNorm                      115.2     2200     0.0524   4.5%
+  Linear(FP32)                    62.6     3700     0.0169   2.5%
+  SiLU                            20.2     3700     0.0054   0.8%
+
+--- Mode: int8 ---
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+⚠️  Buffer pool already initialized, skipping
+Data shape for DDIM sampling is (8, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   2%|▏         | 1/50 [00:00<00:15,  3.15it/s]DDIM Sampler:   4%|▍         | 2/50 [00:00<00:10,  4.78it/s]DDIM Sampler:  10%|█         | 5/50 [00:00<00:03, 11.71it/s]DDIM Sampler:  16%|█▌        | 8/50 [00:00<00:02, 16.69it/s]DDIM Sampler:  22%|██▏       | 11/50 [00:00<00:01, 20.21it/s]DDIM Sampler:  28%|██▊       | 14/50 [00:00<00:01, 22.69it/s]DDIM Sampler:  34%|███▍      | 17/50 [00:00<00:01, 24.46it/s]DDIM Sampler:  40%|████      | 20/50 [00:01<00:01, 25.71it/s]DDIM Sampler:  46%|████▌     | 23/50 [00:01<00:01, 26.57it/s]DDIM Sampler:  52%|█████▏    | 26/50 [00:01<00:00, 27.20it/s]DDIM Sampler:  58%|█████▊    | 29/50 [00:01<00:00, 27.60it/s]DDIM Sampler:  64%|██████▍   | 32/50 [00:01<00:00, 27.92it/s]DDIM Sampler:  70%|███████   | 35/50 [00:01<00:00, 28.13it/s]DDIM Sampler:  76%|███████▌  | 38/50 [00:01<00:00, 28.28it/s]DDIM Sampler:  82%|████████▏ | 41/50 [00:01<00:00, 28.38it/s]DDIM Sampler:  88%|████████▊ | 44/50 [00:01<00:00, 28.43it/s]DDIM Sampler:  94%|█████████▍| 47/50 [00:02<00:00, 28.50it/s]DDIM Sampler: 100%|██████████| 50/50 [00:02<00:00, 28.53it/s]DDIM Sampler: 100%|██████████| 50/50 [00:02<00:00, 23.44it/s]
+Data shape for DDIM sampling is (8, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   2%|▏         | 1/50 [00:00<00:09,  4.95it/s]DDIM Sampler:   8%|▊         | 4/50 [00:00<00:03, 13.62it/s]DDIM Sampler:  14%|█▍        | 7/50 [00:00<00:02, 17.37it/s]DDIM Sampler:  20%|██        | 10/50 [00:00<00:02, 19.43it/s]DDIM Sampler:  26%|██▌       | 13/50 [00:00<00:01, 20.62it/s]DDIM Sampler:  32%|███▏      | 16/50 [00:00<00:01, 21.44it/s]DDIM Sampler:  38%|███▊      | 19/50 [00:00<00:01, 21.98it/s]DDIM Sampler:  44%|████▍     | 22/50 [00:01<00:01, 22.35it/s]DDIM Sampler:  50%|█████     | 25/50 [00:01<00:01, 22.58it/s]DDIM Sampler:  56%|█████▌    | 28/50 [00:01<00:00, 22.76it/s]DDIM Sampler:  62%|██████▏   | 31/50 [00:01<00:00, 22.89it/s]DDIM Sampler:  68%|██████▊   | 34/50 [00:01<00:00, 22.96it/s]DDIM Sampler:  74%|███████▍  | 37/50 [00:01<00:00, 23.04it/s]DDIM Sampler:  80%|████████  | 40/50 [00:01<00:00, 22.95it/s]DDIM Sampler:  86%|████████▌ | 43/50 [00:02<00:00, 22.90it/s]DDIM Sampler:  92%|█████████▏| 46/50 [00:02<00:00, 22.88it/s]DDIM Sampler:  98%|█████████▊| 49/50 [00:02<00:00, 22.95it/s]DDIM Sampler: 100%|██████████| 50/50 [00:02<00:00, 21.46it/s]
+Data shape for DDIM sampling is (8, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   2%|▏         | 1/50 [00:00<00:05,  8.27it/s]DDIM Sampler:   8%|▊         | 4/50 [00:00<00:02, 17.23it/s]DDIM Sampler:  14%|█▍        | 7/50 [00:00<00:02, 19.96it/s]DDIM Sampler:  20%|██        | 10/50 [00:00<00:01, 21.24it/s]DDIM Sampler:  26%|██▌       | 13/50 [00:00<00:01, 21.98it/s]DDIM Sampler:  32%|███▏      | 16/50 [00:00<00:01, 23.25it/s]DDIM Sampler:  38%|███▊      | 19/50 [00:00<00:01, 24.05it/s]DDIM Sampler:  44%|████▍     | 22/50 [00:01<00:01, 22.75it/s]DDIM Sampler:  50%|█████     | 25/50 [00:01<00:01, 22.20it/s]DDIM Sampler:  56%|█████▌    | 28/50 [00:01<00:00, 22.29it/s]DDIM Sampler:  62%|██████▏   | 31/50 [00:01<00:01, 17.93it/s]DDIM Sampler:  68%|██████▊   | 34/50 [00:01<00:00, 19.12it/s]DDIM Sampler:  74%|███████▍  | 37/50 [00:01<00:00, 20.17it/s]DDIM Sampler:  80%|████████  | 40/50 [00:01<00:00, 20.97it/s]DDIM Sampler:  86%|████████▌ | 43/50 [00:02<00:00, 21.56it/s]DDIM Sampler:  92%|█████████▏| 46/50 [00:02<00:00, 22.52it/s]DDIM Sampler:  98%|█████████▊| 49/50 [00:02<00:00, 23.45it/s]DDIM Sampler: 100%|██████████| 50/50 [00:02<00:00, 21.45it/s]
+  Wall time: 4.67s  |  Time/step: 5.84ms
+  Component                  Total(ms)    Calls    Avg(ms)      %
+  Int8Conv2d                    1287.0     7000     0.1839  42.2%
+  Attention                      989.7     2100     0.4713  32.5%
+  Int8Linear                     461.5     3700     0.1247  15.1%
+  GroupNorm                      152.6     2200     0.0694   5.0%
+  Conv2d(FP32)                   130.2     1900     0.0685   4.3%
+  SiLU                            28.1     3700     0.0076   0.9%
+
+--- Mode: int4 ---
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+⚠️  Buffer pool already initialized, skipping
+Data shape for DDIM sampling is (8, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   2%|▏         | 1/50 [00:00<00:05,  9.65it/s]DDIM Sampler:   8%|▊         | 4/50 [00:00<00:02, 20.38it/s]DDIM Sampler:  14%|█▍        | 7/50 [00:00<00:01, 24.28it/s]DDIM Sampler:  20%|██        | 10/50 [00:00<00:01, 26.17it/s]DDIM Sampler:  26%|██▌       | 13/50 [00:00<00:01, 27.21it/s]DDIM Sampler:  32%|███▏      | 16/50 [00:00<00:01, 27.84it/s]DDIM Sampler:  38%|███▊      | 19/50 [00:00<00:01, 28.25it/s]DDIM Sampler:  44%|████▍     | 22/50 [00:00<00:00, 28.52it/s]DDIM Sampler:  50%|█████     | 25/50 [00:00<00:00, 28.69it/s]DDIM Sampler:  56%|█████▌    | 28/50 [00:01<00:00, 28.80it/s]DDIM Sampler:  62%|██████▏   | 31/50 [00:01<00:00, 28.87it/s]DDIM Sampler:  68%|██████▊   | 34/50 [00:01<00:00, 28.91it/s]DDIM Sampler:  74%|███████▍  | 37/50 [00:01<00:00, 28.96it/s]DDIM Sampler:  80%|████████  | 40/50 [00:01<00:00, 29.02it/s]DDIM Sampler:  86%|████████▌ | 43/50 [00:01<00:00, 29.03it/s]DDIM Sampler:  92%|█████████▏| 46/50 [00:01<00:00, 29.04it/s]DDIM Sampler:  98%|█████████▊| 49/50 [00:01<00:00, 29.06it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 27.86it/s]
+Data shape for DDIM sampling is (8, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   2%|▏         | 1/50 [00:00<00:05,  8.98it/s]DDIM Sampler:   8%|▊         | 4/50 [00:00<00:02, 17.73it/s]DDIM Sampler:  14%|█▍        | 7/50 [00:00<00:02, 20.35it/s]DDIM Sampler:  20%|██        | 10/50 [00:00<00:01, 21.55it/s]DDIM Sampler:  26%|██▌       | 13/50 [00:00<00:01, 22.16it/s]DDIM Sampler:  32%|███▏      | 16/50 [00:00<00:01, 22.22it/s]DDIM Sampler:  38%|███▊      | 19/50 [00:00<00:01, 22.57it/s]DDIM Sampler:  44%|████▍     | 22/50 [00:01<00:01, 22.78it/s]DDIM Sampler:  50%|█████     | 25/50 [00:01<00:01, 22.92it/s]DDIM Sampler:  56%|█████▌    | 28/50 [00:01<00:00, 23.05it/s]DDIM Sampler:  62%|██████▏   | 31/50 [00:01<00:00, 23.15it/s]DDIM Sampler:  68%|██████▊   | 34/50 [00:01<00:00, 23.19it/s]DDIM Sampler:  74%|███████▍  | 37/50 [00:01<00:00, 23.24it/s]DDIM Sampler:  80%|████████  | 40/50 [00:01<00:00, 23.27it/s]DDIM Sampler:  86%|████████▌ | 43/50 [00:01<00:00, 23.31it/s]DDIM Sampler:  92%|█████████▏| 46/50 [00:02<00:00, 23.32it/s]DDIM Sampler:  98%|█████████▊| 49/50 [00:02<00:00, 23.27it/s]DDIM Sampler: 100%|██████████| 50/50 [00:02<00:00, 22.50it/s]
+Data shape for DDIM sampling is (8, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   2%|▏         | 1/50 [00:00<00:05,  8.99it/s]DDIM Sampler:   8%|▊         | 4/50 [00:00<00:02, 17.93it/s]DDIM Sampler:  14%|█▍        | 7/50 [00:00<00:02, 20.47it/s]DDIM Sampler:  20%|██        | 10/50 [00:00<00:01, 21.63it/s]DDIM Sampler:  26%|██▌       | 13/50 [00:00<00:01, 22.27it/s]DDIM Sampler:  32%|███▏      | 16/50 [00:00<00:01, 22.66it/s]DDIM Sampler:  38%|███▊      | 19/50 [00:00<00:01, 22.90it/s]DDIM Sampler:  44%|████▍     | 22/50 [00:01<00:01, 23.61it/s]DDIM Sampler:  50%|█████     | 25/50 [00:01<00:01, 24.40it/s]DDIM Sampler:  56%|█████▌    | 28/50 [00:01<00:00, 24.95it/s]DDIM Sampler:  62%|██████▏   | 31/50 [00:01<00:00, 19.98it/s]DDIM Sampler:  68%|██████▊   | 34/50 [00:01<00:00, 21.52it/s]DDIM Sampler:  74%|███████▍  | 37/50 [00:01<00:00, 22.78it/s]DDIM Sampler:  80%|████████  | 40/50 [00:01<00:00, 23.74it/s]DDIM Sampler:  86%|████████▌ | 43/50 [00:01<00:00, 24.45it/s]DDIM Sampler:  92%|█████████▏| 46/50 [00:02<00:00, 25.00it/s]DDIM Sampler:  98%|█████████▊| 49/50 [00:02<00:00, 25.38it/s]DDIM Sampler: 100%|██████████| 50/50 [00:02<00:00, 23.05it/s]
+  Wall time: 4.40s  |  Time/step: 5.50ms
+  Component                  Total(ms)    Calls    Avg(ms)      %
+  Attention                      988.7     2100     0.4708  35.6%
+  Int4Conv2d                     974.0     7000     0.1391  35.1%
+  Int4Linear                     479.3     3700     0.1296  17.3%
+  GroupNorm                      148.8     2200     0.0676   5.4%
+  Conv2d(FP32)                   141.1     1900     0.0743   5.1%
+  SiLU                            45.6     3700     0.0123   1.6%
+
+======================================================================
+EXPERIMENT 3: Per Conv-Layer-Shape Speedup
+======================================================================
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+  C_in=192,C_out=192,K=3x3,S=1,Count=9: FP32=0.1434ms  INT8=0.0802ms  INT4=0.0479ms
+  C_in=192,C_out=384,K=1x1,S=1,Count=1: FP32=0.0581ms  INT8=0.0582ms  INT4=0.0486ms
+  C_in=192,C_out=384,K=3x3,S=1,Count=1: FP32=0.2283ms  INT8=0.1157ms  INT4=0.0691ms
+  C_in=384,C_out=192,K=1x1,S=1,Count=2: FP32=0.0353ms  INT8=0.0228ms  INT4=0.0213ms
+  C_in=384,C_out=192,K=3x3,S=1,Count=2: FP32=0.0960ms  INT8=0.0449ms  INT4=0.0276ms
+  C_in=384,C_out=384,K=3x3,S=1,Count=21: FP32=0.1508ms  INT8=0.0518ms  INT4=0.0332ms
+  C_in=384,C_out=768,K=1x1,S=1,Count=1: FP32=0.0442ms  INT8=0.0381ms  INT4=0.0277ms
+  C_in=384,C_out=768,K=3x3,S=1,Count=1: FP32=0.2497ms  INT8=0.0935ms  INT4=0.0541ms
+  C_in=576,C_out=192,K=1x1,S=1,Count=1: FP32=0.0361ms  INT8=0.0247ms  INT4=0.0213ms
+  C_in=576,C_out=192,K=3x3,S=1,Count=1: FP32=0.0712ms  INT8=0.0654ms  INT4=0.0373ms
+  C_in=576,C_out=384,K=1x1,S=1,Count=1: FP32=0.0355ms  INT8=0.0251ms  INT4=0.0216ms
+  C_in=576,C_out=384,K=3x3,S=1,Count=1: FP32=0.0945ms  INT8=0.0656ms  INT4=0.0373ms
+  C_in=768,C_out=384,K=1x1,S=1,Count=4: FP32=0.0370ms  INT8=0.0251ms  INT4=0.0218ms
+  C_in=768,C_out=384,K=3x3,S=1,Count=4: FP32=0.1214ms  INT8=0.0765ms  INT4=0.0430ms
+  C_in=768,C_out=768,K=3x3,S=1,Count=23: FP32=0.2220ms  INT8=0.0791ms  INT4=0.0439ms
+  C_in=1152,C_out=384,K=1x1,S=1,Count=1: FP32=0.0472ms  INT8=0.0326ms  INT4=0.0273ms
+  C_in=1152,C_out=384,K=3x3,S=1,Count=1: FP32=0.1632ms  INT8=0.1120ms  INT4=0.0589ms
+  C_in=1152,C_out=768,K=1x1,S=1,Count=1: FP32=0.0400ms  INT8=0.0251ms  INT4=0.0232ms
+  C_in=1152,C_out=768,K=3x3,S=1,Count=1: FP32=0.2850ms  INT8=0.1124ms  INT4=0.0630ms
+  C_in=1536,C_out=768,K=1x1,S=1,Count=5: FP32=0.0442ms  INT8=0.0299ms  INT4=0.0251ms
+  C_in=1536,C_out=768,K=3x3,S=1,Count=5: FP32=0.3677ms  INT8=0.1452ms  INT4=0.0802ms
+
+======================================================================
+EXPERIMENT 4: Per Linear-Layer-Shape Speedup
+======================================================================
+  in=192,out=768,count=1 (bs=8): FP32=0.0316  FP16=0.0347  INT8_base=0.0535  INT8_mod=0.1700  INT4_base=0.0532  INT4_mod=0.1687ms
+  in=768,out=768,count=15 (bs=8): FP32=0.0347  FP16=0.0346  INT8_base=0.0525  INT8_mod=0.1718  INT4_base=0.0525  INT4_mod=0.1721ms
+  in=768,out=384,count=6 (bs=8): FP32=0.0353  FP16=0.0346  INT8_base=0.0524  INT8_mod=0.1711  INT4_base=0.0529  INT4_mod=0.1719ms
+  in=768,out=1536,count=15 (bs=8): FP32=0.0345  FP16=0.0344  INT8_base=0.0528  INT8_mod=0.1713  INT4_base=0.0524  INT4_mod=0.1704ms
+
+======================================================================
+EXPERIMENT 5: Batch Size Ablation
+======================================================================
+
+--- Mode: fp32, batch_size=1 ---
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+Data shape for DDIM sampling is (1, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   2%|▏         | 1/50 [00:00<00:39,  1.25it/s]DDIM Sampler:  10%|█         | 5/50 [00:00<00:06,  7.09it/s]DDIM Sampler:  20%|██        | 10/50 [00:01<00:02, 14.24it/s]DDIM Sampler:  30%|███       | 15/50 [00:01<00:01, 20.56it/s]DDIM Sampler:  40%|████      | 20/50 [00:01<00:01, 25.79it/s]DDIM Sampler:  50%|█████     | 25/50 [00:01<00:00, 30.04it/s]DDIM Sampler:  60%|██████    | 30/50 [00:01<00:00, 33.34it/s]DDIM Sampler:  70%|███████   | 35/50 [00:01<00:00, 35.86it/s]DDIM Sampler:  80%|████████  | 40/50 [00:01<00:00, 37.72it/s]DDIM Sampler:  90%|█████████ | 45/50 [00:01<00:00, 38.98it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 39.97it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 25.42it/s]
+Data shape for DDIM sampling is (1, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:  10%|█         | 5/50 [00:00<00:01, 42.36it/s]DDIM Sampler:  20%|██        | 10/50 [00:00<00:00, 42.36it/s]DDIM Sampler:  30%|███       | 15/50 [00:00<00:00, 42.40it/s]DDIM Sampler:  40%|████      | 20/50 [00:00<00:00, 41.96it/s]DDIM Sampler:  50%|█████     | 25/50 [00:00<00:00, 42.12it/s]DDIM Sampler:  60%|██████    | 30/50 [00:00<00:00, 42.21it/s]DDIM Sampler:  70%|███████   | 35/50 [00:00<00:00, 42.26it/s]DDIM Sampler:  80%|████████  | 40/50 [00:00<00:00, 41.72it/s]DDIM Sampler:  90%|█████████ | 45/50 [00:01<00:00, 41.96it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 42.09it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 42.10it/s]
+Data shape for DDIM sampling is (1, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:  10%|█         | 5/50 [00:00<00:01, 42.33it/s]DDIM Sampler:  20%|██        | 10/50 [00:00<00:00, 42.34it/s]DDIM Sampler:  30%|███       | 15/50 [00:00<00:00, 42.40it/s]DDIM Sampler:  40%|████      | 20/50 [00:00<00:00, 41.68it/s]DDIM Sampler:  50%|█████     | 25/50 [00:00<00:00, 41.94it/s]DDIM Sampler:  60%|██████    | 30/50 [00:00<00:00, 42.04it/s]DDIM Sampler:  70%|███████   | 35/50 [00:00<00:00, 42.19it/s]DDIM Sampler:  80%|████████  | 40/50 [00:00<00:00, 42.15it/s]DDIM Sampler:  90%|█████████ | 45/50 [00:01<00:00, 42.15it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 41.71it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 41.97it/s]
+  Time/sample: 1.191s | Time/step: 23.82ms | Throughput: 0.84 samples/s
+
+--- Mode: fp32, batch_size=2 ---
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+Data shape for DDIM sampling is (2, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   2%|▏         | 1/50 [00:00<00:36,  1.33it/s]DDIM Sampler:  12%|█▏        | 6/50 [00:00<00:04,  8.88it/s]DDIM Sampler:  22%|██▏       | 11/50 [00:00<00:02, 15.79it/s]DDIM Sampler:  32%|███▏      | 16/50 [00:01<00:01, 21.96it/s]DDIM Sampler:  40%|████      | 20/50 [00:01<00:01, 25.75it/s]DDIM Sampler:  48%|████▊     | 24/50 [00:01<00:00, 29.08it/s]DDIM Sampler:  56%|█████▌    | 28/50 [00:01<00:00, 31.47it/s]DDIM Sampler:  64%|██████▍   | 32/50 [00:01<00:00, 33.68it/s]DDIM Sampler:  72%|███████▏  | 36/50 [00:01<00:00, 35.37it/s]DDIM Sampler:  80%|████████  | 40/50 [00:01<00:00, 36.65it/s]DDIM Sampler:  88%|████████▊ | 44/50 [00:01<00:00, 37.60it/s]DDIM Sampler:  96%|█████████▌| 48/50 [00:01<00:00, 38.29it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 25.49it/s]
+Data shape for DDIM sampling is (2, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   8%|▊         | 4/50 [00:00<00:01, 39.80it/s]DDIM Sampler:  16%|█▌        | 8/50 [00:00<00:01, 39.87it/s]DDIM Sampler:  24%|██▍       | 12/50 [00:00<00:00, 39.14it/s]DDIM Sampler:  34%|███▍      | 17/50 [00:00<00:00, 39.53it/s]DDIM Sampler:  42%|████▏     | 21/50 [00:00<00:00, 39.67it/s]DDIM Sampler:  50%|█████     | 25/50 [00:00<00:00, 39.77it/s]DDIM Sampler:  60%|██████    | 30/50 [00:00<00:00, 39.53it/s]DDIM Sampler:  68%|██████▊   | 34/50 [00:00<00:00, 39.67it/s]DDIM Sampler:  78%|███████▊  | 39/50 [00:00<00:00, 39.80it/s]DDIM Sampler:  86%|████████▌ | 43/50 [00:01<00:00, 39.36it/s]DDIM Sampler:  96%|█████████▌| 48/50 [00:01<00:00, 40.69it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 40.13it/s]
+Data shape for DDIM sampling is (2, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:  10%|█         | 5/50 [00:00<00:00, 45.31it/s]DDIM Sampler:  20%|██        | 10/50 [00:00<00:00, 45.45it/s]DDIM Sampler:  30%|███       | 15/50 [00:00<00:00, 45.56it/s]DDIM Sampler:  40%|████      | 20/50 [00:00<00:00, 45.64it/s]DDIM Sampler:  50%|█████     | 25/50 [00:00<00:00, 45.66it/s]DDIM Sampler:  60%|██████    | 30/50 [00:00<00:00, 45.13it/s]DDIM Sampler:  70%|███████   | 35/50 [00:00<00:00, 45.30it/s]DDIM Sampler:  80%|████████  | 40/50 [00:00<00:00, 45.46it/s]DDIM Sampler:  90%|█████████ | 45/50 [00:00<00:00, 45.53it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 44.66it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 45.19it/s]
+  Time/sample: 0.589s | Time/step: 11.78ms | Throughput: 1.70 samples/s
+
+--- Mode: fp32, batch_size=4 ---
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+Data shape for DDIM sampling is (4, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   2%|▏         | 1/50 [00:00<00:35,  1.37it/s]DDIM Sampler:  10%|█         | 5/50 [00:00<00:05,  7.61it/s]DDIM Sampler:  18%|█▊        | 9/50 [00:00<00:03, 13.57it/s]DDIM Sampler:  26%|██▌       | 13/50 [00:01<00:01, 18.94it/s]DDIM Sampler:  34%|███▍      | 17/50 [00:01<00:01, 23.42it/s]DDIM Sampler:  42%|████▏     | 21/50 [00:01<00:01, 27.13it/s]DDIM Sampler:  50%|█████     | 25/50 [00:01<00:00, 30.05it/s]DDIM Sampler:  58%|█████▊    | 29/50 [00:01<00:00, 32.27it/s]DDIM Sampler:  66%|██████▌   | 33/50 [00:01<00:00, 33.46it/s]DDIM Sampler:  74%|███████▍  | 37/50 [00:01<00:00, 34.75it/s]DDIM Sampler:  82%|████████▏ | 41/50 [00:01<00:00, 35.70it/s]DDIM Sampler:  90%|█████████ | 45/50 [00:01<00:00, 36.35it/s]DDIM Sampler:  98%|█████████▊| 49/50 [00:01<00:00, 36.83it/s]DDIM Sampler: 100%|██████████| 50/50 [00:02<00:00, 24.67it/s]
+Data shape for DDIM sampling is (4, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   8%|▊         | 4/50 [00:00<00:01, 38.04it/s]DDIM Sampler:  16%|█▌        | 8/50 [00:00<00:01, 38.00it/s]DDIM Sampler:  24%|██▍       | 12/50 [00:00<00:01, 37.97it/s]DDIM Sampler:  32%|███▏      | 16/50 [00:00<00:00, 38.05it/s]DDIM Sampler:  40%|████      | 20/50 [00:00<00:00, 38.10it/s]DDIM Sampler:  48%|████▊     | 24/50 [00:00<00:00, 37.64it/s]DDIM Sampler:  56%|█████▌    | 28/50 [00:00<00:00, 37.83it/s]DDIM Sampler:  64%|██████▍   | 32/50 [00:00<00:00, 37.94it/s]DDIM Sampler:  72%|███████▏  | 36/50 [00:00<00:00, 38.01it/s]DDIM Sampler:  80%|████████  | 40/50 [00:01<00:00, 37.66it/s]DDIM Sampler:  88%|████████▊ | 44/50 [00:01<00:00, 37.80it/s]DDIM Sampler:  96%|█████████▌| 48/50 [00:01<00:00, 37.90it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 37.90it/s]
+Data shape for DDIM sampling is (4, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   8%|▊         | 4/50 [00:00<00:01, 36.93it/s]DDIM Sampler:  16%|█▌        | 8/50 [00:00<00:01, 37.68it/s]DDIM Sampler:  24%|██▍       | 12/50 [00:00<00:01, 37.88it/s]DDIM Sampler:  32%|███▏      | 16/50 [00:00<00:00, 37.98it/s]DDIM Sampler:  40%|████      | 20/50 [00:00<00:00, 37.53it/s]DDIM Sampler:  48%|████▊     | 24/50 [00:00<00:00, 37.72it/s]DDIM Sampler:  56%|█████▌    | 28/50 [00:00<00:00, 37.86it/s]DDIM Sampler:  64%|██████▍   | 32/50 [00:00<00:00, 37.95it/s]DDIM Sampler:  72%|███████▏  | 36/50 [00:00<00:00, 37.99it/s]DDIM Sampler:  80%|████████  | 40/50 [00:01<00:00, 37.53it/s]DDIM Sampler:  88%|████████▊ | 44/50 [00:01<00:00, 37.67it/s]DDIM Sampler:  96%|█████████▌| 48/50 [00:01<00:00, 37.77it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 37.76it/s]
+  Time/sample: 0.331s | Time/step: 6.62ms | Throughput: 3.02 samples/s
+
+--- Mode: fp32, batch_size=8 ---
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+Data shape for DDIM sampling is (8, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   6%|▌         | 3/50 [00:00<00:01, 29.07it/s]DDIM Sampler:  14%|█▍        | 7/50 [00:00<00:01, 30.34it/s]DDIM Sampler:  22%|██▏       | 11/50 [00:00<00:01, 30.67it/s]DDIM Sampler:  30%|███       | 15/50 [00:00<00:01, 30.83it/s]DDIM Sampler:  38%|███▊      | 19/50 [00:00<00:01, 30.93it/s]DDIM Sampler:  46%|████▌     | 23/50 [00:00<00:00, 30.97it/s]DDIM Sampler:  54%|█████▍    | 27/50 [00:00<00:00, 30.98it/s]DDIM Sampler:  62%|██████▏   | 31/50 [00:01<00:00, 31.00it/s]DDIM Sampler:  70%|███████   | 35/50 [00:01<00:00, 31.03it/s]DDIM Sampler:  78%|███████▊  | 39/50 [00:01<00:00, 31.03it/s]DDIM Sampler:  86%|████████▌ | 43/50 [00:01<00:00, 31.03it/s]DDIM Sampler:  94%|█████████▍| 47/50 [00:01<00:00, 31.02it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 30.91it/s]
+Data shape for DDIM sampling is (8, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   8%|▊         | 4/50 [00:00<00:01, 31.00it/s]DDIM Sampler:  16%|█▌        | 8/50 [00:00<00:01, 31.02it/s]DDIM Sampler:  24%|██▍       | 12/50 [00:00<00:01, 31.01it/s]DDIM Sampler:  32%|███▏      | 16/50 [00:00<00:01, 31.00it/s]DDIM Sampler:  40%|████      | 20/50 [00:00<00:00, 31.01it/s]DDIM Sampler:  48%|████▊     | 24/50 [00:00<00:00, 31.02it/s]DDIM Sampler:  56%|█████▌    | 28/50 [00:00<00:00, 31.01it/s]DDIM Sampler:  64%|██████▍   | 32/50 [00:01<00:00, 31.02it/s]DDIM Sampler:  72%|███████▏  | 36/50 [00:01<00:00, 31.02it/s]DDIM Sampler:  80%|████████  | 40/50 [00:01<00:00, 31.00it/s]DDIM Sampler:  88%|████████▊ | 44/50 [00:01<00:00, 30.99it/s]DDIM Sampler:  96%|█████████▌| 48/50 [00:01<00:00, 30.99it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 31.00it/s]
+Data shape for DDIM sampling is (8, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   8%|▊         | 4/50 [00:00<00:01, 30.98it/s]DDIM Sampler:  16%|█▌        | 8/50 [00:00<00:01, 30.99it/s]DDIM Sampler:  24%|██▍       | 12/50 [00:00<00:01, 31.00it/s]DDIM Sampler:  32%|███▏      | 16/50 [00:00<00:01, 31.03it/s]DDIM Sampler:  40%|████      | 20/50 [00:00<00:00, 31.02it/s]DDIM Sampler:  48%|████▊     | 24/50 [00:00<00:00, 31.02it/s]DDIM Sampler:  56%|█████▌    | 28/50 [00:00<00:00, 31.01it/s]DDIM Sampler:  64%|██████▍   | 32/50 [00:01<00:00, 31.00it/s]DDIM Sampler:  72%|███████▏  | 36/50 [00:01<00:00, 31.02it/s]DDIM Sampler:  80%|████████  | 40/50 [00:01<00:00, 31.01it/s]DDIM Sampler:  88%|████████▊ | 44/50 [00:01<00:00, 31.02it/s]DDIM Sampler:  96%|█████████▌| 48/50 [00:01<00:00, 31.20it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 31.10it/s]
+  Time/sample: 0.201s | Time/step: 4.03ms | Throughput: 4.96 samples/s
+
+--- Mode: fp32, batch_size=16 ---
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+Data shape for DDIM sampling is (16, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   2%|▏         | 1/50 [00:01<00:54,  1.12s/it]DDIM Sampler:   6%|▌         | 3/50 [00:01<00:15,  3.01it/s]DDIM Sampler:  10%|█         | 5/50 [00:01<00:08,  5.29it/s]DDIM Sampler:  14%|█▍        | 7/50 [00:01<00:05,  7.60it/s]DDIM Sampler:  18%|█▊        | 9/50 [00:01<00:04,  9.79it/s]DDIM Sampler:  22%|██▏       | 11/50 [00:01<00:03, 11.75it/s]DDIM Sampler:  26%|██▌       | 13/50 [00:01<00:02, 13.42it/s]DDIM Sampler:  30%|███       | 15/50 [00:01<00:02, 14.76it/s]DDIM Sampler:  34%|███▍      | 17/50 [00:01<00:02, 15.82it/s]DDIM Sampler:  38%|███▊      | 19/50 [00:02<00:01, 16.62it/s]DDIM Sampler:  42%|████▏     | 21/50 [00:02<00:01, 17.21it/s]DDIM Sampler:  46%|████▌     | 23/50 [00:02<00:01, 17.64it/s]DDIM Sampler:  50%|█████     | 25/50 [00:02<00:01, 17.96it/s]DDIM Sampler:  54%|█████▍    | 27/50 [00:02<00:01, 18.18it/s]DDIM Sampler:  58%|█████▊    | 29/50 [00:02<00:01, 18.34it/s]DDIM Sampler:  62%|██████▏   | 31/50 [00:02<00:01, 18.45it/s]DDIM Sampler:  66%|██████▌   | 33/50 [00:02<00:00, 18.53it/s]DDIM Sampler:  70%|███████   | 35/50 [00:02<00:00, 18.59it/s]DDIM Sampler:  74%|███████▍  | 37/50 [00:03<00:00, 18.62it/s]DDIM Sampler:  78%|███████▊  | 39/50 [00:03<00:00, 18.65it/s]DDIM Sampler:  82%|████████▏ | 41/50 [00:03<00:00, 18.67it/s]DDIM Sampler:  86%|████████▌ | 43/50 [00:03<00:00, 18.68it/s]DDIM Sampler:  90%|█████████ | 45/50 [00:03<00:00, 18.69it/s]DDIM Sampler:  94%|█████████▍| 47/50 [00:03<00:00, 18.70it/s]DDIM Sampler:  98%|█████████▊| 49/50 [00:03<00:00, 18.71it/s]DDIM Sampler: 100%|██████████| 50/50 [00:03<00:00, 13.35it/s]
+Data shape for DDIM sampling is (16, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   4%|▍         | 2/50 [00:00<00:02, 18.70it/s]DDIM Sampler:   8%|▊         | 4/50 [00:00<00:02, 18.70it/s]DDIM Sampler:  12%|█▏        | 6/50 [00:00<00:02, 18.71it/s]DDIM Sampler:  16%|█▌        | 8/50 [00:00<00:02, 18.71it/s]DDIM Sampler:  20%|██        | 10/50 [00:00<00:02, 18.72it/s]DDIM Sampler:  24%|██▍       | 12/50 [00:00<00:02, 18.72it/s]DDIM Sampler:  28%|██▊       | 14/50 [00:00<00:01, 18.72it/s]DDIM Sampler:  32%|███▏      | 16/50 [00:00<00:01, 18.72it/s]DDIM Sampler:  36%|███▌      | 18/50 [00:00<00:01, 18.72it/s]DDIM Sampler:  40%|████      | 20/50 [00:01<00:01, 18.72it/s]DDIM Sampler:  44%|████▍     | 22/50 [00:01<00:01, 18.71it/s]DDIM Sampler:  48%|████▊     | 24/50 [00:01<00:01, 18.71it/s]DDIM Sampler:  52%|█████▏    | 26/50 [00:01<00:01, 18.71it/s]DDIM Sampler:  56%|█████▌    | 28/50 [00:01<00:01, 18.71it/s]DDIM Sampler:  60%|██████    | 30/50 [00:01<00:01, 18.72it/s]DDIM Sampler:  64%|██████▍   | 32/50 [00:01<00:00, 18.71it/s]DDIM Sampler:  68%|██████▊   | 34/50 [00:01<00:00, 18.71it/s]DDIM Sampler:  72%|███████▏  | 36/50 [00:01<00:00, 18.72it/s]DDIM Sampler:  76%|███████▌  | 38/50 [00:02<00:00, 18.71it/s]DDIM Sampler:  80%|████████  | 40/50 [00:02<00:00, 18.71it/s]DDIM Sampler:  84%|████████▍ | 42/50 [00:02<00:00, 18.71it/s]DDIM Sampler:  88%|████████▊ | 44/50 [00:02<00:00, 18.71it/s]DDIM Sampler:  92%|█████████▏| 46/50 [00:02<00:00, 18.71it/s]DDIM Sampler:  96%|█████████▌| 48/50 [00:02<00:00, 18.71it/s]DDIM Sampler: 100%|██████████| 50/50 [00:02<00:00, 18.70it/s]DDIM Sampler: 100%|██████████| 50/50 [00:02<00:00, 18.71it/s]
+Data shape for DDIM sampling is (16, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   4%|▍         | 2/50 [00:00<00:02, 18.71it/s]DDIM Sampler:   8%|▊         | 4/50 [00:00<00:02, 18.71it/s]DDIM Sampler:  12%|█▏        | 6/50 [00:00<00:02, 18.71it/s]DDIM Sampler:  16%|█▌        | 8/50 [00:00<00:02, 18.71it/s]DDIM Sampler:  20%|██        | 10/50 [00:00<00:02, 18.71it/s]DDIM Sampler:  24%|██▍       | 12/50 [00:00<00:02, 18.71it/s]DDIM Sampler:  28%|██▊       | 14/50 [00:00<00:01, 18.71it/s]DDIM Sampler:  32%|███▏      | 16/50 [00:00<00:01, 18.71it/s]DDIM Sampler:  36%|███▌      | 18/50 [00:00<00:01, 18.71it/s]DDIM Sampler:  40%|████      | 20/50 [00:01<00:01, 18.70it/s]DDIM Sampler:  44%|████▍     | 22/50 [00:01<00:01, 18.71it/s]DDIM Sampler:  48%|████▊     | 24/50 [00:01<00:01, 18.71it/s]DDIM Sampler:  52%|█████▏    | 26/50 [00:01<00:01, 18.71it/s]DDIM Sampler:  56%|█████▌    | 28/50 [00:01<00:01, 18.71it/s]DDIM Sampler:  60%|██████    | 30/50 [00:01<00:01, 18.71it/s]DDIM Sampler:  64%|██████▍   | 32/50 [00:01<00:00, 18.71it/s]DDIM Sampler:  68%|██████▊   | 34/50 [00:01<00:00, 18.71it/s]DDIM Sampler:  72%|███████▏  | 36/50 [00:01<00:00, 18.71it/s]DDIM Sampler:  76%|███████▌  | 38/50 [00:02<00:00, 18.71it/s]DDIM Sampler:  80%|████████  | 40/50 [00:02<00:00, 18.72it/s]DDIM Sampler:  84%|████████▍ | 42/50 [00:02<00:00, 18.72it/s]DDIM Sampler:  88%|████████▊ | 44/50 [00:02<00:00, 18.72it/s]DDIM Sampler:  92%|█████████▏| 46/50 [00:02<00:00, 18.72it/s]DDIM Sampler:  96%|█████████▌| 48/50 [00:02<00:00, 18.72it/s]DDIM Sampler: 100%|██████████| 50/50 [00:02<00:00, 18.71it/s]DDIM Sampler: 100%|██████████| 50/50 [00:02<00:00, 18.71it/s]
+  Time/sample: 0.167s | Time/step: 3.34ms | Throughput: 5.98 samples/s
+
+--- Mode: int8, batch_size=1 ---
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+⚠️  Buffer pool already initialized, skipping
+Data shape for DDIM sampling is (1, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   2%|▏         | 1/50 [00:00<00:07,  6.29it/s]DDIM Sampler:  10%|█         | 5/50 [00:00<00:02, 21.54it/s]DDIM Sampler:  20%|██        | 10/50 [00:00<00:01, 30.58it/s]DDIM Sampler:  28%|██▊       | 14/50 [00:00<00:01, 33.03it/s]DDIM Sampler:  36%|███▌      | 18/50 [00:00<00:00, 34.57it/s]DDIM Sampler:  44%|████▍     | 22/50 [00:00<00:00, 35.54it/s]DDIM Sampler:  52%|█████▏    | 26/50 [00:00<00:00, 36.05it/s]DDIM Sampler:  60%|██████    | 30/50 [00:00<00:00, 36.50it/s]DDIM Sampler:  68%|██████▊   | 34/50 [00:01<00:00, 36.78it/s]DDIM Sampler:  76%|███████▌  | 38/50 [00:01<00:00, 36.99it/s]DDIM Sampler:  84%|████████▍ | 42/50 [00:01<00:00, 37.12it/s]DDIM Sampler:  92%|█████████▏| 46/50 [00:01<00:00, 37.11it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 37.14it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 34.37it/s]
+Data shape for DDIM sampling is (1, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   2%|▏         | 1/50 [00:00<00:05,  9.73it/s]DDIM Sampler:  10%|█         | 5/50 [00:00<00:01, 26.28it/s]DDIM Sampler:  18%|█▊        | 9/50 [00:00<00:01, 31.41it/s]DDIM Sampler:  26%|██▌       | 13/50 [00:00<00:01, 33.77it/s]DDIM Sampler:  34%|███▍      | 17/50 [00:00<00:00, 35.09it/s]DDIM Sampler:  42%|████▏     | 21/50 [00:00<00:00, 35.89it/s]DDIM Sampler:  50%|█████     | 25/50 [00:00<00:00, 36.36it/s]DDIM Sampler:  58%|█████▊    | 29/50 [00:00<00:00, 36.62it/s]DDIM Sampler:  66%|██████▌   | 33/50 [00:00<00:00, 36.52it/s]DDIM Sampler:  76%|███████▌  | 38/50 [00:01<00:00, 38.76it/s]DDIM Sampler:  86%|████████▌ | 43/50 [00:01<00:00, 40.42it/s]DDIM Sampler:  96%|█████████▌| 48/50 [00:01<00:00, 41.54it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 37.04it/s]
+Data shape for DDIM sampling is (1, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   6%|▌         | 3/50 [00:00<00:01, 25.39it/s]DDIM Sampler:  16%|█▌        | 8/50 [00:00<00:01, 36.19it/s]DDIM Sampler:  26%|██▌       | 13/50 [00:00<00:00, 39.73it/s]DDIM Sampler:  36%|███▌      | 18/50 [00:00<00:00, 41.45it/s]DDIM Sampler:  46%|████▌     | 23/50 [00:00<00:00, 42.39it/s]DDIM Sampler:  56%|█████▌    | 28/50 [00:00<00:00, 42.29it/s]DDIM Sampler:  66%|██████▌   | 33/50 [00:00<00:00, 39.57it/s]DDIM Sampler:  74%|███████▍  | 37/50 [00:00<00:00, 38.34it/s]DDIM Sampler:  82%|████████▏ | 41/50 [00:01<00:00, 37.45it/s]DDIM Sampler:  90%|█████████ | 45/50 [00:01<00:00, 36.81it/s]DDIM Sampler:  98%|█████████▊| 49/50 [00:01<00:00, 36.36it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 38.04it/s]
+  Time/sample: 1.334s | Time/step: 26.67ms | Throughput: 0.75 samples/s
+
+--- Mode: int8, batch_size=2 ---
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+⚠️  Buffer pool already initialized, skipping
+Data shape for DDIM sampling is (2, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   4%|▍         | 2/50 [00:00<00:02, 18.72it/s]DDIM Sampler:  14%|█▍        | 7/50 [00:00<00:01, 32.95it/s]DDIM Sampler:  24%|██▍       | 12/50 [00:00<00:01, 37.13it/s]DDIM Sampler:  34%|███▍      | 17/50 [00:00<00:00, 38.94it/s]DDIM Sampler:  44%|████▍     | 22/50 [00:00<00:00, 39.93it/s]DDIM Sampler:  54%|█████▍    | 27/50 [00:00<00:00, 40.48it/s]DDIM Sampler:  64%|██████▍   | 32/50 [00:00<00:00, 40.86it/s]DDIM Sampler:  74%|███████▍  | 37/50 [00:00<00:00, 41.13it/s]DDIM Sampler:  84%|████████▍ | 42/50 [00:01<00:00, 41.25it/s]DDIM Sampler:  94%|█████████▍| 47/50 [00:01<00:00, 41.39it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 39.73it/s]
+Data shape for DDIM sampling is (2, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   4%|▍         | 2/50 [00:00<00:02, 19.95it/s]DDIM Sampler:  14%|█▍        | 7/50 [00:00<00:01, 33.73it/s]DDIM Sampler:  24%|██▍       | 12/50 [00:00<00:01, 37.52it/s]DDIM Sampler:  34%|███▍      | 17/50 [00:00<00:00, 39.24it/s]DDIM Sampler:  44%|████▍     | 22/50 [00:00<00:00, 40.19it/s]DDIM Sampler:  54%|█████▍    | 27/50 [00:00<00:00, 40.76it/s]DDIM Sampler:  64%|██████▍   | 32/50 [00:00<00:00, 41.04it/s]DDIM Sampler:  74%|███████▍  | 37/50 [00:00<00:00, 41.27it/s]DDIM Sampler:  84%|████████▍ | 42/50 [00:01<00:00, 41.40it/s]DDIM Sampler:  94%|█████████▍| 47/50 [00:01<00:00, 41.53it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 39.99it/s]
+Data shape for DDIM sampling is (2, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   4%|▍         | 2/50 [00:00<00:02, 19.97it/s]DDIM Sampler:  14%|█▍        | 7/50 [00:00<00:01, 33.69it/s]DDIM Sampler:  24%|██▍       | 12/50 [00:00<00:01, 37.54it/s]DDIM Sampler:  34%|███▍      | 17/50 [00:00<00:00, 39.25it/s]DDIM Sampler:  44%|████▍     | 22/50 [00:00<00:00, 40.15it/s]DDIM Sampler:  54%|█████▍    | 27/50 [00:00<00:00, 40.62it/s]DDIM Sampler:  64%|██████▍   | 32/50 [00:00<00:00, 40.91it/s]DDIM Sampler:  74%|███████▍  | 37/50 [00:00<00:00, 41.16it/s]DDIM Sampler:  84%|████████▍ | 42/50 [00:01<00:00, 41.34it/s]DDIM Sampler:  94%|█████████▍| 47/50 [00:01<00:00, 41.45it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 39.94it/s]
+  Time/sample: 0.626s | Time/step: 12.52ms | Throughput: 1.60 samples/s
+
+--- Mode: int8, batch_size=4 ---
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+⚠️  Buffer pool already initialized, skipping
+Data shape for DDIM sampling is (4, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   4%|▍         | 2/50 [00:00<00:02, 17.03it/s]DDIM Sampler:  12%|█▏        | 6/50 [00:00<00:01, 28.76it/s]DDIM Sampler:  20%|██        | 10/50 [00:00<00:01, 32.85it/s]DDIM Sampler:  28%|██▊       | 14/50 [00:00<00:01, 34.83it/s]DDIM Sampler:  36%|███▌      | 18/50 [00:00<00:00, 35.94it/s]DDIM Sampler:  44%|████▍     | 22/50 [00:00<00:00, 36.63it/s]DDIM Sampler:  52%|█████▏    | 26/50 [00:00<00:00, 37.05it/s]DDIM Sampler:  60%|██████    | 30/50 [00:00<00:00, 37.31it/s]DDIM Sampler:  68%|██████▊   | 34/50 [00:00<00:00, 37.51it/s]DDIM Sampler:  76%|███████▌  | 38/50 [00:01<00:00, 37.64it/s]DDIM Sampler:  84%|████████▍ | 42/50 [00:01<00:00, 37.74it/s]DDIM Sampler:  92%|█████████▏| 46/50 [00:01<00:00, 37.81it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 37.87it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 36.16it/s]
+Data shape for DDIM sampling is (4, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   4%|▍         | 2/50 [00:00<00:02, 18.17it/s]DDIM Sampler:  12%|█▏        | 6/50 [00:00<00:01, 29.60it/s]DDIM Sampler:  20%|██        | 10/50 [00:00<00:01, 33.40it/s]DDIM Sampler:  28%|██▊       | 14/50 [00:00<00:01, 35.22it/s]DDIM Sampler:  36%|███▌      | 18/50 [00:00<00:00, 36.15it/s]DDIM Sampler:  44%|████▍     | 22/50 [00:00<00:00, 36.72it/s]DDIM Sampler:  52%|█████▏    | 26/50 [00:00<00:00, 37.14it/s]DDIM Sampler:  60%|██████    | 30/50 [00:00<00:00, 37.41it/s]DDIM Sampler:  68%|██████▊   | 34/50 [00:00<00:00, 37.56it/s]DDIM Sampler:  76%|███████▌  | 38/50 [00:01<00:00, 37.68it/s]DDIM Sampler:  84%|████████▍ | 42/50 [00:01<00:00, 37.77it/s]DDIM Sampler:  92%|█████████▏| 46/50 [00:01<00:00, 37.82it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 37.88it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 36.36it/s]
+Data shape for DDIM sampling is (4, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   4%|▍         | 2/50 [00:00<00:02, 18.17it/s]DDIM Sampler:  12%|█▏        | 6/50 [00:00<00:01, 29.65it/s]DDIM Sampler:  20%|██        | 10/50 [00:00<00:01, 33.45it/s]DDIM Sampler:  28%|██▊       | 14/50 [00:00<00:01, 35.29it/s]DDIM Sampler:  36%|███▌      | 18/50 [00:00<00:00, 36.29it/s]DDIM Sampler:  44%|████▍     | 22/50 [00:00<00:00, 36.83it/s]DDIM Sampler:  52%|█████▏    | 26/50 [00:00<00:00, 37.20it/s]DDIM Sampler:  60%|██████    | 30/50 [00:00<00:00, 37.49it/s]DDIM Sampler:  68%|██████▊   | 34/50 [00:00<00:00, 37.66it/s]DDIM Sampler:  76%|███████▌  | 38/50 [00:01<00:00, 37.79it/s]DDIM Sampler:  84%|████████▍ | 42/50 [00:01<00:00, 37.86it/s]DDIM Sampler:  92%|█████████▏| 46/50 [00:01<00:00, 37.90it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 37.93it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 36.44it/s]
+  Time/sample: 0.344s | Time/step: 6.87ms | Throughput: 2.91 samples/s
+
+--- Mode: int8, batch_size=8 ---
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+⚠️  Buffer pool already initialized, skipping
+Data shape for DDIM sampling is (8, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   2%|▏         | 1/50 [00:00<00:05,  9.49it/s]DDIM Sampler:   8%|▊         | 4/50 [00:00<00:02, 21.26it/s]DDIM Sampler:  16%|█▌        | 8/50 [00:00<00:01, 26.43it/s]DDIM Sampler:  24%|██▍       | 12/50 [00:00<00:01, 28.53it/s]DDIM Sampler:  32%|███▏      | 16/50 [00:00<00:01, 29.57it/s]DDIM Sampler:  40%|████      | 20/50 [00:00<00:00, 30.17it/s]DDIM Sampler:  48%|████▊     | 24/50 [00:00<00:00, 30.49it/s]DDIM Sampler:  56%|█████▌    | 28/50 [00:00<00:00, 30.73it/s]DDIM Sampler:  64%|██████▍   | 32/50 [00:01<00:00, 30.89it/s]DDIM Sampler:  72%|███████▏  | 36/50 [00:01<00:00, 31.00it/s]DDIM Sampler:  80%|████████  | 40/50 [00:01<00:00, 31.10it/s]DDIM Sampler:  88%|████████▊ | 44/50 [00:01<00:00, 31.14it/s]DDIM Sampler:  96%|█████████▌| 48/50 [00:01<00:00, 31.19it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 29.83it/s]
+Data shape for DDIM sampling is (8, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   2%|▏         | 1/50 [00:00<00:05,  9.62it/s]DDIM Sampler:  10%|█         | 5/50 [00:00<00:01, 23.45it/s]DDIM Sampler:  18%|█▊        | 9/50 [00:00<00:01, 27.17it/s]DDIM Sampler:  26%|██▌       | 13/50 [00:00<00:01, 28.83it/s]DDIM Sampler:  34%|███▍      | 17/50 [00:00<00:01, 29.71it/s]DDIM Sampler:  42%|████▏     | 21/50 [00:00<00:00, 30.23it/s]DDIM Sampler:  50%|█████     | 25/50 [00:00<00:00, 30.55it/s]DDIM Sampler:  58%|█████▊    | 29/50 [00:01<00:00, 30.77it/s]DDIM Sampler:  66%|██████▌   | 33/50 [00:01<00:00, 30.90it/s]DDIM Sampler:  74%|███████▍  | 37/50 [00:01<00:00, 31.02it/s]DDIM Sampler:  82%|████████▏ | 41/50 [00:01<00:00, 31.07it/s]DDIM Sampler:  90%|█████████ | 45/50 [00:01<00:00, 31.13it/s]DDIM Sampler:  98%|█████████▊| 49/50 [00:01<00:00, 31.17it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 29.90it/s]
+Data shape for DDIM sampling is (8, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   2%|▏         | 1/50 [00:00<00:05,  9.63it/s]DDIM Sampler:  10%|█         | 5/50 [00:00<00:01, 23.42it/s]DDIM Sampler:  18%|█▊        | 9/50 [00:00<00:01, 27.14it/s]DDIM Sampler:  26%|██▌       | 13/50 [00:00<00:01, 28.81it/s]DDIM Sampler:  34%|███▍      | 17/50 [00:00<00:01, 29.71it/s]DDIM Sampler:  42%|████▏     | 21/50 [00:00<00:00, 30.25it/s]DDIM Sampler:  50%|█████     | 25/50 [00:00<00:00, 30.60it/s]DDIM Sampler:  58%|█████▊    | 29/50 [00:00<00:00, 30.82it/s]DDIM Sampler:  66%|██████▌   | 33/50 [00:01<00:00, 30.99it/s]DDIM Sampler:  74%|███████▍  | 37/50 [00:01<00:00, 31.09it/s]DDIM Sampler:  82%|████████▏ | 41/50 [00:01<00:00, 31.17it/s]DDIM Sampler:  90%|█████████ | 45/50 [00:01<00:00, 31.20it/s]DDIM Sampler:  98%|█████████▊| 49/50 [00:01<00:00, 31.26it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 29.95it/s]
+  Time/sample: 0.209s | Time/step: 4.18ms | Throughput: 4.78 samples/s
+
+--- Mode: int8, batch_size=16 ---
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+⚠️  Buffer pool already initialized, skipping
+Data shape for DDIM sampling is (16, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   2%|▏         | 1/50 [00:00<00:08,  6.02it/s]DDIM Sampler:   6%|▌         | 3/50 [00:00<00:03, 12.19it/s]DDIM Sampler:  10%|█         | 5/50 [00:00<00:02, 15.11it/s]DDIM Sampler:  14%|█▍        | 7/50 [00:00<00:02, 16.72it/s]DDIM Sampler:  18%|█▊        | 9/50 [00:00<00:02, 17.68it/s]DDIM Sampler:  22%|██▏       | 11/50 [00:00<00:02, 18.30it/s]DDIM Sampler:  26%|██▌       | 13/50 [00:00<00:01, 18.69it/s]DDIM Sampler:  30%|███       | 15/50 [00:00<00:01, 18.96it/s]DDIM Sampler:  34%|███▍      | 17/50 [00:00<00:01, 19.14it/s]DDIM Sampler:  38%|███▊      | 19/50 [00:01<00:01, 19.26it/s]DDIM Sampler:  42%|████▏     | 21/50 [00:01<00:01, 19.35it/s]DDIM Sampler:  46%|████▌     | 23/50 [00:01<00:01, 19.41it/s]DDIM Sampler:  50%|█████     | 25/50 [00:01<00:01, 19.45it/s]DDIM Sampler:  54%|█████▍    | 27/50 [00:01<00:01, 19.48it/s]DDIM Sampler:  58%|█████▊    | 29/50 [00:01<00:01, 19.50it/s]DDIM Sampler:  62%|██████▏   | 31/50 [00:01<00:00, 19.52it/s]DDIM Sampler:  66%|██████▌   | 33/50 [00:01<00:00, 19.53it/s]DDIM Sampler:  70%|███████   | 35/50 [00:01<00:00, 19.54it/s]DDIM Sampler:  74%|███████▍  | 37/50 [00:02<00:00, 19.54it/s]DDIM Sampler:  78%|███████▊  | 39/50 [00:02<00:00, 19.54it/s]DDIM Sampler:  82%|████████▏ | 41/50 [00:02<00:00, 19.54it/s]DDIM Sampler:  86%|████████▌ | 43/50 [00:02<00:00, 19.54it/s]DDIM Sampler:  90%|█████████ | 45/50 [00:02<00:00, 19.54it/s]DDIM Sampler:  94%|█████████▍| 47/50 [00:02<00:00, 19.55it/s]DDIM Sampler:  98%|█████████▊| 49/50 [00:02<00:00, 19.55it/s]DDIM Sampler: 100%|██████████| 50/50 [00:02<00:00, 18.69it/s]
+Data shape for DDIM sampling is (16, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   2%|▏         | 1/50 [00:00<00:07,  6.31it/s]DDIM Sampler:   6%|▌         | 3/50 [00:00<00:03, 12.66it/s]DDIM Sampler:  10%|█         | 5/50 [00:00<00:02, 15.46it/s]DDIM Sampler:  14%|█▍        | 7/50 [00:00<00:02, 16.95it/s]DDIM Sampler:  18%|█▊        | 9/50 [00:00<00:02, 17.84it/s]DDIM Sampler:  22%|██▏       | 11/50 [00:00<00:02, 18.40it/s]DDIM Sampler:  26%|██▌       | 13/50 [00:00<00:01, 18.77it/s]DDIM Sampler:  30%|███       | 15/50 [00:00<00:01, 19.01it/s]DDIM Sampler:  34%|███▍      | 17/50 [00:00<00:01, 19.17it/s]DDIM Sampler:  38%|███▊      | 19/50 [00:01<00:01, 19.27it/s]DDIM Sampler:  42%|████▏     | 21/50 [00:01<00:01, 19.35it/s]DDIM Sampler:  46%|████▌     | 23/50 [00:01<00:01, 19.40it/s]DDIM Sampler:  50%|█████     | 25/50 [00:01<00:01, 19.44it/s]DDIM Sampler:  54%|█████▍    | 27/50 [00:01<00:01, 19.47it/s]DDIM Sampler:  58%|█████▊    | 29/50 [00:01<00:01, 19.49it/s]DDIM Sampler:  62%|██████▏   | 31/50 [00:01<00:00, 19.51it/s]DDIM Sampler:  66%|██████▌   | 33/50 [00:01<00:00, 19.52it/s]DDIM Sampler:  70%|███████   | 35/50 [00:01<00:00, 19.53it/s]DDIM Sampler:  74%|███████▍  | 37/50 [00:02<00:00, 19.53it/s]DDIM Sampler:  78%|███████▊  | 39/50 [00:02<00:00, 19.54it/s]DDIM Sampler:  82%|████████▏ | 41/50 [00:02<00:00, 19.54it/s]DDIM Sampler:  86%|████████▌ | 43/50 [00:02<00:00, 19.55it/s]DDIM Sampler:  90%|█████████ | 45/50 [00:02<00:00, 19.57it/s]DDIM Sampler:  94%|█████████▍| 47/50 [00:02<00:00, 19.57it/s]DDIM Sampler:  98%|█████████▊| 49/50 [00:02<00:00, 19.58it/s]DDIM Sampler: 100%|██████████| 50/50 [00:02<00:00, 18.76it/s]
+Data shape for DDIM sampling is (16, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   2%|▏         | 1/50 [00:00<00:07,  6.64it/s]DDIM Sampler:   6%|▌         | 3/50 [00:00<00:03, 13.02it/s]DDIM Sampler:  10%|█         | 5/50 [00:00<00:02, 15.73it/s]DDIM Sampler:  14%|█▍        | 7/50 [00:00<00:02, 17.16it/s]DDIM Sampler:  18%|█▊        | 9/50 [00:00<00:02, 18.00it/s]DDIM Sampler:  22%|██▏       | 11/50 [00:00<00:02, 18.53it/s]DDIM Sampler:  26%|██▌       | 13/50 [00:00<00:01, 18.87it/s]DDIM Sampler:  30%|███       | 15/50 [00:00<00:01, 19.10it/s]DDIM Sampler:  34%|███▍      | 17/50 [00:00<00:01, 19.25it/s]DDIM Sampler:  38%|███▊      | 19/50 [00:01<00:01, 19.35it/s]DDIM Sampler:  42%|████▏     | 21/50 [00:01<00:01, 19.43it/s]DDIM Sampler:  46%|████▌     | 23/50 [00:01<00:01, 19.48it/s]DDIM Sampler:  50%|█████     | 25/50 [00:01<00:01, 19.51it/s]DDIM Sampler:  54%|█████▍    | 27/50 [00:01<00:01, 19.53it/s]DDIM Sampler:  58%|█████▊    | 29/50 [00:01<00:01, 19.55it/s]DDIM Sampler:  62%|██████▏   | 31/50 [00:01<00:00, 19.56it/s]DDIM Sampler:  66%|██████▌   | 33/50 [00:01<00:00, 19.57it/s]DDIM Sampler:  70%|███████   | 35/50 [00:01<00:00, 19.58it/s]DDIM Sampler:  74%|███████▍  | 37/50 [00:01<00:00, 19.58it/s]DDIM Sampler:  78%|███████▊  | 39/50 [00:02<00:00, 19.59it/s]DDIM Sampler:  82%|████████▏ | 41/50 [00:02<00:00, 19.59it/s]DDIM Sampler:  86%|████████▌ | 43/50 [00:02<00:00, 19.59it/s]DDIM Sampler:  90%|█████████ | 45/50 [00:02<00:00, 19.60it/s]DDIM Sampler:  94%|█████████▍| 47/50 [00:02<00:00, 19.60it/s]DDIM Sampler:  98%|█████████▊| 49/50 [00:02<00:00, 19.60it/s]DDIM Sampler: 100%|██████████| 50/50 [00:02<00:00, 18.86it/s]
+  Time/sample: 0.166s | Time/step: 3.32ms | Throughput: 6.02 samples/s
+
+--- Mode: int4, batch_size=1 ---
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+⚠️  Buffer pool already initialized, skipping
+Data shape for DDIM sampling is (1, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   4%|▍         | 2/50 [00:00<00:02, 19.39it/s]DDIM Sampler:  14%|█▍        | 7/50 [00:00<00:01, 33.89it/s]DDIM Sampler:  24%|██▍       | 12/50 [00:00<00:00, 38.07it/s]DDIM Sampler:  34%|███▍      | 17/50 [00:00<00:00, 40.04it/s]DDIM Sampler:  44%|████▍     | 22/50 [00:00<00:00, 41.14it/s]DDIM Sampler:  54%|█████▍    | 27/50 [00:00<00:00, 41.73it/s]DDIM Sampler:  64%|██████▍   | 32/50 [00:00<00:00, 42.09it/s]DDIM Sampler:  74%|███████▍  | 37/50 [00:00<00:00, 42.37it/s]DDIM Sampler:  84%|████████▍ | 42/50 [00:01<00:00, 42.52it/s]DDIM Sampler:  94%|█████████▍| 47/50 [00:01<00:00, 42.69it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 40.93it/s]
+Data shape for DDIM sampling is (1, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   6%|▌         | 3/50 [00:00<00:01, 26.26it/s]DDIM Sampler:  16%|█▌        | 8/50 [00:00<00:01, 36.26it/s]DDIM Sampler:  26%|██▌       | 13/50 [00:00<00:00, 39.38it/s]DDIM Sampler:  36%|███▌      | 18/50 [00:00<00:00, 40.84it/s]DDIM Sampler:  46%|████▌     | 23/50 [00:00<00:00, 41.64it/s]DDIM Sampler:  56%|█████▌    | 28/50 [00:00<00:00, 42.13it/s]DDIM Sampler:  66%|██████▌   | 33/50 [00:00<00:00, 42.41it/s]DDIM Sampler:  76%|███████▌  | 38/50 [00:00<00:00, 42.61it/s]DDIM Sampler:  86%|████████▌ | 43/50 [00:01<00:00, 42.75it/s]DDIM Sampler:  96%|█████████▌| 48/50 [00:01<00:00, 42.85it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 41.46it/s]
+Data shape for DDIM sampling is (1, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   6%|▌         | 3/50 [00:00<00:01, 26.43it/s]DDIM Sampler:  16%|█▌        | 8/50 [00:00<00:01, 36.29it/s]DDIM Sampler:  26%|██▌       | 13/50 [00:00<00:00, 39.39it/s]DDIM Sampler:  36%|███▌      | 18/50 [00:00<00:00, 40.89it/s]DDIM Sampler:  46%|████▌     | 23/50 [00:00<00:00, 41.69it/s]DDIM Sampler:  56%|█████▌    | 28/50 [00:00<00:00, 42.20it/s]DDIM Sampler:  66%|██████▌   | 33/50 [00:00<00:00, 42.49it/s]DDIM Sampler:  76%|███████▌  | 38/50 [00:00<00:00, 42.66it/s]DDIM Sampler:  86%|████████▌ | 43/50 [00:01<00:00, 42.73it/s]DDIM Sampler:  96%|█████████▌| 48/50 [00:01<00:00, 42.83it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 41.47it/s]
+  Time/sample: 1.207s | Time/step: 24.14ms | Throughput: 0.83 samples/s
+
+--- Mode: int4, batch_size=2 ---
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+⚠️  Buffer pool already initialized, skipping
+Data shape for DDIM sampling is (2, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   4%|▍         | 2/50 [00:00<00:02, 17.20it/s]DDIM Sampler:  12%|█▏        | 6/50 [00:00<00:01, 28.30it/s]DDIM Sampler:  20%|██        | 10/50 [00:00<00:01, 32.01it/s]DDIM Sampler:  28%|██▊       | 14/50 [00:00<00:01, 33.76it/s]DDIM Sampler:  38%|███▊      | 19/50 [00:00<00:00, 36.88it/s]DDIM Sampler:  48%|████▊     | 24/50 [00:00<00:00, 38.91it/s]DDIM Sampler:  58%|█████▊    | 29/50 [00:00<00:00, 40.19it/s]DDIM Sampler:  68%|██████▊   | 34/50 [00:00<00:00, 40.91it/s]DDIM Sampler:  78%|███████▊  | 39/50 [00:01<00:00, 41.46it/s]DDIM Sampler:  88%|████████▊ | 44/50 [00:01<00:00, 41.79it/s]DDIM Sampler:  98%|█████████▊| 49/50 [00:01<00:00, 42.04it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 38.69it/s]
+Data shape for DDIM sampling is (2, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   6%|▌         | 3/50 [00:00<00:01, 25.80it/s]DDIM Sampler:  16%|█▌        | 8/50 [00:00<00:01, 35.22it/s]DDIM Sampler:  26%|██▌       | 13/50 [00:00<00:00, 38.63it/s]DDIM Sampler:  36%|███▌      | 18/50 [00:00<00:00, 40.36it/s]DDIM Sampler:  46%|████▌     | 23/50 [00:00<00:00, 41.26it/s]DDIM Sampler:  56%|█████▌    | 28/50 [00:00<00:00, 41.85it/s]DDIM Sampler:  66%|██████▌   | 33/50 [00:00<00:00, 42.16it/s]DDIM Sampler:  76%|███████▌  | 38/50 [00:00<00:00, 42.37it/s]DDIM Sampler:  86%|████████▌ | 43/50 [00:01<00:00, 42.51it/s]DDIM Sampler:  96%|█████████▌| 48/50 [00:01<00:00, 42.64it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 41.10it/s]
+Data shape for DDIM sampling is (2, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   6%|▌         | 3/50 [00:00<00:01, 25.83it/s]DDIM Sampler:  16%|█▌        | 8/50 [00:00<00:01, 35.93it/s]DDIM Sampler:  26%|██▌       | 13/50 [00:00<00:00, 39.09it/s]DDIM Sampler:  36%|███▌      | 18/50 [00:00<00:00, 40.37it/s]DDIM Sampler:  46%|████▌     | 23/50 [00:00<00:00, 41.21it/s]DDIM Sampler:  56%|█████▌    | 28/50 [00:00<00:00, 41.83it/s]DDIM Sampler:  66%|██████▌   | 33/50 [00:00<00:00, 42.14it/s]DDIM Sampler:  76%|███████▌  | 38/50 [00:00<00:00, 42.31it/s]DDIM Sampler:  86%|████████▌ | 43/50 [00:01<00:00, 40.92it/s]DDIM Sampler:  96%|█████████▌| 48/50 [00:01<00:00, 41.45it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 40.67it/s]
+  Time/sample: 0.612s | Time/step: 12.24ms | Throughput: 1.63 samples/s
+
+--- Mode: int4, batch_size=4 ---
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+⚠️  Buffer pool already initialized, skipping
+Data shape for DDIM sampling is (4, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   4%|▍         | 2/50 [00:00<00:02, 18.60it/s]DDIM Sampler:  12%|█▏        | 6/50 [00:00<00:01, 30.34it/s]DDIM Sampler:  20%|██        | 10/50 [00:00<00:01, 34.28it/s]DDIM Sampler:  28%|██▊       | 14/50 [00:00<00:00, 36.19it/s]DDIM Sampler:  36%|███▌      | 18/50 [00:00<00:00, 37.26it/s]DDIM Sampler:  44%|████▍     | 22/50 [00:00<00:00, 37.86it/s]DDIM Sampler:  52%|█████▏    | 26/50 [00:00<00:00, 38.29it/s]DDIM Sampler:  60%|██████    | 30/50 [00:00<00:00, 38.51it/s]DDIM Sampler:  68%|██████▊   | 34/50 [00:00<00:00, 38.69it/s]DDIM Sampler:  76%|███████▌  | 38/50 [00:01<00:00, 38.79it/s]DDIM Sampler:  84%|████████▍ | 42/50 [00:01<00:00, 38.84it/s]DDIM Sampler:  92%|█████████▏| 46/50 [00:01<00:00, 38.95it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 38.99it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 37.42it/s]
+Data shape for DDIM sampling is (4, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   4%|▍         | 2/50 [00:00<00:02, 19.76it/s]DDIM Sampler:  12%|█▏        | 6/50 [00:00<00:01, 31.23it/s]DDIM Sampler:  20%|██        | 10/50 [00:00<00:01, 34.86it/s]DDIM Sampler:  28%|██▊       | 14/50 [00:00<00:00, 36.60it/s]DDIM Sampler:  36%|███▌      | 18/50 [00:00<00:00, 37.52it/s]DDIM Sampler:  44%|████▍     | 22/50 [00:00<00:00, 38.09it/s]DDIM Sampler:  52%|█████▏    | 26/50 [00:00<00:00, 38.45it/s]DDIM Sampler:  60%|██████    | 30/50 [00:00<00:00, 38.70it/s]DDIM Sampler:  68%|██████▊   | 34/50 [00:00<00:00, 38.81it/s]DDIM Sampler:  76%|███████▌  | 38/50 [00:01<00:00, 38.96it/s]DDIM Sampler:  84%|████████▍ | 42/50 [00:01<00:00, 39.06it/s]DDIM Sampler:  92%|█████████▏| 46/50 [00:01<00:00, 39.08it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 39.11it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 37.71it/s]
+Data shape for DDIM sampling is (4, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   4%|▍         | 2/50 [00:00<00:02, 19.43it/s]DDIM Sampler:  12%|█▏        | 6/50 [00:00<00:01, 30.79it/s]DDIM Sampler:  20%|██        | 10/50 [00:00<00:01, 34.59it/s]DDIM Sampler:  28%|██▊       | 14/50 [00:00<00:00, 36.46it/s]DDIM Sampler:  36%|███▌      | 18/50 [00:00<00:00, 37.51it/s]DDIM Sampler:  44%|████▍     | 22/50 [00:00<00:00, 38.03it/s]DDIM Sampler:  52%|█████▏    | 26/50 [00:00<00:00, 38.39it/s]DDIM Sampler:  60%|██████    | 30/50 [00:00<00:00, 38.71it/s]DDIM Sampler:  68%|██████▊   | 34/50 [00:00<00:00, 38.86it/s]DDIM Sampler:  76%|███████▌  | 38/50 [00:01<00:00, 38.99it/s]DDIM Sampler:  84%|████████▍ | 42/50 [00:01<00:00, 39.18it/s]DDIM Sampler:  92%|█████████▏| 46/50 [00:01<00:00, 39.31it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 39.36it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 37.73it/s]
+  Time/sample: 0.332s | Time/step: 6.63ms | Throughput: 3.01 samples/s
+
+--- Mode: int4, batch_size=8 ---
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+⚠️  Buffer pool already initialized, skipping
+Data shape for DDIM sampling is (8, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   4%|▍         | 2/50 [00:00<00:03, 15.19it/s]DDIM Sampler:  12%|█▏        | 6/50 [00:00<00:01, 24.90it/s]DDIM Sampler:  20%|██        | 10/50 [00:00<00:01, 28.12it/s]DDIM Sampler:  28%|██▊       | 14/50 [00:00<00:01, 29.65it/s]DDIM Sampler:  36%|███▌      | 18/50 [00:00<00:01, 30.51it/s]DDIM Sampler:  44%|████▍     | 22/50 [00:00<00:00, 30.77it/s]DDIM Sampler:  52%|█████▏    | 26/50 [00:00<00:00, 31.21it/s]DDIM Sampler:  60%|██████    | 30/50 [00:01<00:00, 31.48it/s]DDIM Sampler:  68%|██████▊   | 34/50 [00:01<00:00, 31.65it/s]DDIM Sampler:  76%|███████▌  | 38/50 [00:01<00:00, 31.78it/s]DDIM Sampler:  84%|████████▍ | 42/50 [00:01<00:00, 31.90it/s]DDIM Sampler:  92%|█████████▏| 46/50 [00:01<00:00, 31.97it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 32.01it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 30.65it/s]
+Data shape for DDIM sampling is (8, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   4%|▍         | 2/50 [00:00<00:03, 15.99it/s]DDIM Sampler:  12%|█▏        | 6/50 [00:00<00:01, 25.47it/s]DDIM Sampler:  20%|██        | 10/50 [00:00<00:01, 28.49it/s]DDIM Sampler:  28%|██▊       | 14/50 [00:00<00:01, 29.87it/s]DDIM Sampler:  36%|███▌      | 18/50 [00:00<00:01, 30.65it/s]DDIM Sampler:  44%|████▍     | 22/50 [00:00<00:00, 31.15it/s]DDIM Sampler:  52%|█████▏    | 26/50 [00:00<00:00, 31.48it/s]DDIM Sampler:  60%|██████    | 30/50 [00:00<00:00, 31.72it/s]DDIM Sampler:  68%|██████▊   | 34/50 [00:01<00:00, 31.81it/s]DDIM Sampler:  76%|███████▌  | 38/50 [00:01<00:00, 31.89it/s]DDIM Sampler:  84%|████████▍ | 42/50 [00:01<00:00, 31.97it/s]DDIM Sampler:  92%|█████████▏| 46/50 [00:01<00:00, 32.03it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 32.05it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 30.86it/s]
+Data shape for DDIM sampling is (8, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   4%|▍         | 2/50 [00:00<00:02, 16.07it/s]DDIM Sampler:  12%|█▏        | 6/50 [00:00<00:01, 25.54it/s]DDIM Sampler:  20%|██        | 10/50 [00:00<00:01, 28.60it/s]DDIM Sampler:  28%|██▊       | 14/50 [00:00<00:01, 30.02it/s]DDIM Sampler:  36%|███▌      | 18/50 [00:00<00:01, 30.80it/s]DDIM Sampler:  44%|████▍     | 22/50 [00:00<00:00, 31.28it/s]DDIM Sampler:  52%|█████▏    | 26/50 [00:00<00:00, 31.56it/s]DDIM Sampler:  60%|██████    | 30/50 [00:00<00:00, 31.77it/s]DDIM Sampler:  68%|██████▊   | 34/50 [00:01<00:00, 31.90it/s]DDIM Sampler:  76%|███████▌  | 38/50 [00:01<00:00, 31.97it/s]DDIM Sampler:  84%|████████▍ | 42/50 [00:01<00:00, 32.05it/s]DDIM Sampler:  92%|█████████▏| 46/50 [00:01<00:00, 32.09it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 31.92it/s]DDIM Sampler: 100%|██████████| 50/50 [00:01<00:00, 30.90it/s]
+  Time/sample: 0.203s | Time/step: 4.05ms | Throughput: 4.94 samples/s
+
+--- Mode: int4, batch_size=16 ---
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+⚠️  Buffer pool already initialized, skipping
+Data shape for DDIM sampling is (16, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   2%|▏         | 1/50 [00:00<00:06,  7.43it/s]DDIM Sampler:   8%|▊         | 4/50 [00:00<00:02, 15.48it/s]DDIM Sampler:  14%|█▍        | 7/50 [00:00<00:02, 17.94it/s]DDIM Sampler:  20%|██        | 10/50 [00:00<00:02, 19.08it/s]DDIM Sampler:  26%|██▌       | 13/50 [00:00<00:01, 19.70it/s]DDIM Sampler:  32%|███▏      | 16/50 [00:00<00:01, 20.08it/s]DDIM Sampler:  38%|███▊      | 19/50 [00:01<00:01, 20.31it/s]DDIM Sampler:  44%|████▍     | 22/50 [00:01<00:01, 20.47it/s]DDIM Sampler:  50%|█████     | 25/50 [00:01<00:01, 20.57it/s]DDIM Sampler:  56%|█████▌    | 28/50 [00:01<00:01, 20.64it/s]DDIM Sampler:  62%|██████▏   | 31/50 [00:01<00:00, 20.69it/s]DDIM Sampler:  68%|██████▊   | 34/50 [00:01<00:00, 20.73it/s]DDIM Sampler:  74%|███████▍  | 37/50 [00:01<00:00, 20.75it/s]DDIM Sampler:  80%|████████  | 40/50 [00:02<00:00, 20.77it/s]DDIM Sampler:  86%|████████▌ | 43/50 [00:02<00:00, 20.77it/s]DDIM Sampler:  92%|█████████▏| 46/50 [00:02<00:00, 20.78it/s]DDIM Sampler:  98%|█████████▊| 49/50 [00:02<00:00, 20.79it/s]DDIM Sampler: 100%|██████████| 50/50 [00:02<00:00, 20.07it/s]
+Data shape for DDIM sampling is (16, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   2%|▏         | 1/50 [00:00<00:06,  7.47it/s]DDIM Sampler:   8%|▊         | 4/50 [00:00<00:02, 15.55it/s]DDIM Sampler:  14%|█▍        | 7/50 [00:00<00:02, 17.98it/s]DDIM Sampler:  20%|██        | 10/50 [00:00<00:02, 19.11it/s]DDIM Sampler:  26%|██▌       | 13/50 [00:00<00:01, 19.72it/s]DDIM Sampler:  32%|███▏      | 16/50 [00:00<00:01, 20.09it/s]DDIM Sampler:  38%|███▊      | 19/50 [00:00<00:01, 20.32it/s]DDIM Sampler:  44%|████▍     | 22/50 [00:01<00:01, 20.47it/s]DDIM Sampler:  50%|█████     | 25/50 [00:01<00:01, 20.57it/s]DDIM Sampler:  56%|█████▌    | 28/50 [00:01<00:01, 20.64it/s]DDIM Sampler:  62%|██████▏   | 31/50 [00:01<00:00, 20.69it/s]DDIM Sampler:  68%|██████▊   | 34/50 [00:01<00:00, 20.72it/s]DDIM Sampler:  74%|███████▍  | 37/50 [00:01<00:00, 20.74it/s]DDIM Sampler:  80%|████████  | 40/50 [00:02<00:00, 20.76it/s]DDIM Sampler:  86%|████████▌ | 43/50 [00:02<00:00, 20.77it/s]DDIM Sampler:  92%|█████████▏| 46/50 [00:02<00:00, 20.78it/s]DDIM Sampler:  98%|█████████▊| 49/50 [00:02<00:00, 20.78it/s]DDIM Sampler: 100%|██████████| 50/50 [00:02<00:00, 20.08it/s]
+Data shape for DDIM sampling is (16, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 50 timesteps
+DDIM Sampler:   0%|          | 0/50 [00:00<?, ?it/s]DDIM Sampler:   2%|▏         | 1/50 [00:00<00:06,  7.48it/s]DDIM Sampler:   8%|▊         | 4/50 [00:00<00:02, 15.55it/s]DDIM Sampler:  14%|█▍        | 7/50 [00:00<00:02, 17.99it/s]DDIM Sampler:  20%|██        | 10/50 [00:00<00:02, 19.11it/s]DDIM Sampler:  26%|██▌       | 13/50 [00:00<00:01, 19.72it/s]DDIM Sampler:  32%|███▏      | 16/50 [00:00<00:01, 20.09it/s]DDIM Sampler:  38%|███▊      | 19/50 [00:00<00:01, 20.32it/s]DDIM Sampler:  44%|████▍     | 22/50 [00:01<00:01, 20.47it/s]DDIM Sampler:  50%|█████     | 25/50 [00:01<00:01, 20.57it/s]DDIM Sampler:  56%|█████▌    | 28/50 [00:01<00:01, 20.64it/s]DDIM Sampler:  62%|██████▏   | 31/50 [00:01<00:00, 20.69it/s]DDIM Sampler:  68%|██████▊   | 34/50 [00:01<00:00, 20.72it/s]DDIM Sampler:  74%|███████▍  | 37/50 [00:01<00:00, 20.75it/s]DDIM Sampler:  80%|████████  | 40/50 [00:02<00:00, 20.76it/s]DDIM Sampler:  86%|████████▌ | 43/50 [00:02<00:00, 20.77it/s]DDIM Sampler:  92%|█████████▏| 46/50 [00:02<00:00, 20.77it/s]DDIM Sampler:  98%|█████████▊| 49/50 [00:02<00:00, 20.77it/s]DDIM Sampler: 100%|██████████| 50/50 [00:02<00:00, 20.08it/s]
+  Time/sample: 0.156s | Time/step: 3.11ms | Throughput: 6.42 samples/s
+
+All experiment data saved to /workspace/MoDiff/analysis_int4_vs_int8/experiment_results.json
