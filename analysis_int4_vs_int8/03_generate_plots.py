@@ -28,6 +28,15 @@ try:
     import matplotlib.pyplot as plt
     import matplotlib.patches as mpatches
     HAS_MPL = True
+    # Global font sizes — applied to all plots
+    plt.rcParams.update({
+        'font.size': 12,
+        'axes.titlesize': 14,
+        'axes.labelsize': 12,
+        'xtick.labelsize': 11,
+        'ytick.labelsize': 11,
+        'legend.fontsize': 11,
+    })
 except ImportError:
     HAS_MPL = False
     print("WARNING: matplotlib not available. Install with: pip install matplotlib")
@@ -58,14 +67,13 @@ def plot_ldm_speedups(ldm_results):
     speedups = []
     times = []
     
-    mode_order = ['fp32', 'fp16', 'int8_baseline', 'int8', 'int4_baseline', 'int4']
+    mode_order = ['fp32', 'int8_baseline', 'int8', 'int4_baseline', 'int4']
     colors = {
-        'fp32': '#2196F3',
-        'fp16': '#4CAF50', 
-        'int8_baseline': '#FF9800',
-        'int8': '#FF5722',
-        'int4_baseline': '#9C27B0',
-        'int4': '#673AB7',
+        'fp32':          '#B8E5FA',
+        'int8_baseline': '#EEC186',
+        'int8':          '#F7A6AC',
+        'int4_baseline': '#EEF0A7',
+        'int4':          '#F7B7D2',
     }
     
     for mode in mode_order:
@@ -101,7 +109,7 @@ def plot_ldm_speedups(ldm_results):
                 f'{t:.2f}', ha='center', va='bottom', fontsize=9)
     
     plt.tight_layout()
-    path = os.path.join(OUTPUT_DIR, 'plot_ldm_speedups.png')
+    path = os.path.join(OUTPUT_DIR, 'plot_ldm_speedups.pdf')
     plt.savefig(path, dpi=150, bbox_inches='tight')
     plt.close()
     print(f"Saved: {path}")
@@ -141,26 +149,26 @@ def plot_cutlass_conv_throughput(gemm_results):
     width = 0.35
     
     # TOPS comparison
-    bars1 = ax1.bar(x - width/2, int8_tops, width, label='INT8', color='#FF5722')
-    bars2 = ax1.bar(x + width/2, int4_tops, width, label='INT4', color='#673AB7')
+    bars1 = ax1.bar(x - width/2, int8_tops, width, label='INT8', color='#F7A6AC')
+    bars2 = ax1.bar(x + width/2, int4_tops, width, label='INT4', color='#F7B7D2')
     ax1.set_ylabel('TOPS (Tera Operations/Sec)')
     ax1.set_title('CUTLASS Conv2d: Raw Throughput (INT8 vs INT4)')
     ax1.set_xticks(x)
-    ax1.set_xticklabels([s.replace(',', '\n') for s in shape_labels], fontsize=7, rotation=0)
+    ax1.set_xticklabels([s.replace(',', '\n') for s in shape_labels], fontsize=9, rotation=0)
     ax1.legend()
     
     # Speedup ratio
     ratios = [i4/i8 if i8 > 0 else 0 for i4, i8 in zip(int4_ms, int8_ms)]
     inv_ratios = [i8/i4 if i4 > 0 else 0 for i4, i8 in zip(int4_ms, int8_ms)]
     
-    colors = ['#4CAF50' if r < 1 else '#F44336' for r in ratios]
+    colors = ['#B2DBB9' if r < 1 else '#F7A6AC' for r in ratios]
     bars3 = ax2.bar(x, inv_ratios, color=colors)
     ax2.axhline(y=1.0, color='gray', linestyle='--', alpha=0.7, label='Break-even')
     ax2.axhline(y=1.5, color='green', linestyle='--', alpha=0.5, label='Expected ~1.5x (NVIDIA)')
     ax2.set_ylabel('INT4/INT8 Speedup')
-    ax2.set_title('Pure Kernel Speedup: INT4 vs INT8 (>1 means INT4 is faster)')
+    ax2.set_title('Pure Kernel Speedup: INT4 vs INT8')
     ax2.set_xticks(x)
-    ax2.set_xticklabels([s.replace(',', '\n') for s in shape_labels], fontsize=7, rotation=0)
+    ax2.set_xticklabels([s.replace(',', '\n') for s in shape_labels], fontsize=9, rotation=0)
     ax2.legend()
     
     for bar, ratio in zip(bars3, inv_ratios):
@@ -220,8 +228,8 @@ def plot_e2e_breakdown(gemm_results):
         
         x = np.arange(len(labels))
         
-        ax.bar(x, conv_times, label='Compute (conv)', color='#2196F3')
-        ax.bar(x, quant_times, bottom=conv_times, label='Quantization', color='#FF9800')
+        ax.bar(x, conv_times, label='Compute (conv)', color='#B8E5FA')
+        ax.bar(x, quant_times, bottom=conv_times, label='Quantization', color='#EEC186')
         ax.bar(x, other_times, bottom=[c+q for c,q in zip(conv_times, quant_times)], 
                label='Overhead', color='#F44336')
         
@@ -288,8 +296,8 @@ def plot_quant_overhead_pct(gemm_results):
     width = 0.35
     
     # Quant overhead percentage
-    ax1.bar(x - width/2, int8_quant_pct, width, label='INT8', color='#FF5722')
-    ax1.bar(x + width/2, int4_quant_pct, width, label='INT4', color='#673AB7')
+    ax1.bar(x - width/2, int8_quant_pct, width, label='INT8', color='#F7A6AC')
+    ax1.bar(x + width/2, int4_quant_pct, width, label='INT4', color='#F7B7D2')
     ax1.set_ylabel('Overhead = (total − conv_only) / total (%)')
     ax1.set_title('True Quant Overhead: (total − conv_only) / total\n[includes quant + kernel scheduling + alloc]')
     ax1.set_xticks(x)
@@ -297,8 +305,8 @@ def plot_quant_overhead_pct(gemm_results):
     ax1.legend()
     
     # Pure conv speedup vs FP32
-    ax2.bar(x - width/2, int8_conv_speedup, width, label='INT8 conv', color='#FF5722')
-    ax2.bar(x + width/2, int4_conv_speedup, width, label='INT4 conv', color='#673AB7')
+    ax2.bar(x - width/2, int8_conv_speedup, width, label='INT8 conv', color='#F7A6AC')
+    ax2.bar(x + width/2, int4_conv_speedup, width, label='INT4 conv', color='#F7B7D2')
     ax2.set_ylabel('Speedup vs FP32')
     ax2.set_title('Pure Convolution Speedup (no quant overhead)')
     ax2.set_xticks(x)
@@ -348,8 +356,8 @@ def plot_pipeline_breakdown(pipeline_results):
     x = np.arange(len(all_types))
     width = 0.35
     
-    ax1.barh(x - width/2, int8_times, width, label='INT8', color='#FF5722')
-    ax1.barh(x + width/2, int4_times, width, label='INT4', color='#673AB7')
+    ax1.barh(x - width/2, int8_times, width, label='INT8', color='#F7A6AC')
+    ax1.barh(x + width/2, int4_times, width, label='INT4', color='#F7B7D2')
     ax1.set_yticks(x)
     ax1.set_yticklabels(all_types, fontsize=9)
     ax1.set_xlabel('Total Time (ms)')
@@ -404,8 +412,8 @@ def plot_matmul_throughput(gemm_results):
     x = np.arange(len(labels))
     width = 0.35
     
-    ax.bar(x - width/2, fp32_tflops, width, label='FP32 (TF32)', color='#2196F3')
-    ax.bar(x + width/2, fp16_tflops, width, label='FP16', color='#4CAF50')
+    ax.bar(x - width/2, fp32_tflops, width, label='FP32 (TF32)', color='#B8E5FA')
+    ax.bar(x + width/2, fp16_tflops, width, label='FP16', color='#B2DBB9')
     
     ax.set_ylabel('TFLOPS')
     try:
@@ -415,7 +423,7 @@ def plot_matmul_throughput(gemm_results):
         gpu_name = "GPU"
     ax.set_title(f'torch.matmul Throughput ({gpu_name})')
     ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=8)
+    ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=9)
     ax.legend()
     
     plt.tight_layout()
@@ -650,6 +658,67 @@ def generate_report(ldm_results, gemm_results, pipeline_results):
 
 
 # ============================================================================
+# Plot: E2E Component Breakdown Bar Chart (from experiment_results.json)
+# ============================================================================
+
+def plot_exp2_component_bars():
+    """Grouped bar chart of per-component times from exp2 breakdown."""
+    if not HAS_MPL:
+        return
+
+    exp_results_path = os.path.join(OUTPUT_DIR, 'experiment_results.json')
+    if not os.path.exists(exp_results_path):
+        print(f"Warning: {exp_results_path} not found, skipping component bars")
+        return
+
+    with open(exp_results_path) as f:
+        data = json.load(f)
+
+    exp = data.get('exp2_breakdown', {})
+    modes = [m for m in ['fp32', 'int8', 'int4'] if m in exp]
+    if not modes:
+        print("Warning: no exp2_breakdown data found")
+        return
+
+    generic_map = {
+        'Conv2d(FP32)': 'Conv2d', 'Int8Conv2d': 'Conv2d', 'Int4Conv2d': 'Conv2d',
+        'Linear(FP32)': 'Linear', 'Int8Linear': 'Linear', 'Int4Linear': 'Linear',
+        'Attention': 'Attention', 'GroupNorm': 'GroupNorm', 'SiLU': 'SiLU',
+    }
+    generic_order = ['Conv2d', 'Attention', 'Linear', 'GroupNorm', 'SiLU']
+    mode_colors = {
+        'fp32': '#B8E5FA', 'fp16': '#B2DBB9', 'int8': '#F7A6AC', 'int4': '#F7B7D2',
+    }
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    x = np.arange(len(generic_order))
+    n = len(modes)
+    width = 0.8 / n
+
+    for i, mode in enumerate(modes):
+        ls = exp[mode]['layer_stats']
+        agg = {}
+        for lt, s in ls.items():
+            g = generic_map.get(lt, lt)
+            agg[g] = agg.get(g, 0) + s['total_ms']
+        vals = [agg.get(g, 0) for g in generic_order]
+        offset = (i - n / 2 + 0.5) * width
+        bars = ax.bar(x + offset, vals, width, label=mode.upper(),
+                      color=mode_colors.get(mode, '#999'), edgecolor='black', linewidth=0.5)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(generic_order)
+    ax.set_ylabel('Total Time (ms)')
+    ax.set_title('Per-Component Time: FP32 vs INT8 vs INT4')
+    ax.legend(loc='upper right')
+    plt.tight_layout()
+    path = os.path.join(OUTPUT_DIR, 'plot_02b_component_bars.png')
+    plt.savefig(path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"Saved: {path}")
+
+
+# ============================================================================
 # Main
 # ============================================================================
 
@@ -671,6 +740,7 @@ def main():
         plot_quant_overhead_pct(gemm_results)
         plot_pipeline_breakdown(pipeline_results)
         plot_matmul_throughput(gemm_results)
+        plot_exp2_component_bars()
     else:
         print("matplotlib not available, skipping plots")
     

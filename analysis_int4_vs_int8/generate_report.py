@@ -13,29 +13,39 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 
+# Global font sizes — applied to all plots
+plt.rcParams.update({
+    'font.size': 12,
+    'axes.titlesize': 14,
+    'axes.labelsize': 12,
+    'xtick.labelsize': 11,
+    'ytick.labelsize': 11,
+    'legend.fontsize': 11,
+})
+
 OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))
 RESULTS_PATH = os.path.join(OUTPUT_DIR, 'experiment_results.json')
 
 # Color palette
 C = {
-    'fp32': '#2196F3',
-    'int8_baseline': '#FF9800',
-    'int8': '#FF5722',
-    'int4_baseline': '#9C27B0',
-    'int4': '#673AB7',
-    'fp16': '#4CAF50',
+    'fp32':          '#B8E5FA',
+    'fp16':          '#F7A6AC',
+    'int8_baseline': '#EEC186',
+    'int8':          '#B2DBB9',
+    'int4_baseline': '#EEF0A7',
+    'int4':          '#F7B7D2',
 }
 
 LAYER_COLORS = {
-    'Conv2d(FP32)': '#2196F3',
-    'Int8Conv2d': '#FF5722',
-    'Int4Conv2d': '#673AB7',
-    'Linear(FP32)': '#4CAF50',
-    'Int8Linear': '#FF9800',
-    'Int4Linear': '#9C27B0',
-    'Attention': '#E91E63',
-    'GroupNorm': '#795548',
-    'SiLU': '#607D8B',
+    'Conv2d(FP32)': '#B8E5FA',
+    'Int8Conv2d':   '#F7A6AC',
+    'Int4Conv2d':   '#F7B7D2',
+    'Linear(FP32)': '#B2DBB9',
+    'Int8Linear':   '#EEC186',
+    'Int4Linear':   '#EEF0A7',
+    'Attention':    '#F7A6AC',
+    'GroupNorm':    '#EEC186',
+    'SiLU':         '#EEF0A7',
 }
 
 
@@ -58,23 +68,23 @@ def plot_exp1_pipeline(data):
     times = [exp[m]['time_per_sample'] * 1000 for m in modes]  # ms
     bars = ax1.bar(range(len(modes)), times, color=[C[m] for m in modes], edgecolor='black', linewidth=0.5)
     ax1.set_xticks(range(len(modes)))
-    ax1.set_xticklabels([m.replace('_', '\n') for m in modes], fontsize=9)
+    ax1.set_xticklabels([m.replace('_', '\n') for m in modes])
     ax1.set_ylabel('Time per Sample (ms)')
     ax1.set_title('Full Pipeline: Time per Sample')
     for bar, t in zip(bars, times):
         ax1.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 2,
-                 f'{t:.0f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+                 f'{t:.0f}', ha='center', va='bottom', fontsize=11, fontweight='bold')
 
     # --- Time per step ---
     step_ms = [exp[m]['time_per_step_ms'] for m in modes]
     bars2 = ax2.bar(range(len(modes)), step_ms, color=[C[m] for m in modes], edgecolor='black', linewidth=0.5)
     ax2.set_xticks(range(len(modes)))
-    ax2.set_xticklabels([m.replace('_', '\n') for m in modes], fontsize=9)
+    ax2.set_xticklabels([m.replace('_', '\n') for m in modes])
     ax2.set_ylabel('Time per Step (ms)')
     ax2.set_title('Full Pipeline: Time per Diffusion Step')
     for bar, t in zip(bars2, step_ms):
         ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.05,
-                 f'{t:.2f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+                 f'{t:.2f}', ha='center', va='bottom', fontsize=11, fontweight='bold')
 
     plt.tight_layout()
     path = os.path.join(OUTPUT_DIR, 'plot_01_pipeline_speedup.png')
@@ -109,11 +119,11 @@ def plot_exp2_breakdown(data):
     }
     generic_order = ['Conv2d', 'Attention', 'Linear', 'GroupNorm', 'SiLU']
     generic_colors = {
-        'Conv2d': '#2196F3',
-        'Attention': '#E91E63',
-        'Linear': '#4CAF50',
-        'GroupNorm': '#795548',
-        'SiLU': '#607D8B',
+        'Conv2d':    '#B8E5FA',
+        'Attention': '#F7A6AC',
+        'Linear':    '#B2DBB9',
+        'GroupNorm': '#EEC186',
+        'SiLU':      '#EEF0A7',
     }
 
     fig, axes = plt.subplots(1, len(modes), figsize=(6 * len(modes), 6))
@@ -140,10 +150,10 @@ def plot_exp2_breakdown(data):
 
         wedges, texts = ax.pie(sizes, labels=labels, colors=colors,
                                 startangle=140, labeldistance=1.15,
-                                textprops={'fontsize': 8})
-        ax.set_title(f'{mode.upper()}\nTotal: {total:.0f}ms', fontsize=11, fontweight='bold')
+                                textprops={'fontsize': 10})
+        ax.set_title(f'{mode.upper()}\nTotal: {total:.0f}ms', fontsize=12, fontweight='bold')
 
-    plt.suptitle('Per-Component Time Breakdown (50 steps × 2 batches × 32 samples, bs=32;\nFP32 = no autocast, INT8/INT4 = FP16 autocast)', fontsize=11, y=1.02)
+    plt.suptitle('Per-Component Time Breakdown', fontsize=14, y=1.02)
     plt.tight_layout()
     path = os.path.join(OUTPUT_DIR, 'plot_02_component_breakdown.png')
     plt.savefig(path, dpi=150, bbox_inches='tight')
@@ -165,16 +175,12 @@ def plot_exp2_breakdown(data):
         color = C.get(mode, '#999')
         offset = (i - n / 2 + 0.5) * width
         bars = ax.bar(x + offset, vals, width, label=mode.upper(), color=color, edgecolor='black', linewidth=0.5)
-        for bar, v in zip(bars, vals):
-            if v > 10:
-                ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 5,
-                        f'{v:.0f}', ha='center', va='bottom', fontsize=6)
 
     ax.set_xticks(x)
-    ax.set_xticklabels(generic_order, fontsize=10)
+    ax.set_xticklabels(generic_order)
     ax.set_ylabel('Total Time (ms)')
-    ax.set_title('Per-Component Time: FP32 vs INT8 vs INT4 (bs=32;\nFP32=no autocast, INT8/INT4=FP16 autocast)')
-    ax.legend()
+    ax.set_title('Per-Component Time: FP32 vs INT8 vs INT4')
+    ax.legend(loc='upper right')
     plt.tight_layout()
     path = os.path.join(OUTPUT_DIR, 'plot_02b_component_bars.png')
     plt.savefig(path, dpi=150, bbox_inches='tight')
@@ -219,9 +225,9 @@ def plot_exp3_conv(data):
     ax1.bar(x, int8_times, width, label='INT8 (quant+conv)', color=C['int8'], edgecolor='black', linewidth=0.3)
     ax1.bar(x + width, int4_times, width, label='INT4 (quant+pack+conv)', color=C['int4'], edgecolor='black', linewidth=0.3)
     ax1.set_xticks(x)
-    ax1.set_xticklabels(labels, fontsize=7)
+    ax1.set_xticklabels(labels, fontsize=9)
     ax1.set_ylabel('Time (ms)')
-    ax1.set_title('Per Conv-Layer-Shape: Time (FP32 vs INT8 vs INT4)')
+    ax1.set_title('Per Conv-Layer: Time (FP32 vs INT8 vs INT4)')
     ax1.legend()
     plt.tight_layout()
     path_a = os.path.join(OUTPUT_DIR, 'plot_03a_conv_time.png')
@@ -238,13 +244,13 @@ def plot_exp3_conv(data):
     ax2.bar(x + width / 2, int4_spd, width, label='INT4 speedup', color=C['int4'], edgecolor='black', linewidth=0.3)
     ax2.axhline(y=1.0, color='gray', linestyle='--', alpha=0.7, label='Break-even')
     ax2.set_xticks(x)
-    ax2.set_xticklabels(labels, fontsize=7)
+    ax2.set_xticklabels(labels, fontsize=9)
     ax2.set_ylabel('Speedup vs FP32')
-    ax2.set_title('Per Conv-Layer-Shape: Speedup vs FP32')
+    ax2.set_title('Per Conv-Layer: Speedup vs FP32')
     ax2.legend()
     for i, (s8, s4) in enumerate(zip(int8_spd, int4_spd)):
-        ax2.text(i - width / 2, s8 + 0.05, f'{s8:.2f}', ha='center', fontsize=6, color=C['int8'])
-        ax2.text(i + width / 2, s4 + 0.05, f'{s4:.2f}', ha='center', fontsize=6, color=C['int4'])
+        ax2.text(i - width / 2, s8 + 0.05, f'{s8:.2f}', ha='center', fontsize=9, color=C['int8'])
+        ax2.text(i + width / 2, s4 + 0.05, f'{s4:.2f}', ha='center', fontsize=9, color=C['int4'])
     plt.tight_layout()
     path_b = os.path.join(OUTPUT_DIR, 'plot_03b_conv_speedup.png')
     plt.savefig(path_b, dpi=150, bbox_inches='tight')
@@ -295,10 +301,10 @@ def plot_exp4_linear(data):
     for (lbl, vals, color), off in zip(all_series, offsets):
         ax1.bar(x + off * width, vals, width, label=lbl, color=color, edgecolor='black', linewidth=0.3)
     ax1.set_xticks(x)
-    ax1.set_xticklabels(labels, fontsize=9)
+    ax1.set_xticklabels(labels)
     ax1.set_ylabel('Time (ms)')
-    ax1.set_title('Per Linear-Layer-Shape: Latency')
-    ax1.legend(fontsize=7, ncol=2)
+    ax1.set_title('Per Linear-Layer: Latency')
+    ax1.legend(ncol=2)
     plt.tight_layout()
     path_a = os.path.join(OUTPUT_DIR, 'plot_04a_linear_latency.png')
     plt.savefig(path_a, dpi=150, bbox_inches='tight')
@@ -316,10 +322,10 @@ def plot_exp4_linear(data):
         ax2.bar(x + off * width, spd, width, label=lbl, color=color, edgecolor='black', linewidth=0.3)
     ax2.axhline(y=1.0, color='gray', linestyle='--', alpha=0.7)
     ax2.set_xticks(x)
-    ax2.set_xticklabels(labels, fontsize=9)
+    ax2.set_xticklabels(labels)
     ax2.set_ylabel('Speedup vs FP32')
-    ax2.set_title('Per Linear-Layer-Shape: Speedup vs FP32')
-    ax2.legend(fontsize=7, ncol=2)
+    ax2.set_title('Per Linear-Layer: Speedup vs FP32')
+    ax2.legend(ncol=2)
     plt.tight_layout()
     path_b = os.path.join(OUTPUT_DIR, 'plot_04b_linear_speedup.png')
     plt.savefig(path_b, dpi=150, bbox_inches='tight')
@@ -358,6 +364,7 @@ def plot_exp5_ablation(data):
     ax2.legend()
     ax2.grid(True, alpha=0.3)
     ax2.set_xticks([1, 2, 4, 8, 16])
+
 
     plt.tight_layout()
     path = os.path.join(OUTPUT_DIR, 'plot_05_batch_ablation.png')

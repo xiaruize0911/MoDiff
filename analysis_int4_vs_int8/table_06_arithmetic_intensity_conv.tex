@@ -1,0 +1,34 @@
+\begin{table}[h]
+  \centering
+  \caption{Arithmetic Intensity: Conv2d Layers. Bytes counted as: FP32=4B/elem; INT8=1B act+weight, 4B output; INT4=0.5B act+weight, 4B output.}
+  \label{tab:ai_conv2d}
+  \begin{tabular}{lrrrrrrrrr}
+    \toprule
+    Shape & FLOPs & \multicolumn{3}{c}{Bytes} & \multicolumn{3}{c}{AI (FLOPs/B)} & INT8/FP32 & INT4/FP32 \\
+    \cmidrule(lr){3-5}\cmidrule(lr){6-8}
+    & & FP32 & INT8 & INT4 & FP32 & INT8 & INT4 & & \\
+    \midrule
+    C\_in=1536, C\_out=768, K=3x3, S=1, Count=5 & 10.87G & 47.19MB & 12.98MB & 7.27MB & 230.40 & 837.82 & 1494.49 & 3.64$\times$ & 6.49$\times$ \\
+    C\_in=1152, C\_out=768, K=3x3, S=1, Count=1 & 8.15G & 35.78MB & 10.13MB & 5.85MB & 227.87 & 805.28 & 1394.02 & 3.53$\times$ & 6.12$\times$ \\
+    C\_in=384, C\_out=768, K=3x3, S=1, Count=1 & 10.87G & 20.05MB & 9.73MB & 8.01MB & 542.12 & 1117.09 & 1356.96 & 2.06$\times$ & 2.50$\times$ \\
+    C\_in=192, C\_out=384, K=3x3, S=1, Count=1 & 10.87G & 21.53MB & 14.82MB & 13.70MB & 504.99 & 733.61 & 793.49 & 1.45$\times$ & 1.57$\times$ \\
+    C\_in=768, C\_out=768, K=3x3, S=1, Count=23 & 5.44G & 24.38MB & 7.27MB & 4.42MB & 222.97 & 747.24 & 1228.80 & 3.35$\times$ & 5.51$\times$ \\
+    C\_in=1152, C\_out=384, K=3x3, S=1, Count=1 & 4.08G & 19.07MB & 5.36MB & 3.07MB & 213.77 & 760.95 & 1327.10 & 3.56$\times$ & 6.21$\times$ \\
+    C\_in=384, C\_out=384, K=3x3, S=1, Count=21 & 5.44G & 11.60MB & 5.26MB & 4.20MB & 468.61 & 1033.57 & 1293.47 & 2.21$\times$ & 2.76$\times$ \\
+    C\_in=192, C\_out=192, K=3x3, S=1, Count=9 & 5.44G & 13.91MB & 8.20MB & 7.24MB & 390.78 & 663.22 & 750.41 & 1.70$\times$ & 1.92$\times$ \\
+    C\_in=768, C\_out=384, K=3x3, S=1, Count=4 & 2.72G & 12.98MB & 3.83MB & 2.31MB & 209.45 & 708.92 & 1176.51 & 3.38$\times$ & 5.62$\times$ \\
+    C\_in=384, C\_out=192, K=3x3, S=1, Count=2 & 2.72G & 7.37MB & 3.02MB & 2.30MB & 368.64 & 899.12 & 1182.80 & 2.44$\times$ & 3.21$\times$ \\
+    C\_in=576, C\_out=384, K=3x3, S=1, Count=1 & 2.04G & 9.93MB & 3.07MB & 1.93MB & 205.31 & 663.55 & 1056.61 & 3.23$\times$ & 5.15$\times$ \\
+    C\_in=576, C\_out=192, K=3x3, S=1, Count=1 & 1.02G & 5.55MB & 1.68MB & 1.04MB & 183.50 & 605.43 & 981.59 & 3.30$\times$ & 5.35$\times$ \\
+    C\_in=192, C\_out=384, K=1x1, S=1, Count=1 & 1.21G & 19.17MB & 14.23MB & 13.41MB & 63.02 & 84.89 & 90.10 & 1.35$\times$ & 1.43$\times$ \\
+    C\_in=1152, C\_out=384, K=1x1, S=1, Count=1 & 0.45G & 4.92MB & 1.82MB & 1.30MB & 92.16 & 249.08 & 347.77 & 2.70$\times$ & 3.77$\times$ \\
+    C\_in=1536, C\_out=768, K=1x1, S=1, Count=5 & 1.21G & 9.44MB & 3.54MB & 2.56MB & 128.00 & 341.33 & 472.62 & 2.67$\times$ & 3.69$\times$ \\
+    C\_in=384, C\_out=768, K=1x1, S=1, Count=1 & 1.21G & 10.62MB & 7.37MB & 6.83MB & 113.78 & 163.84 & 176.81 & 1.44$\times$ & 1.55$\times$ \\
+    C\_in=1152, C\_out=768, K=1x1, S=1, Count=1 & 0.91G & 7.47MB & 3.05MB & 2.31MB & 121.26 & 297.29 & 392.17 & 2.45$\times$ & 3.23$\times$ \\
+    C\_in=768, C\_out=384, K=1x1, S=1, Count=4 & 0.30G & 3.54MB & 1.47MB & 1.13MB & 85.33 & 204.80 & 267.13 & 2.40$\times$ & 3.13$\times$ \\
+    C\_in=576, C\_out=192, K=1x1, S=1, Count=1 & 0.11G & 2.02MB & 0.80MB & 0.60MB & 56.20 & 141.78 & 190.02 & 2.52$\times$ & 3.38$\times$ \\
+    C\_in=576, C\_out=384, K=1x1, S=1, Count=1 & 0.23G & 2.85MB & 1.30MB & 1.04MB & 79.45 & 173.89 & 216.85 & 2.19$\times$ & 2.73$\times$ \\
+    C\_in=384, C\_out=192, K=1x1, S=1, Count=2 & 0.30G & 5.01MB & 2.43MB & 2.00MB & 60.24 & 124.12 & 150.77 & 2.06$\times$ & 2.50$\times$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
