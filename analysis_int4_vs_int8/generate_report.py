@@ -49,8 +49,7 @@ def load_data():
 # ============================================================================
 def plot_exp1_pipeline(data):
     exp = data['exp1_pipeline']
-    modes = [m for m in ['fp32', 'fp16', 'int8_baseline', 'int8', 'int4_baseline', 'int4'] if m in exp]
-    C['fp16'] = '#4CAF50'
+    modes = [m for m in ['fp32', 'int8_baseline', 'int8', 'int4_baseline', 'int4'] if m in exp]
     fp32_t = exp['fp32']['time_per_sample']
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5.5))
@@ -261,7 +260,6 @@ def plot_exp4_linear(data):
 
     labels = []
     fp32_t = []
-    fp16_t = []
     int8_base_t = []
     int8_mod_t = []
     int4_base_t = []
@@ -274,18 +272,16 @@ def plot_exp4_linear(data):
         count = parts[2].split('=')[1]
         labels.append(f'{inf}→{outf}\n(×{count})')
         fp32_t.append(v['fp32_ms'])
-        fp16_t.append(v['fp16_ms'])
         int8_base_t.append(v['int8_baseline_ms'])
         int8_mod_t.append(v['int8_modiff_ms'])
         int4_base_t.append(v['int4_baseline_ms'])
         int4_mod_t.append(v['int4_modiff_ms'])
 
     x = np.arange(len(labels))
-    width = 0.13
-    offsets = [-2.5, -1.5, -0.5, 0.5, 1.5, 2.5]
+    width = 0.15
+    offsets = [-2, -1, 0, 1, 2]
     all_series = [
         ('FP32', fp32_t, C['fp32']),
-        ('FP16', fp16_t, C.get('fp16', '#4CAF50')),
         ('INT8 base', int8_base_t, C['int8_baseline']),
         ('INT8 MoDiff', int8_mod_t, C['int8']),
         ('INT4 base', int4_base_t, C['int4_baseline']),
@@ -423,7 +419,7 @@ def generate_report(data):
     R.append("| Mode | Time/Sample (ms) | Time/Step (ms) | Speedup vs FP32 |")
     R.append("|------|-----------------|---------------|-----------------|")
     fp32_t = exp1['fp32']['time_per_sample']
-    for mode in [m for m in ['fp32', 'fp16', 'int8_baseline', 'int8', 'int4_baseline', 'int4'] if m in exp1]:
+    for mode in [m for m in ['fp32', 'int8_baseline', 'int8', 'int4_baseline', 'int4'] if m in exp1]:
         r = exp1[mode]
         spd = fp32_t / r['time_per_sample'] if r['time_per_sample'] > 0 else 0
         R.append(f"| {mode} | {r['time_per_sample']*1000:.1f} | {r['time_per_step_ms']:.2f} | {spd:.3f}× |")
@@ -552,14 +548,14 @@ def generate_report(data):
     bs_key = list(exp4.keys())[0]
     lin_shapes = exp4[bs_key]
 
-    R.append("| Shape (in→out) | Count | FP32 (ms) | FP16 (ms) | INT8 base (ms) | INT8 MoDiff (ms) | INT4 base (ms) | INT4 MoDiff (ms) |")
-    R.append("|---------------|-------|----------|----------|---------------|-----------------|---------------|-----------------|")
+    R.append("| Shape (in→out) | Count | FP32 (ms) | INT8 base (ms) | INT8 MoDiff (ms) | INT4 base (ms) | INT4 MoDiff (ms) |")
+    R.append("|---------------|-------|----------|---------------|-----------------|---------------|-----------------|")
     for sk, v in lin_shapes.items():
         parts = sk.split(',')
         inf = parts[0].split('=')[1]
         outf = parts[1].split('=')[1]
         count = parts[2].split('=')[1]
-        R.append(f"| {inf}→{outf} | {count} | {v['fp32_ms']:.4f} | {v['fp16_ms']:.4f} | "
+        R.append(f"| {inf}→{outf} | {count} | {v['fp32_ms']:.4f} | "
                  f"{v['int8_baseline_ms']:.4f} | {v['int8_modiff_ms']:.4f} | "
                  f"{v['int4_baseline_ms']:.4f} | {v['int4_modiff_ms']:.4f} |")
     R.append("")
@@ -567,19 +563,19 @@ def generate_report(data):
     R.append("**Key findings:**")
     R.append("")
     avg_fp32 = np.mean([v['fp32_ms'] for v in lin_shapes.values()])
-    avg_fp16 = np.mean([v['fp16_ms'] for v in lin_shapes.values()])
     avg_int8b = np.mean([v['int8_baseline_ms'] for v in lin_shapes.values()])
     avg_int4b = np.mean([v['int4_baseline_ms'] for v in lin_shapes.values()])
     avg_int8m = np.mean([v['int8_modiff_ms'] for v in lin_shapes.values()])
     avg_int4m = np.mean([v['int4_modiff_ms'] for v in lin_shapes.values()])
-    R.append(f"- FP32 avg: {avg_fp32:.4f}ms, FP16 avg: {avg_fp16:.4f}ms ({avg_fp32/avg_fp16:.2f}× speedup)")
     R.append(f"- INT8 baseline avg: {avg_int8b:.4f}ms ({avg_fp32/avg_int8b:.2f}× vs FP32)")
     R.append(f"- INT4 baseline avg: {avg_int4b:.4f}ms ({avg_fp32/avg_int4b:.2f}× vs FP32)")
     R.append(f"- INT8 MoDiff avg: {avg_int8m:.4f}ms, INT4 MoDiff avg: {avg_int4m:.4f}ms")
     R.append(f"- Linear layers use FP16 GEMM + quantization overhead, so INT8/INT4 baseline are slightly slower than FP32.")
     R.append(f"- MoDiff modulated steps add ~{(avg_int8m/avg_int8b - 1)*100:.0f}% overhead for error-compensated caching.")
     R.append("")
-    R.append("![Linear Layer Analysis](plot_04_linear_layer_analysis.png)")
+    R.append("![Linear Layer Latency](plot_04a_linear_latency.png)")
+    R.append("")
+    R.append("![Linear Layer Speedup](plot_04b_linear_speedup.png)")
     R.append("")
 
     # ==========================================================================

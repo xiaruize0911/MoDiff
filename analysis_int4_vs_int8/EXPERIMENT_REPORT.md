@@ -15,7 +15,6 @@ Settings: 200 DDIM steps, 128 samples, batch_size=32, LSUN Churches 256×256 (re
 | Mode | Time/Sample (ms) | Time/Step (ms) | Speedup vs FP32 |
 |------|-----------------|---------------|-----------------|
 | fp32 | 613.4 | 3.07 | 1.000× |
-| fp16 | 310.2 | 1.55 | 1.978× |
 | int8_baseline | 333.0 | 1.66 | 1.842× |
 | int8 | 367.7 | 1.84 | 1.668× |
 | int4_baseline | 306.2 | 1.53 | 2.003× |
@@ -126,23 +125,24 @@ Each unique conv shape benchmarked in isolation: FP32 (cuDNN) vs INT8 (CUTLASS q
 
 Each unique linear shape benchmarked in isolation. All 37 linear layers are time-embedding projections.
 
-| Shape (in→out) | Count | FP32 (ms) | FP16 (ms) | INT8 base (ms) | INT8 MoDiff (ms) | INT4 base (ms) | INT4 MoDiff (ms) |
-|---------------|-------|----------|----------|---------------|-----------------|---------------|-----------------|
-| 192→768 | 1 | 0.0316 | 0.0347 | 0.0535 | 0.1700 | 0.0532 | 0.1687 |
-| 768→768 | 15 | 0.0347 | 0.0346 | 0.0525 | 0.1718 | 0.0525 | 0.1721 |
-| 768→384 | 6 | 0.0353 | 0.0346 | 0.0524 | 0.1711 | 0.0529 | 0.1719 |
-| 768→1536 | 15 | 0.0345 | 0.0344 | 0.0528 | 0.1713 | 0.0524 | 0.1704 |
+| Shape (in→out) | Count | FP32 (ms) | INT8 base (ms) | INT8 MoDiff (ms) | INT4 base (ms) | INT4 MoDiff (ms) |
+|---------------|-------|----------|---------------|-----------------|---------------|-----------------|
+| 192→768 | 1 | 0.0316 | 0.0535 | 0.1700 | 0.0532 | 0.1687 |
+| 768→768 | 15 | 0.0347 | 0.0525 | 0.1718 | 0.0525 | 0.1721 |
+| 768→384 | 6 | 0.0353 | 0.0524 | 0.1711 | 0.0529 | 0.1719 |
+| 768→1536 | 15 | 0.0345 | 0.0528 | 0.1713 | 0.0524 | 0.1704 |
 
 **Key findings:**
 
-- FP32 avg: 0.0340ms, FP16 avg: 0.0346ms (0.98× speedup)
 - INT8 baseline avg: 0.0528ms (0.64× vs FP32)
 - INT4 baseline avg: 0.0527ms (0.64× vs FP32)
 - INT8 MoDiff avg: 0.1710ms, INT4 MoDiff avg: 0.1708ms
 - Linear layers use FP16 GEMM + quantization overhead, so INT8/INT4 baseline are slightly slower than FP32.
 - MoDiff modulated steps add ~224% overhead for error-compensated caching.
 
-![Linear Layer Analysis](plot_04_linear_layer_analysis.png)
+![Linear Layer Latency](plot_04a_linear_latency.png)
+
+![Linear Layer Speedup](plot_04b_linear_speedup.png)
 
 ## 5. Batch Size Ablation Study
 
