@@ -209,12 +209,11 @@ def plot_exp3_conv(data):
         int8_times.append(v['int8_e2e_ms'])
         int4_times.append(v['int4_e2e_ms'] if v['int4_e2e_ms'] is not None else 0)
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 10))
-
     x = np.arange(len(labels))
     width = 0.25
 
-    # Time comparison
+    # --- Plot 03a: Time comparison ---
+    fig, ax1 = plt.subplots(figsize=(16, 5))
     ax1.bar(x - width, fp32_times, width, label='FP32', color=C['fp32'], edgecolor='black', linewidth=0.3)
     ax1.bar(x, int8_times, width, label='INT8 (quant+conv)', color=C['int8'], edgecolor='black', linewidth=0.3)
     ax1.bar(x + width, int4_times, width, label='INT4 (quant+pack+conv)', color=C['int4'], edgecolor='black', linewidth=0.3)
@@ -223,11 +222,17 @@ def plot_exp3_conv(data):
     ax1.set_ylabel('Time (ms)')
     ax1.set_title('Per Conv-Layer-Shape: Time (FP32 vs INT8 vs INT4)')
     ax1.legend()
+    plt.tight_layout()
+    path_a = os.path.join(OUTPUT_DIR, 'plot_03a_conv_time.png')
+    plt.savefig(path_a, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved {path_a}")
 
-    # Speedup
+    # --- Plot 03b: Speedup ---
     int8_spd = [f / i8 if i8 > 0 else 0 for f, i8 in zip(fp32_times, int8_times)]
     int4_spd = [f / i4 if i4 > 0 else 0 for f, i4 in zip(fp32_times, int4_times)]
 
+    fig, ax2 = plt.subplots(figsize=(16, 5))
     ax2.bar(x - width / 2, int8_spd, width, label='INT8 speedup', color=C['int8'], edgecolor='black', linewidth=0.3)
     ax2.bar(x + width / 2, int4_spd, width, label='INT4 speedup', color=C['int4'], edgecolor='black', linewidth=0.3)
     ax2.axhline(y=1.0, color='gray', linestyle='--', alpha=0.7, label='Break-even')
@@ -236,16 +241,14 @@ def plot_exp3_conv(data):
     ax2.set_ylabel('Speedup vs FP32')
     ax2.set_title('Per Conv-Layer-Shape: Speedup vs FP32')
     ax2.legend()
-
     for i, (s8, s4) in enumerate(zip(int8_spd, int4_spd)):
         ax2.text(i - width / 2, s8 + 0.05, f'{s8:.2f}', ha='center', fontsize=6, color=C['int8'])
         ax2.text(i + width / 2, s4 + 0.05, f'{s4:.2f}', ha='center', fontsize=6, color=C['int4'])
-
     plt.tight_layout()
-    path = os.path.join(OUTPUT_DIR, 'plot_03_conv_layer_analysis.png')
-    plt.savefig(path, dpi=150, bbox_inches='tight')
+    path_b = os.path.join(OUTPUT_DIR, 'plot_03b_conv_speedup.png')
+    plt.savefig(path_b, dpi=150, bbox_inches='tight')
     plt.close()
-    print(f"  Saved {path}")
+    print(f"  Saved {path_b}")
 
 
 # ============================================================================
@@ -277,12 +280,8 @@ def plot_exp4_linear(data):
         int4_base_t.append(v['int4_baseline_ms'])
         int4_mod_t.append(v['int4_modiff_ms'])
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
-
     x = np.arange(len(labels))
     width = 0.13
-
-    # Time comparison
     offsets = [-2.5, -1.5, -0.5, 0.5, 1.5, 2.5]
     all_series = [
         ('FP32', fp32_t, C['fp32']),
@@ -292,36 +291,42 @@ def plot_exp4_linear(data):
         ('INT4 base', int4_base_t, C['int4_baseline']),
         ('INT4 MoDiff', int4_mod_t, C['int4']),
     ]
+
+    # --- Plot 04a: Latency ---
+    fig, ax1 = plt.subplots(figsize=(14, 6))
     for (lbl, vals, color), off in zip(all_series, offsets):
         ax1.bar(x + off * width, vals, width, label=lbl, color=color, edgecolor='black', linewidth=0.3)
-
     ax1.set_xticks(x)
     ax1.set_xticklabels(labels, fontsize=9)
     ax1.set_ylabel('Time (ms)')
     ax1.set_title('Per Linear-Layer-Shape: Latency')
     ax1.legend(fontsize=7, ncol=2)
+    plt.tight_layout()
+    path_a = os.path.join(OUTPUT_DIR, 'plot_04a_linear_latency.png')
+    plt.savefig(path_a, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved {path_a}")
 
-    # Speedup vs FP32
+    # --- Plot 04b: Speedup vs FP32 ---
     series_spd = []
     for lbl, vals, color in all_series[1:]:
         spd = [f / v if v > 0 else 0 for f, v in zip(fp32_t, vals)]
         series_spd.append((lbl, spd, color))
 
+    fig, ax2 = plt.subplots(figsize=(14, 6))
     for (lbl, spd, color), off in zip(series_spd, offsets[1:]):
         ax2.bar(x + off * width, spd, width, label=lbl, color=color, edgecolor='black', linewidth=0.3)
-
     ax2.axhline(y=1.0, color='gray', linestyle='--', alpha=0.7)
     ax2.set_xticks(x)
     ax2.set_xticklabels(labels, fontsize=9)
     ax2.set_ylabel('Speedup vs FP32')
     ax2.set_title('Per Linear-Layer-Shape: Speedup vs FP32')
     ax2.legend(fontsize=7, ncol=2)
-
     plt.tight_layout()
-    path = os.path.join(OUTPUT_DIR, 'plot_04_linear_layer_analysis.png')
-    plt.savefig(path, dpi=150, bbox_inches='tight')
+    path_b = os.path.join(OUTPUT_DIR, 'plot_04b_linear_speedup.png')
+    plt.savefig(path_b, dpi=150, bbox_inches='tight')
     plt.close()
-    print(f"  Saved {path}")
+    print(f"  Saved {path_b}")
 
 
 # ============================================================================
