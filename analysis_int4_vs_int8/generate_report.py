@@ -49,9 +49,8 @@ def load_data():
 # ============================================================================
 def plot_exp1_pipeline(data):
     exp = data['exp1_pipeline']
-    modes = [m for m in ['fp32', 'fp16', 'int8_baseline', 'int8', 'int8_static', 'int4_baseline', 'int4'] if m in exp]
+    modes = [m for m in ['fp32', 'fp16', 'int8_baseline', 'int8', 'int4_baseline', 'int4'] if m in exp]
     C['fp16'] = '#4CAF50'
-    C['int8_static'] = '#795548'
     fp32_t = exp['fp32']['time_per_sample']
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5.5))
@@ -419,7 +418,7 @@ def generate_report(data):
     R.append("| Mode | Time/Sample (ms) | Time/Step (ms) | Speedup vs FP32 |")
     R.append("|------|-----------------|---------------|-----------------|")
     fp32_t = exp1['fp32']['time_per_sample']
-    for mode in [m for m in ['fp32', 'fp16', 'int8_baseline', 'int8', 'int8_static', 'int4_baseline', 'int4'] if m in exp1]:
+    for mode in [m for m in ['fp32', 'fp16', 'int8_baseline', 'int8', 'int4_baseline', 'int4'] if m in exp1]:
         r = exp1[mode]
         spd = fp32_t / r['time_per_sample'] if r['time_per_sample'] > 0 else 0
         R.append(f"| {mode} | {r['time_per_sample']*1000:.1f} | {r['time_per_step_ms']:.2f} | {spd:.3f}× |")

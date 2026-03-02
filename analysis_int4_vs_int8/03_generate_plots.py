@@ -58,13 +58,12 @@ def plot_ldm_speedups(ldm_results):
     speedups = []
     times = []
     
-    mode_order = ['fp32', 'fp16', 'int8_baseline', 'int8', 'int8_static', 'int4_baseline', 'int4']
+    mode_order = ['fp32', 'fp16', 'int8_baseline', 'int8', 'int4_baseline', 'int4']
     colors = {
         'fp32': '#2196F3',
         'fp16': '#4CAF50', 
         'int8_baseline': '#FF9800',
         'int8': '#FF5722',
-        'int8_static': '#E91E63',
         'int4_baseline': '#9C27B0',
         'int4': '#673AB7',
     }

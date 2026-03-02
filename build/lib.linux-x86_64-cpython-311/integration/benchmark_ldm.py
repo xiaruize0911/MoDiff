@@ -87,6 +87,22 @@ except ImportError:
     HAS_INT8 = False
     print("Warning: INT8 not available")
 
+# INT8 Linear imports
+try:
+    from integration.int8_linear import (
+        OptimizedInt8Linear,
+        convert_model_to_int8_linear,
+        enable_modiff_mode_linear,
+        reset_modiff_state_linear,
+        set_calibrating_linear,
+        export_linear_static_scales,
+        apply_linear_static_scales,
+    )
+    HAS_INT8_LINEAR = True
+except ImportError:
+    HAS_INT8_LINEAR = False
+    print("Warning: INT8 Linear not available")
+
 # INT4 imports
 try:
     from integration.int4_optimized import (
@@ -101,6 +117,22 @@ try:
 except ImportError:
     HAS_INT4 = False
     print("Warning: INT4 not available")
+
+# INT4 Linear imports
+try:
+    from integration.int4_linear import (
+        OptimizedInt4Linear,
+        convert_model_to_int4_linear,
+        enable_modiff_mode_int4_linear,
+        reset_modiff_state_int4_linear,
+        set_calibrating_int4_linear,
+        export_int4_linear_static_scales,
+        apply_int4_linear_static_scales,
+    )
+    HAS_INT4_LINEAR = True
+except ImportError:
+    HAS_INT4_LINEAR = False
+    print("Warning: INT4 Linear not available")
 
 # FID (optional)
 try:
@@ -142,6 +174,16 @@ def count_conv_layers(model: nn.Module) -> int:
     if HAS_INT4:
         conv_types.append(OptimizedInt4Conv2d)
     return sum(1 for m in model.modules() if isinstance(m, tuple(conv_types)))
+
+
+def count_linear_layers(model: nn.Module) -> int:
+    """Count Linear layers in model."""
+    linear_types = [nn.Linear]
+    if HAS_INT8_LINEAR:
+        linear_types.append(OptimizedInt8Linear)
+    if HAS_INT4_LINEAR:
+        linear_types.append(OptimizedInt4Linear)
+    return sum(1 for m in model.modules() if isinstance(m, tuple(linear_types)))
 
 
 def convert_to_int8_baseline(model: nn.Module):
@@ -274,6 +316,11 @@ class BenchmarkRunner:
             print(f"Converting UNet to INT8 ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
             convert_model_to_optimized_int8(model.model.diffusion_model)
             
+            # Also convert linear layers to INT8 with MoDiff
+            if HAS_INT8_LINEAR:
+                print(f"Converting UNet linear layers to INT8 ({count_linear_layers(model.model.diffusion_model)} linear layers)...")
+                convert_model_to_int8_linear(model.model.diffusion_model)
+            
             # Initialize buffer pool for pre-allocated buffers
             from integration.buffer_pool import initialize_buffer_pool
             initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
@@ -286,9 +333,18 @@ class BenchmarkRunner:
                 config.scales = scales
                 config.is_calibrated = True
                 loaded = apply_static_scales(model.model.diffusion_model, scales)
-                print(f"✓ Loaded {loaded} INT8 layer scales (static quantization enabled)")
+                print(f"✓ Loaded {loaded} INT8 conv layer scales (static quantization enabled)")
+                # Load linear scales if present
+                if HAS_INT8_LINEAR:
+                    linear_scales = {k: v for k, v in scales.items() if k.startswith('linear:')}
+                    if linear_scales:
+                        clean_scales = {k.replace('linear:', ''): v for k, v in linear_scales.items()}
+                        loaded_lin = apply_linear_static_scales(model.model.diffusion_model, clean_scales)
+                        print(f"✓ Loaded {loaded_lin} INT8 linear layer scales")
             
             enable_modiff_mode_int8(model.model.diffusion_model, True)
+            if HAS_INT8_LINEAR:
+                enable_modiff_mode_linear(model.model.diffusion_model, True)
         elif mode == 'int8_static' and HAS_INT8:
             print(f"Converting UNet to INT8 Static ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
             # Generate calibration samples
@@ -315,6 +371,11 @@ class BenchmarkRunner:
             print(f"Converting UNet to INT4 ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
             convert_model_to_optimized_int4(model.model.diffusion_model)
             
+            # Also convert linear layers to INT4 with MoDiff
+            if HAS_INT4_LINEAR:
+                print(f"Converting UNet linear layers to INT4 ({count_linear_layers(model.model.diffusion_model)} linear layers)...")
+                convert_model_to_int4_linear(model.model.diffusion_model)
+            
             # Initialize buffer pool for pre-allocated buffers
             from integration.buffer_pool import initialize_buffer_pool
             initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
@@ -324,19 +385,29 @@ class BenchmarkRunner:
                 print(f"Loading INT4 calibration from {self.calibration_path}")
                 scales = torch.load(self.calibration_path, weights_only=True)
                 loaded = apply_int4_static_scales(model.model.diffusion_model, scales)
-                print(f"✓ Loaded static scales for {loaded} INT4 layers")
+                print(f"✓ Loaded static scales for {loaded} INT4 conv layers")
+                # Load INT4 linear scales if present
+                if HAS_INT4_LINEAR:
+                    linear_scales = {k: v for k, v in scales.items() if k.startswith('linear:')}
+                    if linear_scales:
+                        clean_scales = {k.replace('linear:', ''): v for k, v in linear_scales.items()}
+                        loaded_lin = apply_int4_linear_static_scales(model.model.diffusion_model, clean_scales)
+                        print(f"✓ Loaded {loaded_lin} INT4 linear layer scales")
             
             enable_modiff_mode_int4(model.model.diffusion_model, True)
+            if HAS_INT4_LINEAR:
+                enable_modiff_mode_int4_linear(model.model.diffusion_model, True)
         elif mode == 'int8_baseline' and HAS_INT8:
             print(f"Converting UNet to INT8 Baseline (INT8 kernels without MoDiff temporal caching) ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
             convert_model_to_optimized_int8(model.model.diffusion_model)
+            
+            # Also convert linear layers to INT8 (baseline = no temporal caching)
+            if HAS_INT8_LINEAR:
+                print(f"Converting UNet linear layers to INT8 ({count_linear_layers(model.model.diffusion_model)} linear layers)...")
+                convert_model_to_int8_linear(model.model.diffusion_model)
+            
             from integration.buffer_pool import initialize_buffer_pool
             initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
-            # Load static scales (same as MoDiff mode) so that _compute_activation_scale
-            # returns a cached float instead of calling abs().max().item() (CPU-GPU sync).
-            # Without this, baseline serializes GPU execution on every layer every step,
-            # making it appear slower than MoDiff for reasons unrelated to temporal caching.
-            # After this fix the ONLY difference vs int8 (MoDiff) is temporal caching.
             if self.calibration_path and os.path.exists(self.calibration_path):
                 print(f"Loading static calibration from {self.calibration_path}")
                 scales = torch.load(self.calibration_path, weights_only=True)
@@ -344,21 +415,41 @@ class BenchmarkRunner:
                 config.scales = scales
                 config.is_calibrated = True
                 loaded = apply_static_scales(model.model.diffusion_model, scales)
-                print(f"✓ Loaded {loaded} INT8 layer scales for baseline (static quantization enabled)")
+                print(f"✓ Loaded {loaded} INT8 conv layer scales for baseline (static quantization enabled)")
+                if HAS_INT8_LINEAR:
+                    linear_scales = {k: v for k, v in scales.items() if k.startswith('linear:')}
+                    if linear_scales:
+                        clean_scales = {k.replace('linear:', ''): v for k, v in linear_scales.items()}
+                        loaded_lin = apply_linear_static_scales(model.model.diffusion_model, clean_scales)
+                        print(f"✓ Loaded {loaded_lin} INT8 linear layer scales for baseline")
             enable_modiff_mode_int8(model.model.diffusion_model, False)  # Disable temporal caching
+            if HAS_INT8_LINEAR:
+                enable_modiff_mode_linear(model.model.diffusion_model, False)  # Disable temporal caching
         elif mode == 'int4_baseline' and HAS_INT4:
             print(f"Converting UNet to INT4 Baseline (INT4 kernels without MoDiff temporal caching) ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
             convert_model_to_optimized_int4(model.model.diffusion_model)
+            
+            # Also convert linear layers to INT4 (baseline = no temporal caching)
+            if HAS_INT4_LINEAR:
+                print(f"Converting UNet linear layers to INT4 ({count_linear_layers(model.model.diffusion_model)} linear layers)...")
+                convert_model_to_int4_linear(model.model.diffusion_model)
+            
             from integration.buffer_pool import initialize_buffer_pool
             initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
-            # Load static scales (same as MoDiff mode) — eliminates abs().max().item() sync.
-            # Without this, baseline is slower than MoDiff for reasons unrelated to temporal caching.
             if self.calibration_path and os.path.exists(self.calibration_path):
                 print(f"Loading INT4 calibration from {self.calibration_path}")
                 scales = torch.load(self.calibration_path, weights_only=True)
                 loaded = apply_int4_static_scales(model.model.diffusion_model, scales)
-                print(f"✓ Loaded static scales for {loaded} INT4 baseline layers")
+                print(f"✓ Loaded static scales for {loaded} INT4 baseline conv layers")
+                if HAS_INT4_LINEAR:
+                    linear_scales = {k: v for k, v in scales.items() if k.startswith('linear:')}
+                    if linear_scales:
+                        clean_scales = {k.replace('linear:', ''): v for k, v in linear_scales.items()}
+                        loaded_lin = apply_int4_linear_static_scales(model.model.diffusion_model, clean_scales)
+                        print(f"✓ Loaded {loaded_lin} INT4 linear layer scales for baseline")
             enable_modiff_mode_int4(model.model.diffusion_model, False)  # Disable temporal caching
+            if HAS_INT4_LINEAR:
+                enable_modiff_mode_int4_linear(model.model.diffusion_model, False)  # Disable temporal caching
         elif mode == 'int8_full_pipeline' and HAS_INT8:
             print(f"Converting UNet to Full INT8 Pipeline (no per-layer Q/DQ) ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
             # Full INT8: quantize once at input, stay quantized throughout
@@ -389,23 +480,39 @@ class BenchmarkRunner:
             print(f"✗ torch.compile failed: {e}")
     
     def _calibrate_int8(self, model, sampler, num_runs: int = 10):
-        """Calibrate INT8 quantization scales."""
+        """Calibrate INT8 quantization scales (conv + linear)."""
         print(f"Calibrating INT8 ({num_runs} runs)...")
         reset_calibration_int8()
         set_calibrating_int8(model.model.diffusion_model, True)
+        if HAS_INT8_LINEAR:
+            set_calibrating_linear(model.model.diffusion_model, True)
         
         with torch.no_grad():
             for _ in range(num_runs):
                 reset_modiff_state_int8(model.model.diffusion_model)
+                if HAS_INT8_LINEAR:
+                    reset_modiff_state_linear(model.model.diffusion_model)
                 sampler.sample(S=5, batch_size=2, shape=self.shape, eta=0.0, verbose=False)
         
         get_calibration_config_int8().finalize()
         set_calibrating_int8(model.model.diffusion_model, False)
+        if HAS_INT8_LINEAR:
+            set_calibrating_linear(model.model.diffusion_model, False)
         num_layers = len(get_calibration_config_int8().scales)
+        
+        # Merge linear scales into the calibration dict
+        all_scales = dict(get_calibration_config_int8().scales)
+        if HAS_INT8_LINEAR:
+            linear_scales = export_linear_static_scales(model.model.diffusion_model)
+            for k, v in linear_scales.items():
+                all_scales[f'linear:{k}'] = v
+            print(f"Calibrated {num_layers} conv layers + {len(linear_scales)} linear layers")
+        else:
+            print(f"Calibrated {num_layers} layers")
+        
         if self.calibration_path:
-            torch.save(get_calibration_config_int8().scales, self.calibration_path)
+            torch.save(all_scales, self.calibration_path)
             print(f"✓ Saved INT8 static scales: {self.calibration_path}")
-        print(f"Calibrated {num_layers} layers")
     
     def _calibrate_int4(self, model, sampler, num_runs: int = 5):
         """Calibrate INT4 quantization scales (dynamic to static transition)."""
@@ -413,21 +520,34 @@ class BenchmarkRunner:
         from integration.int4_optimized import set_calibrating_int4
         
         set_calibrating_int4(model.model.diffusion_model, True)
+        if HAS_INT4_LINEAR:
+            set_calibrating_int4_linear(model.model.diffusion_model, True)
         
         with torch.no_grad():
             for _ in range(num_runs):
                 reset_modiff_state_int4(model.model.diffusion_model)
+                if HAS_INT4_LINEAR:
+                    reset_modiff_state_int4_linear(model.model.diffusion_model)
                 # Sample a few steps to get representative activations
                 sampler.sample(S=5, batch_size=self.batch_size, shape=self.shape, eta=0.0, verbose=False)
         
         set_calibrating_int4(model.model.diffusion_model, False)
+        if HAS_INT4_LINEAR:
+            set_calibrating_int4_linear(model.model.diffusion_model, False)
         scales = export_int4_static_scales(model.model.diffusion_model)
+        
+        # Merge linear scales
+        if HAS_INT4_LINEAR:
+            linear_scales = export_int4_linear_static_scales(model.model.diffusion_model)
+            for k, v in linear_scales.items():
+                scales[f'linear:{k}'] = v
+            print(f"✓ Calibrated INT4 conv layers: {len(scales) - len(linear_scales)}, linear: {len(linear_scales)}")
+        
         if len(scales) == 0:
             print("Warning: INT4 calibration exported 0 scales; falling back to dynamic scaling")
         if self.calibration_path:
             torch.save(scales, self.calibration_path)
             print(f"✓ Saved INT4 static scales: {self.calibration_path}")
-        print(f"✓ Calibrated INT4 layers: {len(scales)}")
         print("✓ INT4 Calibration finished (Static scales locked)")
     
     def _generate_samples(self, model, sampler, mode: str, num_samples: int,
@@ -443,6 +563,10 @@ class BenchmarkRunner:
             reset_modiff_state_int8(model.model.diffusion_model)
         elif mode in ('int4', 'int4_baseline') and HAS_INT4:
             reset_modiff_state_int4(model.model.diffusion_model)
+        if mode in ('int8', 'int8_static', 'int8_baseline') and HAS_INT8_LINEAR:
+            reset_modiff_state_linear(model.model.diffusion_model)
+        elif mode in ('int4', 'int4_baseline') and HAS_INT4_LINEAR:
+            reset_modiff_state_int4_linear(model.model.diffusion_model)
         with torch.inference_mode():
             sampler.sample(S=self.steps, batch_size=self.batch_size, shape=self.shape, eta=0.0, verbose=False)
         torch.cuda.synchronize()
@@ -459,6 +583,10 @@ class BenchmarkRunner:
                 reset_modiff_state_int8(model.model.diffusion_model)
             elif mode in ('int4', 'int4_baseline') and HAS_INT4:
                 reset_modiff_state_int4(model.model.diffusion_model)
+            if mode in ('int8', 'int8_static', 'int8_baseline') and HAS_INT8_LINEAR:
+                reset_modiff_state_linear(model.model.diffusion_model)
+            elif mode in ('int4', 'int4_baseline') and HAS_INT4_LINEAR:
+                reset_modiff_state_int4_linear(model.model.diffusion_model)
             # Note: baseline modes have state reset but MoDiff optimizations disabled
             
             torch.cuda.synchronize()

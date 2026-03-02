@@ -249,26 +249,134 @@ class LayerProfiler:
 # Experiment 1: Full Pipeline Speedup
 # ============================================================================
 
+def _run_calibration_int8(unet, sampler, steps, batch_size, shape, num_cal_runs=3):
+    """Calibrate INT8 static activation scales via absmax accumulation.
+
+    Runs ``num_cal_runs`` denoising passes with ``set_calibrating=True`` so every
+    OptimizedInt8Conv2d/OptimizedInt8Linear accumulates per-layer absmax statistics.
+    Finalising locks those into permanent static scales – on subsequent inference
+    steps the expensive per-step absmax reduction is skipped entirely.
+    """
+    from integration.int8_optimized import (
+        reset_calibration,
+        set_calibrating,
+        get_calibration_config,
+        apply_static_scales,
+    )
+    from integration.int8_linear import (
+        set_calibrating_linear,
+        export_linear_static_scales,
+        apply_linear_static_scales,
+    )
+    print(f"  Calibrating INT8 ({num_cal_runs} runs × {steps} steps)...")
+    reset_calibration()
+    set_calibrating(unet, True)
+    set_calibrating_linear(unet, True)
+    with torch.no_grad(), torch.amp.autocast('cuda', dtype=torch.float16):
+        for _ in range(num_cal_runs):
+            sampler.sample(S=steps, batch_size=batch_size, shape=shape, eta=0.0, verbose=False)
+    get_calibration_config().finalize()
+    set_calibrating(unet, False)
+    set_calibrating_linear(unet, False)
+
+    # Collect conv + linear scales into one dict (linear keys prefixed with 'linear:')
+    scales = dict(get_calibration_config().scales)
+    lin_scales = export_linear_static_scales(unet)
+    for k, v in lin_scales.items():
+        scales[f'linear:{k}'] = v
+    print(f"  Collected {len(scales)} static scales ({len(lin_scales)} linear).")
+    return scales
+
+
+def _apply_int8_scales(unet, scales):
+    """Push a pre-computed INT8 scale dict onto a freshly-converted model."""
+    from integration.int8_optimized import apply_static_scales, get_calibration_config
+    from integration.int8_linear import apply_linear_static_scales
+    config = get_calibration_config()
+    config.is_calibrated = True
+    apply_static_scales(unet, scales)
+    lin_scales = {k.replace('linear:', ''): v for k, v in scales.items() if k.startswith('linear:')}
+    if lin_scales:
+        apply_linear_static_scales(unet, lin_scales)
+
+
+def _run_calibration_int4(unet, sampler, steps, batch_size, shape, num_cal_runs=3):
+    """Calibrate INT4 static activation scales."""
+    from integration.int4_optimized import set_calibrating_int4, export_int4_static_scales
+    from integration.int4_linear import (
+        set_calibrating_int4_linear,
+        export_int4_linear_static_scales,
+    )
+    print(f"  Calibrating INT4 ({num_cal_runs} runs × {steps} steps)...")
+    set_calibrating_int4(unet, True)
+    set_calibrating_int4_linear(unet, True)
+    with torch.no_grad(), torch.amp.autocast('cuda', dtype=torch.float16):
+        for _ in range(num_cal_runs):
+            sampler.sample(S=steps, batch_size=batch_size, shape=shape, eta=0.0, verbose=False)
+    set_calibrating_int4(unet, False)
+    set_calibrating_int4_linear(unet, False)
+
+    scales = export_int4_static_scales(unet)
+    lin_scales = export_int4_linear_static_scales(unet)
+    for k, v in lin_scales.items():
+        scales[f'linear:{k}'] = v
+    print(f"  Collected {len(scales)} INT4 static scales ({len(lin_scales)} linear).")
+    return scales
+
+
+def _apply_int4_scales(unet, scales):
+    """Push a pre-computed INT4 scale dict onto a freshly-converted model."""
+    from integration.int4_optimized import apply_int4_static_scales
+    from integration.int4_linear import apply_int4_linear_static_scales
+    apply_int4_static_scales(unet, scales)
+    lin_scales = {k.replace('linear:', ''): v for k, v in scales.items() if k.startswith('linear:')}
+    if lin_scales:
+        apply_int4_linear_static_scales(unet, lin_scales)
+
+
 def experiment_1_pipeline_speedup(steps=50, num_samples=8, batch_size=8):
-    """Run benchmark_ldm.py for each mode and record time/sample."""
+    """Run benchmark for each mode with forced static calibration.
+
+    Static calibration eliminates the per-step absmax reduction kernel,
+    which is the dominant overhead that prevents INT8/INT4 from beating FP32
+    in dynamic-quantization mode.
+
+    Calibration strategy
+    --------------------
+    * INT8/INT8-baseline share calibration (same scale dict, modiff flag differs).
+    * INT4/INT4-baseline share calibration similarly.
+    * Calibration uses ``CAL_STEPS`` denoising steps × ``CAL_RUNS`` passes —
+      enough to collect representative activation statistics quickly.
+    """
     print("\n" + "=" * 70)
-    print("EXPERIMENT 1: Full Pipeline Speedup")
+    print("EXPERIMENT 1: Full Pipeline Speedup (with forced static calibration)")
     print("=" * 70)
 
     from ldm.models.diffusion.ddim import DDIMSampler
     shape = (4, 32, 32)
-    modes = ['fp32', 'int8_baseline', 'int8', 'int4_baseline', 'int4']
+    modes = ['fp32', 'fp16', 'int8_baseline', 'int8', 'int4_baseline', 'int4']
     results = {}
+
+    # Calibration hyper-params: short passes are sufficient to gather absmax stats.
+    CAL_STEPS = min(steps, 20)   # max 20 denoising steps per cal run
+    CAL_RUNS  = 3                 # 3 passes × CAL_STEPS steps
+
+    # Shared calibration dicts – populated the first time we see an int8/int4 mode
+    # and reused for the sibling baseline/MoDiff mode.
+    int8_calib_scales: dict | None = None
+    int4_calib_scales: dict | None = None
 
     for mode in modes:
         print(f"\n--- Mode: {mode} ---")
         model = load_ldm_model()
         unet = model.model.diffusion_model
+        sampler = DDIMSampler(model)
 
         reset_fn = lambda: None
 
-        if mode == 'fp32':
-            pass
+        if mode in ('fp32', 'fp16'):
+            pass  # no conversion needed
+
         elif mode in ('int8', 'int8_baseline'):
             from integration.int8_optimized import (
                 convert_model_to_optimized_int8,
@@ -280,14 +388,22 @@ def experiment_1_pipeline_speedup(steps=50, num_samples=8, batch_size=8):
                 enable_modiff_mode_linear,
                 reset_modiff_state_linear,
             )
+            from integration.buffer_pool import initialize_buffer_pool
+
             convert_model_to_optimized_int8(unet)
             convert_model_to_int8_linear(unet)
-            from integration.buffer_pool import initialize_buffer_pool
             initialize_buffer_pool(unet, max_batch_size=batch_size, device='cuda')
-            enable_modiff = mode == 'int8'
+
+            # Calibrate once; reuse cached scales for the paired mode
+            if int8_calib_scales is None:
+                int8_calib_scales = _run_calibration_int8(unet, sampler, CAL_STEPS, batch_size, shape, CAL_RUNS)
+            _apply_int8_scales(unet, int8_calib_scales)
+
+            enable_modiff = (mode == 'int8')
             enable_int8(unet, enable_modiff)
             enable_modiff_mode_linear(unet, enable_modiff)
             reset_fn = lambda: (reset_int8(unet), reset_modiff_state_linear(unet))
+
         elif mode in ('int4', 'int4_baseline'):
             from integration.int4_optimized import (
                 convert_model_to_optimized_int4,
@@ -299,20 +415,27 @@ def experiment_1_pipeline_speedup(steps=50, num_samples=8, batch_size=8):
                 enable_modiff_mode_int4_linear,
                 reset_modiff_state_int4_linear,
             )
+            from integration.buffer_pool import initialize_buffer_pool
+
             convert_model_to_optimized_int4(unet)
             convert_model_to_int4_linear(unet)
-            from integration.buffer_pool import initialize_buffer_pool
             initialize_buffer_pool(unet, max_batch_size=batch_size, device='cuda')
-            enable_modiff = mode == 'int4'
+
+            if int4_calib_scales is None:
+                int4_calib_scales = _run_calibration_int4(unet, sampler, CAL_STEPS, batch_size, shape, CAL_RUNS)
+            _apply_int4_scales(unet, int4_calib_scales)
+
+            enable_modiff = (mode == 'int4')
             enable_int4(unet, enable_modiff)
             enable_modiff_mode_int4_linear(unet, enable_modiff)
             reset_fn = lambda: (reset_int4(unet), reset_modiff_state_int4_linear(unet))
 
-        sampler = DDIMSampler(model)
-
-        # Warmup
+        # Warmup: full step count so cuDNN benchmark selects optimal kernels.
+        # All non-FP32 modes use FP16 autocast so attention/norm also run
+        # in FP16 (matches benchmark_ldm.py's use_autocast behaviour).
+        use_autocast = (mode != 'fp32')
         reset_fn()
-        with torch.inference_mode():
+        with torch.inference_mode(), torch.amp.autocast('cuda', enabled=use_autocast, dtype=torch.float16):
             sampler.sample(S=steps, batch_size=batch_size, shape=shape, eta=0.0, verbose=False)
         torch.cuda.synchronize()
 
@@ -324,7 +447,7 @@ def experiment_1_pipeline_speedup(steps=50, num_samples=8, batch_size=8):
             reset_fn()
             torch.cuda.synchronize()
             start = time.time()
-            with torch.inference_mode():
+            with torch.inference_mode(), torch.amp.autocast('cuda', enabled=use_autocast, dtype=torch.float16):
                 sampler.sample(S=steps, batch_size=bs, shape=shape, eta=0.0, verbose=False)
             torch.cuda.synchronize()
             total_time += time.time() - start
@@ -344,9 +467,9 @@ def experiment_1_pipeline_speedup(steps=50, num_samples=8, batch_size=8):
 
         cleanup_model(model)
 
-    # Compute speedups
+    # Compute speedups vs FP32
     fp32_t = results['fp32']['time_per_sample']
-    for mode, r in results.items():
+    for m, r in results.items():
         r['speedup'] = fp32_t / r['time_per_sample'] if r['time_per_sample'] > 0 else 0
 
     return results

@@ -8,66 +8,58 @@
   },
   "exp1_pipeline": {
     "fp32": {
-      "total_time": 77.80867958068848,
+      "total_time_s": 78.51352858543396,
       "num_samples": 128,
-      "time_per_sample": 0.6078803092241287,
-      "time_per_step_ms": 3.0394015461206436,
+      "time_per_sample": 0.6133869420737028,
+      "time_per_step_ms": 3.066934710368514,
       "steps": 200,
-      "batch_size": 32
+      "batch_size": 32,
+      "speedup": 1.0
     },
     "fp16": {
-      "total_time": 40.37855625152588,
+      "total_time_s": 39.69948720932007,
       "num_samples": 128,
-      "time_per_sample": 0.31545747071504593,
-      "time_per_step_ms": 1.5772873535752296,
-      "speedup": 1.9269802292088671,
+      "time_per_sample": 0.31015224382281303,
+      "time_per_step_ms": 1.5507612191140652,
       "steps": 200,
-      "batch_size": 32
-    },
-    "int8": {
-      "total_time": 47.14071297645569,
-      "num_samples": 128,
-      "time_per_sample": 0.36828682012856007,
-      "time_per_step_ms": 1.8414341006428003,
-      "speedup": 1.650562214015512,
-      "steps": 200,
-      "batch_size": 32
+      "batch_size": 32,
+      "speedup": 1.977696290419633
     },
     "int8_baseline": {
-      "total_time": 40.09999132156372,
+      "total_time_s": 42.61846446990967,
       "num_samples": 128,
-      "time_per_sample": 0.31328118219971657,
-      "time_per_step_ms": 1.5664059109985828,
-      "speedup": 1.9403664942652232,
+      "time_per_sample": 0.3329567536711693,
+      "time_per_step_ms": 1.6647837683558464,
       "steps": 200,
-      "batch_size": 32
+      "batch_size": 32,
+      "speedup": 1.842242078920221
     },
-    "int8_static": {
-      "total_time": 46.13928484916687,
+    "int8": {
+      "total_time_s": 47.0602707862854,
       "num_samples": 128,
-      "time_per_sample": 0.3604631628841162,
-      "time_per_step_ms": 1.8023158144205809,
-      "speedup": 1.6863867707323916,
+      "time_per_sample": 0.3676583655178547,
+      "time_per_step_ms": 1.8382918275892735,
       "steps": 200,
-      "batch_size": 32
-    },
-    "int4": {
-      "total_time": 43.58402729034424,
-      "num_samples": 128,
-      "time_per_sample": 0.34050021320581436,
-      "time_per_step_ms": 1.7025010660290718,
-      "speedup": 1.7852567653362885,
-      "steps": 200,
-      "batch_size": 32
+      "batch_size": 32,
+      "speedup": 1.6683611733129862
     },
     "int4_baseline": {
-      "total_time": 37.02189588546753,
+      "total_time_s": 39.19187831878662,
       "num_samples": 128,
-      "time_per_sample": 0.2892335616052151,
-      "time_per_step_ms": 1.4461678080260754,
-      "speedup": 2.10169354431228,
+      "time_per_sample": 0.3061865493655205,
+      "time_per_step_ms": 1.5309327468276024,
       "steps": 200,
-      "batch_size": 32
+      "batch_size": 32,
+      "speedup": 2.003311194906382
+    },
+    "int4": {
+      "total_time_s": 43.62925434112549,
+      "num_samples": 128,
+      "time_per_sample": 0.3408535495400429,
+      "time_per_step_ms": 1.7042677477002144,
+      "steps": 200,
+      "batch_size": 32,
+      "speedup": 1.7995615504119702
     }
   },
   "exp2_breakdown": {

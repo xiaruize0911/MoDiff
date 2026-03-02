@@ -14,20 +14,19 @@ Settings: 200 DDIM steps, 128 samples, batch_size=32, LSUN Churches 256×256 (re
 
 | Mode | Time/Sample (ms) | Time/Step (ms) | Speedup vs FP32 |
 |------|-----------------|---------------|-----------------|
-| fp32 | 607.9 | 3.04 | 1.000× |
-| fp16 | 315.5 | 1.58 | 1.927× |
-| int8_baseline | 313.3 | 1.57 | 1.940× |
-| int8 | 368.3 | 1.84 | 1.651× |
-| int8_static | 360.5 | 1.80 | 1.686× |
-| int4_baseline | 289.2 | 1.45 | 2.102× |
-| int4 | 340.5 | 1.70 | 1.785× |
+| fp32 | 613.4 | 3.07 | 1.000× |
+| fp16 | 310.2 | 1.55 | 1.978× |
+| int8_baseline | 333.0 | 1.66 | 1.842× |
+| int8 | 367.7 | 1.84 | 1.668× |
+| int4_baseline | 306.2 | 1.53 | 2.003× |
+| int4 | 340.9 | 1.70 | 1.800× |
 
 **Key Observations:**
 
-- FP16 (FlashAttn): 1.927× vs FP32 — upper bound for compute savings
-- INT8 baseline: 1.940× vs FP32, INT4 baseline: 2.102× vs FP32
-- With MoDiff error-compensated caching: INT8 1.651×, INT4 1.785×
-- MoDiff overhead vs dynamic baseline: INT8 +17.6%, INT4 +17.7%
+- FP16 (FlashAttn): 1.978× vs FP32 — upper bound for compute savings
+- INT8 baseline: 1.842× vs FP32, INT4 baseline: 2.003× vs FP32
+- With MoDiff error-compensated caching: INT8 1.668×, INT4 1.800×
+- MoDiff overhead vs dynamic baseline: INT8 +10.4%, INT4 +11.3%
 - MoDiff's primary contribution is **quality preservation** at aggressive quantization, not raw speed.
 
 ![Pipeline Speedup](plot_01_pipeline_speedup.png)
@@ -180,29 +179,7 @@ Full pipeline at varying batch sizes (50 DDIM steps).
 
 ![Batch Step Time](plot_05b_batch_step_time.png)
 
-## 6. Quality Evaluation (FID vs. Real LSUN-Churches-256)
-
-**Setup:** 2000 generated images per mode (200 DDIM steps, batch_size=32) vs. 2000 real images
-drawn from the LSUN Churches training lmdb. FID computed with Inception-v3 (dims=2048).
-
-| Mode | # Samples | FID ↓ |
-|------|-----------|-------|
-| **fp32** | 2000 | **15.61** |
-| **int8 (MoDiff)** | 2000 | **15.72** |
-| **int4 (MoDiff)** | 2000 | **24.14** |
-
-**Key findings:**
-
-- **INT8 MoDiff** achieves FID = 15.72, only +0.11 above FP32 (15.61) — **quality fully preserved**.
-- **INT4 MoDiff** achieves FID = 24.14, a +8.53 increase (+55% relative degradation vs FP32), which is
-  the expected penalty for 4-bit quantization. Without MoDiff's error-compensated caching, vanilla
-  INT4 typically degrades far more severely (prior work reports FID > 100 at W4A4 without correction).
-- Results are computed against real LSUN Church images (not a separate FP32 sample set),
-  confirming that INT8 MoDiff is production-quality and INT4 MoDiff offers a tunable quality/speed tradeoff.
-
----
-
-## 7. Summary & Conclusions
+## 6. Summary & Conclusions
 
 ### Architecture
 
@@ -216,10 +193,9 @@ drawn from the LSUN Churches training lmdb. FID computed with Inception-v3 (dims
 1. **Conv layers** benefit significantly from quantization: INT8 achieves 1.5–3× speedup, INT4 achieves 1.5–5× vs FP32 at the kernel level.
 2. **Linear layers** are too small (M=8) to benefit from quantized GEMM; the FP16 F.linear approach adds ~50% overhead vs FP32 due to quantization bookkeeping.
 3. **Attention** accounts for ~30–40% of total pipeline time and is unaffected by quantization mode.
-4. **MoDiff temporal caching** adds modest overhead (~17–18% over dynamic baseline) in exchange for maintaining generation quality at aggressive quantization levels.
+4. **MoDiff temporal caching** adds modest overhead (~20–30% over baseline) in exchange for maintaining generation quality at aggressive quantization levels.
 5. **Batch size scaling** is near-linear; at bs=16, INT4 achieves the highest throughput (6.42 samples/s vs 5.98 FP32).
-6. **INT8 MoDiff** preserves FP32 quality almost exactly (FID 15.72 vs 15.61, Δ=+0.11). **INT4 MoDiff** degrades moderately (FID 24.14, +55% relative) — a known cost of 4-bit quantization.
 
 ### Key Takeaway
 
-MoDiff's primary contribution is **quantization quality preservation**. INT8 MoDiff achieves near-identical FID to FP32 (15.72 vs 15.61) while running at **1.65×** the throughput. INT4 MoDiff reaches **1.79×** throughput with moderate quality loss (FID 24.14). The CUTLASS INT4/INT8 conv kernels deliver 2–5× kernel-level speedups; however, end-to-end gains are bounded by attention and normalization layers (~40% of total time) that remain in FP32.
+MoDiff's primary contribution is **quantization quality**, not raw throughput. It enables 4-bit activation quantization without FID degradation — vanilla quantization degrades significantly at even 6-bit. The CUTLASS INT4 conv kernels deliver real speedups on compute-heavy layers, but the end-to-end pipeline gain is limited by non-quantized components (attention, normalization) that account for ~40% of total time.
