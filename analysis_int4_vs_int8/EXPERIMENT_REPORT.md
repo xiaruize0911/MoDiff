@@ -4,7 +4,7 @@
 **SM Capability:** 8.6  
 **PyTorch:** 2.4.1+cu124  
 **CUDA:** 12.4  
-**Timestamp:** 2026-03-01 12:02:03  
+**Timestamp:** 2026-03-02 10:03:46  
 
 ---
 
@@ -32,45 +32,47 @@ Settings: 200 DDIM steps, 128 samples, batch_size=32, LSUN Churches 256×256 (re
 
 ## 2. Per-Component Pipeline Breakdown
 
-Measured via CUDA-event forward hooks on the full UNet (50 steps × 2 batches × 8 samples).
+Measured via CUDA-event forward hooks (50 steps × 2 batches × 32 samples, batch\_size=32).  
+— FP32 mode: no autocast (identical to Exp.1 FP32 baseline).  
+— INT8/INT4 modes: FP16 autocast enabled (identical to Exp.1 conditions).
 
 ### FP32
 
-Wall time: 3.70s, Time/step: 4.63ms
+Wall time: 9.86s, Time/step: 3.08ms
 
 | Component | Total (ms) | Calls | Avg (ms) | % of Total |
 |-----------|-----------|-------|---------|-----------|
-| Conv2d(FP32) | 1390.4 | 8900 | 0.1562 | 54.5% |
-| Attention | 961.2 | 2100 | 0.4577 | 37.7% |
-| GroupNorm | 115.2 | 2200 | 0.0524 | 4.5% |
-| Linear(FP32) | 62.6 | 3700 | 0.0169 | 2.5% |
-| SiLU | 20.2 | 3700 | 0.0054 | 0.8% |
+| Attention | 3512.1 | 2100 | 1.6725 | 49.1% |
+| Conv2d(FP32) | 3274.4 | 8900 | 0.3679 | 45.8% |
+| GroupNorm | 266.5 | 2200 | 0.1212 | 3.7% |
+| Linear(FP32) | 68.6 | 3700 | 0.0185 | 1.0% |
+| SiLU | 29.3 | 3700 | 0.0079 | 0.4% |
 
 ### INT8
 
-Wall time: 4.67s, Time/step: 5.84ms
+Wall time: 6.24s, Time/step: 1.95ms
 
 | Component | Total (ms) | Calls | Avg (ms) | % of Total |
 |-----------|-----------|-------|---------|-----------|
-| Int8Conv2d | 1287.0 | 7000 | 0.1839 | 42.2% |
-| Attention | 989.7 | 2100 | 0.4713 | 32.5% |
-| Int8Linear | 461.5 | 3700 | 0.1247 | 15.1% |
-| GroupNorm | 152.6 | 2200 | 0.0694 | 5.0% |
-| Conv2d(FP32) | 130.2 | 1900 | 0.0685 | 4.3% |
-| SiLU | 28.1 | 3700 | 0.0076 | 0.9% |
+| Int8Conv2d | 2734.3 | 7000 | 0.3906 | 69.4% |
+| Attention | 511.4 | 2100 | 0.2435 | 13.0% |
+| GroupNorm | 268.1 | 2200 | 0.1218 | 6.8% |
+| Conv2d(FP32) | 214.2 | 1900 | 0.1128 | 5.4% |
+| Int8Linear | 183.8 | 3700 | 0.0497 | 4.7% |
+| SiLU | 29.2 | 3700 | 0.0079 | 0.7% |
 
 ### INT4
 
-Wall time: 4.40s, Time/step: 5.50ms
+Wall time: 5.99s, Time/step: 1.87ms
 
 | Component | Total (ms) | Calls | Avg (ms) | % of Total |
 |-----------|-----------|-------|---------|-----------|
-| Attention | 988.7 | 2100 | 0.4708 | 35.6% |
-| Int4Conv2d | 974.0 | 7000 | 0.1391 | 35.1% |
-| Int4Linear | 479.3 | 3700 | 0.1296 | 17.3% |
-| GroupNorm | 148.8 | 2200 | 0.0676 | 5.4% |
-| Conv2d(FP32) | 141.1 | 1900 | 0.0743 | 5.1% |
-| SiLU | 45.6 | 3700 | 0.0123 | 1.6% |
+| Int4Conv2d | 2289.2 | 7000 | 0.3270 | 63.8% |
+| Attention | 532.5 | 2100 | 0.2535 | 14.9% |
+| GroupNorm | 283.1 | 2200 | 0.1287 | 7.9% |
+| Conv2d(FP32) | 227.8 | 1900 | 0.1199 | 6.4% |
+| Int4Linear | 223.1 | 3700 | 0.0603 | 6.2% |
+| SiLU | 29.8 | 3700 | 0.0080 | 0.8% |
 
 ![Component Breakdown Pies](plot_02_component_breakdown.png)
 
@@ -79,12 +81,12 @@ Wall time: 4.40s, Time/step: 5.50ms
 ### Cross-Mode Comparison
 
 | Component | FP32 (ms) | INT8 (ms) | INT4 (ms) | INT8 vs FP32 | INT4 vs FP32 |
-|-----------|----------|----------|----------|-------------|-------------|
-| Conv2d | 1390.4 | 1417.2 | 1115.1 | 1.02× | 0.80× |
-| Attention | 961.2 | 989.7 | 988.7 | 1.03× | 1.03× |
-| Linear | 62.6 | 461.5 | 479.3 | 7.38× | 7.66× |
-| GroupNorm | 115.2 | 152.6 | 148.8 | 1.32× | 1.29× |
-| SiLU | 20.2 | 28.1 | 45.6 | 1.40× | 2.26× |
+|---|---|---|---|---|---|
+| Conv2d | 3274.4 | 2948.6 | 2517.0 | 0.90× | 0.77× |
+| Attention | 3512.1 | 511.4 | 532.5 | 0.15× | 0.15× |
+| Linear | 68.6 | 183.8 | 223.1 | 2.68× | 3.25× |
+| GroupNorm | 266.5 | 268.1 | 283.1 | 1.01× | 1.06× |
+| SiLU | 29.3 | 29.2 | 29.8 | 1.00× | 1.02× |
 
 ## 3. Per Conv-Layer-Shape Analysis
 

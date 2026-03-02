@@ -1,0 +1,17 @@
+\begin{table}[htbp]
+\centering
+\small
+\caption{Full pipeline inference speed (200 DDIM steps, 128 samples, batch size 32, LSUN Churches 256$\times$256).}
+\label{tab:pipeline_speedup}
+\begin{tabular}{lrrr}
+\toprule
+Mode & Time/Sample (ms) & Time/Step (ms) & Speedup vs FP32 \\
+\midrule
+fp32 & 613.4 & 3.07 & 1.000$\times$ \\
+int8\_baseline & 333.0 & 1.66 & 1.842$\times$ \\
+int8 & 367.7 & 1.84 & 1.668$\times$ \\
+int4\_baseline & 306.2 & 1.53 & 2.003$\times$ \\
+int4 & 340.9 & 1.70 & 1.800$\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}

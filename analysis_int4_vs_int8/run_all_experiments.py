@@ -487,6 +487,7 @@ def experiment_2_breakdown(steps=50, num_batches=2, batch_size=8):
 
     from ldm.models.diffusion.ddim import DDIMSampler
     shape = (4, 32, 32)
+    # fp32 = no autocast, int8/int4 = FP16 autocast + calibrated static scales
     modes = ['fp32', 'int8', 'int4']
     results = {}
 
@@ -497,7 +498,7 @@ def experiment_2_breakdown(steps=50, num_batches=2, batch_size=8):
         reset_fn = lambda: None
 
         if mode == 'fp32':
-            pass
+            pass  # plain model, no quantized layers
         elif mode == 'int8':
             from integration.int8_optimized import (
                 convert_model_to_optimized_int8,
@@ -516,6 +517,10 @@ def experiment_2_breakdown(steps=50, num_batches=2, batch_size=8):
             enable_int8(unet, True)
             enable_modiff_mode_linear(unet, True)
             reset_fn = lambda: (reset_int8(unet), reset_modiff_state_linear(unet))
+            sampler = DDIMSampler(model)
+            CAL_STEPS = min(steps, 20)
+            int8_scales = _run_calibration_int8(unet, sampler, CAL_STEPS, batch_size, shape, num_cal_runs=3)
+            _apply_int8_scales(unet, int8_scales)
         elif mode == 'int4':
             from integration.int4_optimized import (
                 convert_model_to_optimized_int4,
@@ -534,12 +539,20 @@ def experiment_2_breakdown(steps=50, num_batches=2, batch_size=8):
             enable_int4(unet, True)
             enable_modiff_mode_int4_linear(unet, True)
             reset_fn = lambda: (reset_int4(unet), reset_modiff_state_int4_linear(unet))
+            sampler = DDIMSampler(model)
+            CAL_STEPS = min(steps, 20)
+            int4_scales = _run_calibration_int4(unet, sampler, CAL_STEPS, batch_size, shape, num_cal_runs=3)
+            _apply_int4_scales(unet, int4_scales)
 
-        sampler = DDIMSampler(model)
+        if mode == 'fp32':
+            sampler = DDIMSampler(model)
+
+        # fp32: no autocast; int8/int4: FP16 autocast (matching exp1 inference conditions)
+        use_autocast = (mode != 'fp32')
 
         # Warmup (no hooks)
         reset_fn()
-        with torch.inference_mode():
+        with torch.inference_mode(), torch.amp.autocast('cuda', enabled=use_autocast, dtype=torch.float16):
             sampler.sample(S=steps, batch_size=batch_size, shape=shape, eta=0.0, verbose=False)
         torch.cuda.synchronize()
 
@@ -552,7 +565,7 @@ def experiment_2_breakdown(steps=50, num_batches=2, batch_size=8):
         wall_start = time.time()
         for _ in range(num_batches):
             reset_fn()
-            with torch.inference_mode():
+            with torch.inference_mode(), torch.amp.autocast('cuda', enabled=use_autocast, dtype=torch.float16):
                 sampler.sample(S=steps, batch_size=batch_size, shape=shape, eta=0.0, verbose=False)
         torch.cuda.synchronize()
         wall_time = time.time() - wall_start

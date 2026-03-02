@@ -1,0 +1,35 @@
+\begin{table}[htbp]
+\centering
+\small
+\caption{Batch-size ablation: time per sample (50 DDIM steps).}
+\label{tab:batch_latency}
+\begin{tabular}{lrrrrr}
+\toprule
+Batch Size & FP32 (ms) & INT8 (ms) & INT8/FP32 & INT4 (ms) & INT4/FP32 \\
+\midrule
+1 & 1190.9 & 1333.6 & 0.893$\times$ & 1207.2 & 0.987$\times$ \\
+2 & 588.9 & 626.2 & 0.940$\times$ & 612.1 & 0.962$\times$ \\
+4 & 330.8 & 343.7 & 0.962$\times$ & 331.7 & 0.997$\times$ \\
+8 & 201.5 & 209.0 & 0.964$\times$ & 202.6 & 0.994$\times$ \\
+16 & 167.1 & 166.2 & 1.005$\times$ & 155.7 & 1.073$\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Batch-size ablation: throughput (samples/second, 50 DDIM steps).}
+\label{tab:batch_throughput}
+\begin{tabular}{lrrr}
+\toprule
+Batch Size & FP32 (samp/s) & INT8 (samp/s) & INT4 (samp/s) \\
+\midrule
+1 & 0.84 & 0.75 & 0.83 \\
+2 & 1.70 & 1.60 & 1.63 \\
+4 & 3.02 & 2.91 & 3.01 \\
+8 & 4.96 & 4.78 & 4.94 \\
+16 & 5.98 & 6.02 & 6.42 \\
+\bottomrule
+\end{tabular}
+\end{table}

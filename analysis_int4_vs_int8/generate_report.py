@@ -88,7 +88,7 @@ def plot_exp1_pipeline(data):
 # ============================================================================
 def plot_exp2_breakdown(data):
     exp = data['exp2_breakdown']
-    modes = ['fp32', 'int8', 'int4']
+    modes = [m for m in ['fp32', 'fp16', 'int8', 'int4'] if m in exp]
 
     # Collect unified component list
     all_components = set()
@@ -116,7 +116,7 @@ def plot_exp2_breakdown(data):
         'SiLU': '#607D8B',
     }
 
-    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    fig, axes = plt.subplots(1, len(modes), figsize=(6 * len(modes), 6))
 
     for idx, mode in enumerate(modes):
         ax = axes[idx]
@@ -143,7 +143,7 @@ def plot_exp2_breakdown(data):
                                 textprops={'fontsize': 8})
         ax.set_title(f'{mode.upper()}\nTotal: {total:.0f}ms', fontsize=11, fontweight='bold')
 
-    plt.suptitle('Per-Component Time Breakdown (50 steps × 2 batches × 8 samples)', fontsize=13, y=1.02)
+    plt.suptitle('Per-Component Time Breakdown (50 steps × 2 batches × 32 samples, bs=32;\nFP32 = no autocast, INT8/INT4 = FP16 autocast)', fontsize=11, y=1.02)
     plt.tight_layout()
     path = os.path.join(OUTPUT_DIR, 'plot_02_component_breakdown.png')
     plt.savefig(path, dpi=150, bbox_inches='tight')
@@ -153,7 +153,8 @@ def plot_exp2_breakdown(data):
     # --- Grouped bar chart version ---
     fig, ax = plt.subplots(figsize=(12, 6))
     x = np.arange(len(generic_order))
-    width = 0.25
+    n = len(modes)
+    width = 0.8 / n
     for i, mode in enumerate(modes):
         ls = exp[mode]['layer_stats']
         agg = {}
@@ -162,16 +163,17 @@ def plot_exp2_breakdown(data):
             agg[g] = agg.get(g, 0) + s['total_ms']
         vals = [agg.get(g, 0) for g in generic_order]
         color = C.get(mode, '#999')
-        bars = ax.bar(x + i * width, vals, width, label=mode.upper(), color=color, edgecolor='black', linewidth=0.5)
+        offset = (i - n / 2 + 0.5) * width
+        bars = ax.bar(x + offset, vals, width, label=mode.upper(), color=color, edgecolor='black', linewidth=0.5)
         for bar, v in zip(bars, vals):
             if v > 10:
                 ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 5,
-                        f'{v:.0f}', ha='center', va='bottom', fontsize=7)
+                        f'{v:.0f}', ha='center', va='bottom', fontsize=6)
 
-    ax.set_xticks(x + width)
+    ax.set_xticks(x)
     ax.set_xticklabels(generic_order, fontsize=10)
     ax.set_ylabel('Total Time (ms)')
-    ax.set_title('Per-Component Time: FP32 vs INT8 vs INT4')
+    ax.set_title('Per-Component Time: FP32 vs INT8 vs INT4 (bs=32;\nFP32=no autocast, INT8/INT4=FP16 autocast)')
     ax.legend()
     plt.tight_layout()
     path = os.path.join(OUTPUT_DIR, 'plot_02b_component_bars.png')
@@ -451,7 +453,9 @@ def generate_report(data):
     # ==========================================================================
     R.append("## 2. Per-Component Pipeline Breakdown")
     R.append("")
-    R.append("Measured via CUDA-event forward hooks on the full UNet (50 steps × 2 batches × 8 samples).")
+    R.append("Measured via CUDA-event forward hooks (50 steps × 2 batches × 32 samples, batch\_size=32).  ")
+    R.append("— FP32 mode: no autocast (identical to Exp.1 FP32 baseline).  ")
+    R.append("— INT8/INT4 modes: FP16 autocast enabled (identical to Exp.1 conditions).")
     R.append("")
 
     # Generic aggregation
@@ -461,7 +465,7 @@ def generate_report(data):
         'Attention': 'Attention', 'GroupNorm': 'GroupNorm', 'SiLU': 'SiLU',
     }
 
-    for mode in ['fp32', 'int8', 'int4']:
+    for mode in [m for m in ['fp32', 'fp16', 'int8', 'int4'] if m in exp2]:
         ls = exp2[mode]['layer_stats']
         total = sum(v['total_ms'] for v in ls.values())
         R.append(f"### {mode.upper()}")
@@ -484,17 +488,21 @@ def generate_report(data):
     R.append("### Cross-Mode Comparison")
     R.append("")
     generic_order = ['Conv2d', 'Attention', 'Linear', 'GroupNorm', 'SiLU']
-    R.append("| Component | FP32 (ms) | INT8 (ms) | INT4 (ms) | INT8 vs FP32 | INT4 vs FP32 |")
-    R.append("|-----------|----------|----------|----------|-------------|-------------|")
+    exp2_modes = [m for m in ['fp32', 'fp16', 'int8', 'int4'] if m in exp2]
+    header_cols = ' | '.join(f'{m.upper()} (ms)' for m in exp2_modes)
+    ratio_cols  = ' | '.join(f'{m.upper()} vs FP32' for m in exp2_modes if m != 'fp32')
+    R.append(f"| Component | {header_cols} | {ratio_cols} |")
+    sep = '|'.join(['---'] * (1 + len(exp2_modes) + len(exp2_modes) - 1))
+    R.append(f"|{sep}|")
     for g in generic_order:
         vals = {}
-        for mode in ['fp32', 'int8', 'int4']:
+        for mode in exp2_modes:
             ls = exp2[mode]['layer_stats']
             vals[mode] = sum(s['total_ms'] for lt, s in ls.items() if generic_map.get(lt, lt) == g)
         fp32_v = vals['fp32']
-        i8_ratio = vals['int8'] / fp32_v if fp32_v > 0 else 0
-        i4_ratio = vals['int4'] / fp32_v if fp32_v > 0 else 0
-        R.append(f"| {g} | {fp32_v:.1f} | {vals['int8']:.1f} | {vals['int4']:.1f} | {i8_ratio:.2f}× | {i4_ratio:.2f}× |")
+        ms_cols   = ' | '.join(f"{vals[m]:.1f}" for m in exp2_modes)
+        ratio_str = ' | '.join(f"{vals[m]/fp32_v:.2f}×" if fp32_v > 0 else 'N/A' for m in exp2_modes if m != 'fp32')
+        R.append(f"| {g} | {ms_cols} | {ratio_str} |")
     R.append("")
 
     # ==========================================================================
