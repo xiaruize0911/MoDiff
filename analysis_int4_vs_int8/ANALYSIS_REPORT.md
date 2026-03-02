@@ -6,21 +6,6 @@
 
 ## 1. LDM Benchmark Results (Full Pipeline)
 
-| Mode | Time/Sample (s) | Time/Step (ms) | Speedup vs FP32 |
-|------|----------------|---------------|-----------------|
-| fp32 | 0.306 | 1.53 | 1.00x |
-| fp16 | 0.309 | 1.55 | 0.99x |
-| int8_baseline | 0.190 | 0.95 | 1.61x |
-| int8 | 0.208 | 1.04 | 1.47x |
-| int8_static | 0.211 | 1.06 | 1.45x |
-| int4_baseline | 0.183 | 0.92 | 1.67x |
-| int4 | 0.206 | 1.03 | 1.49x |
-
-**Key Observation:** INT4 baseline achieves ~1.67x speedup vs FP32, while INT8 baseline achieves ~1.61x.
-The speedup gap between INT4 and INT8 baselines is ~3.5%, far from the theoretical ~50% expected due to quantization overhead, non-quantized layers, and memory-bound operations.
-
-![LDM Speedups](plot_ldm_speedups.png)
-
 ## 2. Raw CUTLASS Kernel Throughput
 
 | Shape | INT8 (ms) | INT4 (ms) | INT4/INT8 Speedup | INT8 TOPS | INT4 TOPS |
@@ -116,7 +101,7 @@ This shows time split between quantization overhead and actual compute:
 | Memory bandwidth | INT4 reads ~0.5x INT8 | Only for packed activations/weights |
 | Quantize overhead | N/A | INT4 packing adds cost |
 | Non-conv layers | N/A | Same cost for both |
-| Overall pipeline | ~50% faster | ~3.5% faster |
+| Overall pipeline | ~50% faster | ~0.0% faster |
 
 ### NVIDIA Blog Reference
 
@@ -127,8 +112,8 @@ operation is compute-bound and quantization overhead is negligible.
 ### What This Means for MoDiff
 
 1. **Baseline quantization is good:** Both INT8 and INT4 show solid speedups over FP32
-2. **MoDiff adds modest runtime overhead:** Compared to baseline, MoDiff INT8 is ~9.7% slower and MoDiff INT4 is ~12.1% slower. This overhead comes from storing intermediate activations and computing residuals (`a_t - â_{t+1}`). Per the paper, the benefit is **quantization quality** (FID/IS scores at lower bits), not raw throughput.
-3. **INT4 gap is real but modest:** INT4 baseline is ~3.5% faster than INT8 baseline, far below the theoretical ~50%. Overhead-dominated pipelines limit the gain.
+2. **MoDiff adds modest runtime overhead:** Compared to baseline, MoDiff INT8 is ~0.0% slower and MoDiff INT4 is ~0.0% slower. This overhead comes from storing intermediate activations and computing residuals (`a_t - â_{t+1}`). Per the paper, the benefit is **quantization quality** (FID/IS scores at lower bits), not raw throughput.
+3. **INT4 gap is real but modest:** INT4 baseline is ~0.0% faster than INT8 baseline, far below the theoretical ~50%. Overhead-dominated pipelines limit the gain.
 4. **Paper focus:** MoDiff's core contribution is enabling 3-bit (or lower) activation quantization without FID degradation — not raw speed. On CIFAR-10, LCQ+MoDiff at W8/A3 achieves a similar sFID to full-precision, while vanilla quant degrades significantly at even 6-bit activation.
 5. **For bigger models:** INT4 should show larger relative gains where conv is a bigger fraction of total compute time
 
