@@ -1,0 +1,16 @@
+\begin{table}[t]
+\centering
+\caption{Per-timestep DRAM (50 steps, batch 4).}
+\label{tab:memory_per_step}
+\begin{tabular}{lrrrrl}
+\toprule
+Mode & Total (GB) & Per-Step (MB) & vs FP32 & W-Save & Cache (MB/step) \\
+\midrule
+  FP32 & 66.14 & 1322.9 & 1.00$\\times$ & 0\% & 0.0 \\
+  INT8 Standard & 54.18 & 1083.7 & 0.82$\\times$ & 70\% & 0.0 \\
+  INT4 Standard & 47.13 & 942.6 & 0.71$\\times$ & 81\% & 0.0 \\
+  INT8 MoDiff & 68.82 & 1376.3 & 1.04$\\times$ & 70\% & 257.7 \\
+  INT4 MoDiff & 61.76 & 1235.2 & 0.93$\\times$ & 81\% & 257.7 \\
+\bottomrule
+\end{tabular}
+\end{table}

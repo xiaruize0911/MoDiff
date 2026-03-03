@@ -1,0 +1,80 @@
+{
+  "config": {
+    "steps": 50,
+    "batch_size": 4,
+    "device": "cuda",
+    "measurement": "real_hooks"
+  },
+  "modes": {
+    "fp32": {
+      "mode": "fp32",
+      "steps": 50,
+      "batch_size": 4,
+      "weight_read_bytes": 54790041600,
+      "act_input_bytes": 6565222400,
+      "output_bytes": 4788838400,
+      "cache_read_bytes": 0,
+      "cache_write_bytes": 0,
+      "qdq_bytes": 0,
+      "num_layer_calls": 6300,
+      "total_bytes": 66144102400,
+      "total_gb": 66.1441024
+    },
+    "int8_standard": {
+      "mode": "int8_standard",
+      "steps": 50,
+      "batch_size": 4,
+      "weight_read_bytes": 16510464000,
+      "act_input_bytes": 6565222400,
+      "output_bytes": 4788838400,
+      "cache_read_bytes": 0,
+      "cache_write_bytes": 0,
+      "qdq_bytes": 26319667200,
+      "num_layer_calls": 6300,
+      "total_bytes": 54184192000,
+      "total_gb": 54.184192
+    },
+    "int4_standard": {
+      "mode": "int4_standard",
+      "steps": 50,
+      "batch_size": 4,
+      "weight_read_bytes": 10604851200,
+      "act_input_bytes": 6565222400,
+      "output_bytes": 4788838400,
+      "cache_read_bytes": 0,
+      "cache_write_bytes": 0,
+      "qdq_bytes": 25170124800,
+      "num_layer_calls": 6300,
+      "total_bytes": 47129036800,
+      "total_gb": 47.1290368
+    },
+    "int8_modiff": {
+      "mode": "int8_modiff",
+      "steps": 50,
+      "batch_size": 4,
+      "weight_read_bytes": 16510464000,
+      "act_input_bytes": 6565222400,
+      "output_bytes": 4788838400,
+      "cache_read_bytes": 8189475840,
+      "cache_write_bytes": 4695164928,
+      "qdq_bytes": 28068200448,
+      "num_layer_calls": 6300,
+      "total_bytes": 68817366016,
+      "total_gb": 68.817366016
+    },
+    "int4_modiff": {
+      "mode": "int4_modiff",
+      "steps": 50,
+      "batch_size": 4,
+      "weight_read_bytes": 10604851200,
+      "act_input_bytes": 6565222400,
+      "output_bytes": 4788838400,
+      "cache_read_bytes": 8189475840,
+      "cache_write_bytes": 4695164928,
+      "qdq_bytes": 26918658048,
+      "num_layer_calls": 6300,
+      "total_bytes": 61762210816,
+      "total_gb": 61.762210816
+    }
+  }
+}
