@@ -337,22 +337,28 @@ class OptimizedInt8Conv2d(nn.Module):
             else:
                 self._smooth_inv_flat = torch.empty(0, device=x.device, dtype=torch.float32)
 
-        # Fused: [smooth * x] - cache, absmax reduction, scale + inv_scale
-        # SmoothQuant is fused into the kernel (no extra element-wise multiply)
-        modiff_cutlass.sub_absmax_scale(
+        # Kernel 1 Fused C++ Backend Call:
+        # Fuses sub_absmax_scale, dequant_accumulate, and scale_quantize into 1 python launch.
+        p_step1 = profiler.start("MoDiff INT8 Fused Step1")
+        x_int8 = modiff_cutlass.step1_quantize_fprop(
             x, self.a_hat_cache, self._residual_buf,
             self._absmax_buf, self._scale_buf, self._inv_scale_buf,
             self._retire_count, 127.0, self._smooth_inv_flat
         )
+        profiler.stop("MoDiff INT8 Fused Step1", p_step1)
 
-        # Quantize + CUTLASS conv: uses inv_scale directly as device pointer alpha
-        conv_residual = self._int8_conv_fused(self._residual_buf, self._scale_buf, self._inv_scale_buf)
-
-        # Fused dequant + cache accumulate: 5 kernel launches → 1
-        modiff_cutlass.dequant_accumulate_int8(self._residual_buf, self.a_hat_cache, self._scale_buf)
-
-        # Fused: o_hat_cache += conv_raw * weight_scale_channel (2 kernels → 1)
-        modiff_cutlass.scale_accumulate(conv_residual, self.weight_scale_channel.view(-1), self.o_hat_cache)
+        p_conv = profiler.start("MoDiff INT8 Fused Conv2d")
+        modiff_cutlass.conv2d_int8_fprop_o_hat(
+            x_int8,
+            self.weight_int8,
+            self._inv_scale_buf.view(1),
+            self.weight_scale_channel.view(-1),
+            self.o_hat_cache,
+            self.stride[0], self.stride[1],
+            self.padding[0], self.padding[1],
+            self.dilation[0], self.dilation[1]
+        )
+        profiler.stop("MoDiff INT8 Fused Conv2d", p_conv)
         return self.o_hat_cache
 
     # ==================================================================

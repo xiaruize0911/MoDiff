@@ -106,6 +106,47 @@ __global__ void dequant_accumulate_int8_kernel(
     }
 }
 
+// Fused step 1: quantize residual and accumulate into a_hat_cache simultaneously
+__global__ void quantize_and_update_ahat_kernel(
+    const float* __restrict__ residual,
+    float* __restrict__ a_hat_cache,
+    int8_t* __restrict__ output_int8,
+    const float* __restrict__ scale_ptr,
+    int num_elements
+) {
+    float scale = *scale_ptr;
+    float inv_scale = 1.0f / scale;
+    int idx4 = blockIdx.x * blockDim.x + threadIdx.x;
+    int base = idx4 * 4;
+    
+    if (base + 3 < num_elements) {
+        float4 r_v = reinterpret_cast<const float4*>(residual)[idx4];
+        float4 c_v = reinterpret_cast<const float4*>(a_hat_cache)[idx4];
+        
+        float q0 = fmaxf(-127.0f, fminf(127.0f, roundf(r_v.x * scale)));
+        float q1 = fmaxf(-127.0f, fminf(127.0f, roundf(r_v.y * scale)));
+        float q2 = fmaxf(-127.0f, fminf(127.0f, roundf(r_v.z * scale)));
+        float q3 = fmaxf(-127.0f, fminf(127.0f, roundf(r_v.w * scale)));
+        
+        c_v.x += q0 * inv_scale;
+        c_v.y += q1 * inv_scale;
+        c_v.z += q2 * inv_scale;
+        c_v.w += q3 * inv_scale;
+        reinterpret_cast<float4*>(a_hat_cache)[idx4] = c_v;
+        
+        reinterpret_cast<int32_t*>(output_int8)[idx4] =
+            ((unsigned char)(int8_t)q0) | ((unsigned char)(int8_t)q1 << 8) |
+            ((unsigned char)(int8_t)q2 << 16) | ((unsigned char)(int8_t)q3 << 24);
+    } else {
+        for (int i = base; i < num_elements; i++) {
+            float r = residual[i];
+            float q = fmaxf(-127.0f, fminf(127.0f, roundf(r * scale)));
+            a_hat_cache[i] += q * inv_scale;
+            output_int8[i] = (int8_t)q;
+        }
+    }
+}
+
 // =========================================================================
 // Fused: o_hat_cache += conv_output * weight_scale (per-channel broadcast)
 // Vectorized float4 loads for better memory bandwidth.
@@ -463,7 +504,8 @@ using Conv2dInt8Kernel = typename cutlass::conv::kernel::DefaultConv2dFprop<
     float, 
     1, // ElementCount for vector load from Accum/C
     int32_t, 
-    float
+    float,
+    cutlass::epilogue::thread::ScaleType::Default
   >,
   cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>,
   3, // Stages (was 2, 3 improves memory latency pipelining)
@@ -508,8 +550,8 @@ using Conv2dInt4Op = cutlass::conv::device::ImplicitGemmConvolution<Conv2dInt4Ke
 torch::Tensor conv2d_int8_fprop(
     torch::Tensor input,
     torch::Tensor weight,
-    torch::Tensor scales,
-    torch::Tensor bias,
+    torch::Tensor scales,     
+    torch::Tensor bias,       
     int stride_h, int stride_w,
     int padding_h, int padding_w,
     int dilation_h, int dilation_w
@@ -530,6 +572,7 @@ torch::Tensor conv2d_int8_fprop(
     
     int H_out = (H + 2 * padding_h - dilation_h * (R - 1) - 1) / stride_h + 1;
     int W_out = (W + 2 * padding_w - dilation_w * (S - 1) - 1) / stride_w + 1;
+
 
     auto options = torch::TensorOptions().dtype(torch::kFloat32).device(input.device()).memory_format(torch::MemoryFormat::ChannelsLast);
     auto output = torch::empty({N, K, H_out, W_out}, options);
@@ -684,3 +727,208 @@ torch::Tensor conv2d_int4_fprop(
 
     return output;
 }
+
+// =========================================================================
+// Implementation: Fused Conv + O_Hat Accumulate
+// =========================================================================
+
+torch::Tensor conv2d_int8_fprop_o_hat(
+    torch::Tensor input,
+    torch::Tensor weight,
+    torch::Tensor inv_scale,      // scalar tensor for CUTLASS alpha
+    torch::Tensor weight_scales,  // per-channel vector
+    torch::Tensor o_hat_cache,    // in-place output accumulate target
+    int stride_h, int stride_w,
+    int padding_h, int padding_w,
+    int dilation_h, int dilation_w
+) {
+    // 1) Empty bias
+    auto empty_bias = torch::empty({0}, torch::TensorOptions().device(input.device()));
+    
+    // 2) Run CUTLASS Conv (outputs int32 accumulator scaled by inv_scale)
+    auto conv_out = conv2d_int8_fprop(
+        input, weight, inv_scale, empty_bias,
+        stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w
+    );
+    
+    // 3) Setup thread grid for scale_accumulate
+    int num_elements = conv_out.numel();
+    int num_channels = weight_scales.numel();
+    int block_size = 256;
+    int num_work_items = (num_elements + 3) / 4;
+    int grid_size = (num_work_items + block_size - 1) / block_size;
+    
+    // 4) Launch native CUDA kernel for per-channel scale + accumulation into o_hat_cache
+    // this directly overwrites o_hat_cache (C/D matrix) in global memory.
+    scale_accumulate_kernel<<<grid_size, block_size>>>(
+        conv_out.data_ptr<float>(),
+        weight_scales.data_ptr<float>(),
+        o_hat_cache.data_ptr<float>(),
+        num_elements,
+        num_channels
+    );
+    
+    // Return o_hat_cache itself for identical graph tracking
+    return o_hat_cache;
+}
+
+
+__global__ void quantize_pack_and_update_ahat_kernel_int4(
+    const float* __restrict__ residual,
+    float* __restrict__ a_hat_cache,
+    int8_t* __restrict__ output_packed,
+    const float* __restrict__ scale_ptr,
+    int num_elements
+) {
+    float scale = *scale_ptr;
+    float inv_scale = 1.0f / scale;
+    int idx4 = blockIdx.x * blockDim.x + threadIdx.x;
+    int base = idx4 * 4;
+    
+    if (base + 3 < num_elements) {
+        float4 r_v = reinterpret_cast<const float4*>(residual)[idx4];
+        float4 c_v = reinterpret_cast<const float4*>(a_hat_cache)[idx4];
+        
+        float q0 = fmaxf(-7.0f, fminf(7.0f, roundf(r_v.x * scale)));
+        float q1 = fmaxf(-7.0f, fminf(7.0f, roundf(r_v.y * scale)));
+        float q2 = fmaxf(-7.0f, fminf(7.0f, roundf(r_v.z * scale)));
+        float q3 = fmaxf(-7.0f, fminf(7.0f, roundf(r_v.w * scale)));
+        
+        c_v.x += q0 * inv_scale;
+        c_v.y += q1 * inv_scale;
+        c_v.z += q2 * inv_scale;
+        c_v.w += q3 * inv_scale;
+        reinterpret_cast<float4*>(a_hat_cache)[idx4] = c_v;
+        
+        int8_t b0 = ((int8_t)q0 & 0x0F) | (((int8_t)q1 & 0x0F) << 4);
+        int8_t b1 = ((int8_t)q2 & 0x0F) | (((int8_t)q3 & 0x0F) << 4);
+        
+        // Write 2 bytes (1 int16)
+        reinterpret_cast<int16_t*>(output_packed)[idx4] = (uint16_t)(uint8_t)b0 | ((uint16_t)(uint8_t)b1 << 8);
+    } else {
+        for (int i = base; i < num_elements; i++) {
+            float r = residual[i];
+            float q = fmaxf(-7.0f, fminf(7.0f, roundf(r * scale)));
+            a_hat_cache[i] += q * inv_scale;
+            // The tail quantization is technically not beautifully packed for output_packed 
+            // since one byte holds 2 elements. Assuming num_elements is always even.
+            if (i % 2 == 0) {
+                float r_next = (i + 1 < num_elements) ? residual[i + 1] : 0.0f;
+                float q_next = fmaxf(-7.0f, fminf(7.0f, roundf(r_next * scale)));
+                
+                int8_t b_curr = ((int8_t)q & 0x0F) | (((int8_t)q_next & 0x0F) << 4);
+                output_packed[i / 2] = b_curr;
+            }
+        }
+    }
+}
+
+torch::Tensor step1_quantize_fprop(
+    torch::Tensor x,
+    torch::Tensor a_hat_cache,
+    torch::Tensor residual_buf,
+    torch::Tensor absmax_buf,
+    torch::Tensor scale_buf,
+    torch::Tensor inv_scale_buf,
+    torch::Tensor retire_count,
+    float Q_level,
+    torch::Tensor smooth_inv
+) {
+    // 1) Compute sub_absmax_scale globally
+    sub_absmax_scale(x, a_hat_cache, residual_buf, absmax_buf, scale_buf, inv_scale_buf, retire_count, Q_level, smooth_inv);
+    
+    // 2) Allocate int8 output
+    auto x_int8 = torch::empty_like(x, torch::TensorOptions().dtype(torch::kInt8));
+    
+    // 3) Fused quantize + accumulate into a_hat_cache
+    int num_elements = x.numel();
+    int block_size = 256;
+    int num_work_items = (num_elements + 3) / 4;
+    int grid_size = (num_work_items + block_size - 1) / block_size;
+    
+    quantize_and_update_ahat_kernel<<<grid_size, block_size>>>(
+        residual_buf.data_ptr<float>(),
+        a_hat_cache.data_ptr<float>(),
+        x_int8.data_ptr<int8_t>(),
+        scale_buf.data_ptr<float>(),
+        num_elements
+    );
+    
+    return x_int8;
+}
+
+
+torch::Tensor step1_quantize_pack_int4_fprop(
+    torch::Tensor x,
+    torch::Tensor a_hat_cache,
+    torch::Tensor residual_buf,
+    torch::Tensor absmax_buf,
+    torch::Tensor scale_buf,
+    torch::Tensor inv_scale_buf,
+    torch::Tensor retire_count,
+    float Q_level,
+    torch::Tensor smooth_inv
+) {
+    // 1) Compute sub_absmax_scale globally
+    sub_absmax_scale(x, a_hat_cache, residual_buf, absmax_buf, scale_buf, inv_scale_buf, retire_count, Q_level, smooth_inv);
+    
+    // 2) Allocate int4 output
+    int num_input = x.numel();
+    int num_output = num_input / 2;
+    auto x_packed = torch::empty({num_output}, torch::TensorOptions().dtype(torch::kInt8).device(x.device()));
+    
+    // 3) Fused quantize + accumulate into a_hat_cache
+    int block_size = 256;
+    int num_work_items = (num_input + 3) / 4;
+    int grid_size = (num_work_items + block_size - 1) / block_size;
+    
+    quantize_pack_and_update_ahat_kernel_int4<<<grid_size, block_size>>>(
+        residual_buf.data_ptr<float>(),
+        a_hat_cache.data_ptr<float>(),
+        x_packed.data_ptr<int8_t>(),
+        scale_buf.data_ptr<float>(),
+        num_input
+    );
+    
+    int N = x.size(0);
+    int C = x.size(1);
+    int H = x.size(2);
+    int W = x.size(3);
+    
+    return x_packed.view({N, H, W, C/2});
+}
+
+torch::Tensor conv2d_int4_fprop_o_hat(
+    torch::Tensor input,
+    torch::Tensor weight_packed,
+    torch::Tensor inv_scale,      // scalar tensor for CUTLASS alpha
+    torch::Tensor weight_scales,  // per-channel vector
+    torch::Tensor o_hat_cache,    // in-place output accumulate target
+    int stride_h, int stride_w,
+    int padding_h, int padding_w,
+    int dilation_h, int dilation_w
+) {
+    auto empty_bias = torch::empty({0}, torch::TensorOptions().device(input.device()));
+    
+    auto conv_out = conv2d_int4_fprop(
+        input, weight_packed, inv_scale, empty_bias,
+        stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w
+    );
+    
+    int num_elements = conv_out.numel();
+    int num_channels = weight_scales.numel();
+    int block_size = 256;
+    int num_work_items = (num_elements + 3) / 4;
+    int grid_size = (num_work_items + block_size - 1) / block_size;
+    
+    scale_accumulate_kernel<<<grid_size, block_size>>>(
+        conv_out.data_ptr<float>(),
+        weight_scales.data_ptr<float>(),
+        o_hat_cache.data_ptr<float>(),
+        num_elements,
+        num_channels
+    );
+    
+    return o_hat_cache;
+}
+

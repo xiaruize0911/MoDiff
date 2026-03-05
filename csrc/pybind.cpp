@@ -32,6 +32,53 @@ void sub_absmax_scale(torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor 
                       torch::Tensor retire_count, float Q_level, torch::Tensor smooth_inv);
 void scale_accumulate(torch::Tensor conv_output, torch::Tensor weight_scale, torch::Tensor o_hat_cache);
 
+torch::Tensor conv2d_int8_fprop_o_hat(
+    torch::Tensor input,
+    torch::Tensor weight,
+    torch::Tensor inv_scale,
+    torch::Tensor weight_scales,
+    torch::Tensor o_hat_cache,
+    int stride_h, int stride_w,
+    int padding_h, int padding_w,
+    int dilation_h, int dilation_w
+);
+
+
+torch::Tensor step1_quantize_pack_int4_fprop(
+    torch::Tensor x,
+    torch::Tensor a_hat_cache,
+    torch::Tensor residual_buf,
+    torch::Tensor absmax_buf,
+    torch::Tensor scale_buf,
+    torch::Tensor inv_scale_buf,
+    torch::Tensor retire_count,
+    float Q_level,
+    torch::Tensor smooth_inv
+);
+
+torch::Tensor conv2d_int4_fprop_o_hat(
+    torch::Tensor input,
+    torch::Tensor weight_packed,
+    torch::Tensor inv_scale,
+    torch::Tensor weight_scales,
+    torch::Tensor o_hat_cache,
+    int stride_h, int stride_w,
+    int padding_h, int padding_w,
+    int dilation_h, int dilation_w
+);
+
+torch::Tensor step1_quantize_fprop(
+    torch::Tensor x,
+    torch::Tensor a_hat_cache,
+    torch::Tensor residual_buf,
+    torch::Tensor absmax_buf,
+    torch::Tensor scale_buf,
+    torch::Tensor inv_scale_buf,
+    torch::Tensor retire_count,
+    float Q_level,
+    torch::Tensor smooth_inv
+);
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("conv2d_int4_fprop", &conv2d_int4_fprop, "Conv2d INT4 Forward (CUTLASS)");
     m.def("conv2d_int8_fprop", &conv2d_int8_fprop, "Conv2d INT8 Forward (CUTLASS)");
@@ -42,4 +89,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("dequant_accumulate_int8", &dequant_accumulate_int8, "Fused Dequant + Accumulate for INT8 cache");
     m.def("sub_absmax_scale", &sub_absmax_scale, "Fused Subtract + AbsMax + Scale computation");
     m.def("scale_accumulate", &scale_accumulate, "Fused Scale + Accumulate (o_hat += conv * weight_scale)");
+    m.def("conv2d_int8_fprop_o_hat", &conv2d_int8_fprop_o_hat, "Fused INT8 Conv + o_hat accumulate");
+    
+    m.def("step1_quantize_pack_int4_fprop", &step1_quantize_pack_int4_fprop, "Fused sub_absmax_scale + dequant + quantize+pack for INT4 step 1");
+    m.def("conv2d_int4_fprop_o_hat", &conv2d_int4_fprop_o_hat, "Fused INT4 Conv + o_hat accumulate");
+
+    m.def("step1_quantize_fprop", &step1_quantize_fprop, "Fused sub_absmax_scale + dequant + quantize for step 1");
 }

@@ -367,22 +367,28 @@ class OptimizedInt4Conv2d(nn.Module):
             else:
                 self._smooth_inv_flat = torch.empty(0, device=x.device, dtype=torch.float32)
 
-        # Fused: [smooth * x] - cache, absmax reduction, scale + inv_scale
-        # SmoothQuant is fused into the kernel (no extra element-wise multiply)
-        modiff_cutlass.sub_absmax_scale(
+        # Kernel 1 Fused C++ Backend Call:
+        # Fuses sub_absmax_scale, scale_quantize_and_pack, and dequant_accumulate into 1 python launch.
+        p_step1 = profiler.start("MoDiff INT4 Fused Step1")
+        x_packed = modiff_cutlass.step1_quantize_pack_int4_fprop(
             x, self.a_hat_cache, self._residual_buf,
             self._absmax_buf, self._scale_buf, self._inv_scale_buf,
             self._retire_count, 7.0, self._smooth_inv_flat
         )
+        profiler.stop("MoDiff INT4 Fused Step1", p_step1)
 
-        # Quantize + CUTLASS conv: uses inv_scale directly as device pointer alpha
-        conv_residual = self._int4_conv_fused(self._residual_buf, self._scale_buf, self._inv_scale_buf)
-
-        # Fused dequant + cache accumulate: 5 kernel launches → 1
-        modiff_cutlass.dequant_accumulate_int4(self._residual_buf, self.a_hat_cache, self._scale_buf)
-
-        # Fused: o_hat_cache += conv_raw * weight_scale_channel (2 kernels → 1)
-        modiff_cutlass.scale_accumulate(conv_residual, self.weight_scale_channel.view(-1), self.o_hat_cache)
+        p_conv = profiler.start("MoDiff INT4 Fused Conv2d")
+        modiff_cutlass.conv2d_int4_fprop_o_hat(
+            x_packed,
+            self.weight_packed,
+            self._inv_scale_buf.view(1),
+            self.weight_scale_channel.view(-1),
+            self.o_hat_cache,
+            self.stride[0], self.stride[1],
+            self.padding[0], self.padding[1],
+            self.dilation[0], self.dilation[1]
+        )
+        profiler.stop("MoDiff INT4 Fused Conv2d", p_conv)
         return self.o_hat_cache
 
     # ==================================================================

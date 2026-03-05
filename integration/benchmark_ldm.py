@@ -284,8 +284,6 @@ class BenchmarkRunner:
         model, _ = load_model(self.config_path, self.ckpt_path)
         
         # Configure backends for maximum speed
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
         torch.backends.cudnn.benchmark = True
         
         # Use channels_last memory format to eliminate NCHW↔NHWC conversions

@@ -2,26 +2,26 @@
 
 **Model**: LSUN-Churches LDM (U-Net diffusion model)  
 **Steps**: 50  |  **Batch**: 4  
-**Method**: Forward-pass hooks (measured) + analytical Q/DQ round-trips  
+**Method**: Forward-pass hooks (measured)  
 
 ---
 
 ## Summary
 
-| Mode | Total HBM (GB) | vs FP32 | Weight (GB) | Cache total (GB) | Q/DQ (GB) |
-|------|--------------|--------|------------|-----------------|----------|
-| FP32 | 66.14 | --- | 54.79 | 0.00 | 0.00 |
-| INT8 Standard | 54.18 | +18.1% | 16.51 | 0.00 | 26.32 |
-| INT4 Standard | 47.13 | +28.7% | 10.60 | 0.00 | 25.17 |
-| INT8 MoDiff | 68.82 | -4.0% | 16.51 | 12.88 | 28.07 |
-| INT4 MoDiff | 61.76 | +6.6% | 10.60 | 12.88 | 26.92 |
+| Mode | Total HBM (GB) | vs FP32 | Weight (GB) | Cache total (GB) |
+|------|--------------|--------|------------|-----------------|
+| FP32 | 66.16 | --- | 54.81 | 0.00 |
+| INT8 Standard | 27.90 | +57.8% | 16.55 | 0.00 |
+| INT4 Standard | 22.00 | +66.8% | 10.64 | 0.00 |
+| INT8 MoDiff | 49.84 | +24.7% | 16.55 | 21.94 |
+| INT4 MoDiff | 43.94 | +33.6% | 10.64 | 21.94 |
 
 ## Key Findings
 
-- **INT8 Standard** saves +18.1% HBM vs FP32 (weight bytes: 54.8 GB -> 16.5 GB, 3.3x compression); Q/DQ overhead: 26.32 GB
-- **INT4 Standard** saves +28.7% HBM vs FP32 (weight bytes: 54.8 GB -> 10.6 GB, 5.2x compression); Q/DQ overhead: 25.17 GB
-- **INT8 MoDiff** total: 68.82 GB (-4.0% vs FP32); cache overhead: 12.88 GB; Q/DQ overhead: 28.07 GB
-- **INT4 MoDiff** total: 61.76 GB (+6.6% vs FP32); cache overhead: 12.88 GB; Q/DQ overhead: 26.92 GB
+- **INT8 Standard** reads 54.8 GB -> 16.5 GB weight bytes (3.3x compression); 
+- **INT4 Standard** reads 54.8 GB -> 10.6 GB weight bytes (5.2x compression); 
+- **INT8 MoDiff** total: 49.84 GB (+24.7% vs FP32); cache overhead: 21.94 GB;
+- **INT4 MoDiff** total: 43.94 GB (+33.6% vs FP32); cache overhead: 21.94 GB;
 
 ## Why MoDiff Is Still Fast
 
@@ -40,26 +40,12 @@ quantization with FP32-level output quality (Theorem 1 of the MoDiff paper).
 - MoDiff `a_hat_cache` read + write; `o_hat_cache` read (from next-step perspective)
   (o_hat write IS the output write, not double-counted)
 
-### Analytically Added (Q/DQ kernel-boundary round-trips)
-Every CUDA kernel call produces a new tensor allocation; for conv activations
-(smallest: 4×192×32×32 = 786 KB >> L2), these round-trip through HBM:
-
-**INT8 Conv standard:**
-  `x(FP32) → scale_quantize_int8 → x_int8 → CUTLASS → out_raw → ×w_scale → out`
-  Extra = write+read `x_int8` (INT8, ×¼) + write+read `out_raw` (FP32)
-  = `2×(act/4) + 2×out`
-
-**INT4 Conv standard:**
-  Extra = write+read `x_packed` (INT4, ×⅛) + write+read `out_raw`
-  = `2×(act/8) + 2×out`
-
-**MoDiff Conv modulated (extra on top of standard):**
-  `sub_absmax_scale` writes `_residual_buf` (FP32, =act);
-  `scale_quantize_int8` reads it; `dequant_accumulate_int8` reads it again
-  + `a_hat_cache` is read a **second time** by `dequant_accumulate_int8`
-  Extra mod = `3×act + a_hat_nbytes`
-
-**FP16-Linear layers:** activations are ≤12 KB → L2-resident; counted as 0.
+### Conv-only modulated kernel split (measured labels)
+- **Kernel-1** (`step1_quantize_*_fprop`): reads input + `a_hat_cache`; writes
+  quantized activation + updated `a_hat_cache` + `_residual_buf`
+- **Kernel-2** (`conv2d_*_fprop_o_hat`): reads quantized activation + quantized
+  weights + `weight_scale_channel` + previous `o_hat_cache`; writes updated `o_hat_cache`
+- Output file: `table_memory_conv_kernel_split.md` and `plot_memory_conv_kernel_split.png`
 
 ## Output Files
 
@@ -71,5 +57,7 @@ Every CUDA kernel call produces a new tensor allocation; for conv activations
 | `plot_memory_savings.png` | Savings vs FP32 |
 | `plot_memory_cumulative.png` | IO accumulation over timesteps |
 | `plot_memory_per_step.png` | Per-step bar chart |
+| `plot_memory_conv_kernel_split.png` | Conv kernel-1 vs kernel-2 IO |
 | `table_memory_summary.md/tex` | Full summary table |
 | `table_memory_per_step.md/tex` | Per-step IO table |
+| `table_memory_conv_kernel_split.md` | Conv kernel-1/kernel-2 IO table |

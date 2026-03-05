@@ -17,6 +17,7 @@ import os
 import sys
 import json
 import time
+import subprocess
 import warnings
 import gc
 from collections import defaultdict
@@ -932,6 +933,50 @@ def experiment_5_batch_ablation(batch_sizes=[1, 2, 4, 8, 16], steps=50):
 
 
 # ============================================================================
+# Experiment 6: Memory Transfer Analysis
+# ============================================================================
+
+def experiment_6_memory_transfer(steps=50, batch_size=4):
+    """Run real memory-transfer analysis script and ingest generated JSON."""
+    print("\n" + "=" * 70)
+    print("EXPERIMENT 6: Memory Transfer Analysis")
+    print("=" * 70)
+
+    script_path = os.path.join(OUTPUT_DIR, '08_memory_transfer_analysis.py')
+    cmd = [
+        sys.executable,
+        script_path,
+        '--steps', str(steps),
+        '--batch_size', str(batch_size),
+        '--device', 'cuda' if torch.cuda.is_available() else 'cpu',
+    ]
+
+    print(f"Running: {' '.join(cmd)}")
+    completed = subprocess.run(cmd, cwd=os.path.dirname(OUTPUT_DIR), capture_output=True, text=True)
+    if completed.returncode != 0:
+        print("Memory transfer analysis failed:")
+        print(completed.stdout)
+        print(completed.stderr)
+        raise RuntimeError("experiment_6_memory_transfer failed")
+
+    print(completed.stdout)
+    if completed.stderr.strip():
+        print(completed.stderr)
+
+    json_path = os.path.join(OUTPUT_DIR, 'memory_transfer_analysis.json')
+    report_path = os.path.join(OUTPUT_DIR, 'MEMORY_TRANSFER_REPORT.md')
+    result = {
+        'script': script_path,
+        'json_path': json_path,
+        'report_path': report_path,
+    }
+    if os.path.exists(json_path):
+        with open(json_path, 'r') as f:
+            result['data'] = json.load(f)
+    return result
+
+
+# ============================================================================
 # Main
 # ============================================================================
 
@@ -973,6 +1018,11 @@ def main():
     # --- Experiment 5 ---
     all_data['exp5_ablation'] = experiment_5_batch_ablation(
         batch_sizes=[1, 2, 4, 8, 16], steps=50
+    )
+
+    # --- Experiment 6 ---
+    all_data['exp6_memory'] = experiment_6_memory_transfer(
+        steps=50, batch_size=4
     )
 
     # Save all data

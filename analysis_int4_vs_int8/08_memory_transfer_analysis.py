@@ -90,14 +90,17 @@ class ModeIO:
     output_bytes:      int = 0
     cache_read_bytes:  int = 0
     cache_write_bytes: int = 0
-    qdq_bytes:         int = 0   # Q/DQ kernel-boundary HBM round-trips (analytical)
+    conv_step1_read_bytes:  int = 0
+    conv_step1_write_bytes: int = 0
+    conv_step2_read_bytes:  int = 0
+    conv_step2_write_bytes: int = 0
+    conv_modulated_calls:   int = 0
     num_layer_calls:   int = 0
 
     @property
     def total_dram_bytes(self) -> int:
         return (self.weight_read_bytes + self.act_input_bytes +
-                self.output_bytes + self.cache_read_bytes + self.cache_write_bytes +
-                self.qdq_bytes)
+                self.output_bytes + self.cache_read_bytes + self.cache_write_bytes)
 
     def total_gb(self) -> float:
         return self.total_dram_bytes / 1e9
@@ -126,12 +129,11 @@ COLORS = {
 }
 
 COMPONENT_COLORS = {
-    "Weight Reads":   "#4878CF",
-    "Act FP32 Reads": "#6ACC65",
-    "Output Writes":  "#B47CC7",
-    "Cache Reads":    "#C4AD66",
-    "Cache Writes":   "#77BEDB",
-    "Q/DQ Overhead":  "#E87B56",
+    "Params/Weights (Rd)": "#4878CF",
+    "Act Inputs (Rd)":     "#6ACC65",
+    "Outputs (Wr)":        "#B47CC7",
+    "Cache (Rd)":          "#C4AD66",
+    "Cache (Wr)":          "#77BEDB",
 }
 
 
@@ -139,112 +141,64 @@ COMPONENT_COLORS = {
 # Hook helpers
 # ---------------------------------------------------------------------------
 
-def _get_weight_nbytes(mod: nn.Module) -> int:
-    """Return size in bytes of the stored (quantised) weight tensor."""
-    if hasattr(mod, "weight_int8"):
-        return mod.weight_int8.nbytes
-    if hasattr(mod, "weight_packed") and mod.weight_packed.numel() > 0:
-        return mod.weight_packed.nbytes
-    if hasattr(mod, "weight_int8_T"):
-        return mod.weight_int8_T.nbytes
-    if hasattr(mod, "weight_packed_T") and mod.weight_packed_T.numel() > 0:
-        return mod.weight_packed_T.nbytes
-    # OptimizedInt8Linear / OptimizedInt4Linear store weights as FP16
-    if hasattr(mod, "weight_fp16"):
-        return mod.weight_fp16.nbytes
-    return mod.weight.nbytes
+def _get_param_buffer_nbytes(mod: nn.Module) -> int:
+    """Return size in bytes of ALL stored parameters and buffers (weights, bias, scales)."""
+    total = 0
+    seen = set()
+    
+    # Catch all typical parameters + dynamically generated buffers (e.g. integer weights)
+    for name, t in mod.named_parameters(recurse=False):
+        if t is not None and id(t) not in seen:
+            total += t.nbytes
+            seen.add(id(t))
+    for name, t in mod.named_buffers(recurse=False):
+        # We only count buffers that are used in the forward pass implicitly
+        # skip `_orig_weight` which is just a backup reference, not read during forward.
+        if t is not None and id(t) not in seen and name != "_orig_weight":
+            total += t.nbytes
+            seen.add(id(t))
+            
+    # Some layers store FP16 equivalents in attributes without registering them.
+    if hasattr(mod, "weight_fp16") and mod.weight_fp16 is not None:
+        if id(mod.weight_fp16) not in seen:
+            total += mod.weight_fp16.nbytes
+            seen.add(id(mod.weight_fp16))
+            
+    return total
 
 
 def _is_modiff(mod: nn.Module) -> bool:
     return getattr(mod, "modiff_enabled", False)
 
 
-def _qdq_nbytes(mod: nn.Module, act_b: int, out_b: int,
-                is_modulated: bool, a_hat_before: int) -> int:
-    """
-    Analytical DRAM bytes for Q/DQ intermediates that cross CUDA kernel
-    boundaries and therefore must round-trip through HBM.
-    Applied only to Conv layers (activations >>L2); FP16-linear time-embedding
-    layers are ≤12 KB and L2-resident → 0.
-
-    ── Standard path (not modulated) ──────────────────────────────────────────
-    ALL 89 conv layers have a bias, so the output chain is always:
-      CUTLASS → out_raw(FP32) → [×weight_scale → out1(FP32)] → [+bias → output]
-    The hook captures 'output' as output_bytes.  Intermediates not counted:
-      • out_raw  write + read (before ×scale)  = 2×out_b
-      • out1     write + read (before +bias)   = 2×out_b
-                                                 ──────────
-                                                 4×out_b
-
-    Calibrated standard (fused scale_quantize_int8 / scale_quantize_and_pack):
-      x(FP32) ──[fused Q kern]──→ x_int8/x_packed ──[CUTLASS]──→ out_raw …
-      • x_int8  write + read                         = 2×(act_b/4)   [INT8]
-      • x_packed write + read                        = 2×(act_b/8)   [INT4]
-      + the 4×out_b from above
-
-    Uncalibrated standard (our benchmark — is_calibrated=False):
-      x(FP32) ──[x*scale]──→ x_scaled(FP32) ──[Q kern]──→ x_int8/x_packed …
-      • x_scaled write + read                        = 2×act_b
-      + x_int8/x_packed as above
-      + 4×out_b from above
-
-    ── Modulated path ──────────────────────────────────────────────────────────
-    Always uses fused CUTLASS kernels (no x_scaled, no out1 — bias was folded
-    into o_hat_cache in the first step).  Kernel sequence:
-      1. sub_absmax_scale(x, a_hat, _residual_buf)  ← writes _residual_buf
-      2. scale_quantize_int8/4(_residual_buf)        ← reads _residual_buf (1st)
-                                                     ← writes x_int8/x_packed
-      3. conv2d_int8/4_fprop(x_int8/packed, weight)  ← reads x_int8/packed
-                                                     ← writes conv_residual
-      4. dequant_accumulate_int8/4(_residual_buf,    ← reads _residual_buf (2nd)
-                                   a_hat_cache, …)   ← reads a_hat_cache (2nd)
-                                                     ← writes a_hat_cache (→cache_write ✓)
-      5. scale_accumulate(conv_residual,…,o_hat)     ← reads conv_residual
-                                                     ← reads o_hat (→cache_read ✓)
-                                                     ← writes o_hat (→output_bytes ✓)
-
-    Already counted elsewhere: x read (act_input), weight read (weight_read),
-      a_hat 1st read (cache_read), o_hat read (cache_read), o_hat write (output).
-
-    Extra (not counted): _residual_buf(1w+2r) + x_int8/packed(1w+1r) +
-                         conv_residual(1w+1r) + a_hat 2nd read
-      = 3×act_b + 2×(act_b/4 or /8) + 2×out_b + a_hat_before
-    """
-    is_conv_int8 = hasattr(mod, "weight_int8")
-    is_conv_int4 = hasattr(mod, "weight_packed") and not is_conv_int8
-    if not (is_conv_int8 or is_conv_int4):
-        return 0   # FP16-linear: too small for HBM round-trips
-
-    has_bias = getattr(mod, "bias", None) is not None
-    is_calibrated = getattr(mod, "is_calibrated", False)
-
-    if is_modulated:
-        # No x_scaled intermediate (sub_absmax_scale is fused).
-        # No out1 intermediate (scale_accumulate writes directly into o_hat_cache).
-        quant_sz = act_b // 4 if is_conv_int8 else act_b // 8
-        return (3 * act_b          # _residual_buf: 1 write + 2 reads
-                + a_hat_before     # a_hat_cache: 2nd read by dequant_accumulate
-                + 2 * quant_sz     # x_int8/packed: 1 write + 1 read
-                + 2 * out_b)       # conv_residual: 1 write + 1 read
-
-    # ── Standard (not modulated) ──────────────────────────────────────────────
-    # out chain: out_raw (2×out_b) + out1 if bias (2×out_b)
-    out_intermediates = 4 * out_b if has_bias else 2 * out_b
-
-    quant_sz = act_b // 4 if is_conv_int8 else act_b // 8
-
-    if is_calibrated:
-        # Fused scale+quantize kernel: no x_scaled intermediate.
-        return 2 * quant_sz + out_intermediates
-    else:
-        # Uncalibrated: x*scale → x_scaled(FP32) written and read before quant.
-        # INT8: x_scaled → round().clamp().to(int8) — treated as one logical
-        #       "read x_scaled + write x_int8" step (element-wise chain, same
-        #       size pipeline; conservative: 2×act_b for x_scaled w+r).
-        # INT4: x_scaled → quantize_and_pack (single fused CUDA kernel).
-        return 2 * act_b + 2 * quant_sz + out_intermediates
+def _is_quantized_conv_layer(mod: nn.Module) -> bool:
+    return ((hasattr(mod, "weight_int8") or hasattr(mod, "weight_packed"))
+            and hasattr(mod, "kernel_size")
+            and hasattr(mod, "in_channels")
+            and hasattr(mod, "out_channels"))
 
 
+def _get_modulated_conv_qact_nbytes(mod: nn.Module, x: torch.Tensor) -> int:
+    """Bytes of step1 quantized activation output (int8/int4 packed)."""
+    if hasattr(mod, "weight_packed") and getattr(mod, "weight_packed") is not None:
+        # INT4 packed: 2 values per byte
+        return x.numel() // 2
+    # INT8: 1 byte per value
+    return x.numel()
+
+
+def _get_modulated_conv_step2_weight_nbytes(mod: nn.Module) -> int:
+    """Bytes read by conv step2 kernel (quant weights + channel scales + inv_scale)."""
+    total = 0
+    if hasattr(mod, "weight_int8") and mod.weight_int8 is not None:
+        total += mod.weight_int8.nbytes
+    if hasattr(mod, "weight_packed") and mod.weight_packed is not None:
+        total += mod.weight_packed.nbytes
+    if hasattr(mod, "weight_scale_channel") and mod.weight_scale_channel is not None:
+        total += mod.weight_scale_channel.nbytes
+    if hasattr(mod, "_inv_scale_buf") and mod._inv_scale_buf is not None:
+        total += mod._inv_scale_buf.nbytes
+    return total
 
 def _is_compute_layer(mod: nn.Module) -> bool:
     """True for any leaf compute layer: Conv2d, Linear, or a quantised variant."""
@@ -294,18 +248,13 @@ def attach_measurement_hooks(diffusion_model: nn.Module, io: ModeIO):
             def post(mod, inp, out):
                 x     = inp[0] if isinstance(inp, tuple) else inp
                 act_b = x.nbytes
-                wgt_b = _get_weight_nbytes(mod)
+                wgt_b = _get_param_buffer_nbytes(mod)
                 out_b = out.nbytes if isinstance(out, torch.Tensor) else 0
 
                 io.act_input_bytes   += act_b
                 io.weight_read_bytes += wgt_b
                 io.output_bytes      += out_b
                 io.num_layer_calls   += 1
-
-                # Q/DQ kernel-boundary round-trips (analytical, conv layers only)
-                is_modulated = _is_modiff(mod) and mod._meas_was_cached
-                io.qdq_bytes += _qdq_nbytes(mod, act_b, out_b,
-                                             is_modulated, mod._meas_a_hat_before)
 
                 if _is_modiff(mod):
                     if mod._meas_was_cached:
@@ -317,6 +266,31 @@ def attach_measurement_hooks(diffusion_model: nn.Module, io: ModeIO):
                                  else mod._meas_a_hat_before)
                         io.cache_write_bytes += new_a                    # write new a_hat_t
                         # o_hat write is in-place (= output write, already in out_b)
+                        
+                        # Residual map dynamically built between the two C++ steps
+                        if hasattr(mod, "_residual_buf") and mod._residual_buf is not None:
+                            io.cache_write_bytes += mod._residual_buf.nbytes
+                            io.cache_read_bytes += mod._residual_buf.nbytes
+
+                        # Conv-only two-kernel split (measured from live tensors/buffers)
+                        if _is_quantized_conv_layer(mod):
+                            qact_b = _get_modulated_conv_qact_nbytes(mod, x)
+                            new_o = (mod.o_hat_cache.nbytes
+                                     if (hasattr(mod, "o_hat_cache") and mod.o_hat_cache is not None)
+                                     else out_b)
+                            residual_b = (mod._residual_buf.nbytes
+                                          if (hasattr(mod, "_residual_buf") and mod._residual_buf is not None)
+                                          else 0)
+                            step2_w_b = _get_modulated_conv_step2_weight_nbytes(mod)
+
+                            # Kernel-1: step1_quantize_*_fprop
+                            io.conv_step1_read_bytes += act_b + mod._meas_a_hat_before
+                            io.conv_step1_write_bytes += new_a + residual_b + qact_b
+
+                            # Kernel-2: conv2d_*_fprop_o_hat
+                            io.conv_step2_read_bytes += qact_b + step2_w_b + mod._meas_o_hat_before
+                            io.conv_step2_write_bytes += new_o
+                            io.conv_modulated_calls += 1
                     else:
                         # First step: _forward_first_step does `return o_hat.clone()`
                         # so the output is a CLONE separate from self.o_hat_cache.
@@ -490,8 +464,7 @@ def measure_mode(
           f"act={io.act_input_bytes/1e9:.2f}  "
           f"out={io.output_bytes/1e9:.2f}  "
           f"cache_r={io.cache_read_bytes/1e9:.2f}  "
-          f"cache_w={io.cache_write_bytes/1e9:.2f}  "
-          f"qdq={io.qdq_bytes/1e9:.2f})")
+          f"cache_w={io.cache_write_bytes/1e9:.2f})")
     return io
 
 
@@ -536,12 +509,11 @@ def plot_stacked_breakdown(modes_io: List[ModeIO], save_dir: str):
         return
     labels = [MODE_LABELS.get(m.mode, m.mode) for m in modes_io]
     components = [
-        ("Weight Reads",   [_gb(m.weight_read_bytes) for m in modes_io]),
-        ("Act FP32 Reads", [_gb(m.act_input_bytes)   for m in modes_io]),
-        ("Output Writes",  [_gb(m.output_bytes)      for m in modes_io]),
-        ("Cache Reads",    [_gb(m.cache_read_bytes)  for m in modes_io]),
-        ("Cache Writes",   [_gb(m.cache_write_bytes) for m in modes_io]),
-        ("Q/DQ Overhead",  [_gb(m.qdq_bytes)         for m in modes_io]),
+        ("Params/Weights (Rd)",   [_gb(m.weight_read_bytes) for m in modes_io]),
+        ("Act Inputs (Rd)",       [_gb(m.act_input_bytes)   for m in modes_io]),
+        ("Outputs (Wr)",          [_gb(m.output_bytes)      for m in modes_io]),
+        ("Cache (Rd)",            [_gb(m.cache_read_bytes)  for m in modes_io]),
+        ("Cache (Wr)",            [_gb(m.cache_write_bytes) for m in modes_io]),
     ]
     fig, ax = plt.subplots(figsize=(12, 6))
     x = range(len(labels))
@@ -572,19 +544,16 @@ def plot_savings_vs_fp32(modes_io: List[ModeIO], save_dir: str):
 
     weight_savings = [_gb(fp32.weight_read_bytes - m.weight_read_bytes) for m in rest]
     cache_overhead = [_gb(-(m.cache_read_bytes + m.cache_write_bytes))   for m in rest]
-    qdq_overhead   = [_gb(-m.qdq_bytes)                                  for m in rest]
     net_savings    = [_gb(fp32.total_dram_bytes  - m.total_dram_bytes)   for m in rest]
 
     x     = range(len(labels))
-    width = 0.18
+    width = 0.25
     fig, ax = plt.subplots(figsize=(12, 6))
-    ax.bar([xi - 1.5*width for xi in x], weight_savings, width,
-           label="Weight HBM savings",   color=COMPONENT_COLORS["Weight Reads"])
-    ax.bar([xi - 0.5*width for xi in x], cache_overhead, width,
-           label="MoDiff cache overhead", color=COMPONENT_COLORS["Cache Writes"])
-    ax.bar([xi + 0.5*width for xi in x], qdq_overhead,   width,
-           label="Q/DQ overhead",         color=COMPONENT_COLORS["Q/DQ Overhead"])
-    net_bars = ax.bar([xi + 1.5*width for xi in x], net_savings, width,
+    ax.bar([xi - width for xi in x], weight_savings, width,
+           label="Params HBM savings",   color=COMPONENT_COLORS["Params/Weights (Rd)"])
+    ax.bar([xi for xi in x], cache_overhead, width,
+           label="MoDiff cache overhead", color=COMPONENT_COLORS["Cache (Wr)"])
+    net_bars = ax.bar([xi + width for xi in x], net_savings, width,
                       label="Net HBM change", color="#2ca02c")
     ax.axhline(0, color="black", linewidth=0.8)
     ax.set_xticks(list(x))
@@ -657,6 +626,36 @@ def plot_per_step_comparison(modes_io: List[ModeIO], save_dir: str):
     print(f"  Saved {path}")
 
 
+def plot_conv_kernel_split(modes_io: List[ModeIO], save_dir: str):
+    if not HAS_MPL:
+        return
+    labels = [MODE_LABELS.get(m.mode, m.mode) for m in modes_io]
+    k1 = [_gb(m.conv_step1_read_bytes + m.conv_step1_write_bytes) for m in modes_io]
+    k2 = [_gb(m.conv_step2_read_bytes + m.conv_step2_write_bytes) for m in modes_io]
+
+    fig, ax = plt.subplots(figsize=(11, 5))
+    x = range(len(labels))
+    ax.bar(x, k1, label="Conv Kernel-1 IO (Rd+Wr)", color="#4E79A7", edgecolor="#333", linewidth=0.4)
+    ax.bar(x, k2, bottom=k1, label="Conv Kernel-2 IO (Rd+Wr)", color="#F28E2B", edgecolor="#333", linewidth=0.4)
+
+    for i, m in enumerate(modes_io):
+        total = k1[i] + k2[i]
+        if total > 0:
+            ax.text(i, total + 0.15, f"{total:.1f} GB\n({m.conv_modulated_calls} calls)",
+                    ha="center", va="bottom", fontsize=9, fontweight="bold")
+
+    ax.set_xticks(list(x))
+    ax.set_xticklabels(labels)
+    ax.set_ylabel("DRAM Transfer (GB)")
+    ax.set_title("Conv MoDiff Modulated Path -- Kernel-1 vs Kernel-2 IO")
+    ax.legend(loc="upper right")
+    plt.tight_layout()
+    path = os.path.join(save_dir, "plot_memory_conv_kernel_split.png")
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    print(f"  Saved {path}")
+
+
 # ---------------------------------------------------------------------------
 # Tables
 # ---------------------------------------------------------------------------
@@ -673,12 +672,11 @@ def generate_summary_table(modes_io: List[ModeIO], save_dir: str):
         f"**Steps:** {modes_io[0].steps}  |  **Batch:** {modes_io[0].batch_size}",
         "",
         "> Measured via forward-pass hooks recording `tensor.nbytes` for each layer call.",
-        "> Q/DQ overhead computed analytically from kernel-boundary tensor sizes.",
         "",
         "| Mode | Weight (GB) | Act FP32 (GB) | Output (GB) | "
-        "Cache Rd (GB) | Cache Wr (GB) | Q/DQ (GB) | **Total (GB)** | **vs FP32** |",
+        "Cache Rd (GB) | Cache Wr (GB) | **Total (GB)** | **vs FP32** |",
         "|------|------------|--------------|------------|"            
-        "-------------|-------------|----------|--------------|------------|",
+        "-------------|-------------|--------------|------------|",
     ]
     for m in modes_io:
         s = f"{(1-m.total_dram_bytes/fp32_total)*100:+.1f}%" if m.mode != "fp32" else "---"
@@ -689,7 +687,6 @@ def generate_summary_table(modes_io: List[ModeIO], save_dir: str):
             f"| {_gb(m.output_bytes):.2f} "
             f"| {_gb(m.cache_read_bytes):.2f} "
             f"| {_gb(m.cache_write_bytes):.2f} "
-            f"| {_gb(m.qdq_bytes):.2f} "
             f"| **{m.total_gb():.2f}** "
             f"| {s} |"
         )
@@ -709,7 +706,6 @@ def generate_summary_table(modes_io: List[ModeIO], save_dir: str):
             f"{_gb(m.output_bytes):.1f} & "
             f"{_gb(m.cache_read_bytes):.1f} & "
             f"{_gb(m.cache_write_bytes):.1f} & "
-            f"{_gb(m.qdq_bytes):.1f} & "
             f"\\textbf{{{m.total_gb():.1f}}} & "
             f"{s} \\\\"
         )
@@ -718,10 +714,10 @@ def generate_summary_table(modes_io: List[ModeIO], save_dir: str):
         "\\begin{table}[t]\n\\centering\n"
         f"\\caption{{Measured DRAM transfer ({steps} steps, batch {bs}).}}\n"
         "\\label{tab:memory_transfer}\n"
-        "\\begin{tabular}{lrrrrrrrl}\n\\toprule\n"
+        "\\begin{tabular}{lrrrrrrl}\n\\toprule\n"
         "Mode & Weight & Act & Output & Cache Rd & Cache Wr & "
-        "Q/DQ & \\textbf{Total} & vs FP32 \\\\\n"
-        " & (GB) & (GB) & (GB) & (GB) & (GB) & (GB) & \\textbf{(GB)} & \\\\\n"
+        "\\textbf{Total} & vs FP32 \\\\\n"
+        " & (GB) & (GB) & (GB) & (GB) & (GB) & \\textbf{(GB)} & \\\\\n"
         "\\midrule\n"
     )
     tex += "\n".join(tex_rows)
@@ -786,6 +782,32 @@ def generate_per_step_table(modes_io: List[ModeIO], save_dir: str):
     print(f"  Saved {tex_path}")
 
 
+def generate_conv_kernel_table(modes_io: List[ModeIO], save_dir: str):
+    md = [
+        "# Conv Kernel IO Split (MoDiff modulated steps only)",
+        "",
+        "| Mode | K1 Read (GB) | K1 Write (GB) | K1 Total (GB) | K2 Read (GB) | K2 Write (GB) | K2 Total (GB) | Calls |",
+        "|------|--------------|---------------|---------------|--------------|---------------|---------------|-------|",
+    ]
+    for m in modes_io:
+        k1 = _gb(m.conv_step1_read_bytes + m.conv_step1_write_bytes)
+        k2 = _gb(m.conv_step2_read_bytes + m.conv_step2_write_bytes)
+        md.append(
+            f"| {MODE_LABELS[m.mode]} "
+            f"| {_gb(m.conv_step1_read_bytes):.2f} "
+            f"| {_gb(m.conv_step1_write_bytes):.2f} "
+            f"| {k1:.2f} "
+            f"| {_gb(m.conv_step2_read_bytes):.2f} "
+            f"| {_gb(m.conv_step2_write_bytes):.2f} "
+            f"| {k2:.2f} "
+            f"| {m.conv_modulated_calls} |"
+        )
+    path = os.path.join(save_dir, "table_memory_conv_kernel_split.md")
+    with open(path, "w") as f:
+        f.write("\n".join(md))
+    print(f"  Saved {path}")
+
+
 def generate_report(modes_io: List[ModeIO], save_dir: str):
     fp32  = modes_io[0]
     int8m = next(m for m in modes_io if m.mode == "int8_modiff")
@@ -801,14 +823,14 @@ def generate_report(modes_io: List[ModeIO], save_dir: str):
         "",
         f"**Model**: LSUN-Churches LDM (U-Net diffusion model)  ",
         f"**Steps**: {fp32.steps}  |  **Batch**: {fp32.batch_size}  ",
-        f"**Method**: Forward-pass hooks (measured) + analytical Q/DQ round-trips  ",
+        f"**Method**: Forward-pass hooks (measured)  ",
         "",
         "---",
         "",
         "## Summary",
         "",
-        "| Mode | Total HBM (GB) | vs FP32 | Weight (GB) | Cache total (GB) | Q/DQ (GB) |",
-        "|------|--------------|--------|------------|-----------------|----------|",
+        "| Mode | Total HBM (GB) | vs FP32 | Weight (GB) | Cache total (GB) |",
+        "|------|--------------|--------|------------|-----------------|",
     ]
     for m in modes_io:
         cache_gb = (m.cache_read_bytes + m.cache_write_bytes) / 1e9
@@ -818,27 +840,20 @@ def generate_report(modes_io: List[ModeIO], save_dir: str):
             f"| {m.total_gb():.2f} "
             f"| {s} "
             f"| {m.weight_read_bytes/1e9:.2f} "
-            f"| {cache_gb:.2f} "
-            f"| {m.qdq_bytes/1e9:.2f} |"
+            f"| {cache_gb:.2f} |"
         )
     lines += [
         "",
         "## Key Findings",
         "",
-        f"- **INT8 Standard** saves {saving(int8s):+.1f}% HBM vs FP32 "
-        f"(weight bytes: {fp32.weight_read_bytes/1e9:.1f} GB -> {int8s.weight_read_bytes/1e9:.1f} GB, "
-        f"{fp32.weight_read_bytes/int8s.weight_read_bytes:.1f}x compression); "
-        f"Q/DQ overhead: {int8s.qdq_bytes/1e9:.2f} GB",
-        f"- **INT4 Standard** saves {saving(int4s):+.1f}% HBM vs FP32 "
-        f"(weight bytes: {fp32.weight_read_bytes/1e9:.1f} GB -> {int4s.weight_read_bytes/1e9:.1f} GB, "
-        f"{fp32.weight_read_bytes/int4s.weight_read_bytes:.1f}x compression); "
-        f"Q/DQ overhead: {int4s.qdq_bytes/1e9:.2f} GB",
+        f"- **INT8 Standard** reads {fp32.weight_read_bytes/1e9:.1f} GB -> {int8s.weight_read_bytes/1e9:.1f} GB weight bytes "
+        f"({fp32.weight_read_bytes/int8s.weight_read_bytes:.1f}x compression); ",
+        f"- **INT4 Standard** reads {fp32.weight_read_bytes/1e9:.1f} GB -> {int4s.weight_read_bytes/1e9:.1f} GB weight bytes "
+        f"({fp32.weight_read_bytes/int4s.weight_read_bytes:.1f}x compression); ",
         f"- **INT8 MoDiff** total: {int8m.total_gb():.2f} GB ({saving(int8m):+.1f}% vs FP32); "
-        f"cache overhead: {(int8m.cache_read_bytes+int8m.cache_write_bytes)/1e9:.2f} GB; "
-        f"Q/DQ overhead: {int8m.qdq_bytes/1e9:.2f} GB",
+        f"cache overhead: {(int8m.cache_read_bytes+int8m.cache_write_bytes)/1e9:.2f} GB;",
         f"- **INT4 MoDiff** total: {int4m.total_gb():.2f} GB ({saving(int4m):+.1f}% vs FP32); "
-        f"cache overhead: {(int4m.cache_read_bytes+int4m.cache_write_bytes)/1e9:.2f} GB; "
-        f"Q/DQ overhead: {int4m.qdq_bytes/1e9:.2f} GB",
+        f"cache overhead: {(int4m.cache_read_bytes+int4m.cache_write_bytes)/1e9:.2f} GB;",
         "",
         "## Why MoDiff Is Still Fast",
         "",
@@ -857,26 +872,12 @@ def generate_report(modes_io: List[ModeIO], save_dir: str):
         "- MoDiff `a_hat_cache` read + write; `o_hat_cache` read (from next-step perspective)",
         "  (o_hat write IS the output write, not double-counted)",
         "",
-        "### Analytically Added (Q/DQ kernel-boundary round-trips)",
-        "Every CUDA kernel call produces a new tensor allocation; for conv activations",
-        "(smallest: 4×192×32×32 = 786 KB >> L2), these round-trip through HBM:",
-        "",
-        "**INT8 Conv standard:**",
-        "  `x(FP32) → scale_quantize_int8 → x_int8 → CUTLASS → out_raw → ×w_scale → out`",
-        "  Extra = write+read `x_int8` (INT8, ×¼) + write+read `out_raw` (FP32)",
-        "  = `2×(act/4) + 2×out`",
-        "",
-        "**INT4 Conv standard:**",
-        "  Extra = write+read `x_packed` (INT4, ×⅛) + write+read `out_raw`",
-        "  = `2×(act/8) + 2×out`",
-        "",
-        "**MoDiff Conv modulated (extra on top of standard):**",
-        "  `sub_absmax_scale` writes `_residual_buf` (FP32, =act);",
-        "  `scale_quantize_int8` reads it; `dequant_accumulate_int8` reads it again",
-        "  + `a_hat_cache` is read a **second time** by `dequant_accumulate_int8`",
-        "  Extra mod = `3×act + a_hat_nbytes`",
-        "",
-        "**FP16-Linear layers:** activations are ≤12 KB → L2-resident; counted as 0.",
+        "### Conv-only modulated kernel split (measured labels)",
+        "- **Kernel-1** (`step1_quantize_*_fprop`): reads input + `a_hat_cache`; writes",
+        "  quantized activation + updated `a_hat_cache` + `_residual_buf`",
+        "- **Kernel-2** (`conv2d_*_fprop_o_hat`): reads quantized activation + quantized",
+        "  weights + `weight_scale_channel` + previous `o_hat_cache`; writes updated `o_hat_cache`",
+        "- Output file: `table_memory_conv_kernel_split.md` and `plot_memory_conv_kernel_split.png`",
         "",
         "## Output Files",
         "",
@@ -888,8 +889,10 @@ def generate_report(modes_io: List[ModeIO], save_dir: str):
         "| `plot_memory_savings.png` | Savings vs FP32 |",
         "| `plot_memory_cumulative.png` | IO accumulation over timesteps |",
         "| `plot_memory_per_step.png` | Per-step bar chart |",
+        "| `plot_memory_conv_kernel_split.png` | Conv kernel-1 vs kernel-2 IO |",
         "| `table_memory_summary.md/tex` | Full summary table |",
         "| `table_memory_per_step.md/tex` | Per-step IO table |",
+        "| `table_memory_conv_kernel_split.md` | Conv kernel-1/kernel-2 IO table |",
         "",
     ]
     path = os.path.join(save_dir, "MEMORY_TRANSFER_REPORT.md")
@@ -965,11 +968,13 @@ def main():
     plot_savings_vs_fp32(modes_io, OUTPUT_DIR)
     plot_cumulative_io(modes_io, OUTPUT_DIR)
     plot_per_step_comparison(modes_io, OUTPUT_DIR)
+    plot_conv_kernel_split(modes_io, OUTPUT_DIR)
     print()
 
     print("[3/3] Generating tables & report ...")
     generate_summary_table(modes_io, OUTPUT_DIR)
     generate_per_step_table(modes_io, OUTPUT_DIR)
+    generate_conv_kernel_table(modes_io, OUTPUT_DIR)
     generate_report(modes_io, OUTPUT_DIR)
     print()
 

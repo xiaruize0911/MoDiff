@@ -6,7 +6,6 @@ Supports:
 - FP16: Half precision with autocast
 - INT8: MoDiff INT8 with optimized kernels + temporal caching
 - INT8_baseline: INT8 optimized kernels WITHOUT temporal caching
-- INT8_static: Static quantization INT8 with pre-calibrated scales
 - INT4: MoDiff INT4 with optimized kernels + temporal caching
 - INT4_baseline: INT4 optimized kernels WITHOUT temporal caching
 
@@ -17,7 +16,6 @@ Key differences:
                   After fixing both unfair advantages (buffer pool + static scales), baseline
                   should be marginally FASTER than MoDiff (temporal caching adds subtract/accumulate
                   overhead per step without skipping any convolutions)
-- Static mode: Same as int8 but always uses static scales (explicit calibration flow)
 
 Note: All INT8/INT4 modes use the same per-layer quantization approach.
       Baseline modes isolate the performance impact of temporal caching.
@@ -72,8 +70,6 @@ try:
     from integration.int8_optimized import (
         OptimizedInt8Conv2d,
         convert_model_to_optimized_int8,
-        convert_model_to_optimized_int8_static,
-        calibrate_int8_static_scales,
         apply_static_scales,
         enable_modiff_mode as enable_modiff_mode_int8,
         reset_modiff_state as reset_modiff_state_int8,
@@ -345,28 +341,6 @@ class BenchmarkRunner:
             enable_modiff_mode_int8(model.model.diffusion_model, True)
             if HAS_INT8_LINEAR:
                 enable_modiff_mode_linear(model.model.diffusion_model, True)
-        elif mode == 'int8_static' and HAS_INT8:
-            print(f"Converting UNet to INT8 Static ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
-            # Generate calibration samples
-            print("Generating calibration samples...")
-            calib_samples = []
-            for _ in range(50):
-                x = torch.randn(2, *self.shape, device='cuda')
-                calib_samples.append(x)
-            
-            # Convert with static quantization
-            convert_model_to_optimized_int8_static(
-                model.model.diffusion_model,
-                sample_inputs=calib_samples,
-                num_timesteps=1000,
-                device='cuda'
-            )
-            
-            # Initialize buffer pool for pre-allocated buffers
-            from integration.buffer_pool import initialize_buffer_pool
-            initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
-            
-            enable_modiff_mode_int8(model.model.diffusion_model, True)
         elif mode == 'int4' and HAS_INT4:
             print(f"Converting UNet to INT4 ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
             convert_model_to_optimized_int4(model.model.diffusion_model)
@@ -559,11 +533,11 @@ class BenchmarkRunner:
         # Full warmup at actual batch size + step count to let cuDNN benchmark
         # select optimal kernels. Without this, first timed run includes kernel selection.
         print(f"Warming up cuDNN (full {self.steps}-step pass at batch_size={self.batch_size})...")
-        if mode in ('int8', 'int8_static', 'int8_baseline') and HAS_INT8:
+        if mode in ('int8', 'int8_baseline') and HAS_INT8:
             reset_modiff_state_int8(model.model.diffusion_model)
         elif mode in ('int4', 'int4_baseline') and HAS_INT4:
             reset_modiff_state_int4(model.model.diffusion_model)
-        if mode in ('int8', 'int8_static', 'int8_baseline') and HAS_INT8_LINEAR:
+        if mode in ('int8', 'int8_baseline') and HAS_INT8_LINEAR:
             reset_modiff_state_linear(model.model.diffusion_model)
         elif mode in ('int4', 'int4_baseline') and HAS_INT4_LINEAR:
             reset_modiff_state_int4_linear(model.model.diffusion_model)
@@ -579,11 +553,11 @@ class BenchmarkRunner:
         while generated < num_samples:
             batch = min(self.batch_size, num_samples - generated)
             
-            if mode in ('int8', 'int8_static', 'int8_baseline') and HAS_INT8:
+            if mode in ('int8', 'int8_baseline') and HAS_INT8:
                 reset_modiff_state_int8(model.model.diffusion_model)
             elif mode in ('int4', 'int4_baseline') and HAS_INT4:
                 reset_modiff_state_int4(model.model.diffusion_model)
-            if mode in ('int8', 'int8_static', 'int8_baseline') and HAS_INT8_LINEAR:
+            if mode in ('int8', 'int8_baseline') and HAS_INT8_LINEAR:
                 reset_modiff_state_linear(model.model.diffusion_model)
             elif mode in ('int4', 'int4_baseline') and HAS_INT4_LINEAR:
                 reset_modiff_state_int4_linear(model.model.diffusion_model)
@@ -620,7 +594,7 @@ class BenchmarkRunner:
         # Determine calibration path if not explicitly provided
         original_calib_path = self.calibration_path
         if not self.calibration_path:
-            if mode in ('int8', 'int8_baseline', 'int8_static'):
+            if mode in ('int8', 'int8_baseline'):
                 self.calibration_path = 'integration/int8_calibration.pt'
             elif mode in ('int4', 'int4_baseline'):
                 self.calibration_path = 'integration/int4_calibration.pt'
@@ -744,7 +718,7 @@ class BenchmarkRunner:
         print("-" * 55)
         
         baseline = self.results.get('fp32', {}).get('time_per_sample', 1.0)
-        for mode in ['fp32', 'fp16', 'int8', 'int8_baseline', 'int8_static', 'int4', 'int4_baseline']:
+        for mode in ['fp32', 'fp16', 'int8', 'int8_baseline', 'int4', 'int4_baseline']:
             if mode in self.results:
                 r = self.results[mode]
                 t = f"{r['time_per_sample']:.3f}s"
@@ -767,7 +741,7 @@ def main():
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--steps', type=int, default=200)
     parser.add_argument('--num_samples', type=int, default=128)
-    parser.add_argument('--mode', type=str, choices=['all', 'fp32', 'fp16', 'int8', 'int8_baseline', 'int8_static', 'int4', 'int4_baseline'], default='all')
+    parser.add_argument('--mode', type=str, choices=['all', 'fp32', 'fp16', 'int8', 'int8_baseline', 'int4', 'int4_baseline'], default='all')
     parser.add_argument('--eval_fid', action='store_true', help='Compute FID between modes')
     parser.add_argument('--skip_calibration', action='store_true')
     parser.add_argument('--force_recalibrate', action='store_true', help='Force regeneration of calibration scales')
@@ -787,10 +761,10 @@ def main():
         calibration_path=args.calibration
     )
     
-    modes = ['fp32', 'fp16', 'int8', 'int8_baseline', 'int8_static', 'int4', 'int4_baseline'] if args.mode == 'all' else [args.mode]
+    modes = ['fp32', 'fp16', 'int8', 'int8_baseline', 'int4', 'int4_baseline'] if args.mode == 'all' else [args.mode]
     
     for mode in modes:
-        if mode in ('int8', 'int8_static') and not HAS_INT8:
+        if mode == 'int8' and not HAS_INT8:
             print(f"Skipping {mode}: not available")
             continue
         if mode == 'int4' and not HAS_INT4:
