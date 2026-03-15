@@ -417,6 +417,10 @@ class ExtendedBenchmarkRunner:
         """
         Micro-benchmark comparing fused vs separate kernel timings.
         Tests individual kernel operations on representative tensor shapes.
+
+        Also measures the narrower conv-side question the user cares about:
+        - compute + DQ           : conv2d_*_fprop + out_raw * weight_scale
+        - compute + DQ + update  : conv2d_*_fprop_o_hat
         """
         print(f"\n{'='*60}")
         print("KERNEL TIMING COMPARISON (Fused vs Separate)")
@@ -490,7 +494,7 @@ class ExtendedBenchmarkRunner:
                 torch.cuda.synchronize()
                 fused_step1_ms = sum(s.elapsed_time(e) for s, e in zip(start_events, end_events)) / num_iterations
 
-                # Time fused conv+accumulate
+                # Time fused conv + dequant + update_o_hat
                 for _ in range(10):
                     modiff_cutlass.conv2d_int8_fprop_o_hat(
                         x_int8, w_quant, inv_scale_buf.view(1), weight_scale.view(-1), o_hat,
@@ -507,6 +511,24 @@ class ExtendedBenchmarkRunner:
 
                 torch.cuda.synchronize()
                 fused_conv_ms = sum(s.elapsed_time(e) for s, e in zip(start_events, end_events)) / num_iterations
+
+                # Time compute + DQ only (no o_hat update)
+                for _ in range(10):
+                    out_raw = modiff_cutlass.conv2d_int8_fprop(
+                        x_int8, w_quant, inv_scale_buf.view(1), empty_bias, 1, 1, 1, 1, 1, 1
+                    )
+                    _ = out_raw * weight_scale
+
+                for i in range(num_iterations):
+                    start_events[i].record()
+                    out_raw = modiff_cutlass.conv2d_int8_fprop(
+                        x_int8, w_quant, inv_scale_buf.view(1), empty_bias, 1, 1, 1, 1, 1, 1
+                    )
+                    _ = out_raw * weight_scale
+                    end_events[i].record()
+
+                torch.cuda.synchronize()
+                compute_dq_ms = sum(s.elapsed_time(e) for s, e in zip(start_events, end_events)) / num_iterations
 
                 # --- INT8 Separate kernels ---
                 # Step 1 separate: residual, absmax, scale, quantize
@@ -554,11 +576,21 @@ class ExtendedBenchmarkRunner:
                     'separate_conv_ms': separate_conv_ms,
                     'separate_total_ms': separate_step1_ms + separate_conv_ms,
                     'fusion_speedup': (separate_step1_ms + separate_conv_ms) / (fused_step1_ms + fused_conv_ms),
+                    'compute_dq_ms': compute_dq_ms,
+                    'compute_dq_update_ohat_ms': fused_conv_ms,
+                    'ohat_update_overhead_ms': fused_conv_ms - compute_dq_ms,
+                    'ohat_update_overhead_pct': ((fused_conv_ms - compute_dq_ms) / max(compute_dq_ms, 1e-12)) * 100.0,
                 }
 
                 print(f"  INT8 Fused:    step1={fused_step1_ms:.3f}ms, conv={fused_conv_ms:.3f}ms, total={fused_step1_ms+fused_conv_ms:.3f}ms")
                 print(f"  INT8 Separate: step1={separate_step1_ms:.3f}ms, conv={separate_conv_ms:.3f}ms, total={separate_step1_ms+separate_conv_ms:.3f}ms")
                 print(f"  Fusion speedup: {(separate_step1_ms+separate_conv_ms)/(fused_step1_ms+fused_conv_ms):.2f}x")
+                print(
+                    f"  INT8 Conv-side: compute+DQ={compute_dq_ms:.3f}ms, "
+                    f"compute+DQ+update_o_hat={fused_conv_ms:.3f}ms, "
+                    f"overhead={fused_conv_ms - compute_dq_ms:+.3f}ms "
+                    f"({((fused_conv_ms - compute_dq_ms) / max(compute_dq_ms, 1e-12)) * 100.0:+.1f}%)"
+                )
 
             except Exception as e:
                 print(f"  INT8 kernel timing failed: {e}")
@@ -597,7 +629,7 @@ class ExtendedBenchmarkRunner:
                 torch.cuda.synchronize()
                 fused4_step1 = sum(s.elapsed_time(e) for s, e in zip(start_events, end_events)) / num_iterations
 
-                # Fused conv+accumulate
+                # Fused conv + dequant + update_o_hat
                 for _ in range(10):
                     modiff_cutlass.conv2d_int4_fprop_o_hat(
                         xp, w_packed, inv_scale_buf.view(1), ws4.view(-1), o_hat, 1, 1, 1, 1, 1, 1
@@ -612,6 +644,24 @@ class ExtendedBenchmarkRunner:
 
                 torch.cuda.synchronize()
                 fused4_conv = sum(s.elapsed_time(e) for s, e in zip(start_events, end_events)) / num_iterations
+
+                # Time compute + DQ only (no o_hat update)
+                for _ in range(10):
+                    out_raw4 = modiff_cutlass.conv2d_int4_fprop(
+                        xp, w_packed, inv_scale_buf.view(1), empty_bias, 1, 1, 1, 1, 1, 1
+                    )
+                    _ = out_raw4 * ws4
+
+                for i in range(num_iterations):
+                    start_events[i].record()
+                    out_raw4 = modiff_cutlass.conv2d_int4_fprop(
+                        xp, w_packed, inv_scale_buf.view(1), empty_bias, 1, 1, 1, 1, 1, 1
+                    )
+                    _ = out_raw4 * ws4
+                    end_events[i].record()
+
+                torch.cuda.synchronize()
+                compute_dq4_ms = sum(s.elapsed_time(e) for s, e in zip(start_events, end_events)) / num_iterations
 
                 # Separate INT4
                 for i in range(num_iterations):
@@ -649,11 +699,21 @@ class ExtendedBenchmarkRunner:
                     'separate_conv_ms': sep4_conv,
                     'separate_total_ms': sep4_step1 + sep4_conv,
                     'fusion_speedup': (sep4_step1 + sep4_conv) / (fused4_step1 + fused4_conv),
+                    'compute_dq_ms': compute_dq4_ms,
+                    'compute_dq_update_ohat_ms': fused4_conv,
+                    'ohat_update_overhead_ms': fused4_conv - compute_dq4_ms,
+                    'ohat_update_overhead_pct': ((fused4_conv - compute_dq4_ms) / max(compute_dq4_ms, 1e-12)) * 100.0,
                 }
 
                 print(f"  INT4 Fused:    step1={fused4_step1:.3f}ms, conv={fused4_conv:.3f}ms, total={fused4_step1+fused4_conv:.3f}ms")
                 print(f"  INT4 Separate: step1={sep4_step1:.3f}ms, conv={sep4_conv:.3f}ms, total={sep4_step1+sep4_conv:.3f}ms")
                 print(f"  Fusion speedup: {(sep4_step1+sep4_conv)/(fused4_step1+fused4_conv):.2f}x")
+                print(
+                    f"  INT4 Conv-side: compute+DQ={compute_dq4_ms:.3f}ms, "
+                    f"compute+DQ+update_o_hat={fused4_conv:.3f}ms, "
+                    f"overhead={fused4_conv - compute_dq4_ms:+.3f}ms "
+                    f"({((fused4_conv - compute_dq4_ms) / max(compute_dq4_ms, 1e-12)) * 100.0:+.1f}%)"
+                )
 
             except Exception as e:
                 print(f"  INT4 kernel timing failed: {e}")
@@ -704,6 +764,18 @@ class ExtendedBenchmarkRunner:
             print("-" * 60)
             for key, val in self.results['kernel_timing'].items():
                 print(f"{key:<20} {val['fused_total_ms']:<15.3f} {val['separate_total_ms']:<15.3f} {val['fusion_speedup']:<10.2f}x")
+
+            print(f"\n{'='*70}")
+            print("KERNEL TIMING: Compute+DQ vs Compute+DQ+Update o_hat")
+            print(f"{'='*70}")
+            print(f"{'Config':<20} {'Compute+DQ':<15} {'+Update o_hat':<15} {'Overhead':<15}")
+            print("-" * 70)
+            for key, val in self.results['kernel_timing'].items():
+                print(
+                    f"{key:<20} {val['compute_dq_ms']:<15.3f} "
+                    f"{val['compute_dq_update_ohat_ms']:<15.3f} "
+                    f"{val['ohat_update_overhead_ms']:+.3f}ms ({val['ohat_update_overhead_pct']:+.1f}%)"
+                )
 
         # Save results
         results_path = os.path.join(self.output_dir, 'extended_results.json')
@@ -769,6 +841,19 @@ class ExtendedBenchmarkRunner:
             ])
             for key, val in self.results['kernel_timing'].items():
                 lines.append(f"| {key} | {val['fused_step1_ms']:.3f} | {val['fused_conv_ms']:.3f} | {val['separate_step1_ms']:.3f} | {val['separate_conv_ms']:.3f} |")
+
+            lines.extend([
+                "",
+                "## Kernel Timing: Compute+DQ vs Compute+DQ+Update o_hat",
+                "",
+                "| Shape | Compute+DQ (ms) | Compute+DQ+Update o_hat (ms) | Overhead |",
+                "| --- | --- | --- | --- |",
+            ])
+            for key, val in self.results['kernel_timing'].items():
+                lines.append(
+                    f"| {key} | {val['compute_dq_ms']:.3f} | {val['compute_dq_update_ohat_ms']:.3f} | "
+                    f"{val['ohat_update_overhead_ms']:+.3f}ms ({val['ohat_update_overhead_pct']:+.1f}%) |"
+                )
 
         lines.extend([
             "",
