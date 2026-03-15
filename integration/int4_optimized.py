@@ -132,6 +132,7 @@ class OptimizedInt4Conv2d(nn.Module):
         self._inv_scale_buf: Optional[torch.Tensor] = None
         self._absmax_buf: Optional[torch.Tensor] = None
         self._retire_count: Optional[torch.Tensor] = None
+        self.baseline_impl = 'current'
 
     # ==================================================================
     # Quantization helpers
@@ -298,9 +299,34 @@ class OptimizedInt4Conv2d(nn.Module):
                     [self._cached_scale_float], device=x.device, dtype=torch.float32)
             if not x.is_contiguous(memory_format=torch.channels_last):
                 x = x.contiguous(memory_format=torch.channels_last)
+            quant_name = "Baseline INT4 Fused Q" if self.baseline_impl == 'two_kernel_fused' else "Baseline INT4 Current Q"
+            compute_name = (
+                "Baseline INT4 Fused Compute+DQ"
+                if self.baseline_impl == 'two_kernel_fused'
+                else "Baseline INT4 Current Compute+DQ"
+            )
+            p_quant = profiler.start(quant_name)
             x_packed = modiff_cutlass.scale_quantize_and_pack(x, self._cached_scale_tensor)
+            profiler.stop(quant_name, p_quant)
+
+            if self.baseline_impl == 'two_kernel_fused':
+                p_compute = profiler.start(compute_name)
+                out = modiff_cutlass.conv2d_int4_fprop_output(
+                    x_packed,
+                    self.weight_packed,
+                    self._cached_alpha_tensor,
+                    self.weight_scale_channel.view(-1),
+                    self.bias.view(-1) if self.bias is not None else torch.empty(0, device=x.device),
+                    self.stride[0], self.stride[1],
+                    self.padding[0], self.padding[1],
+                    self.dilation[0], self.dilation[1]
+                )
+                profiler.stop(compute_name, p_compute)
+                return out
+
             if self._empty_bias is None or self._empty_bias.device != x.device:
                 self._empty_bias = torch.empty(0, device=x.device)
+            p_compute = profiler.start(compute_name)
             out_raw = modiff_cutlass.conv2d_int4_fprop(
                 x_packed, self.weight_packed, self._cached_alpha_tensor, self._empty_bias,
                 self.stride[0], self.stride[1],
@@ -310,6 +336,7 @@ class OptimizedInt4Conv2d(nn.Module):
             out = out_raw * self.weight_scale_channel
             if self.bias is not None:
                 out = out + self.bias
+            profiler.stop(compute_name, p_compute)
             return out
         # Fallback: naive PyTorch path (dynamic scale, includes CPU-GPU sync)
         input_scale = self._compute_activation_scale(x)
@@ -492,6 +519,11 @@ class OptimizedInt4Conv2d(nn.Module):
             [alpha], device=self.static_input_scale.device, dtype=torch.float32
         )
 
+    def set_baseline_impl(self, impl: str):
+        if impl not in ('current', 'two_kernel_fused'):
+            raise ValueError(f"Unsupported INT4 baseline implementation: {impl}")
+        self.baseline_impl = impl
+
 
 # ---------------------------------------------------------------------------
 # Model conversion
@@ -543,6 +575,12 @@ def reset_modiff_state(model: nn.Module):
     for module in model.modules():
         if isinstance(module, OptimizedInt4Conv2d):
             module.reset_state()
+
+
+def set_baseline_impl(model: nn.Module, impl: str = 'current'):
+    for module in model.modules():
+        if isinstance(module, OptimizedInt4Conv2d):
+            module.set_baseline_impl(impl)
 
 
 def set_calibrating_int4(model: nn.Module, calibrating: bool):

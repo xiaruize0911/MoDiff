@@ -182,6 +182,38 @@ __global__ void scale_accumulate_kernel(
     }
 }
 
+__global__ void scale_bias_output_kernel(
+    const float* __restrict__ conv_output,
+    const float* __restrict__ weight_scale,
+    const float* __restrict__ bias,
+    float* __restrict__ output,
+    int num_elements,
+    int num_channels,
+    bool has_bias
+) {
+    int idx4 = blockIdx.x * blockDim.x + threadIdx.x;
+    int base = idx4 * 4;
+    if (base + 3 < num_elements) {
+        float4 conv_v = reinterpret_cast<const float4*>(conv_output)[idx4];
+        int ch_base = base % num_channels;
+        float4 out_v;
+        float s0 = weight_scale[ch_base];
+        float s1 = weight_scale[ch_base + 1];
+        float s2 = weight_scale[ch_base + 2];
+        float s3 = weight_scale[ch_base + 3];
+        out_v.x = conv_v.x * s0 + (has_bias ? bias[ch_base] : 0.0f);
+        out_v.y = conv_v.y * s1 + (has_bias ? bias[ch_base + 1] : 0.0f);
+        out_v.z = conv_v.z * s2 + (has_bias ? bias[ch_base + 2] : 0.0f);
+        out_v.w = conv_v.w * s3 + (has_bias ? bias[ch_base + 3] : 0.0f);
+        reinterpret_cast<float4*>(output)[idx4] = out_v;
+    } else {
+        for (int i = base; i < num_elements; i++) {
+            int ch = i % num_channels;
+            output[i] = conv_output[i] * weight_scale[ch] + (has_bias ? bias[ch] : 0.0f);
+        }
+    }
+}
+
 void scale_accumulate(
     torch::Tensor conv_output,
     torch::Tensor weight_scale,
@@ -773,6 +805,45 @@ torch::Tensor conv2d_int8_fprop_o_hat(
 }
 
 
+torch::Tensor conv2d_int8_fprop_output(
+    torch::Tensor input,
+    torch::Tensor weight,
+    torch::Tensor inv_scale,
+    torch::Tensor weight_scales,
+    torch::Tensor bias,
+    int stride_h, int stride_w,
+    int padding_h, int padding_w,
+    int dilation_h, int dilation_w
+) {
+    auto empty_bias = torch::empty({0}, torch::TensorOptions().device(input.device()));
+    auto conv_out = conv2d_int8_fprop(
+        input, weight, inv_scale, empty_bias,
+        stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w
+    );
+
+    auto output = torch::empty_like(conv_out);
+    int num_elements = conv_out.numel();
+    int num_channels = weight_scales.numel();
+    int block_size = 256;
+    int num_work_items = (num_elements + 3) / 4;
+    int grid_size = (num_work_items + block_size - 1) / block_size;
+    bool has_bias = bias.numel() > 0;
+    const float* bias_ptr = has_bias ? bias.data_ptr<float>() : nullptr;
+
+    scale_bias_output_kernel<<<grid_size, block_size>>>(
+        conv_out.data_ptr<float>(),
+        weight_scales.data_ptr<float>(),
+        bias_ptr,
+        output.data_ptr<float>(),
+        num_elements,
+        num_channels,
+        has_bias
+    );
+
+    return output;
+}
+
+
 __global__ void quantize_pack_and_update_ahat_kernel_int4(
     const float* __restrict__ residual,
     float* __restrict__ a_hat_cache,
@@ -930,5 +1001,44 @@ torch::Tensor conv2d_int4_fprop_o_hat(
     );
     
     return o_hat_cache;
+}
+
+
+torch::Tensor conv2d_int4_fprop_output(
+    torch::Tensor input,
+    torch::Tensor weight_packed,
+    torch::Tensor inv_scale,
+    torch::Tensor weight_scales,
+    torch::Tensor bias,
+    int stride_h, int stride_w,
+    int padding_h, int padding_w,
+    int dilation_h, int dilation_w
+) {
+    auto empty_bias = torch::empty({0}, torch::TensorOptions().device(input.device()));
+    auto conv_out = conv2d_int4_fprop(
+        input, weight_packed, inv_scale, empty_bias,
+        stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w
+    );
+
+    auto output = torch::empty_like(conv_out);
+    int num_elements = conv_out.numel();
+    int num_channels = weight_scales.numel();
+    int block_size = 256;
+    int num_work_items = (num_elements + 3) / 4;
+    int grid_size = (num_work_items + block_size - 1) / block_size;
+    bool has_bias = bias.numel() > 0;
+    const float* bias_ptr = has_bias ? bias.data_ptr<float>() : nullptr;
+
+    scale_bias_output_kernel<<<grid_size, block_size>>>(
+        conv_out.data_ptr<float>(),
+        weight_scales.data_ptr<float>(),
+        bias_ptr,
+        output.data_ptr<float>(),
+        num_elements,
+        num_channels,
+        has_bias
+    );
+
+    return output;
 }
 
