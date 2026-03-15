@@ -1,33 +1,31 @@
 """
 PyTorch Native INT8 + CUDA Graph Inference for MoDiff.
 
-This module implements INT8 quantization using PyTorch's native quantization APIs
-combined with CUDA Graphs for maximum kernel launch elimination.
+This module implements PyTorch-native INT8 simulation for Conv2d layers and wires
+real CUDA Graph replay into the per-step UNet call path used by DDIM sampling.
 
 Two modes:
-1. int8_cudagraph: PyTorch dynamic INT8 quantization + CUDA Graph + MoDiff temporal caching
+1. int8_cudagraph: PyTorch INT8 + CUDA Graph + MoDiff temporal caching
 2. int8_cudagraph_baseline: Same but without MoDiff temporal caching
 
-CUDA Graphs capture the entire forward pass (including all kernel launches) into
-a single graph that can be replayed with near-zero CPU overhead. This eliminates
-the ~100us per-kernel launch overhead that dominates small-batch inference.
+Implementation details:
+- baseline mode captures one per-step UNet graph (`standard`)
+- MoDiff mode captures two per-step UNet graphs:
+    * `first`      : first denoising step after state reset
+    * `modulated`  : all subsequent denoising steps
+- DDIM itself stays as the outer Python loop, but each UNet invocation in that
+    loop is replayed from a captured CUDA graph using fixed static buffers.
 
 Architecture (unchanged from original MoDiff):
 - UNet with ResBlocks, attention, time embedding
 - DDIMSampler with configurable steps
 - AutoencoderKL first stage decoder
-
-Requirements:
-- PyTorch >= 2.0 (for torch.cuda.CUDAGraph)
-- CUDA capable GPU with compute capability >= 7.0
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict, Optional, Tuple
-import copy
-import time
+from typing import Any, Dict, Optional, Tuple
 
 
 class PyTorchInt8Conv2d(nn.Module):
@@ -91,11 +89,23 @@ class PyTorchInt8Conv2d(nn.Module):
         self._scale_count = 0
         self.register_buffer('static_input_scale', torch.tensor(1.0))
 
-        # Static buffers for CUDA Graph compatibility
-        self._static_input: Optional[torch.Tensor] = None
-        self._static_output: Optional[torch.Tensor] = None
+        # Persistent state buffers for CUDA Graph compatibility
+        self._state_ready = False
 
-    def _quantize_and_conv(self, x: torch.Tensor, input_scale: float, with_bias: bool = True) -> torch.Tensor:
+    def _ensure_state_buffers(self, x: torch.Tensor):
+        h_out = ((x.shape[2] + 2 * self.padding[0] - self.dilation[0] * (self.kernel_size[0] - 1) - 1) // self.stride[0]) + 1
+        w_out = ((x.shape[3] + 2 * self.padding[1] - self.dilation[1] * (self.kernel_size[1] - 1) - 1) // self.stride[1]) + 1
+        output_shape = (x.shape[0], self.out_channels, h_out, w_out)
+
+        if self.a_hat_cache is None or self.a_hat_cache.shape != x.shape:
+            self.a_hat_cache = torch.zeros_like(x)
+            self._state_ready = False
+
+        if self.o_hat_cache is None or self.o_hat_cache.shape != output_shape:
+            self.o_hat_cache = torch.zeros(output_shape, device=x.device, dtype=torch.float32)
+            self._state_ready = False
+
+    def _quantize_and_conv(self, x: torch.Tensor, input_scale, with_bias: bool = True) -> torch.Tensor:
         """INT8 quantize input, do FP16 conv (PyTorch native), dequantize output."""
         # Quantize activation to INT8
         x_int8 = (x * input_scale).round().clamp(-127, 127)
@@ -113,12 +123,12 @@ class PyTorchInt8Conv2d(nn.Module):
             out = out + self.bias.view(1, -1, 1, 1)
         return out
 
-    def _dequantize_activation(self, x: torch.Tensor, scale: float) -> torch.Tensor:
+    def _dequantize_activation(self, x: torch.Tensor, scale) -> torch.Tensor:
         """Simulate quantize-then-dequantize: a_hat = Q(x)."""
         return (x * scale).round().clamp(-127, 127) / scale
 
-    def _compute_scale(self, x: torch.Tensor) -> float:
-        """Compute per-tensor symmetric scale."""
+    def _compute_scale_float(self, x: torch.Tensor) -> float:
+        """Compute per-tensor symmetric scale as Python float (for calibration/export only)."""
         if self.is_calibrated:
             return float(self.static_input_scale.item())
         abs_max = x.abs().max().item()
@@ -128,12 +138,28 @@ class PyTorchInt8Conv2d(nn.Module):
             self._scale_count += 1
         return scale
 
+    def _compute_scale_tensor(self, x: torch.Tensor) -> torch.Tensor:
+        """Compute per-tensor symmetric scale on GPU, graph-safe."""
+        if self.is_calibrated:
+            scale = self.static_input_scale
+            if scale.device != x.device:
+                scale = scale.to(x.device)
+            return scale
+
+        abs_max = x.abs().amax()
+        scale = 127.0 / torch.clamp(abs_max, min=1e-6)
+        if self.calibrating:
+            scale_float = float(scale.detach().item())
+            self._scale_sum += scale_float
+            self._scale_count += 1
+        return scale
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if x.dtype != torch.float32:
             x = x.float()
 
         if not self.modiff_enabled:
-            scale = self._compute_scale(x)
+            scale = self._compute_scale_tensor(x)
             return self._quantize_and_conv(x, scale)
 
         if self.is_first_step:
@@ -145,25 +171,28 @@ class PyTorchInt8Conv2d(nn.Module):
 
     def _forward_first_step(self, x: torch.Tensor) -> torch.Tensor:
         """First timestep: warm-up."""
-        scale = self._compute_scale(x)
+        self._ensure_state_buffers(x)
+
+        scale = self._compute_scale_tensor(x)
         a_hat = self._dequantize_activation(x, scale)
         o_hat = self._quantize_and_conv(x, scale)
 
         for _ in range(self.warmup_steps - 1):
             residual = x - a_hat
-            abs_max = residual.abs().max().item()
-            r_scale = 127.0 / max(abs_max, 1e-6)
+            r_scale = self._compute_scale_tensor(residual)
             r_dq = self._dequantize_activation(residual, r_scale)
             o_hat = o_hat + self._quantize_and_conv(residual, r_scale, with_bias=False)
             a_hat = a_hat + r_dq
 
-        self.a_hat_cache = a_hat
-        self.o_hat_cache = o_hat
-        return o_hat.clone()
+        self.a_hat_cache.copy_(a_hat)
+        self.o_hat_cache.copy_(o_hat)
+        self._state_ready = True
+        return self.o_hat_cache
 
     def _forward_modulated(self, x: torch.Tensor) -> torch.Tensor:
         """MoDiff modulated step."""
-        if self.a_hat_cache is None or self.a_hat_cache.shape != x.shape:
+        self._ensure_state_buffers(x)
+        if not self._state_ready:
             self.is_first_step = True
             out = self._forward_first_step(x)
             self.is_first_step = False
@@ -174,7 +203,7 @@ class PyTorchInt8Conv2d(nn.Module):
         r_scale = 127.0 / torch.clamp(abs_max, min=1e-6)
 
         r_dq = (residual * r_scale).round().clamp(-127, 127) / r_scale
-        conv_r = self._quantize_and_conv(residual, float(r_scale.item()), with_bias=False)
+        conv_r = self._quantize_and_conv(residual, r_scale, with_bias=False)
 
         self.a_hat_cache.add_(r_dq)
         self.o_hat_cache.add_(conv_r)
@@ -187,8 +216,12 @@ class PyTorchInt8Conv2d(nn.Module):
 
     def reset_state(self):
         self.is_first_step = True
-        self.a_hat_cache = None
-        self.o_hat_cache = None
+        with torch.inference_mode():
+            if self.a_hat_cache is not None:
+                self.a_hat_cache.zero_()
+            if self.o_hat_cache is not None:
+                self.o_hat_cache.zero_()
+        self._state_ready = False
 
     def set_calibrating(self, calibrating: bool):
         if calibrating:
@@ -206,6 +239,159 @@ class PyTorchInt8Conv2d(nn.Module):
     def set_static_scale(self, scale: float):
         self.static_input_scale.fill_(scale)
         self.is_calibrated = True
+
+
+def _iter_pytorch_int8_modules(model: nn.Module):
+    for m in model.modules():
+        if isinstance(m, PyTorchInt8Conv2d):
+            yield m
+
+
+class _GraphRecord:
+    def __init__(self, graph: torch.cuda.CUDAGraph, static_x: torch.Tensor, static_t: torch.Tensor,
+                 static_kwargs: Dict[str, Any], static_output: torch.Tensor):
+        self.graph = graph
+        self.static_x = static_x
+        self.static_t = static_t
+        self.static_kwargs = static_kwargs
+        self.static_output = static_output
+
+
+class UNetCudaGraphManager:
+    """Capture and replay per-step UNet forwards for standard/first/modulated phases."""
+
+    def __init__(self, diffusion_wrapper: nn.Module, batch_size: int, shape: Tuple[int, int, int],
+                 modiff_enabled: bool):
+        self.diffusion_wrapper = diffusion_wrapper
+        self.diffusion_model = diffusion_wrapper.diffusion_model
+        self.batch_size = batch_size
+        self.shape = shape
+        self.modiff_enabled = modiff_enabled
+        self.records: Dict[str, _GraphRecord] = {}
+        self.phase_index = 0
+        self.capture_count = 0
+        self.replay_count = 0
+        self._previous_cudnn_benchmark = torch.backends.cudnn.benchmark
+
+        # cuDNN algorithm search is not capture-safe; freeze engine selection.
+        torch.backends.cudnn.benchmark = False
+
+        self._prepare_module_state_buffers()
+
+    def _prepare_module_state_buffers(self):
+        C, H, W = self.shape
+        example = torch.zeros(self.batch_size, C, H, W, device=next(self.diffusion_model.parameters()).device, dtype=torch.float32)
+        for module in _iter_pytorch_int8_modules(self.diffusion_model):
+            module._ensure_state_buffers(example)
+
+    def reset_sequence(self):
+        self.phase_index = 0
+
+    def _phase_name(self) -> str:
+        if not self.modiff_enabled:
+            return 'standard'
+        return 'first' if self.phase_index == 0 else 'modulated'
+
+    def _copy_structure(self, obj: Any) -> Any:
+        if torch.is_tensor(obj):
+            return obj.clone()
+        if isinstance(obj, list):
+            return [self._copy_structure(v) for v in obj]
+        if isinstance(obj, tuple):
+            return tuple(self._copy_structure(v) for v in obj)
+        if isinstance(obj, dict):
+            return {k: self._copy_structure(v) for k, v in obj.items()}
+        return obj
+
+    def _copy_into(self, dst: Any, src: Any):
+        if torch.is_tensor(dst):
+            dst.copy_(src)
+            return
+        if isinstance(dst, list):
+            for d, s in zip(dst, src):
+                self._copy_into(d, s)
+            return
+        if isinstance(dst, tuple):
+            for d, s in zip(dst, src):
+                self._copy_into(d, s)
+            return
+        if isinstance(dst, dict):
+            for k in dst:
+                self._copy_into(dst[k], src[k])
+
+    def _set_module_first_step(self, is_first_step: bool):
+        for module in _iter_pytorch_int8_modules(self.diffusion_model):
+            module.is_first_step = is_first_step
+
+    def _capture_phase(self, phase: str, x: torch.Tensor, t: torch.Tensor, model_kwargs: Dict[str, Any]) -> torch.Tensor:
+        static_x = torch.empty_like(x)
+        static_t = torch.empty_like(t)
+        static_kwargs = self._copy_structure(model_kwargs)
+        static_x.copy_(x)
+        static_t.copy_(t)
+
+        if phase == 'first':
+            self._set_module_first_step(True)
+        elif phase == 'modulated':
+            self._set_module_first_step(False)
+
+        graph = torch.cuda.CUDAGraph()
+        torch.cuda.synchronize()
+        with torch.cuda.graph(graph):
+            static_output = self.diffusion_wrapper(static_x, static_t, **static_kwargs)
+
+        record = _GraphRecord(graph, static_x, static_t, static_kwargs, static_output)
+        self.records[phase] = record
+        self.capture_count += 1
+
+        if phase == 'first':
+            self._set_module_first_step(False)
+        return static_output
+
+    def __call__(self, x: torch.Tensor, t: torch.Tensor, model_kwargs: Dict[str, Any]) -> torch.Tensor:
+        phase = self._phase_name()
+        if phase not in self.records:
+            out = self._capture_phase(phase, x, t, model_kwargs)
+        else:
+            record = self.records[phase]
+            self._copy_into(record.static_x, x)
+            self._copy_into(record.static_t, t)
+            self._copy_into(record.static_kwargs, model_kwargs)
+            record.graph.replay()
+            out = record.static_output
+            self.replay_count += 1
+            if phase == 'first':
+                self._set_module_first_step(False)
+
+        if self.modiff_enabled and phase == 'first':
+            self.phase_index = 1
+        elif not self.modiff_enabled:
+            self.phase_index += 1
+        else:
+            self.phase_index += 1
+        return out
+
+    def stats(self) -> Dict[str, int]:
+        return {
+            'num_graphs': len(self.records),
+            'capture_count': self.capture_count,
+            'replay_count': self.replay_count,
+        }
+
+
+def install_cuda_graph_replay_pytorch_int8(diffusion_wrapper: nn.Module, batch_size: int,
+                                           shape: Tuple[int, int, int]) -> UNetCudaGraphManager:
+    modiff_enabled = any(module.modiff_enabled for module in _iter_pytorch_int8_modules(diffusion_wrapper.diffusion_model))
+    manager = UNetCudaGraphManager(diffusion_wrapper, batch_size=batch_size, shape=shape, modiff_enabled=modiff_enabled)
+    diffusion_wrapper.diffusion_model._cuda_graph_manager = manager
+    return manager
+
+
+def get_cuda_graph_replay_stats(diffusion_model: nn.Module) -> Optional[Dict[str, int]]:
+    manager = getattr(diffusion_model, '_cuda_graph_manager', None)
+    if manager is None:
+        return None
+    return manager.stats()
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +518,9 @@ def reset_modiff_state_pytorch_int8(model: nn.Module):
     for m in model.modules():
         if isinstance(m, PyTorchInt8Conv2d):
             m.reset_state()
+    manager = getattr(model, '_cuda_graph_manager', None)
+    if manager is not None:
+        manager.reset_sequence()
 
 
 def set_calibrating_pytorch_int8(model: nn.Module, calibrating: bool):

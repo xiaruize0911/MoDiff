@@ -87,6 +87,8 @@ try:
         set_calibrating_pytorch_int8,
         apply_pytorch_int8_scales,
         export_pytorch_int8_scales,
+        install_cuda_graph_replay_pytorch_int8,
+        get_cuda_graph_replay_stats,
     )
     HAS_CUDAGRAPH = True
 except ImportError as e:
@@ -337,16 +339,14 @@ class ExtendedBenchmarkRunner:
         torch.cuda.synchronize()
 
         # For CUDA Graph modes, try to capture the graph after warmup
-        cuda_graph_wrapper = None
         if 'cudagraph' in mode:
-            print("  Attempting CUDA Graph capture...")
-            try:
-                # CUDA Graph capture for the UNet forward
-                # Note: DDIM sampling loop itself cannot be captured (dynamic control flow)
-                # but individual UNet forward passes can be
-                print("  CUDA Graph: Using eager mode with static buffers (DDIM loop has dynamic flow)")
-            except Exception as e:
-                print(f"  CUDA Graph capture failed: {e}, using eager mode")
+            print("  Installing per-step UNet CUDA Graph replay...")
+            install_cuda_graph_replay_pytorch_int8(
+                model.model,
+                batch_size=self.batch_size,
+                shape=self.shape,
+            )
+            self._reset_state(model, mode)
 
         # Generate samples and measure
         total_time = 0.0
@@ -356,14 +356,17 @@ class ExtendedBenchmarkRunner:
         while generated < num_samples:
             batch = min(self.batch_size, num_samples - generated)
             self._reset_state(model, mode)
+            sample_batch = self.batch_size if 'cudagraph' in mode else batch
 
             torch.cuda.synchronize()
             start = time.time()
 
             with torch.inference_mode(), torch.amp.autocast('cuda', enabled=use_autocast, dtype=dtype):
                 samples, _ = sampler.sample(
-                    S=self.steps, batch_size=batch, shape=self.shape, eta=0.0, verbose=False
+                    S=self.steps, batch_size=sample_batch, shape=self.shape, eta=0.0, verbose=False
                 )
+                if sample_batch != batch:
+                    samples = samples[:batch]
 
             torch.cuda.synchronize()
             elapsed = time.time() - start
@@ -398,11 +401,27 @@ class ExtendedBenchmarkRunner:
             'steps': self.steps,
         }
 
+        if 'cudagraph' in mode:
+            graph_stats = get_cuda_graph_replay_stats(model.model.diffusion_model)
+            if graph_stats is None:
+                raise RuntimeError("CUDA Graph manager was not installed for cudagraph mode.")
+            if graph_stats['num_graphs'] == 0 or graph_stats['replay_count'] == 0:
+                raise RuntimeError(f"CUDA Graph replay was not exercised correctly: {graph_stats}")
+            self.results[mode]['cuda_graph_num_graphs'] = graph_stats['num_graphs']
+            self.results[mode]['cuda_graph_capture_count'] = graph_stats['capture_count']
+            self.results[mode]['cuda_graph_replay_count'] = graph_stats['replay_count']
+
         print(f"\n{mode.upper()} Results:")
         print(f"  Total: {total_time:.2f}s for {num_samples} samples")
         print(f"  Per-sample: {time_per_sample:.3f}s")
         print(f"  Per-step: {time_per_step:.2f}ms")
         print(f"  Memory: {mem_after_setup['allocated_mb']:.0f}MB allocated, {mem_peak['max_allocated_mb']:.0f}MB peak")
+        if 'cudagraph' in mode:
+            print(
+                f"  CUDA Graphs: {self.results[mode]['cuda_graph_num_graphs']} graphs, "
+                f"{self.results[mode]['cuda_graph_capture_count']} captures, "
+                f"{self.results[mode]['cuda_graph_replay_count']} replays"
+            )
 
         if 'fp32' in self.results:
             speedup = self.results['fp32']['time_per_sample'] / time_per_sample

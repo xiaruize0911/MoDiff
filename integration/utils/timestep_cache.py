@@ -36,8 +36,37 @@ class TimestepEmbeddingCache:
     def __init__(self):
         # Cache: (dim, max_period) -> Dict[timestep_tuple -> embedding_tensor]
         self.cache: Dict[Tuple[int, int], Dict[tuple, torch.Tensor]] = {}
+        self.device_cache: Dict[Tuple[str, int, int, bool], torch.Tensor] = {}
         self.hits = 0
         self.misses = 0
+
+    def _get_device_table(
+        self,
+        timesteps: torch.Tensor,
+        dim: int,
+        max_period: int,
+        repeat_only: bool,
+    ) -> Optional[torch.Tensor]:
+        """Get or build a device-resident embedding lookup table for CUDA tensors."""
+        if timesteps.device.type != 'cuda':
+            return None
+
+        device_key = (str(timesteps.device), dim, max_period, repeat_only)
+        table = self.device_cache.get(device_key)
+
+        if torch.cuda.is_current_stream_capturing():
+            return table
+
+        required_size = int(timesteps.max().item()) + 1 if timesteps.numel() > 0 else 1
+        if table is None or table.shape[0] < required_size:
+            all_timesteps = torch.arange(required_size, device=timesteps.device, dtype=timesteps.dtype)
+            table = _original_timestep_embedding(all_timesteps, dim, max_period, repeat_only).contiguous()
+            self.device_cache[device_key] = table
+            self.misses += 1
+        else:
+            self.hits += 1
+
+        return table
         
     def get_embedding(
         self,
@@ -58,6 +87,13 @@ class TimestepEmbeddingCache:
         Returns:
             Tensor of shape [N, dim] with timestep embeddings
         """
+        device_table = self._get_device_table(timesteps, dim, max_period, repeat_only)
+        if device_table is not None:
+            return device_table.index_select(0, timesteps.long())
+
+        if timesteps.device.type == 'cuda' and torch.cuda.is_current_stream_capturing():
+            return _original_timestep_embedding(timesteps, dim, max_period, repeat_only)
+
         # Create cache key for this configuration
         config_key = (dim, max_period, repeat_only)
         
@@ -103,6 +139,7 @@ class TimestepEmbeddingCache:
     def clear(self):
         """Clear all cached embeddings."""
         self.cache.clear()
+        self.device_cache.clear()
         self.hits = 0
         self.misses = 0
     
@@ -114,7 +151,8 @@ class TimestepEmbeddingCache:
             'misses': self.misses,
             'hit_rate': self.hits / (self.hits + self.misses) if (self.hits + self.misses) > 0 else 0.0,
             'total_entries': total_entries,
-            'configs': len(self.cache)
+            'configs': len(self.cache),
+            'device_tables': len(self.device_cache),
         }
 
 
