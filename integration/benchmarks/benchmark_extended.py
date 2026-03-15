@@ -752,8 +752,8 @@ class ExtendedBenchmarkRunner:
         print(f"GPU: {torch.cuda.get_device_name()}")
 
         # Pipeline timing
-        print(f"\n{'Mode':<25} {'Time/Sample':<15} {'Speedup':<12} {'Memory (MB)':<15}")
-        print("-" * 70)
+        print(f"\n{'Mode':<25} {'Time/Sample':<15} {'Speedup':<12} {'Memory (MB)':<15} {'Graph Stats':<20}")
+        print("-" * 92)
 
         baseline = self.results.get('fp32', {}).get('time_per_sample', 1.0)
         pipeline_modes = [
@@ -772,7 +772,11 @@ class ExtendedBenchmarkRunner:
                 speedup = baseline / r['time_per_sample'] if r['time_per_sample'] > 0 else 0
                 s = "(baseline)" if mode == 'fp32' else f"{speedup:.2f}x"
                 mem = f"{r.get('memory_peak_mb', 0):.0f}"
-                print(f"{mode:<25} {t:<15} {s:<12} {mem:<15}")
+                if 'cudagraph' in mode:
+                    graph_stats = f"{int(r.get('cuda_graph_num_graphs', 0))}g/{int(r.get('cuda_graph_replay_count', 0))}r"
+                else:
+                    graph_stats = '-'
+                print(f"{mode:<25} {t:<15} {s:<12} {mem:<15} {graph_stats:<20}")
 
         # Kernel timing
         if 'kernel_timing' in self.results:
@@ -823,8 +827,8 @@ class ExtendedBenchmarkRunner:
             "",
             "## Pipeline Timing Results",
             "",
-            "| Mode | Time/Sample (s) | Speedup vs FP32 | Peak Memory (MB) |",
-            "| --- | --- | --- | --- |",
+            "| Mode | Time/Sample (s) | Speedup vs FP32 | Peak Memory (MB) | Graphs | Captures | Replays |",
+            "| --- | --- | --- | --- | --- | --- | --- |",
         ]
 
         baseline = self.results.get('fp32', {}).get('time_per_sample', 1.0)
@@ -838,7 +842,31 @@ class ExtendedBenchmarkRunner:
                 speedup = baseline / r['time_per_sample'] if r['time_per_sample'] > 0 else 0
                 s = "-" if mode == 'fp32' else f"{speedup:.2f}x"
                 mem = f"{r.get('memory_peak_mb', 0):.0f}"
-                lines.append(f"| {mode} | {t} | {s} | {mem} |")
+                graphs = str(int(r.get('cuda_graph_num_graphs', 0))) if 'cudagraph' in mode else '-'
+                captures = str(int(r.get('cuda_graph_capture_count', 0))) if 'cudagraph' in mode else '-'
+                replays = str(int(r.get('cuda_graph_replay_count', 0))) if 'cudagraph' in mode else '-'
+                lines.append(f"| {mode} | {t} | {s} | {mem} | {graphs} | {captures} | {replays} |")
+
+        cudagraph_modes = [
+            mode for mode in ['int8_cudagraph', 'int8_cudagraph_baseline']
+            if mode in self.results
+        ]
+        if cudagraph_modes:
+            lines.extend([
+                "",
+                "## CUDA Graph Replay Stats",
+                "",
+                "| Mode | Graphs | Captures | Replays | Replays / Captures |",
+                "| --- | --- | --- | --- | --- |",
+            ])
+            for mode in cudagraph_modes:
+                r = self.results[mode]
+                captures = int(r.get('cuda_graph_capture_count', 0))
+                replays = int(r.get('cuda_graph_replay_count', 0))
+                ratio = f"{(replays / captures):.1f}" if captures > 0 else '-'
+                lines.append(
+                    f"| {mode} | {int(r.get('cuda_graph_num_graphs', 0))} | {captures} | {replays} | {ratio} |"
+                )
 
         if 'kernel_timing' in self.results:
             lines.extend([
