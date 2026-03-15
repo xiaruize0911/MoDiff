@@ -148,6 +148,36 @@ __global__ void quantize_and_update_ahat_kernel(
     }
 }
 
+__global__ void quantize_only_int8_kernel(
+    const float* __restrict__ residual,
+    int8_t* __restrict__ output_int8,
+    const float* __restrict__ scale_ptr,
+    int num_elements
+) {
+    float scale = *scale_ptr;
+    int idx4 = blockIdx.x * blockDim.x + threadIdx.x;
+    int base = idx4 * 4;
+
+    if (base + 3 < num_elements) {
+        float4 r_v = reinterpret_cast<const float4*>(residual)[idx4];
+
+        float q0 = fmaxf(-127.0f, fminf(127.0f, roundf(r_v.x * scale)));
+        float q1 = fmaxf(-127.0f, fminf(127.0f, roundf(r_v.y * scale)));
+        float q2 = fmaxf(-127.0f, fminf(127.0f, roundf(r_v.z * scale)));
+        float q3 = fmaxf(-127.0f, fminf(127.0f, roundf(r_v.w * scale)));
+
+        reinterpret_cast<int32_t*>(output_int8)[idx4] =
+            ((unsigned char)(int8_t)q0) | ((unsigned char)(int8_t)q1 << 8) |
+            ((unsigned char)(int8_t)q2 << 16) | ((unsigned char)(int8_t)q3 << 24);
+    } else {
+        for (int i = base; i < num_elements; i++) {
+            float r = residual[i];
+            float q = fmaxf(-127.0f, fminf(127.0f, roundf(r * scale)));
+            output_int8[i] = (int8_t)q;
+        }
+    }
+}
+
 // =========================================================================
 // Fused: o_hat_cache += conv_output * weight_scale (per-channel broadcast)
 // Vectorized float4 loads for better memory bandwidth.
@@ -179,6 +209,36 @@ __global__ void scale_accumulate_kernel(
         for (int i = base; i < num_elements; i++) {
             int ch = i % num_channels;
             o_hat_cache[i] += conv_output[i] * weight_scale[ch];
+        }
+    }
+}
+
+__global__ void scale_store_kernel(
+    const float* __restrict__ conv_output,
+    const float* __restrict__ weight_scale,
+    float* __restrict__ output,
+    int num_elements,
+    int num_channels
+) {
+    int idx4 = blockIdx.x * blockDim.x + threadIdx.x;
+    int base = idx4 * 4;
+    if (base + 3 < num_elements) {
+        float4 conv_v = reinterpret_cast<const float4*>(conv_output)[idx4];
+        float4 out_v;
+        int ch_base = base % num_channels;
+        float s0 = weight_scale[ch_base];
+        float s1 = weight_scale[ch_base + 1];
+        float s2 = weight_scale[ch_base + 2];
+        float s3 = weight_scale[ch_base + 3];
+        out_v.x = conv_v.x * s0;
+        out_v.y = conv_v.y * s1;
+        out_v.z = conv_v.z * s2;
+        out_v.w = conv_v.w * s3;
+        reinterpret_cast<float4*>(output)[idx4] = out_v;
+    } else {
+        for (int i = base; i < num_elements; i++) {
+            int ch = i % num_channels;
+            output[i] = conv_output[i] * weight_scale[ch];
         }
     }
 }
@@ -834,6 +894,39 @@ __global__ void quantize_pack_and_update_ahat_kernel_int4(
     }
 }
 
+__global__ void quantize_pack_only_kernel_int4(
+    const float* __restrict__ residual,
+    int8_t* __restrict__ output_packed,
+    const float* __restrict__ scale_ptr,
+    int num_elements
+) {
+    float scale = *scale_ptr;
+    int idx4 = blockIdx.x * blockDim.x + threadIdx.x;
+    int base = idx4 * 4;
+
+    if (base + 3 < num_elements) {
+        float4 r_v = reinterpret_cast<const float4*>(residual)[idx4];
+
+        float q0 = fmaxf(-7.0f, fminf(7.0f, roundf(r_v.x * scale)));
+        float q1 = fmaxf(-7.0f, fminf(7.0f, roundf(r_v.y * scale)));
+        float q2 = fmaxf(-7.0f, fminf(7.0f, roundf(r_v.z * scale)));
+        float q3 = fmaxf(-7.0f, fminf(7.0f, roundf(r_v.w * scale)));
+
+        int8_t b0 = ((int8_t)q0 & 0x0F) | (((int8_t)q1 & 0x0F) << 4);
+        int8_t b1 = ((int8_t)q2 & 0x0F) | (((int8_t)q3 & 0x0F) << 4);
+        reinterpret_cast<int16_t*>(output_packed)[idx4] = (uint16_t)(uint8_t)b0 | ((uint16_t)(uint8_t)b1 << 8);
+    } else {
+        for (int i = base; i < num_elements; i += 2) {
+            float q0 = fmaxf(-7.0f, fminf(7.0f, roundf(residual[i] * scale)));
+            float q1 = 0.0f;
+            if (i + 1 < num_elements) {
+                q1 = fmaxf(-7.0f, fminf(7.0f, roundf(residual[i + 1] * scale)));
+            }
+            output_packed[i / 2] = (((int8_t)q0 & 0x0F) | ((((int8_t)q1 & 0x0F) << 4)));
+        }
+    }
+}
+
 torch::Tensor step1_quantize_fprop(
     torch::Tensor x,
     torch::Tensor a_hat_cache,
@@ -866,6 +959,36 @@ torch::Tensor step1_quantize_fprop(
         num_elements
     );
     
+    return x_int8;
+}
+
+torch::Tensor step1_quantize_no_ahat_fprop(
+    torch::Tensor x,
+    torch::Tensor a_hat_cache,
+    torch::Tensor residual_buf,
+    torch::Tensor absmax_buf,
+    torch::Tensor scale_buf,
+    torch::Tensor inv_scale_buf,
+    torch::Tensor retire_count,
+    float Q_level,
+    torch::Tensor smooth_inv
+) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    sub_absmax_scale(x, a_hat_cache, residual_buf, absmax_buf, scale_buf, inv_scale_buf, retire_count, Q_level, smooth_inv);
+
+    auto x_int8 = torch::empty_like(x, torch::TensorOptions().dtype(torch::kInt8));
+    int num_elements = x.numel();
+    int block_size = 256;
+    int num_work_items = (num_elements + 3) / 4;
+    int grid_size = (num_work_items + block_size - 1) / block_size;
+
+    quantize_only_int8_kernel<<<grid_size, block_size, 0, stream>>>(
+        residual_buf.data_ptr<float>(),
+        x_int8.data_ptr<int8_t>(),
+        scale_buf.data_ptr<float>(),
+        num_elements
+    );
+
     return x_int8;
 }
 
@@ -909,6 +1032,110 @@ torch::Tensor step1_quantize_pack_int4_fprop(
     int W = x.size(3);
     
     return x_packed.view({N, H, W, C/2});
+}
+
+torch::Tensor step1_quantize_pack_int4_no_ahat_fprop(
+    torch::Tensor x,
+    torch::Tensor a_hat_cache,
+    torch::Tensor residual_buf,
+    torch::Tensor absmax_buf,
+    torch::Tensor scale_buf,
+    torch::Tensor inv_scale_buf,
+    torch::Tensor retire_count,
+    float Q_level,
+    torch::Tensor smooth_inv
+) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    sub_absmax_scale(x, a_hat_cache, residual_buf, absmax_buf, scale_buf, inv_scale_buf, retire_count, Q_level, smooth_inv);
+
+    int num_input = x.numel();
+    int num_output = num_input / 2;
+    auto x_packed = torch::empty({num_output}, torch::TensorOptions().dtype(torch::kInt8).device(x.device()));
+
+    int block_size = 256;
+    int num_work_items = (num_input + 3) / 4;
+    int grid_size = (num_work_items + block_size - 1) / block_size;
+
+    quantize_pack_only_kernel_int4<<<grid_size, block_size, 0, stream>>>(
+        residual_buf.data_ptr<float>(),
+        x_packed.data_ptr<int8_t>(),
+        scale_buf.data_ptr<float>(),
+        num_input
+    );
+
+    int N = x.size(0);
+    int C = x.size(1);
+    int H = x.size(2);
+    int W = x.size(3);
+    return x_packed.view({N, H, W, C/2});
+}
+
+torch::Tensor conv2d_int8_fprop_no_ohat(
+    torch::Tensor input,
+    torch::Tensor weight,
+    torch::Tensor inv_scale,
+    torch::Tensor weight_scales,
+    int stride_h, int stride_w,
+    int padding_h, int padding_w,
+    int dilation_h, int dilation_w
+) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    auto empty_bias = torch::empty({0}, torch::TensorOptions().device(input.device()));
+    auto conv_out = conv2d_int8_fprop(
+        input, weight, inv_scale, empty_bias,
+        stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w
+    );
+
+    auto output = torch::empty_like(conv_out, conv_out.options().memory_format(torch::MemoryFormat::ChannelsLast));
+    int num_elements = conv_out.numel();
+    int num_channels = weight_scales.numel();
+    int block_size = 256;
+    int num_work_items = (num_elements + 3) / 4;
+    int grid_size = (num_work_items + block_size - 1) / block_size;
+
+    scale_store_kernel<<<grid_size, block_size, 0, stream>>>(
+        conv_out.data_ptr<float>(),
+        weight_scales.data_ptr<float>(),
+        output.data_ptr<float>(),
+        num_elements,
+        num_channels
+    );
+
+    return output;
+}
+
+torch::Tensor conv2d_int4_fprop_no_ohat(
+    torch::Tensor input,
+    torch::Tensor weight_packed,
+    torch::Tensor inv_scale,
+    torch::Tensor weight_scales,
+    int stride_h, int stride_w,
+    int padding_h, int padding_w,
+    int dilation_h, int dilation_w
+) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    auto empty_bias = torch::empty({0}, torch::TensorOptions().device(input.device()));
+    auto conv_out = conv2d_int4_fprop(
+        input, weight_packed, inv_scale, empty_bias,
+        stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w
+    );
+
+    auto output = torch::empty_like(conv_out, conv_out.options().memory_format(torch::MemoryFormat::ChannelsLast));
+    int num_elements = conv_out.numel();
+    int num_channels = weight_scales.numel();
+    int block_size = 256;
+    int num_work_items = (num_elements + 3) / 4;
+    int grid_size = (num_work_items + block_size - 1) / block_size;
+
+    scale_store_kernel<<<grid_size, block_size, 0, stream>>>(
+        conv_out.data_ptr<float>(),
+        weight_scales.data_ptr<float>(),
+        output.data_ptr<float>(),
+        num_elements,
+        num_channels
+    );
+
+    return output;
 }
 
 torch::Tensor conv2d_int4_fprop_o_hat(

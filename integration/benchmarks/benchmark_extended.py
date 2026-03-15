@@ -546,6 +546,26 @@ class ExtendedBenchmarkRunner:
                 torch.cuda.synchronize()
                 fused_step1_ms = sum(s.elapsed_time(e) for s, e in zip(start_events, end_events)) / num_iterations
 
+                # Time fused step1 without a_hat update (same fused launch structure)
+                for _ in range(10):
+                    modiff_cutlass.step1_quantize_no_ahat_fprop(
+                        x, cache, residual_buf, absmax_buf, scale_buf, inv_scale_buf,
+                        retire_count, 127.0, smooth_inv
+                    )
+
+                for i in range(num_iterations):
+                    absmax_buf.zero_()
+                    retire_count.zero_()
+                    start_events[i].record()
+                    x_int8_no_cache = modiff_cutlass.step1_quantize_no_ahat_fprop(
+                        x, cache, residual_buf, absmax_buf, scale_buf, inv_scale_buf,
+                        retire_count, 127.0, smooth_inv
+                    )
+                    end_events[i].record()
+
+                torch.cuda.synchronize()
+                fused_step1_no_cache_ms = sum(s.elapsed_time(e) for s, e in zip(start_events, end_events)) / num_iterations
+
                 # Time fused conv + dequant + update_o_hat
                 for _ in range(10):
                     modiff_cutlass.conv2d_int8_fprop_o_hat(
@@ -563,6 +583,24 @@ class ExtendedBenchmarkRunner:
 
                 torch.cuda.synchronize()
                 fused_conv_ms = sum(s.elapsed_time(e) for s, e in zip(start_events, end_events)) / num_iterations
+
+                # Time fused conv + dequant without o_hat update (same fused launch structure)
+                for _ in range(10):
+                    _ = modiff_cutlass.conv2d_int8_fprop_no_ohat(
+                        x_int8_no_cache, w_quant, inv_scale_buf.view(1), weight_scale.view(-1),
+                        1, 1, 1, 1, 1, 1
+                    )
+
+                for i in range(num_iterations):
+                    start_events[i].record()
+                    _ = modiff_cutlass.conv2d_int8_fprop_no_ohat(
+                        x_int8_no_cache, w_quant, inv_scale_buf.view(1), weight_scale.view(-1),
+                        1, 1, 1, 1, 1, 1
+                    )
+                    end_events[i].record()
+
+                torch.cuda.synchronize()
+                fused_conv_no_cache_ms = sum(s.elapsed_time(e) for s, e in zip(start_events, end_events)) / num_iterations
 
                 # Time compute + DQ only (no o_hat update)
                 for _ in range(10):
@@ -622,7 +660,9 @@ class ExtendedBenchmarkRunner:
                 shape_key = f"{N}x{C}x{H}x{W}"
                 kernel_results[f"INT8_{shape_key}"] = {
                     'fused_step1_ms': fused_step1_ms,
+                    'fused_step1_no_cache_ms': fused_step1_no_cache_ms,
                     'fused_conv_ms': fused_conv_ms,
+                    'fused_conv_no_cache_ms': fused_conv_no_cache_ms,
                     'fused_total_ms': fused_step1_ms + fused_conv_ms,
                     'separate_step1_ms': separate_step1_ms,
                     'separate_conv_ms': separate_conv_ms,
@@ -630,6 +670,10 @@ class ExtendedBenchmarkRunner:
                     'fusion_speedup': (separate_step1_ms + separate_conv_ms) / (fused_step1_ms + fused_conv_ms),
                     'compute_dq_ms': compute_dq_ms,
                     'compute_dq_update_ohat_ms': fused_conv_ms,
+                    'step1_cache_update_overhead_ms': fused_step1_ms - fused_step1_no_cache_ms,
+                    'step1_cache_update_overhead_pct': ((fused_step1_ms - fused_step1_no_cache_ms) / max(fused_step1_no_cache_ms, 1e-12)) * 100.0,
+                    'conv_cache_update_overhead_ms': fused_conv_ms - fused_conv_no_cache_ms,
+                    'conv_cache_update_overhead_pct': ((fused_conv_ms - fused_conv_no_cache_ms) / max(fused_conv_no_cache_ms, 1e-12)) * 100.0,
                     'ohat_update_overhead_ms': fused_conv_ms - compute_dq_ms,
                     'ohat_update_overhead_pct': ((fused_conv_ms - compute_dq_ms) / max(compute_dq_ms, 1e-12)) * 100.0,
                 }
@@ -642,6 +686,12 @@ class ExtendedBenchmarkRunner:
                     f"compute+DQ+update_o_hat={fused_conv_ms:.3f}ms, "
                     f"overhead={fused_conv_ms - compute_dq_ms:+.3f}ms "
                     f"({((fused_conv_ms - compute_dq_ms) / max(compute_dq_ms, 1e-12)) * 100.0:+.1f}%)"
+                )
+                print(
+                    f"  INT8 Cache-only delta: step1={fused_step1_ms - fused_step1_no_cache_ms:+.3f}ms "
+                    f"({((fused_step1_ms - fused_step1_no_cache_ms) / max(fused_step1_no_cache_ms, 1e-12)) * 100.0:+.1f}%), "
+                    f"conv={fused_conv_ms - fused_conv_no_cache_ms:+.3f}ms "
+                    f"({((fused_conv_ms - fused_conv_no_cache_ms) / max(fused_conv_no_cache_ms, 1e-12)) * 100.0:+.1f}%)"
                 )
 
             except Exception as e:
@@ -681,6 +731,26 @@ class ExtendedBenchmarkRunner:
                 torch.cuda.synchronize()
                 fused4_step1 = sum(s.elapsed_time(e) for s, e in zip(start_events, end_events)) / num_iterations
 
+                # Fused step1 without a_hat update (same fused launch structure)
+                for _ in range(10):
+                    modiff_cutlass.step1_quantize_pack_int4_no_ahat_fprop(
+                        x, cache, residual_buf, absmax_buf, scale_buf, inv_scale_buf,
+                        retire_count, 7.0, smooth_inv
+                    )
+
+                for i in range(num_iterations):
+                    absmax_buf.zero_()
+                    retire_count.zero_()
+                    start_events[i].record()
+                    xp_no_cache = modiff_cutlass.step1_quantize_pack_int4_no_ahat_fprop(
+                        x, cache, residual_buf, absmax_buf, scale_buf, inv_scale_buf,
+                        retire_count, 7.0, smooth_inv
+                    )
+                    end_events[i].record()
+
+                torch.cuda.synchronize()
+                fused4_step1_no_cache = sum(s.elapsed_time(e) for s, e in zip(start_events, end_events)) / num_iterations
+
                 # Fused conv + dequant + update_o_hat
                 for _ in range(10):
                     modiff_cutlass.conv2d_int4_fprop_o_hat(
@@ -696,6 +766,22 @@ class ExtendedBenchmarkRunner:
 
                 torch.cuda.synchronize()
                 fused4_conv = sum(s.elapsed_time(e) for s, e in zip(start_events, end_events)) / num_iterations
+
+                # Fused conv without o_hat update (same fused launch structure)
+                for _ in range(10):
+                    _ = modiff_cutlass.conv2d_int4_fprop_no_ohat(
+                        xp_no_cache, w_packed, inv_scale_buf.view(1), ws4.view(-1), 1, 1, 1, 1, 1, 1
+                    )
+
+                for i in range(num_iterations):
+                    start_events[i].record()
+                    _ = modiff_cutlass.conv2d_int4_fprop_no_ohat(
+                        xp_no_cache, w_packed, inv_scale_buf.view(1), ws4.view(-1), 1, 1, 1, 1, 1, 1
+                    )
+                    end_events[i].record()
+
+                torch.cuda.synchronize()
+                fused4_conv_no_cache = sum(s.elapsed_time(e) for s, e in zip(start_events, end_events)) / num_iterations
 
                 # Time compute + DQ only (no o_hat update)
                 for _ in range(10):
@@ -745,7 +831,9 @@ class ExtendedBenchmarkRunner:
 
                 kernel_results[f"INT4_{shape_key}"] = {
                     'fused_step1_ms': fused4_step1,
+                    'fused_step1_no_cache_ms': fused4_step1_no_cache,
                     'fused_conv_ms': fused4_conv,
+                    'fused_conv_no_cache_ms': fused4_conv_no_cache,
                     'fused_total_ms': fused4_step1 + fused4_conv,
                     'separate_step1_ms': sep4_step1,
                     'separate_conv_ms': sep4_conv,
@@ -753,6 +841,10 @@ class ExtendedBenchmarkRunner:
                     'fusion_speedup': (sep4_step1 + sep4_conv) / (fused4_step1 + fused4_conv),
                     'compute_dq_ms': compute_dq4_ms,
                     'compute_dq_update_ohat_ms': fused4_conv,
+                    'step1_cache_update_overhead_ms': fused4_step1 - fused4_step1_no_cache,
+                    'step1_cache_update_overhead_pct': ((fused4_step1 - fused4_step1_no_cache) / max(fused4_step1_no_cache, 1e-12)) * 100.0,
+                    'conv_cache_update_overhead_ms': fused4_conv - fused4_conv_no_cache,
+                    'conv_cache_update_overhead_pct': ((fused4_conv - fused4_conv_no_cache) / max(fused4_conv_no_cache, 1e-12)) * 100.0,
                     'ohat_update_overhead_ms': fused4_conv - compute_dq4_ms,
                     'ohat_update_overhead_pct': ((fused4_conv - compute_dq4_ms) / max(compute_dq4_ms, 1e-12)) * 100.0,
                 }
@@ -766,6 +858,12 @@ class ExtendedBenchmarkRunner:
                     f"overhead={fused4_conv - compute_dq4_ms:+.3f}ms "
                     f"({((fused4_conv - compute_dq4_ms) / max(compute_dq4_ms, 1e-12)) * 100.0:+.1f}%)"
                 )
+                print(
+                    f"  INT4 Cache-only delta: step1={fused4_step1 - fused4_step1_no_cache:+.3f}ms "
+                    f"({((fused4_step1 - fused4_step1_no_cache) / max(fused4_step1_no_cache, 1e-12)) * 100.0:+.1f}%), "
+                    f"conv={fused4_conv - fused4_conv_no_cache:+.3f}ms "
+                    f"({((fused4_conv - fused4_conv_no_cache) / max(fused4_conv_no_cache, 1e-12)) * 100.0:+.1f}%)"
+                )
 
             except Exception as e:
                 print(f"  INT4 kernel timing failed: {e}")
@@ -774,7 +872,108 @@ class ExtendedBenchmarkRunner:
             torch.cuda.empty_cache()
 
         self.results['kernel_timing'] = kernel_results
+        self._annotate_cache_update_io()
         return kernel_results
+
+    def _bytes_to_mib(self, value_bytes: float) -> float:
+        return float(value_bytes) / (1024.0 * 1024.0)
+
+    def _annotate_cache_update_io(self):
+        if 'kernel_timing' not in self.results:
+            return
+
+        for key, val in self.results['kernel_timing'].items():
+            shape = key.split('_', 1)[1]
+            n, c, h, w = [int(part) for part in shape.split('x')]
+            num_input_elements = n * c * h * w
+            num_output_elements = num_input_elements
+
+            step1_extra_bytes = num_input_elements * 8.0   # read + write a_hat_cache float32
+            conv_extra_bytes = num_output_elements * 4.0   # extra read of o_hat_cache float32
+
+            val['step1_cache_update_extra_bytes'] = step1_extra_bytes
+            val['step1_cache_update_extra_mib'] = self._bytes_to_mib(step1_extra_bytes)
+            val['conv_cache_update_extra_bytes'] = conv_extra_bytes
+            val['conv_cache_update_extra_mib'] = self._bytes_to_mib(conv_extra_bytes)
+            val['total_cache_update_extra_bytes'] = step1_extra_bytes + conv_extra_bytes
+            val['total_cache_update_extra_mib'] = self._bytes_to_mib(step1_extra_bytes + conv_extra_bytes)
+
+    def generate_cache_update_report(self):
+        report_path = os.path.join(self.output_dir, 'FUSED_CACHE_UPDATE_REPORT.md')
+        if 'kernel_timing' not in self.results:
+            raise RuntimeError('kernel_timing results are required to generate the cache update report.')
+
+        self._annotate_cache_update_io()
+        kt = self.results['kernel_timing']
+
+        lines = [
+            '# Fused Cache Update Overhead Report',
+            '',
+            f'**Date**: {time.strftime("%Y-%m-%d %H:%M:%S")}',
+            f'**GPU**: {torch.cuda.get_device_name()}',
+            f'**Batch Size**: {self.batch_size}',
+            f'**Timesteps**: {self.steps}',
+            '',
+            'This report isolates the cost of MoDiff cache updates while preserving the same fused launch structure as the production kernels.',
+            '',
+            'Compared kernels:',
+            '- **Step1 fused**: `sub_absmax_scale + quantize (+ optional a_hat update)`',
+            '- **Conv fused**: `conv + dequant (+ optional o_hat update)`',
+            '',
+            '## INT8 Cache Update Overhead',
+            '',
+            '| Shape | Step1 w/ cache (ms) | Step1 no cache (ms) | a_hat update cost | Conv w/ cache (ms) | Conv no cache (ms) | o_hat update cost | Extra IO from cache update (MiB) |',
+            '| --- | --- | --- | --- | --- | --- | --- | --- |',
+        ]
+
+        for key, val in kt.items():
+            if not key.startswith('INT8_'):
+                continue
+            lines.append(
+                f"| {key} | {val['fused_step1_ms']:.3f} | {val['fused_step1_no_cache_ms']:.3f} | "
+                f"{val['step1_cache_update_overhead_ms']:+.3f}ms ({val['step1_cache_update_overhead_pct']:+.1f}%) | "
+                f"{val['fused_conv_ms']:.3f} | {val['fused_conv_no_cache_ms']:.3f} | "
+                f"{val['conv_cache_update_overhead_ms']:+.3f}ms ({val['conv_cache_update_overhead_pct']:+.1f}%) | "
+                f"{val['total_cache_update_extra_mib']:.1f} |"
+            )
+
+        lines.extend([
+            '',
+            '## INT4 Cache Update Overhead',
+            '',
+            '| Shape | Step1 w/ cache (ms) | Step1 no cache (ms) | a_hat update cost | Conv w/ cache (ms) | Conv no cache (ms) | o_hat update cost | Extra IO from cache update (MiB) |',
+            '| --- | --- | --- | --- | --- | --- | --- | --- |',
+        ])
+
+        for key, val in kt.items():
+            if not key.startswith('INT4_'):
+                continue
+            lines.append(
+                f"| {key} | {val['fused_step1_ms']:.3f} | {val['fused_step1_no_cache_ms']:.3f} | "
+                f"{val['step1_cache_update_overhead_ms']:+.3f}ms ({val['step1_cache_update_overhead_pct']:+.1f}%) | "
+                f"{val['fused_conv_ms']:.3f} | {val['fused_conv_no_cache_ms']:.3f} | "
+                f"{val['conv_cache_update_overhead_ms']:+.3f}ms ({val['conv_cache_update_overhead_pct']:+.1f}%) | "
+                f"{val['total_cache_update_extra_mib']:.1f} |"
+            )
+
+        lines.extend([
+            '',
+            '## Memory-IO model',
+            '',
+            '- **Step1 cache update (`a_hat`)**: additional float32 read + float32 write per input activation, i.e. about **8 bytes / element** beyond the no-cache fused baseline.',
+            '- **Conv cache update (`o_hat`)**: additional float32 read of the existing `o_hat_cache` per output activation, i.e. about **4 bytes / element** beyond the no-cache fused baseline.',
+            '- These are lower-bound tensor traffic estimates for the cache-update delta itself; they intentionally ignore small scalar buffers and assume the same quantized compute path in both variants.',
+            '',
+            '## Takeaways',
+            '',
+            '- The Step1 cache update isolates the cost of writing the temporal activation cache (`a_hat`).',
+            '- The Conv cache update isolates the cost of reading and accumulating into the temporal output cache (`o_hat`).',
+            '- Comparing these no-cache fused baselines against the production fused kernels shows how much of MoDiff hot-path time is spent on cache maintenance rather than quantized compute.',
+        ])
+
+        with open(report_path, 'w') as f:
+            f.write('\n'.join(lines))
+        print(f'Cache update report saved to: {report_path}')
 
     def print_summary(self):
         """Print comprehensive summary."""
@@ -849,6 +1048,11 @@ class ExtendedBenchmarkRunner:
     def generate_report(self):
         """Generate markdown report with results."""
         report_path = os.path.join(self.output_dir, 'EXTENDED_BENCHMARK_REPORT.md')
+        correctness_path = os.path.join(self.output_dir, 'correctness_summary.json')
+        correctness = None
+        if os.path.exists(correctness_path):
+            with open(correctness_path) as f:
+                correctness = json.load(f)
         lines = [
             "# Extended MoDiff Benchmark Report",
             "",
@@ -974,6 +1178,42 @@ class ExtendedBenchmarkRunner:
                     f"| {key} | {val['compute_dq_ms']:.3f} | {val['compute_dq_update_ohat_ms']:.3f} | "
                     f"{val['ohat_update_overhead_ms']:+.3f}ms ({val['ohat_update_overhead_pct']:+.1f}%) |"
                 )
+
+        if correctness is not None:
+            lines.extend([
+                "",
+                "## Correctness Validation",
+                "",
+                "These checks were rerun after the full benchmark sweep to confirm that the CUDA Graph path still matches the eager INT8 reference.",
+            ])
+
+            raw = correctness.get('raw_cutlass_graph')
+            if raw is not None:
+                lines.extend([
+                    "",
+                    "### Raw CUTLASS CUDA Graph replay",
+                    "",
+                    raw.get('description', ''),
+                    "",
+                    "| Check | Mean Abs Diff | Max Abs Diff |",
+                    "| --- | --- | --- |",
+                    f"| replay(x₁) vs eager(x₁) | {raw['y1_vs_out1_mean_abs']:.6f} | {raw['y1_vs_out1_max_abs']:.6f} |",
+                    f"| replay(x₂) vs eager(x₂) | {raw['y2_vs_out2_mean_abs']:.6f} | {raw['y2_vs_out2_max_abs']:.6f} |",
+                    f"| replay(x₂) vs eager(x₁) | {raw['y2_vs_out1_mean_abs']:.6f} | {raw['y2_vs_out1_max_abs']:.6f} |",
+                ])
+
+            model = correctness.get('ldm_eager_vs_cudagraph')
+            if model is not None:
+                lines.extend([
+                    "",
+                    "### End-to-end LDM eager vs CUDA Graph",
+                    "",
+                    model.get('description', ''),
+                    "",
+                    f"- configuration: batch size {int(model['batch_size'])}, {int(model['steps'])} DDIM steps, $\\eta = {model['eta']:.1f}$",
+                    f"- latent diff: mean {model['latent_mean_abs']:.6f}, max {model['latent_max_abs']:.6f}",
+                    f"- decoded image diff: mean {model['image_mean_abs']:.6f}, max {model['image_max_abs']:.6f}",
+                ])
 
         lines.extend([
             "",
@@ -1246,6 +1486,8 @@ def main():
 
     runner.print_summary()
     runner.generate_report()
+    if 'kernel_timing' in runner.results:
+        runner.generate_cache_update_report()
 
     if not args.skip_plots:
         results_path = os.path.join(args.output_dir, 'extended_results.json')
