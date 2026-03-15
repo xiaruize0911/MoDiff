@@ -103,6 +103,38 @@ class OptimizedInt8Conv2d(nn.Module):
         self._absmax_buf: Optional[torch.Tensor] = None
         self._retire_count: Optional[torch.Tensor] = None
 
+    def _ensure_state_buffers(self, x: torch.Tensor):
+        if not x.is_contiguous(memory_format=torch.channels_last):
+            x = x.contiguous(memory_format=torch.channels_last)
+
+        h_out = ((x.shape[2] + 2 * self.padding[0] - self.dilation[0] * (self.kernel_size[0] - 1) - 1) // self.stride[0]) + 1
+        w_out = ((x.shape[3] + 2 * self.padding[1] - self.dilation[1] * (self.kernel_size[1] - 1) - 1) // self.stride[1]) + 1
+        output_shape = (x.shape[0], self.out_channels, h_out, w_out)
+
+        if self.a_hat_cache is None or self.a_hat_cache.shape != x.shape:
+            self.a_hat_cache = torch.zeros_like(x)
+        if self.o_hat_cache is None or self.o_hat_cache.shape != output_shape:
+            self.o_hat_cache = torch.zeros(
+                output_shape, device=x.device, dtype=torch.float32
+            ).contiguous(memory_format=torch.channels_last)
+
+        if self._residual_buf is None or self._residual_buf.shape != x.shape:
+            self._residual_buf = torch.empty_like(x)
+        if self._scale_buf is None or self._scale_buf.device != x.device:
+            self._scale_buf = torch.empty(1, device=x.device, dtype=torch.float32)
+        if self._inv_scale_buf is None or self._inv_scale_buf.device != x.device:
+            self._inv_scale_buf = torch.empty(1, device=x.device, dtype=torch.float32)
+        if self._absmax_buf is None or self._absmax_buf.device != x.device:
+            self._absmax_buf = torch.zeros(1, device=x.device, dtype=torch.float32)
+        if self._retire_count is None or self._retire_count.device != x.device:
+            self._retire_count = torch.zeros(1, device=x.device, dtype=torch.int32)
+
+        if not hasattr(self, '_smooth_inv_flat') or self._smooth_inv_flat.device != x.device:
+            if not self._smooth_is_identity:
+                self._smooth_inv_flat = self._smooth_inv.view(-1).contiguous()
+            else:
+                self._smooth_inv_flat = torch.empty(0, device=x.device, dtype=torch.float32)
+
     # ==================================================================
     # Quantization helpers
     # ==================================================================
@@ -290,21 +322,29 @@ class OptimizedInt8Conv2d(nn.Module):
 
     def _forward_first_step(self, x: torch.Tensor) -> torch.Tensor:
         """First timestep (t=T): warm-up with repeated quantisation."""
-        input_scale = self._compute_activation_scale(x)
+        self._ensure_state_buffers(x)
+
+        if self.is_calibrated:
+            input_scale = self.static_input_scale
+            if input_scale.device != x.device:
+                input_scale = input_scale.to(x.device)
+        else:
+            input_scale = self._compute_scale_tensor(x)
+
         a_hat = self._dequantize_activation(x, input_scale)
         o_hat = self._int8_conv(x, input_scale, with_bias=True)
 
         for _ in range(self.warmup_steps - 1):
             residual = x - a_hat
-            r_scale = self._compute_activation_scale(residual, is_residual=True)
+            r_scale = self._compute_scale_tensor(residual)
             conv_r = self._int8_conv(residual, r_scale, with_bias=False)
             r_dq = self._dequantize_activation(residual, r_scale)
             a_hat = a_hat + r_dq
             o_hat = o_hat + conv_r
 
-        self.a_hat_cache = a_hat
-        self.o_hat_cache = o_hat
-        return o_hat.clone()
+        self.a_hat_cache.copy_(a_hat)
+        self.o_hat_cache.copy_(o_hat)
+        return self.o_hat_cache
 
     def _forward_modulated(self, x: torch.Tensor) -> torch.Tensor:
         """MoDiff modulated step (t<T). No periodic reset per paper.
@@ -322,20 +362,7 @@ class OptimizedInt8Conv2d(nn.Module):
             self.is_first_step = False
             return out
 
-        # Lazy-init persistent buffers (reused across timesteps, never reallocated)
-        if self._residual_buf is None or self._residual_buf.shape != x.shape:
-            self._residual_buf = torch.empty_like(x)
-            self._scale_buf = torch.empty(1, device=x.device, dtype=torch.float32)
-            self._inv_scale_buf = torch.empty(1, device=x.device, dtype=torch.float32)
-            self._absmax_buf = torch.zeros(1, device=x.device, dtype=torch.float32)
-            self._retire_count = torch.zeros(1, device=x.device, dtype=torch.int32)
-
-        # Lazy-init smooth_inv flat tensor (1-D contiguous for kernel)
-        if not hasattr(self, '_smooth_inv_flat'):
-            if not self._smooth_is_identity:
-                self._smooth_inv_flat = self._smooth_inv.view(-1).contiguous()
-            else:
-                self._smooth_inv_flat = torch.empty(0, device=x.device, dtype=torch.float32)
+        self._ensure_state_buffers(x)
 
         # Kernel 1 Fused C++ Backend Call:
         # Fuses sub_absmax_scale, dequant_accumulate, and scale_quantize into 1 python launch.
@@ -372,8 +399,11 @@ class OptimizedInt8Conv2d(nn.Module):
 
     def reset_state(self):
         self.is_first_step = True
-        self.a_hat_cache = None
-        self.o_hat_cache = None
+        with torch.inference_mode():
+            if self.a_hat_cache is not None:
+                self.a_hat_cache.zero_()
+            if self.o_hat_cache is not None:
+                self.o_hat_cache.zero_()
         self.step_count = 0
 
     # ==================================================================

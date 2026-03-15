@@ -1,12 +1,14 @@
 """
-PyTorch Native INT8 + CUDA Graph Inference for MoDiff.
+INT8 + CUDA Graph Inference for MoDiff.
 
-This module implements PyTorch-native INT8 simulation for Conv2d layers and wires
-real CUDA Graph replay into the per-step UNet call path used by DDIM sampling.
+This module wires real CUDA Graph replay into the per-step UNet call path used
+by DDIM sampling. It originally shipped with a PyTorch-native INT8 simulation
+layer, and now also supports the CUTLASS-backed `OptimizedInt8Conv2d` path used
+by the main fused INT8 implementation.
 
 Two modes:
-1. int8_cudagraph: PyTorch INT8 + CUDA Graph + MoDiff temporal caching
-2. int8_cudagraph_baseline: Same but without MoDiff temporal caching
+1. int8_cudagraph: CUTLASS INT8 + CUDA Graph + MoDiff temporal caching
+2. int8_cudagraph_baseline: Same backend but without MoDiff temporal caching
 
 Implementation details:
 - baseline mode captures one per-step UNet graph (`standard`)
@@ -26,6 +28,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Any, Dict, Optional, Tuple
+
+try:
+    from integration.kernels.int8_optimized import OptimizedInt8Conv2d
+except ImportError:
+    OptimizedInt8Conv2d = None
 
 
 class PyTorchInt8Conv2d(nn.Module):
@@ -241,9 +248,13 @@ class PyTorchInt8Conv2d(nn.Module):
         self.is_calibrated = True
 
 
-def _iter_pytorch_int8_modules(model: nn.Module):
+def _iter_graph_int8_modules(model: nn.Module):
+    module_types = [PyTorchInt8Conv2d]
+    if OptimizedInt8Conv2d is not None:
+        module_types.append(OptimizedInt8Conv2d)
+    module_types = tuple(module_types)
     for m in model.modules():
-        if isinstance(m, PyTorchInt8Conv2d):
+        if isinstance(m, module_types):
             yield m
 
 
@@ -280,9 +291,15 @@ class UNetCudaGraphManager:
 
     def _prepare_module_state_buffers(self):
         C, H, W = self.shape
-        example = torch.zeros(self.batch_size, C, H, W, device=next(self.diffusion_model.parameters()).device, dtype=torch.float32)
-        for module in _iter_pytorch_int8_modules(self.diffusion_model):
-            module._ensure_state_buffers(example)
+        example = torch.zeros(
+            self.batch_size, C, H, W,
+            device=next(self.diffusion_model.parameters()).device,
+            dtype=torch.float32,
+        ).contiguous(memory_format=torch.channels_last)
+        for module in _iter_graph_int8_modules(self.diffusion_model):
+            ensure_state = getattr(module, '_ensure_state_buffers', None)
+            if ensure_state is not None:
+                ensure_state(example)
 
     def reset_sequence(self):
         self.phase_index = 0
@@ -320,7 +337,7 @@ class UNetCudaGraphManager:
                 self._copy_into(dst[k], src[k])
 
     def _set_module_first_step(self, is_first_step: bool):
-        for module in _iter_pytorch_int8_modules(self.diffusion_model):
+        for module in _iter_graph_int8_modules(self.diffusion_model):
             module.is_first_step = is_first_step
 
     def _capture_phase(self, phase: str, x: torch.Tensor, t: torch.Tensor, model_kwargs: Dict[str, Any]) -> torch.Tensor:
@@ -381,7 +398,7 @@ class UNetCudaGraphManager:
 
 def install_cuda_graph_replay_pytorch_int8(diffusion_wrapper: nn.Module, batch_size: int,
                                            shape: Tuple[int, int, int]) -> UNetCudaGraphManager:
-    modiff_enabled = any(module.modiff_enabled for module in _iter_pytorch_int8_modules(diffusion_wrapper.diffusion_model))
+    modiff_enabled = any(module.modiff_enabled for module in _iter_graph_int8_modules(diffusion_wrapper.diffusion_model))
     manager = UNetCudaGraphManager(diffusion_wrapper, batch_size=batch_size, shape=shape, modiff_enabled=modiff_enabled)
     diffusion_wrapper.diffusion_model._cuda_graph_manager = manager
     return manager
@@ -509,38 +526,35 @@ def convert_model_to_pytorch_int8(model: nn.Module, prefix: str = "") -> nn.Modu
 
 
 def enable_modiff_mode_pytorch_int8(model: nn.Module, enabled: bool = True):
-    for m in model.modules():
-        if isinstance(m, PyTorchInt8Conv2d):
-            m.enable_modiff(enabled)
+    for m in _iter_graph_int8_modules(model):
+        m.enable_modiff(enabled)
 
 
 def reset_modiff_state_pytorch_int8(model: nn.Module):
-    for m in model.modules():
-        if isinstance(m, PyTorchInt8Conv2d):
-            m.reset_state()
+    for m in _iter_graph_int8_modules(model):
+        m.reset_state()
     manager = getattr(model, '_cuda_graph_manager', None)
     if manager is not None:
         manager.reset_sequence()
 
 
 def set_calibrating_pytorch_int8(model: nn.Module, calibrating: bool):
-    for m in model.modules():
-        if isinstance(m, PyTorchInt8Conv2d):
-            m.set_calibrating(calibrating)
+    for m in _iter_graph_int8_modules(model):
+        m.set_calibrating(calibrating)
 
 
 def export_pytorch_int8_scales(model: nn.Module) -> Dict[str, float]:
     scales = {}
-    for m in model.modules():
-        if isinstance(m, PyTorchInt8Conv2d) and m.is_calibrated:
+    for m in _iter_graph_int8_modules(model):
+        if m.is_calibrated:
             scales[m.layer_name] = float(m.static_input_scale.item())
     return scales
 
 
 def apply_pytorch_int8_scales(model: nn.Module, scales: Dict[str, float]) -> int:
     loaded = 0
-    for m in model.modules():
-        if isinstance(m, PyTorchInt8Conv2d) and m.layer_name in scales:
+    for m in _iter_graph_int8_modules(model):
+        if m.layer_name in scales:
             m.set_static_scale(scales[m.layer_name])
             loaded += 1
     return loaded

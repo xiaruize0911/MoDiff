@@ -1,11 +1,11 @@
 """
-Extended Benchmark: PyTorch INT8 + CUDA Graph and Fused Kernel Baselines.
+Extended Benchmark: CUTLASS INT8 + CUDA Graph and Fused Kernel Baselines.
 
 This script adds new benchmark modes to compare against the existing MoDiff:
 
 New modes:
-  1. int8_cudagraph: PyTorch INT8 + CUDA Graph + MoDiff temporal caching
-  2. int8_cudagraph_baseline: PyTorch INT8 + CUDA Graph, no MoDiff
+    1. int8_cudagraph: CUTLASS INT8 + CUDA Graph + MoDiff temporal caching
+    2. int8_cudagraph_baseline: CUTLASS INT8 + CUDA Graph, no MoDiff
   3. int8_separate: INT8 with separate Q/Conv/DQ kernels + MoDiff
   4. int8_separate_baseline: INT8 with separate Q/Conv/DQ kernels, no MoDiff
   5. int4_separate: INT4 with separate Q/Conv/DQ kernels + MoDiff
@@ -76,17 +76,12 @@ try:
 except ImportError:
     HAS_INT4 = False
 
-# Import PyTorch INT8 + CUDA Graph
+# Import INT8 + CUDA Graph helpers
 try:
     from integration.kernels.int8_cudagraph import (
-        PyTorchInt8Conv2d,
         CUDAGraphWrapper,
-        convert_model_to_pytorch_int8,
         enable_modiff_mode_pytorch_int8,
         reset_modiff_state_pytorch_int8,
-        set_calibrating_pytorch_int8,
-        apply_pytorch_int8_scales,
-        export_pytorch_int8_scales,
         install_cuda_graph_replay_pytorch_int8,
         get_cuda_graph_replay_stats,
     )
@@ -166,7 +161,7 @@ class ExtendedBenchmarkRunner:
         """Run calibration passes to get quantization scales."""
         print(f"  Calibrating {mode} ({num_runs} runs)...")
         if 'cudagraph' in mode:
-            set_calibrating_pytorch_int8(model.model.diffusion_model, True)
+            set_calibrating_int8(model.model.diffusion_model, True)
         elif 'separate' in mode and 'int8' in mode:
             for m in model.model.diffusion_model.modules():
                 if isinstance(m, SeparateKernelInt8Conv2d):
@@ -179,7 +174,7 @@ class ExtendedBenchmarkRunner:
         with torch.no_grad():
             for _ in range(num_runs):
                 if 'cudagraph' in mode:
-                    reset_modiff_state_pytorch_int8(model.model.diffusion_model)
+                    reset_modiff_state_int8(model.model.diffusion_model)
                 elif 'separate' in mode and 'int8' in mode:
                     reset_modiff_state_separate_int8(model.model.diffusion_model)
                 elif 'separate' in mode and 'int4' in mode:
@@ -187,8 +182,8 @@ class ExtendedBenchmarkRunner:
                 sampler.sample(S=5, batch_size=2, shape=self.shape, eta=0.0, verbose=False)
 
         if 'cudagraph' in mode:
-            set_calibrating_pytorch_int8(model.model.diffusion_model, False)
-            return export_pytorch_int8_scales(model.model.diffusion_model)
+            set_calibrating_int8(model.model.diffusion_model, False)
+            return get_calibration_config_int8().scales
         return {}
 
     def _setup_model(self, mode: str):
@@ -197,17 +192,25 @@ class ExtendedBenchmarkRunner:
         model = self._setup_model_base(model)
 
         if mode == 'int8_cudagraph':
-            convert_model_to_pytorch_int8(model.model.diffusion_model)
-            scales = self._calibrate(model, DDIMSampler(model), mode)
-            if scales:
-                apply_pytorch_int8_scales(model.model.diffusion_model, scales)
+            convert_model_to_optimized_int8(model.model.diffusion_model)
+            from integration.utils.buffer_pool import initialize_buffer_pool
+            initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
+            calib_path = 'integration/calibration/int8_calibration.pt'
+            if os.path.exists(calib_path):
+                scales = torch.load(calib_path, weights_only=True)
+                loaded = apply_static_scales(model.model.diffusion_model, scales)
+                print(f"  Loaded {loaded} static scales from {calib_path}")
             enable_modiff_mode_pytorch_int8(model.model.diffusion_model, True)
 
         elif mode == 'int8_cudagraph_baseline':
-            convert_model_to_pytorch_int8(model.model.diffusion_model)
-            scales = self._calibrate(model, DDIMSampler(model), mode)
-            if scales:
-                apply_pytorch_int8_scales(model.model.diffusion_model, scales)
+            convert_model_to_optimized_int8(model.model.diffusion_model)
+            from integration.utils.buffer_pool import initialize_buffer_pool
+            initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
+            calib_path = 'integration/calibration/int8_calibration.pt'
+            if os.path.exists(calib_path):
+                scales = torch.load(calib_path, weights_only=True)
+                loaded = apply_static_scales(model.model.diffusion_model, scales)
+                print(f"  Loaded {loaded} static scales from {calib_path}")
             enable_modiff_mode_pytorch_int8(model.model.diffusion_model, False)
 
         elif mode == 'int8_separate':
@@ -755,7 +758,7 @@ class ExtendedBenchmarkRunner:
         print(f"\n{'Mode':<25} {'Time/Sample':<15} {'Speedup':<12} {'Memory (MB)':<15} {'Graph Stats':<20}")
         print("-" * 92)
 
-        baseline = self.results.get('fp32', {}).get('time_per_sample', 1.0)
+        baseline = self.results.get('fp32', {}).get('time_per_sample')
         pipeline_modes = [
             'fp32', 'fp16',
             'int8', 'int8_baseline',
@@ -769,8 +772,8 @@ class ExtendedBenchmarkRunner:
             if mode in self.results and mode != 'kernel_timing':
                 r = self.results[mode]
                 t = f"{r['time_per_sample']:.3f}s"
-                speedup = baseline / r['time_per_sample'] if r['time_per_sample'] > 0 else 0
-                s = "(baseline)" if mode == 'fp32' else f"{speedup:.2f}x"
+                speedup = (baseline / r['time_per_sample']) if (baseline is not None and r['time_per_sample'] > 0) else None
+                s = "(baseline)" if mode == 'fp32' else (f"{speedup:.2f}x" if speedup is not None else '-')
                 mem = f"{r.get('memory_peak_mb', 0):.0f}"
                 if 'cudagraph' in mode:
                     graph_stats = f"{int(r.get('cuda_graph_num_graphs', 0))}g/{int(r.get('cuda_graph_replay_count', 0))}r"
@@ -831,7 +834,7 @@ class ExtendedBenchmarkRunner:
             "| --- | --- | --- | --- | --- | --- | --- |",
         ]
 
-        baseline = self.results.get('fp32', {}).get('time_per_sample', 1.0)
+        baseline = self.results.get('fp32', {}).get('time_per_sample')
         for mode in ['fp32', 'fp16', 'int8', 'int8_baseline', 'int4', 'int4_baseline',
                       'int8_cudagraph', 'int8_cudagraph_baseline',
                       'int8_separate', 'int8_separate_baseline',
@@ -839,8 +842,8 @@ class ExtendedBenchmarkRunner:
             if mode in self.results and mode != 'kernel_timing':
                 r = self.results[mode]
                 t = f"{r['time_per_sample']:.3f}"
-                speedup = baseline / r['time_per_sample'] if r['time_per_sample'] > 0 else 0
-                s = "-" if mode == 'fp32' else f"{speedup:.2f}x"
+                speedup = (baseline / r['time_per_sample']) if (baseline is not None and r['time_per_sample'] > 0) else None
+                s = "-" if mode == 'fp32' or speedup is None else f"{speedup:.2f}x"
                 mem = f"{r.get('memory_peak_mb', 0):.0f}"
                 graphs = str(int(r.get('cuda_graph_num_graphs', 0))) if 'cudagraph' in mode else '-'
                 captures = str(int(r.get('cuda_graph_capture_count', 0))) if 'cudagraph' in mode else '-'
@@ -889,11 +892,11 @@ class ExtendedBenchmarkRunner:
             "  - same structure as INT8, but using packed INT4 activations/weights and fused INT4 kernels",
             "- **`int4_baseline`**: same CUTLASS INT4 backend, with MoDiff disabled.",
             "",
-            "### PyTorch INT8 + CUDA Graph modes",
+            "### CUTLASS INT8 + CUDA Graph modes",
             "",
-            "- **`int8_cudagraph`**: `PyTorchInt8Conv2d` from `integration/kernels/int8_cudagraph.py` plus real per-step UNet CUDA graph replay.",
-            "  - activations are quantized and immediately dequantized",
-            "  - convolution is still executed by PyTorch `F.conv2d` using FP16 weights",
+            "- **`int8_cudagraph`**: `OptimizedInt8Conv2d` from `integration/kernels/int8_optimized.py` plus real per-step UNet CUDA graph replay.",
+            "  - the underlying convolution and modulation path use the same CUTLASS INT8 kernels as fused `int8`",
+            "  - activations stay on the CUTLASS quantized path instead of dequantizing back to FP16 `F.conv2d`",
             "  - DDIM remains the outer Python loop, but each UNet step is replayed from captured CUDA graphs",
             "  - two graphs are used: one for the first MoDiff step and one for all modulated steps",
             "- **`int8_cudagraph_baseline`**: same backend, but with MoDiff disabled, so only a single per-step graph is needed.",
@@ -945,18 +948,16 @@ class ExtendedBenchmarkRunner:
             "",
             "## Analysis",
             "",
-            "### Task 1: PyTorch INT8 + CUDA Graph",
+            "### Task 1: CUTLASS INT8 + CUDA Graph",
             "",
             "CUDA Graphs reduce Python/kernel-launch overhead by replaying captured UNet executions.",
             "In this implementation, the graph replay is real and is exercised in the benchmark:",
             "- `int8_cudagraph_baseline` captures 1 graph and replays it 199 times",
             "- `int8_cudagraph` captures 2 graphs (first/modulated) and replays them 198 times",
             "",
-            "However, `int8_cudagraph` is still slower than CUTLASS `int8` because the backend is different:",
-            "- CUTLASS `int8` uses true INT8 tensor-core convolution kernels",
-            "- `int8_cudagraph` quantizes activations, dequantizes them, and then runs FP16 `F.conv2d`",
-            "- graph replay removes launch overhead, but it does **not** convert the PyTorch backend into a true INT8 conv backend",
-            "- the result is better than the old eager pseudo-cudagraph path, but still slower than the fused CUTLASS INT8 implementation",
+            "`int8_cudagraph` now uses the same CUTLASS INT8 kernels as fused `int8` for the conv/modulation path.",
+            "This isolates the effect of CUDA Graph replay on top of the optimized backend instead of benchmarking a different FP16 fallback backend.",
+            "Any remaining gap between `int8_cudagraph` and eager fused `int8` therefore reflects graph-capture constraints, first-step capture cost, and the interaction between static replay buffers and the MoDiff execution schedule rather than a backend mismatch.",
             "",
             "### Task 2: Fused vs Separate Kernels",
             "",
@@ -966,21 +967,46 @@ class ExtendedBenchmarkRunner:
             "",
             "The separate baseline breaks these into individual PyTorch/CUTLASS calls.",
             "Fusion benefit is primarily from reduced kernel launch overhead and memory bandwidth savings.",
-            "",
-            "### Why `int8_cudagraph` and `int8_separate` do not beat fused `int8`",
-            "",
-            f"- **`int8_cudagraph` vs `int8`**: {self.results['int8_cudagraph']['time_per_sample']:.3f}s vs {self.results['int8']['time_per_sample']:.3f}s.",
-            "  - CUDA Graph replay helps on the control-plane side",
-            "  - but the compute kernel is still PyTorch FP16 conv after quantize/dequantize",
-            "  - fused CUTLASS `int8` wins because it keeps the hot path in dedicated INT8 kernels end-to-end",
-            "",
-            f"- **`int8_separate` vs `int8`**: {self.results['int8_separate']['time_per_sample']:.3f}s vs {self.results['int8']['time_per_sample']:.3f}s.",
-            "  - the separate path performs the same MoDiff math, but it explodes the fused hot path into many kernels",
-            "  - the microbenchmark shows the main gap is in **Step1 fusion**, not in `o_hat` accumulation",
-            f"  - fused INT8 total kernel time is {self.results['kernel_timing']['INT8_32x192x32x32']['fused_total_ms']:.3f}ms vs {self.results['kernel_timing']['INT8_32x192x32x32']['separate_total_ms']:.3f}ms on the representative 32x192x32x32 case",
-            f"  - the extra cost of `compute+DQ+update_o_hat` over `compute+DQ` is only {self.results['kernel_timing']['INT8_32x192x32x32']['ohat_update_overhead_ms']:+.3f}ms ({self.results['kernel_timing']['INT8_32x192x32x32']['ohat_update_overhead_pct']:+.1f}%)",
-            "  - so the missing speedup is mostly due to unfused Step1 work and extra global-memory traffic, not because `o_hat` update is too expensive",
         ])
+
+        if 'int8_cudagraph' in self.results and 'int8' in self.results:
+            graph_time = self.results['int8_cudagraph']['time_per_sample']
+            eager_time = self.results['int8']['time_per_sample']
+            if graph_time < eager_time:
+                lines.extend([
+                    "",
+                    "### Effect of CUDA Graph replay on CUTLASS INT8",
+                    "",
+                    f"- **`int8_cudagraph` vs `int8`**: {graph_time:.3f}s vs {eager_time:.3f}s.",
+                    f"  - CUDA Graph replay reduces the eager CUTLASS INT8 path by {eager_time / graph_time:.2f}x on this run",
+                    "  - both modes use the same CUTLASS INT8 kernels on the hot path, so this speedup comes from reducing Python/kernel-launch overhead",
+                    "  - the remaining trade-off is memory: graph replay keeps large static buffers alive, which raises peak memory usage",
+                ])
+            else:
+                lines.extend([
+                    "",
+                    "### Effect of CUDA Graph replay on CUTLASS INT8",
+                    "",
+                    f"- **`int8_cudagraph` vs `int8`**: {graph_time:.3f}s vs {eager_time:.3f}s.",
+                    "  - CUDA Graph replay helps on the control-plane side",
+                    "  - both modes now use the same CUTLASS INT8 kernels on the hot path",
+                    "  - any remaining delta comes from graph capture/replay mechanics rather than PyTorch FP16 fallback kernels",
+                ])
+
+        if 'int8_separate' in self.results and 'int8' in self.results:
+            lines.extend([
+                "",
+                f"- **`int8_separate` vs `int8`**: {self.results['int8_separate']['time_per_sample']:.3f}s vs {self.results['int8']['time_per_sample']:.3f}s.",
+                "  - the separate path performs the same MoDiff math, but it explodes the fused hot path into many kernels",
+                "  - the microbenchmark shows the main gap is in **Step1 fusion**, not in `o_hat` accumulation",
+            ])
+            if 'kernel_timing' in self.results and 'INT8_32x192x32x32' in self.results['kernel_timing']:
+                ref = self.results['kernel_timing']['INT8_32x192x32x32']
+                lines.extend([
+                    f"  - fused INT8 total kernel time is {ref['fused_total_ms']:.3f}ms vs {ref['separate_total_ms']:.3f}ms on the representative 32x192x32x32 case",
+                    f"  - the extra cost of `compute+DQ+update_o_hat` over `compute+DQ` is only {ref['ohat_update_overhead_ms']:+.3f}ms ({ref['ohat_update_overhead_pct']:+.1f}%)",
+                    "  - so the missing speedup is mostly due to unfused Step1 work and extra global-memory traffic, not because `o_hat` update is too expensive",
+                ])
 
         with open(report_path, 'w') as f:
             f.write('\n'.join(lines))
