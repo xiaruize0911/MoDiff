@@ -58,9 +58,6 @@ class TimestepEmbeddingCache:
         Returns:
             Tensor of shape [N, dim] with timestep embeddings
         """
-        if timesteps.is_cuda and torch.cuda.is_current_stream_capturing():
-            return _original_timestep_embedding(timesteps, dim, max_period, repeat_only)
-
         # Create cache key for this configuration
         config_key = (dim, max_period, repeat_only)
         

@@ -62,7 +62,6 @@ torch.backends.cudnn.benchmark = True
 sys.path.insert(0, os.getcwd())
 
 from integration.profiler import profiler
-from integration.runtime.cuda_graphs import SamplerCudaGraphRunner
 from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 
@@ -73,7 +72,6 @@ try:
         convert_model_to_optimized_int8,
         apply_static_scales,
         enable_modiff_mode as enable_modiff_mode_int8,
-        set_baseline_impl as set_int8_baseline_impl,
         reset_modiff_state as reset_modiff_state_int8,
         set_calibrating as set_calibrating_int8,
         get_calibration_config as get_calibration_config_int8,
@@ -107,7 +105,6 @@ try:
         OptimizedInt4Conv2d,
         convert_model_to_optimized_int4,
         enable_modiff_mode as enable_modiff_mode_int4,
-        set_baseline_impl as set_int4_baseline_impl,
         reset_modiff_state as reset_modiff_state_int4,
         apply_int4_static_scales,
         export_int4_static_scales,
@@ -281,18 +278,6 @@ class BenchmarkRunner:
         self.results = {}
         
         os.makedirs(output_dir, exist_ok=True)
-
-    @staticmethod
-    def _is_profile_mode(mode: str) -> bool:
-        return mode in {
-            'int8', 'int4',
-            'int8_baseline', 'int4_baseline',
-            'int8_baseline_fused', 'int4_baseline_fused',
-        }
-
-    @staticmethod
-    def _is_graph_mode(mode: str) -> bool:
-        return mode in {'int8_graph', 'int8_baseline_graph'}
     
     def _setup_model(self, mode: str):
         """Load and setup model for given mode."""
@@ -321,7 +306,7 @@ class BenchmarkRunner:
         fuse_resblocks_in_module(model.model.diffusion_model, inplace=True)
         print_fusion_summary(model.model.diffusion_model)
         
-        if mode in ('int8', 'int8_graph') and HAS_INT8:
+        if mode == 'int8' and HAS_INT8:
             print(f"Converting UNet to INT8 ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
             convert_model_to_optimized_int8(model.model.diffusion_model)
             
@@ -352,7 +337,6 @@ class BenchmarkRunner:
                         print(f"✓ Loaded {loaded_lin} INT8 linear layer scales")
             
             enable_modiff_mode_int8(model.model.diffusion_model, True)
-            set_int8_baseline_impl(model.model.diffusion_model, 'current')
             if HAS_INT8_LINEAR:
                 enable_modiff_mode_linear(model.model.diffusion_model, True)
         elif mode == 'int4' and HAS_INT4:
@@ -383,10 +367,9 @@ class BenchmarkRunner:
                         print(f"✓ Loaded {loaded_lin} INT4 linear layer scales")
             
             enable_modiff_mode_int4(model.model.diffusion_model, True)
-            set_int4_baseline_impl(model.model.diffusion_model, 'current')
             if HAS_INT4_LINEAR:
                 enable_modiff_mode_int4_linear(model.model.diffusion_model, True)
-        elif mode in ('int8_baseline', 'int8_baseline_graph') and HAS_INT8:
+        elif mode == 'int8_baseline' and HAS_INT8:
             print(f"Converting UNet to INT8 Baseline (INT8 kernels without MoDiff temporal caching) ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
             convert_model_to_optimized_int8(model.model.diffusion_model)
             
@@ -412,7 +395,6 @@ class BenchmarkRunner:
                         loaded_lin = apply_linear_static_scales(model.model.diffusion_model, clean_scales)
                         print(f"✓ Loaded {loaded_lin} INT8 linear layer scales for baseline")
             enable_modiff_mode_int8(model.model.diffusion_model, False)  # Disable temporal caching
-            set_int8_baseline_impl(model.model.diffusion_model, 'current')
             if HAS_INT8_LINEAR:
                 enable_modiff_mode_linear(model.model.diffusion_model, False)  # Disable temporal caching
         elif mode == 'int4_baseline' and HAS_INT4:
@@ -438,62 +420,8 @@ class BenchmarkRunner:
                         loaded_lin = apply_int4_linear_static_scales(model.model.diffusion_model, clean_scales)
                         print(f"✓ Loaded {loaded_lin} INT4 linear layer scales for baseline")
             enable_modiff_mode_int4(model.model.diffusion_model, False)  # Disable temporal caching
-            set_int4_baseline_impl(model.model.diffusion_model, 'current')
             if HAS_INT4_LINEAR:
                 enable_modiff_mode_int4_linear(model.model.diffusion_model, False)  # Disable temporal caching
-        elif mode == 'int8_baseline_fused' and HAS_INT8:
-            print(f"Converting UNet to INT8 fused baseline ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
-            convert_model_to_optimized_int8(model.model.diffusion_model)
-
-            if HAS_INT8_LINEAR:
-                print(f"Converting UNet linear layers to INT8 ({count_linear_layers(model.model.diffusion_model)} linear layers)...")
-                convert_model_to_int8_linear(model.model.diffusion_model)
-
-            from integration.buffer_pool import initialize_buffer_pool
-            initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
-            if self.calibration_path and os.path.exists(self.calibration_path):
-                print(f"Loading static calibration from {self.calibration_path}")
-                scales = torch.load(self.calibration_path, weights_only=True)
-                config = get_calibration_config_int8()
-                config.scales = scales
-                config.is_calibrated = True
-                loaded = apply_static_scales(model.model.diffusion_model, scales)
-                print(f"✓ Loaded {loaded} INT8 conv layer scales for fused baseline")
-                if HAS_INT8_LINEAR:
-                    linear_scales = {k: v for k, v in scales.items() if k.startswith('linear:')}
-                    if linear_scales:
-                        clean_scales = {k.replace('linear:', ''): v for k, v in linear_scales.items()}
-                        loaded_lin = apply_linear_static_scales(model.model.diffusion_model, clean_scales)
-                        print(f"✓ Loaded {loaded_lin} INT8 linear layer scales for fused baseline")
-            enable_modiff_mode_int8(model.model.diffusion_model, False)
-            set_int8_baseline_impl(model.model.diffusion_model, 'two_kernel_fused')
-            if HAS_INT8_LINEAR:
-                enable_modiff_mode_linear(model.model.diffusion_model, False)
-        elif mode == 'int4_baseline_fused' and HAS_INT4:
-            print(f"Converting UNet to INT4 fused baseline ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
-            convert_model_to_optimized_int4(model.model.diffusion_model)
-
-            if HAS_INT4_LINEAR:
-                print(f"Converting UNet linear layers to INT4 ({count_linear_layers(model.model.diffusion_model)} linear layers)...")
-                convert_model_to_int4_linear(model.model.diffusion_model)
-
-            from integration.buffer_pool import initialize_buffer_pool
-            initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
-            if self.calibration_path and os.path.exists(self.calibration_path):
-                print(f"Loading INT4 calibration from {self.calibration_path}")
-                scales = torch.load(self.calibration_path, weights_only=True)
-                loaded = apply_int4_static_scales(model.model.diffusion_model, scales)
-                print(f"✓ Loaded static scales for {loaded} INT4 fused baseline conv layers")
-                if HAS_INT4_LINEAR:
-                    linear_scales = {k: v for k, v in scales.items() if k.startswith('linear:')}
-                    if linear_scales:
-                        clean_scales = {k.replace('linear:', ''): v for k, v in linear_scales.items()}
-                        loaded_lin = apply_int4_linear_static_scales(model.model.diffusion_model, clean_scales)
-                        print(f"✓ Loaded {loaded_lin} INT4 linear layer scales for fused baseline")
-            enable_modiff_mode_int4(model.model.diffusion_model, False)
-            set_int4_baseline_impl(model.model.diffusion_model, 'two_kernel_fused')
-            if HAS_INT4_LINEAR:
-                enable_modiff_mode_int4_linear(model.model.diffusion_model, False)
         elif mode == 'int8_full_pipeline' and HAS_INT8:
             print(f"Converting UNet to Full INT8 Pipeline (no per-layer Q/DQ) ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
             # Full INT8: quantize once at input, stay quantized throughout
@@ -603,13 +531,13 @@ class BenchmarkRunner:
         # Full warmup at actual batch size + step count to let cuDNN benchmark
         # select optimal kernels. Without this, first timed run includes kernel selection.
         print(f"Warming up cuDNN (full {self.steps}-step pass at batch_size={self.batch_size})...")
-        if mode in ('int8', 'int8_graph', 'int8_baseline', 'int8_baseline_graph', 'int8_baseline_fused') and HAS_INT8:
+        if mode in ('int8', 'int8_baseline') and HAS_INT8:
             reset_modiff_state_int8(model.model.diffusion_model)
-        elif mode in ('int4', 'int4_baseline', 'int4_baseline_fused') and HAS_INT4:
+        elif mode in ('int4', 'int4_baseline') and HAS_INT4:
             reset_modiff_state_int4(model.model.diffusion_model)
-        if mode in ('int8', 'int8_graph', 'int8_baseline', 'int8_baseline_graph', 'int8_baseline_fused') and HAS_INT8_LINEAR:
+        if mode in ('int8', 'int8_baseline') and HAS_INT8_LINEAR:
             reset_modiff_state_linear(model.model.diffusion_model)
-        elif mode in ('int4', 'int4_baseline', 'int4_baseline_fused') and HAS_INT4_LINEAR:
+        elif mode in ('int4', 'int4_baseline') and HAS_INT4_LINEAR:
             reset_modiff_state_int4_linear(model.model.diffusion_model)
         with torch.inference_mode():
             sampler.sample(S=self.steps, batch_size=self.batch_size, shape=self.shape, eta=0.0, verbose=False)
@@ -618,52 +546,30 @@ class BenchmarkRunner:
         
         total_time = 0.0
         generated = 0
-        peak_allocated = 0
-        peak_reserved = 0
-        graph_runner = None
-
-        if self._is_graph_mode(mode):
-            print(f"Capturing CUDA Graph for {mode}...")
-            graph_runner = SamplerCudaGraphRunner(
-                sampler=sampler,
-                steps=self.steps,
-                batch_size=self.batch_size,
-                shape=self.shape,
-                use_autocast=use_autocast,
-                dtype=dtype,
-            )
-            graph_runner.capture()
-            print("CUDA Graph capture complete.")
         
         pbar = tqdm(total=num_samples, desc=f"Generating {mode}")
         while generated < num_samples:
             batch = min(self.batch_size, num_samples - generated)
             
-            if mode in ('int8', 'int8_graph', 'int8_baseline', 'int8_baseline_graph', 'int8_baseline_fused') and HAS_INT8:
+            if mode in ('int8', 'int8_baseline') and HAS_INT8:
                 reset_modiff_state_int8(model.model.diffusion_model)
-            elif mode in ('int4', 'int4_baseline', 'int4_baseline_fused') and HAS_INT4:
+            elif mode in ('int4', 'int4_baseline') and HAS_INT4:
                 reset_modiff_state_int4(model.model.diffusion_model)
-            if mode in ('int8', 'int8_graph', 'int8_baseline', 'int8_baseline_graph', 'int8_baseline_fused') and HAS_INT8_LINEAR:
+            if mode in ('int8', 'int8_baseline') and HAS_INT8_LINEAR:
                 reset_modiff_state_linear(model.model.diffusion_model)
-            elif mode in ('int4', 'int4_baseline', 'int4_baseline_fused') and HAS_INT4_LINEAR:
+            elif mode in ('int4', 'int4_baseline') and HAS_INT4_LINEAR:
                 reset_modiff_state_int4_linear(model.model.diffusion_model)
             # Note: baseline modes have state reset but MoDiff optimizations disabled
             
-            torch.cuda.reset_peak_memory_stats()
             torch.cuda.synchronize()
             start = time.time()
-
-            if graph_runner is not None and batch == self.batch_size:
-                samples, _ = graph_runner.replay()
-            else:
-                with torch.inference_mode(), torch.amp.autocast('cuda', enabled=use_autocast, dtype=dtype):
-                    samples, _ = sampler.sample(S=self.steps, batch_size=batch,
-                                               shape=self.shape, eta=0.0, verbose=False)
+            
+            with torch.inference_mode(), torch.amp.autocast('cuda', enabled=use_autocast, dtype=dtype):
+                samples, _ = sampler.sample(S=self.steps, batch_size=batch,
+                                           shape=self.shape, eta=0.0, verbose=False)
             
             torch.cuda.synchronize()
             total_time += time.time() - start
-            peak_allocated = max(peak_allocated, torch.cuda.max_memory_allocated())
-            peak_reserved = max(peak_reserved, torch.cuda.max_memory_reserved())
             
             # Decode and save
             with torch.amp.autocast('cuda', enabled=use_autocast, dtype=dtype):
@@ -677,7 +583,7 @@ class BenchmarkRunner:
             pbar.update(batch)
         
         pbar.close()
-        return total_time, generated, peak_allocated, peak_reserved
+        return total_time, generated
     
     def run_mode(self, mode: str, num_samples: int = 16, calibrate: bool = True, force_recalibrate: bool = False):
         """Run benchmark for a specific mode."""
@@ -686,9 +592,9 @@ class BenchmarkRunner:
         # Determine calibration path if not explicitly provided
         original_calib_path = self.calibration_path
         if not self.calibration_path:
-            if mode in ('int8', 'int8_graph', 'int8_baseline', 'int8_baseline_graph', 'int8_baseline_fused'):
+            if mode in ('int8', 'int8_baseline'):
                 self.calibration_path = 'integration/int8_calibration.pt'
-            elif mode in ('int4', 'int4_baseline', 'int4_baseline_fused'):
+            elif mode in ('int4', 'int4_baseline'):
                 self.calibration_path = 'integration/int4_calibration.pt'
 
         # If forcing recalibration, ignore existing file during setup
@@ -698,7 +604,7 @@ class BenchmarkRunner:
             self.calibration_path = None
 
         # Reset profiler
-        if self._is_profile_mode(mode):
+        if mode in ['int8', 'int4']:
             profiler.reset()
             print("Profiler reset.")
 
@@ -709,11 +615,11 @@ class BenchmarkRunner:
             self.calibration_path = actual_calib_file
 
         # INT8/INT4 calibration (skip if static scales already loaded or force_recalibrate is False)
-        if mode in ('int8', 'int8_graph', 'int8_baseline', 'int8_baseline_graph', 'int8_baseline_fused') and HAS_INT8:
+        if mode == 'int8' and HAS_INT8:
             config = get_calibration_config_int8()
             if calibrate and (force_recalibrate or not config.is_calibrated):
                 self._calibrate_int8(model, sampler)
-        elif mode in ('int4', 'int4_baseline', 'int4_baseline_fused') and HAS_INT4:
+        elif mode == 'int4' and HAS_INT4:
             # Check if we already have static scales loaded
             # Note: _setup_model already called apply_int4_static_scales if path existed
             # but if we are forcing recalibration, we want to run _calibrate_int4
@@ -721,11 +627,11 @@ class BenchmarkRunner:
                 self._calibrate_int4(model, sampler)
         
         # Reset profiler AFTER calibration so generation-only timing is accurate
-        if self._is_profile_mode(mode):
+        if mode in ['int8', 'int4']:
             profiler.reset()
         
         # Initialize Buffer Pool for zero-copy MoDiff
-        if mode in ('int8', 'int8_graph', 'int8_baseline_graph', 'int4'):
+        if mode in ('int8', 'int4'):
             from integration.buffer_pool import initialize_buffer_pool
             initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size)
         
@@ -735,12 +641,12 @@ class BenchmarkRunner:
         
         # Generate samples
         try:
-            total_time, num_gen, peak_allocated, peak_reserved = self._generate_samples(
+            total_time, num_gen = self._generate_samples(
                 model, sampler, mode, num_samples, use_autocast, dtype
             )
         except Exception as e:
             print(f"Error during generation: {e}")
-            if self._is_profile_mode(mode):
+            if mode in ['int8', 'int4']:
                 print(f"\nProfiler Summary ({mode.upper()}) BEFORE CRASH:")
                 profiler.print_summary()
             raise e
@@ -754,8 +660,6 @@ class BenchmarkRunner:
             'num_samples': num_gen,
             'time_per_sample': time_per_sample,
             'time_per_step_ms': time_per_step,
-            'peak_memory_allocated_mb': peak_allocated / (1024 ** 2),
-            'peak_memory_reserved_mb': peak_reserved / (1024 ** 2),
         }
         
         # Restore original path for next mode in 'all' loop
@@ -765,8 +669,6 @@ class BenchmarkRunner:
         print(f"  Total: {total_time:.2f}s for {num_gen} samples")
         print(f"  Per-sample: {time_per_sample:.3f}s")
         print(f"  Per-step: {time_per_step:.2f}ms")
-        print(f"  Peak allocated: {self.results[mode]['peak_memory_allocated_mb']:.1f} MiB")
-        print(f"  Peak reserved: {self.results[mode]['peak_memory_reserved_mb']:.1f} MiB")
         
         if 'fp32' in self.results and mode != 'fp32':
             speedup = self.results['fp32']['time_per_sample'] / time_per_sample
@@ -774,8 +676,7 @@ class BenchmarkRunner:
             print(f"  Speedup vs FP32: {speedup:.2f}x")
         
         # Print profiler summary
-        if self._is_profile_mode(mode):
-            self.results[mode]['profile'] = profiler.summary_dict()
+        if mode in ['int8', 'int4']:
             print(f"\nProfiler Summary ({mode.upper()}):")
             profiler.print_summary()
         
@@ -811,19 +712,18 @@ class BenchmarkRunner:
     def print_summary(self):
         """Print benchmark summary."""
         print(f"\n{'='*60}\nSUMMARY\n{'='*60}")
-        print(f"\n{'Mode':<22} {'Time/Sample':<15} {'Speedup':<12} {'Peak Mem':<12} {'FID':<10}")
-        print("-" * 80)
+        print(f"\n{'Mode':<15} {'Time/Sample':<15} {'Speedup':<12} {'FID':<10}")
+        print("-" * 55)
         
         baseline = self.results.get('fp32', {}).get('time_per_sample', 1.0)
-        for mode in ['fp32', 'fp16', 'int8', 'int8_graph', 'int8_baseline', 'int8_baseline_graph', 'int8_baseline_fused', 'int4', 'int4_baseline', 'int4_baseline_fused']:
+        for mode in ['fp32', 'fp16', 'int8', 'int8_baseline', 'int4', 'int4_baseline']:
             if mode in self.results:
                 r = self.results[mode]
                 t = f"{r['time_per_sample']:.3f}s"
                 speedup = baseline / r['time_per_sample'] if r['time_per_sample'] > 0 else 0
                 s = "(baseline)" if mode == 'fp32' else f"{speedup:.2f}x"
-                mem = f"{r.get('peak_memory_allocated_mb', 0):.0f} MiB"
                 fid = f"{r.get('fid', '-'):.2f}" if 'fid' in r else "-"
-                print(f"{mode:<22} {t:<15} {s:<12} {mem:<12} {fid:<10}")
+                print(f"{mode:<15} {t:<15} {s:<12} {fid:<10}")
         
         # Save results
         with open(os.path.join(self.output_dir, 'results.json'), 'w') as f:
@@ -839,11 +739,10 @@ def main():
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--steps', type=int, default=200)
     parser.add_argument('--num_samples', type=int, default=128)
-    parser.add_argument('--mode', type=str, choices=['all', 'fp32', 'fp16', 'int8', 'int8_graph', 'int8_baseline', 'int8_baseline_graph', 'int8_baseline_fused', 'int4', 'int4_baseline', 'int4_baseline_fused'], default='all')
+    parser.add_argument('--mode', type=str, choices=['all', 'fp32', 'fp16', 'int8', 'int8_baseline', 'int4', 'int4_baseline'], default='all')
     parser.add_argument('--eval_fid', action='store_true', help='Compute FID between modes')
     parser.add_argument('--skip_calibration', action='store_true')
     parser.add_argument('--force_recalibrate', action='store_true', help='Force regeneration of calibration scales')
-    parser.add_argument('--enable_profiler', action='store_true', help='Enable CUDA-event component profiling')
     parser.add_argument('--calibration', type=str, default=None,
                        help='Path to static calibration file (e.g., integration/int8_calibration.pt)')
     args = parser.parse_args()
@@ -853,7 +752,6 @@ def main():
     print(f"Steps: {args.steps} | Batch: {args.batch_size} | Samples: {args.num_samples}")
     if args.calibration:
         print(f"Static calibration: {args.calibration}")
-    profiler.enabled = args.enable_profiler
     
     runner = BenchmarkRunner(
         args.config, args.ckpt, args.output_dir,
@@ -861,13 +759,13 @@ def main():
         calibration_path=args.calibration
     )
     
-    modes = ['fp32', 'fp16', 'int8', 'int8_graph', 'int8_baseline', 'int8_baseline_graph', 'int8_baseline_fused', 'int4', 'int4_baseline', 'int4_baseline_fused'] if args.mode == 'all' else [args.mode]
+    modes = ['fp32', 'fp16', 'int8', 'int8_baseline', 'int4', 'int4_baseline'] if args.mode == 'all' else [args.mode]
     
     for mode in modes:
-        if mode in ('int8', 'int8_graph', 'int8_baseline', 'int8_baseline_graph', 'int8_baseline_fused') and not HAS_INT8:
+        if mode == 'int8' and not HAS_INT8:
             print(f"Skipping {mode}: not available")
             continue
-        if mode in ('int4', 'int4_baseline', 'int4_baseline_fused') and not HAS_INT4:
+        if mode == 'int4' and not HAS_INT4:
             print(f"Skipping {mode}: not available")
             continue
         runner.run_mode(mode, args.num_samples, calibrate=not args.skip_calibration, force_recalibrate=args.force_recalibrate)

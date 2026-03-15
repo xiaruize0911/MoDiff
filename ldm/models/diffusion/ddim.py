@@ -45,10 +45,10 @@ class DDIMSampler(object):
         ddim_sigmas, ddim_alphas, ddim_alphas_prev = make_ddim_sampling_parameters(alphacums=alphas_cumprod.cpu(),
                                                                                    ddim_timesteps=self.ddim_timesteps,
                                                                                    eta=ddim_eta,verbose=verbose)
-        self.register_buffer('ddim_sigmas', to_torch(torch.as_tensor(ddim_sigmas)))
-        self.register_buffer('ddim_alphas', to_torch(torch.as_tensor(ddim_alphas)))
-        self.register_buffer('ddim_alphas_prev', to_torch(torch.as_tensor(ddim_alphas_prev)))
-        self.register_buffer('ddim_sqrt_one_minus_alphas', to_torch(torch.as_tensor(np.sqrt(1. - ddim_alphas))))
+        self.register_buffer('ddim_sigmas', ddim_sigmas)
+        self.register_buffer('ddim_alphas', ddim_alphas)
+        self.register_buffer('ddim_alphas_prev', ddim_alphas_prev)
+        self.register_buffer('ddim_sqrt_one_minus_alphas', np.sqrt(1. - ddim_alphas))
         sigmas_for_original_sampling_steps = ddim_eta * torch.sqrt(
             (1 - self.alphas_cumprod_prev) / (1 - self.alphas_cumprod) * (
                         1 - self.alphas_cumprod / self.alphas_cumprod_prev))
@@ -215,23 +215,25 @@ class DDIMSampler(object):
         sigmas = self.model.ddim_sigmas_for_original_num_steps if use_original_steps else self.ddim_sigmas
 
         # select parameters corresponding to the currently considered timestep
-        # Keep coefficients as CUDA tensors so this path remains CUDA-graph safe
-        # and avoids CPU synchronization from Python scalar extraction.
-        a_t = torch.as_tensor(alphas[index], device=device, dtype=x.dtype)
-        a_prev = torch.as_tensor(alphas_prev[index], device=device, dtype=x.dtype)
-        sigma_t = torch.as_tensor(sigmas[index], device=device, dtype=x.dtype)
-        sqrt_one_minus_at = torch.as_tensor(sqrt_one_minus_alphas[index], device=device, dtype=x.dtype)
+        # Use scalar indexing and in-place broadcast to avoid per-step torch.full allocations
+        a_t_val = float(alphas[index])
+        a_prev_val = float(alphas_prev[index])
+        sigma_t_val = float(sigmas[index])
+        sqrt_one_minus_at_val = float(sqrt_one_minus_alphas[index])
 
         # current prediction for x_0
-        pred_x0 = (x - sqrt_one_minus_at * e_t) * torch.rsqrt(a_t)
+        pred_x0 = (x - sqrt_one_minus_at_val * e_t) * (1.0 / (a_t_val ** 0.5))
         if quantize_denoised:
             pred_x0, _, *_ = self.model.first_stage_model.quantize(pred_x0)
         # direction pointing to x_t
-        dir_xt = torch.sqrt(1. - a_prev - sigma_t.square()) * e_t
-        noise = noise_like(x.shape, device, repeat_noise) * temperature
-        if noise_dropout > 0.:
-            noise = torch.nn.functional.dropout(noise, p=noise_dropout)
-        x_prev = torch.sqrt(a_prev) * pred_x0 + dir_xt + sigma_t * noise
+        dir_xt = ((1. - a_prev_val - sigma_t_val**2) ** 0.5) * e_t
+        if sigma_t_val > 0.:
+            noise = sigma_t_val * noise_like(x.shape, device, repeat_noise) * temperature
+            if noise_dropout > 0.:
+                noise = torch.nn.functional.dropout(noise, p=noise_dropout)
+            x_prev = (a_prev_val ** 0.5) * pred_x0 + dir_xt + noise
+        else:
+            x_prev = (a_prev_val ** 0.5) * pred_x0 + dir_xt
         return x_prev, pred_x0
 
     @torch.no_grad()

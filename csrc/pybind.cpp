@@ -22,17 +22,6 @@ torch::Tensor conv2d_int8_fprop(
     int dilation_h, int dilation_w
 );
 
-torch::Tensor conv2d_int8_fprop_output(
-    torch::Tensor input,
-    torch::Tensor weight,
-    torch::Tensor inv_scale,
-    torch::Tensor weight_scales,
-    torch::Tensor bias,
-    int stride_h, int stride_w,
-    int padding_h, int padding_w,
-    int dilation_h, int dilation_w
-);
-
 torch::Tensor quantize_and_pack(torch::Tensor input);
 torch::Tensor scale_quantize_and_pack(torch::Tensor input, torch::Tensor scale);
 torch::Tensor scale_quantize_int8(torch::Tensor input, torch::Tensor scale);
@@ -78,17 +67,6 @@ torch::Tensor conv2d_int4_fprop_o_hat(
     int dilation_h, int dilation_w
 );
 
-torch::Tensor conv2d_int4_fprop_output(
-    torch::Tensor input,
-    torch::Tensor weight_packed,
-    torch::Tensor inv_scale,
-    torch::Tensor weight_scales,
-    torch::Tensor bias,
-    int stride_h, int stride_w,
-    int padding_h, int padding_w,
-    int dilation_h, int dilation_w
-);
-
 torch::Tensor step1_quantize_fprop(
     torch::Tensor x,
     torch::Tensor a_hat_cache,
@@ -104,8 +82,6 @@ torch::Tensor step1_quantize_fprop(
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("conv2d_int4_fprop", &conv2d_int4_fprop, "Conv2d INT4 Forward (CUTLASS)");
     m.def("conv2d_int8_fprop", &conv2d_int8_fprop, "Conv2d INT8 Forward (CUTLASS)");
-    m.def("conv2d_int8_fprop_output", &conv2d_int8_fprop_output, "Fused INT8 Conv + output dequant/bias");
-    m.def("conv2d_int4_fprop_output", &conv2d_int4_fprop_output, "Fused INT4 Conv + output dequant/bias");
     m.def("quantize_and_pack", &quantize_and_pack, "Fast Quantization and Packing for INT4");
     m.def("scale_quantize_and_pack", &scale_quantize_and_pack, "Fused Scale + Quantize + Pack for INT4");
     m.def("scale_quantize_int8", &scale_quantize_int8, "Fused Scale + Quantize for INT8");

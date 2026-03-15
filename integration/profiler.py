@@ -77,21 +77,4 @@ class Profiler:
             print(f"{name:<30} | {duration:<10.4f} | {count:<8} | {avg_ms:<10.3f} | {pct:<8.1f}")
         print("="*60 + "\n")
 
-    @classmethod
-    def summary_dict(cls):
-        cls.collect()
-        total_profiled = sum(cls._stats.values())
-        summary = {}
-        for name, duration in sorted(cls._stats.items(), key=lambda x: x[1], reverse=True):
-            count = cls._counts[name]
-            avg_ms = (duration / count) * 1000 if count else 0.0
-            pct = (duration / total_profiled) * 100 if total_profiled > 0 else 0.0
-            summary[name] = {
-                'total_s': duration,
-                'calls': count,
-                'avg_ms': avg_ms,
-                'pct_total': pct,
-            }
-        return summary
-
 profiler = Profiler
