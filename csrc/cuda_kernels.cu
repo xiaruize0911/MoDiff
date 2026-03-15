@@ -1,4 +1,5 @@
 #include <torch/extension.h>
+#include <ATen/cuda/CUDAContext.h>
 #include <cuda_runtime.h>
 #include <iostream>
 
@@ -187,6 +188,7 @@ void scale_accumulate(
     torch::Tensor weight_scale,
     torch::Tensor o_hat_cache
 ) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     int num_elements = conv_output.numel();
     int num_channels = weight_scale.numel();
     int block_size = 256;
@@ -194,7 +196,7 @@ void scale_accumulate(
     int num_work_items = (num_elements + 3) / 4;
     int grid_size = (num_work_items + block_size - 1) / block_size;
     
-    scale_accumulate_kernel<<<grid_size, block_size>>>(
+    scale_accumulate_kernel<<<grid_size, block_size, 0, stream>>>(
         conv_output.data_ptr<float>(),
         weight_scale.data_ptr<float>(),
         o_hat_cache.data_ptr<float>(),
@@ -311,6 +313,7 @@ void sub_absmax_scale(
     float Q_level,
     torch::Tensor smooth_inv       // Per-channel SmoothQuant inverse (empty = skip)
 ) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     int num_elements = x.numel();
     int block_size = 256;
     int grid_size = min((num_elements + block_size - 1) / block_size, 1024);
@@ -323,7 +326,7 @@ void sub_absmax_scale(
         num_channels = smooth_inv.numel();
     }
     
-    sub_absmax_scale_kernel<<<grid_size, block_size, block_size * sizeof(float)>>>(
+    sub_absmax_scale_kernel<<<grid_size, block_size, block_size * sizeof(float), stream>>>(
         x.data_ptr<float>(),
         a_hat_cache.data_ptr<float>(),
         residual.data_ptr<float>(),
@@ -391,10 +394,11 @@ torch::Tensor quantize_and_pack(torch::Tensor input) {
     
     auto output = torch::empty({num_output}, torch::TensorOptions().dtype(torch::kInt8).device(input.device()));
     
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     int block_size = 256;
     int grid_size = (num_output + block_size - 1) / block_size;
     
-    quantize_pack_kernel<<<grid_size, block_size>>>(
+    quantize_pack_kernel<<<grid_size, block_size, 0, stream>>>(
         input.data_ptr<float>(),
         output.data_ptr<int8_t>(),
         num_output
@@ -422,10 +426,11 @@ torch::Tensor scale_quantize_and_pack(torch::Tensor input, torch::Tensor scale) 
     
     auto output = torch::empty({num_output}, torch::TensorOptions().dtype(torch::kInt8).device(input.device()));
     
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     int block_size = 256;
     int grid_size = (num_output + block_size - 1) / block_size;
     
-    scale_quantize_pack_kernel<<<grid_size, block_size>>>(
+    scale_quantize_pack_kernel<<<grid_size, block_size, 0, stream>>>(
         input.data_ptr<float>(),
         output.data_ptr<int8_t>(),
         scale.data_ptr<float>(),
@@ -444,12 +449,13 @@ torch::Tensor scale_quantize_int8(torch::Tensor input, torch::Tensor scale) {
     // Fused: input * scale -> round -> clamp(-127,127) -> int8 (vectorized float4)
     auto output = torch::empty_like(input, torch::TensorOptions().dtype(torch::kInt8).device(input.device()));
     
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     int num_elements = input.numel();
     int block_size = 256;
     int num_work_items = (num_elements + 3) / 4;
     int grid_size = (num_work_items + block_size - 1) / block_size;
     
-    scale_quantize_int8_kernel<<<grid_size, block_size>>>(
+    scale_quantize_int8_kernel<<<grid_size, block_size, 0, stream>>>(
         input.data_ptr<float>(),
         output.data_ptr<int8_t>(),
         scale.data_ptr<float>(),
@@ -460,13 +466,14 @@ torch::Tensor scale_quantize_int8(torch::Tensor input, torch::Tensor scale) {
 }
 
 void dequant_accumulate_int4(torch::Tensor residual, torch::Tensor a_hat_cache, torch::Tensor scale) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     // In-place: a_hat_cache += round(clamp(residual * scale, -7, 7)) / scale
     int num_elements = residual.numel();
     int block_size = 256;
     int num_work_items = (num_elements + 3) / 4;
     int grid_size = (num_work_items + block_size - 1) / block_size;
     
-    dequant_accumulate_int4_kernel<<<grid_size, block_size>>>(
+    dequant_accumulate_int4_kernel<<<grid_size, block_size, 0, stream>>>(
         residual.data_ptr<float>(),
         a_hat_cache.data_ptr<float>(),
         scale.data_ptr<float>(),
@@ -475,13 +482,14 @@ void dequant_accumulate_int4(torch::Tensor residual, torch::Tensor a_hat_cache, 
 }
 
 void dequant_accumulate_int8(torch::Tensor residual, torch::Tensor a_hat_cache, torch::Tensor scale) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     // In-place: a_hat_cache += round(clamp(residual * scale, -127, 127)) / scale
     int num_elements = residual.numel();
     int block_size = 256;
     int num_work_items = (num_elements + 3) / 4;
     int grid_size = (num_work_items + block_size - 1) / block_size;
     
-    dequant_accumulate_int8_kernel<<<grid_size, block_size>>>(
+    dequant_accumulate_int8_kernel<<<grid_size, block_size, 0, stream>>>(
         residual.data_ptr<float>(),
         a_hat_cache.data_ptr<float>(),
         scale.data_ptr<float>(),
@@ -556,6 +564,7 @@ torch::Tensor conv2d_int8_fprop(
     int padding_h, int padding_w,
     int dilation_h, int dilation_w
 ) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     CHECK_CUDA(input);
     CHECK_CONTIGUOUS(input);
     
@@ -620,7 +629,7 @@ torch::Tensor conv2d_int8_fprop(
     size_t workspace_size = op.get_workspace_size(args);
     auto workspace = torch::empty({(long)workspace_size}, torch::TensorOptions().dtype(torch::kByte).device(input.device()));
     
-    cutlass::Status status = op(args, workspace.data_ptr());
+    cutlass::Status status = op(args, workspace.data_ptr(), stream);
     
     if (status != cutlass::Status::kSuccess) {
         std::cerr << "CUTLASS INT8 Kernel Failed: " << cutlass::cutlassGetStatusString(status) << std::endl;
@@ -643,6 +652,7 @@ torch::Tensor conv2d_int4_fprop(
     int padding_h, int padding_w,
     int dilation_h, int dilation_w
 ) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     // Previous Code Assumed NCHW input and performed check
     // Now we accept packed input so we disable these generic checks
     // as we handle specific checks below.
@@ -719,7 +729,7 @@ torch::Tensor conv2d_int4_fprop(
     size_t workspace_size = op.get_workspace_size(args);
     auto workspace = torch::empty({(long)workspace_size}, torch::TensorOptions().dtype(torch::kByte).device(input.device()));
     
-    cutlass::Status status = op(args, workspace.data_ptr());
+    cutlass::Status status = op(args, workspace.data_ptr(), stream);
     if (status != cutlass::Status::kSuccess) {
         std::cerr << "CUTLASS INT4 Kernel Failed: " << cutlass::cutlassGetStatusString(status) << std::endl;
         TORCH_CHECK(false, "CUTLASS INT4 Kernel failed");
@@ -742,6 +752,7 @@ torch::Tensor conv2d_int8_fprop_o_hat(
     int padding_h, int padding_w,
     int dilation_h, int dilation_w
 ) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     // 1) Empty bias
     auto empty_bias = torch::empty({0}, torch::TensorOptions().device(input.device()));
     
@@ -760,7 +771,7 @@ torch::Tensor conv2d_int8_fprop_o_hat(
     
     // 4) Launch native CUDA kernel for per-channel scale + accumulation into o_hat_cache
     // this directly overwrites o_hat_cache (C/D matrix) in global memory.
-    scale_accumulate_kernel<<<grid_size, block_size>>>(
+    scale_accumulate_kernel<<<grid_size, block_size, 0, stream>>>(
         conv_out.data_ptr<float>(),
         weight_scales.data_ptr<float>(),
         o_hat_cache.data_ptr<float>(),
@@ -834,6 +845,7 @@ torch::Tensor step1_quantize_fprop(
     float Q_level,
     torch::Tensor smooth_inv
 ) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     // 1) Compute sub_absmax_scale globally
     sub_absmax_scale(x, a_hat_cache, residual_buf, absmax_buf, scale_buf, inv_scale_buf, retire_count, Q_level, smooth_inv);
     
@@ -846,7 +858,7 @@ torch::Tensor step1_quantize_fprop(
     int num_work_items = (num_elements + 3) / 4;
     int grid_size = (num_work_items + block_size - 1) / block_size;
     
-    quantize_and_update_ahat_kernel<<<grid_size, block_size>>>(
+    quantize_and_update_ahat_kernel<<<grid_size, block_size, 0, stream>>>(
         residual_buf.data_ptr<float>(),
         a_hat_cache.data_ptr<float>(),
         x_int8.data_ptr<int8_t>(),
@@ -869,6 +881,7 @@ torch::Tensor step1_quantize_pack_int4_fprop(
     float Q_level,
     torch::Tensor smooth_inv
 ) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     // 1) Compute sub_absmax_scale globally
     sub_absmax_scale(x, a_hat_cache, residual_buf, absmax_buf, scale_buf, inv_scale_buf, retire_count, Q_level, smooth_inv);
     
@@ -882,7 +895,7 @@ torch::Tensor step1_quantize_pack_int4_fprop(
     int num_work_items = (num_input + 3) / 4;
     int grid_size = (num_work_items + block_size - 1) / block_size;
     
-    quantize_pack_and_update_ahat_kernel_int4<<<grid_size, block_size>>>(
+    quantize_pack_and_update_ahat_kernel_int4<<<grid_size, block_size, 0, stream>>>(
         residual_buf.data_ptr<float>(),
         a_hat_cache.data_ptr<float>(),
         x_packed.data_ptr<int8_t>(),
@@ -908,6 +921,7 @@ torch::Tensor conv2d_int4_fprop_o_hat(
     int padding_h, int padding_w,
     int dilation_h, int dilation_w
 ) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     auto empty_bias = torch::empty({0}, torch::TensorOptions().device(input.device()));
     
     auto conv_out = conv2d_int4_fprop(
@@ -921,7 +935,7 @@ torch::Tensor conv2d_int4_fprop_o_hat(
     int num_work_items = (num_elements + 3) / 4;
     int grid_size = (num_work_items + block_size - 1) / block_size;
     
-    scale_accumulate_kernel<<<grid_size, block_size>>>(
+    scale_accumulate_kernel<<<grid_size, block_size, 0, stream>>>(
         conv_out.data_ptr<float>(),
         weight_scales.data_ptr<float>(),
         o_hat_cache.data_ptr<float>(),

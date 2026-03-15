@@ -283,6 +283,8 @@ class UNetCudaGraphManager:
         self.capture_count = 0
         self.replay_count = 0
         self._previous_cudnn_benchmark = torch.backends.cudnn.benchmark
+        self._warmup_stream = torch.cuda.Stream()
+        self._num_warmup = 3
 
         # cuDNN algorithm search is not capture-safe; freeze engine selection.
         torch.backends.cudnn.benchmark = False
@@ -340,6 +342,49 @@ class UNetCudaGraphManager:
         for module in _iter_graph_int8_modules(self.diffusion_model):
             module.is_first_step = is_first_step
 
+    def _snapshot_module_state(self):
+        snapshots = []
+        for module in _iter_graph_int8_modules(self.diffusion_model):
+            snap = {
+                'module': module,
+                'is_first_step': getattr(module, 'is_first_step', None),
+                'step_count': getattr(module, 'step_count', None),
+                '_state_ready': getattr(module, '_state_ready', None),
+                'a_hat_cache': None if getattr(module, 'a_hat_cache', None) is None else module.a_hat_cache.clone(),
+                'o_hat_cache': None if getattr(module, 'o_hat_cache', None) is None else module.o_hat_cache.clone(),
+            }
+            snapshots.append(snap)
+        return snapshots
+
+    def _restore_module_state(self, snapshots):
+        for snap in snapshots:
+            module = snap['module']
+            if snap['is_first_step'] is not None:
+                module.is_first_step = snap['is_first_step']
+            if snap['step_count'] is not None and hasattr(module, 'step_count'):
+                module.step_count = snap['step_count']
+            if snap['_state_ready'] is not None and hasattr(module, '_state_ready'):
+                module._state_ready = snap['_state_ready']
+            for attr in ('a_hat_cache', 'o_hat_cache'):
+                saved = snap[attr]
+                if saved is None:
+                    setattr(module, attr, None)
+                    continue
+                current = getattr(module, attr, None)
+                if current is None or current.shape != saved.shape or current.device != saved.device or current.dtype != saved.dtype:
+                    setattr(module, attr, saved.clone())
+                else:
+                    current.copy_(saved)
+
+    def _warmup_phase(self, static_x: torch.Tensor, static_t: torch.Tensor, static_kwargs: Dict[str, Any]):
+        snapshot = self._snapshot_module_state()
+        with torch.inference_mode():
+            with torch.cuda.stream(self._warmup_stream):
+                for _ in range(self._num_warmup):
+                    _ = self.diffusion_wrapper(static_x, static_t, **static_kwargs)
+            self._warmup_stream.synchronize()
+        self._restore_module_state(snapshot)
+
     def _capture_phase(self, phase: str, x: torch.Tensor, t: torch.Tensor, model_kwargs: Dict[str, Any]) -> torch.Tensor:
         static_x = torch.empty_like(x)
         static_t = torch.empty_like(t)
@@ -351,6 +396,8 @@ class UNetCudaGraphManager:
             self._set_module_first_step(True)
         elif phase == 'modulated':
             self._set_module_first_step(False)
+
+        self._warmup_phase(static_x, static_t, static_kwargs)
 
         graph = torch.cuda.CUDAGraph()
         torch.cuda.synchronize()

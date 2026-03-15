@@ -315,6 +315,24 @@ class ExtendedBenchmarkRunner:
         elif 'int4' in mode and HAS_INT4:
             reset_modiff_state_int4(model.model.diffusion_model)
 
+    def _select_cudagraph_precapture_steps(self, sampler, mode: str) -> int:
+        """Pick a valid short DDIM schedule that captures all needed graph phases.
+
+        DDIM's uniform discretization only supports step counts that divide the
+        underlying DDPM schedule length cleanly; otherwise it can generate an
+        out-of-bounds timestep (e.g. 3 -> 1000). For CUDA Graph benchmarking we
+        only need enough steps to capture the required phases ahead of timing:
+        1 step for baseline, 2 steps for MoDiff (first + modulated).
+        """
+        ddpm_steps = int(getattr(sampler.model, 'num_timesteps', 1000))
+        min_required = 1 if 'baseline' in mode else 2
+
+        for candidate in range(min_required, self.steps + 1):
+            if ddpm_steps % candidate == 0:
+                return candidate
+
+        return self.steps
+
     def run_mode(self, mode: str, num_samples: int = 32):
         """Run benchmark for a specific mode."""
         print(f"\n{'='*60}\n{mode.upper()}\n{'='*60}")
@@ -349,6 +367,18 @@ class ExtendedBenchmarkRunner:
                 batch_size=self.batch_size,
                 shape=self.shape,
             )
+            self._reset_state(model, mode)
+            precapture_steps = self._select_cudagraph_precapture_steps(sampler, mode)
+            print("  Pre-capturing CUDA Graph phases before timed sampling...")
+            with torch.inference_mode(), torch.amp.autocast('cuda', enabled=use_autocast, dtype=dtype):
+                sampler.sample(
+                    S=precapture_steps,
+                    batch_size=self.batch_size,
+                    shape=self.shape,
+                    eta=0.0,
+                    verbose=False,
+                )
+            torch.cuda.synchronize()
             self._reset_state(model, mode)
 
         # Generate samples and measure
@@ -899,6 +929,7 @@ class ExtendedBenchmarkRunner:
             "  - activations stay on the CUTLASS quantized path instead of dequantizing back to FP16 `F.conv2d`",
             "  - DDIM remains the outer Python loop, but each UNet step is replayed from captured CUDA graphs",
             "  - two graphs are used: one for the first MoDiff step and one for all modulated steps",
+            "  - the benchmark pre-captures those graphs on a short valid DDIM schedule before timed sampling, so graph construction cost does not leak into the steady-state timing",
             "- **`int8_cudagraph_baseline`**: same backend, but with MoDiff disabled, so only a single per-step graph is needed.",
             "",
             "### Separate-kernel baselines",
@@ -952,12 +983,33 @@ class ExtendedBenchmarkRunner:
             "",
             "CUDA Graphs reduce Python/kernel-launch overhead by replaying captured UNet executions.",
             "In this implementation, the graph replay is real and is exercised in the benchmark:",
-            "- `int8_cudagraph_baseline` captures 1 graph and replays it 199 times",
-            "- `int8_cudagraph` captures 2 graphs (first/modulated) and replays them 198 times",
+        ])
+
+        if 'int8_cudagraph_baseline' in self.results:
+            base = self.results['int8_cudagraph_baseline']
+            lines.append(
+                f"- `int8_cudagraph_baseline` captures {int(base.get('cuda_graph_num_graphs', 0))} graph and replays it {int(base.get('cuda_graph_replay_count', 0))} times"
+            )
+        if 'int8_cudagraph' in self.results:
+            graph = self.results['int8_cudagraph']
+            lines.append(
+                f"- `int8_cudagraph` captures {int(graph.get('cuda_graph_num_graphs', 0))} graphs (first/modulated) and replays them {int(graph.get('cuda_graph_replay_count', 0))} times"
+            )
+
+        lines.extend([
             "",
             "`int8_cudagraph` now uses the same CUTLASS INT8 kernels as fused `int8` for the conv/modulation path.",
             "This isolates the effect of CUDA Graph replay on top of the optimized backend instead of benchmarking a different FP16 fallback backend.",
             "Any remaining gap between `int8_cudagraph` and eager fused `int8` therefore reflects graph-capture constraints, first-step capture cost, and the interaction between static replay buffers and the MoDiff execution schedule rather than a backend mismatch.",
+            "",
+            "### Why the earlier graph numbers looked slow",
+            "",
+            "The slow `int8_cudagraph` / `int8_cudagraph_baseline` run was primarily a benchmarking bug rather than a pure kernel regression.",
+            "The pre-capture path used an invalid short DDIM schedule (`S=3`), but DDIM uniform discretization only works cleanly for step counts that divide the 1000-step base schedule.",
+            "That could either fail outright or prevent the graphs from being fully pre-captured before the timed sample, which makes the first measured batch pay graph-construction cost.",
+            "The benchmark now pre-captures with the minimum valid schedule needed for each mode:",
+            "- `int8_cudagraph`: 2 steps (captures both first-step and modulated graphs)",
+            "- `int8_cudagraph_baseline`: 1 step (captures the single baseline graph)",
             "",
             "### Task 2: Fused vs Separate Kernels",
             "",

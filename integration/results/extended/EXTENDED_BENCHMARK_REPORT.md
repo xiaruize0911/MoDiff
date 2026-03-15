@@ -1,6 +1,6 @@
 # Extended MoDiff Benchmark Report
 
-**Date**: 2026-03-15 07:23:32
+**Date**: 2026-03-15 09:28:57
 **GPU**: NVIDIA A40
 **Batch Size**: 32
 **Timesteps**: 200
@@ -10,17 +10,18 @@
 
 | Mode | Time/Sample (s) | Speedup vs FP32 | Peak Memory (MB) | Graphs | Captures | Replays |
 | --- | --- | --- | --- | --- | --- | --- |
-| int8 | 0.498 | - | 13314 | - | - | - |
-| int8_baseline | 0.312 | - | 11106 | - | - | - |
-| int8_cudagraph | 0.215 | - | 17668 | 2 | 2 | 198 |
-| int8_cudagraph_baseline | 0.241 | - | 20280 | 1 | 1 | 199 |
+| fp32 | 0.609 | - | 39051 | - | - | - |
+| int8 | 0.509 | 1.20x | 13314 | - | - | - |
+| int8_baseline | 0.311 | 1.96x | 11106 | - | - | - |
+| int8_cudagraph | 0.336 | 1.81x | 23325 | 2 | 2 | 200 |
+| int8_cudagraph_baseline | 0.298 | 2.04x | 22770 | 1 | 1 | 200 |
 
 ## CUDA Graph Replay Stats
 
 | Mode | Graphs | Captures | Replays | Replays / Captures |
 | --- | --- | --- | --- | --- |
-| int8_cudagraph | 2 | 2 | 198 | 99.0 |
-| int8_cudagraph_baseline | 1 | 1 | 199 | 199.0 |
+| int8_cudagraph | 2 | 2 | 200 | 100.0 |
+| int8_cudagraph_baseline | 1 | 1 | 200 | 200.0 |
 
 ## Mode Implementation Details
 
@@ -48,6 +49,7 @@
   - activations stay on the CUTLASS quantized path instead of dequantizing back to FP16 `F.conv2d`
   - DDIM remains the outer Python loop, but each UNet step is replayed from captured CUDA graphs
   - two graphs are used: one for the first MoDiff step and one for all modulated steps
+  - the benchmark pre-captures those graphs on a short valid DDIM schedule before timed sampling, so graph construction cost does not leak into the steady-state timing
 - **`int8_cudagraph_baseline`**: same backend, but with MoDiff disabled, so only a single per-step graph is needed.
 
 ### Separate-kernel baselines
@@ -64,12 +66,21 @@
 
 CUDA Graphs reduce Python/kernel-launch overhead by replaying captured UNet executions.
 In this implementation, the graph replay is real and is exercised in the benchmark:
-- `int8_cudagraph_baseline` captures 1 graph and replays it 199 times
-- `int8_cudagraph` captures 2 graphs (first/modulated) and replays them 198 times
+- `int8_cudagraph_baseline` captures 1 graph and replays it 200 times
+- `int8_cudagraph` captures 2 graphs (first/modulated) and replays them 200 times
 
 `int8_cudagraph` now uses the same CUTLASS INT8 kernels as fused `int8` for the conv/modulation path.
 This isolates the effect of CUDA Graph replay on top of the optimized backend instead of benchmarking a different FP16 fallback backend.
 Any remaining gap between `int8_cudagraph` and eager fused `int8` therefore reflects graph-capture constraints, first-step capture cost, and the interaction between static replay buffers and the MoDiff execution schedule rather than a backend mismatch.
+
+### Why the earlier graph numbers looked slow
+
+The slow `int8_cudagraph` / `int8_cudagraph_baseline` run was primarily a benchmarking bug rather than a pure kernel regression.
+The pre-capture path used an invalid short DDIM schedule (`S=3`), but DDIM uniform discretization only works cleanly for step counts that divide the 1000-step base schedule.
+That could either fail outright or prevent the graphs from being fully pre-captured before the timed sample, which makes the first measured batch pay graph-construction cost.
+The benchmark now pre-captures with the minimum valid schedule needed for each mode:
+- `int8_cudagraph`: 2 steps (captures both first-step and modulated graphs)
+- `int8_cudagraph_baseline`: 1 step (captures the single baseline graph)
 
 ### Task 2: Fused vs Separate Kernels
 
@@ -82,7 +93,7 @@ Fusion benefit is primarily from reduced kernel launch overhead and memory bandw
 
 ### Effect of CUDA Graph replay on CUTLASS INT8
 
-- **`int8_cudagraph` vs `int8`**: 0.215s vs 0.498s.
-  - CUDA Graph replay reduces the eager CUTLASS INT8 path by 2.32x on this run
+- **`int8_cudagraph` vs `int8`**: 0.336s vs 0.509s.
+  - CUDA Graph replay reduces the eager CUTLASS INT8 path by 1.52x on this run
   - both modes use the same CUTLASS INT8 kernels on the hot path, so this speedup comes from reducing Python/kernel-launch overhead
   - the remaining trade-off is memory: graph replay keeps large static buffers alive, which raises peak memory usage
