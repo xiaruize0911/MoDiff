@@ -21,7 +21,7 @@ from ldm.modules.attention import SpatialTransformer
 
 # Cached timestep embedding for 2-3% speedup
 try:
-    from integration.timestep_cache import get_cached_timestep_embedding
+    from integration.utils.timestep_cache import get_cached_timestep_embedding
     USE_TIMESTEP_CACHE = True
 except ImportError:
     USE_TIMESTEP_CACHE = False

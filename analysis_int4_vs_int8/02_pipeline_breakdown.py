@@ -46,7 +46,7 @@ torch.backends.cudnn.benchmark = True
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from integration.profiler import profiler, Profiler
+from integration.utils.profiler import profiler, Profiler
 
 
 # ============================================================================
@@ -82,8 +82,8 @@ class LayerProfiler:
     
     def register(self, model):
         """Attach hooks to all layers in the model."""
-        from integration.int8_optimized import OptimizedInt8Conv2d
-        from integration.int4_optimized import OptimizedInt4Conv2d
+        from integration.kernels.int8_optimized import OptimizedInt8Conv2d
+        from integration.kernels.int4_optimized import OptimizedInt4Conv2d
         
         for name, module in model.named_modules():
             if isinstance(module, OptimizedInt8Conv2d):
@@ -199,23 +199,23 @@ def run_pipeline_breakdown(mode, steps=50, num_batches=4, batch_size=8):
     AttentionBlock.forward = lambda self, x: self._forward(x)
     
     # Apply ResBlock fusion
-    from integration.fused_resblock import fuse_resblocks_in_module
+    from integration.fused_ops.fused_resblock import fuse_resblocks_in_module
     fuse_resblocks_in_module(model.model.diffusion_model, inplace=True)
     
     shape = (4, 32, 32)
     
     if mode == 'int8':
-        from integration.int8_optimized import (
+        from integration.kernels.int8_optimized import (
             convert_model_to_optimized_int8, enable_modiff_mode as enable_int8,
             reset_modiff_state as reset_int8
         )
         convert_model_to_optimized_int8(model.model.diffusion_model)
-        from integration.buffer_pool import initialize_buffer_pool
+        from integration.utils.buffer_pool import initialize_buffer_pool
         initialize_buffer_pool(model.model.diffusion_model, max_batch_size=batch_size, device='cuda')
         
-        calib_path = 'integration/int8_calibration.pt'
+        calib_path = 'integration/calibration/int8_calibration.pt'
         if os.path.exists(calib_path):
-            from integration.int8_optimized import apply_static_scales, get_calibration_config
+            from integration.kernels.int8_optimized import apply_static_scales, get_calibration_config
             scales = torch.load(calib_path, weights_only=True)
             config = get_calibration_config()
             config.scales = scales
@@ -226,15 +226,15 @@ def run_pipeline_breakdown(mode, steps=50, num_batches=4, batch_size=8):
         reset_fn = lambda: reset_int8(model.model.diffusion_model)
         
     elif mode == 'int4':
-        from integration.int4_optimized import (
+        from integration.kernels.int4_optimized import (
             convert_model_to_optimized_int4, enable_modiff_mode as enable_int4,
             reset_modiff_state as reset_int4, apply_int4_static_scales
         )
         convert_model_to_optimized_int4(model.model.diffusion_model)
-        from integration.buffer_pool import initialize_buffer_pool
+        from integration.utils.buffer_pool import initialize_buffer_pool
         initialize_buffer_pool(model.model.diffusion_model, max_batch_size=batch_size, device='cuda')
         
-        calib_path = 'integration/int4_calibration.pt'
+        calib_path = 'integration/calibration/int4_calibration.pt'
         if os.path.exists(calib_path):
             scales = torch.load(calib_path, weights_only=True)
             apply_int4_static_scales(model.model.diffusion_model, scales)
@@ -243,7 +243,7 @@ def run_pipeline_breakdown(mode, steps=50, num_batches=4, batch_size=8):
         reset_fn = lambda: reset_int4(model.model.diffusion_model)
         
     elif mode == 'int8_baseline':
-        from integration.int8_optimized import (
+        from integration.kernels.int8_optimized import (
             convert_model_to_optimized_int8, enable_modiff_mode as enable_int8,
             reset_modiff_state as reset_int8
         )
@@ -252,7 +252,7 @@ def run_pipeline_breakdown(mode, steps=50, num_batches=4, batch_size=8):
         reset_fn = lambda: reset_int8(model.model.diffusion_model)
         
     elif mode == 'int4_baseline':
-        from integration.int4_optimized import (
+        from integration.kernels.int4_optimized import (
             convert_model_to_optimized_int4, enable_modiff_mode as enable_int4,
             reset_modiff_state as reset_int4
         )

@@ -82,7 +82,7 @@ def main():
     parser = argparse.ArgumentParser(description="Compute FID for LSUN-Church comparison")
     parser.add_argument('--real_path', type=str, required=True,
                         help='Path to real images folder or precomputed .npz stats file')
-    parser.add_argument('--results_dir', type=str, default='integration/results_ldm_benchmark',
+    parser.add_argument('--results_dir', type=str, default='integration/results/ldm',
                         help='Directory containing generated results')
     parser.add_argument('--modes', type=str, nargs='+', default=['fp32', 'int8', 'int4'],
                         help='Modes to evaluate')

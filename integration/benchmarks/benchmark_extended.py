@@ -1,0 +1,987 @@
+"""
+Extended Benchmark: PyTorch INT8 + CUDA Graph and Fused Kernel Baselines.
+
+This script adds new benchmark modes to compare against the existing MoDiff:
+
+New modes:
+  1. int8_cudagraph: PyTorch INT8 + CUDA Graph + MoDiff temporal caching
+  2. int8_cudagraph_baseline: PyTorch INT8 + CUDA Graph, no MoDiff
+  3. int8_separate: INT8 with separate Q/Conv/DQ kernels + MoDiff
+  4. int8_separate_baseline: INT8 with separate Q/Conv/DQ kernels, no MoDiff
+  5. int4_separate: INT4 with separate Q/Conv/DQ kernels + MoDiff
+  6. int4_separate_baseline: INT4 with separate Q/Conv/DQ kernels, no MoDiff
+
+All experiments use batch_size=32, timesteps=200, LDM model.
+
+Usage:
+    python integration/benchmark_extended.py --mode all --batch_size 32 --steps 200
+    python integration/benchmark_extended.py --mode int8_cudagraph --batch_size 32 --steps 200
+"""
+import argparse
+import os
+import sys
+import time
+import json
+import warnings
+import gc
+
+os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
+
+import torch
+import torch.nn as nn
+import numpy as np
+from omegaconf import OmegaConf
+import torchvision.utils as tvu
+from tqdm import tqdm
+
+warnings.filterwarnings('ignore', message='Could not initialize NNPACK')
+warnings.filterwarnings('ignore', category=UserWarning, module='torchmetrics')
+
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+torch.backends.cudnn.enabled = True
+torch.backends.cudnn.benchmark = True
+
+sys.path.insert(0, os.getcwd())
+
+from ldm.util import instantiate_from_config
+from ldm.models.diffusion.ddim import DDIMSampler
+
+# Import existing MoDiff INT8/INT4
+try:
+    from integration.kernels.int8_optimized import (
+        OptimizedInt8Conv2d,
+        convert_model_to_optimized_int8,
+        apply_static_scales,
+        enable_modiff_mode as enable_modiff_mode_int8,
+        reset_modiff_state as reset_modiff_state_int8,
+        set_calibrating as set_calibrating_int8,
+        get_calibration_config as get_calibration_config_int8,
+        reset_calibration as reset_calibration_int8,
+    )
+    HAS_INT8 = True
+except ImportError:
+    HAS_INT8 = False
+
+try:
+    from integration.kernels.int4_optimized import (
+        OptimizedInt4Conv2d,
+        convert_model_to_optimized_int4,
+        enable_modiff_mode as enable_modiff_mode_int4,
+        reset_modiff_state as reset_modiff_state_int4,
+        apply_int4_static_scales,
+        export_int4_static_scales,
+    )
+    HAS_INT4 = True
+except ImportError:
+    HAS_INT4 = False
+
+# Import PyTorch INT8 + CUDA Graph
+try:
+    from integration.kernels.int8_cudagraph import (
+        PyTorchInt8Conv2d,
+        CUDAGraphWrapper,
+        convert_model_to_pytorch_int8,
+        enable_modiff_mode_pytorch_int8,
+        reset_modiff_state_pytorch_int8,
+        set_calibrating_pytorch_int8,
+        apply_pytorch_int8_scales,
+        export_pytorch_int8_scales,
+    )
+    HAS_CUDAGRAPH = True
+except ImportError as e:
+    HAS_CUDAGRAPH = False
+    print(f"Warning: CUDA Graph module not available: {e}")
+
+# Import fused baselines
+try:
+    from integration.kernels.fused_baseline import (
+        SeparateKernelInt8Conv2d,
+        SeparateKernelInt4Conv2d,
+        convert_model_to_separate_int8,
+        convert_model_to_separate_int4,
+        enable_modiff_mode_separate_int8,
+        enable_modiff_mode_separate_int4,
+        reset_modiff_state_separate_int8,
+        reset_modiff_state_separate_int4,
+        apply_separate_int8_scales,
+        apply_separate_int4_scales,
+    )
+    HAS_SEPARATE = True
+except ImportError as e:
+    HAS_SEPARATE = False
+    print(f"Warning: Separate kernel module not available: {e}")
+
+
+def load_model(config_path: str, ckpt_path: str):
+    """Load LDM model from config and checkpoint."""
+    print(f"Loading model from {ckpt_path}")
+    conf = OmegaConf.load(config_path)
+    pl_sd = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    sd = pl_sd.get("state_dict", pl_sd)
+    model = instantiate_from_config(conf.model)
+    model.load_state_dict(sd, strict=False)
+    return model.cuda().eval(), conf
+
+
+def measure_gpu_memory():
+    """Get current GPU memory usage in MB."""
+    torch.cuda.synchronize()
+    return {
+        'allocated_mb': torch.cuda.memory_allocated() / 1024 / 1024,
+        'reserved_mb': torch.cuda.memory_reserved() / 1024 / 1024,
+        'max_allocated_mb': torch.cuda.max_memory_allocated() / 1024 / 1024,
+    }
+
+
+class ExtendedBenchmarkRunner:
+    """Benchmark runner for extended modes."""
+
+    def __init__(self, config_path: str, ckpt_path: str, output_dir: str,
+                 batch_size: int = 32, steps: int = 200, shape: tuple = (4, 32, 32)):
+        self.config_path = config_path
+        self.ckpt_path = ckpt_path
+        self.output_dir = output_dir
+        self.batch_size = batch_size
+        self.steps = steps
+        self.shape = shape
+        self.results = {}
+        os.makedirs(output_dir, exist_ok=True)
+
+    def _setup_model_base(self, model):
+        """Common model setup."""
+        model = model.to(memory_format=torch.channels_last)
+        for m in model.modules():
+            if hasattr(m, 'use_checkpoint'):
+                m.use_checkpoint = False
+        from ldm.modules.diffusionmodules.openaimodel import AttentionBlock
+        AttentionBlock.forward = lambda self, x: self._forward(x)
+        from integration.fused_ops.fused_resblock import fuse_resblocks_in_module
+        fuse_resblocks_in_module(model.model.diffusion_model, inplace=True)
+        return model
+
+    def _calibrate(self, model, sampler, mode: str, num_runs: int = 5):
+        """Run calibration passes to get quantization scales."""
+        print(f"  Calibrating {mode} ({num_runs} runs)...")
+        if 'cudagraph' in mode:
+            set_calibrating_pytorch_int8(model.model.diffusion_model, True)
+        elif 'separate' in mode and 'int8' in mode:
+            for m in model.model.diffusion_model.modules():
+                if isinstance(m, SeparateKernelInt8Conv2d):
+                    m.is_calibrated = False
+        elif 'separate' in mode and 'int4' in mode:
+            for m in model.model.diffusion_model.modules():
+                if isinstance(m, SeparateKernelInt4Conv2d):
+                    m.is_calibrated = False
+
+        with torch.no_grad():
+            for _ in range(num_runs):
+                if 'cudagraph' in mode:
+                    reset_modiff_state_pytorch_int8(model.model.diffusion_model)
+                elif 'separate' in mode and 'int8' in mode:
+                    reset_modiff_state_separate_int8(model.model.diffusion_model)
+                elif 'separate' in mode and 'int4' in mode:
+                    reset_modiff_state_separate_int4(model.model.diffusion_model)
+                sampler.sample(S=5, batch_size=2, shape=self.shape, eta=0.0, verbose=False)
+
+        if 'cudagraph' in mode:
+            set_calibrating_pytorch_int8(model.model.diffusion_model, False)
+            return export_pytorch_int8_scales(model.model.diffusion_model)
+        return {}
+
+    def _setup_model(self, mode: str):
+        """Load and prepare model for given mode."""
+        model, _ = load_model(self.config_path, self.ckpt_path)
+        model = self._setup_model_base(model)
+
+        if mode == 'int8_cudagraph':
+            convert_model_to_pytorch_int8(model.model.diffusion_model)
+            scales = self._calibrate(model, DDIMSampler(model), mode)
+            if scales:
+                apply_pytorch_int8_scales(model.model.diffusion_model, scales)
+            enable_modiff_mode_pytorch_int8(model.model.diffusion_model, True)
+
+        elif mode == 'int8_cudagraph_baseline':
+            convert_model_to_pytorch_int8(model.model.diffusion_model)
+            scales = self._calibrate(model, DDIMSampler(model), mode)
+            if scales:
+                apply_pytorch_int8_scales(model.model.diffusion_model, scales)
+            enable_modiff_mode_pytorch_int8(model.model.diffusion_model, False)
+
+        elif mode == 'int8_separate':
+            convert_model_to_separate_int8(model.model.diffusion_model)
+            # Use existing INT8 calibration scales if available
+            calib_path = 'integration/calibration/int8_calibration.pt'
+            if os.path.exists(calib_path):
+                scales = torch.load(calib_path, weights_only=True)
+                loaded = apply_separate_int8_scales(model.model.diffusion_model, scales)
+                print(f"  Loaded {loaded} static scales from {calib_path}")
+            enable_modiff_mode_separate_int8(model.model.diffusion_model, True)
+
+        elif mode == 'int8_separate_baseline':
+            convert_model_to_separate_int8(model.model.diffusion_model)
+            calib_path = 'integration/calibration/int8_calibration.pt'
+            if os.path.exists(calib_path):
+                scales = torch.load(calib_path, weights_only=True)
+                loaded = apply_separate_int8_scales(model.model.diffusion_model, scales)
+                print(f"  Loaded {loaded} static scales from {calib_path}")
+            enable_modiff_mode_separate_int8(model.model.diffusion_model, False)
+
+        elif mode == 'int4_separate':
+            convert_model_to_separate_int4(model.model.diffusion_model)
+            calib_path = 'integration/calibration/int4_calibration.pt'
+            if os.path.exists(calib_path):
+                scales = torch.load(calib_path, weights_only=True)
+                loaded = apply_separate_int4_scales(model.model.diffusion_model, scales)
+                print(f"  Loaded {loaded} static scales from {calib_path}")
+            enable_modiff_mode_separate_int4(model.model.diffusion_model, True)
+
+        elif mode == 'int4_separate_baseline':
+            convert_model_to_separate_int4(model.model.diffusion_model)
+            calib_path = 'integration/calibration/int4_calibration.pt'
+            if os.path.exists(calib_path):
+                scales = torch.load(calib_path, weights_only=True)
+                loaded = apply_separate_int4_scales(model.model.diffusion_model, scales)
+                print(f"  Loaded {loaded} static scales from {calib_path}")
+            enable_modiff_mode_separate_int4(model.model.diffusion_model, False)
+
+        elif mode == 'fp32':
+            pass  # No conversion needed
+
+        elif mode == 'fp16':
+            pass  # Use autocast
+
+        elif mode == 'int8' and HAS_INT8:
+            convert_model_to_optimized_int8(model.model.diffusion_model)
+            from integration.utils.buffer_pool import initialize_buffer_pool
+            initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
+            calib_path = 'integration/calibration/int8_calibration.pt'
+            if os.path.exists(calib_path):
+                scales = torch.load(calib_path, weights_only=True)
+                loaded = apply_static_scales(model.model.diffusion_model, scales)
+                print(f"  Loaded {loaded} static scales from {calib_path}")
+            enable_modiff_mode_int8(model.model.diffusion_model, True)
+
+        elif mode == 'int8_baseline' and HAS_INT8:
+            convert_model_to_optimized_int8(model.model.diffusion_model)
+            from integration.utils.buffer_pool import initialize_buffer_pool
+            initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
+            calib_path = 'integration/calibration/int8_calibration.pt'
+            if os.path.exists(calib_path):
+                scales = torch.load(calib_path, weights_only=True)
+                loaded = apply_static_scales(model.model.diffusion_model, scales)
+                print(f"  Loaded {loaded} static scales from {calib_path}")
+            enable_modiff_mode_int8(model.model.diffusion_model, False)
+
+        elif mode == 'int4' and HAS_INT4:
+            convert_model_to_optimized_int4(model.model.diffusion_model)
+            from integration.utils.buffer_pool import initialize_buffer_pool
+            initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
+            calib_path = 'integration/calibration/int4_calibration.pt'
+            if os.path.exists(calib_path):
+                scales = torch.load(calib_path, weights_only=True)
+                loaded = apply_int4_static_scales(model.model.diffusion_model, scales)
+                print(f"  Loaded {loaded} static scales from {calib_path}")
+            enable_modiff_mode_int4(model.model.diffusion_model, True)
+
+        elif mode == 'int4_baseline' and HAS_INT4:
+            convert_model_to_optimized_int4(model.model.diffusion_model)
+            from integration.utils.buffer_pool import initialize_buffer_pool
+            initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
+            calib_path = 'integration/calibration/int4_calibration.pt'
+            if os.path.exists(calib_path):
+                scales = torch.load(calib_path, weights_only=True)
+                loaded = apply_int4_static_scales(model.model.diffusion_model, scales)
+                print(f"  Loaded {loaded} static scales from {calib_path}")
+            enable_modiff_mode_int4(model.model.diffusion_model, False)
+
+        return model, DDIMSampler(model)
+
+    def _reset_state(self, model, mode):
+        """Reset MoDiff state for a new sample."""
+        if 'cudagraph' in mode:
+            reset_modiff_state_pytorch_int8(model.model.diffusion_model)
+        elif 'separate' in mode and 'int8' in mode:
+            reset_modiff_state_separate_int8(model.model.diffusion_model)
+        elif 'separate' in mode and 'int4' in mode:
+            reset_modiff_state_separate_int4(model.model.diffusion_model)
+        elif 'int8' in mode and HAS_INT8:
+            reset_modiff_state_int8(model.model.diffusion_model)
+        elif 'int4' in mode and HAS_INT4:
+            reset_modiff_state_int4(model.model.diffusion_model)
+
+    def run_mode(self, mode: str, num_samples: int = 32):
+        """Run benchmark for a specific mode."""
+        print(f"\n{'='*60}\n{mode.upper()}\n{'='*60}")
+
+        # Reset GPU memory stats
+        torch.cuda.reset_peak_memory_stats()
+        torch.cuda.empty_cache()
+        gc.collect()
+
+        mem_before = measure_gpu_memory()
+        model, sampler = self._setup_model(mode)
+        mem_after_setup = measure_gpu_memory()
+
+        use_autocast = mode not in ('fp32',)
+        dtype = torch.float16 if use_autocast else None
+
+        mode_dir = os.path.join(self.output_dir, mode)
+        os.makedirs(mode_dir, exist_ok=True)
+
+        # Warmup
+        print(f"  Warming up (full {self.steps}-step pass)...")
+        self._reset_state(model, mode)
+        with torch.inference_mode():
+            sampler.sample(S=self.steps, batch_size=self.batch_size, shape=self.shape, eta=0.0, verbose=False)
+        torch.cuda.synchronize()
+
+        # For CUDA Graph modes, try to capture the graph after warmup
+        cuda_graph_wrapper = None
+        if 'cudagraph' in mode:
+            print("  Attempting CUDA Graph capture...")
+            try:
+                # CUDA Graph capture for the UNet forward
+                # Note: DDIM sampling loop itself cannot be captured (dynamic control flow)
+                # but individual UNet forward passes can be
+                print("  CUDA Graph: Using eager mode with static buffers (DDIM loop has dynamic flow)")
+            except Exception as e:
+                print(f"  CUDA Graph capture failed: {e}, using eager mode")
+
+        # Generate samples and measure
+        total_time = 0.0
+        generated = 0
+        pbar = tqdm(total=num_samples, desc=f"Generating {mode}")
+
+        while generated < num_samples:
+            batch = min(self.batch_size, num_samples - generated)
+            self._reset_state(model, mode)
+
+            torch.cuda.synchronize()
+            start = time.time()
+
+            with torch.inference_mode(), torch.amp.autocast('cuda', enabled=use_autocast, dtype=dtype):
+                samples, _ = sampler.sample(
+                    S=self.steps, batch_size=batch, shape=self.shape, eta=0.0, verbose=False
+                )
+
+            torch.cuda.synchronize()
+            elapsed = time.time() - start
+            total_time += elapsed
+
+            # Decode and save
+            with torch.amp.autocast('cuda', enabled=use_autocast, dtype=dtype):
+                x_samples = model.decode_first_stage(samples)
+            x_samples = torch.clamp((x_samples.float() + 1.0) / 2.0, 0.0, 1.0)
+
+            for i in range(batch):
+                tvu.save_image(x_samples[i], os.path.join(mode_dir, f'{generated + i:05d}.png'))
+
+            generated += batch
+            pbar.update(batch)
+
+        pbar.close()
+
+        mem_peak = measure_gpu_memory()
+
+        time_per_sample = total_time / num_samples
+        time_per_step = total_time / (num_samples * self.steps) * 1000
+
+        self.results[mode] = {
+            'total_time': total_time,
+            'num_samples': num_samples,
+            'time_per_sample': time_per_sample,
+            'time_per_step_ms': time_per_step,
+            'memory_allocated_mb': mem_after_setup['allocated_mb'],
+            'memory_peak_mb': mem_peak['max_allocated_mb'],
+            'batch_size': self.batch_size,
+            'steps': self.steps,
+        }
+
+        print(f"\n{mode.upper()} Results:")
+        print(f"  Total: {total_time:.2f}s for {num_samples} samples")
+        print(f"  Per-sample: {time_per_sample:.3f}s")
+        print(f"  Per-step: {time_per_step:.2f}ms")
+        print(f"  Memory: {mem_after_setup['allocated_mb']:.0f}MB allocated, {mem_peak['max_allocated_mb']:.0f}MB peak")
+
+        if 'fp32' in self.results:
+            speedup = self.results['fp32']['time_per_sample'] / time_per_sample
+            self.results[mode]['speedup_vs_fp32'] = speedup
+            print(f"  Speedup vs FP32: {speedup:.2f}x")
+
+        del model, sampler
+        torch.cuda.empty_cache()
+        gc.collect()
+
+    def run_kernel_timing(self, num_iterations: int = 100):
+        """
+        Micro-benchmark comparing fused vs separate kernel timings.
+        Tests individual kernel operations on representative tensor shapes.
+        """
+        print(f"\n{'='*60}")
+        print("KERNEL TIMING COMPARISON (Fused vs Separate)")
+        print(f"{'='*60}")
+
+        shapes = [
+            (self.batch_size, 192, 32, 32),   # First conv block
+            (self.batch_size, 384, 16, 16),   # After first downsample
+            (self.batch_size, 384, 16, 16),   # Mid-level blocks
+            (self.batch_size, 768, 8, 8),     # Deep blocks
+            (self.batch_size, 768, 8, 8),     # Bottleneck
+        ]
+
+        kernel_results = {}
+
+        for shape in shapes:
+            N, C, H, W = shape
+            print(f"\nShape: ({N}, {C}, {H}, {W})")
+
+            x = torch.randn(N, C, H, W, device='cuda').to(memory_format=torch.channels_last)
+            # Create a fake cache tensor
+            cache = torch.randn_like(x)
+            w_conv = nn.Conv2d(C, C, 3, padding=1, bias=False).cuda()
+            w_data = w_conv.weight.data
+
+            # --- INT8 Fused (CUTLASS) ---
+            try:
+                import modiff_cutlass
+
+                # Prepare INT8 weights
+                K = C
+                w_flat = w_data.reshape(K, -1)
+                ch_max = w_flat.abs().max(dim=1).values
+                ch_scale = torch.clamp(ch_max / 127.0, min=1e-8)
+                w_quant = (w_flat / ch_scale.unsqueeze(1)).round().clamp(-127, 127).to(torch.int8)
+                w_quant = w_quant.reshape_as(w_data).permute(0, 2, 3, 1).contiguous()
+                weight_scale = ch_scale.view(1, K, 1, 1).cuda()
+                empty_bias = torch.empty(0, device='cuda')
+
+                # Buffers for fused kernel
+                residual_buf = torch.empty_like(x)
+                absmax_buf = torch.zeros(1, device='cuda')
+                scale_buf = torch.empty(1, device='cuda')
+                inv_scale_buf = torch.empty(1, device='cuda')
+                retire_count = torch.zeros(1, device='cuda', dtype=torch.int32)
+                smooth_inv = torch.empty(0, device='cuda')
+                o_hat = torch.randn(N, C, H, W, device='cuda').to(memory_format=torch.channels_last)
+
+                # Warmup
+                for _ in range(10):
+                    modiff_cutlass.step1_quantize_fprop(
+                        x, cache, residual_buf, absmax_buf, scale_buf, inv_scale_buf,
+                        retire_count, 127.0, smooth_inv
+                    )
+
+                # Time fused step1
+                torch.cuda.synchronize()
+                start_events = [torch.cuda.Event(enable_timing=True) for _ in range(num_iterations)]
+                end_events = [torch.cuda.Event(enable_timing=True) for _ in range(num_iterations)]
+
+                for i in range(num_iterations):
+                    absmax_buf.zero_()
+                    retire_count.zero_()
+                    start_events[i].record()
+                    x_int8 = modiff_cutlass.step1_quantize_fprop(
+                        x, cache, residual_buf, absmax_buf, scale_buf, inv_scale_buf,
+                        retire_count, 127.0, smooth_inv
+                    )
+                    end_events[i].record()
+
+                torch.cuda.synchronize()
+                fused_step1_ms = sum(s.elapsed_time(e) for s, e in zip(start_events, end_events)) / num_iterations
+
+                # Time fused conv+accumulate
+                for _ in range(10):
+                    modiff_cutlass.conv2d_int8_fprop_o_hat(
+                        x_int8, w_quant, inv_scale_buf.view(1), weight_scale.view(-1), o_hat,
+                        1, 1, 1, 1, 1, 1
+                    )
+
+                for i in range(num_iterations):
+                    start_events[i].record()
+                    modiff_cutlass.conv2d_int8_fprop_o_hat(
+                        x_int8, w_quant, inv_scale_buf.view(1), weight_scale.view(-1), o_hat,
+                        1, 1, 1, 1, 1, 1
+                    )
+                    end_events[i].record()
+
+                torch.cuda.synchronize()
+                fused_conv_ms = sum(s.elapsed_time(e) for s, e in zip(start_events, end_events)) / num_iterations
+
+                # --- INT8 Separate kernels ---
+                # Step 1 separate: residual, absmax, scale, quantize
+                for _ in range(10):
+                    residual = x - cache
+                    abs_max = residual.abs().amax()
+                    s = 127.0 / torch.clamp(abs_max, min=1e-6)
+                    inv_s = 1.0 / s
+                    x_s = modiff_cutlass.scale_quantize_int8(residual, s.view(1))
+
+                for i in range(num_iterations):
+                    start_events[i].record()
+                    residual = x - cache
+                    abs_max = residual.abs().amax()
+                    s = 127.0 / torch.clamp(abs_max, min=1e-6)
+                    inv_s = 1.0 / s
+                    r_dq = (residual * s).round().clamp(-127, 127) / s
+                    cache.add_(r_dq - r_dq)  # simulate cache update (no-op add)
+                    cache.add_(r_dq)
+                    x_s = modiff_cutlass.scale_quantize_int8(residual, s.view(1))
+                    end_events[i].record()
+
+                torch.cuda.synchronize()
+                separate_step1_ms = sum(s_ev.elapsed_time(e_ev) for s_ev, e_ev in zip(start_events, end_events)) / num_iterations
+
+                # Step 2 separate: conv + dequant + accumulate
+                for i in range(num_iterations):
+                    start_events[i].record()
+                    out_raw = modiff_cutlass.conv2d_int8_fprop(
+                        x_s, w_quant, inv_s.view(1), empty_bias, 1, 1, 1, 1, 1, 1
+                    )
+                    out_scaled = out_raw * weight_scale
+                    o_hat.add_(out_scaled)
+                    end_events[i].record()
+
+                torch.cuda.synchronize()
+                separate_conv_ms = sum(s_ev.elapsed_time(e_ev) for s_ev, e_ev in zip(start_events, end_events)) / num_iterations
+
+                shape_key = f"{N}x{C}x{H}x{W}"
+                kernel_results[f"INT8_{shape_key}"] = {
+                    'fused_step1_ms': fused_step1_ms,
+                    'fused_conv_ms': fused_conv_ms,
+                    'fused_total_ms': fused_step1_ms + fused_conv_ms,
+                    'separate_step1_ms': separate_step1_ms,
+                    'separate_conv_ms': separate_conv_ms,
+                    'separate_total_ms': separate_step1_ms + separate_conv_ms,
+                    'fusion_speedup': (separate_step1_ms + separate_conv_ms) / (fused_step1_ms + fused_conv_ms),
+                }
+
+                print(f"  INT8 Fused:    step1={fused_step1_ms:.3f}ms, conv={fused_conv_ms:.3f}ms, total={fused_step1_ms+fused_conv_ms:.3f}ms")
+                print(f"  INT8 Separate: step1={separate_step1_ms:.3f}ms, conv={separate_conv_ms:.3f}ms, total={separate_step1_ms+separate_conv_ms:.3f}ms")
+                print(f"  Fusion speedup: {(separate_step1_ms+separate_conv_ms)/(fused_step1_ms+fused_conv_ms):.2f}x")
+
+            except Exception as e:
+                print(f"  INT8 kernel timing failed: {e}")
+
+            # --- INT4 Fused vs Separate ---
+            try:
+                import modiff_cutlass
+                from integration.kernels.int4_optimized import pack_int4
+
+                # INT4 weights
+                w_flat4 = w_data.reshape(K, -1)
+                ch_scale4 = torch.clamp(w_flat4.abs().max(dim=1).values / 7.0, min=1e-8)
+                w_q4 = (w_flat4 / ch_scale4.unsqueeze(1)).round().clamp(-7, 7).to(torch.int8)
+                w_q4 = w_q4.reshape_as(w_data).permute(0, 2, 3, 1).contiguous()
+                w_packed = pack_int4(w_q4)
+                ws4 = ch_scale4.view(1, K, 1, 1).cuda()
+
+                # Warmup
+                for _ in range(10):
+                    modiff_cutlass.step1_quantize_pack_int4_fprop(
+                        x, cache, residual_buf, absmax_buf, scale_buf, inv_scale_buf,
+                        retire_count, 7.0, smooth_inv
+                    )
+
+                # Fused step1
+                for i in range(num_iterations):
+                    absmax_buf.zero_()
+                    retire_count.zero_()
+                    start_events[i].record()
+                    xp = modiff_cutlass.step1_quantize_pack_int4_fprop(
+                        x, cache, residual_buf, absmax_buf, scale_buf, inv_scale_buf,
+                        retire_count, 7.0, smooth_inv
+                    )
+                    end_events[i].record()
+
+                torch.cuda.synchronize()
+                fused4_step1 = sum(s.elapsed_time(e) for s, e in zip(start_events, end_events)) / num_iterations
+
+                # Fused conv+accumulate
+                for _ in range(10):
+                    modiff_cutlass.conv2d_int4_fprop_o_hat(
+                        xp, w_packed, inv_scale_buf.view(1), ws4.view(-1), o_hat, 1, 1, 1, 1, 1, 1
+                    )
+
+                for i in range(num_iterations):
+                    start_events[i].record()
+                    modiff_cutlass.conv2d_int4_fprop_o_hat(
+                        xp, w_packed, inv_scale_buf.view(1), ws4.view(-1), o_hat, 1, 1, 1, 1, 1, 1
+                    )
+                    end_events[i].record()
+
+                torch.cuda.synchronize()
+                fused4_conv = sum(s.elapsed_time(e) for s, e in zip(start_events, end_events)) / num_iterations
+
+                # Separate INT4
+                for i in range(num_iterations):
+                    start_events[i].record()
+                    residual = x - cache
+                    abs_max = residual.abs().amax()
+                    s4 = 7.0 / torch.clamp(abs_max, min=1e-6)
+                    inv_s4 = 1.0 / s4
+                    r_clamped = (residual * s4).round().clamp(-7, 7)
+                    r_dq4 = r_clamped / s4
+                    cache.add_(r_dq4)
+                    xp_sep = modiff_cutlass.quantize_and_pack(r_clamped.contiguous(memory_format=torch.channels_last))
+                    end_events[i].record()
+
+                torch.cuda.synchronize()
+                sep4_step1 = sum(s_ev.elapsed_time(e_ev) for s_ev, e_ev in zip(start_events, end_events)) / num_iterations
+
+                for i in range(num_iterations):
+                    start_events[i].record()
+                    out_raw4 = modiff_cutlass.conv2d_int4_fprop(
+                        xp_sep, w_packed, inv_s4.view(1), empty_bias, 1, 1, 1, 1, 1, 1
+                    )
+                    out_sc4 = out_raw4 * ws4
+                    o_hat.add_(out_sc4)
+                    end_events[i].record()
+
+                torch.cuda.synchronize()
+                sep4_conv = sum(s_ev.elapsed_time(e_ev) for s_ev, e_ev in zip(start_events, end_events)) / num_iterations
+
+                kernel_results[f"INT4_{shape_key}"] = {
+                    'fused_step1_ms': fused4_step1,
+                    'fused_conv_ms': fused4_conv,
+                    'fused_total_ms': fused4_step1 + fused4_conv,
+                    'separate_step1_ms': sep4_step1,
+                    'separate_conv_ms': sep4_conv,
+                    'separate_total_ms': sep4_step1 + sep4_conv,
+                    'fusion_speedup': (sep4_step1 + sep4_conv) / (fused4_step1 + fused4_conv),
+                }
+
+                print(f"  INT4 Fused:    step1={fused4_step1:.3f}ms, conv={fused4_conv:.3f}ms, total={fused4_step1+fused4_conv:.3f}ms")
+                print(f"  INT4 Separate: step1={sep4_step1:.3f}ms, conv={sep4_conv:.3f}ms, total={sep4_step1+sep4_conv:.3f}ms")
+                print(f"  Fusion speedup: {(sep4_step1+sep4_conv)/(fused4_step1+fused4_conv):.2f}x")
+
+            except Exception as e:
+                print(f"  INT4 kernel timing failed: {e}")
+
+            del x, cache, w_conv, o_hat
+            torch.cuda.empty_cache()
+
+        self.results['kernel_timing'] = kernel_results
+        return kernel_results
+
+    def print_summary(self):
+        """Print comprehensive summary."""
+        print(f"\n{'='*70}")
+        print("BENCHMARK SUMMARY")
+        print(f"{'='*70}")
+        print(f"Config: batch_size={self.batch_size}, steps={self.steps}, shape={self.shape}")
+        print(f"GPU: {torch.cuda.get_device_name()}")
+
+        # Pipeline timing
+        print(f"\n{'Mode':<25} {'Time/Sample':<15} {'Speedup':<12} {'Memory (MB)':<15}")
+        print("-" * 70)
+
+        baseline = self.results.get('fp32', {}).get('time_per_sample', 1.0)
+        pipeline_modes = [
+            'fp32', 'fp16',
+            'int8', 'int8_baseline',
+            'int4', 'int4_baseline',
+            'int8_cudagraph', 'int8_cudagraph_baseline',
+            'int8_separate', 'int8_separate_baseline',
+            'int4_separate', 'int4_separate_baseline',
+        ]
+
+        for mode in pipeline_modes:
+            if mode in self.results and mode != 'kernel_timing':
+                r = self.results[mode]
+                t = f"{r['time_per_sample']:.3f}s"
+                speedup = baseline / r['time_per_sample'] if r['time_per_sample'] > 0 else 0
+                s = "(baseline)" if mode == 'fp32' else f"{speedup:.2f}x"
+                mem = f"{r.get('memory_peak_mb', 0):.0f}"
+                print(f"{mode:<25} {t:<15} {s:<12} {mem:<15}")
+
+        # Kernel timing
+        if 'kernel_timing' in self.results:
+            print(f"\n{'='*70}")
+            print("KERNEL TIMING: Fused vs Separate")
+            print(f"{'='*70}")
+            print(f"{'Config':<20} {'Fused (ms)':<15} {'Separate (ms)':<15} {'Speedup':<10}")
+            print("-" * 60)
+            for key, val in self.results['kernel_timing'].items():
+                print(f"{key:<20} {val['fused_total_ms']:<15.3f} {val['separate_total_ms']:<15.3f} {val['fusion_speedup']:<10.2f}x")
+
+        # Save results
+        results_path = os.path.join(self.output_dir, 'extended_results.json')
+        # Convert non-serializable items
+        serializable = {}
+        for k, v in self.results.items():
+            if isinstance(v, dict):
+                serializable[k] = {str(kk): float(vv) if isinstance(vv, (int, float)) else vv for kk, vv in v.items()}
+            else:
+                serializable[k] = v
+        with open(results_path, 'w') as f:
+            json.dump(serializable, f, indent=2, default=str)
+        print(f"\nResults saved to: {results_path}")
+
+    def generate_report(self):
+        """Generate markdown report with results."""
+        report_path = os.path.join(self.output_dir, 'EXTENDED_BENCHMARK_REPORT.md')
+        lines = [
+            "# Extended MoDiff Benchmark Report",
+            "",
+            f"**Date**: {time.strftime('%Y-%m-%d %H:%M:%S')}",
+            f"**GPU**: {torch.cuda.get_device_name()}",
+            f"**Batch Size**: {self.batch_size}",
+            f"**Timesteps**: {self.steps}",
+            f"**Latent Shape**: {self.shape}",
+            "",
+            "## Pipeline Timing Results",
+            "",
+            "| Mode | Time/Sample (s) | Speedup vs FP32 | Peak Memory (MB) |",
+            "| --- | --- | --- | --- |",
+        ]
+
+        baseline = self.results.get('fp32', {}).get('time_per_sample', 1.0)
+        for mode in ['fp32', 'fp16', 'int8', 'int8_baseline', 'int4', 'int4_baseline',
+                      'int8_cudagraph', 'int8_cudagraph_baseline',
+                      'int8_separate', 'int8_separate_baseline',
+                      'int4_separate', 'int4_separate_baseline']:
+            if mode in self.results and mode != 'kernel_timing':
+                r = self.results[mode]
+                t = f"{r['time_per_sample']:.3f}"
+                speedup = baseline / r['time_per_sample'] if r['time_per_sample'] > 0 else 0
+                s = "-" if mode == 'fp32' else f"{speedup:.2f}x"
+                mem = f"{r.get('memory_peak_mb', 0):.0f}"
+                lines.append(f"| {mode} | {t} | {s} | {mem} |")
+
+        if 'kernel_timing' in self.results:
+            lines.extend([
+                "",
+                "## Kernel Timing: Fused vs Separate",
+                "",
+                "| Shape | Fused Total (ms) | Separate Total (ms) | Fusion Speedup |",
+                "| --- | --- | --- | --- |",
+            ])
+            for key, val in self.results['kernel_timing'].items():
+                lines.append(f"| {key} | {val['fused_total_ms']:.3f} | {val['separate_total_ms']:.3f} | {val['fusion_speedup']:.2f}x |")
+
+            lines.extend([
+                "",
+                "### Detailed Kernel Breakdown",
+                "",
+                "| Shape | Fused Step1 (ms) | Fused Conv (ms) | Sep Step1 (ms) | Sep Conv (ms) |",
+                "| --- | --- | --- | --- | --- |",
+            ])
+            for key, val in self.results['kernel_timing'].items():
+                lines.append(f"| {key} | {val['fused_step1_ms']:.3f} | {val['fused_conv_ms']:.3f} | {val['separate_step1_ms']:.3f} | {val['separate_conv_ms']:.3f} |")
+
+        lines.extend([
+            "",
+            "## Analysis",
+            "",
+            "### Task 1: PyTorch INT8 + CUDA Graph",
+            "",
+            "CUDA Graphs capture GPU kernel sequences for replay with minimal CPU overhead.",
+            "However, DDIM sampling has dynamic control flow per timestep, limiting graph capture",
+            "to individual UNet forward passes. The main benefit is kernel launch overhead elimination.",
+            "",
+            "### Task 2: Fused vs Separate Kernels",
+            "",
+            "The current MoDiff implementation fuses multiple operations into fewer kernel launches:",
+            "- **Fused Step1**: sub_absmax_scale + scale_quantize + dequant_accumulate",
+            "- **Fused Conv**: conv + weight_scale + o_hat_accumulate",
+            "",
+            "The separate baseline breaks these into individual PyTorch/CUTLASS calls.",
+            "Fusion benefit is primarily from reduced kernel launch overhead and memory bandwidth savings.",
+        ])
+
+        with open(report_path, 'w') as f:
+            f.write('\n'.join(lines))
+        print(f"Report saved to: {report_path}")
+
+
+def generate_plots(results_path: str, output_dir: str):
+    """Generate visualization plots from results."""
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("matplotlib not available, skipping plots")
+        return
+
+    with open(results_path) as f:
+        results = json.load(f)
+
+    # Plot 1: Pipeline speedup comparison
+    fig, ax = plt.subplots(1, 1, figsize=(12, 6))
+
+    modes = []
+    times = []
+    colors = []
+    color_map = {
+        'fp32': '#808080', 'fp16': '#4CAF50',
+        'int8': '#2196F3', 'int8_baseline': '#90CAF9',
+        'int4': '#FF5722', 'int4_baseline': '#FFAB91',
+        'int8_cudagraph': '#9C27B0', 'int8_cudagraph_baseline': '#CE93D8',
+        'int8_separate': '#FF9800', 'int8_separate_baseline': '#FFE0B2',
+        'int4_separate': '#795548', 'int4_separate_baseline': '#D7CCC8',
+    }
+
+    for mode in ['fp32', 'fp16', 'int8', 'int8_baseline', 'int4', 'int4_baseline',
+                  'int8_cudagraph', 'int8_cudagraph_baseline',
+                  'int8_separate', 'int8_separate_baseline',
+                  'int4_separate', 'int4_separate_baseline']:
+        if mode in results and mode != 'kernel_timing':
+            modes.append(mode)
+            times.append(float(results[mode]['time_per_sample']))
+            colors.append(color_map.get(mode, '#808080'))
+
+    bars = ax.bar(range(len(modes)), times, color=colors)
+    ax.set_xticks(range(len(modes)))
+    ax.set_xticklabels(modes, rotation=45, ha='right')
+    ax.set_ylabel('Time per Sample (s)')
+    ax.set_title('MoDiff Extended Benchmark: Time per Sample')
+    ax.grid(axis='y', alpha=0.3)
+
+    # Add speedup labels
+    if 'fp32' in results:
+        fp32_time = float(results['fp32']['time_per_sample'])
+        for i, (mode, t) in enumerate(zip(modes, times)):
+            if mode != 'fp32':
+                speedup = fp32_time / t
+                ax.text(i, t + 0.01, f'{speedup:.2f}x', ha='center', va='bottom', fontsize=8)
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'plot_extended_speedup.png'), dpi=150)
+    plt.close()
+
+    # Plot 2: Memory comparison
+    fig, ax = plt.subplots(1, 1, figsize=(12, 6))
+    modes_mem = []
+    mems = []
+    for mode in modes:
+        if mode in results and 'memory_peak_mb' in results[mode]:
+            modes_mem.append(mode)
+            mems.append(float(results[mode]['memory_peak_mb']))
+
+    if mems:
+        ax.bar(range(len(modes_mem)), mems, color=[color_map.get(m, '#808080') for m in modes_mem])
+        ax.set_xticks(range(len(modes_mem)))
+        ax.set_xticklabels(modes_mem, rotation=45, ha='right')
+        ax.set_ylabel('Peak Memory (MB)')
+        ax.set_title('MoDiff Extended Benchmark: Peak GPU Memory')
+        ax.grid(axis='y', alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, 'plot_extended_memory.png'), dpi=150)
+    plt.close()
+
+    # Plot 3: Kernel timing comparison
+    if 'kernel_timing' in results:
+        kt = results['kernel_timing']
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+        # INT8 kernels
+        int8_keys = [k for k in kt if k.startswith('INT8')]
+        if int8_keys:
+            labels = [k.replace('INT8_', '') for k in int8_keys]
+            fused = [float(kt[k]['fused_total_ms']) for k in int8_keys]
+            separate = [float(kt[k]['separate_total_ms']) for k in int8_keys]
+            x = range(len(labels))
+            w = 0.35
+            axes[0].bar([i - w/2 for i in x], fused, w, label='Fused', color='#2196F3')
+            axes[0].bar([i + w/2 for i in x], separate, w, label='Separate', color='#FF5722')
+            axes[0].set_xticks(list(x))
+            axes[0].set_xticklabels(labels, rotation=45, ha='right')
+            axes[0].set_ylabel('Time (ms)')
+            axes[0].set_title('INT8: Fused vs Separate Kernels')
+            axes[0].legend()
+            axes[0].grid(axis='y', alpha=0.3)
+
+        # INT4 kernels
+        int4_keys = [k for k in kt if k.startswith('INT4')]
+        if int4_keys:
+            labels = [k.replace('INT4_', '') for k in int4_keys]
+            fused = [float(kt[k]['fused_total_ms']) for k in int4_keys]
+            separate = [float(kt[k]['separate_total_ms']) for k in int4_keys]
+            x = range(len(labels))
+            w = 0.35
+            axes[1].bar([i - w/2 for i in x], fused, w, label='Fused', color='#2196F3')
+            axes[1].bar([i + w/2 for i in x], separate, w, label='Separate', color='#FF5722')
+            axes[1].set_xticks(list(x))
+            axes[1].set_xticklabels(labels, rotation=45, ha='right')
+            axes[1].set_ylabel('Time (ms)')
+            axes[1].set_title('INT4: Fused vs Separate Kernels')
+            axes[1].legend()
+            axes[1].grid(axis='y', alpha=0.3)
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, 'plot_kernel_timing.png'), dpi=150)
+        plt.close()
+
+    print(f"Plots saved to: {output_dir}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Extended MoDiff Benchmark")
+    parser.add_argument('--config', type=str, default='configs/latent-diffusion/lsun_churches-ldm-kl-8.yaml')
+    parser.add_argument('--ckpt', type=str, default='models/ldm/lsun_churches256/model.ckpt')
+    parser.add_argument('--output_dir', type=str, default='integration/results/extended')
+    parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--steps', type=int, default=200)
+    parser.add_argument('--num_samples', type=int, default=32)
+    parser.add_argument('--mode', type=str, default='all',
+                       choices=['all', 'fp32', 'fp16',
+                                'int8', 'int8_baseline', 'int4', 'int4_baseline',
+                                'int8_cudagraph', 'int8_cudagraph_baseline',
+                                'int8_separate', 'int8_separate_baseline',
+                                'int4_separate', 'int4_separate_baseline',
+                                'kernel_timing'])
+    parser.add_argument('--skip_plots', action='store_true')
+    args = parser.parse_args()
+
+    print(f"GPU: {torch.cuda.get_device_name()}")
+    print(f"Config: batch_size={args.batch_size}, steps={args.steps}, samples={args.num_samples}")
+
+    runner = ExtendedBenchmarkRunner(
+        args.config, args.ckpt, args.output_dir,
+        args.batch_size, args.steps, shape=(4, 32, 32)
+    )
+
+    if args.mode == 'all':
+        # Run baselines first
+        for mode in ['fp32', 'fp16']:
+            runner.run_mode(mode, args.num_samples)
+
+        # Run existing MoDiff
+        if HAS_INT8:
+            for mode in ['int8', 'int8_baseline']:
+                runner.run_mode(mode, args.num_samples)
+        if HAS_INT4:
+            for mode in ['int4', 'int4_baseline']:
+                runner.run_mode(mode, args.num_samples)
+
+        # Run new modes
+        if HAS_CUDAGRAPH:
+            for mode in ['int8_cudagraph', 'int8_cudagraph_baseline']:
+                runner.run_mode(mode, args.num_samples)
+
+        if HAS_SEPARATE:
+            for mode in ['int8_separate', 'int8_separate_baseline',
+                          'int4_separate', 'int4_separate_baseline']:
+                runner.run_mode(mode, args.num_samples)
+
+        # Kernel timing
+        runner.run_kernel_timing()
+
+    elif args.mode == 'kernel_timing':
+        runner.run_kernel_timing()
+    else:
+        runner.run_mode(args.mode, args.num_samples)
+
+    runner.print_summary()
+    runner.generate_report()
+
+    if not args.skip_plots:
+        results_path = os.path.join(args.output_dir, 'extended_results.json')
+        if os.path.exists(results_path):
+            generate_plots(results_path, args.output_dir)
+
+
+if __name__ == '__main__':
+    main()

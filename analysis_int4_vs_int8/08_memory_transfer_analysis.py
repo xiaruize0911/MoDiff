@@ -354,15 +354,15 @@ def _load_base_model(config_path: str, ckpt_path: str, device: str):
 
 
 def _apply_int8(dm: nn.Module, use_modiff: bool, batch_size: int = 4, device: str = "cuda"):
-    from integration.int8_optimized import (
+    from integration.kernels.int8_optimized import (
         convert_model_to_optimized_int8,
         enable_modiff_mode as enable_conv,
     )
-    from integration.buffer_pool import initialize_buffer_pool
+    from integration.utils.buffer_pool import initialize_buffer_pool
     convert_model_to_optimized_int8(dm)
     initialize_buffer_pool(dm, max_batch_size=batch_size, device=device)
     try:
-        from integration.int8_linear import (
+        from integration.kernels.int8_linear import (
             convert_model_to_int8_linear,
             enable_modiff_mode_linear,
         )
@@ -374,15 +374,15 @@ def _apply_int8(dm: nn.Module, use_modiff: bool, batch_size: int = 4, device: st
 
 
 def _apply_int4(dm: nn.Module, use_modiff: bool, batch_size: int = 4, device: str = "cuda"):
-    from integration.int4_optimized import (
+    from integration.kernels.int4_optimized import (
         convert_model_to_optimized_int4,
         enable_modiff_mode as enable_conv,
     )
-    from integration.buffer_pool import initialize_buffer_pool
+    from integration.utils.buffer_pool import initialize_buffer_pool
     convert_model_to_optimized_int4(dm)
     initialize_buffer_pool(dm, max_batch_size=batch_size, device=device)
     try:
-        from integration.int4_linear import (
+        from integration.kernels.int4_linear import (
             convert_model_to_int4_linear,
             enable_modiff_mode_int4_linear,
         )
@@ -420,7 +420,7 @@ def measure_mode(
     """
     # Reset the global buffer pool so each mode gets a fresh one
     try:
-        import integration.buffer_pool as _bp
+        import integration.utils.buffer_pool as _bp
         _bp._global_buffer_pool = None
     except Exception:
         pass

@@ -7,7 +7,7 @@ Generates publication-quality plots and tables from benchmark results.
 Reads from:
   - gemm_benchmark_results.json (from 01_gemm_microbenchmark.py)
   - pipeline_breakdown_results.json (from 02_pipeline_breakdown.py)
-  - ../integration/results_ldm_benchmark/results.json (original full benchmark)
+  - ../integration/results/ldm/results.json (original full benchmark)
 
 Outputs:
   - PNG plots

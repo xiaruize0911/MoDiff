@@ -61,13 +61,13 @@ torch.backends.cudnn.benchmark = True
 
 sys.path.insert(0, os.getcwd())
 
-from integration.profiler import profiler
+from integration.utils.profiler import profiler
 from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 
 # INT8 imports
 try:
-    from integration.int8_optimized import (
+    from integration.kernels.int8_optimized import (
         OptimizedInt8Conv2d,
         convert_model_to_optimized_int8,
         apply_static_scales,
@@ -77,7 +77,7 @@ try:
         get_calibration_config as get_calibration_config_int8,
         reset_calibration as reset_calibration_int8,
     )
-    from integration.profiler import profiler  # Added for profiling
+    from integration.utils.profiler import profiler  # Added for profiling
     HAS_INT8 = True
 except ImportError:
     HAS_INT8 = False
@@ -85,7 +85,7 @@ except ImportError:
 
 # INT8 Linear imports
 try:
-    from integration.int8_linear import (
+    from integration.kernels.int8_linear import (
         OptimizedInt8Linear,
         convert_model_to_int8_linear,
         enable_modiff_mode_linear,
@@ -101,7 +101,7 @@ except ImportError:
 
 # INT4 imports
 try:
-    from integration.int4_optimized import (
+    from integration.kernels.int4_optimized import (
         OptimizedInt4Conv2d,
         convert_model_to_optimized_int4,
         enable_modiff_mode as enable_modiff_mode_int4,
@@ -116,7 +116,7 @@ except ImportError:
 
 # INT4 Linear imports
 try:
-    from integration.int4_linear import (
+    from integration.kernels.int4_linear import (
         OptimizedInt4Linear,
         convert_model_to_int4_linear,
         enable_modiff_mode_int4_linear,
@@ -299,7 +299,7 @@ class BenchmarkRunner:
         AttentionBlock.forward = lambda self, x: self._forward(x)
         
         # Apply ResBlock fusion for all modes (8-12% speedup)
-        from integration.fused_resblock import fuse_resblocks_in_module, print_fusion_summary
+        from integration.fused_ops.fused_resblock import fuse_resblocks_in_module, print_fusion_summary
         print("\n" + "="*60)
         print("Applying ResBlock Fusion Optimization")
         print("="*60)
@@ -316,7 +316,7 @@ class BenchmarkRunner:
                 convert_model_to_int8_linear(model.model.diffusion_model)
             
             # Initialize buffer pool for pre-allocated buffers
-            from integration.buffer_pool import initialize_buffer_pool
+            from integration.utils.buffer_pool import initialize_buffer_pool
             initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
             
             # Load static calibration if available
@@ -349,7 +349,7 @@ class BenchmarkRunner:
                 convert_model_to_int4_linear(model.model.diffusion_model)
             
             # Initialize buffer pool for pre-allocated buffers
-            from integration.buffer_pool import initialize_buffer_pool
+            from integration.utils.buffer_pool import initialize_buffer_pool
             initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
 
             # Load static INT4 activation scales if provided
@@ -378,7 +378,7 @@ class BenchmarkRunner:
                 print(f"Converting UNet linear layers to INT8 ({count_linear_layers(model.model.diffusion_model)} linear layers)...")
                 convert_model_to_int8_linear(model.model.diffusion_model)
             
-            from integration.buffer_pool import initialize_buffer_pool
+            from integration.utils.buffer_pool import initialize_buffer_pool
             initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
             if self.calibration_path and os.path.exists(self.calibration_path):
                 print(f"Loading static calibration from {self.calibration_path}")
@@ -406,7 +406,7 @@ class BenchmarkRunner:
                 print(f"Converting UNet linear layers to INT4 ({count_linear_layers(model.model.diffusion_model)} linear layers)...")
                 convert_model_to_int4_linear(model.model.diffusion_model)
             
-            from integration.buffer_pool import initialize_buffer_pool
+            from integration.utils.buffer_pool import initialize_buffer_pool
             initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
             if self.calibration_path and os.path.exists(self.calibration_path):
                 print(f"Loading INT4 calibration from {self.calibration_path}")
@@ -489,7 +489,7 @@ class BenchmarkRunner:
     def _calibrate_int4(self, model, sampler, num_runs: int = 5):
         """Calibrate INT4 quantization scales (dynamic to static transition)."""
         print(f"Calibrating INT4 ({num_runs} runs for speed)...")
-        from integration.int4_optimized import set_calibrating_int4
+        from integration.kernels.int4_optimized import set_calibrating_int4
         
         set_calibrating_int4(model.model.diffusion_model, True)
         if HAS_INT4_LINEAR:
@@ -593,9 +593,9 @@ class BenchmarkRunner:
         original_calib_path = self.calibration_path
         if not self.calibration_path:
             if mode in ('int8', 'int8_baseline'):
-                self.calibration_path = 'integration/int8_calibration.pt'
+                self.calibration_path = 'integration/calibration/int8_calibration.pt'
             elif mode in ('int4', 'int4_baseline'):
-                self.calibration_path = 'integration/int4_calibration.pt'
+                self.calibration_path = 'integration/calibration/int4_calibration.pt'
 
         # If forcing recalibration, ignore existing file during setup
         actual_calib_file = self.calibration_path
@@ -632,7 +632,7 @@ class BenchmarkRunner:
         
         # Initialize Buffer Pool for zero-copy MoDiff
         if mode in ('int8', 'int4'):
-            from integration.buffer_pool import initialize_buffer_pool
+            from integration.utils.buffer_pool import initialize_buffer_pool
             initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size)
         
         # Configure autocast - enable for all modes except fp32 to maximize bandwidth
@@ -735,7 +735,7 @@ def main():
     parser = argparse.ArgumentParser(description="LDM Benchmark")
     parser.add_argument('--config', type=str, default='configs/latent-diffusion/lsun_churches-ldm-kl-8.yaml')
     parser.add_argument('--ckpt', type=str, default='models/ldm/lsun_churches256/model.ckpt')
-    parser.add_argument('--output_dir', type=str, default='integration/results_ldm_benchmark')
+    parser.add_argument('--output_dir', type=str, default='integration/results/ldm')
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--steps', type=int, default=200)
     parser.add_argument('--num_samples', type=int, default=128)
@@ -744,7 +744,7 @@ def main():
     parser.add_argument('--skip_calibration', action='store_true')
     parser.add_argument('--force_recalibrate', action='store_true', help='Force regeneration of calibration scales')
     parser.add_argument('--calibration', type=str, default=None,
-                       help='Path to static calibration file (e.g., integration/int8_calibration.pt)')
+                       help='Path to static calibration file (e.g., integration/calibration/int8_calibration.pt)')
     args = parser.parse_args()
     
     print(f"GPU: {torch.cuda.get_device_name()}")

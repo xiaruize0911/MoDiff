@@ -113,7 +113,7 @@ def load_ldm_model():
     from ldm.modules.diffusionmodules.openaimodel import AttentionBlock
     AttentionBlock.forward = lambda self, x: self._forward(x)
 
-    from integration.fused_resblock import fuse_resblocks_in_module
+    from integration.fused_ops.fused_resblock import fuse_resblocks_in_module
     fuse_resblocks_in_module(model.model.diffusion_model, inplace=True)
 
     return model
@@ -159,14 +159,14 @@ class LayerProfiler:
         return hook
 
     def register(self, model, track_shapes=False):
-        from integration.int8_optimized import OptimizedInt8Conv2d
-        from integration.int4_optimized import OptimizedInt4Conv2d
+        from integration.kernels.int8_optimized import OptimizedInt8Conv2d
+        from integration.kernels.int4_optimized import OptimizedInt4Conv2d
         try:
-            from integration.int8_linear import OptimizedInt8Linear
+            from integration.kernels.int8_linear import OptimizedInt8Linear
         except ImportError:
             OptimizedInt8Linear = None
         try:
-            from integration.int4_linear import OptimizedInt4Linear
+            from integration.kernels.int4_linear import OptimizedInt4Linear
         except ImportError:
             OptimizedInt4Linear = None
 
@@ -258,13 +258,13 @@ def _run_calibration_int8(unet, sampler, steps, batch_size, shape, num_cal_runs=
     Finalising locks those into permanent static scales – on subsequent inference
     steps the expensive per-step absmax reduction is skipped entirely.
     """
-    from integration.int8_optimized import (
+    from integration.kernels.int8_optimized import (
         reset_calibration,
         set_calibrating,
         get_calibration_config,
         apply_static_scales,
     )
-    from integration.int8_linear import (
+    from integration.kernels.int8_linear import (
         set_calibrating_linear,
         export_linear_static_scales,
         apply_linear_static_scales,
@@ -291,8 +291,8 @@ def _run_calibration_int8(unet, sampler, steps, batch_size, shape, num_cal_runs=
 
 def _apply_int8_scales(unet, scales):
     """Push a pre-computed INT8 scale dict onto a freshly-converted model."""
-    from integration.int8_optimized import apply_static_scales, get_calibration_config
-    from integration.int8_linear import apply_linear_static_scales
+    from integration.kernels.int8_optimized import apply_static_scales, get_calibration_config
+    from integration.kernels.int8_linear import apply_linear_static_scales
     config = get_calibration_config()
     config.is_calibrated = True
     apply_static_scales(unet, scales)
@@ -303,8 +303,8 @@ def _apply_int8_scales(unet, scales):
 
 def _run_calibration_int4(unet, sampler, steps, batch_size, shape, num_cal_runs=3):
     """Calibrate INT4 static activation scales."""
-    from integration.int4_optimized import set_calibrating_int4, export_int4_static_scales
-    from integration.int4_linear import (
+    from integration.kernels.int4_optimized import set_calibrating_int4, export_int4_static_scales
+    from integration.kernels.int4_linear import (
         set_calibrating_int4_linear,
         export_int4_linear_static_scales,
     )
@@ -327,8 +327,8 @@ def _run_calibration_int4(unet, sampler, steps, batch_size, shape, num_cal_runs=
 
 def _apply_int4_scales(unet, scales):
     """Push a pre-computed INT4 scale dict onto a freshly-converted model."""
-    from integration.int4_optimized import apply_int4_static_scales
-    from integration.int4_linear import apply_int4_linear_static_scales
+    from integration.kernels.int4_optimized import apply_int4_static_scales
+    from integration.kernels.int4_linear import apply_int4_linear_static_scales
     apply_int4_static_scales(unet, scales)
     lin_scales = {k.replace('linear:', ''): v for k, v in scales.items() if k.startswith('linear:')}
     if lin_scales:
@@ -379,17 +379,17 @@ def experiment_1_pipeline_speedup(steps=50, num_samples=8, batch_size=8):
             pass  # no conversion needed
 
         elif mode in ('int8', 'int8_baseline'):
-            from integration.int8_optimized import (
+            from integration.kernels.int8_optimized import (
                 convert_model_to_optimized_int8,
                 enable_modiff_mode as enable_int8,
                 reset_modiff_state as reset_int8,
             )
-            from integration.int8_linear import (
+            from integration.kernels.int8_linear import (
                 convert_model_to_int8_linear,
                 enable_modiff_mode_linear,
                 reset_modiff_state_linear,
             )
-            from integration.buffer_pool import initialize_buffer_pool
+            from integration.utils.buffer_pool import initialize_buffer_pool
 
             convert_model_to_optimized_int8(unet)
             convert_model_to_int8_linear(unet)
@@ -406,17 +406,17 @@ def experiment_1_pipeline_speedup(steps=50, num_samples=8, batch_size=8):
             reset_fn = lambda: (reset_int8(unet), reset_modiff_state_linear(unet))
 
         elif mode in ('int4', 'int4_baseline'):
-            from integration.int4_optimized import (
+            from integration.kernels.int4_optimized import (
                 convert_model_to_optimized_int4,
                 enable_modiff_mode as enable_int4,
                 reset_modiff_state as reset_int4,
             )
-            from integration.int4_linear import (
+            from integration.kernels.int4_linear import (
                 convert_model_to_int4_linear,
                 enable_modiff_mode_int4_linear,
                 reset_modiff_state_int4_linear,
             )
-            from integration.buffer_pool import initialize_buffer_pool
+            from integration.utils.buffer_pool import initialize_buffer_pool
 
             convert_model_to_optimized_int4(unet)
             convert_model_to_int4_linear(unet)
@@ -501,19 +501,19 @@ def experiment_2_breakdown(steps=50, num_batches=2, batch_size=8):
         if mode == 'fp32':
             pass  # plain model, no quantized layers
         elif mode == 'int8':
-            from integration.int8_optimized import (
+            from integration.kernels.int8_optimized import (
                 convert_model_to_optimized_int8,
                 enable_modiff_mode as enable_int8,
                 reset_modiff_state as reset_int8,
             )
-            from integration.int8_linear import (
+            from integration.kernels.int8_linear import (
                 convert_model_to_int8_linear,
                 enable_modiff_mode_linear,
                 reset_modiff_state_linear,
             )
             convert_model_to_optimized_int8(unet)
             convert_model_to_int8_linear(unet)
-            from integration.buffer_pool import initialize_buffer_pool
+            from integration.utils.buffer_pool import initialize_buffer_pool
             initialize_buffer_pool(unet, max_batch_size=batch_size, device='cuda')
             enable_int8(unet, True)
             enable_modiff_mode_linear(unet, True)
@@ -523,19 +523,19 @@ def experiment_2_breakdown(steps=50, num_batches=2, batch_size=8):
             int8_scales = _run_calibration_int8(unet, sampler, CAL_STEPS, batch_size, shape, num_cal_runs=3)
             _apply_int8_scales(unet, int8_scales)
         elif mode == 'int4':
-            from integration.int4_optimized import (
+            from integration.kernels.int4_optimized import (
                 convert_model_to_optimized_int4,
                 enable_modiff_mode as enable_int4,
                 reset_modiff_state as reset_int4,
             )
-            from integration.int4_linear import (
+            from integration.kernels.int4_linear import (
                 convert_model_to_int4_linear,
                 enable_modiff_mode_int4_linear,
                 reset_modiff_state_int4_linear,
             )
             convert_model_to_optimized_int4(unet)
             convert_model_to_int4_linear(unet)
-            from integration.buffer_pool import initialize_buffer_pool
+            from integration.utils.buffer_pool import initialize_buffer_pool
             initialize_buffer_pool(unet, max_batch_size=batch_size, device='cuda')
             enable_int4(unet, True)
             enable_modiff_mode_int4_linear(unet, True)
@@ -766,7 +766,7 @@ def experiment_4_linear_layer_analysis(batch_sizes=[8]):
             fp16_res = benchmark_fn(lambda: linear_fp16(x_fp16), warmup=15, iters=80)
 
             # --- INT8 quantized linear (FP16 GEMM with quant overhead) ---
-            from integration.int8_linear import OptimizedInt8Linear, convert_model_to_int8_linear, enable_modiff_mode_linear, reset_modiff_state_linear
+            from integration.kernels.int8_linear import OptimizedInt8Linear, convert_model_to_int8_linear, enable_modiff_mode_linear, reset_modiff_state_linear
             wrapper_int8 = nn.Sequential(nn.Linear(in_f, out_f)).cuda()
             wrapper_int8[0].load_state_dict(linear_fp32.state_dict())
             convert_model_to_int8_linear(wrapper_int8)
@@ -784,7 +784,7 @@ def experiment_4_linear_layer_analysis(batch_sizes=[8]):
             int8_base_res = benchmark_fn(lambda: wrapper_int8(x), warmup=15, iters=80)
 
             # --- INT4 quantized linear ---
-            from integration.int4_linear import OptimizedInt4Linear, convert_model_to_int4_linear, enable_modiff_mode_int4_linear, reset_modiff_state_int4_linear
+            from integration.kernels.int4_linear import OptimizedInt4Linear, convert_model_to_int4_linear, enable_modiff_mode_int4_linear, reset_modiff_state_int4_linear
             wrapper_int4 = nn.Sequential(nn.Linear(in_f, out_f)).cuda()
             wrapper_int4[0].load_state_dict(linear_fp32.state_dict())
             convert_model_to_int4_linear(wrapper_int4)
@@ -850,37 +850,37 @@ def experiment_5_batch_ablation(batch_sizes=[1, 2, 4, 8, 16], steps=50):
                 if mode == 'fp32':
                     pass
                 elif mode == 'int8':
-                    from integration.int8_optimized import (
+                    from integration.kernels.int8_optimized import (
                         convert_model_to_optimized_int8,
                         enable_modiff_mode as enable_int8,
                         reset_modiff_state as reset_int8,
                     )
-                    from integration.int8_linear import (
+                    from integration.kernels.int8_linear import (
                         convert_model_to_int8_linear,
                         enable_modiff_mode_linear,
                         reset_modiff_state_linear,
                     )
                     convert_model_to_optimized_int8(unet)
                     convert_model_to_int8_linear(unet)
-                    from integration.buffer_pool import initialize_buffer_pool
+                    from integration.utils.buffer_pool import initialize_buffer_pool
                     initialize_buffer_pool(unet, max_batch_size=batch_size, device='cuda')
                     enable_int8(unet, True)
                     enable_modiff_mode_linear(unet, True)
                     reset_fn = lambda: (reset_int8(unet), reset_modiff_state_linear(unet))
                 elif mode == 'int4':
-                    from integration.int4_optimized import (
+                    from integration.kernels.int4_optimized import (
                         convert_model_to_optimized_int4,
                         enable_modiff_mode as enable_int4,
                         reset_modiff_state as reset_int4,
                     )
-                    from integration.int4_linear import (
+                    from integration.kernels.int4_linear import (
                         convert_model_to_int4_linear,
                         enable_modiff_mode_int4_linear,
                         reset_modiff_state_int4_linear,
                     )
                     convert_model_to_optimized_int4(unet)
                     convert_model_to_int4_linear(unet)
-                    from integration.buffer_pool import initialize_buffer_pool
+                    from integration.utils.buffer_pool import initialize_buffer_pool
                     initialize_buffer_pool(unet, max_batch_size=batch_size, device='cuda')
                     enable_int4(unet, True)
                     enable_modiff_mode_int4_linear(unet, True)

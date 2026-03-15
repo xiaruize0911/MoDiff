@@ -8,7 +8,7 @@ we eliminate redundant computation.
 Expected speedup: 2-3% (timestep embedding accounts for ~2-5% of forward pass time)
 
 Usage:
-    from integration.timestep_cache import get_cached_timestep_embedding
+    from integration.utils.timestep_cache import get_cached_timestep_embedding
     
     # In UNet forward():
     # OLD: t_emb = timestep_embedding(timesteps, self.model_channels)

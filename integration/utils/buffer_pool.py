@@ -63,13 +63,13 @@ class BufferPool:
         
         # Import here to avoid circular dependency
         try:
-            from integration.int8_optimized import OptimizedInt8Conv2d
+            from integration.kernels.int8_optimized import OptimizedInt8Conv2d
             has_int8 = True
         except ImportError:
             has_int8 = False
             
         try:
-            from integration.int4_optimized import OptimizedInt4Conv2d
+            from integration.kernels.int4_optimized import OptimizedInt4Conv2d
             has_int4 = True
         except ImportError:
             has_int4 = False

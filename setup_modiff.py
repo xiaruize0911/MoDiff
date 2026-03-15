@@ -296,7 +296,7 @@ def verify_setup():
     # Check CUTLASS extension
     checks_total += 1
     try:
-        from integration.int8_optimized import HAS_CUTLASS
+        from integration.kernels.int8_optimized import HAS_CUTLASS
         if HAS_CUTLASS:
             print_success("CUTLASS backend available")
             checks_passed += 1

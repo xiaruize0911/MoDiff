@@ -2,38 +2,57 @@
 
 Optimized INT8/INT4 MoDiff implementation with CUTLASS Tensor Core acceleration.
 
-## Files
+## Directory Structure
 
-| File | Description |
-|------|-------------|
-| `int8_optimized.py` | INT8 implementation with CUTLASS Tensor Cores |
-| `int4_optimized.py` | INT4 implementation (unpacks to INT8) |
-| `modiff_layers.py` | Legacy INT8 implementation (for compatibility) |
-| `benchmark_ldm.py` | Unified LDM benchmark for all precision modes |
-| `generate_50k_int8.py` | Generate 50k samples for FID evaluation (INT8/INT4) |
-| `calculate_fid_lmdb.py` | Calculate FID with LMDB dataset support |
+```
+integration/
+├── kernels/                        # Quantized Conv/Linear Layer Implementations
+│   ├── int8_optimized.py           #   CUTLASS INT8 fused conv + MoDiff
+│   ├── int4_optimized.py           #   CUTLASS INT4 fused conv + MoDiff
+│   ├── int8_cudagraph.py           #   PyTorch native INT8 + CUDA Graph
+│   ├── fused_baseline.py           #   Separate-kernel (unfused) baseline
+│   ├── int8_linear.py              #   INT8 quantized linear layer
+│   ├── int4_linear.py              #   INT4 quantized linear layer
+│   └── modiff_layers.py            #   Legacy CUTLASS conv
+│
+├── fused_ops/                      # Fused Operator Implementations
+│   ├── fused_gn_silu.py            #   Triton GroupNorm+SiLU kernel
+│   └── fused_resblock.py           #   Fused residual block
+│
+├── utils/                          # Infrastructure & Utilities
+│   ├── buffer_pool.py              #   Pre-allocated GPU buffer pool
+│   ├── timestep_cache.py           #   Cached timestep embeddings
+│   └── profiler.py                 #   CUDA event-based profiler
+│
+├── benchmarks/                     # Benchmarks & Evaluation
+│   ├── benchmark_ldm.py            #   Original LDM benchmark
+│   ├── benchmark_extended.py       #   Extended benchmark (all modes)
+│   ├── generate_extended_report.py #   Report & plot generation
+│   ├── eval_fid_lsun.py            #   FID evaluation on LSUN
+│   └── fid_eval.py                 #   FID computation utilities
+│
+├── calibration/                    # Calibration Data
+│   ├── int8_calibration.pt
+│   └── int4_calibration.pt
+│
+└── results/                        # Benchmark Output
+    ├── extended/                    #   Extended benchmark results & plots
+    └── ldm/                         #   Original LDM benchmark results
+```
 
 ## Quick Start
 
 ```bash
 cd /workspace/MoDiff
 
-# Run all modes (FP32, FP16, INT8, INT4)
-python integration/benchmark_ldm.py --mode all --steps 50 --num_samples 16
+# Run original benchmark (FP32, FP16, INT8, INT4)
+python integration/benchmarks/benchmark_ldm.py --mode all --steps 50 --num_samples 16
 
-# Run only INT8
-python integration/benchmark_ldm.py --mode int8 --num_samples 100
+# Run extended benchmark (includes PyTorch INT8, CUDA Graph, separate kernels)
+python integration/benchmarks/benchmark_extended.py --mode int8 --batch_size 32 --steps 200
 
-# Generate 50k samples for FID evaluation
-python integration/generate_50k_int8.py --mode int8 --num_samples 50000 \
-    --output_dir results/int8_50k --steps 50 --batch_size 64
-
-# Calculate FID against real LSUN dataset
-python integration/calculate_fid_lmdb.py \
-    results/int8_50k/samples \
-    data/lsun/church_outdoor_train_lmdb \
-    --num_samples 50000 --batch_size 50 \
-    --output results/int8_50k/fid_score.txt
+# Generate report and plots from results
+python integration/benchmarks/generate_extended_report.py
 ```
 
 ## Benchmark Results (LDM LSUN-Churches, 100 steps, NVIDIA L40S)
