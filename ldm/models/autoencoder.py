@@ -3,7 +3,10 @@ import pytorch_lightning as pl
 import torch.nn.functional as F
 from contextlib import contextmanager
 
-from taming.modules.vqvae.quantize import VectorQuantizer2 as VectorQuantizer
+try:
+    from taming.modules.vqvae.quantize import VectorQuantizer2 as VectorQuantizer
+except ImportError:
+    from taming.modules.vqvae.quantize import VectorQuantizer
 
 from ldm.modules.diffusionmodules.model import Encoder, Decoder
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution

@@ -143,4 +143,108 @@ Fusion benefit is primarily from reduced kernel launch overhead and memory bandw
   - the microbenchmark shows the main gap is in **Step1 fusion**, not in `o_hat` accumulation
   - fused INT8 total kernel time is 0.646ms vs 1.542ms on the representative 32x192x32x32 case
   - the extra cost of `compute+DQ+update_o_hat` over `compute+DQ` is only +0.041ms (+13.0%)
+
+---
+
+## Bottleneck Analysis: Per-Component Time Breakdown
+
+**Setup**: INT8 MoDiff + Fused ResBlocks + Triton GN+SiLU, Batch=32, 20 DDIM steps, A40 GPU.
+
+Wall-clock per-step: **60.0 ms**
+
+Profiling method: CUDA event hooks on every leaf module, classified by type. Events captured from the final DDIM step (steady state), summed across all layers.
+
+| Component | Per-Step (ms) | % of Step | Layer Count |
+| --- | --- | --- | --- |
+| INT8 Convolutions (CUTLASS) | 23.4 | 39.1% | 70 |
+| Attention (Naive BMM) | 17.8 | 29.7% | 42 |
+| Fused GN+SiLU (Triton) | 6.2 | 10.3% | 35 |
+| GroupNorm (standalone) | 2.7 | 4.5% | 22 |
+| FP32 Convolutions | 2.2 | 3.6% | 19 |
+| Resample (Up/Downsample) | 0.7 | 1.2% | 16 |
+| Linear | 0.5 | 0.8% | 37 |
+| SiLU (standalone) | 0.3 | 0.5% | 37 |
+| Time Embedding | 0.2 | 0.4% | 1 |
+| **Hooked Total** | **54.0** | **90.0%** | |
+| Overhead / Other | 6.0 | 10.0% | |
+| **Wall-clock Step** | **60.0** | **100.0%** | |
+
+### Key Findings
+
+**Top 3 bottlenecks account for 79% of step time:**
+1. INT8 CUTLASS convolutions dominate at 39%, expected since the UNet is conv-heavy (70 quantized conv layers)
+2. Attention blocks consume 30% — currently using naive batch-matrix-multiply (BMM) with explicit attention matrix materialization
+3. Fused GN+SiLU takes 10% — the Triton kernel handles GroupNorm and SiLU in a single pass
+
+### Experiment 2: Attention — Naive BMM vs Flash Attention (SDPA)
+
+Replacing the naive `einsum('b i d, b j d -> b i j')` + softmax + `einsum('b i j, b j d -> b i d')` path
+with `torch.nn.functional.scaled_dot_product_attention` (SDPA / Flash Attention):
+
+| Config | Naive BMM (ms) | SDPA (ms) | Speedup | Memory Saved |
+| --- | --- | --- | --- | --- |
+| B32, C=192, 32×32 (seq=1024) | 5.866 | 0.445 | **13.2×** | 512 MiB |
+| B32, C=384, 16×16 (seq=256) | 0.445 | 0.063 | **7.0×** | 32 MiB |
+| B32, C=384, 8×8 (seq=64) | 0.059 | 0.028 | **2.1×** | 2 MiB |
+| B32, C=768, 4×4 (seq=16) | 0.057 | 0.027 | **2.1×** | 0.1 MiB |
+
+Flash Attention eliminates the O(n²) attention matrix materialization.
+At the highest resolution (32×32, seq_len=1024), this saves 5.4ms per attention layer call and 512 MiB of memory.
+With 42 attention layers across the UNet (multiple at the high-resolution levels), the model-level impact is substantial.
+
+**Estimated model-level savings**: ~14 ms/step (80% reduction in attention time, weighted by resolution distribution).
+
+### Experiment 3: Triton Fused GroupNorm+SiLU
+
+| Shape | Separate (ms) | Triton Fused (ms) | Speedup |
+| --- | --- | --- | --- |
+| 32×192×32×32 | 0.356 | 1.570 | 0.23× (slower) |
+| 32×384×16×16 | 0.188 | 0.134 | **1.41×** |
+| 32×384×8×8 | 0.071 | 0.042 | **1.68×** |
+| 32×768×4×4 | 0.068 | 0.038 | **1.80×** |
+| 32×768×2×2 | 0.067 | 0.037 | **1.82×** |
+
+The Triton kernel is slower at 32×32 spatial (likely suboptimal block tiling for large spatial dims) but provides 1.4–1.8× speedup at smaller resolutions. Since the UNet spends more compute at higher resolutions, the net benefit is mixed — the 32×32 regression partially offsets gains at lower resolutions.
+
+**Recommendation**: Use resolution-adaptive dispatch — standard `F.group_norm + F.silu` at 32×32, Triton kernel at 16×16 and below.
+
+### Experiment 4: FP16 Cache Accumulation
+
+| Shape | FP32 Cache (ms) | FP16 Cache (ms) | Speedup | Memory Saved |
+| --- | --- | --- | --- | --- |
+| 32×192×32×32 | 0.287 | 0.913 | 0.31× (slower) | 24 MiB |
+| 32×384×16×16 | 0.147 | 0.477 | 0.31× | 12 MiB |
+| 32×384×8×8 | 0.033 | 0.135 | 0.25× | 3 MiB |
+
+Converting caches to FP16 with separate PyTorch ops is **slower** than the fused FP32 CUTLASS kernel. The fused kernel accesses cache memory as part of the compute pipeline without extra memory round-trips. The manual FP16 path introduces 3 extra global memory operations (dequant → accumulate → requant) that outweigh the bandwidth savings from smaller data types.
+
+**Recommendation**: FP16 cache savings require native CUTLASS kernel support (accumulate in FP16 within the fused kernel), not a separate PyTorch wrapper.
+
+### Experiment 5: torch.compile on GN+SiLU+Conv Pipeline
+
+| Shape | Eager (ms) | Compiled (ms) | Speedup |
+| --- | --- | --- | --- |
+| 32×192×32×32 | 2.060 | 1.565 | **1.32×** |
+| 32×384×16×16 | 1.431 | 1.367 | **1.05×** |
+| 32×384×8×8 | 0.439 | 0.848 | 0.52× (slower) |
+
+`torch.compile` provides meaningful speedup at large spatial resolutions by fusing the GN+SiLU+Conv pipeline into optimized Triton kernels. At small spatial dims, the compilation overhead dominates.
+
+**Recommendation**: Selectively apply torch.compile to high-resolution blocks only.
+
+## Optimization Roadmap
+
+Based on the bottleneck analysis, the following optimizations can reduce per-step time from **60 ms** to an estimated **40 ms** (1.5× improvement):
+
+| Optimization | Estimated Savings | Difficulty | Status |
+| --- | --- | --- | --- |
+| Flash Attention (SDPA) | -14.3 ms (24%) | Low | Ready — drop-in replacement |
+| CUDA Graph replay | -3.0 ms (5%) | Medium | Implemented, needs tuning |
+| Torch.compile (high-res blocks) | -1.2 ms (2%) | Low | Requires selective application |
+| Triton GN+SiLU (small spatial) | -1.2 ms (2%) | Low | Already implemented, needs dispatch fix |
+| INT4 quantization (future) | -7.0 ms (12%) | High | Experimental, needs accuracy validation |
+
+**Combined actionable savings (first 4 items)**: ~19.7 ms → projected **40.3 ms/step** (1.49× vs current INT8)
+
+Including INT4 quantization: ~26.7 ms → projected **33.3 ms/step** (1.80× vs current, 3.22× vs FP32)
   - so the missing speedup is mostly due to unfused Step1 work and extra global-memory traffic, not because `o_hat` update is too expensive
