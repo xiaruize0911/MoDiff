@@ -992,7 +992,11 @@ class LatentDiffusion(DDPM):
 
         else:
             # import ipdb; ipdb.set_trace()
-            x_recon = self.model(x_noisy, t, **cond)
+            graph_manager = getattr(self.model.diffusion_model, '_cuda_graph_manager', None)
+            if graph_manager is not None and not return_ids:
+                x_recon = graph_manager(x_noisy, t, cond)
+            else:
+                x_recon = self.model(x_noisy, t, **cond)
 
         if isinstance(x_recon, tuple) and not return_ids:
             return x_recon[0]

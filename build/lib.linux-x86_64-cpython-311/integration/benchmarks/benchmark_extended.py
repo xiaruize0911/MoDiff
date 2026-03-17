@@ -1434,7 +1434,7 @@ def main():
     parser.add_argument('--output_dir', type=str, default='integration/results/extended')
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--steps', type=int, default=200)
-    parser.add_argument('--num_samples', type=int, default=128)
+    parser.add_argument('--num_samples', type=int, default=32)
     parser.add_argument('--mode', type=str, default='all',
                        choices=['all', 'fp32', 'fp16',
                                 'int8', 'int8_baseline', 'int4', 'int4_baseline',

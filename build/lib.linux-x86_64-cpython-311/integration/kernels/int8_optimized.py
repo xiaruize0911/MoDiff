@@ -316,9 +316,8 @@ class OptimizedInt8Conv2d(nn.Module):
             if self.bias is not None:
                 out = out + self.bias
             return out
-        # Fallback: GPU-only scale (no .item() CPU sync — safe inside CUDA graph capture).
-        # Mirrors the uncalibrated branch of _forward_first_step.
-        input_scale = self._compute_scale_tensor(x)
+        # Fallback: naive PyTorch path (dynamic scale, includes CPU-GPU sync)
+        input_scale = self._compute_activation_scale(x)
         return self._int8_conv(x, input_scale, with_bias=True)
 
     def _forward_first_step(self, x: torch.Tensor) -> torch.Tensor:
