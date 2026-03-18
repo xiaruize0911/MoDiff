@@ -45,14 +45,15 @@ import torch.nn as nn
 import numpy as np
 from omegaconf import OmegaConf
 import torchvision.utils as tvu
+from tqdm import tqdm
 
 # Suppress NNPACK warnings (not needed for GPU)
 warnings.filterwarnings('ignore', message='Could not initialize NNPACK')
 warnings.filterwarnings('ignore', category=UserWarning, module='torchmetrics')
 
 # Enable TF32 for faster FP32 operations on Ampere+ GPUs
-torch.backends.cuda.matmul.allow_tf32 = False
-torch.backends.cudnn.allow_tf32 = False
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
 
 # Enable cuDNN for optimized convolution kernels
 torch.backends.cudnn.enabled = True
@@ -545,7 +546,8 @@ class BenchmarkRunner:
         
         total_time = 0.0
         generated = 0
-
+        
+        pbar = tqdm(total=num_samples, desc=f"Generating {mode}")
         while generated < num_samples:
             batch = min(self.batch_size, num_samples - generated)
             
@@ -578,7 +580,9 @@ class BenchmarkRunner:
                 tvu.save_image(x_samples[i], os.path.join(mode_dir, f'{generated + i:05d}.png'))
             
             generated += batch
-
+            pbar.update(batch)
+        
+        pbar.close()
         return total_time, generated
     
     def run_mode(self, mode: str, num_samples: int = 16, calibrate: bool = True, force_recalibrate: bool = False):

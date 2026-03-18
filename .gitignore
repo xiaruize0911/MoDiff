@@ -17,6 +17,6 @@ results*/
 integration/results_ldm_benchmark
 *.so
 PHASE2_PLAN.md
-/integration/results*
+*.png
 /integration/lsun_val
 /benchmark_output

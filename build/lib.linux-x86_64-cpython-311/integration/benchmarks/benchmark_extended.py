@@ -32,12 +32,13 @@ import torch.nn as nn
 import numpy as np
 from omegaconf import OmegaConf
 import torchvision.utils as tvu
+from tqdm import tqdm
 
 warnings.filterwarnings('ignore', message='Could not initialize NNPACK')
 warnings.filterwarnings('ignore', category=UserWarning, module='torchmetrics')
 
-torch.backends.cuda.matmul.allow_tf32 = False
-torch.backends.cudnn.allow_tf32 = False
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 
@@ -332,55 +333,6 @@ class ExtendedBenchmarkRunner:
 
         return self.steps
 
-    def _benchmark_cuda_callable(self, fn, num_iterations: int, warmup: int = 10) -> float:
-        """Time a CUDA callable with warmup using CUDA events. Returns milliseconds."""
-        for _ in range(warmup):
-            fn()
-
-        torch.cuda.synchronize()
-        start_events = [torch.cuda.Event(enable_timing=True) for _ in range(num_iterations)]
-        end_events = [torch.cuda.Event(enable_timing=True) for _ in range(num_iterations)]
-
-        for i in range(num_iterations):
-            start_events[i].record()
-            fn()
-            end_events[i].record()
-
-        torch.cuda.synchronize()
-        return sum(s.elapsed_time(e) for s, e in zip(start_events, end_events)) / num_iterations
-
-    def _estimate_quant_io_compute(self, static_quant_ms: float, io_proxy_ms: float) -> dict:
-        """Estimate whether quantization is IO- or compute-dominated.
-
-        Uses a tensor copy as an IO proxy / lower bound for memory movement.
-        The arithmetic/packing contribution is approximated as the remaining
-        time in the static quantization kernel after subtracting the IO proxy.
-        """
-        io_proxy_ms = max(float(io_proxy_ms), 0.0)
-        static_quant_ms = max(float(static_quant_ms), 0.0)
-        compute_estimate_ms = max(static_quant_ms - io_proxy_ms, 0.0)
-
-        if static_quant_ms <= 0.0:
-            return {
-                'io_proxy_ms': io_proxy_ms,
-                'compute_estimate_ms': compute_estimate_ms,
-                'io_share_lower_bound_pct': 0.0,
-                'compute_share_upper_bound_pct': 0.0,
-                'dominant_factor': 'unknown',
-            }
-
-        io_share = min(100.0, (io_proxy_ms / static_quant_ms) * 100.0)
-        compute_share = max(0.0, 100.0 - io_share)
-        dominant = 'io' if io_proxy_ms >= compute_estimate_ms else 'compute'
-
-        return {
-            'io_proxy_ms': io_proxy_ms,
-            'compute_estimate_ms': compute_estimate_ms,
-            'io_share_lower_bound_pct': io_share,
-            'compute_share_upper_bound_pct': compute_share,
-            'dominant_factor': dominant,
-        }
-
     def run_mode(self, mode: str, num_samples: int = 32):
         """Run benchmark for a specific mode."""
         print(f"\n{'='*60}\n{mode.upper()}\n{'='*60}")
@@ -432,6 +384,7 @@ class ExtendedBenchmarkRunner:
         # Generate samples and measure
         total_time = 0.0
         generated = 0
+        pbar = tqdm(total=num_samples, desc=f"Generating {mode}")
 
         while generated < num_samples:
             batch = min(self.batch_size, num_samples - generated)
@@ -461,6 +414,9 @@ class ExtendedBenchmarkRunner:
                 tvu.save_image(x_samples[i], os.path.join(mode_dir, f'{generated + i:05d}.png'))
 
             generated += batch
+            pbar.update(batch)
+
+        pbar.close()
 
         mem_peak = measure_gpu_memory()
 
@@ -531,7 +487,6 @@ class ExtendedBenchmarkRunner:
         ]
 
         kernel_results = {}
-        quantization_results = {}
 
         for shape in shapes:
             N, C, H, W = shape
@@ -540,11 +495,8 @@ class ExtendedBenchmarkRunner:
             x = torch.randn(N, C, H, W, device='cuda').to(memory_format=torch.channels_last)
             # Create a fake cache tensor
             cache = torch.randn_like(x)
-            cache_zero = torch.zeros_like(x)
-            io_proxy_buf = torch.empty_like(x)
             w_conv = nn.Conv2d(C, C, 3, padding=1, bias=False).cuda()
             w_data = w_conv.weight.data
-            shape_key = f"{N}x{C}x{H}x{W}"
 
             # --- INT8 Fused (CUTLASS) ---
             try:
@@ -705,6 +657,7 @@ class ExtendedBenchmarkRunner:
                 torch.cuda.synchronize()
                 separate_conv_ms = sum(s_ev.elapsed_time(e_ev) for s_ev, e_ev in zip(start_events, end_events)) / num_iterations
 
+                shape_key = f"{N}x{C}x{H}x{W}"
                 kernel_results[f"INT8_{shape_key}"] = {
                     'fused_step1_ms': fused_step1_ms,
                     'fused_step1_no_cache_ms': fused_step1_no_cache_ms,
@@ -739,54 +692,6 @@ class ExtendedBenchmarkRunner:
                     f"({((fused_step1_ms - fused_step1_no_cache_ms) / max(fused_step1_no_cache_ms, 1e-12)) * 100.0:+.1f}%), "
                     f"conv={fused_conv_ms - fused_conv_no_cache_ms:+.3f}ms "
                     f"({((fused_conv_ms - fused_conv_no_cache_ms) / max(fused_conv_no_cache_ms, 1e-12)) * 100.0:+.1f}%)"
-                )
-
-                static_scale_int8 = torch.tensor(
-                    [127.0 / max(x.abs().amax().item(), 1e-6)], device='cuda', dtype=torch.float32
-                )
-
-                def dynamic_quant_int8():
-                    absmax_buf.zero_()
-                    retire_count.zero_()
-                    modiff_cutlass.step1_quantize_no_ahat_fprop(
-                        x, cache_zero, residual_buf, absmax_buf, scale_buf, inv_scale_buf,
-                        retire_count, 127.0, smooth_inv
-                    )
-
-                def static_quant_int8():
-                    modiff_cutlass.scale_quantize_int8(x, static_scale_int8)
-
-                def absmax_scale_int8():
-                    abs_max = x.abs().amax()
-                    _ = 127.0 / torch.clamp(abs_max, min=1e-6)
-
-                def io_proxy():
-                    io_proxy_buf.copy_(x)
-
-                dynamic_quant_ms = self._benchmark_cuda_callable(dynamic_quant_int8, num_iterations)
-                static_quant_ms = self._benchmark_cuda_callable(static_quant_int8, num_iterations)
-                absmax_scale_ms = self._benchmark_cuda_callable(absmax_scale_int8, num_iterations)
-                io_proxy_ms = self._benchmark_cuda_callable(io_proxy, num_iterations)
-                io_compute = self._estimate_quant_io_compute(static_quant_ms, io_proxy_ms)
-
-                quantization_results[f"INT8_{shape_key}"] = {
-                    'dynamic_quant_ms': dynamic_quant_ms,
-                    'static_quant_ms': static_quant_ms,
-                    'absmax_scale_ms': absmax_scale_ms,
-                    'dynamic_over_static_ms': dynamic_quant_ms - static_quant_ms,
-                    'dynamic_over_static_pct': ((dynamic_quant_ms - static_quant_ms) / max(static_quant_ms, 1e-12)) * 100.0,
-                    **io_compute,
-                }
-
-                print(
-                    f"  INT8 Quant: dynamic={dynamic_quant_ms:.3f}ms, static={static_quant_ms:.3f}ms, "
-                    f"dynamic overhead={dynamic_quant_ms - static_quant_ms:+.3f}ms "
-                    f"({((dynamic_quant_ms - static_quant_ms) / max(static_quant_ms, 1e-12)) * 100.0:+.1f}%)"
-                )
-                print(
-                    f"  INT8 Quant breakdown: absmax+scale={absmax_scale_ms:.3f}ms, "
-                    f"IO proxy={io_proxy_ms:.3f}ms, compute est.={io_compute['compute_estimate_ms']:.3f}ms, "
-                    f"dominant={io_compute['dominant_factor']}"
                 )
 
             except Exception as e:
@@ -960,51 +865,6 @@ class ExtendedBenchmarkRunner:
                     f"({((fused4_conv - fused4_conv_no_cache) / max(fused4_conv_no_cache, 1e-12)) * 100.0:+.1f}%)"
                 )
 
-                static_scale_int4 = torch.tensor(
-                    [7.0 / max(x.abs().amax().item(), 1e-6)], device='cuda', dtype=torch.float32
-                )
-
-                def dynamic_quant_int4():
-                    absmax_buf.zero_()
-                    retire_count.zero_()
-                    modiff_cutlass.step1_quantize_pack_int4_no_ahat_fprop(
-                        x, cache_zero, residual_buf, absmax_buf, scale_buf, inv_scale_buf,
-                        retire_count, 7.0, smooth_inv
-                    )
-
-                def static_quant_int4():
-                    modiff_cutlass.scale_quantize_and_pack(x, static_scale_int4)
-
-                def absmax_scale_int4():
-                    abs_max = x.abs().amax()
-                    _ = 7.0 / torch.clamp(abs_max, min=1e-6)
-
-                dynamic_quant4_ms = self._benchmark_cuda_callable(dynamic_quant_int4, num_iterations)
-                static_quant4_ms = self._benchmark_cuda_callable(static_quant_int4, num_iterations)
-                absmax_scale4_ms = self._benchmark_cuda_callable(absmax_scale_int4, num_iterations)
-                io_proxy4_ms = self._benchmark_cuda_callable(io_proxy, num_iterations)
-                io_compute4 = self._estimate_quant_io_compute(static_quant4_ms, io_proxy4_ms)
-
-                quantization_results[f"INT4_{shape_key}"] = {
-                    'dynamic_quant_ms': dynamic_quant4_ms,
-                    'static_quant_ms': static_quant4_ms,
-                    'absmax_scale_ms': absmax_scale4_ms,
-                    'dynamic_over_static_ms': dynamic_quant4_ms - static_quant4_ms,
-                    'dynamic_over_static_pct': ((dynamic_quant4_ms - static_quant4_ms) / max(static_quant4_ms, 1e-12)) * 100.0,
-                    **io_compute4,
-                }
-
-                print(
-                    f"  INT4 Quant: dynamic={dynamic_quant4_ms:.3f}ms, static={static_quant4_ms:.3f}ms, "
-                    f"dynamic overhead={dynamic_quant4_ms - static_quant4_ms:+.3f}ms "
-                    f"({((dynamic_quant4_ms - static_quant4_ms) / max(static_quant4_ms, 1e-12)) * 100.0:+.1f}%)"
-                )
-                print(
-                    f"  INT4 Quant breakdown: absmax+scale={absmax_scale4_ms:.3f}ms, "
-                    f"IO proxy={io_proxy4_ms:.3f}ms, compute est.={io_compute4['compute_estimate_ms']:.3f}ms, "
-                    f"dominant={io_compute4['dominant_factor']}"
-                )
-
             except Exception as e:
                 print(f"  INT4 kernel timing failed: {e}")
 
@@ -1012,7 +872,6 @@ class ExtendedBenchmarkRunner:
             torch.cuda.empty_cache()
 
         self.results['kernel_timing'] = kernel_results
-        self.results['quantization_timing'] = quantization_results
         self._annotate_cache_update_io()
         return kernel_results
 
@@ -1038,72 +897,6 @@ class ExtendedBenchmarkRunner:
             val['conv_cache_update_extra_mib'] = self._bytes_to_mib(conv_extra_bytes)
             val['total_cache_update_extra_bytes'] = step1_extra_bytes + conv_extra_bytes
             val['total_cache_update_extra_mib'] = self._bytes_to_mib(step1_extra_bytes + conv_extra_bytes)
-
-    def generate_quantization_report(self):
-        report_path = os.path.join(self.output_dir, 'LAYER_QUANTIZATION_REPORT.md')
-        qt = self.results.get('quantization_timing')
-        if not qt:
-            raise RuntimeError('quantization_timing results are required to generate the quantization report.')
-
-        lines = [
-            '# Layer-Level Quantization Timing Report',
-            '',
-            f'**Date**: {time.strftime("%Y-%m-%d %H:%M:%S")}',
-            f'**GPU**: {torch.cuda.get_device_name()}',
-            f'**Batch Size**: {self.batch_size}',
-            '',
-            'This report compares the current dynamic activation quantization path against a static-scale quantization path using the same CUTLASS quantization kernels.',
-            '',
-            'Interpretation notes:',
-            '- **Dynamic quantization**: includes the per-tensor absmax/scale discovery inside the hot path.',
-            '- **Static quantization**: reuses a fixed precomputed activation scale and only performs quantize/(pack) work.',
-            '- **IO proxy**: tensor copy used as a lower-bound proxy for memory movement during quantization.',
-            '- **Compute estimate**: `static_quant_ms - io_proxy_ms`, clipped at zero. This is an upper-bound style estimate of arithmetic/packing overhead.',
-            '',
-            '## INT8 Dynamic vs Static Quantization',
-            '',
-            '| Shape | Dynamic (ms) | Static (ms) | Dynamic overhead | Absmax+scale (ms) | IO proxy (ms) | Compute est. (ms) | Dominant |',
-            '| --- | --- | --- | --- | --- | --- | --- | --- |',
-        ]
-
-        for key, val in qt.items():
-            if not key.startswith('INT8_'):
-                continue
-            lines.append(
-                f"| {key} | {val['dynamic_quant_ms']:.3f} | {val['static_quant_ms']:.3f} | "
-                f"{val['dynamic_over_static_ms']:+.3f}ms ({val['dynamic_over_static_pct']:+.1f}%) | "
-                f"{val['absmax_scale_ms']:.3f} | {val['io_proxy_ms']:.3f} | {val['compute_estimate_ms']:.3f} | {val['dominant_factor']} |"
-            )
-
-        lines.extend([
-            '',
-            '## INT4 Dynamic vs Static Quantization',
-            '',
-            '| Shape | Dynamic (ms) | Static (ms) | Dynamic overhead | Absmax+scale (ms) | IO proxy (ms) | Compute est. (ms) | Dominant |',
-            '| --- | --- | --- | --- | --- | --- | --- | --- |',
-        ])
-
-        for key, val in qt.items():
-            if not key.startswith('INT4_'):
-                continue
-            lines.append(
-                f"| {key} | {val['dynamic_quant_ms']:.3f} | {val['static_quant_ms']:.3f} | "
-                f"{val['dynamic_over_static_ms']:+.3f}ms ({val['dynamic_over_static_pct']:+.1f}%) | "
-                f"{val['absmax_scale_ms']:.3f} | {val['io_proxy_ms']:.3f} | {val['compute_estimate_ms']:.3f} | {val['dominant_factor']} |"
-            )
-
-        lines.extend([
-            '',
-            '## Key takeaways',
-            '',
-            '- The gap between dynamic and static quantization isolates the cost of discovering a fresh activation scale in the hot path.',
-            '- The IO proxy vs static quantization comparison indicates whether quantization is primarily memory-movement limited or arithmetic/packing limited.',
-            '- If the IO proxy is close to the static quantization time, quantization is effectively IO-bound; if the compute estimate is larger, arithmetic/packing is the main contributor.',
-        ])
-
-        with open(report_path, 'w') as f:
-            f.write('\n'.join(lines))
-        print(f'Quantization report saved to: {report_path}')
 
     def generate_cache_update_report(self):
         report_path = os.path.join(self.output_dir, 'FUSED_CACHE_UPDATE_REPORT.md')
@@ -1237,19 +1030,6 @@ class ExtendedBenchmarkRunner:
                     f"{key:<20} {val['compute_dq_ms']:<15.3f} "
                     f"{val['compute_dq_update_ohat_ms']:<15.3f} "
                     f"{val['ohat_update_overhead_ms']:+.3f}ms ({val['ohat_update_overhead_pct']:+.1f}%)"
-                )
-
-        if 'quantization_timing' in self.results:
-            print(f"\n{'='*70}")
-            print("LAYER QUANTIZATION: Dynamic vs Static")
-            print(f"{'='*70}")
-            print(f"{'Config':<20} {'Dynamic (ms)':<15} {'Static (ms)':<15} {'Overhead':<18} {'Dominant':<10}")
-            print("-" * 85)
-            for key, val in self.results['quantization_timing'].items():
-                print(
-                    f"{key:<20} {val['dynamic_quant_ms']:<15.3f} {val['static_quant_ms']:<15.3f} "
-                    f"{val['dynamic_over_static_ms']:+.3f}ms ({val['dynamic_over_static_pct']:+.1f}%) "
-                    f"{val['dominant_factor']:<10}"
                 )
 
         # Save results
@@ -1399,35 +1179,6 @@ class ExtendedBenchmarkRunner:
                     f"{val['ohat_update_overhead_ms']:+.3f}ms ({val['ohat_update_overhead_pct']:+.1f}%) |"
                 )
 
-        if 'quantization_timing' in self.results:
-            lines.extend([
-                "",
-                "## Layer-level Quantization Timing",
-                "",
-                "These measurements compare the current dynamic activation quantization path against a static-scale path using the same quantization kernels.",
-                "",
-                "### Dynamic vs Static Quantization",
-                "",
-                "| Shape | Dynamic (ms) | Static (ms) | Dynamic overhead | Absmax+scale (ms) | IO proxy (ms) | Compute est. (ms) | Dominant |",
-                "| --- | --- | --- | --- | --- | --- | --- | --- |",
-            ])
-            for key, val in self.results['quantization_timing'].items():
-                lines.append(
-                    f"| {key} | {val['dynamic_quant_ms']:.3f} | {val['static_quant_ms']:.3f} | "
-                    f"{val['dynamic_over_static_ms']:+.3f}ms ({val['dynamic_over_static_pct']:+.1f}%) | "
-                    f"{val['absmax_scale_ms']:.3f} | {val['io_proxy_ms']:.3f} | {val['compute_estimate_ms']:.3f} | {val['dominant_factor']} |"
-                )
-
-            lines.extend([
-                "",
-                "### Quantization interpretation",
-                "",
-                "- **Dynamic quantization** includes the per-tensor absmax reduction and scale computation in the hot path.",
-                "- **Static quantization** removes that scale-discovery step and directly quantizes with a cached scale.",
-                "- **IO proxy** is a tensor copy lower bound for memory traffic.",
-                "- **Compute estimate** is `static_quant_ms - io_proxy_ms`, clipped at zero; if it stays small, the quantization kernel is predominantly IO-limited.",
-            ])
-
         if correctness is not None:
             lines.extend([
                 "",
@@ -1467,11 +1218,6 @@ class ExtendedBenchmarkRunner:
         lines.extend([
             "",
             "## Analysis",
-            "",
-            "### Fairness configuration",
-            "",
-            "- TF32 is disabled for both matmul and cuDNN paths in this benchmark, so the `fp32` baseline stays true FP32 rather than silently using TensorFloat-32 acceleration.",
-            "- The baseline quantized modes use the same optimized kernels and static scales as the MoDiff modes; the only intended difference is temporal caching.",
             "",
             "### Task 1: CUTLASS INT8 + CUDA Graph",
             "",
@@ -1742,8 +1488,6 @@ def main():
     runner.generate_report()
     if 'kernel_timing' in runner.results:
         runner.generate_cache_update_report()
-    if 'quantization_timing' in runner.results:
-        runner.generate_quantization_report()
 
     if not args.skip_plots:
         results_path = os.path.join(args.output_dir, 'extended_results.json')
