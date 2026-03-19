@@ -1,6 +1,6 @@
 # Extended MoDiff Benchmark Report
 
-**Date**: 2026-03-18 04:16:10
+**Date**: 2026-03-19 14:11:00
 **GPU**: NVIDIA A40
 **Batch Size**: 32
 **Timesteps**: 200
@@ -10,18 +10,18 @@
 
 | Mode | Time/Sample (s) | Speedup vs FP32 | Peak Memory (MB) | Graphs | Captures | Replays |
 | --- | --- | --- | --- | --- | --- | --- |
-| fp32 | 0.912 | - | 39051 | - | - | - |
-| fp16 | 0.407 | 2.24x | 9992 | - | - | - |
-| int8 | 0.350 | 2.60x | 13099 | - | - | - |
-| int8_baseline | 0.348 | 2.62x | 11130 | - | - | - |
-| int4 | 0.327 | 2.79x | 12874 | - | - | - |
-| int4_baseline | 0.292 | 3.12x | 10905 | - | - | - |
-| int8_cudagraph | 0.337 | 2.70x | 23325 | 2 | 2 | 800 |
-| int8_cudagraph_baseline | 0.330 | 2.77x | 22770 | 1 | 1 | 800 |
-| int8_separate | 0.483 | 1.89x | 10622 | - | - | - |
-| int8_separate_baseline | 0.487 | 1.87x | 9354 | - | - | - |
-| int4_separate | 0.449 | 2.03x | 10396 | - | - | - |
-| int4_separate_baseline | 0.337 | 2.71x | 9129 | - | - | - |
+| fp32 | 0.917 | - | 37541 | - | - | - |
+| fp16 | 0.406 | 2.26x | 4539 | - | - | - |
+| int8 | 0.353 | 2.60x | 7698 | - | - | - |
+| int8_baseline | 0.360 | 2.55x | 5729 | - | - | - |
+| int4 | 0.330 | 2.78x | 7473 | - | - | - |
+| int4_baseline | 0.299 | 3.06x | 5504 | - | - | - |
+| int8_cudagraph | 0.338 | 2.72x | 23325 | 2 | 2 | 800 |
+| int8_cudagraph_baseline | 0.329 | 2.78x | 22770 | 1 | 1 | 800 |
+| int8_separate | 0.511 | 1.79x | 5221 | - | - | - |
+| int8_separate_baseline | 0.497 | 1.84x | 3954 | - | - | - |
+| int4_separate | 0.453 | 2.03x | 4996 | - | - | - |
+| int4_separate_baseline | 0.377 | 2.43x | 3729 | - | - | - |
 
 ## CUDA Graph Replay Stats
 
@@ -71,34 +71,34 @@
 
 | Shape | Fused Total (ms) | Separate Total (ms) | Fusion Speedup |
 | --- | --- | --- | --- |
-| INT8_32x192x32x32 | 0.648 | 1.541 | 2.38x |
-| INT4_32x192x32x32 | 0.530 | 1.197 | 2.26x |
-| INT8_32x384x16x16 | 0.346 | 0.810 | 2.34x |
-| INT4_32x384x16x16 | 0.285 | 0.635 | 2.22x |
-| INT8_32x768x8x8 | 0.253 | 0.490 | 1.94x |
-| INT4_32x768x8x8 | 0.181 | 0.364 | 2.01x |
+| INT8_32x192x32x32 | 0.651 | 1.546 | 2.38x |
+| INT4_32x192x32x32 | 0.531 | 1.205 | 2.27x |
+| INT8_32x384x16x16 | 0.347 | 0.812 | 2.34x |
+| INT4_32x384x16x16 | 0.286 | 0.637 | 2.22x |
+| INT8_32x768x8x8 | 0.254 | 0.491 | 1.93x |
+| INT4_32x768x8x8 | 0.182 | 0.367 | 2.01x |
 
 ### Detailed Kernel Breakdown
 
 | Shape | Fused Step1 (ms) | Fused Conv (ms) | Sep Step1 (ms) | Sep Conv (ms) |
 | --- | --- | --- | --- | --- |
-| INT8_32x192x32x32 | 0.287 | 0.361 | 1.083 | 0.458 |
-| INT4_32x192x32x32 | 0.279 | 0.251 | 0.849 | 0.348 |
-| INT8_32x384x16x16 | 0.148 | 0.198 | 0.562 | 0.248 |
-| INT4_32x384x16x16 | 0.144 | 0.142 | 0.443 | 0.192 |
-| INT8_32x768x8x8 | 0.073 | 0.179 | 0.285 | 0.205 |
-| INT4_32x768x8x8 | 0.070 | 0.111 | 0.227 | 0.137 |
+| INT8_32x192x32x32 | 0.288 | 0.363 | 1.085 | 0.461 |
+| INT4_32x192x32x32 | 0.280 | 0.251 | 0.855 | 0.350 |
+| INT8_32x384x16x16 | 0.148 | 0.199 | 0.563 | 0.249 |
+| INT4_32x384x16x16 | 0.144 | 0.142 | 0.444 | 0.193 |
+| INT8_32x768x8x8 | 0.074 | 0.180 | 0.285 | 0.206 |
+| INT4_32x768x8x8 | 0.071 | 0.112 | 0.230 | 0.137 |
 
 ## Kernel Timing: Compute+DQ vs Compute+DQ+Update o_hat
 
 | Shape | Compute+DQ (ms) | Compute+DQ+Update o_hat (ms) | Overhead |
 | --- | --- | --- | --- |
-| INT8_32x192x32x32 | 0.321 | 0.361 | +0.041ms (+12.7%) |
-| INT4_32x192x32x32 | 0.210 | 0.251 | +0.041ms (+19.6%) |
-| INT8_32x384x16x16 | 0.178 | 0.198 | +0.020ms (+11.3%) |
-| INT4_32x384x16x16 | 0.121 | 0.142 | +0.021ms (+17.2%) |
-| INT8_32x768x8x8 | 0.170 | 0.179 | +0.009ms (+5.2%) |
-| INT4_32x768x8x8 | 0.100 | 0.111 | +0.011ms (+10.6%) |
+| INT8_32x192x32x32 | 0.323 | 0.363 | +0.040ms (+12.5%) |
+| INT4_32x192x32x32 | 0.210 | 0.251 | +0.041ms (+19.3%) |
+| INT8_32x384x16x16 | 0.178 | 0.199 | +0.021ms (+11.6%) |
+| INT4_32x384x16x16 | 0.122 | 0.142 | +0.021ms (+17.1%) |
+| INT8_32x768x8x8 | 0.171 | 0.180 | +0.009ms (+5.2%) |
+| INT4_32x768x8x8 | 0.101 | 0.112 | +0.011ms (+10.4%) |
 
 ## Layer-level Quantization Timing
 
@@ -108,12 +108,12 @@ These measurements compare the current dynamic activation quantization path agai
 
 | Shape | Dynamic (ms) | Static (ms) | Dynamic overhead | Absmax+scale (ms) | IO proxy (ms) | Compute est. (ms) | Dominant |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| INT8_32x192x32x32 | 0.196 | 0.056 | +0.141ms (+251.5%) | 0.150 | 0.094 | 0.000 | io |
-| INT4_32x192x32x32 | 0.190 | 0.050 | +0.140ms (+277.2%) | 0.150 | 0.094 | 0.000 | io |
-| INT8_32x384x16x16 | 0.104 | 0.030 | +0.074ms (+242.1%) | 0.089 | 0.049 | 0.000 | io |
-| INT4_32x384x16x16 | 0.101 | 0.028 | +0.073ms (+262.3%) | 0.087 | 0.049 | 0.000 | io |
-| INT8_32x768x8x8 | 0.055 | 0.022 | +0.032ms (+146.2%) | 0.077 | 0.027 | 0.000 | io |
-| INT4_32x768x8x8 | 0.052 | 0.021 | +0.031ms (+144.9%) | 0.078 | 0.027 | 0.000 | io |
+| INT8_32x192x32x32 | 0.197 | 0.056 | +0.141ms (+249.6%) | 0.151 | 0.095 | 0.000 | io |
+| INT4_32x192x32x32 | 0.190 | 0.051 | +0.140ms (+275.5%) | 0.151 | 0.095 | 0.000 | io |
+| INT8_32x384x16x16 | 0.105 | 0.030 | +0.074ms (+245.0%) | 0.093 | 0.050 | 0.000 | io |
+| INT4_32x384x16x16 | 0.101 | 0.031 | +0.070ms (+227.8%) | 0.094 | 0.050 | 0.000 | io |
+| INT8_32x768x8x8 | 0.055 | 0.024 | +0.031ms (+131.1%) | 0.089 | 0.036 | 0.000 | io |
+| INT4_32x768x8x8 | 0.080 | 0.034 | +0.046ms (+134.9%) | 0.122 | 0.031 | 0.003 | io |
 
 ### Quantization interpretation
 
@@ -160,14 +160,14 @@ Fusion benefit is primarily from reduced kernel launch overhead and memory bandw
 
 ### Effect of CUDA Graph replay on CUTLASS INT8
 
-- **`int8_cudagraph` vs `int8`**: 0.337s vs 0.350s.
+- **`int8_cudagraph` vs `int8`**: 0.338s vs 0.353s.
   - CUDA Graph replay reduces the eager CUTLASS INT8 path by 1.04x on this run
   - both modes use the same CUTLASS INT8 kernels on the hot path, so this speedup comes from reducing Python/kernel-launch overhead
   - the remaining trade-off is memory: graph replay keeps large static buffers alive, which raises peak memory usage
 
-- **`int8_separate` vs `int8`**: 0.483s vs 0.350s.
+- **`int8_separate` vs `int8`**: 0.511s vs 0.353s.
   - the separate path performs the same MoDiff math, but it explodes the fused hot path into many kernels
   - the microbenchmark shows the main gap is in **Step1 fusion**, not in `o_hat` accumulation
-  - fused INT8 total kernel time is 0.648ms vs 1.541ms on the representative 32x192x32x32 case
-  - the extra cost of `compute+DQ+update_o_hat` over `compute+DQ` is only +0.041ms (+12.7%)
+  - fused INT8 total kernel time is 0.651ms vs 1.546ms on the representative 32x192x32x32 case
+  - the extra cost of `compute+DQ+update_o_hat` over `compute+DQ` is only +0.040ms (+12.5%)
   - so the missing speedup is mostly due to unfused Step1 work and extra global-memory traffic, not because `o_hat` update is too expensive

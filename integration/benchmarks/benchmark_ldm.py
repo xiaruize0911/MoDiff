@@ -277,6 +277,25 @@ class BenchmarkRunner:
         self.results = {}
         
         os.makedirs(output_dir, exist_ok=True)
+
+    def _decode_and_save_samples(self, model, samples, mode_dir: str, start_index: int,
+                                 use_autocast: bool = False, dtype: torch.dtype = None,
+                                 decode_chunk_size: int = 8):
+        """Decode latent samples in smaller chunks and save from CPU tensors."""
+        batch = samples.shape[0]
+
+        for chunk_start in range(0, batch, decode_chunk_size):
+            chunk_end = min(chunk_start + decode_chunk_size, batch)
+            sample_chunk = samples[chunk_start:chunk_end]
+
+            with torch.inference_mode(), torch.amp.autocast('cuda', enabled=use_autocast, dtype=dtype):
+                decoded = model.decode_first_stage(sample_chunk)
+
+            decoded = torch.clamp((decoded.float() + 1.0) / 2.0, 0.0, 1.0).cpu()
+
+            for local_idx, image in enumerate(decoded):
+                image_index = start_index + chunk_start + local_idx
+                tvu.save_image(image, os.path.join(mode_dir, f'{image_index:05d}.png'))
     
     def _setup_model(self, mode: str):
         """Load and setup model for given mode."""
@@ -569,13 +588,14 @@ class BenchmarkRunner:
             torch.cuda.synchronize()
             total_time += time.time() - start
             
-            # Decode and save
-            with torch.amp.autocast('cuda', enabled=use_autocast, dtype=dtype):
-                x_samples = model.decode_first_stage(samples)
-            x_samples = torch.clamp((x_samples.float() + 1.0) / 2.0, 0.0, 1.0)
-            
-            for i in range(batch):
-                tvu.save_image(x_samples[i], os.path.join(mode_dir, f'{generated + i:05d}.png'))
+            self._decode_and_save_samples(
+                model,
+                samples,
+                mode_dir,
+                generated,
+                use_autocast=use_autocast,
+                dtype=dtype,
+            )
             
             generated += batch
 
