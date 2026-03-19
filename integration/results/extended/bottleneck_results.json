@@ -1,0 +1,210 @@
+{
+  "model_profile": {
+    "total_per_step_ms": 211.2207293510437,
+    "batch_size": 32,
+    "num_steps": 20,
+    "components": {
+      "int_conv": {
+        "total_ms": 71.2121914550662,
+        "per_step_ms": 3.56060957275331,
+        "count_per_step": 3.5,
+        "pct_of_step": 1.6857292291779107
+      },
+      "attention": {
+        "total_ms": 51.33174399845302,
+        "per_step_ms": 2.566587199922651,
+        "count_per_step": 2.1,
+        "pct_of_step": 1.2151208869547296
+      },
+      "fp_conv": {
+        "total_ms": 6.873887777328491,
+        "per_step_ms": 0.34369438886642456,
+        "count_per_step": 0.95,
+        "pct_of_step": 0.16271811479980872
+      },
+      "gn_silu_fused": {
+        "total_ms": 6.153087995946407,
+        "per_step_ms": 0.30765439979732034,
+        "count_per_step": 1.75,
+        "pct_of_step": 0.14565540074715216
+      },
+      "resample": {
+        "total_ms": 5.394176033791155,
+        "per_step_ms": 0.26970880168955774,
+        "count_per_step": 0.8,
+        "pct_of_step": 0.1276904982376556
+      },
+      "groupnorm": {
+        "total_ms": 2.649856001138687,
+        "per_step_ms": 0.13249280005693437,
+        "count_per_step": 1.1,
+        "pct_of_step": 0.0627271766668008
+      },
+      "linear": {
+        "total_ms": 0.3719359990209341,
+        "per_step_ms": 0.018596799951046704,
+        "count_per_step": 1.85,
+        "pct_of_step": 0.00880443884848976
+      },
+      "silu": {
+        "total_ms": 0.27155200159177184,
+        "per_step_ms": 0.013577600079588591,
+        "count_per_step": 1.85,
+        "pct_of_step": 0.006428156990700923
+      },
+      "time_embed": {
+        "total_ms": 0.03094400092959404,
+        "per_step_ms": 0.001547200046479702,
+        "count_per_step": 0.05,
+        "pct_of_step": 0.0007325038840805692
+      }
+    },
+    "total_hooked_per_step_ms": 7.214468763163312,
+    "overhead_per_step_ms": 204.00626058788038,
+    "overhead_pct": 96.58439359369267
+  },
+  "attention": {
+    "B32_C192_S32x32": {
+      "seq_len": 1024,
+      "num_heads": 8,
+      "head_dim": 24,
+      "naive_ms": 20.014173040390016,
+      "sdpa_ms": 1.494017275571823,
+      "speedup": 13.396212592474711,
+      "attn_matrix_mib": 512.0,
+      "memory_saved_mib": 512.0
+    },
+    "B32_C384_S16x16": {
+      "seq_len": 256,
+      "num_heads": 8,
+      "head_dim": 48,
+      "naive_ms": 1.4330684852600097,
+      "sdpa_ms": 0.2659180764108896,
+      "speedup": 5.389135272796085,
+      "attn_matrix_mib": 32.0,
+      "memory_saved_mib": 32.0
+    },
+    "B32_C384_S8x8": {
+      "seq_len": 64,
+      "num_heads": 8,
+      "head_dim": 48,
+      "naive_ms": 0.07700767908245325,
+      "sdpa_ms": 0.07367615962401032,
+      "speedup": 1.045218419030587,
+      "attn_matrix_mib": 2.0,
+      "memory_saved_mib": 2.0
+    },
+    "B32_C768_S4x4": {
+      "seq_len": 16,
+      "num_heads": 8,
+      "head_dim": 96,
+      "naive_ms": 0.06080512166954577,
+      "sdpa_ms": 0.01633087994530797,
+      "speedup": 3.723321821799058,
+      "attn_matrix_mib": 0.125,
+      "memory_saved_mib": 0.125
+    }
+  },
+  "gn_silu": {
+    "32x192x32x32": {
+      "separate_ms": 1.221208312213421,
+      "triton_fused_ms": 4.85279935836792,
+      "functional_ms": 1.2201568081974983,
+      "triton_speedup_vs_separate": 0.25165027894830055,
+      "functional_speedup_vs_separate": 1.000861777772216
+    },
+    "32x384x16x16": {
+      "separate_ms": 0.6657961563766003,
+      "triton_fused_ms": 0.4670905584096909,
+      "functional_ms": 0.6678950418531895,
+      "triton_speedup_vs_separate": 1.4254112920703104,
+      "functional_speedup_vs_separate": 0.9968574621084692
+    },
+    "32x384x8x8": {
+      "separate_ms": 0.20239072024822236,
+      "triton_fused_ms": 0.13281696282327174,
+      "functional_ms": 0.1983200004696846,
+      "triton_speedup_vs_separate": 1.5238318656444998,
+      "functional_speedup_vs_separate": 1.0205260173905657
+    },
+    "32x768x4x4": {
+      "separate_ms": 0.07215264081954956,
+      "triton_fused_ms": 0.05700768136419356,
+      "functional_ms": 0.07195616032928229,
+      "triton_speedup_vs_separate": 1.2656652418224559,
+      "functional_speedup_vs_separate": 1.0027305582922734
+    },
+    "32x768x2x2": {
+      "separate_ms": 0.06278624108061194,
+      "triton_fused_ms": 0.052283519632183015,
+      "functional_ms": 0.06237056216225028,
+      "triton_speedup_vs_separate": 1.2008801534846172,
+      "functional_speedup_vs_separate": 1.0066646652515383
+    }
+  },
+  "fp16_cache": {
+    "32x192x32x32": {
+      "fp32_cache_step1_ms": 1.0136668786406517,
+      "fp16_cache_step1_ms": 3.1392041766643524,
+      "speedup": 0.3229056861531547,
+      "fp32_cache_bytes_mib": 48.0,
+      "fp16_cache_bytes_mib": 24.0,
+      "bytes_saved_mib": 24.0
+    },
+    "32x384x16x16": {
+      "fp32_cache_step1_ms": 0.530883204638958,
+      "fp16_cache_step1_ms": 1.6349091255664825,
+      "speedup": 0.3247172557404445,
+      "fp32_cache_bytes_mib": 24.0,
+      "fp16_cache_bytes_mib": 12.0,
+      "bytes_saved_mib": 12.0
+    },
+    "32x384x8x8": {
+      "fp32_cache_step1_ms": 0.1259897558018565,
+      "fp16_cache_step1_ms": 0.27891360126435755,
+      "speedup": 0.4517160698894779,
+      "fp32_cache_bytes_mib": 6.0,
+      "fp16_cache_bytes_mib": 3.0,
+      "bytes_saved_mib": 3.0
+    },
+    "32x768x4x4": {
+      "fp32_cache_step1_ms": 0.06082335864193737,
+      "fp16_cache_step1_ms": 0.19491520147770644,
+      "speedup": 0.3120503592373429,
+      "fp32_cache_bytes_mib": 3.0,
+      "fp16_cache_bytes_mib": 1.5,
+      "bytes_saved_mib": 1.5
+    },
+    "32x768x2x2": {
+      "fp32_cache_step1_ms": 0.009208960030227899,
+      "fp16_cache_step1_ms": 0.18356735721230508,
+      "speedup": 0.05016665364734354,
+      "fp32_cache_bytes_mib": 0.75,
+      "fp16_cache_bytes_mib": 0.375,
+      "bytes_saved_mib": 0.375
+    }
+  },
+  "torch_compile": {
+    "32x192x32x32": {
+      "eager_ms": 6.928024940490722,
+      "compiled_ms": null,
+      "speedup": null,
+      "status": "skipped",
+      "reason": "duplicate template name"
+    },
+    "32x384x16x16": {
+      "eager_ms": 4.860537586212158,
+      "compiled_ms": null,
+      "speedup": null,
+      "status": "skipped",
+      "reason": "cannot import name 'mm_configs' from 'torch._inductor.kernel.mm_common' (/usr/local/lib/python3.11/dist-packages/torch/_inductor/kernel/mm_common.py)"
+    },
+    "32x384x8x8": {
+      "eager_ms": 1.4827065575122833,
+      "compiled_ms": null,
+      "speedup": null,
+      "status": "skipped",
+      "reason": "cannot import name 'mm_configs' from 'torch._inductor.kernel.mm_common' (/usr/local/lib/python3.11/dist-packages/torch/_inductor/kernel/mm_common.py)"
+    }
+  }
+}

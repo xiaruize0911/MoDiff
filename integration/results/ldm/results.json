@@ -1,0 +1,43 @@
+{
+  "fp32": {
+    "total_time": 118.37143778800964,
+    "num_samples": 128,
+    "time_per_sample": 0.9247768577188253,
+    "time_per_step_ms": 4.623884288594127
+  },
+  "fp16": {
+    "total_time": 53.104506492614746,
+    "num_samples": 128,
+    "time_per_sample": 0.4148789569735527,
+    "time_per_step_ms": 2.0743947848677635,
+    "speedup": 2.229028110909412
+  },
+  "int8": {
+    "total_time": 46.37914514541626,
+    "num_samples": 128,
+    "time_per_sample": 0.36233707144856453,
+    "time_per_step_ms": 1.8116853572428226,
+    "speedup": 2.552255704948208
+  },
+  "int8_baseline": {
+    "total_time": 45.955382108688354,
+    "num_samples": 128,
+    "time_per_sample": 0.35902642272412777,
+    "time_per_step_ms": 1.7951321136206388,
+    "speedup": 2.575790524558173
+  },
+  "int4": {
+    "total_time": 43.51865220069885,
+    "num_samples": 128,
+    "time_per_sample": 0.3399894703179598,
+    "time_per_step_ms": 1.699947351589799,
+    "speedup": 2.7200161724243093
+  },
+  "int4_baseline": {
+    "total_time": 37.40629243850708,
+    "num_samples": 128,
+    "time_per_sample": 0.29223665967583656,
+    "time_per_step_ms": 1.4611832983791828,
+    "speedup": 3.164479291354595
+  }
+}

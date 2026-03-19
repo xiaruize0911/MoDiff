@@ -10,10 +10,10 @@ __pycache__/
 /log
 /data
 *.tar.gz
+*.png
 modiff_triton/data
 /arXiv-2506.22463v1
 /benchmark_results
-results*/
 integration/results_ldm_benchmark
 *.so
 PHASE2_PLAN.md
