@@ -157,6 +157,7 @@ class StaticDynamicBenchmark:
         quality_samples: int,
         calibration_steps: int,
         calibration_runs: int,
+        timing_repeats: int,
         seed: int,
     ):
         self.config_path = config_path
@@ -168,6 +169,7 @@ class StaticDynamicBenchmark:
         self.quality_samples = quality_samples
         self.calibration_steps = calibration_steps
         self.calibration_runs = calibration_runs
+        self.timing_repeats = timing_repeats
         self.seed = seed
         self.shape = (4, 32, 32)
         self.results: Dict[str, Dict[str, float | int | str | bool]] = {}
@@ -188,6 +190,24 @@ class StaticDynamicBenchmark:
         os.makedirs(self._samples_root(), exist_ok=True)
         os.makedirs(self._quality_root(), exist_ok=True)
         os.makedirs(self._calibration_root(), exist_ok=True)
+
+    def _mode_seed(self, spec: ModeSpec, offset: int = 0) -> int:
+        workload_key = f"{spec.precision}_{'modiff' if spec.modiff else 'baseline'}"
+        key = sum(ord(ch) for ch in workload_key)
+        return self.seed + key + offset
+
+    def _make_timed_latents(self, spec: ModeSpec) -> Tuple[torch.Tensor, List[torch.Tensor]]:
+        generator = torch.Generator(device='cuda')
+        generator.manual_seed(self._mode_seed(spec, offset=1000))
+        warmup = torch.randn((self.batch_size, *self.shape), device='cuda', generator=generator)
+
+        timed_batches: List[torch.Tensor] = []
+        generated = 0
+        while generated < self.num_samples:
+            batch = min(self.batch_size, self.num_samples - generated)
+            timed_batches.append(torch.randn((batch, *self.shape), device='cuda', generator=generator))
+            generated += batch
+        return warmup, timed_batches
 
     def _samples_root(self) -> str:
         return os.path.join(self.output_dir, 'samples')
@@ -361,6 +381,7 @@ class StaticDynamicBenchmark:
         torch.cuda.empty_cache()
         gc.collect()
         model, sampler, conv_loaded, linear_loaded = self._build_mode(spec)
+        warmup_latents, timed_latents = self._make_timed_latents(spec)
         mem_after_setup = measure_gpu_memory()
         torch.cuda.reset_peak_memory_stats()
 
@@ -370,25 +391,56 @@ class StaticDynamicBenchmark:
         print(f"  warmup: {self.steps} steps @ batch {self.batch_size}")
         self._reset_quant_state(model.model.diffusion_model, spec.precision)
         with torch.inference_mode(), torch.amp.autocast('cuda', dtype=dtype):
-            sampler.sample(S=self.steps, batch_size=self.batch_size, shape=self.shape, eta=0.0, verbose=False)
+            sampler.sample(
+                S=self.steps,
+                batch_size=self.batch_size,
+                shape=self.shape,
+                eta=0.0,
+                verbose=False,
+                x_T=warmup_latents.clone(),
+            )
         torch.cuda.synchronize()
 
-        total_time = 0.0
-        generated = 0
-        while generated < self.num_samples:
-            batch = min(self.batch_size, self.num_samples - generated)
-            self._reset_quant_state(model.model.diffusion_model, spec.precision)
+        repeat_totals: List[float] = []
+        final_repeat_samples: List[torch.Tensor] = []
+        for repeat_idx in range(self.timing_repeats):
+            total_time = 0.0
+            repeat_samples: List[torch.Tensor] = []
+            generated = 0
+            for latent_batch in timed_latents:
+                batch = latent_batch.shape[0]
+                self._reset_quant_state(model.model.diffusion_model, spec.precision)
 
-            torch.cuda.synchronize()
-            t0 = time.time()
-            with torch.inference_mode(), torch.amp.autocast('cuda', dtype=dtype):
-                samples, _ = sampler.sample(S=self.steps, batch_size=batch, shape=self.shape, eta=0.0, verbose=False)
-            torch.cuda.synchronize()
-            total_time += time.time() - t0
+                torch.cuda.synchronize()
+                t0 = time.time()
+                with torch.inference_mode(), torch.amp.autocast('cuda', dtype=dtype):
+                    samples, _ = sampler.sample(
+                        S=self.steps,
+                        batch_size=batch,
+                        shape=self.shape,
+                        eta=0.0,
+                        verbose=False,
+                        x_T=latent_batch.clone(),
+                    )
+                torch.cuda.synchronize()
+                total_time += time.time() - t0
+                if repeat_idx == self.timing_repeats - 1:
+                    repeat_samples.append(samples.detach().cpu())
+                generated += batch
 
-            decoded = decode_latents(model, samples, use_autocast=True, dtype=dtype)
-            self._save_samples(decoded, mode_dir, generated)
-            generated += batch
+            repeat_totals.append(total_time)
+            if repeat_idx == self.timing_repeats - 1:
+                final_repeat_samples = repeat_samples
+
+        total_time = float(np.mean(repeat_totals))
+        time_std = float(np.std(repeat_totals))
+        generated = sum(batch.shape[0] for batch in timed_latents)
+
+        save_index = 0
+        for sample_batch in final_repeat_samples:
+            decoded = decode_latents(model, sample_batch.cuda(non_blocking=True), use_autocast=True, dtype=dtype)
+            self._save_samples(decoded, mode_dir, save_index)
+            save_index += decoded.shape[0]
 
         mem_peak = measure_gpu_memory()
         result = {
@@ -401,6 +453,8 @@ class StaticDynamicBenchmark:
             'steps': self.steps,
             'batch_size': self.batch_size,
             'total_time_s': total_time,
+            'repeat_times_s': repeat_totals,
+            'timing_std_s': time_std,
             'time_per_sample_s': total_time / generated,
             'time_per_step_ms': total_time / (generated * self.steps) * 1000.0,
             'memory_allocated_mb': mem_after_setup['allocated_mb'],
@@ -411,6 +465,8 @@ class StaticDynamicBenchmark:
         self.results[spec.name] = result
 
         print(f"  total: {result['total_time_s']:.2f}s for {generated} samples")
+        if self.timing_repeats > 1:
+            print(f"  repeats: {', '.join(f'{value:.2f}s' for value in repeat_totals)} (std {time_std:.2f}s)")
         print(f"  per-sample: {result['time_per_sample_s']:.3f}s")
         print(f"  per-step: {result['time_per_step_ms']:.2f}ms")
         print(f"  memory: {result['memory_allocated_mb']:.0f}MB allocated, {result['memory_peak_mb']:.0f}MB peak")
@@ -591,6 +647,13 @@ class StaticDynamicBenchmark:
                 f"- MoDiff peak-memory delta (static - dynamic): **{modiff_mem_delta:+.0f} MB**.",
             ])
 
+            if self.timing_repeats > 1:
+                lines.extend([
+                    f"- Baseline timing repeat std-dev: **{baseline_dynamic['timing_std_s']:.2f}s** dynamic vs **{baseline_static['timing_std_s']:.2f}s** static.",
+                    f"- MoDiff timing repeat std-dev: **{modiff_dynamic['timing_std_s']:.2f}s** dynamic vs **{modiff_static['timing_std_s']:.2f}s** static.",
+                    '- Timed runs reuse the same pre-generated initial latents (`x_T`) across compared modes so static vs dynamic timing is measured on identical denoising workloads.',
+                ])
+
             q = quality_summary[precision]
             lines.extend([
                 '',
@@ -661,6 +724,7 @@ def main():
     parser.add_argument('--quality_samples', type=int, default=4)
     parser.add_argument('--calibration_steps', type=int, default=20)
     parser.add_argument('--calibration_runs', type=int, default=3)
+    parser.add_argument('--timing_repeats', type=int, default=3)
     parser.add_argument('--seed', type=int, default=20260319)
     args = parser.parse_args()
 
@@ -679,6 +743,7 @@ def main():
         quality_samples=args.quality_samples,
         calibration_steps=args.calibration_steps,
         calibration_runs=args.calibration_runs,
+        timing_repeats=args.timing_repeats,
         seed=args.seed,
     )
     bench.run(precisions)

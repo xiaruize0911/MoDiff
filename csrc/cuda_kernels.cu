@@ -178,6 +178,128 @@ __global__ void quantize_only_int8_kernel(
     }
 }
 
+__global__ void static_quantize_and_update_ahat_kernel_int8(
+    const float* __restrict__ x,
+    float* __restrict__ a_hat_cache,
+    int8_t* __restrict__ output_int8,
+    const float* __restrict__ scale_ptr,
+    const float* __restrict__ smooth_inv,
+    int num_channels,
+    int num_elements
+) {
+    float scale = *scale_ptr;
+    float inv_scale = 1.0f / scale;
+    int idx4 = blockIdx.x * blockDim.x + threadIdx.x;
+    int base = idx4 * 4;
+
+    if (base + 3 < num_elements) {
+        float4 x_v = reinterpret_cast<const float4*>(x)[idx4];
+        float4 c_v = reinterpret_cast<float4*>(a_hat_cache)[idx4];
+
+        if (smooth_inv != nullptr) {
+            int ch = base % num_channels;
+            x_v.x *= smooth_inv[ch];
+            x_v.y *= smooth_inv[ch + 1];
+            x_v.z *= smooth_inv[ch + 2];
+            x_v.w *= smooth_inv[ch + 3];
+        }
+
+        float r0 = x_v.x - c_v.x;
+        float r1 = x_v.y - c_v.y;
+        float r2 = x_v.z - c_v.z;
+        float r3 = x_v.w - c_v.w;
+
+        float q0 = fmaxf(-127.0f, fminf(127.0f, roundf(r0 * scale)));
+        float q1 = fmaxf(-127.0f, fminf(127.0f, roundf(r1 * scale)));
+        float q2 = fmaxf(-127.0f, fminf(127.0f, roundf(r2 * scale)));
+        float q3 = fmaxf(-127.0f, fminf(127.0f, roundf(r3 * scale)));
+
+        c_v.x += q0 * inv_scale;
+        c_v.y += q1 * inv_scale;
+        c_v.z += q2 * inv_scale;
+        c_v.w += q3 * inv_scale;
+        reinterpret_cast<float4*>(a_hat_cache)[idx4] = c_v;
+
+        reinterpret_cast<int32_t*>(output_int8)[idx4] =
+            ((unsigned char)(int8_t)q0) | ((unsigned char)(int8_t)q1 << 8) |
+            ((unsigned char)(int8_t)q2 << 16) | ((unsigned char)(int8_t)q3 << 24);
+    } else {
+        for (int i = base; i < num_elements; i++) {
+            float xval = x[i];
+            if (smooth_inv != nullptr) {
+                xval *= smooth_inv[i % num_channels];
+            }
+            float r = xval - a_hat_cache[i];
+            float q = fmaxf(-127.0f, fminf(127.0f, roundf(r * scale)));
+            a_hat_cache[i] += q * inv_scale;
+            output_int8[i] = (int8_t)q;
+        }
+    }
+}
+
+__global__ void static_quantize_pack_and_update_ahat_kernel_int4(
+    const float* __restrict__ x,
+    float* __restrict__ a_hat_cache,
+    int8_t* __restrict__ output_packed,
+    const float* __restrict__ scale_ptr,
+    const float* __restrict__ smooth_inv,
+    int num_channels,
+    int num_elements
+) {
+    float scale = *scale_ptr;
+    float inv_scale = 1.0f / scale;
+    int idx4 = blockIdx.x * blockDim.x + threadIdx.x;
+    int base = idx4 * 4;
+
+    if (base + 3 < num_elements) {
+        float4 x_v = reinterpret_cast<const float4*>(x)[idx4];
+        float4 c_v = reinterpret_cast<float4*>(a_hat_cache)[idx4];
+
+        if (smooth_inv != nullptr) {
+            int ch = base % num_channels;
+            x_v.x *= smooth_inv[ch];
+            x_v.y *= smooth_inv[ch + 1];
+            x_v.z *= smooth_inv[ch + 2];
+            x_v.w *= smooth_inv[ch + 3];
+        }
+
+        float q0 = fmaxf(-7.0f, fminf(7.0f, roundf((x_v.x - c_v.x) * scale)));
+        float q1 = fmaxf(-7.0f, fminf(7.0f, roundf((x_v.y - c_v.y) * scale)));
+        float q2 = fmaxf(-7.0f, fminf(7.0f, roundf((x_v.z - c_v.z) * scale)));
+        float q3 = fmaxf(-7.0f, fminf(7.0f, roundf((x_v.w - c_v.w) * scale)));
+
+        c_v.x += q0 * inv_scale;
+        c_v.y += q1 * inv_scale;
+        c_v.z += q2 * inv_scale;
+        c_v.w += q3 * inv_scale;
+        reinterpret_cast<float4*>(a_hat_cache)[idx4] = c_v;
+
+        int8_t b0 = ((int8_t)q0 & 0x0F) | (((int8_t)q1 & 0x0F) << 4);
+        int8_t b1 = ((int8_t)q2 & 0x0F) | (((int8_t)q3 & 0x0F) << 4);
+        reinterpret_cast<int16_t*>(output_packed)[idx4] = (uint16_t)(uint8_t)b0 | ((uint16_t)(uint8_t)b1 << 8);
+    } else {
+        for (int i = base; i < num_elements; i += 2) {
+            float x0 = x[i];
+            if (smooth_inv != nullptr) {
+                x0 *= smooth_inv[i % num_channels];
+            }
+            float q0 = fmaxf(-7.0f, fminf(7.0f, roundf((x0 - a_hat_cache[i]) * scale)));
+            a_hat_cache[i] += q0 * inv_scale;
+
+            float q1 = 0.0f;
+            if (i + 1 < num_elements) {
+                float x1 = x[i + 1];
+                if (smooth_inv != nullptr) {
+                    x1 *= smooth_inv[(i + 1) % num_channels];
+                }
+                q1 = fmaxf(-7.0f, fminf(7.0f, roundf((x1 - a_hat_cache[i + 1]) * scale)));
+                a_hat_cache[i + 1] += q1 * inv_scale;
+            }
+            output_packed[i / 2] = (((int8_t)q0 & 0x0F) | ((((int8_t)q1 & 0x0F) << 4)));
+        }
+    }
+}
+
 // =========================================================================
 // Fused: o_hat_cache += conv_output * weight_scale (per-channel broadcast)
 // Vectorized float4 loads for better memory bandwidth.
@@ -992,6 +1114,40 @@ torch::Tensor step1_quantize_no_ahat_fprop(
     return x_int8;
 }
 
+torch::Tensor step1_static_quantize_fprop(
+    torch::Tensor x,
+    torch::Tensor a_hat_cache,
+    torch::Tensor scale_buf,
+    torch::Tensor smooth_inv
+) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+
+    auto x_int8 = torch::empty_like(x, torch::TensorOptions().dtype(torch::kInt8));
+    int num_elements = x.numel();
+    int block_size = 256;
+    int num_work_items = (num_elements + 3) / 4;
+    int grid_size = (num_work_items + block_size - 1) / block_size;
+
+    const float* smooth_ptr = nullptr;
+    int num_channels = x.size(1);
+    if (smooth_inv.numel() > 0) {
+        smooth_ptr = smooth_inv.data_ptr<float>();
+        num_channels = smooth_inv.numel();
+    }
+
+    static_quantize_and_update_ahat_kernel_int8<<<grid_size, block_size, 0, stream>>>(
+        x.data_ptr<float>(),
+        a_hat_cache.data_ptr<float>(),
+        x_int8.data_ptr<int8_t>(),
+        scale_buf.data_ptr<float>(),
+        smooth_ptr,
+        num_channels,
+        num_elements
+    );
+
+    return x_int8;
+}
+
 
 torch::Tensor step1_quantize_pack_int4_fprop(
     torch::Tensor x,
@@ -1033,6 +1189,47 @@ torch::Tensor step1_quantize_pack_int4_fprop(
     
     return x_packed.view({N, H, W, C/2});
 }
+
+    torch::Tensor step1_static_quantize_pack_int4_fprop(
+        torch::Tensor x,
+        torch::Tensor a_hat_cache,
+        torch::Tensor scale_buf,
+        torch::Tensor smooth_inv
+    ) {
+        cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+
+        int num_input = x.numel();
+        int num_output = num_input / 2;
+        auto x_packed = torch::empty({num_output}, torch::TensorOptions().dtype(torch::kInt8).device(x.device()));
+
+        int block_size = 256;
+        int num_work_items = (num_input + 3) / 4;
+        int grid_size = (num_work_items + block_size - 1) / block_size;
+
+        const float* smooth_ptr = nullptr;
+        int num_channels = x.size(1);
+        if (smooth_inv.numel() > 0) {
+            smooth_ptr = smooth_inv.data_ptr<float>();
+            num_channels = smooth_inv.numel();
+        }
+
+        static_quantize_pack_and_update_ahat_kernel_int4<<<grid_size, block_size, 0, stream>>>(
+            x.data_ptr<float>(),
+            a_hat_cache.data_ptr<float>(),
+            x_packed.data_ptr<int8_t>(),
+            scale_buf.data_ptr<float>(),
+            smooth_ptr,
+            num_channels,
+            num_input
+        );
+
+        int N = x.size(0);
+        int C = x.size(1);
+        int H = x.size(2);
+        int W = x.size(3);
+
+        return x_packed.view({N, H, W, C/2});
+    }
 
 torch::Tensor step1_quantize_pack_int4_no_ahat_fprop(
     torch::Tensor x,

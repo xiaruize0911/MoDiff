@@ -1,0 +1,86 @@
+{
+  "int4_dynamic_baseline": {
+    "mode": "int4_dynamic_baseline",
+    "label": "INT4 dynamic baseline",
+    "precision": "int4",
+    "static": false,
+    "modiff": false,
+    "num_samples": 1,
+    "steps": 2,
+    "batch_size": 1,
+    "total_time_s": 0.06341743469238281,
+    "repeat_times_s": [
+      0.06341743469238281
+    ],
+    "timing_std_s": 0.0,
+    "time_per_sample_s": 0.06341743469238281,
+    "time_per_step_ms": 31.708717346191406,
+    "memory_allocated_mb": 3643.21533203125,
+    "memory_peak_mb": 3877.02880859375,
+    "loaded_conv_scales": 0,
+    "loaded_linear_scales": 0
+  },
+  "int4_static_baseline": {
+    "mode": "int4_static_baseline",
+    "label": "INT4 static baseline",
+    "precision": "int4",
+    "static": true,
+    "modiff": false,
+    "num_samples": 1,
+    "steps": 2,
+    "batch_size": 1,
+    "total_time_s": 0.0558476448059082,
+    "repeat_times_s": [
+      0.0558476448059082
+    ],
+    "timing_std_s": 0.0,
+    "time_per_sample_s": 0.0558476448059082,
+    "time_per_step_ms": 27.9238224029541,
+    "memory_allocated_mb": 3651.7763671875,
+    "memory_peak_mb": 3875.96533203125,
+    "loaded_conv_scales": 70,
+    "loaded_linear_scales": 0
+  },
+  "int4_dynamic_modiff": {
+    "mode": "int4_dynamic_modiff",
+    "label": "INT4 dynamic MoDiff",
+    "precision": "int4",
+    "static": false,
+    "modiff": true,
+    "num_samples": 1,
+    "steps": 2,
+    "batch_size": 1,
+    "total_time_s": 0.13922691345214844,
+    "repeat_times_s": [
+      0.13922691345214844
+    ],
+    "timing_std_s": 0.0,
+    "time_per_sample_s": 0.13922691345214844,
+    "time_per_step_ms": 69.61345672607422,
+    "memory_allocated_mb": 3651.7080078125,
+    "memory_peak_mb": 3937.98583984375,
+    "loaded_conv_scales": 0,
+    "loaded_linear_scales": 0
+  },
+  "int4_static_modiff": {
+    "mode": "int4_static_modiff",
+    "label": "INT4 static MoDiff",
+    "precision": "int4",
+    "static": true,
+    "modiff": true,
+    "num_samples": 1,
+    "steps": 2,
+    "batch_size": 1,
+    "total_time_s": 0.07856369018554688,
+    "repeat_times_s": [
+      0.07856369018554688
+    ],
+    "timing_std_s": 0.0,
+    "time_per_sample_s": 0.07856369018554688,
+    "time_per_step_ms": 39.28184509277344,
+    "memory_allocated_mb": 3651.79443359375,
+    "memory_peak_mb": 3915.8310546875,
+    "loaded_conv_scales": 70,
+    "loaded_linear_scales": 37
+  }
+}

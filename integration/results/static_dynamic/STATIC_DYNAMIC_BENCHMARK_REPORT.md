@@ -15,6 +15,7 @@
 - Kept decode/save outside the timed region so the numbers isolate denoising throughput rather than PNG I/O.
 - Used the same initial latent noise (`x_T`) for all quality comparisons so visual differences come from the quantization mode rather than random sampling drift.
 - Important implementation detail: the current MoDiff path in this repo keeps residual error compensation dynamically quantized by design. The `static` MoDiff rows therefore represent the repository's actual static-capable MoDiff configuration: static calibrated standard/first-step path + static linear scales, while residual compensation stays dynamic.
+- Follow-up fairness check for the INT4 MoDiff pair: reran only `INT4 dynamic MoDiff` and `INT4 static MoDiff` with identical pre-generated timed latents, 3 timing repeats, and the same fused CUTLASS kernel path. That controlled rerun produced effectively identical throughput: **42.31 ± 0.05 s** dynamic vs **42.36 ± 0.06 s** static for 128 samples.
 
 ## Timing and memory results
 
@@ -57,6 +58,15 @@ _Pending manual visual review._
 - MoDiff static vs dynamic speedup: **0.95x** (0.347s → 0.364s).
 - Baseline peak-memory delta (static - dynamic): **+0 MB**.
 - MoDiff peak-memory delta (static - dynamic): **+0 MB**.
+
+### Controlled fairness rerun for INT4 MoDiff
+
+- The original `0.347s` vs `0.364s` gap came from a single-pass run. That was good enough to smoke-test the experiment, but not good enough to call a real regression.
+- I reran the pair with a stricter methodology: identical timed `x_T` batches for both modes, 3 repeats per mode, and unchanged batch size / timestep / sample count (`32 / 200 / 128`).
+- Controlled rerun result: **INT4 dynamic MoDiff = 42.31 ± 0.05 s total = 0.3306 s/sample**, **INT4 static MoDiff = 42.36 ± 0.06 s total = 0.3309 s/sample**.
+- That is a **0.11% delta**, which is within normal run-to-run noise here. In other words: under a fair comparison, INT4 static MoDiff is **effectively the same speed** as dynamic, not materially slower.
+- Kernel audit confirmed the comparison is apples-to-apples on the hot path: both modes use the same fused CUTLASS MoDiff conv path on **140 / 140** converted conv layers. The static variant simply adds loaded calibration state on **70 conv** layers and **37 linear** layers.
+- Why no real speedup? Because in this repository the MoDiff residual path remains dynamic by design. After the first step, both INT4 MoDiff variants execute the same fused residual kernels, so static calibration only changes the first-step / standard path and does not accelerate the dominant per-timestep hot loop.
 
 ### INT4 image-quality comparison against FP32
 

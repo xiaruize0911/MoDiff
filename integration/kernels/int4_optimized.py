@@ -320,13 +320,13 @@ class OptimizedInt4Conv2d(nn.Module):
 
         Paper Appendix B.6: 4-5 warm-up steps converge error.
         """
-        input_scale = self._compute_activation_scale(x)
+        input_scale = self.static_input_scale if self.is_calibrated else self._compute_activation_scale(x)
         a_hat = self._dequantize_activation(x, input_scale)
         o_hat = self._int4_conv(x, input_scale, with_bias=True)
 
         for _ in range(self.warmup_steps - 1):
             residual = x - a_hat
-            r_scale = self._compute_activation_scale(residual, is_residual=True)
+            r_scale = input_scale if self.is_calibrated else self._compute_activation_scale(residual, is_residual=True)
             conv_r  = self._int4_conv(residual, r_scale, with_bias=False)
             r_dq    = self._dequantize_activation(residual, r_scale)
             a_hat   = a_hat + r_dq
@@ -351,6 +351,40 @@ class OptimizedInt4Conv2d(nn.Module):
             out = self._forward_first_step(x)
             self.is_first_step = False
             return out
+
+        if self.is_calibrated and HAS_CUTLASS and self.use_cutlass:
+            if self._cached_alpha_tensor is None or self._cached_alpha_tensor.device != x.device:
+                scale = float(self.static_input_scale.item())
+                self._cached_scale_float = scale
+                self._cached_alpha_tensor = torch.tensor([1.0 / scale], device=x.device, dtype=torch.float32)
+            if not hasattr(self, '_smooth_inv_flat') or self._smooth_inv_flat.device != x.device:
+                if not self._smooth_is_identity:
+                    self._smooth_inv_flat = self._smooth_inv.view(-1).contiguous()
+                else:
+                    self._smooth_inv_flat = torch.empty(0, device=x.device, dtype=torch.float32)
+
+            p_step1 = profiler.start("MoDiff INT4 Static Step1")
+            x_packed = modiff_cutlass.step1_static_quantize_pack_int4_fprop(
+                x,
+                self.a_hat_cache,
+                self.static_input_scale.view(1),
+                self._smooth_inv_flat,
+            )
+            profiler.stop("MoDiff INT4 Static Step1", p_step1)
+
+            p_conv = profiler.start("MoDiff INT4 Static Conv2d")
+            modiff_cutlass.conv2d_int4_fprop_o_hat(
+                x_packed,
+                self.weight_packed,
+                self._cached_alpha_tensor.view(1),
+                self.weight_scale_channel.view(-1),
+                self.o_hat_cache,
+                self.stride[0], self.stride[1],
+                self.padding[0], self.padding[1],
+                self.dilation[0], self.dilation[1]
+            )
+            profiler.stop("MoDiff INT4 Static Conv2d", p_conv)
+            return self.o_hat_cache
 
         # Lazy-init persistent buffers (reused across timesteps, never reallocated)
         if self._residual_buf is None or self._residual_buf.shape != x.shape:
@@ -490,6 +524,9 @@ class OptimizedInt4Conv2d(nn.Module):
         alpha = 1.0 / float(scale)
         self._cached_alpha_tensor = torch.tensor(
             [alpha], device=self.static_input_scale.device, dtype=torch.float32
+        )
+        self._cached_scale_tensor = torch.tensor(
+            [float(scale)], device=self.static_input_scale.device, dtype=torch.float32
         )
 
 

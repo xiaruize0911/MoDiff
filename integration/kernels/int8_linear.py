@@ -73,6 +73,7 @@ class OptimizedInt8Linear(nn.Module):
         self._scale_count = 0
         self.register_buffer('static_input_scale', torch.tensor(1.0, dtype=torch.float32))
         self._cached_scale_float: Optional[float] = None
+        self._cached_scale_tensor: Optional[torch.Tensor] = None
 
         # --- Fused kernel persistent buffers (lazy-initialized) ---
         self._residual_buf: Optional[torch.Tensor] = None
@@ -138,13 +139,15 @@ class OptimizedInt8Linear(nn.Module):
         Computes a_hat_T = Q(a_T) and o_hat_T = A(a_hat_T) + bias using
         iterative refinement (warmup_steps iterations).
         """
-        input_scale = self._compute_activation_scale(x)
+        input_scale = self._cached_scale_float if self.is_calibrated else self._compute_activation_scale(x)
+        if input_scale is None:
+            input_scale = float(self.static_input_scale.item())
         a_hat = self._dequantize_activation(x, input_scale)
         o_hat = self._fp16_linear(a_hat, with_bias=True)
 
         for _ in range(self.warmup_steps - 1):
             residual = x - a_hat
-            r_scale = self._compute_activation_scale(residual, is_residual=True)
+            r_scale = input_scale if self.is_calibrated else self._compute_activation_scale(residual, is_residual=True)
             r_dq = self._dequantize_activation(residual, r_scale)
             o_hat = o_hat + self._fp16_linear(r_dq, with_bias=False)
             a_hat = a_hat + r_dq
@@ -163,10 +166,27 @@ class OptimizedInt8Linear(nn.Module):
             self.is_first_step = False
             return out
 
+        if self.is_calibrated:
+            return self._forward_modulated_static(x)
+
         if HAS_CUTLASS:
             return self._forward_modulated_fused(x)
         else:
             return self._forward_modulated_fallback(x)
+
+    def _forward_modulated_static(self, x: torch.Tensor) -> torch.Tensor:
+        scale = self._cached_scale_float
+        if scale is None:
+            scale = float(self.static_input_scale.item())
+            self._cached_scale_float = scale
+
+        residual = x - self.a_hat_cache
+        r_dq = (residual * scale).round().clamp(-127, 127) / scale
+        linear_r = self._fp16_linear(r_dq, with_bias=False)
+
+        self.a_hat_cache.add_(r_dq)
+        self.o_hat_cache.add_(linear_r)
+        return self.o_hat_cache
 
     def _forward_modulated_fused(self, x: torch.Tensor) -> torch.Tensor:
         """Modulated path using fused CUTLASS kernels on [B,D,1,1] channels_last."""
@@ -267,6 +287,7 @@ class OptimizedInt8Linear(nn.Module):
         self.static_input_scale.fill_(float(scale))
         self.is_calibrated = True
         self._cached_scale_float = float(scale)
+        self._cached_scale_tensor = torch.tensor([float(scale)], device=self.static_input_scale.device, dtype=torch.float32)
 
 
 # ---------------------------------------------------------------------------
