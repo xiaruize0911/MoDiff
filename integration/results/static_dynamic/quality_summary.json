@@ -2,33 +2,33 @@
   "int8": {
     "int8_dynamic_baseline": {
       "label": "INT8 dynamic baseline",
-      "mae_vs_fp32": 0.008068745955824852,
-      "max_abs_vs_fp32": 0.37114280462265015,
-      "psnr_vs_fp32_db": 36.42936406319361,
+      "mae_vs_fp32": 0.008068599738180637,
+      "max_abs_vs_fp32": 0.36870962381362915,
+      "psnr_vs_fp32_db": 36.428446779691726,
       "loaded_conv_scales": 0,
       "loaded_linear_scales": 0
     },
     "int8_static_baseline": {
       "label": "INT8 static baseline",
-      "mae_vs_fp32": 0.05838172510266304,
-      "max_abs_vs_fp32": 0.9421818852424622,
-      "psnr_vs_fp32_db": 20.154727537853688,
+      "mae_vs_fp32": 0.07126747071743011,
+      "max_abs_vs_fp32": 0.96142578125,
+      "psnr_vs_fp32_db": 19.34322167179644,
       "loaded_conv_scales": 70,
       "loaded_linear_scales": 0
     },
     "int8_dynamic_modiff": {
       "label": "INT8 dynamic MoDiff",
-      "mae_vs_fp32": 0.004717964679002762,
-      "max_abs_vs_fp32": 0.4007035493850708,
-      "psnr_vs_fp32_db": 40.46420693079511,
+      "mae_vs_fp32": 0.004717549774795771,
+      "max_abs_vs_fp32": 0.4023714065551758,
+      "psnr_vs_fp32_db": 40.46580436199977,
       "loaded_conv_scales": 0,
       "loaded_linear_scales": 0
     },
     "int8_static_modiff": {
       "label": "INT8 static MoDiff",
-      "mae_vs_fp32": 0.004795949440449476,
-      "max_abs_vs_fp32": 0.4111710786819458,
-      "psnr_vs_fp32_db": 40.355017307224514,
+      "mae_vs_fp32": 0.009822611697018147,
+      "max_abs_vs_fp32": 0.6645228862762451,
+      "psnr_vs_fp32_db": 34.1781145184422,
       "loaded_conv_scales": 70,
       "loaded_linear_scales": 37
     },
@@ -37,33 +37,33 @@
   "int4": {
     "int4_dynamic_baseline": {
       "label": "INT4 dynamic baseline",
-      "mae_vs_fp32": 0.18122798204421997,
+      "mae_vs_fp32": 0.1812290996313095,
       "max_abs_vs_fp32": 1.0,
-      "psnr_vs_fp32_db": 12.598333550629523,
+      "psnr_vs_fp32_db": 12.598286169948933,
       "loaded_conv_scales": 0,
       "loaded_linear_scales": 0
     },
     "int4_static_baseline": {
       "label": "INT4 static baseline",
-      "mae_vs_fp32": 0.1655912846326828,
-      "max_abs_vs_fp32": 0.990234375,
-      "psnr_vs_fp32_db": 13.402917778837377,
+      "mae_vs_fp32": 0.19996225833892822,
+      "max_abs_vs_fp32": 0.99169921875,
+      "psnr_vs_fp32_db": 12.072625175150012,
       "loaded_conv_scales": 70,
       "loaded_linear_scales": 0
     },
     "int4_dynamic_modiff": {
       "label": "INT4 dynamic MoDiff",
-      "mae_vs_fp32": 0.06420549750328064,
-      "max_abs_vs_fp32": 0.8817760944366455,
-      "psnr_vs_fp32_db": 20.19322660345933,
+      "mae_vs_fp32": 0.06420540809631348,
+      "max_abs_vs_fp32": 0.8812874555587769,
+      "psnr_vs_fp32_db": 20.193155561843415,
       "loaded_conv_scales": 0,
       "loaded_linear_scales": 0
     },
     "int4_static_modiff": {
       "label": "INT4 static MoDiff",
-      "mae_vs_fp32": 0.0641283467411995,
-      "max_abs_vs_fp32": 0.8695690631866455,
-      "psnr_vs_fp32_db": 20.198386569924693,
+      "mae_vs_fp32": 0.07112818956375122,
+      "max_abs_vs_fp32": 0.8927320241928101,
+      "psnr_vs_fp32_db": 19.37339687917444,
       "loaded_conv_scales": 70,
       "loaded_linear_scales": 37
     },
