@@ -45,6 +45,22 @@ from ldm.models.diffusion.ddim import DDIMSampler
 from omegaconf import OmegaConf
 
 
+def _is_known_torch_compile_issue(exc):
+    """Return True for environment-specific torch.compile/Inductor failures.
+
+    Some PyTorch + Triton/Inductor combinations fail during import or first
+    compilation with backend errors that are unrelated to this benchmark's
+    logic. Treat these as skipped experiments rather than hard failures.
+    """
+    message = str(exc).lower()
+    return (
+        'duplicate template name' in message or
+        'torch.compile' in message or
+        'triton' in message or
+        'inductor' in message
+    )
+
+
 # ============================================================================
 # Experiment 1: Per-component UNet time breakdown
 # ============================================================================
@@ -430,25 +446,38 @@ def benchmark_torch_compile_overhead(shapes, num_iterations=50):
         eager_ms = sum(s.elapsed_time(e) for s, e in zip(start_events, end_events)) / num_iterations
 
         # torch.compile
-        compiled = torch.compile(pipeline, mode="reduce-overhead")
-        # Warm up compilation
-        for _ in range(5):
-            y = compiled(x)
-        torch.cuda.synchronize()
+        compiled = None
+        try:
+            compiled = torch.compile(pipeline, mode="reduce-overhead")
+            # Warm up compilation
+            for _ in range(5):
+                y = compiled(x)
+            torch.cuda.synchronize()
 
-        for i in range(num_iterations):
-            start_events[i].record()
-            y = compiled(x)
-            end_events[i].record()
+            for i in range(num_iterations):
+                start_events[i].record()
+                y = compiled(x)
+                end_events[i].record()
 
-        torch.cuda.synchronize()
-        compiled_ms = sum(s.elapsed_time(e) for s, e in zip(start_events, end_events)) / num_iterations
+            torch.cuda.synchronize()
+            compiled_ms = sum(s.elapsed_time(e) for s, e in zip(start_events, end_events)) / num_iterations
 
-        results[f"{N}x{C}x{H}x{W}"] = {
-            'eager_ms': eager_ms,
-            'compiled_ms': compiled_ms,
-            'speedup': eager_ms / max(compiled_ms, 1e-9),
-        }
+            results[f"{N}x{C}x{H}x{W}"] = {
+                'eager_ms': eager_ms,
+                'compiled_ms': compiled_ms,
+                'speedup': eager_ms / max(compiled_ms, 1e-9),
+                'status': 'ok',
+            }
+        except Exception as exc:
+            if not _is_known_torch_compile_issue(exc):
+                raise
+            results[f"{N}x{C}x{H}x{W}"] = {
+                'eager_ms': eager_ms,
+                'compiled_ms': None,
+                'speedup': None,
+                'status': 'skipped',
+                'reason': str(exc),
+            }
 
         del x, pipeline, compiled
         torch.cuda.empty_cache()
@@ -681,10 +710,14 @@ def main():
         compile_shapes = conv_shapes[:3]  # skip very small spatial
         compile_results = benchmark_torch_compile_overhead(compile_shapes, num_iterations=50)
         results['torch_compile'] = compile_results
-        print(f"\n{'Shape':<25} {'Eager (ms)':<12} {'Compiled (ms)':<15} {'Speedup':<10}")
-        print("-" * 62)
+        print(f"\n{'Shape':<25} {'Eager (ms)':<12} {'Compiled (ms)':<15} {'Speedup':<10} {'Status':<10}")
+        print("-" * 74)
         for key, val in compile_results.items():
-            print(f"{key:<25} {val['eager_ms']:<12.3f} {val['compiled_ms']:<15.3f} {val['speedup']:<10.2f}x")
+            compiled_ms = f"{val['compiled_ms']:.3f}" if isinstance(val['compiled_ms'], (int, float)) else "skipped"
+            speedup = f"{val['speedup']:.2f}x" if isinstance(val['speedup'], (int, float)) else "n/a"
+            print(f"{key:<25} {val['eager_ms']:<12.3f} {compiled_ms:<15} {speedup:<10} {val.get('status', 'ok'):<10}")
+            if val.get('status') == 'skipped' and val.get('reason'):
+                print(f"  ↳ skipped: {val['reason']}")
     except Exception as e:
         print(f"torch.compile benchmark failed: {e}")
         import traceback
