@@ -1,76 +1,64 @@
 {
   "model_profile": {
-    "total_per_step_ms": 211.2207293510437,
+    "total_per_step_ms": 60.41529178619385,
     "batch_size": 32,
     "num_steps": 20,
     "components": {
       "int_conv": {
-        "total_ms": 71.2121914550662,
-        "per_step_ms": 3.56060957275331,
-        "count_per_step": 3.5,
-        "pct_of_step": 1.6857292291779107
-      },
-      "attention": {
-        "total_ms": 51.33174399845302,
-        "per_step_ms": 2.566587199922651,
-        "count_per_step": 2.1,
-        "pct_of_step": 1.2151208869547296
-      },
-      "fp_conv": {
-        "total_ms": 6.873887777328491,
-        "per_step_ms": 0.34369438886642456,
-        "count_per_step": 0.95,
-        "pct_of_step": 0.16271811479980872
+        "total_ms": 562.5069445595145,
+        "per_step_ms": 28.125347227975727,
+        "count_per_step": 70.0,
+        "pct_of_step": 46.55335825821991
       },
       "gn_silu_fused": {
-        "total_ms": 6.153087995946407,
-        "per_step_ms": 0.30765439979732034,
-        "count_per_step": 1.75,
-        "pct_of_step": 0.14565540074715216
-      },
-      "resample": {
-        "total_ms": 5.394176033791155,
-        "per_step_ms": 0.26970880168955774,
-        "count_per_step": 0.8,
-        "pct_of_step": 0.1276904982376556
+        "total_ms": 123.79776009172201,
+        "per_step_ms": 6.1898880045861,
+        "count_per_step": 35.0,
+        "pct_of_step": 10.24556502431826
       },
       "groupnorm": {
-        "total_ms": 2.649856001138687,
-        "per_step_ms": 0.13249280005693437,
-        "count_per_step": 1.1,
-        "pct_of_step": 0.0627271766668008
+        "total_ms": 53.133695929311216,
+        "per_step_ms": 2.656684796465561,
+        "count_per_step": 22.0,
+        "pct_of_step": 4.39737145666268
+      },
+      "fp_conv": {
+        "total_ms": 43.262400133535266,
+        "per_step_ms": 2.1631200066767633,
+        "count_per_step": 19.0,
+        "pct_of_step": 3.5804180410680084
       },
       "linear": {
-        "total_ms": 0.3719359990209341,
-        "per_step_ms": 0.018596799951046704,
-        "count_per_step": 1.85,
-        "pct_of_step": 0.00880443884848976
+        "total_ms": 10.462144000455737,
+        "per_step_ms": 0.5231072000227869,
+        "count_per_step": 37.0,
+        "pct_of_step": 0.8658523108255977
+      },
+      "resample": {
+        "total_ms": 9.677983972243965,
+        "per_step_ms": 0.4838991986121982,
+        "count_per_step": 8.0,
+        "pct_of_step": 0.8009548316421096
       },
       "silu": {
-        "total_ms": 0.27155200159177184,
-        "per_step_ms": 0.013577600079588591,
-        "count_per_step": 1.85,
-        "pct_of_step": 0.006428156990700923
-      },
-      "time_embed": {
-        "total_ms": 0.03094400092959404,
-        "per_step_ms": 0.001547200046479702,
-        "count_per_step": 0.05,
-        "pct_of_step": 0.0007325038840805692
+        "total_ms": 5.818911989685148,
+        "per_step_ms": 0.2909455994842574,
+        "count_per_step": 37.0,
+        "pct_of_step": 0.48157608923564704
       }
     },
-    "total_hooked_per_step_ms": 7.214468763163312,
-    "overhead_per_step_ms": 204.00626058788038,
-    "overhead_pct": 96.58439359369267
+    "total_hooked_per_step_ms": 40.432992033823396,
+    "overhead_per_step_ms": 19.98229975237045,
+    "overhead_pct": 33.074903988027785
   },
   "attention": {
     "B32_C192_S32x32": {
       "seq_len": 1024,
       "num_heads": 8,
       "head_dim": 24,
-      "naive_ms": 20.014173040390016,
-      "sdpa_ms": 1.494017275571823,
-      "speedup": 13.396212592474711,
+      "naive_ms": 5.882256636619568,
+      "sdpa_ms": 0.4555283206701279,
+      "speedup": 12.9130426577346,
       "attn_matrix_mib": 512.0,
       "memory_saved_mib": 512.0
     },
@@ -78,9 +66,9 @@
       "seq_len": 256,
       "num_heads": 8,
       "head_dim": 48,
-      "naive_ms": 1.4330684852600097,
-      "sdpa_ms": 0.2659180764108896,
-      "speedup": 5.389135272796085,
+      "naive_ms": 0.43072704076766966,
+      "sdpa_ms": 0.07685823991894722,
+      "speedup": 5.604175183063047,
       "attn_matrix_mib": 32.0,
       "memory_saved_mib": 32.0
     },
@@ -88,9 +76,9 @@
       "seq_len": 64,
       "num_heads": 8,
       "head_dim": 48,
-      "naive_ms": 0.07700767908245325,
-      "sdpa_ms": 0.07367615962401032,
-      "speedup": 1.045218419030587,
+      "naive_ms": 0.05830207973718643,
+      "sdpa_ms": 0.0303056001663208,
+      "speedup": 1.9238054820633006,
       "attn_matrix_mib": 2.0,
       "memory_saved_mib": 2.0
     },
@@ -98,87 +86,87 @@
       "seq_len": 16,
       "num_heads": 8,
       "head_dim": 96,
-      "naive_ms": 0.06080512166954577,
-      "sdpa_ms": 0.01633087994530797,
-      "speedup": 3.723321821799058,
+      "naive_ms": 0.05701567981392145,
+      "sdpa_ms": 0.028488320037722586,
+      "speedup": 2.0013703769974707,
       "attn_matrix_mib": 0.125,
       "memory_saved_mib": 0.125
     }
   },
   "gn_silu": {
     "32x192x32x32": {
-      "separate_ms": 1.221208312213421,
-      "triton_fused_ms": 4.85279935836792,
-      "functional_ms": 1.2201568081974983,
-      "triton_speedup_vs_separate": 0.25165027894830055,
-      "functional_speedup_vs_separate": 1.000861777772216
+      "separate_ms": 0.3575513595342636,
+      "triton_fused_ms": 1.4357619261741639,
+      "functional_ms": 0.3580364793539047,
+      "triton_speedup_vs_separate": 0.2490324844363446,
+      "functional_speedup_vs_separate": 0.9986450547706297
     },
     "32x384x16x16": {
-      "separate_ms": 0.6657961563766003,
-      "triton_fused_ms": 0.4670905584096909,
-      "functional_ms": 0.6678950418531895,
-      "triton_speedup_vs_separate": 1.4254112920703104,
-      "functional_speedup_vs_separate": 0.9968574621084692
+      "separate_ms": 0.1881004799902439,
+      "triton_fused_ms": 0.13295200005173682,
+      "functional_ms": 0.18819840013980865,
+      "triton_speedup_vs_separate": 1.4147999271695548,
+      "functional_speedup_vs_separate": 0.9994796972264801
     },
     "32x384x8x8": {
-      "separate_ms": 0.20239072024822236,
-      "triton_fused_ms": 0.13281696282327174,
-      "functional_ms": 0.1983200004696846,
-      "triton_speedup_vs_separate": 1.5238318656444998,
-      "functional_speedup_vs_separate": 1.0205260173905657
+      "separate_ms": 0.07574751988053322,
+      "triton_fused_ms": 0.048594880141317846,
+      "functional_ms": 0.06789919991046191,
+      "triton_speedup_vs_separate": 1.558755154046132,
+      "functional_speedup_vs_separate": 1.115587812233735
     },
     "32x768x4x4": {
-      "separate_ms": 0.07215264081954956,
-      "triton_fused_ms": 0.05700768136419356,
-      "functional_ms": 0.07195616032928229,
-      "triton_speedup_vs_separate": 1.2656652418224559,
-      "functional_speedup_vs_separate": 1.0027305582922734
+      "separate_ms": 0.07515328019857406,
+      "triton_fused_ms": 0.042336959913372996,
+      "functional_ms": 0.06312159996479749,
+      "triton_speedup_vs_separate": 1.7751222655653025,
+      "functional_speedup_vs_separate": 1.190611141677121
     },
     "32x768x2x2": {
-      "separate_ms": 0.06278624108061194,
-      "triton_fused_ms": 0.052283519632183015,
-      "functional_ms": 0.06237056216225028,
-      "triton_speedup_vs_separate": 1.2008801534846172,
-      "functional_speedup_vs_separate": 1.0066646652515383
+      "separate_ms": 0.075235840305686,
+      "triton_fused_ms": 0.05393376011401415,
+      "functional_ms": 0.06787488009780646,
+      "triton_speedup_vs_separate": 1.3949674590950079,
+      "functional_speedup_vs_separate": 1.1084489607535593
     }
   },
   "fp16_cache": {
     "32x192x32x32": {
-      "fp32_cache_step1_ms": 1.0136668786406517,
-      "fp16_cache_step1_ms": 3.1392041766643524,
-      "speedup": 0.3229056861531547,
+      "fp32_cache_step1_ms": 0.2856819200515747,
+      "fp16_cache_step1_ms": 0.9195292794704437,
+      "speedup": 0.31068278784564507,
       "fp32_cache_bytes_mib": 48.0,
       "fp16_cache_bytes_mib": 24.0,
       "bytes_saved_mib": 24.0
     },
     "32x384x16x16": {
-      "fp32_cache_step1_ms": 0.530883204638958,
-      "fp16_cache_step1_ms": 1.6349091255664825,
-      "speedup": 0.3247172557404445,
+      "fp32_cache_step1_ms": 0.14714239969849585,
+      "fp16_cache_step1_ms": 0.4782982409000397,
+      "speedup": 0.30763734238622753,
       "fp32_cache_bytes_mib": 24.0,
       "fp16_cache_bytes_mib": 12.0,
       "bytes_saved_mib": 12.0
     },
     "32x384x8x8": {
-      "fp32_cache_step1_ms": 0.1259897558018565,
-      "fp16_cache_step1_ms": 0.27891360126435755,
-      "speedup": 0.4517160698894779,
+      "fp32_cache_step1_ms": 0.031283520050346854,
+      "fp16_cache_step1_ms": 0.1448259200155735,
+      "speedup": 0.2160077425849106,
       "fp32_cache_bytes_mib": 6.0,
       "fp16_cache_bytes_mib": 3.0,
       "bytes_saved_mib": 3.0
     },
     "32x768x4x4": {
-      "fp32_cache_step1_ms": 0.06082335864193737,
-      "fp16_cache_step1_ms": 0.19491520147770644,
-      "speedup": 0.3120503592373429,
+      "fp32_cache_step1_ms": 0.017739519961178302,
+      "fp16_cache_step1_ms": 0.14300031945109368,
+      "speedup": 0.12405231001770765,
       "fp32_cache_bytes_mib": 3.0,
       "fp16_cache_bytes_mib": 1.5,
       "bytes_saved_mib": 1.5
     },
     "32x768x2x2": {
-      "fp32_cache_step1_ms": 0.009208960030227899,
-      "fp16_cache_step1_ms": 0.18356735721230508,
-      "speedup": 0.05016665364734354,
+      "fp32_cache_step1_ms": 0.017261760048568248,
+      "fp16_cache_step1_ms": 0.13805023968219757,
+      "speedup": 0.12503969633306083,
       "fp32_cache_bytes_mib": 0.75,
       "fp16_cache_bytes_mib": 0.375,
       "bytes_saved_mib": 0.375
@@ -186,21 +174,21 @@
   },
   "torch_compile": {
     "32x192x32x32": {
-      "eager_ms": 6.928024940490722,
+      "eager_ms": 2.073432960510254,
       "compiled_ms": null,
       "speedup": null,
       "status": "skipped",
       "reason": "duplicate template name"
     },
     "32x384x16x16": {
-      "eager_ms": 4.860537586212158,
+      "eager_ms": 1.4379340767860413,
       "compiled_ms": null,
       "speedup": null,
       "status": "skipped",
       "reason": "cannot import name 'mm_configs' from 'torch._inductor.kernel.mm_common' (/usr/local/lib/python3.11/dist-packages/torch/_inductor/kernel/mm_common.py)"
     },
     "32x384x8x8": {
-      "eager_ms": 1.4827065575122833,
+      "eager_ms": 0.44259008049964904,
       "compiled_ms": null,
       "speedup": null,
       "status": "skipped",

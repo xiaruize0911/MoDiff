@@ -75,13 +75,13 @@ def install_dependencies():
     
     # Install blinker to avoid distutils conflicts
     run_command(
-        "pip install 'blinker>=1.5' --upgrade",
+        f'"{sys.executable}" -m pip install --ignore-installed "blinker>=1.5"',
         "Installing blinker>=1.5"
     )
     
     # Install requirements with --ignore-installed for blinker
     run_command(
-        "pip install -r requirements.txt --ignore-installed blinker",
+        f'"{sys.executable}" -m pip install -r requirements.txt --ignore-installed blinker',
         "Installing requirements.txt"
     )
 
@@ -107,7 +107,7 @@ def build_modiff_extension():
     os.environ["CUTLASS_PATH"] = "/workspace/cutlass"
     
     return run_command(
-        "pip install .",
+        f'"{sys.executable}" -m pip install .',
         "Building and installing MoDiff package",
         cwd=str(Path(__file__).parent)
     )
@@ -116,10 +116,10 @@ def run_benchmark():
     """Run the default LDM benchmark."""
     print_step("Running LDM Benchmark")
     
-    benchmark_script = Path(__file__).parent / "integration" / "benchmark_ldm.py"
+    benchmark_script = Path(__file__).parent / "integration" / "benchmarks" / "benchmark_ldm.py"
     
     return run_command(
-        f"python {benchmark_script}",
+        f'"{sys.executable}" {benchmark_script}',
         "Running integration/benchmark_ldm.py",
         cwd=str(Path(__file__).parent)
     )
@@ -199,18 +199,22 @@ def setup_taming_transformers():
     """Install and configure taming-transformers package."""
     print_step("Setting up taming-transformers")
     
+    def verify_taming_import():
+        return run_command(
+            f'"{sys.executable}" -c "import taming; from taming.modules.vqvae.quantize import VectorQuantizer2"',
+            "Verifying taming-transformers import",
+            check=False,
+        )
+
     # Check if taming-transformers is already installed
-    try:
-        import taming
+    if verify_taming_import():
         print_success("taming-transformers already installed and importable")
         return True
-    except ImportError:
-        pass
     
     # Install from git with real-time output
     print("  Installing taming-transformers from git (this may take a few minutes)...")
     result = subprocess.run(
-        "pip install -e git+https://github.com/CompVis/taming-transformers.git@master#egg=taming-transformers",
+        f'"{sys.executable}" -m pip install -e git+https://github.com/CompVis/taming-transformers.git@master#egg=taming-transformers',
         shell=True,
         check=False,
         text=True
@@ -243,19 +247,17 @@ def setup_taming_transformers():
         
         # Reinstall in editable mode
         run_command(
-            f"pip install -e {src_dir}",
+            f'"{sys.executable}" -m pip install -e {src_dir} --config-settings editable_mode=compat',
             "Installing taming-transformers in editable mode"
         )
     
     # Verify import
-    try:
-        import taming
-        from taming.modules.vqvae.quantize import VectorQuantizer2
+    if verify_taming_import():
         print_success("taming-transformers installed and verified")
         return True
-    except ImportError as e:
-        print_error(f"Failed to import taming: {e}")
-        return False
+
+    print_error("Failed to import taming in a fresh Python process")
+    return False
 
 def patch_pytorch_compatibility():
     """Patch code for PyTorch 2.6+ compatibility."""
@@ -286,12 +288,15 @@ def verify_setup():
     
     # Check taming import
     checks_total += 1
-    try:
-        import taming
+    if run_command(
+        f'"{sys.executable}" -c "import taming"',
+        "Checking taming module import",
+        check=False,
+    ):
         print_success("taming module imports successfully")
         checks_passed += 1
-    except ImportError as e:
-        print_error(f"taming import failed: {e}")
+    else:
+        print_error("taming import failed in a fresh Python process")
     
     # Check CUTLASS extension
     checks_total += 1

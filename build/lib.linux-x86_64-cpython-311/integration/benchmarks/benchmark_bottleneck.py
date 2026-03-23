@@ -71,8 +71,8 @@ class LayerTimingHook:
     def __init__(self):
         self.records = defaultdict(list)  # category -> list of (ms)
         self._hooks = []
-        self._start_events = {}
-        self._end_events = {}
+        self._start_events = defaultdict(list)
+        self._end_events = defaultdict(list)
 
     def _classify(self, module, name):
         """Classify a module into a performance category."""
@@ -125,14 +125,14 @@ class LayerTimingHook:
                 def hook(mod, inp):
                     ev = torch.cuda.Event(enable_timing=True)
                     ev.record()
-                    self._start_events[uid_] = ev
+                    self._start_events[uid_].append(ev)
                 return hook
 
             def make_post_hook(uid_, cat_):
                 def hook(mod, inp, out):
                     ev = torch.cuda.Event(enable_timing=True)
                     ev.record()
-                    self._end_events[uid_] = ev
+                    self._end_events[uid_].append(ev)
                     # We'll compute timings after sync
                 return hook
 
@@ -145,8 +145,11 @@ class LayerTimingHook:
         torch.cuda.synchronize()
         for h1, h2, uid, cat in self._hooks:
             if uid in self._start_events and uid in self._end_events:
-                ms = self._start_events[uid].elapsed_time(self._end_events[uid])
-                self.records[cat].append(ms)
+                start_events = self._start_events[uid]
+                end_events = self._end_events[uid]
+                for start_ev, end_ev in zip(start_events, end_events):
+                    ms = start_ev.elapsed_time(end_ev)
+                    self.records[cat].append(ms)
         self._start_events.clear()
         self._end_events.clear()
 

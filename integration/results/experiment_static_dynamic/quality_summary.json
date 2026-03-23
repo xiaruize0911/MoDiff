@@ -1,0 +1,72 @@
+{
+  "int8": {
+    "int8_dynamic_baseline": {
+      "label": "INT8 dynamic baseline",
+      "mae_vs_fp32": 0.00806872546672821,
+      "max_abs_vs_fp32": 0.37115103006362915,
+      "psnr_vs_fp32_db": 36.429391004208696,
+      "loaded_conv_scales": 0,
+      "loaded_linear_scales": 0
+    },
+    "int8_static_baseline": {
+      "label": "INT8 static baseline",
+      "mae_vs_fp32": 0.04618045687675476,
+      "max_abs_vs_fp32": 0.8961935043334961,
+      "psnr_vs_fp32_db": 22.207411411947696,
+      "loaded_conv_scales": 70,
+      "loaded_linear_scales": 0
+    },
+    "int8_dynamic_modiff": {
+      "label": "INT8 dynamic MoDiff",
+      "mae_vs_fp32": 0.004718008916825056,
+      "max_abs_vs_fp32": 0.4007081985473633,
+      "psnr_vs_fp32_db": 40.46413379081418,
+      "loaded_conv_scales": 0,
+      "loaded_linear_scales": 0
+    },
+    "int8_static_modiff": {
+      "label": "INT8 static MoDiff",
+      "mae_vs_fp32": 0.013424026779830456,
+      "max_abs_vs_fp32": 0.6720912456512451,
+      "psnr_vs_fp32_db": 31.656664927293203,
+      "loaded_conv_scales": 70,
+      "loaded_linear_scales": 37
+    },
+    "figure_path": "integration/results/experiment_static_dynamic/quality/int8_quality_comparison.png"
+  },
+  "int4": {
+    "int4_dynamic_baseline": {
+      "label": "INT4 dynamic baseline",
+      "mae_vs_fp32": 0.18122798204421997,
+      "max_abs_vs_fp32": 1.0,
+      "psnr_vs_fp32_db": 12.59833296204647,
+      "loaded_conv_scales": 0,
+      "loaded_linear_scales": 0
+    },
+    "int4_static_baseline": {
+      "label": "INT4 static baseline",
+      "mae_vs_fp32": 0.13761945068836212,
+      "max_abs_vs_fp32": 0.9917410016059875,
+      "psnr_vs_fp32_db": 14.70807794080703,
+      "loaded_conv_scales": 70,
+      "loaded_linear_scales": 0
+    },
+    "int4_dynamic_modiff": {
+      "label": "INT4 dynamic MoDiff",
+      "mae_vs_fp32": 0.06420551240444183,
+      "max_abs_vs_fp32": 0.8817757368087769,
+      "psnr_vs_fp32_db": 20.19322406623875,
+      "loaded_conv_scales": 0,
+      "loaded_linear_scales": 0
+    },
+    "int4_static_modiff": {
+      "label": "INT4 static MoDiff",
+      "mae_vs_fp32": 0.08066540956497192,
+      "max_abs_vs_fp32": 0.995470404624939,
+      "psnr_vs_fp32_db": 18.43351287447608,
+      "loaded_conv_scales": 70,
+      "loaded_linear_scales": 37
+    },
+    "figure_path": "integration/results/experiment_static_dynamic/quality/int4_quality_comparison.png"
+  }
+}
