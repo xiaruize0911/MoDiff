@@ -40,6 +40,31 @@
 | INT8 C=768 H=W=8 | 0.073 | 0.179 | 0.252 | 0.284 | 0.205 | 0.489 |
 | INT4 C=768 H=W=8 | 0.070 | 0.111 | 0.181 | 0.227 | 0.137 | 0.364 |
 
+### Why the fused INT4/INT8 speedup is smaller
+
+![Fused vs separate speedup diagnosis](plots/09_fused_vs_separate_speedup_diagnosis.png)
+
+The short version: the assumption that "more of the fused path is convolution, so INT4 should win harder" is incomplete.
+
+For a path with total time $T = S + C$:
+
+$$
+speedup = \frac{T_{INT8}}{T_{INT4}} = \frac{S_{8} + C_{8}}{S_{4} + C_{4}}
+$$
+
+The fused path has a larger fraction of conv work, but it also keeps a **large step1 / cache / quantization component** that is only weakly sensitive to bitwidth. In the fused rows above, the conv term benefits from INT4, but the step1 term barely moves between INT8 and INT4. That fixed overhead caps the total ratio.
+
+What this means in practice:
+
+- **The experiment was not wrong.** The measured fused timings are internally consistent.
+- **The assumption was too simple.** A larger conv share does not automatically imply a larger end-to-end INT4/INT8 speedup.
+- **The real bottleneck is composition, not raw compute.** Once step1, cache traffic, and dequant/accumulate work are included, the INT4 advantage gets diluted.
+- **The separate path can show a larger total ratio** because its step1 work scales more with bitwidth in this setup, so the overall INT4 gain survives better.
+
+In other words: the raw conv kernel still behaves closer to the expected INT4-vs-INT8 improvement, but the fused pipeline is constrained by bitwidth-insensitive bookkeeping.
+
+The plot above shows that the total fused path is not just "more convolution" — it also carries fixed overhead that keeps the overall speedup from expanding the way intuition suggests.
+
 ### MoDiff Cache Update Timing
 
 ![MoDiff Cache Update Timing](plots/07_cache_overhead.png)
@@ -155,6 +180,8 @@
 - All values shown in the tables above are taken directly from benchmark outputs or evaluation outputs.
 - Derived arithmetic comparisons such as speedup, percentage overhead, percentage share, and theoretical gap values are intentionally omitted.
 - Kernel-level static-versus-dynamic convolution-only timing remains listed as `NOT ABLE TO MEASURE` in the underlying benchmark artifacts.
+- A supplemental A40 layerwise analysis that isolates raw INT8/INT4 conv-only timing, fused baseline timing, and fused MoDiff timing is available at `analysis_int4_vs_int8/LAYERWISE_A40_REPORT.md`.
+- The corresponding reproducible benchmark script is `analysis_int4_vs_int8/03_layerwise_speedup_a40.py`.
 
 ---
 

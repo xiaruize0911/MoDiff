@@ -1,0 +1,24 @@
+GPU: NVIDIA A40
+PyTorch: 2.6.0+cu124 (CUDA 12.4)
+Warmup=20, iters=100
+
+Benchmarking N=32, C=192, H=W=32
+  Raw conv-only:          INT8=0.228ms, INT4=0.117ms, speedup=1.95x
+  Baseline fused static:  INT8=0.376ms, INT4=0.260ms, speedup=1.45x
+  MoDiff fused static:    INT8=0.513ms, INT4=0.394ms, speedup=1.30x
+  MoDiff fused dynamic:   INT8=0.653ms, INT4=0.534ms, speedup=1.22x
+
+Benchmarking N=32, C=384, H=W=16
+  Raw conv-only:          INT8=0.133ms, INT4=0.074ms, speedup=1.79x
+  Baseline fused static:  INT8=0.210ms, INT4=0.147ms, speedup=1.43x
+  MoDiff fused static:    INT8=0.277ms, INT4=0.215ms, speedup=1.29x
+  MoDiff fused dynamic:   INT8=0.351ms, INT4=0.290ms, speedup=1.21x
+
+Benchmarking N=32, C=768, H=W=8
+  Raw conv-only:          INT8=0.149ms, INT4=0.080ms, speedup=1.86x
+  Baseline fused static:  INT8=0.189ms, INT4=0.115ms, speedup=1.64x
+  MoDiff fused static:    INT8=0.223ms, INT4=0.149ms, speedup=1.49x
+  MoDiff fused dynamic:   INT8=0.259ms, INT4=0.186ms, speedup=1.39x
+
+Saved JSON results to /workspace/MoDiff/analysis_int4_vs_int8/layerwise_speedup_a40.json
+Saved Markdown report to /workspace/MoDiff/analysis_int4_vs_int8/LAYERWISE_A40_REPORT.md

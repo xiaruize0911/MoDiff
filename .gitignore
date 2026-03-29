@@ -20,3 +20,4 @@ PHASE2_PLAN.md
 *.png
 /integration/lsun_val
 /benchmark_output
+/.venv-cu124
