@@ -16,14 +16,20 @@
 
 ![Overall Model Measurements](plots/01_overall_speedup.png)
 
+**Note:** The legacy overall benchmark used ambiguous `int*_baseline` labels. The quantized rows below now come from the dedicated static/dynamic benchmark outputs so the baseline rows explicitly distinguish dynamic and static quantization.
+
 | Mode | Total Time (s) | Samples | Time/Sample (s) | Time/Step (ms) |
 |---|---|---|---|---|
 | FP32 | 58.494 | 64 | 0.914 | 4.57 |
 | FP16 | 31.516 | 64 | 0.492 | 2.46 |
-| INT8 Baseline (no MoDiff) | 22.054 | 64 | 0.345 | 1.72 |
-| INT8 MoDiff | 22.644 | 64 | 0.354 | 1.77 |
-| INT4 Baseline (no MoDiff) | 26.236 | 64 | 0.410 | 2.05 |
-| INT4 MoDiff | 19.367 | 64 | 0.303 | 1.51 |
+| INT8 Dynamic Baseline (no MoDiff) | 22.016 | 64 | 0.344 | 1.72 |
+| INT8 Static Baseline (no MoDiff) | 19.981 | 64 | 0.312 | 1.56 |
+| INT8 Dynamic MoDiff | 22.721 | 64 | 0.355 | 1.78 |
+| INT8 Static MoDiff | 20.970 | 64 | 0.328 | 1.64 |
+| INT4 Dynamic Baseline (no MoDiff) | 26.009 | 64 | 0.406 | 2.03 |
+| INT4 Static Baseline (no MoDiff) | 18.366 | 64 | 0.287 | 1.43 |
+| INT4 Dynamic MoDiff | 21.105 | 64 | 0.330 | 1.65 |
+| INT4 Static MoDiff | 19.310 | 64 | 0.302 | 1.51 |
 
 ## 2. Detailed Kernel and Layer Measurements
 
@@ -114,6 +120,8 @@ The plot above shows that the total fused path is not just "more convolution" â€
 | INT4 Fused + MoDiff | 0.299 | 1.49 | 6771 | - | - | - |
 | INT4 Separate + MoDiff | 0.444 | 2.22 | 4996 | - | - | - |
 | INT4 Separate (Baseline) | 0.337 | 1.68 | 3729 | - | - | - |
+
+**Note:** The extended benchmark rows come from a separate harness with its own calibration-file loading behavior. For explicit dynamic-vs-static baseline comparisons, use Section 3 below.
 
 ## 3. Static and Dynamic Quantization Measurements
 

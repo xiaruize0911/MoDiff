@@ -9,13 +9,16 @@ Compared paths:
    standard PyTorch/CuDNN `nn.Conv2d` using the exact layer shape seen in the
    UNet forward pass.
 
-2. INT8 / INT4 fused baseline (static-scale):
+2. INT8 / INT4 fused baseline (dynamic-scale):
+    absmax/scale discovery -> quantize(+pack) -> CUTLASS conv -> dequant -> bias
+
+3. INT8 / INT4 fused baseline (static-scale):
    quantize(+pack) -> CUTLASS conv -> dequant -> bias
 
-3. INT8 / INT4 fused MoDiff (static-scale hot path):
+4. INT8 / INT4 fused MoDiff (static-scale hot path):
    step1_static_quantize_* -> conv2d_*_fprop_o_hat
 
-4. INT8 / INT4 fused MoDiff (dynamic-scale hot path):
+5. INT8 / INT4 fused MoDiff (dynamic-scale hot path):
    step1_quantize_* -> conv2d_*_fprop_o_hat
 
 The script also reports a weighted aggregate over one UNet forward pass using
@@ -39,6 +42,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
 import torch
 import torch.nn as nn
 import yaml
@@ -410,7 +414,7 @@ def benchmark_single_shape(spec: ConvShapeSpec, warmup: int, iters: int) -> Dict
     out_h, out_w = spec.out_h, spec.out_w
     q = prepare_quantized_weights(conv)
 
-    # Static activation scales for baseline/static MoDiff paths.
+    # Static activation scales for baseline-static / MoDiff-static paths.
     static_scale8 = torch.tensor(
         [127.0 / max(float(x.abs().amax().item()), 1e-6)],
         device="cuda",
@@ -462,7 +466,47 @@ def benchmark_single_shape(spec: ConvShapeSpec, warmup: int, iters: int) -> Dict
         iters=iters,
     )
 
-    def baseline_int8():
+    def baseline_dynamic_int8():
+        dynamic_scale8 = 127.0 / torch.clamp(x.abs().amax(), min=1e-6)
+        xq = modiff_cutlass.scale_quantize_int8(x, dynamic_scale8.view(1))
+        out_raw = modiff_cutlass.conv2d_int8_fprop(
+            xq,
+            q["int8_weight"],
+            (1.0 / dynamic_scale8).view(1),
+            q["empty_bias"],
+            spec.stride[0],
+            spec.stride[1],
+            spec.padding[0],
+            spec.padding[1],
+            spec.dilation[0],
+            spec.dilation[1],
+        )
+        out = out_raw * q["int8_weight_scale"]
+        if q["bias"] is not None:
+            out = out + q["bias"]
+        return out
+
+    def baseline_dynamic_int4():
+        dynamic_scale4 = 7.0 / torch.clamp(x.abs().amax(), min=1e-6)
+        xq = modiff_cutlass.scale_quantize_and_pack(x, dynamic_scale4.view(1))
+        out_raw = modiff_cutlass.conv2d_int4_fprop(
+            xq,
+            q["int4_weight"],
+            (1.0 / dynamic_scale4).view(1),
+            q["empty_bias"],
+            spec.stride[0],
+            spec.stride[1],
+            spec.padding[0],
+            spec.padding[1],
+            spec.dilation[0],
+            spec.dilation[1],
+        )
+        out = out_raw * q["int4_weight_scale"]
+        if q["bias"] is not None:
+            out = out + q["bias"]
+        return out
+
+    def baseline_static_int8():
         xq = modiff_cutlass.scale_quantize_int8(x, static_scale8)
         out_raw = modiff_cutlass.conv2d_int8_fprop(
             xq,
@@ -481,7 +525,7 @@ def benchmark_single_shape(spec: ConvShapeSpec, warmup: int, iters: int) -> Dict
             out = out + q["bias"]
         return out
 
-    def baseline_int4():
+    def baseline_static_int4():
         xq = modiff_cutlass.scale_quantize_and_pack(x, static_scale4)
         out_raw = modiff_cutlass.conv2d_int4_fprop(
             xq,
@@ -500,8 +544,10 @@ def benchmark_single_shape(spec: ConvShapeSpec, warmup: int, iters: int) -> Dict
             out = out + q["bias"]
         return out
 
-    baseline8_stats = benchmark_cuda(baseline_int8, warmup=warmup, iters=iters)
-    baseline4_stats = benchmark_cuda(baseline_int4, warmup=warmup, iters=iters)
+    baseline_dynamic8_stats = benchmark_cuda(baseline_dynamic_int8, warmup=warmup, iters=iters)
+    baseline_dynamic4_stats = benchmark_cuda(baseline_dynamic_int4, warmup=warmup, iters=iters)
+    baseline_static8_stats = benchmark_cuda(baseline_static_int8, warmup=warmup, iters=iters)
+    baseline_static4_stats = benchmark_cuda(baseline_static_int4, warmup=warmup, iters=iters)
 
     # Separate cache/output buffers per mode to keep the benchmark paths isolated.
     cache_s8 = torch.randn_like(x)
@@ -682,8 +728,10 @@ def benchmark_single_shape(spec: ConvShapeSpec, warmup: int, iters: int) -> Dict
     modiff_dynamic4_conv_stats = benchmark_cuda(modiff_dynamic_int4_conv, warmup=warmup, iters=iters)
 
     fp32_ms = ms(fp32_stats)
-    baseline8_ms = ms(baseline8_stats)
-    baseline4_ms = ms(baseline4_stats)
+    baseline_dynamic8_ms = ms(baseline_dynamic8_stats)
+    baseline_dynamic4_ms = ms(baseline_dynamic4_stats)
+    baseline_static8_ms = ms(baseline_static8_stats)
+    baseline_static4_ms = ms(baseline_static4_stats)
     modiff_static8_total = ms(modiff_static8_step1_stats) + ms(modiff_static8_conv_stats)
     modiff_static4_total = ms(modiff_static4_step1_stats) + ms(modiff_static4_conv_stats)
     modiff_dynamic8_total = ms(modiff_dynamic8_step1_stats) + ms(modiff_dynamic8_conv_stats)
@@ -695,12 +743,19 @@ def benchmark_single_shape(spec: ConvShapeSpec, warmup: int, iters: int) -> Dict
             "int4": raw4_stats,
             "int4_over_int8_speedup": speedup(ms(raw8_stats), ms(raw4_stats)),
         },
+        "baseline_fused_dynamic": {
+            "int8": baseline_dynamic8_stats,
+            "int4": baseline_dynamic4_stats,
+            "int8_speedup_vs_fp32": speedup(fp32_ms, baseline_dynamic8_ms),
+            "int4_speedup_vs_fp32": speedup(fp32_ms, baseline_dynamic4_ms),
+            "int4_over_int8_speedup": speedup(baseline_dynamic8_ms, baseline_dynamic4_ms),
+        },
         "baseline_fused_static": {
-            "int8": baseline8_stats,
-            "int4": baseline4_stats,
-            "int8_speedup_vs_fp32": speedup(fp32_ms, baseline8_ms),
-            "int4_speedup_vs_fp32": speedup(fp32_ms, baseline4_ms),
-            "int4_over_int8_speedup": speedup(baseline8_ms, baseline4_ms),
+            "int8": baseline_static8_stats,
+            "int4": baseline_static4_stats,
+            "int8_speedup_vs_fp32": speedup(fp32_ms, baseline_static8_ms),
+            "int4_speedup_vs_fp32": speedup(fp32_ms, baseline_static4_ms),
+            "int4_over_int8_speedup": speedup(baseline_static8_ms, baseline_static4_ms),
         },
         "modiff_fused_static": {
             "int8": {
@@ -746,6 +801,8 @@ def compute_aggregates(results: List[Dict[str, object]]) -> Dict[str, object]:
         "fp32_all": 0.0,
         "fp32_repo_supported": 0.0,
         "fp32_repo_excluded": 0.0,
+        "int8_baseline_dynamic": 0.0,
+        "int4_baseline_dynamic": 0.0,
         "int8_baseline_static": 0.0,
         "int4_baseline_static": 0.0,
         "int8_modiff_static": 0.0,
@@ -768,6 +825,8 @@ def compute_aggregates(results: List[Dict[str, object]]) -> Dict[str, object]:
         if entry["quantized_status"]["state"] != "benchmarked":
             continue
 
+        weighted_ms["int8_baseline_dynamic"] += repo_supported_count * ms(entry["baseline_fused_dynamic"]["int8"])
+        weighted_ms["int4_baseline_dynamic"] += repo_supported_count * ms(entry["baseline_fused_dynamic"]["int4"])
         weighted_ms["int8_baseline_static"] += repo_supported_count * ms(entry["baseline_fused_static"]["int8"])
         weighted_ms["int4_baseline_static"] += repo_supported_count * ms(entry["baseline_fused_static"]["int4"])
         weighted_ms["int8_modiff_static"] += repo_supported_count * float(entry["modiff_fused_static"]["int8"]["total_median_ms"])
@@ -843,7 +902,15 @@ def per_shape_speedups(entry: Dict[str, object], mode: str) -> Tuple[float | Non
             float(raw["int4_over_int8_speedup"]),
         )
 
-    if mode == "baseline":
+    if mode in {"baseline", "baseline_dynamic"}:
+        baseline = entry["baseline_fused_dynamic"]
+        return (
+            float(baseline["int8_speedup_vs_fp32"]),
+            float(baseline["int4_speedup_vs_fp32"]),
+            float(baseline["int4_over_int8_speedup"]),
+        )
+
+    if mode == "baseline_static":
         baseline = entry["baseline_fused_static"]
         return (
             float(baseline["int8_speedup_vs_fp32"]),
@@ -876,20 +943,27 @@ def write_report(output_dir: str, payload: Dict[str, object]) -> str:
     lines: List[str] = [
         "# Full per-shape benchmark table",
         "",
-        "| Shape | Raw INT8 | Raw INT4 | Raw INT4/INT8 | Baseline INT8 | Baseline INT4 | Baseline INT4/INT8 | MoDiff static INT8 | MoDiff static INT4 | MoDiff static INT4/INT8 | MoDiff dynamic INT8 | MoDiff dynamic INT4 | MoDiff dynamic INT4/INT8 |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "- **Raw**: quantized input is precomputed outside the timed region; timed work is conv-only.",
+        "- **Baseline dynamic**: no MoDiff; dynamic activation-scale discovery is included in the timed region.",
+        "- **Baseline static**: no MoDiff; a precomputed activation scale is reused in the timed region.",
+        "- **MoDiff static/dynamic**: timed work includes the MoDiff step1 path plus the fused convolution/update path.",
+        "",
+        "| Shape | Raw INT8 | Raw INT4 | Raw INT4/INT8 | Baseline dynamic INT8 | Baseline dynamic INT4 | Baseline dynamic INT4/INT8 | Baseline static INT8 | Baseline static INT4 | Baseline static INT4/INT8 | MoDiff static INT8 | MoDiff static INT4 | MoDiff static INT4/INT8 | MoDiff dynamic INT8 | MoDiff dynamic INT4 | MoDiff dynamic INT4/INT8 |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
 
     for entry in results:
         raw_int8, raw_int4, raw_ratio = per_shape_speedups(entry, "raw")
-        baseline_int8, baseline_int4, baseline_ratio = per_shape_speedups(entry, "baseline")
+        baseline_dynamic_int8, baseline_dynamic_int4, baseline_dynamic_ratio = per_shape_speedups(entry, "baseline_dynamic")
+        baseline_static_int8, baseline_static_int4, baseline_static_ratio = per_shape_speedups(entry, "baseline_static")
         static_int8, static_int4, static_ratio = per_shape_speedups(entry, "modiff_static")
         dynamic_int8, dynamic_int4, dynamic_ratio = per_shape_speedups(entry, "modiff_dynamic")
 
         lines.append(
             f"| {markdown_cell(entry['shape']['label'])} | "
             f"{format_optional(raw_int8, digits=2, suffix='x')} | {format_optional(raw_int4, digits=2, suffix='x')} | {format_optional(raw_ratio, digits=2, suffix='x')} | "
-            f"{format_optional(baseline_int8, digits=2, suffix='x')} | {format_optional(baseline_int4, digits=2, suffix='x')} | {format_optional(baseline_ratio, digits=2, suffix='x')} | "
+            f"{format_optional(baseline_dynamic_int8, digits=2, suffix='x')} | {format_optional(baseline_dynamic_int4, digits=2, suffix='x')} | {format_optional(baseline_dynamic_ratio, digits=2, suffix='x')} | "
+            f"{format_optional(baseline_static_int8, digits=2, suffix='x')} | {format_optional(baseline_static_int4, digits=2, suffix='x')} | {format_optional(baseline_static_ratio, digits=2, suffix='x')} | "
             f"{format_optional(static_int8, digits=2, suffix='x')} | {format_optional(static_int4, digits=2, suffix='x')} | {format_optional(static_ratio, digits=2, suffix='x')} | "
             f"{format_optional(dynamic_int8, digits=2, suffix='x')} | {format_optional(dynamic_int4, digits=2, suffix='x')} | {format_optional(dynamic_ratio, digits=2, suffix='x')} |"
         )
@@ -904,6 +978,8 @@ def plot_weighted_totals(output_dir: str, payload: Dict[str, object]) -> str:
     order = [
         "fp32_all",
         "fp32_repo_supported",
+        "int8_baseline_dynamic",
+        "int4_baseline_dynamic",
         "int8_baseline_static",
         "int4_baseline_static",
         "int8_modiff_static",
@@ -919,7 +995,7 @@ def plot_weighted_totals(output_dir: str, payload: Dict[str, object]) -> str:
     bars = ax.bar(
         range(len(order)),
         values,
-        color=["#808080", "#A0A0A0", "#4F81BD", "#C0504D", "#7FBA00", "#F28E2B", "#8064A2", "#E15759"],
+        color=["#808080", "#A0A0A0", "#4F81BD", "#C0504D", "#6D9EEB", "#E06666", "#7FBA00", "#F28E2B", "#8064A2", "#E15759"],
     )
     ax.set_xticks(range(len(order)))
     ax.set_xticklabels(labels)
@@ -950,7 +1026,10 @@ def plot_top_shapes(output_dir: str, payload: Dict[str, object], mode_key: str, 
     results = sorted(results, key=lambda e: e["weighted_fp32_supported_ms_per_unet_forward"], reverse=True)[:15]
     labels = [f"{entry['shape']['label']} ×{entry['shape']['repo_supported_count']}" for entry in results][::-1]
 
-    if mode_key == "baseline":
+    if mode_key == "baseline_dynamic":
+        int8_values = [entry["baseline_fused_dynamic"]["int8_speedup_vs_fp32"] for entry in results][::-1]
+        int4_values = [entry["baseline_fused_dynamic"]["int4_speedup_vs_fp32"] for entry in results][::-1]
+    elif mode_key == "baseline_static":
         int8_values = [entry["baseline_fused_static"]["int8_speedup_vs_fp32"] for entry in results][::-1]
         int4_values = [entry["baseline_fused_static"]["int4_speedup_vs_fp32"] for entry in results][::-1]
     elif mode_key == "modiff_dynamic":
@@ -974,6 +1053,64 @@ def plot_top_shapes(output_dir: str, payload: Dict[str, object], mode_key: str, 
     ax.legend()
     fig.tight_layout()
     path = os.path.join(output_dir, filename)
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+    return path
+
+
+def plot_speedup_heatmap(output_dir: str, payload: Dict[str, object]) -> str:
+    results = [entry for entry in payload["results"] if entry["quantized_status"]["state"] == "benchmarked"]
+    results = sorted(results, key=lambda e: e["weighted_fp32_supported_ms_per_unet_forward"], reverse=True)
+
+    shape_labels = [entry["shape"]["label"] for entry in results]
+    mode_labels = ["baseline\ndynamic", "baseline\nstatic", "MoDiff\nstatic", "MoDiff\ndynamic"]
+
+    int8_matrix = []
+    int4_matrix = []
+    for entry in results:
+        int8_matrix.append([
+            entry["baseline_fused_dynamic"]["int8_speedup_vs_fp32"],
+            entry["baseline_fused_static"]["int8_speedup_vs_fp32"],
+            entry["modiff_fused_static"]["int8_speedup_vs_fp32"],
+            entry["modiff_fused_dynamic"]["int8_speedup_vs_fp32"],
+        ])
+        int4_matrix.append([
+            entry["baseline_fused_dynamic"]["int4_speedup_vs_fp32"],
+            entry["baseline_fused_static"]["int4_speedup_vs_fp32"],
+            entry["modiff_fused_static"]["int4_speedup_vs_fp32"],
+            entry["modiff_fused_dynamic"]["int4_speedup_vs_fp32"],
+        ])
+
+    int8_matrix = np.array(int8_matrix, dtype=np.float32)
+    int4_matrix = np.array(int4_matrix, dtype=np.float32)
+
+    vmin = float(min(int8_matrix.min(), int4_matrix.min()))
+    vmax = float(max(int8_matrix.max(), int4_matrix.max()))
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, max(8, 0.28 * len(shape_labels))))
+    for ax, matrix, title in zip(
+        axes,
+        [int8_matrix, int4_matrix],
+        ["INT8 speedup vs FP32", "INT4 speedup vs FP32"],
+    ):
+        im = ax.imshow(matrix, aspect="auto", cmap="viridis", vmin=vmin, vmax=vmax)
+        ax.set_title(title)
+        ax.set_xticks(range(len(mode_labels)))
+        ax.set_xticklabels(mode_labels)
+        ax.set_yticks(range(len(shape_labels)))
+        ax.set_yticklabels(shape_labels, fontsize=7)
+        ax.tick_params(axis="x", labelrotation=0)
+        for row_idx in range(matrix.shape[0]):
+            for col_idx in range(matrix.shape[1]):
+                value = matrix[row_idx, col_idx]
+                text_color = "white" if value < (vmin + vmax) / 2.0 else "black"
+                ax.text(col_idx, row_idx, f"{value:.2f}x", ha="center", va="center", fontsize=7, color=text_color)
+
+    cbar = fig.colorbar(im, ax=axes.ravel().tolist(), shrink=0.88)
+    cbar.set_label("Speedup vs FP32")
+    fig.suptitle("Per-shape speedup heatmap across modes", y=0.995)
+    fig.tight_layout(rect=[0, 0, 1, 0.98])
+    path = os.path.join(output_dir, "05_speedup_heatmap.png")
     fig.savefig(path, dpi=160)
     plt.close(fig)
     return path
@@ -1077,18 +1214,26 @@ def main() -> None:
     plot2 = plot_top_shapes(
         output_dir,
         payload,
-        mode_key="baseline",
-        title="Top repo-supported conv contributors: INT8/INT4 baseline speedup vs FP32",
-        filename="02_top_shapes_baseline_speedup_vs_fp32.png",
+        mode_key="baseline_dynamic",
+        title="Top repo-supported conv contributors: INT8/INT4 dynamic baseline speedup vs FP32",
+        filename="02_top_shapes_baseline_dynamic_speedup_vs_fp32.png",
     )
     plot3 = plot_top_shapes(
         output_dir,
         payload,
+        mode_key="baseline_static",
+        title="Top repo-supported conv contributors: INT8/INT4 static baseline speedup vs FP32",
+        filename="03_top_shapes_baseline_static_speedup_vs_fp32.png",
+    )
+    plot4 = plot_top_shapes(
+        output_dir,
+        payload,
         mode_key="modiff_dynamic",
         title="Top repo-supported conv contributors: INT8/INT4 dynamic MoDiff speedup vs FP32",
-        filename="03_top_shapes_modiff_dynamic_speedup_vs_fp32.png",
+        filename="04_top_shapes_modiff_dynamic_speedup_vs_fp32.png",
     )
-    plot4 = plot_excluded_shapes(output_dir, payload)
+    plot5 = plot_speedup_heatmap(output_dir, payload)
+    plot6 = plot_excluded_shapes(output_dir, payload)
 
     print("\nWeighted aggregate per UNet forward:")
     weighted = aggregates["weighted_ms_per_unet_forward"]
@@ -1097,8 +1242,10 @@ def main() -> None:
     print(f"  FP32 all convs:            {weighted['fp32_all']:.3f} ms")
     print(f"  FP32 repo-supported:       {weighted['fp32_repo_supported']:.3f} ms  ({coverage['supported_fp32_share_pct']:.1f}% of all FP32 conv time)")
     print(f"  FP32 repo-excluded:        {weighted['fp32_repo_excluded']:.3f} ms  ({coverage['unsupported_fp32_share_pct']:.1f}% of all FP32 conv time)")
-    print(f"  INT8 baseline:             {weighted['int8_baseline_static']:.3f} ms  ({speedups['int8_baseline_static']:.2f}x vs supported FP32)")
-    print(f"  INT4 baseline:             {weighted['int4_baseline_static']:.3f} ms  ({speedups['int4_baseline_static']:.2f}x vs supported FP32)")
+    print(f"  INT8 baseline dynamic:     {weighted['int8_baseline_dynamic']:.3f} ms  ({speedups['int8_baseline_dynamic']:.2f}x vs supported FP32)")
+    print(f"  INT4 baseline dynamic:     {weighted['int4_baseline_dynamic']:.3f} ms  ({speedups['int4_baseline_dynamic']:.2f}x vs supported FP32)")
+    print(f"  INT8 baseline static:      {weighted['int8_baseline_static']:.3f} ms  ({speedups['int8_baseline_static']:.2f}x vs supported FP32)")
+    print(f"  INT4 baseline static:      {weighted['int4_baseline_static']:.3f} ms  ({speedups['int4_baseline_static']:.2f}x vs supported FP32)")
     print(f"  INT8 MoDiff static:        {weighted['int8_modiff_static']:.3f} ms  ({speedups['int8_modiff_static']:.2f}x vs supported FP32)")
     print(f"  INT4 MoDiff static:        {weighted['int4_modiff_static']:.3f} ms  ({speedups['int4_modiff_static']:.2f}x vs supported FP32)")
     print(f"  INT8 MoDiff dynamic:       {weighted['int8_modiff_dynamic']:.3f} ms  ({speedups['int8_modiff_dynamic']:.2f}x vs supported FP32)")
@@ -1107,7 +1254,7 @@ def main() -> None:
 
     print(f"\nSaved JSON results to {json_path}")
     print(f"Saved Markdown report to {report_path}")
-    print(f"Saved plots to: {plot1}, {plot2}, {plot3}, {plot4}")
+    print(f"Saved plots to: {plot1}, {plot2}, {plot3}, {plot4}, {plot5}, {plot6}")
 
 
 if __name__ == "__main__":
