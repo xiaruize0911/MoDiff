@@ -1267,11 +1267,12 @@ torch::Tensor step1_quantize_pack_int4_no_ahat_fprop(
     return x_packed.view({N, H, W, C/2});
 }
 
-torch::Tensor conv2d_int8_fprop_no_ohat(
+torch::Tensor conv2d_int8_fprop_no_ohat_prealloc(
     torch::Tensor input,
     torch::Tensor weight,
     torch::Tensor inv_scale,
     torch::Tensor weight_scales,
+    torch::Tensor output,
     int stride_h, int stride_w,
     int padding_h, int padding_w,
     int dilation_h, int dilation_w
@@ -1283,7 +1284,88 @@ torch::Tensor conv2d_int8_fprop_no_ohat(
         stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w
     );
 
-    auto output = torch::empty_like(conv_out, conv_out.options().memory_format(torch::MemoryFormat::ChannelsLast));
+    CHECK_CUDA(output);
+    CHECK_CONTIGUOUS(output);
+    TORCH_CHECK(output.scalar_type() == torch::kFloat32, "output must be float32");
+    TORCH_CHECK(output.sizes() == conv_out.sizes(), "output shape mismatch for conv2d_int8_fprop_no_ohat_prealloc");
+
+    int num_elements = conv_out.numel();
+    int num_channels = weight_scales.numel();
+    int block_size = 256;
+    int num_work_items = (num_elements + 3) / 4;
+    int grid_size = (num_work_items + block_size - 1) / block_size;
+
+    scale_store_kernel<<<grid_size, block_size, 0, stream>>>(
+        conv_out.data_ptr<float>(),
+        weight_scales.data_ptr<float>(),
+        output.data_ptr<float>(),
+        num_elements,
+        num_channels
+    );
+
+    return output;
+}
+
+torch::Tensor conv2d_int8_fprop_no_ohat(
+    torch::Tensor input,
+    torch::Tensor weight,
+    torch::Tensor inv_scale,
+    torch::Tensor weight_scales,
+    int stride_h, int stride_w,
+    int padding_h, int padding_w,
+    int dilation_h, int dilation_w
+) {
+    int N = input.size(0);
+    int H = input.size(2);
+    int W = input.size(3);
+    int K = weight.size(0);
+    int R = weight.size(1);
+    int S = weight.size(2);
+    int H_out = (H + 2 * padding_h - dilation_h * (R - 1) - 1) / stride_h + 1;
+    int W_out = (W + 2 * padding_w - dilation_w * (S - 1) - 1) / stride_w + 1;
+
+    auto output = torch::empty(
+        {N, K, H_out, W_out},
+        torch::TensorOptions().dtype(torch::kFloat32).device(input.device()).memory_format(torch::MemoryFormat::ChannelsLast)
+    );
+
+    return conv2d_int8_fprop_no_ohat_prealloc(
+        input,
+        weight,
+        inv_scale,
+        weight_scales,
+        output,
+        stride_h,
+        stride_w,
+        padding_h,
+        padding_w,
+        dilation_h,
+        dilation_w
+    );
+}
+
+torch::Tensor conv2d_int4_fprop_no_ohat_prealloc(
+    torch::Tensor input,
+    torch::Tensor weight_packed,
+    torch::Tensor inv_scale,
+    torch::Tensor weight_scales,
+    torch::Tensor output,
+    int stride_h, int stride_w,
+    int padding_h, int padding_w,
+    int dilation_h, int dilation_w
+) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    auto empty_bias = torch::empty({0}, torch::TensorOptions().device(input.device()));
+    auto conv_out = conv2d_int4_fprop(
+        input, weight_packed, inv_scale, empty_bias,
+        stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w
+    );
+
+    CHECK_CUDA(output);
+    CHECK_CONTIGUOUS(output);
+    TORCH_CHECK(output.scalar_type() == torch::kFloat32, "output must be float32");
+    TORCH_CHECK(output.sizes() == conv_out.sizes(), "output shape mismatch for conv2d_int4_fprop_no_ohat_prealloc");
+
     int num_elements = conv_out.numel();
     int num_channels = weight_scales.numel();
     int block_size = 256;
@@ -1310,29 +1392,33 @@ torch::Tensor conv2d_int4_fprop_no_ohat(
     int padding_h, int padding_w,
     int dilation_h, int dilation_w
 ) {
-    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-    auto empty_bias = torch::empty({0}, torch::TensorOptions().device(input.device()));
-    auto conv_out = conv2d_int4_fprop(
-        input, weight_packed, inv_scale, empty_bias,
-        stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w
+    int N = input.size(0);
+    int H = input.size(1);
+    int W = input.size(2);
+    int K = weight_packed.size(0);
+    int R = weight_packed.size(1);
+    int S = weight_packed.size(2);
+    int H_out = (H + 2 * padding_h - dilation_h * (R - 1) - 1) / stride_h + 1;
+    int W_out = (W + 2 * padding_w - dilation_w * (S - 1) - 1) / stride_w + 1;
+
+    auto output = torch::empty(
+        {N, K, H_out, W_out},
+        torch::TensorOptions().dtype(torch::kFloat32).device(input.device()).memory_format(torch::MemoryFormat::ChannelsLast)
     );
 
-    auto output = torch::empty_like(conv_out, conv_out.options().memory_format(torch::MemoryFormat::ChannelsLast));
-    int num_elements = conv_out.numel();
-    int num_channels = weight_scales.numel();
-    int block_size = 256;
-    int num_work_items = (num_elements + 3) / 4;
-    int grid_size = (num_work_items + block_size - 1) / block_size;
-
-    scale_store_kernel<<<grid_size, block_size, 0, stream>>>(
-        conv_out.data_ptr<float>(),
-        weight_scales.data_ptr<float>(),
-        output.data_ptr<float>(),
-        num_elements,
-        num_channels
+    return conv2d_int4_fprop_no_ohat_prealloc(
+        input,
+        weight_packed,
+        inv_scale,
+        weight_scales,
+        output,
+        stride_h,
+        stride_w,
+        padding_h,
+        padding_w,
+        dilation_h,
+        dilation_w
     );
-
-    return output;
 }
 
 torch::Tensor conv2d_int4_fprop_o_hat(

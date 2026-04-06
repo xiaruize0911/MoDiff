@@ -1,0 +1,56 @@
+GPU: NVIDIA A40
+Config: /workspace/MoDiff/models/ldm/lsun_churches256/config.yaml
+Batch size: 32 | Warmup: 100 | Iterations/repeat: 1000 | Timed repeats: 10
+Enumerated 33 unique Conv2d shapes from 89 calls.
+[01/33] Benchmarking 2x2 | 768->768 | k3x3 (count=13; quantized_count=13)
+[02/33] Benchmarking 2x2 | 1536->768 | k1x1 (count=3; repo-excluded (skip_connection, pointwise_1x1))
+[03/33] Benchmarking 2x2 | 1536->768 | k3x3 (count=3; quantized_count=3)
+[04/33] Benchmarking 4x4 | 384->384 | k3x3 (count=2; quantized_count=2)
+[05/33] Benchmarking 4x4 | 384->768 | k1x1 (count=1; repo-excluded (skip_connection, pointwise_1x1))
+[06/33] Benchmarking 4x4 | 384->768 | k3x3 (count=1; quantized_count=1)
+[07/33] Benchmarking 4x4 | 768->768 | k3x3 (count=8; quantized_count=8)
+[08/33] Benchmarking 4x4 | 1152->768 | k1x1 (count=1; repo-excluded (skip_connection, pointwise_1x1))
+[09/33] Benchmarking 4x4 | 1152->768 | k3x3 (count=1; quantized_count=1)
+[10/33] Benchmarking 4x4 | 1536->768 | k1x1 (count=2; repo-excluded (skip_connection, pointwise_1x1))
+[11/33] Benchmarking 4x4 | 1536->768 | k3x3 (count=2; quantized_count=2)
+[12/33] Benchmarking 8x8 | 384->384 | k3x3 (count=9; quantized_count=9)
+[13/33] Benchmarking 8x8 | 768->384 | k1x1 (count=2; repo-excluded (skip_connection, pointwise_1x1))
+[14/33] Benchmarking 8x8 | 768->384 | k3x3 (count=2; quantized_count=2)
+[15/33] Benchmarking 8x8 | 768->768 | k3x3 (count=2; quantized_count=2)
+[16/33] Benchmarking 8x8 | 1152->384 | k1x1 (count=1; repo-excluded (skip_connection, pointwise_1x1))
+[17/33] Benchmarking 8x8 | 1152->384 | k3x3 (count=1; quantized_count=1)
+[18/33] Benchmarking 16x16 | 192->192 | k3x3 (count=2; quantized_count=2)
+[19/33] Benchmarking 16x16 | 192->384 | k1x1 (count=1; repo-excluded (skip_connection, pointwise_1x1))
+[20/33] Benchmarking 16x16 | 192->384 | k3x3 (count=1; quantized_count=1)
+[21/33] Benchmarking 16x16 | 384->384 | k3x3 (count=8; quantized_count=8)
+[22/33] Benchmarking 16x16 | 576->384 | k1x1 (count=1; repo-excluded (skip_connection, pointwise_1x1))
+[23/33] Benchmarking 16x16 | 576->384 | k3x3 (count=1; quantized_count=1)
+[24/33] Benchmarking 16x16 | 768->384 | k1x1 (count=2; repo-excluded (skip_connection, pointwise_1x1))
+[25/33] Benchmarking 16x16 | 768->384 | k3x3 (count=2; quantized_count=2)
+[26/33] Benchmarking 32x32 | 4->192 | k3x3 (count=1; repo-excluded (in_channels<32))
+[27/33] Benchmarking 32x32 | 192->4 | k3x3 (count=1; repo-excluded (final_out))
+[28/33] Benchmarking 32x32 | 192->192 | k3x3 (count=7; quantized_count=7)
+[29/33] Benchmarking 32x32 | 384->192 | k1x1 (count=2; repo-excluded (skip_connection, pointwise_1x1))
+[30/33] Benchmarking 32x32 | 384->192 | k3x3 (count=2; quantized_count=2)
+[31/33] Benchmarking 32x32 | 384->384 | k3x3 (count=2; quantized_count=2)
+[32/33] Benchmarking 32x32 | 576->192 | k1x1 (count=1; repo-excluded (skip_connection, pointwise_1x1))
+[33/33] Benchmarking 32x32 | 576->192 | k3x3 (count=1; quantized_count=1)
+
+Weighted aggregate per UNet forward:
+  FP32 all convs:            70.676 ms
+  FP32 repo-supported:       65.149 ms  (92.2% of all FP32 conv time)
+  FP32 repo-excluded:        5.527 ms  (7.8% of all FP32 conv time)
+  INT8 baseline dynamic:     17.845 ms  (3.65x vs supported FP32)
+  INT4 baseline dynamic:     13.544 ms  (4.81x vs supported FP32)
+  INT8 baseline static:      13.450 ms  (4.84x vs supported FP32)
+  INT4 baseline static:      9.188 ms  (7.09x vs supported FP32)
+  INT8 MoDiff static:        17.708 ms  (3.68x vs supported FP32)
+  INT4 MoDiff static:        13.432 ms  (4.85x vs supported FP32)
+  INT8 MoDiff dynamic:       22.143 ms  (2.94x vs supported FP32)
+  INT4 MoDiff dynamic:       17.822 ms  (3.66x vs supported FP32)
+  Raw conv-only INT4/INT8:   1.80x
+
+Saved JSON results to /workspace/MoDiff/analysis_int4_vs_int8/ldm_all_conv_fp32_compare_a40/all_conv_sizes_fp32_int8_int4_results.json
+Saved Markdown report to /workspace/MoDiff/analysis_int4_vs_int8/ldm_all_conv_fp32_compare_a40/ALL_CONV_SIZES_FP32_INT8_INT4_REPORT.md
+Saved CSV report to /workspace/MoDiff/analysis_int4_vs_int8/ldm_all_conv_fp32_compare_a40/ALL_CONV_SIZES_FP32_INT8_INT4_REPORT.csv
+Saved plots to: /workspace/MoDiff/analysis_int4_vs_int8/ldm_all_conv_fp32_compare_a40/01_weighted_total_times.png, /workspace/MoDiff/analysis_int4_vs_int8/ldm_all_conv_fp32_compare_a40/02_top_shapes_baseline_dynamic_speedup_vs_fp32.png, /workspace/MoDiff/analysis_int4_vs_int8/ldm_all_conv_fp32_compare_a40/03_top_shapes_baseline_static_speedup_vs_fp32.png, /workspace/MoDiff/analysis_int4_vs_int8/ldm_all_conv_fp32_compare_a40/04_top_shapes_modiff_dynamic_speedup_vs_fp32.png, /workspace/MoDiff/analysis_int4_vs_int8/ldm_all_conv_fp32_compare_a40/05_speedup_heatmap.png, /workspace/MoDiff/analysis_int4_vs_int8/ldm_all_conv_fp32_compare_a40/04_repo_excluded_shapes_fp32_contribution.png

@@ -127,11 +127,33 @@ torch::Tensor conv2d_int8_fprop_no_ohat(
     int dilation_h, int dilation_w
 );
 
+torch::Tensor conv2d_int8_fprop_no_ohat_prealloc(
+    torch::Tensor input,
+    torch::Tensor weight,
+    torch::Tensor inv_scale,
+    torch::Tensor weight_scales,
+    torch::Tensor output,
+    int stride_h, int stride_w,
+    int padding_h, int padding_w,
+    int dilation_h, int dilation_w
+);
+
 torch::Tensor conv2d_int4_fprop_no_ohat(
     torch::Tensor input,
     torch::Tensor weight_packed,
     torch::Tensor inv_scale,
     torch::Tensor weight_scales,
+    int stride_h, int stride_w,
+    int padding_h, int padding_w,
+    int dilation_h, int dilation_w
+);
+
+torch::Tensor conv2d_int4_fprop_no_ohat_prealloc(
+    torch::Tensor input,
+    torch::Tensor weight_packed,
+    torch::Tensor inv_scale,
+    torch::Tensor weight_scales,
+    torch::Tensor output,
     int stride_h, int stride_w,
     int padding_h, int padding_w,
     int dilation_h, int dilation_w
@@ -159,4 +181,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("step1_static_quantize_pack_int4_fprop", &step1_static_quantize_pack_int4_fprop, "Fused static-scale subtract + dequant + quantize+pack for INT4 step 1");
     m.def("conv2d_int8_fprop_no_ohat", &conv2d_int8_fprop_no_ohat, "Fused INT8 conv + dequant without o_hat update");
     m.def("conv2d_int4_fprop_no_ohat", &conv2d_int4_fprop_no_ohat, "Fused INT4 conv + dequant without o_hat update");
+    m.def("conv2d_int8_fprop_no_ohat_prealloc", &conv2d_int8_fprop_no_ohat_prealloc, "Fused INT8 conv + dequant into a preallocated output buffer");
+    m.def("conv2d_int4_fprop_no_ohat_prealloc", &conv2d_int4_fprop_no_ohat_prealloc, "Fused INT4 conv + dequant into a preallocated output buffer");
 }

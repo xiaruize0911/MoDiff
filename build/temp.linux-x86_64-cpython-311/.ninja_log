@@ -1,3 +1,0 @@
-# ninja log v7
-16	46480	1774762909000000000	/workspace/MoDiff/build/temp.linux-x86_64-cpython-311/csrc/pybind.o	671431a75a0f1099
-12	87806	1774762909000000000	/workspace/MoDiff/build/temp.linux-x86_64-cpython-311/csrc/cuda_kernels.o	8e542c3bc46d58ed

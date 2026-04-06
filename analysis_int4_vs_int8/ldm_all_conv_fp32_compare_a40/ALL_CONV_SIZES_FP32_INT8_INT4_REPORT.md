@@ -1,42 +1,30 @@
 # Full per-shape benchmark table
-
-- **Raw**: quantized input is precomputed outside the timed region; timed work is conv-only.
-- **Baseline dynamic**: no MoDiff; dynamic activation-scale discovery is included in the timed region.
-- **Baseline static**: no MoDiff; a precomputed activation scale is reused in the timed region.
-- **MoDiff static/dynamic**: timed work includes the MoDiff step1 path plus the fused convolution/update path.
-
+- **Timing**: each number is the synchronized per-call average over 10 timed repeats × 1000 iterations, after 100 warm-up iterations.
+- **Timing mode**: synchronized per-call CUDA-event timing.
+- **State reset fairness**: MoDiff `a_hat` and `o_hat` buffers are reset to a fixed zero state before every timed call, outside the timed region, so repeated iterations cannot benefit from cache convergence/drift.
+- **Raw**: quantized input is precomputed outside the timed region; timed work is the CUTLASS conv wrapper only, including its output/workspace allocation.
+- **Baseline dynamic**: no a_hat/o_hat updates; timed work includes fused dynamic-scale discovery + quantization and the no-o_hat conv/dequant path into a preallocated output buffer. Standalone bias add is excluded.
+- **Baseline static**: no MoDiff; a precomputed activation scale is reused in the timed region. Standalone bias add is excluded.
+- **MoDiff static/dynamic**: timed work includes the MoDiff step1 path plus the fused convolution/update path, with each timed call starting from the same zeroed state.
 | Shape | Raw INT8 | Raw INT4 | Raw INT4/INT8 | Baseline dynamic INT8 | Baseline dynamic INT4 | Baseline dynamic INT4/INT8 | Baseline static INT8 | Baseline static INT4 | Baseline static INT4/INT8 | MoDiff static INT8 | MoDiff static INT4 | MoDiff static INT4/INT8 | MoDiff dynamic INT8 | MoDiff dynamic INT4 | MoDiff dynamic INT4/INT8 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 16x16 \| 384->384 \| k3x3 | 6.10x | 10.98x | 1.80x | 2.47x | 3.07x | 1.24x | 3.34x | 4.44x | 1.33x | 3.17x | 4.04x | 1.27x | 2.50x | 3.00x | 1.20x |
-| 2x2 \| 768->768 \| k3x3 | 7.12x | 13.08x | 1.84x | 3.63x | 3.71x | 1.02x | 6.29x | 8.87x | 1.41x | 5.33x | 8.17x | 1.53x | 4.77x | 6.81x | 1.43x |
-| 32x32 \| 192->192 \| k3x3 | 3.94x | 7.83x | 1.99x | 1.55x | 1.93x | 1.24x | 2.07x | 2.75x | 1.33x | 1.90x | 2.46x | 1.30x | 1.49x | 1.82x | 1.22x |
-| 4x4 \| 768->768 \| k3x3 | 11.48x | 21.16x | 1.84x | 7.04x | 7.00x | 0.99x | 9.45x | 15.12x | 1.60x | 8.75x | 13.53x | 1.55x | 7.97x | 11.45x | 1.44x |
-| 32x32 \| 384->384 \| k3x3 | 6.87x | 12.45x | 1.81x | 2.76x | 3.32x | 1.21x | 3.65x | 4.63x | 1.27x | 3.35x | 4.13x | 1.23x | 2.62x | 3.06x | 1.17x |
-| 32x32 \| 384->192 \| k3x3 | 5.31x | 10.09x | 1.90x | 2.02x | 2.43x | 1.20x | 3.00x | 3.95x | 1.32x | 2.46x | 3.04x | 1.24x | 1.77x | 2.06x | 1.16x |
-| 8x8 \| 384->384 \| k3x3 | 9.29x | 15.85x | 1.71x | 3.21x | 3.20x | 1.00x | 5.82x | 7.84x | 1.35x | 5.21x | 6.76x | 1.30x | 4.24x | 5.25x | 1.24x |
-| 4x4 \| 1536->768 \| k3x3 | 12.13x | 23.10x | 1.90x | 9.33x | 14.35x | 1.54x | 10.85x | 18.68x | 1.72x | 10.57x | 17.79x | 1.68x | 9.56x | 15.35x | 1.61x |
-| 16x16 \| 768->384 \| k3x3 | 6.51x | 12.68x | 1.95x | 3.01x | 3.89x | 1.29x | 4.27x | 6.10x | 1.43x | 3.72x | 4.97x | 1.34x | 2.82x | 3.49x | 1.24x |
-| 8x8 \| 768->768 \| k3x3 | 9.69x | 18.10x | 1.87x | 5.75x | 8.16x | 1.42x | 7.23x | 11.06x | 1.53x | 7.16x | 10.50x | 1.47x | 6.16x | 8.52x | 1.38x |
-| 2x2 \| 1536->768 \| k3x3 | 7.56x | 14.45x | 1.91x | 6.16x | 7.01x | 1.14x | 6.97x | 12.41x | 1.78x | 6.41x | 10.65x | 1.66x | 5.97x | 9.44x | 1.58x |
-| 32x32 \| 576->192 \| k3x3 | 5.05x | 9.64x | 1.91x | 2.09x | 2.57x | 1.23x | 3.18x | 4.40x | 1.38x | 2.49x | 3.16x | 1.27x | 1.77x | 2.09x | 1.18x |
-| 8x8 \| 768->384 \| k3x3 | 9.58x | 17.50x | 1.83x | 4.72x | 6.01x | 1.27x | 7.04x | 10.45x | 1.49x | 5.91x | 7.98x | 1.35x | 4.65x | 5.82x | 1.25x |
-| 4x4 \| 1152->768 \| k3x3 | 11.94x | 22.52x | 1.89x | 8.75x | 10.30x | 1.18x | 10.35x | 17.39x | 1.68x | 9.90x | 15.92x | 1.61x | 8.91x | 13.53x | 1.52x |
-| 16x16 \| 576->384 \| k3x3 | 5.73x | 10.84x | 1.89x | 2.68x | 3.44x | 1.28x | 3.67x | 5.12x | 1.40x | 3.33x | 4.42x | 1.33x | 2.59x | 3.21x | 1.24x |
-| 8x8 \| 1152->384 \| k3x3 | 9.70x | 18.29x | 1.89x | 5.05x | 6.72x | 1.33x | 7.65x | 12.00x | 1.57x | 6.27x | 8.79x | 1.40x | 4.81x | 6.12x | 1.27x |
-| 32x32 \| 384->192 \| k1x1 | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — |
-| 16x16 \| 768->384 \| k1x1 | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — |
-| 32x32 \| 576->192 \| k1x1 | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — |
-| 4x4 \| 384->384 \| k3x3 | 6.98x | 9.66x | 1.38x | 1.94x | 2.05x | 1.05x | 4.79x | 5.56x | 1.16x | 4.39x | 5.06x | 1.15x | 3.72x | 4.15x | 1.11x |
-| 16x16 \| 192->192 \| k3x3 | 3.93x | 7.07x | 1.80x | 1.43x | 1.75x | 1.22x | 1.97x | 2.62x | 1.33x | 1.85x | 2.41x | 1.30x | 1.47x | 1.83x | 1.24x |
-| 16x16 \| 192->384 \| k3x3 | 4.68x | 8.48x | 1.81x | 1.83x | 2.25x | 1.23x | 2.28x | 2.94x | 1.29x | 2.33x | 3.01x | 1.29x | 1.99x | 2.48x | 1.24x |
-| 4x4 \| 384->768 \| k3x3 | 10.44x | 14.68x | 1.41x | 2.91x | 3.10x | 1.06x | 7.41x | 8.30x | 1.12x | 6.43x | 9.37x | 1.46x | 5.88x | 7.56x | 1.29x |
-| 2x2 \| 1536->768 \| k1x1 | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — |
-| 16x16 \| 576->384 \| k1x1 | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — |
-| 4x4 \| 1536->768 \| k1x1 | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — |
-| 8x8 \| 768->384 \| k1x1 | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — |
-| 32x32 \| 192->4 \| k3x3 | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — |
-| 8x8 \| 1152->384 \| k1x1 | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — |
-| 16x16 \| 192->384 \| k1x1 | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — |
-| 32x32 \| 4->192 \| k3x3 | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — |
-| 4x4 \| 1152->768 \| k1x1 | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — |
-| 4x4 \| 384->768 \| k1x1 | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — |
+| 16x16 \| 384->384 \| k3x3 | 6.33x | 10.71x | 1.69x | 3.06x | 3.89x | 1.27x | 4.07x | 5.69x | 1.40x | 3.04x | 3.80x | 1.25x | 2.39x | 2.88x | 1.20x |
+| 32x32 \| 192->192 \| k3x3 | 4.25x | 8.07x | 1.90x | 1.91x | 2.45x | 1.28x | 2.60x | 3.72x | 1.43x | 1.89x | 2.43x | 1.29x | 1.49x | 1.80x | 1.21x |
+| 4x4 \| 768->768 \| k3x3 | 10.53x | 19.70x | 1.87x | 7.94x | 11.32x | 1.43x | 9.52x | 13.49x | 1.42x | 8.12x | 12.60x | 1.55x | 7.51x | 10.62x | 1.41x |
+| 2x2 \| 768->768 \| k3x3 | 6.59x | 12.12x | 1.84x | 5.28x | 8.83x | 1.67x | 5.89x | 10.34x | 1.76x | 5.23x | 7.85x | 1.50x | 4.72x | 6.89x | 1.46x |
+| 32x32 \| 384->384 \| k3x3 | 7.04x | 12.31x | 1.75x | 3.29x | 4.08x | 1.24x | 4.45x | 6.13x | 1.38x | 3.26x | 4.05x | 1.24x | 2.56x | 3.02x | 1.18x |
+| 8x8 \| 384->384 \| k3x3 | 8.59x | 14.07x | 1.64x | 4.53x | 5.63x | 1.24x | 6.20x | 8.25x | 1.33x | 4.71x | 5.93x | 1.26x | 3.69x | 4.73x | 1.28x |
+| 32x32 \| 384->192 \| k3x3 | 5.69x | 10.09x | 1.77x | 2.28x | 2.78x | 1.22x | 3.54x | 4.93x | 1.39x | 2.40x | 2.97x | 1.24x | 1.74x | 2.02x | 1.16x |
+| 4x4 \| 1536->768 \| k3x3 | 11.82x | 21.74x | 1.84x | 9.38x | 14.54x | 1.55x | 10.69x | 17.95x | 1.68x | 9.92x | 15.89x | 1.60x | 8.69x | 12.85x | 1.48x |
+| 16x16 \| 768->384 \| k3x3 | 6.80x | 12.74x | 1.87x | 3.42x | 4.51x | 1.32x | 4.79x | 7.23x | 1.51x | 3.55x | 4.72x | 1.33x | 2.72x | 3.36x | 1.24x |
+| 8x8 \| 768->768 \| k3x3 | 10.12x | 17.88x | 1.77x | 6.77x | 9.93x | 1.47x | 7.94x | 12.68x | 1.60x | 6.63x | 9.42x | 1.42x | 5.73x | 7.69x | 1.34x |
+| 2x2 \| 1536->768 \| k3x3 | 7.11x | 13.27x | 1.87x | 6.04x | 9.91x | 1.64x | 6.62x | 12.31x | 1.86x | 6.19x | 10.69x | 1.73x | 5.98x | 9.73x | 1.63x |
+| 32x32 \| 576->192 \| k3x3 | 5.36x | 9.81x | 1.83x | 2.28x | 2.84x | 1.25x | 3.57x | 5.21x | 1.46x | 2.45x | 3.12x | 1.28x | 1.75x | 2.07x | 1.18x |
+| 8x8 \| 768->384 \| k3x3 | 9.46x | 16.85x | 1.78x | 5.37x | 7.06x | 1.32x | 7.18x | 10.53x | 1.47x | 5.52x | 7.17x | 1.30x | 4.31x | 5.28x | 1.22x |
+| 4x4 \| 1152->768 \| k3x3 | 11.30x | 20.00x | 1.77x | 8.70x | 13.40x | 1.54x | 10.23x | 16.49x | 1.61x | 9.27x | 14.34x | 1.55x | 8.18x | 12.35x | 1.51x |
+| 16x16 \| 576->384 \| k3x3 | 6.07x | 10.92x | 1.80x | 3.14x | 4.14x | 1.32x | 4.24x | 6.25x | 1.48x | 3.18x | 4.17x | 1.31x | 2.51x | 3.09x | 1.23x |
+| 8x8 \| 1152->384 \| k3x3 | 9.95x | 18.20x | 1.83x | 5.72x | 7.54x | 1.32x | 7.84x | 11.72x | 1.49x | 5.88x | 8.02x | 1.36x | 4.63x | 5.64x | 1.22x |
+| 4x4 \| 384->384 \| k3x3 | 6.24x | 10.26x | 1.64x | 4.71x | 6.13x | 1.30x | 5.65x | 7.58x | 1.34x | 4.19x | 5.63x | 1.34x | 3.78x | 4.88x | 1.29x |
+| 16x16 \| 192->192 \| k3x3 | 3.72x | 6.52x | 1.75x | 1.90x | 2.34x | 1.23x | 2.44x | 3.40x | 1.39x | 1.72x | 2.19x | 1.27x | 1.40x | 1.68x | 1.21x |
+| 16x16 \| 192->384 \| k3x3 | 4.62x | 8.01x | 1.74x | 2.42x | 3.21x | 1.33x | 3.01x | 4.17x | 1.38x | 2.28x | 2.81x | 1.23x | 1.90x | 2.32x | 1.22x |
+| 4x4 \| 384->768 \| k3x3 | 9.53x | 15.64x | 1.64x | 6.20x | 7.74x | 1.25x | 8.31x | 11.55x | 1.39x | 6.39x | 8.52x | 1.33x | 5.61x | 7.24x | 1.29x |

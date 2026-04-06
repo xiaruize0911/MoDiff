@@ -10,15 +10,17 @@ Compared paths:
    UNet forward pass.
 
 2. INT8 / INT4 fused baseline (dynamic-scale):
-    absmax/scale discovery -> quantize(+pack) -> CUTLASS conv -> dequant -> bias
+    fused dynamic scale discovery -> quantize(+pack) without a_hat update ->
+    CUTLASS conv -> dequantized write into a preallocated output buffer
+    (no o_hat update)
 
 3. INT8 / INT4 fused baseline (static-scale):
-   quantize(+pack) -> CUTLASS conv -> dequant -> bias
+   quantize(+pack) -> CUTLASS conv -> dequant
 
-4. INT8 / INT4 fused MoDiff (static-scale hot path):
+4. INT8 / INT4 fused MoDiff (static-scale):
    step1_static_quantize_* -> conv2d_*_fprop_o_hat
 
-5. INT8 / INT4 fused MoDiff (dynamic-scale hot path):
+5. INT8 / INT4 fused MoDiff (dynamic-scale):
    step1_quantize_* -> conv2d_*_fprop_o_hat
 
 The script also reports a weighted aggregate over one UNet forward pass using
@@ -28,6 +30,7 @@ the actual per-shape invocation counts observed from the model.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import os
@@ -69,23 +72,45 @@ torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 
 
-def benchmark_cuda(fn: Callable[[], None], warmup: int, iters: int) -> Dict[str, float]:
+def benchmark_cuda(
+    fn: Callable[[], None],
+    warmup: int,
+    iters: int,
+    repeats: int,
+    prepare: Callable[[], None] | None = None,
+) -> Dict[str, float]:
+    if warmup < 0:
+        raise ValueError(f"warmup must be >= 0, got {warmup}")
+    if iters <= 0:
+        raise ValueError(f"iters must be > 0, got {iters}")
+    if repeats <= 0:
+        raise ValueError(f"repeats must be > 0, got {repeats}")
+
+    torch.cuda.synchronize()
+
     for _ in range(warmup):
+        if prepare is not None:
+            prepare()
         fn()
 
     torch.cuda.synchronize()
 
-    start_events = [torch.cuda.Event(enable_timing=True) for _ in range(iters)]
-    end_events = [torch.cuda.Event(enable_timing=True) for _ in range(iters)]
+    times_ms: List[float] = []
+    for _ in range(repeats):
+        start_events = [torch.cuda.Event(enable_timing=True) for _ in range(iters)]
+        end_events = [torch.cuda.Event(enable_timing=True) for _ in range(iters)]
 
-    for i in range(iters):
-        start_events[i].record()
-        fn()
-        end_events[i].record()
+        for idx in range(iters):
+            if prepare is not None:
+                prepare()
+            start_events[idx].record()
+            fn()
+            end_events[idx].record()
 
-    torch.cuda.synchronize()
+        torch.cuda.synchronize()
+        elapsed_ms = sum(start.elapsed_time(end) for start, end in zip(start_events, end_events))
+        times_ms.append(float(elapsed_ms / iters))
 
-    times_ms = [float(s.elapsed_time(e)) for s, e in zip(start_events, end_events)]
     times_ms.sort()
 
     return {
@@ -93,11 +118,18 @@ def benchmark_cuda(fn: Callable[[], None], warmup: int, iters: int) -> Dict[str,
         "mean_ms": float(sum(times_ms) / len(times_ms)),
         "min_ms": float(times_ms[0]),
         "max_ms": float(times_ms[-1]),
+        "stddev_ms": float(statistics.pstdev(times_ms)) if len(times_ms) > 1 else 0.0,
+        "timing_mode": "synchronized_per_call_cuda_event_average",
+        "reset_before_each_call": prepare is not None,
+        "warmup": float(warmup),
+        "iters_per_repeat": float(iters),
+        "timed_repeats": float(repeats),
+        "total_timed_calls": float(iters * repeats),
     }
 
 
 def ms(stats: Dict[str, float]) -> float:
-    return float(stats["median_ms"])
+    return float(stats["mean_ms"])
 
 
 def speedup(reference_ms: float, candidate_ms: float) -> float:
@@ -367,7 +399,7 @@ def safe_median_ms(stats: Dict[str, float] | None) -> float | None:
     return ms(stats) if stats is not None else None
 
 
-def benchmark_single_shape(spec: ConvShapeSpec, warmup: int, iters: int) -> Dict[str, object]:
+def benchmark_single_shape(spec: ConvShapeSpec, warmup: int, iters: int, repeats: int) -> Dict[str, object]:
     if spec.groups != 1:
         raise ValueError(f"CUTLASS benchmark currently expects groups=1, got {spec.groups} for {spec.label}")
     if spec.in_channels % 2 != 0:
@@ -393,7 +425,7 @@ def benchmark_single_shape(spec: ConvShapeSpec, warmup: int, iters: int) -> Dict
         dtype=torch.float32,
     ).contiguous(memory_format=torch.channels_last)
 
-    fp32_stats = benchmark_cuda(lambda: conv(x), warmup=warmup, iters=iters)
+    fp32_stats = benchmark_cuda(lambda: conv(x), warmup=warmup, iters=iters, repeats=repeats)
 
     result: Dict[str, object] = {
         "shape": spec.to_dict(),
@@ -447,6 +479,7 @@ def benchmark_single_shape(spec: ConvShapeSpec, warmup: int, iters: int) -> Dict
         ),
         warmup=warmup,
         iters=iters,
+        repeats=repeats,
     )
 
     raw4_stats = benchmark_cuda(
@@ -464,16 +497,45 @@ def benchmark_single_shape(spec: ConvShapeSpec, warmup: int, iters: int) -> Dict
         ),
         warmup=warmup,
         iters=iters,
+        repeats=repeats,
     )
 
+    baseline_cache_d8 = torch.zeros_like(x)
+    baseline_cache_d4 = torch.zeros_like(x)
+    baseline_residual_d8 = torch.empty_like(x)
+    baseline_residual_d4 = torch.empty_like(x)
+    baseline_absmax_d8 = torch.zeros(1, device="cuda", dtype=torch.float32)
+    baseline_absmax_d4 = torch.zeros(1, device="cuda", dtype=torch.float32)
+    baseline_scale_d8 = torch.empty(1, device="cuda", dtype=torch.float32)
+    baseline_scale_d4 = torch.empty(1, device="cuda", dtype=torch.float32)
+    baseline_inv_d8 = torch.empty(1, device="cuda", dtype=torch.float32)
+    baseline_inv_d4 = torch.empty(1, device="cuda", dtype=torch.float32)
+    baseline_retire_d8 = torch.zeros(1, device="cuda", dtype=torch.int32)
+    baseline_retire_d4 = torch.zeros(1, device="cuda", dtype=torch.int32)
+    baseline_out_d8 = torch.empty(spec.batch_size, spec.out_channels, out_h, out_w, device="cuda", dtype=torch.float32).contiguous(memory_format=torch.channels_last)
+    baseline_out_d4 = torch.empty(spec.batch_size, spec.out_channels, out_h, out_w, device="cuda", dtype=torch.float32).contiguous(memory_format=torch.channels_last)
+    smooth_inv = torch.empty(0, device="cuda", dtype=torch.float32)
+
     def baseline_dynamic_int8():
-        dynamic_scale8 = 127.0 / torch.clamp(x.abs().amax(), min=1e-6)
-        xq = modiff_cutlass.scale_quantize_int8(x, dynamic_scale8.view(1))
-        out_raw = modiff_cutlass.conv2d_int8_fprop(
+        baseline_absmax_d8.zero_()
+        baseline_retire_d8.zero_()
+        xq = modiff_cutlass.step1_quantize_no_ahat_fprop(
+            x,
+            baseline_cache_d8,
+            baseline_residual_d8,
+            baseline_absmax_d8,
+            baseline_scale_d8,
+            baseline_inv_d8,
+            baseline_retire_d8,
+            127.0,
+            smooth_inv,
+        )
+        out = modiff_cutlass.conv2d_int8_fprop_no_ohat_prealloc(
             xq,
             q["int8_weight"],
-            (1.0 / dynamic_scale8).view(1),
-            q["empty_bias"],
+            baseline_inv_d8.view(1),
+            q["int8_weight_scale"].view(-1),
+            baseline_out_d8,
             spec.stride[0],
             spec.stride[1],
             spec.padding[0],
@@ -481,19 +543,28 @@ def benchmark_single_shape(spec: ConvShapeSpec, warmup: int, iters: int) -> Dict
             spec.dilation[0],
             spec.dilation[1],
         )
-        out = out_raw * q["int8_weight_scale"]
-        if q["bias"] is not None:
-            out = out + q["bias"]
         return out
 
     def baseline_dynamic_int4():
-        dynamic_scale4 = 7.0 / torch.clamp(x.abs().amax(), min=1e-6)
-        xq = modiff_cutlass.scale_quantize_and_pack(x, dynamic_scale4.view(1))
-        out_raw = modiff_cutlass.conv2d_int4_fprop(
+        baseline_absmax_d4.zero_()
+        baseline_retire_d4.zero_()
+        xq = modiff_cutlass.step1_quantize_pack_int4_no_ahat_fprop(
+            x,
+            baseline_cache_d4,
+            baseline_residual_d4,
+            baseline_absmax_d4,
+            baseline_scale_d4,
+            baseline_inv_d4,
+            baseline_retire_d4,
+            7.0,
+            smooth_inv,
+        )
+        out = modiff_cutlass.conv2d_int4_fprop_no_ohat_prealloc(
             xq,
             q["int4_weight"],
-            (1.0 / dynamic_scale4).view(1),
-            q["empty_bias"],
+            baseline_inv_d4.view(1),
+            q["int4_weight_scale"].view(-1),
+            baseline_out_d4,
             spec.stride[0],
             spec.stride[1],
             spec.padding[0],
@@ -501,9 +572,6 @@ def benchmark_single_shape(spec: ConvShapeSpec, warmup: int, iters: int) -> Dict
             spec.dilation[0],
             spec.dilation[1],
         )
-        out = out_raw * q["int4_weight_scale"]
-        if q["bias"] is not None:
-            out = out + q["bias"]
         return out
 
     def baseline_static_int8():
@@ -520,10 +588,7 @@ def benchmark_single_shape(spec: ConvShapeSpec, warmup: int, iters: int) -> Dict
             spec.dilation[0],
             spec.dilation[1],
         )
-        out = out_raw * q["int8_weight_scale"]
-        if q["bias"] is not None:
-            out = out + q["bias"]
-        return out
+        return out_raw * q["int8_weight_scale"]
 
     def baseline_static_int4():
         xq = modiff_cutlass.scale_quantize_and_pack(x, static_scale4)
@@ -539,26 +604,25 @@ def benchmark_single_shape(spec: ConvShapeSpec, warmup: int, iters: int) -> Dict
             spec.dilation[0],
             spec.dilation[1],
         )
-        out = out_raw * q["int4_weight_scale"]
-        if q["bias"] is not None:
-            out = out + q["bias"]
-        return out
+        return out_raw * q["int4_weight_scale"]
 
-    baseline_dynamic8_stats = benchmark_cuda(baseline_dynamic_int8, warmup=warmup, iters=iters)
-    baseline_dynamic4_stats = benchmark_cuda(baseline_dynamic_int4, warmup=warmup, iters=iters)
-    baseline_static8_stats = benchmark_cuda(baseline_static_int8, warmup=warmup, iters=iters)
-    baseline_static4_stats = benchmark_cuda(baseline_static_int4, warmup=warmup, iters=iters)
+    baseline_dynamic8_stats = benchmark_cuda(baseline_dynamic_int8, warmup=warmup, iters=iters, repeats=repeats)
+    baseline_dynamic4_stats = benchmark_cuda(baseline_dynamic_int4, warmup=warmup, iters=iters, repeats=repeats)
+    baseline_static8_stats = benchmark_cuda(baseline_static_int8, warmup=warmup, iters=iters, repeats=repeats)
+    baseline_static4_stats = benchmark_cuda(baseline_static_int4, warmup=warmup, iters=iters, repeats=repeats)
 
     # Separate cache/output buffers per mode to keep the benchmark paths isolated.
-    cache_s8 = torch.randn_like(x)
-    cache_d8 = torch.randn_like(x)
-    cache_s4 = torch.randn_like(x)
-    cache_d4 = torch.randn_like(x)
+    # Reset them before every timed call so repeated benchmark iterations do not
+    # benefit from cache/o_hat convergence across calls.
+    cache_s8 = torch.zeros_like(x)
+    cache_d8 = torch.zeros_like(x)
+    cache_s4 = torch.zeros_like(x)
+    cache_d4 = torch.zeros_like(x)
 
-    o_hat_s8 = torch.randn(spec.batch_size, spec.out_channels, out_h, out_w, device="cuda", dtype=torch.float32).contiguous(memory_format=torch.channels_last)
-    o_hat_d8 = torch.randn(spec.batch_size, spec.out_channels, out_h, out_w, device="cuda", dtype=torch.float32).contiguous(memory_format=torch.channels_last)
-    o_hat_s4 = torch.randn(spec.batch_size, spec.out_channels, out_h, out_w, device="cuda", dtype=torch.float32).contiguous(memory_format=torch.channels_last)
-    o_hat_d4 = torch.randn(spec.batch_size, spec.out_channels, out_h, out_w, device="cuda", dtype=torch.float32).contiguous(memory_format=torch.channels_last)
+    o_hat_s8 = torch.zeros(spec.batch_size, spec.out_channels, out_h, out_w, device="cuda", dtype=torch.float32).contiguous(memory_format=torch.channels_last)
+    o_hat_d8 = torch.zeros(spec.batch_size, spec.out_channels, out_h, out_w, device="cuda", dtype=torch.float32).contiguous(memory_format=torch.channels_last)
+    o_hat_s4 = torch.zeros(spec.batch_size, spec.out_channels, out_h, out_w, device="cuda", dtype=torch.float32).contiguous(memory_format=torch.channels_last)
+    o_hat_d4 = torch.zeros(spec.batch_size, spec.out_channels, out_h, out_w, device="cuda", dtype=torch.float32).contiguous(memory_format=torch.channels_last)
 
     residual_s8 = torch.empty_like(x)
     residual_d8 = torch.empty_like(x)
@@ -585,12 +649,41 @@ def benchmark_single_shape(spec: ConvShapeSpec, warmup: int, iters: int) -> Dict
     retire_s4 = torch.zeros(1, device="cuda", dtype=torch.int32)
     retire_d4 = torch.zeros(1, device="cuda", dtype=torch.int32)
 
-    smooth_inv = torch.empty(0, device="cuda", dtype=torch.float32)
+    def reset_cache_s8():
+        cache_s8.zero_()
+
+    def reset_cache_d8():
+        cache_d8.zero_()
+
+    def reset_cache_s4():
+        cache_s4.zero_()
+
+    def reset_cache_d4():
+        cache_d4.zero_()
+
+    def reset_ohat_s8():
+        o_hat_s8.zero_()
+
+    def reset_ohat_d8():
+        o_hat_d8.zero_()
+
+    def reset_ohat_s4():
+        o_hat_s4.zero_()
+
+    def reset_ohat_d4():
+        o_hat_d4.zero_()
 
     def modiff_static_int8_step1():
         return modiff_cutlass.step1_static_quantize_fprop(x, cache_s8, static_scale8.view(1), smooth_inv)
 
-    modiff_static8_step1_stats = benchmark_cuda(modiff_static_int8_step1, warmup=warmup, iters=iters)
+    modiff_static8_step1_stats = benchmark_cuda(
+        modiff_static_int8_step1,
+        warmup=warmup,
+        iters=iters,
+        repeats=repeats,
+        prepare=reset_cache_s8,
+    )
+    reset_cache_s8()
     x8_static = modiff_cutlass.step1_static_quantize_fprop(x, cache_s8, static_scale8.view(1), smooth_inv)
 
     def modiff_static_int8_conv():
@@ -608,12 +701,25 @@ def benchmark_single_shape(spec: ConvShapeSpec, warmup: int, iters: int) -> Dict
             spec.dilation[1],
         )
 
-    modiff_static8_conv_stats = benchmark_cuda(modiff_static_int8_conv, warmup=warmup, iters=iters)
+    modiff_static8_conv_stats = benchmark_cuda(
+        modiff_static_int8_conv,
+        warmup=warmup,
+        iters=iters,
+        repeats=repeats,
+        prepare=reset_ohat_s8,
+    )
 
     def modiff_static_int4_step1():
         return modiff_cutlass.step1_static_quantize_pack_int4_fprop(x, cache_s4, static_scale4.view(1), smooth_inv)
 
-    modiff_static4_step1_stats = benchmark_cuda(modiff_static_int4_step1, warmup=warmup, iters=iters)
+    modiff_static4_step1_stats = benchmark_cuda(
+        modiff_static_int4_step1,
+        warmup=warmup,
+        iters=iters,
+        repeats=repeats,
+        prepare=reset_cache_s4,
+    )
+    reset_cache_s4()
     x4_static = modiff_cutlass.step1_static_quantize_pack_int4_fprop(x, cache_s4, static_scale4.view(1), smooth_inv)
 
     def modiff_static_int4_conv():
@@ -631,7 +737,13 @@ def benchmark_single_shape(spec: ConvShapeSpec, warmup: int, iters: int) -> Dict
             spec.dilation[1],
         )
 
-    modiff_static4_conv_stats = benchmark_cuda(modiff_static_int4_conv, warmup=warmup, iters=iters)
+    modiff_static4_conv_stats = benchmark_cuda(
+        modiff_static_int4_conv,
+        warmup=warmup,
+        iters=iters,
+        repeats=repeats,
+        prepare=reset_ohat_s4,
+    )
 
     def modiff_dynamic_int8_step1():
         absmax_d8.zero_()
@@ -648,7 +760,14 @@ def benchmark_single_shape(spec: ConvShapeSpec, warmup: int, iters: int) -> Dict
             smooth_inv,
         )
 
-    modiff_dynamic8_step1_stats = benchmark_cuda(modiff_dynamic_int8_step1, warmup=warmup, iters=iters)
+    modiff_dynamic8_step1_stats = benchmark_cuda(
+        modiff_dynamic_int8_step1,
+        warmup=warmup,
+        iters=iters,
+        repeats=repeats,
+        prepare=reset_cache_d8,
+    )
+    reset_cache_d8()
     absmax_d8.zero_()
     retire_d8.zero_()
     x8_dynamic = modiff_cutlass.step1_quantize_fprop(
@@ -678,7 +797,13 @@ def benchmark_single_shape(spec: ConvShapeSpec, warmup: int, iters: int) -> Dict
             spec.dilation[1],
         )
 
-    modiff_dynamic8_conv_stats = benchmark_cuda(modiff_dynamic_int8_conv, warmup=warmup, iters=iters)
+    modiff_dynamic8_conv_stats = benchmark_cuda(
+        modiff_dynamic_int8_conv,
+        warmup=warmup,
+        iters=iters,
+        repeats=repeats,
+        prepare=reset_ohat_d8,
+    )
 
     def modiff_dynamic_int4_step1():
         absmax_d4.zero_()
@@ -695,7 +820,14 @@ def benchmark_single_shape(spec: ConvShapeSpec, warmup: int, iters: int) -> Dict
             smooth_inv,
         )
 
-    modiff_dynamic4_step1_stats = benchmark_cuda(modiff_dynamic_int4_step1, warmup=warmup, iters=iters)
+    modiff_dynamic4_step1_stats = benchmark_cuda(
+        modiff_dynamic_int4_step1,
+        warmup=warmup,
+        iters=iters,
+        repeats=repeats,
+        prepare=reset_cache_d4,
+    )
+    reset_cache_d4()
     absmax_d4.zero_()
     retire_d4.zero_()
     x4_dynamic = modiff_cutlass.step1_quantize_pack_int4_fprop(
@@ -725,7 +857,13 @@ def benchmark_single_shape(spec: ConvShapeSpec, warmup: int, iters: int) -> Dict
             spec.dilation[1],
         )
 
-    modiff_dynamic4_conv_stats = benchmark_cuda(modiff_dynamic_int4_conv, warmup=warmup, iters=iters)
+    modiff_dynamic4_conv_stats = benchmark_cuda(
+        modiff_dynamic_int4_conv,
+        warmup=warmup,
+        iters=iters,
+        repeats=repeats,
+        prepare=reset_ohat_d4,
+    )
 
     fp32_ms = ms(fp32_stats)
     baseline_dynamic8_ms = ms(baseline_dynamic8_stats)
@@ -761,12 +899,14 @@ def benchmark_single_shape(spec: ConvShapeSpec, warmup: int, iters: int) -> Dict
             "int8": {
                 "step1": modiff_static8_step1_stats,
                 "conv": modiff_static8_conv_stats,
-                "total_median_ms": modiff_static8_total,
+                "total_ms": modiff_static8_total,
+                "total_mean_ms": modiff_static8_total,
             },
             "int4": {
                 "step1": modiff_static4_step1_stats,
                 "conv": modiff_static4_conv_stats,
-                "total_median_ms": modiff_static4_total,
+                "total_ms": modiff_static4_total,
+                "total_mean_ms": modiff_static4_total,
             },
             "int8_speedup_vs_fp32": speedup(fp32_ms, modiff_static8_total),
             "int4_speedup_vs_fp32": speedup(fp32_ms, modiff_static4_total),
@@ -776,12 +916,14 @@ def benchmark_single_shape(spec: ConvShapeSpec, warmup: int, iters: int) -> Dict
             "int8": {
                 "step1": modiff_dynamic8_step1_stats,
                 "conv": modiff_dynamic8_conv_stats,
-                "total_median_ms": modiff_dynamic8_total,
+                "total_ms": modiff_dynamic8_total,
+                "total_mean_ms": modiff_dynamic8_total,
             },
             "int4": {
                 "step1": modiff_dynamic4_step1_stats,
                 "conv": modiff_dynamic4_conv_stats,
-                "total_median_ms": modiff_dynamic4_total,
+                "total_ms": modiff_dynamic4_total,
+                "total_mean_ms": modiff_dynamic4_total,
             },
             "int8_speedup_vs_fp32": speedup(fp32_ms, modiff_dynamic8_total),
             "int4_speedup_vs_fp32": speedup(fp32_ms, modiff_dynamic4_total),
@@ -790,6 +932,8 @@ def benchmark_single_shape(spec: ConvShapeSpec, warmup: int, iters: int) -> Dict
     })
 
     del conv, x, cache_s8, cache_d8, cache_s4, cache_d4
+    del baseline_cache_d8, baseline_cache_d4, baseline_residual_d8, baseline_residual_d4
+    del baseline_out_d8, baseline_out_d4
     del o_hat_s8, o_hat_d8, o_hat_s4, o_hat_d4
     del residual_s8, residual_d8, residual_s4, residual_d4
     torch.cuda.empty_cache()
@@ -829,10 +973,10 @@ def compute_aggregates(results: List[Dict[str, object]]) -> Dict[str, object]:
         weighted_ms["int4_baseline_dynamic"] += repo_supported_count * ms(entry["baseline_fused_dynamic"]["int4"])
         weighted_ms["int8_baseline_static"] += repo_supported_count * ms(entry["baseline_fused_static"]["int8"])
         weighted_ms["int4_baseline_static"] += repo_supported_count * ms(entry["baseline_fused_static"]["int4"])
-        weighted_ms["int8_modiff_static"] += repo_supported_count * float(entry["modiff_fused_static"]["int8"]["total_median_ms"])
-        weighted_ms["int4_modiff_static"] += repo_supported_count * float(entry["modiff_fused_static"]["int4"]["total_median_ms"])
-        weighted_ms["int8_modiff_dynamic"] += repo_supported_count * float(entry["modiff_fused_dynamic"]["int8"]["total_median_ms"])
-        weighted_ms["int4_modiff_dynamic"] += repo_supported_count * float(entry["modiff_fused_dynamic"]["int4"]["total_median_ms"])
+        weighted_ms["int8_modiff_static"] += repo_supported_count * float(entry["modiff_fused_static"]["int8"]["total_ms"])
+        weighted_ms["int4_modiff_static"] += repo_supported_count * float(entry["modiff_fused_static"]["int4"]["total_ms"])
+        weighted_ms["int8_modiff_dynamic"] += repo_supported_count * float(entry["modiff_fused_dynamic"]["int8"]["total_ms"])
+        weighted_ms["int4_modiff_dynamic"] += repo_supported_count * float(entry["modiff_fused_dynamic"]["int4"]["total_ms"])
         weighted_ms["int8_raw_conv_only"] += repo_supported_count * ms(entry["raw_conv_only"]["int8"])
         weighted_ms["int4_raw_conv_only"] += repo_supported_count * ms(entry["raw_conv_only"]["int4"])
 
@@ -937,17 +1081,28 @@ def per_shape_speedups(entry: Dict[str, object], mode: str) -> Tuple[float | Non
     raise ValueError(f"Unknown mode: {mode}")
 
 
+def report_rows(payload: Dict[str, object]) -> List[Dict[str, object]]:
+    results = sorted(payload["results"], key=lambda e: e["weighted_fp32_all_ms_per_unet_forward"], reverse=True)
+    return [entry for entry in results if entry["quantized_status"]["state"] == "benchmarked"]
+
+
 def write_report(output_dir: str, payload: Dict[str, object]) -> str:
     path = os.path.join(output_dir, "ALL_CONV_SIZES_FP32_INT8_INT4_REPORT.md")
-    results = sorted(payload["results"], key=lambda e: e["weighted_fp32_all_ms_per_unet_forward"], reverse=True)
+    results = report_rows(payload)
+    metadata = payload["metadata"]
     lines: List[str] = [
         "# Full per-shape benchmark table",
-        "",
-        "- **Raw**: quantized input is precomputed outside the timed region; timed work is conv-only.",
-        "- **Baseline dynamic**: no MoDiff; dynamic activation-scale discovery is included in the timed region.",
-        "- **Baseline static**: no MoDiff; a precomputed activation scale is reused in the timed region.",
-        "- **MoDiff static/dynamic**: timed work includes the MoDiff step1 path plus the fused convolution/update path.",
-        "",
+        (
+            "- **Timing**: each number is the synchronized per-call average over "
+            f"{int(metadata['timed_repeats'])} timed repeats × {int(metadata['iters'])} iterations, "
+            f"after {int(metadata['warmup'])} warm-up iterations."
+        ),
+        "- **Timing mode**: synchronized per-call CUDA-event timing.",
+        "- **State reset fairness**: MoDiff `a_hat` and `o_hat` buffers are reset to a fixed zero state before every timed call, outside the timed region, so repeated iterations cannot benefit from cache convergence/drift.",
+        "- **Raw**: quantized input is precomputed outside the timed region; timed work is the CUTLASS conv wrapper only, including its output/workspace allocation.",
+        "- **Baseline dynamic**: no a_hat/o_hat updates; timed work includes fused dynamic-scale discovery + quantization and the no-o_hat conv/dequant path into a preallocated output buffer. Standalone bias add is excluded.",
+        "- **Baseline static**: no MoDiff; a precomputed activation scale is reused in the timed region. Standalone bias add is excluded.",
+        "- **MoDiff static/dynamic**: timed work includes the MoDiff step1 path plus the fused convolution/update path, with each timed call starting from the same zeroed state.",
         "| Shape | Raw INT8 | Raw INT4 | Raw INT4/INT8 | Baseline dynamic INT8 | Baseline dynamic INT4 | Baseline dynamic INT4/INT8 | Baseline static INT8 | Baseline static INT4 | Baseline static INT4/INT8 | MoDiff static INT8 | MoDiff static INT4 | MoDiff static INT4/INT8 | MoDiff dynamic INT8 | MoDiff dynamic INT4 | MoDiff dynamic INT4/INT8 |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
@@ -970,6 +1125,58 @@ def write_report(output_dir: str, payload: Dict[str, object]) -> str:
 
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
+    return path
+
+
+def write_csv(output_dir: str, payload: Dict[str, object]) -> str:
+    path = os.path.join(output_dir, "ALL_CONV_SIZES_FP32_INT8_INT4_REPORT.csv")
+    results = report_rows(payload)
+    headers = [
+        "Shape",
+        "Raw INT8",
+        "Raw INT4",
+        "Raw INT4/INT8",
+        "Baseline dynamic INT8",
+        "Baseline dynamic INT4",
+        "Baseline dynamic INT4/INT8",
+        "Baseline static INT8",
+        "Baseline static INT4",
+        "Baseline static INT4/INT8",
+        "MoDiff static INT8",
+        "MoDiff static INT4",
+        "MoDiff static INT4/INT8",
+        "MoDiff dynamic INT8",
+        "MoDiff dynamic INT4",
+        "MoDiff dynamic INT4/INT8",
+    ]
+
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(headers)
+        for entry in results:
+            raw_int8, raw_int4, raw_ratio = per_shape_speedups(entry, "raw")
+            baseline_dynamic_int8, baseline_dynamic_int4, baseline_dynamic_ratio = per_shape_speedups(entry, "baseline_dynamic")
+            baseline_static_int8, baseline_static_int4, baseline_static_ratio = per_shape_speedups(entry, "baseline_static")
+            static_int8, static_int4, static_ratio = per_shape_speedups(entry, "modiff_static")
+            dynamic_int8, dynamic_int4, dynamic_ratio = per_shape_speedups(entry, "modiff_dynamic")
+            writer.writerow([
+                entry["shape"]["label"],
+                format_optional(raw_int8, digits=2, suffix="x"),
+                format_optional(raw_int4, digits=2, suffix="x"),
+                format_optional(raw_ratio, digits=2, suffix="x"),
+                format_optional(baseline_dynamic_int8, digits=2, suffix="x"),
+                format_optional(baseline_dynamic_int4, digits=2, suffix="x"),
+                format_optional(baseline_dynamic_ratio, digits=2, suffix="x"),
+                format_optional(baseline_static_int8, digits=2, suffix="x"),
+                format_optional(baseline_static_int4, digits=2, suffix="x"),
+                format_optional(baseline_static_ratio, digits=2, suffix="x"),
+                format_optional(static_int8, digits=2, suffix="x"),
+                format_optional(static_int4, digits=2, suffix="x"),
+                format_optional(static_ratio, digits=2, suffix="x"),
+                format_optional(dynamic_int8, digits=2, suffix="x"),
+                format_optional(dynamic_int4, digits=2, suffix="x"),
+                format_optional(dynamic_ratio, digits=2, suffix="x"),
+            ])
     return path
 
 
@@ -1146,8 +1353,9 @@ def parse_args() -> argparse.Namespace:
         help="path to the LDM config used to instantiate the UNet",
     )
     parser.add_argument("--batch-size", type=int, default=32, help="batch size used for shape enumeration and benchmarking")
-    parser.add_argument("--warmup", type=int, default=15, help="warmup iterations per microbenchmark")
-    parser.add_argument("--iters", type=int, default=60, help="timed iterations per microbenchmark")
+    parser.add_argument("--warmup", type=int, default=100, help="warmup iterations before each timed microbenchmark")
+    parser.add_argument("--iters", type=int, default=1000, help="timed iterations per repeat")
+    parser.add_argument("--timed-repeats", type=int, default=10, help="number of synchronized timed repeats used to average each microbenchmark")
     parser.add_argument(
         "--output-dir",
         type=str,
@@ -1172,7 +1380,10 @@ def main() -> None:
 
     print(f"GPU: {torch.cuda.get_device_name(0)}")
     print(f"Config: {config_path}")
-    print(f"Batch size: {args.batch_size} | Warmup: {args.warmup} | Iterations: {args.iters}")
+    print(
+        f"Batch size: {args.batch_size} | Warmup: {args.warmup} | "
+        f"Iterations/repeat: {args.iters} | Timed repeats: {args.timed_repeats}"
+    )
 
     specs, inventory = enumerate_conv_shapes(config_path, args.batch_size)
     print(f"Enumerated {inventory['num_unique_conv_shapes']} unique Conv2d shapes from {inventory['num_conv_calls']} calls.")
@@ -1184,7 +1395,7 @@ def main() -> None:
         else:
             status = f"repo-excluded ({', '.join(spec.repo_unsupported_reasons)})"
         print(f"[{index:02d}/{len(specs)}] Benchmarking {spec.label} (count={spec.count}; {status})")
-        results.append(benchmark_single_shape(spec, warmup=args.warmup, iters=args.iters))
+        results.append(benchmark_single_shape(spec, warmup=args.warmup, iters=args.iters, repeats=args.timed_repeats))
 
     aggregates = compute_aggregates(results)
     enrich_results_with_weighted_contribution(
@@ -1202,6 +1413,8 @@ def main() -> None:
             "torch_cuda_version": torch.version.cuda,
             "warmup": args.warmup,
             "iters": args.iters,
+            "timed_repeats": args.timed_repeats,
+            "timing_mode": "synchronized_per_call_cuda_event_average",
         },
         "inventory": inventory,
         "aggregates": aggregates,
@@ -1210,6 +1423,7 @@ def main() -> None:
 
     json_path = write_json(output_dir, payload)
     report_path = write_report(output_dir, payload)
+    csv_path = write_csv(output_dir, payload)
     plot1 = plot_weighted_totals(output_dir, payload)
     plot2 = plot_top_shapes(
         output_dir,
@@ -1254,6 +1468,7 @@ def main() -> None:
 
     print(f"\nSaved JSON results to {json_path}")
     print(f"Saved Markdown report to {report_path}")
+    print(f"Saved CSV report to {csv_path}")
     print(f"Saved plots to: {plot1}, {plot2}, {plot3}, {plot4}, {plot5}, {plot6}")
 
 
