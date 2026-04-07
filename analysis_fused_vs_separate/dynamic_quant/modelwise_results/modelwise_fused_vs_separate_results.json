@@ -1,0 +1,254 @@
+{
+  "int8_fused_modiff": {
+    "mode": "int8_fused_modiff",
+    "label": "INT8 fused MoDiff",
+    "precision": "int8",
+    "implementation": "fused",
+    "quant_mode": "dynamic",
+    "batch_size": 32,
+    "steps": 50,
+    "warmup_runs": 1,
+    "timing_iterations": 2,
+    "timing_repeats": 3,
+    "timed_calls": 6,
+    "repeat_mean_call_ms": [
+      2892.213225364685,
+      2880.977153778076,
+      2874.4916915893555
+    ],
+    "repeat_total_ms": [
+      5784.42645072937,
+      5761.954307556152,
+      5748.983383178711
+    ],
+    "per_repeat_iteration_ms": [
+      [
+        2857.8333854675293,
+        2926.593065261841
+      ],
+      [
+        2881.1264038085938,
+        2880.8279037475586
+      ],
+      [
+        2865.1983737945557,
+        2883.7850093841553
+      ]
+    ],
+    "mean_call_ms": 2882.560690244039,
+    "median_call_ms": 2880.977153778076,
+    "std_call_ms": 7.320923468243249,
+    "min_call_ms": 2874.4916915893555,
+    "max_call_ms": 2892.213225364685,
+    "time_per_sample_ms": 90.08002157012622,
+    "time_per_step_ms": 1.8016004314025245,
+    "memory_allocated_mb": 4152.09765625,
+    "memory_reserved_mb": 5406.0,
+    "memory_setup_allocated_mb": 2164.830078125,
+    "memory_setup_reserved_mb": 3826.0,
+    "memory_ready_allocated_mb": 4152.09765625,
+    "memory_ready_reserved_mb": 5406.0,
+    "memory_peak_mb": 4933.078125,
+    "memory_peak_delta_mb": 780.98046875,
+    "loaded_static_scales": 0,
+    "scale_path": null,
+    "scale_status": "disabled-dynamic",
+    "scale_source": "dynamic-disabled",
+    "released_calibration_buffers_mb": 1802.25,
+    "timing_mode": "synchronized_wall_clock_per_full_sampling_call",
+    "decode_in_timed_region": false,
+    "reset_state_before_each_call": true,
+    "sampler_output_suppressed": true,
+    "buffer_pool_enabled": false,
+    "peak_measurement_scope": "timed-region-after-warmup"
+  },
+  "int8_separate_modiff": {
+    "mode": "int8_separate_modiff",
+    "label": "INT8 separate MoDiff",
+    "precision": "int8",
+    "implementation": "separate",
+    "quant_mode": "dynamic",
+    "batch_size": 32,
+    "steps": 50,
+    "warmup_runs": 1,
+    "timing_iterations": 2,
+    "timing_repeats": 3,
+    "timed_calls": 6,
+    "repeat_mean_call_ms": [
+      4396.958351135254,
+      4205.077052116394,
+      4311.40923500061
+    ],
+    "repeat_total_ms": [
+      8793.916702270508,
+      8410.154104232788,
+      8622.81847000122
+    ],
+    "per_repeat_iteration_ms": [
+      [
+        4305.626153945923,
+        4488.290548324585
+      ],
+      [
+        4221.996784210205,
+        4188.157320022583
+      ],
+      [
+        4043.200731277466,
+        4579.617738723755
+      ]
+    ],
+    "mean_call_ms": 4304.481546084086,
+    "median_call_ms": 4311.40923500061,
+    "std_call_ms": 78.4882279223425,
+    "min_call_ms": 4205.077052116394,
+    "max_call_ms": 4396.958351135254,
+    "time_per_sample_ms": 134.5150483151277,
+    "time_per_step_ms": 2.690300966302554,
+    "memory_allocated_mb": 3454.40234375,
+    "memory_reserved_mb": 4726.0,
+    "memory_setup_allocated_mb": 2181.24072265625,
+    "memory_setup_reserved_mb": 2924.0,
+    "memory_ready_allocated_mb": 3454.40234375,
+    "memory_ready_reserved_mb": 4726.0,
+    "memory_peak_mb": 4068.94677734375,
+    "memory_peak_delta_mb": 614.54443359375,
+    "loaded_static_scales": 0,
+    "scale_path": null,
+    "scale_status": "disabled-dynamic",
+    "scale_source": "dynamic-disabled",
+    "released_calibration_buffers_mb": 0.0,
+    "timing_mode": "synchronized_wall_clock_per_full_sampling_call",
+    "decode_in_timed_region": false,
+    "reset_state_before_each_call": true,
+    "sampler_output_suppressed": true,
+    "buffer_pool_enabled": false,
+    "peak_measurement_scope": "timed-region-after-warmup"
+  },
+  "int4_fused_modiff": {
+    "mode": "int4_fused_modiff",
+    "label": "INT4 fused MoDiff",
+    "precision": "int4",
+    "implementation": "fused",
+    "quant_mode": "dynamic",
+    "batch_size": 32,
+    "steps": 50,
+    "warmup_runs": 1,
+    "timing_iterations": 2,
+    "timing_repeats": 3,
+    "timed_calls": 6,
+    "repeat_mean_call_ms": [
+      3152.7668237686157,
+      3092.15772151947,
+      2722.3334312438965
+    ],
+    "repeat_total_ms": [
+      6305.533647537231,
+      6184.31544303894,
+      5444.666862487793
+    ],
+    "per_repeat_iteration_ms": [
+      [
+        3247.8599548339844,
+        3057.673692703247
+      ],
+      [
+        3184.413194656372,
+        2999.9022483825684
+      ],
+      [
+        2750.899314880371,
+        2693.767547607422
+      ]
+    ],
+    "mean_call_ms": 2989.0859921773276,
+    "median_call_ms": 3092.15772151947,
+    "std_call_ms": 190.23855619067638,
+    "min_call_ms": 2722.3334312438965,
+    "max_call_ms": 3152.7668237686157,
+    "time_per_sample_ms": 93.40893725554149,
+    "time_per_step_ms": 1.8681787451108298,
+    "memory_allocated_mb": 3913.34765625,
+    "memory_reserved_mb": 4808.0,
+    "memory_setup_allocated_mb": 1932.36181640625,
+    "memory_setup_reserved_mb": 3070.0,
+    "memory_ready_allocated_mb": 3913.34765625,
+    "memory_ready_reserved_mb": 4808.0,
+    "memory_peak_mb": 4380.3125,
+    "memory_peak_delta_mb": 466.96484375,
+    "loaded_static_scales": 0,
+    "scale_path": null,
+    "scale_status": "disabled-dynamic",
+    "scale_source": "dynamic-disabled",
+    "released_calibration_buffers_mb": 1802.25,
+    "timing_mode": "synchronized_wall_clock_per_full_sampling_call",
+    "decode_in_timed_region": false,
+    "reset_state_before_each_call": true,
+    "sampler_output_suppressed": true,
+    "buffer_pool_enabled": false,
+    "peak_measurement_scope": "timed-region-after-warmup"
+  },
+  "int4_separate_modiff": {
+    "mode": "int4_separate_modiff",
+    "label": "INT4 separate MoDiff",
+    "precision": "int4",
+    "implementation": "separate",
+    "quant_mode": "dynamic",
+    "batch_size": 32,
+    "steps": 50,
+    "warmup_runs": 1,
+    "timing_iterations": 2,
+    "timing_repeats": 3,
+    "timed_calls": 6,
+    "repeat_mean_call_ms": [
+      4099.900722503662,
+      3618.1663274765015,
+      3614.267587661743
+    ],
+    "repeat_total_ms": [
+      8199.801445007324,
+      7236.332654953003,
+      7228.535175323486
+    ],
+    "per_repeat_iteration_ms": [
+      [
+        4293.375730514526,
+        3906.425714492798
+      ],
+      [
+        3619.3182468414307,
+        3617.0144081115723
+      ],
+      [
+        3614.6771907806396,
+        3613.8579845428467
+      ]
+    ],
+    "mean_call_ms": 3777.4448792139688,
+    "median_call_ms": 3618.1663274765015,
+    "std_call_ms": 228.0162687131281,
+    "min_call_ms": 3614.267587661743,
+    "max_call_ms": 4099.900722503662,
+    "time_per_sample_ms": 118.04515247543652,
+    "time_per_step_ms": 2.3609030495087304,
+    "memory_allocated_mb": 3212.85546875,
+    "memory_reserved_mb": 4654.0,
+    "memory_setup_allocated_mb": 1934.33447265625,
+    "memory_setup_reserved_mb": 2948.0,
+    "memory_ready_allocated_mb": 3212.85546875,
+    "memory_ready_reserved_mb": 4654.0,
+    "memory_peak_mb": 3872.47802734375,
+    "memory_peak_delta_mb": 659.62255859375,
+    "loaded_static_scales": 0,
+    "scale_path": null,
+    "scale_status": "disabled-dynamic",
+    "scale_source": "dynamic-disabled",
+    "released_calibration_buffers_mb": 0.0,
+    "timing_mode": "synchronized_wall_clock_per_full_sampling_call",
+    "decode_in_timed_region": false,
+    "reset_state_before_each_call": true,
+    "sampler_output_suppressed": true,
+    "buffer_pool_enabled": false,
+    "peak_measurement_scope": "timed-region-after-warmup"
+  }
+}

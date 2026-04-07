@@ -1,0 +1,677 @@
+=== Dynamic layerwise ===
+GPU: NVIDIA A40
+Config: /workspace/MoDiff/models/ldm/lsun_churches256/config.yaml
+Conv backend: cudnn
+Batch size: 32 | Warmup: 5 | Iterations/repeat: 20 | Timed repeats: 3 | Quant mode: dynamic
+Enumerated 33 unique Conv2d shapes.
+[01/33] Benchmarking 2x2 | 768->768 | k3x3 s1x1 p1x1 (count=13; supported=13)
+[02/33] Benchmarking 8x8 | 384->384 | k3x3 s1x1 p1x1 (count=9; supported=9)
+[03/33] Benchmarking 16x16 | 384->384 | k3x3 s1x1 p1x1 (count=8; supported=8)
+[04/33] Benchmarking 4x4 | 768->768 | k3x3 s1x1 p1x1 (count=8; supported=8)
+[05/33] Benchmarking 32x32 | 192->192 | k3x3 s1x1 p1x1 (count=7; supported=7)
+[06/33] Benchmarking 2x2 | 1536->768 | k1x1 s1x1 p0x0 (count=3; excluded (skip_connection, pointwise_1x1))
+[07/33] Benchmarking 2x2 | 1536->768 | k3x3 s1x1 p1x1 (count=3; supported=3)
+[08/33] Benchmarking 32x32 | 384->384 | k3x3 s1x1 p1x1 (count=2; supported=2)
+[09/33] Benchmarking 32x32 | 384->192 | k1x1 s1x1 p0x0 (count=2; excluded (skip_connection, pointwise_1x1))
+[10/33] Benchmarking 32x32 | 384->192 | k3x3 s1x1 p1x1 (count=2; supported=2)
+[11/33] Benchmarking 16x16 | 768->384 | k1x1 s1x1 p0x0 (count=2; excluded (skip_connection, pointwise_1x1))
+[12/33] Benchmarking 16x16 | 768->384 | k3x3 s1x1 p1x1 (count=2; supported=2)
+[13/33] Benchmarking 16x16 | 192->192 | k3x3 s1x1 p1x1 (count=2; supported=2)
+[14/33] Benchmarking 8x8 | 768->768 | k3x3 s1x1 p1x1 (count=2; supported=2)
+[15/33] Benchmarking 8x8 | 768->384 | k1x1 s1x1 p0x0 (count=2; excluded (skip_connection, pointwise_1x1))
+[16/33] Benchmarking 8x8 | 768->384 | k3x3 s1x1 p1x1 (count=2; supported=2)
+[17/33] Benchmarking 4x4 | 1536->768 | k1x1 s1x1 p0x0 (count=2; excluded (skip_connection, pointwise_1x1))
+[18/33] Benchmarking 4x4 | 1536->768 | k3x3 s1x1 p1x1 (count=2; supported=2)
+[19/33] Benchmarking 4x4 | 384->384 | k3x3 s1x1 p1x1 (count=2; supported=2)
+[20/33] Benchmarking 32x32 | 576->192 | k1x1 s1x1 p0x0 (count=1; excluded (skip_connection, pointwise_1x1))
+[21/33] Benchmarking 32x32 | 576->192 | k3x3 s1x1 p1x1 (count=1; supported=1)
+[22/33] Benchmarking 32x32 | 192->4 | k3x3 s1x1 p1x1 (count=1; excluded (final_out))
+[23/33] Benchmarking 32x32 | 4->192 | k3x3 s1x1 p1x1 (count=1; excluded (in_channels<32))
+[24/33] Benchmarking 16x16 | 576->384 | k1x1 s1x1 p0x0 (count=1; excluded (skip_connection, pointwise_1x1))
+[25/33] Benchmarking 16x16 | 576->384 | k3x3 s1x1 p1x1 (count=1; supported=1)
+[26/33] Benchmarking 16x16 | 192->384 | k1x1 s1x1 p0x0 (count=1; excluded (skip_connection, pointwise_1x1))
+[27/33] Benchmarking 16x16 | 192->384 | k3x3 s1x1 p1x1 (count=1; supported=1)
+[28/33] Benchmarking 8x8 | 1152->384 | k1x1 s1x1 p0x0 (count=1; excluded (skip_connection, pointwise_1x1))
+[29/33] Benchmarking 8x8 | 1152->384 | k3x3 s1x1 p1x1 (count=1; supported=1)
+[30/33] Benchmarking 4x4 | 1152->768 | k1x1 s1x1 p0x0 (count=1; excluded (skip_connection, pointwise_1x1))
+[31/33] Benchmarking 4x4 | 1152->768 | k3x3 s1x1 p1x1 (count=1; supported=1)
+[32/33] Benchmarking 4x4 | 384->768 | k1x1 s1x1 p0x0 (count=1; excluded (skip_connection, pointwise_1x1))
+[33/33] Benchmarking 4x4 | 384->768 | k3x3 s1x1 p1x1 (count=1; supported=1)
+
+Layerwise weighted totals:
+  INT8: fused=20.355 ms | separate=43.833 ms | speedup=2.15x
+  INT4: fused=16.347 ms | separate=38.289 ms | speedup=2.34x
+
+Saved JSON results to /workspace/MoDiff/analysis_fused_vs_separate/dynamic_quant/layerwise_results/layerwise_fused_vs_separate_results.json
+Saved CSV report to /workspace/MoDiff/analysis_fused_vs_separate/dynamic_quant/layerwise_results/LAYERWISE_FUSED_VS_SEPARATE.csv
+Saved Markdown report to /workspace/MoDiff/analysis_fused_vs_separate/dynamic_quant/layerwise_results/LAYERWISE_FUSED_VS_SEPARATE_REPORT.md
+=== Dynamic modelwise ===
+GPU: NVIDIA A40
+Conv backend: cudnn
+Precisions: int8, int4
+Quant mode: dynamic
+Config: steps=50, batch_size=32, timing_iterations=2, timing_repeats=3
+
+================================================================================
+INT8 fused MoDiff
+================================================================================
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+  warmup 1/1: 50 DDIM steps @ batch 32
+  mean call: 2882.56 ms
+  per sample: 90.08 ms
+  per step: 1.8016 ms
+  repeat means: 2892.21, 2880.98, 2874.49 ms
+  setup allocated: 2165 MB
+  ready allocated: 4152 MB
+  timed peak memory: 4933 MB
+  timed peak delta: 781 MB
+  released calibration-only buffers: 1802 MB
+  loaded static scales: 0 (dynamic mode disables cached activation scales)
+
+================================================================================
+INT8 separate MoDiff
+================================================================================
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+  warmup 1/1: 50 DDIM steps @ batch 32
+  mean call: 4304.48 ms
+  per sample: 134.52 ms
+  per step: 2.6903 ms
+  repeat means: 4396.96, 4205.08, 4311.41 ms
+  setup allocated: 2181 MB
+  ready allocated: 3454 MB
+  timed peak memory: 4069 MB
+  timed peak delta: 615 MB
+  loaded static scales: 0 (dynamic mode disables cached activation scales)
+
+================================================================================
+INT4 fused MoDiff
+================================================================================
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+  warmup 1/1: 50 DDIM steps @ batch 32
+  mean call: 2989.09 ms
+  per sample: 93.41 ms
+  per step: 1.8682 ms
+  repeat means: 3152.77, 3092.16, 2722.33 ms
+  setup allocated: 1932 MB
+  ready allocated: 3913 MB
+  timed peak memory: 4380 MB
+  timed peak delta: 467 MB
+  released calibration-only buffers: 1802 MB
+  loaded static scales: 0 (dynamic mode disables cached activation scales)
+
+================================================================================
+INT4 separate MoDiff
+================================================================================
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+  warmup 1/1: 50 DDIM steps @ batch 32
+  mean call: 3777.44 ms
+  per sample: 118.05 ms
+  per step: 2.3609 ms
+  repeat means: 4099.90, 3618.17, 3614.27 ms
+  setup allocated: 1934 MB
+  ready allocated: 3213 MB
+  timed peak memory: 3872 MB
+  timed peak delta: 660 MB
+  loaded static scales: 0 (dynamic mode disables cached activation scales)
+
+Saved JSON results to /workspace/MoDiff/analysis_fused_vs_separate/dynamic_quant/modelwise_results/modelwise_fused_vs_separate_results.json
+Saved Markdown report to /workspace/MoDiff/analysis_fused_vs_separate/dynamic_quant/modelwise_results/MODELWISE_FUSED_VS_SEPARATE_REPORT.md
+=== Dynamic final report ===
+Summary JSON: /workspace/MoDiff/analysis_fused_vs_separate/dynamic_quant/final/fusion_summary.json
+Report: /workspace/MoDiff/analysis_fused_vs_separate/dynamic_quant/final/FUSED_VS_SEPARATE_FINAL_REPORT.md
+Plot: /workspace/MoDiff/analysis_fused_vs_separate/dynamic_quant/final/plot_01_layerwise_weighted_totals.png
+Plot: /workspace/MoDiff/analysis_fused_vs_separate/dynamic_quant/final/plot_02_layerwise_weighted_breakdown.png
+Plot: /workspace/MoDiff/analysis_fused_vs_separate/dynamic_quant/final/plot_03_layerwise_top_shapes_speedup.png
+Plot: /workspace/MoDiff/analysis_fused_vs_separate/dynamic_quant/final/plot_04_modelwise_call_times.png
+Plot: /workspace/MoDiff/analysis_fused_vs_separate/dynamic_quant/final/plot_05_modelwise_speedup_memory.png
+=== Static layerwise ===
+GPU: NVIDIA A40
+Config: /workspace/MoDiff/models/ldm/lsun_churches256/config.yaml
+Conv backend: cudnn
+Batch size: 32 | Warmup: 5 | Iterations/repeat: 20 | Timed repeats: 3 | Quant mode: static
+Enumerated 33 unique Conv2d shapes.
+[01/33] Benchmarking 2x2 | 768->768 | k3x3 s1x1 p1x1 (count=13; supported=13)
+[02/33] Benchmarking 8x8 | 384->384 | k3x3 s1x1 p1x1 (count=9; supported=9)
+[03/33] Benchmarking 16x16 | 384->384 | k3x3 s1x1 p1x1 (count=8; supported=8)
+[04/33] Benchmarking 4x4 | 768->768 | k3x3 s1x1 p1x1 (count=8; supported=8)
+[05/33] Benchmarking 32x32 | 192->192 | k3x3 s1x1 p1x1 (count=7; supported=7)
+[06/33] Benchmarking 2x2 | 1536->768 | k1x1 s1x1 p0x0 (count=3; excluded (skip_connection, pointwise_1x1))
+[07/33] Benchmarking 2x2 | 1536->768 | k3x3 s1x1 p1x1 (count=3; supported=3)
+[08/33] Benchmarking 32x32 | 384->384 | k3x3 s1x1 p1x1 (count=2; supported=2)
+[09/33] Benchmarking 32x32 | 384->192 | k1x1 s1x1 p0x0 (count=2; excluded (skip_connection, pointwise_1x1))
+[10/33] Benchmarking 32x32 | 384->192 | k3x3 s1x1 p1x1 (count=2; supported=2)
+[11/33] Benchmarking 16x16 | 768->384 | k1x1 s1x1 p0x0 (count=2; excluded (skip_connection, pointwise_1x1))
+[12/33] Benchmarking 16x16 | 768->384 | k3x3 s1x1 p1x1 (count=2; supported=2)
+[13/33] Benchmarking 16x16 | 192->192 | k3x3 s1x1 p1x1 (count=2; supported=2)
+[14/33] Benchmarking 8x8 | 768->768 | k3x3 s1x1 p1x1 (count=2; supported=2)
+[15/33] Benchmarking 8x8 | 768->384 | k1x1 s1x1 p0x0 (count=2; excluded (skip_connection, pointwise_1x1))
+[16/33] Benchmarking 8x8 | 768->384 | k3x3 s1x1 p1x1 (count=2; supported=2)
+[17/33] Benchmarking 4x4 | 1536->768 | k1x1 s1x1 p0x0 (count=2; excluded (skip_connection, pointwise_1x1))
+[18/33] Benchmarking 4x4 | 1536->768 | k3x3 s1x1 p1x1 (count=2; supported=2)
+[19/33] Benchmarking 4x4 | 384->384 | k3x3 s1x1 p1x1 (count=2; supported=2)
+[20/33] Benchmarking 32x32 | 576->192 | k1x1 s1x1 p0x0 (count=1; excluded (skip_connection, pointwise_1x1))
+[21/33] Benchmarking 32x32 | 576->192 | k3x3 s1x1 p1x1 (count=1; supported=1)
+[22/33] Benchmarking 32x32 | 192->4 | k3x3 s1x1 p1x1 (count=1; excluded (final_out))
+[23/33] Benchmarking 32x32 | 4->192 | k3x3 s1x1 p1x1 (count=1; excluded (in_channels<32))
+[24/33] Benchmarking 16x16 | 576->384 | k1x1 s1x1 p0x0 (count=1; excluded (skip_connection, pointwise_1x1))
+[25/33] Benchmarking 16x16 | 576->384 | k3x3 s1x1 p1x1 (count=1; supported=1)
+[26/33] Benchmarking 16x16 | 192->384 | k1x1 s1x1 p0x0 (count=1; excluded (skip_connection, pointwise_1x1))
+[27/33] Benchmarking 16x16 | 192->384 | k3x3 s1x1 p1x1 (count=1; supported=1)
+[28/33] Benchmarking 8x8 | 1152->384 | k1x1 s1x1 p0x0 (count=1; excluded (skip_connection, pointwise_1x1))
+[29/33] Benchmarking 8x8 | 1152->384 | k3x3 s1x1 p1x1 (count=1; supported=1)
+[30/33] Benchmarking 4x4 | 1152->768 | k1x1 s1x1 p0x0 (count=1; excluded (skip_connection, pointwise_1x1))
+[31/33] Benchmarking 4x4 | 1152->768 | k3x3 s1x1 p1x1 (count=1; supported=1)
+[32/33] Benchmarking 4x4 | 384->768 | k1x1 s1x1 p0x0 (count=1; excluded (skip_connection, pointwise_1x1))
+[33/33] Benchmarking 4x4 | 384->768 | k3x3 s1x1 p1x1 (count=1; supported=1)
+
+Layerwise weighted totals:
+  INT8: fused=16.352 ms | separate=36.632 ms | speedup=2.24x
+  INT4: fused=12.451 ms | separate=31.061 ms | speedup=2.49x
+
+Saved JSON results to /workspace/MoDiff/analysis_fused_vs_separate/static_quant/layerwise_results/layerwise_fused_vs_separate_results.json
+Saved CSV report to /workspace/MoDiff/analysis_fused_vs_separate/static_quant/layerwise_results/LAYERWISE_FUSED_VS_SEPARATE.csv
+Saved Markdown report to /workspace/MoDiff/analysis_fused_vs_separate/static_quant/layerwise_results/LAYERWISE_FUSED_VS_SEPARATE_REPORT.md
+=== Static modelwise ===
+GPU: NVIDIA A40
+Conv backend: cudnn
+Precisions: int8, int4
+Quant mode: static
+Config: steps=50, batch_size=32, timing_iterations=2, timing_repeats=3
+
+================================================================================
+INT8 fused MoDiff
+================================================================================
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+  ignoring INT8 scale file with 0 matching quantized conv keys: /workspace/MoDiff/integration/calibration/int8_calibration.pt
+  calibrating INT8 static scales from representative DDIM samples...
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+    calibration run 1/1
+  warmup 1/1: 50 DDIM steps @ batch 32
+  mean call: 2701.89 ms
+  per sample: 84.43 ms
+  per step: 1.6887 ms
+  repeat means: 2731.63, 2716.99, 2657.05 ms
+  setup allocated: 2174 MB
+  ready allocated: 4152 MB
+  timed peak memory: 4932 MB
+  timed peak delta: 780 MB
+  released calibration-only buffers: 1802 MB
+  loaded static scales: 70 (generated-calibration) from /workspace/MoDiff/analysis_fused_vs_separate/static_quant/modelwise_results/int8_generated_static_scales.pt
+
+================================================================================
+INT8 separate MoDiff
+================================================================================
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+  warmup 1/1: 50 DDIM steps @ batch 32
+  mean call: 4041.66 ms
+  per sample: 126.30 ms
+  per step: 2.5260 ms
+  repeat means: 4077.82, 4002.75, 4044.40 ms
+  setup allocated: 2180 MB
+  ready allocated: 3453 MB
+  timed peak memory: 4065 MB
+  timed peak delta: 613 MB
+  loaded static scales: 70 (generated-calibration) from /workspace/MoDiff/analysis_fused_vs_separate/static_quant/modelwise_results/int8_generated_static_scales.pt
+
+================================================================================
+INT4 fused MoDiff
+================================================================================
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+  warmup 1/1: 50 DDIM steps @ batch 32
+  mean call: 2493.33 ms
+  per sample: 77.92 ms
+  per step: 1.5583 ms
+  repeat means: 2429.12, 2427.05, 2623.82 ms
+  setup allocated: 1933 MB
+  ready allocated: 3209 MB
+  timed peak memory: 3680 MB
+  timed peak delta: 471 MB
+  released calibration-only buffers: 1802 MB
+  loaded static scales: 70 (loaded-file) from /workspace/MoDiff/integration/calibration/int4_calibration.pt
+
+================================================================================
+INT4 separate MoDiff
+================================================================================
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+  warmup 1/1: 50 DDIM steps @ batch 32
+  mean call: 3604.53 ms
+  per sample: 112.64 ms
+  per step: 2.2528 ms
+  repeat means: 3617.49, 3601.39, 3594.70 ms
+  setup allocated: 1934 MB
+  ready allocated: 3214 MB
+  timed peak memory: 3871 MB
+  timed peak delta: 657 MB
+  loaded static scales: 70 (loaded-file) from /workspace/MoDiff/integration/calibration/int4_calibration.pt
+
+Saved JSON results to /workspace/MoDiff/analysis_fused_vs_separate/static_quant/modelwise_results/modelwise_fused_vs_separate_results.json
+Saved Markdown report to /workspace/MoDiff/analysis_fused_vs_separate/static_quant/modelwise_results/MODELWISE_FUSED_VS_SEPARATE_REPORT.md
+=== Static final report ===
+Summary JSON: /workspace/MoDiff/analysis_fused_vs_separate/static_quant/final/fusion_summary.json
+Report: /workspace/MoDiff/analysis_fused_vs_separate/static_quant/final/FUSED_VS_SEPARATE_FINAL_REPORT.md
+Plot: /workspace/MoDiff/analysis_fused_vs_separate/static_quant/final/plot_01_layerwise_weighted_totals.png
+Plot: /workspace/MoDiff/analysis_fused_vs_separate/static_quant/final/plot_02_layerwise_weighted_breakdown.png
+Plot: /workspace/MoDiff/analysis_fused_vs_separate/static_quant/final/plot_03_layerwise_top_shapes_speedup.png
+Plot: /workspace/MoDiff/analysis_fused_vs_separate/static_quant/final/plot_04_modelwise_call_times.png
+Plot: /workspace/MoDiff/analysis_fused_vs_separate/static_quant/final/plot_05_modelwise_speedup_memory.png
+=== Cleanup stale mixed outputs ===

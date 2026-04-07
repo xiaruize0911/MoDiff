@@ -1,0 +1,3 @@
+Precision,Fused Mean Call (ms),Separate Mean Call (ms),Fusion Speedup,Fused Ready Memory (MB),Separate Ready Memory (MB),Fused Peak Memory (MB),Separate Peak Memory (MB),Fused Peak Delta (MB),Separate Peak Delta (MB),Fused Scale Status,Separate Scale Status
+INT8,2701.892654,4041.656653,1.495861,4152.416016,3452.667969,4932.176758,4065.337402,779.760742,612.669434,generated-calibration,generated-calibration
+INT4,2493.327856,3604.525248,1.445668,3209.310547,3214.074219,3680.478516,3870.790527,471.167969,656.716309,loaded-file,loaded-file

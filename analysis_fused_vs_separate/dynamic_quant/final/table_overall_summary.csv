@@ -1,0 +1,3 @@
+Precision,Layerwise Weighted Fused (ms),Layerwise Weighted Separate (ms),Layerwise Weighted Speedup,Modelwise Fused Call (ms),Modelwise Separate Call (ms),Modelwise Speedup
+INT8,20.355010,43.833092,2.153430,2882.560690,4304.481546,1.493284
+INT4,16.347124,38.288616,2.342223,2989.085992,3777.444879,1.263746

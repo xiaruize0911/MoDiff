@@ -316,9 +316,13 @@ class OptimizedInt8Conv2d(nn.Module):
             if self.bias is not None:
                 out = out + self.bias
             return out
-        # Fallback: GPU-only scale (no .item() CPU sync — safe inside CUDA graph capture).
-        # Mirrors the uncalibrated branch of _forward_first_step.
-        input_scale = self._compute_scale_tensor(x)
+        # Fallback: during calibration we need the host-visible scale path so the
+        # module can accumulate static activation statistics. Outside calibration
+        # we stay on the GPU-only scale path to avoid CPU-GPU synchronization.
+        if self.calibrating:
+            input_scale = self._compute_activation_scale(x)
+        else:
+            input_scale = self._compute_scale_tensor(x)
         return self._int8_conv(x, input_scale, with_bias=True)
 
     def _forward_first_step(self, x: torch.Tensor) -> torch.Tensor:
@@ -329,6 +333,8 @@ class OptimizedInt8Conv2d(nn.Module):
             input_scale = self.static_input_scale
             if input_scale.device != x.device:
                 input_scale = input_scale.to(x.device)
+        elif self.calibrating:
+            input_scale = self._compute_activation_scale(x)
         else:
             input_scale = self._compute_scale_tensor(x)
 
@@ -337,7 +343,12 @@ class OptimizedInt8Conv2d(nn.Module):
 
         for _ in range(self.warmup_steps - 1):
             residual = x - a_hat
-            r_scale = input_scale if self.is_calibrated else self._compute_scale_tensor(residual)
+            if self.is_calibrated:
+                r_scale = input_scale
+            elif self.calibrating:
+                r_scale = self._compute_activation_scale(residual, is_residual=True)
+            else:
+                r_scale = self._compute_scale_tensor(residual)
             conv_r = self._int8_conv(residual, r_scale, with_bias=False)
             r_dq = self._dequantize_activation(residual, r_scale)
             a_hat = a_hat + r_dq

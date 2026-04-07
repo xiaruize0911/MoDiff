@@ -1,0 +1,254 @@
+{
+  "int8_fused_modiff": {
+    "mode": "int8_fused_modiff",
+    "label": "INT8 fused MoDiff",
+    "precision": "int8",
+    "implementation": "fused",
+    "quant_mode": "static",
+    "batch_size": 32,
+    "steps": 50,
+    "warmup_runs": 1,
+    "timing_iterations": 2,
+    "timing_repeats": 3,
+    "timed_calls": 6,
+    "repeat_mean_call_ms": [
+      2731.6339015960693,
+      2716.9930934906006,
+      2657.0509672164917
+    ],
+    "repeat_total_ms": [
+      5463.267803192139,
+      5433.986186981201,
+      5314.101934432983
+    ],
+    "per_repeat_iteration_ms": [
+      [
+        2678.452968597412,
+        2784.8148345947266
+      ],
+      [
+        2776.4828205108643,
+        2657.503366470337
+      ],
+      [
+        2663.057565689087,
+        2651.0443687438965
+      ]
+    ],
+    "mean_call_ms": 2701.8926541010537,
+    "median_call_ms": 2716.9930934906006,
+    "std_call_ms": 32.26629797466831,
+    "min_call_ms": 2657.0509672164917,
+    "max_call_ms": 2731.6339015960693,
+    "time_per_sample_ms": 84.43414544065793,
+    "time_per_step_ms": 1.6886829088131585,
+    "memory_allocated_mb": 4152.416015625,
+    "memory_reserved_mb": 5684.0,
+    "memory_setup_allocated_mb": 2173.74267578125,
+    "memory_setup_reserved_mb": 3828.0,
+    "memory_ready_allocated_mb": 4152.416015625,
+    "memory_ready_reserved_mb": 5684.0,
+    "memory_peak_mb": 4932.1767578125,
+    "memory_peak_delta_mb": 779.7607421875,
+    "loaded_static_scales": 70,
+    "scale_path": "/workspace/MoDiff/analysis_fused_vs_separate/static_quant/modelwise_results/int8_generated_static_scales.pt",
+    "scale_status": "generated-calibration",
+    "scale_source": "generated-calibration",
+    "released_calibration_buffers_mb": 1802.25,
+    "timing_mode": "synchronized_wall_clock_per_full_sampling_call",
+    "decode_in_timed_region": false,
+    "reset_state_before_each_call": true,
+    "sampler_output_suppressed": true,
+    "buffer_pool_enabled": false,
+    "peak_measurement_scope": "timed-region-after-warmup"
+  },
+  "int8_separate_modiff": {
+    "mode": "int8_separate_modiff",
+    "label": "INT8 separate MoDiff",
+    "precision": "int8",
+    "implementation": "separate",
+    "quant_mode": "static",
+    "batch_size": 32,
+    "steps": 50,
+    "warmup_runs": 1,
+    "timing_iterations": 2,
+    "timing_repeats": 3,
+    "timed_calls": 6,
+    "repeat_mean_call_ms": [
+      4077.817678451538,
+      4002.750515937805,
+      4044.40176486969
+    ],
+    "repeat_total_ms": [
+      8155.635356903076,
+      8005.50103187561,
+      8088.80352973938
+    ],
+    "per_repeat_iteration_ms": [
+      [
+        4230.210304260254,
+        3925.4250526428223
+      ],
+      [
+        3994.926929473877,
+        4010.5741024017334
+      ],
+      [
+        4035.1808071136475,
+        4053.6227226257324
+      ]
+    ],
+    "mean_call_ms": 4041.6566530863442,
+    "median_call_ms": 4044.40176486969,
+    "std_call_ms": 30.707452417864232,
+    "min_call_ms": 4002.750515937805,
+    "max_call_ms": 4077.817678451538,
+    "time_per_sample_ms": 126.30177040894826,
+    "time_per_step_ms": 2.526035408178965,
+    "memory_allocated_mb": 3452.66796875,
+    "memory_reserved_mb": 4726.0,
+    "memory_setup_allocated_mb": 2180.19384765625,
+    "memory_setup_reserved_mb": 2924.0,
+    "memory_ready_allocated_mb": 3452.66796875,
+    "memory_ready_reserved_mb": 4726.0,
+    "memory_peak_mb": 4065.33740234375,
+    "memory_peak_delta_mb": 612.66943359375,
+    "loaded_static_scales": 70,
+    "scale_path": "/workspace/MoDiff/analysis_fused_vs_separate/static_quant/modelwise_results/int8_generated_static_scales.pt",
+    "scale_status": "generated-calibration",
+    "scale_source": "generated-calibration",
+    "released_calibration_buffers_mb": 0.0,
+    "timing_mode": "synchronized_wall_clock_per_full_sampling_call",
+    "decode_in_timed_region": false,
+    "reset_state_before_each_call": true,
+    "sampler_output_suppressed": true,
+    "buffer_pool_enabled": false,
+    "peak_measurement_scope": "timed-region-after-warmup"
+  },
+  "int4_fused_modiff": {
+    "mode": "int4_fused_modiff",
+    "label": "INT4 fused MoDiff",
+    "precision": "int4",
+    "implementation": "fused",
+    "quant_mode": "static",
+    "batch_size": 32,
+    "steps": 50,
+    "warmup_runs": 1,
+    "timing_iterations": 2,
+    "timing_repeats": 3,
+    "timed_calls": 6,
+    "repeat_mean_call_ms": [
+      2429.117202758789,
+      2427.0461797714233,
+      2623.820185661316
+    ],
+    "repeat_total_ms": [
+      4858.234405517578,
+      4854.092359542847,
+      5247.640371322632
+    ],
+    "per_repeat_iteration_ms": [
+      [
+        2429.611921310425,
+        2428.6224842071533
+      ],
+      [
+        2428.683280944824,
+        2425.4090785980225
+      ],
+      [
+        2461.9739055633545,
+        2785.6664657592773
+      ]
+    ],
+    "mean_call_ms": 2493.327856063843,
+    "median_call_ms": 2429.117202758789,
+    "std_call_ms": 92.27588470409526,
+    "min_call_ms": 2427.0461797714233,
+    "max_call_ms": 2623.820185661316,
+    "time_per_sample_ms": 77.91649550199509,
+    "time_per_step_ms": 1.5583299100399017,
+    "memory_allocated_mb": 3209.310546875,
+    "memory_reserved_mb": 4488.0,
+    "memory_setup_allocated_mb": 1932.80517578125,
+    "memory_setup_reserved_mb": 3050.0,
+    "memory_ready_allocated_mb": 3209.310546875,
+    "memory_ready_reserved_mb": 4488.0,
+    "memory_peak_mb": 3680.478515625,
+    "memory_peak_delta_mb": 471.16796875,
+    "loaded_static_scales": 70,
+    "scale_path": "/workspace/MoDiff/integration/calibration/int4_calibration.pt",
+    "scale_status": "loaded-file",
+    "scale_source": "loaded-file",
+    "released_calibration_buffers_mb": 1802.25,
+    "timing_mode": "synchronized_wall_clock_per_full_sampling_call",
+    "decode_in_timed_region": false,
+    "reset_state_before_each_call": true,
+    "sampler_output_suppressed": true,
+    "buffer_pool_enabled": false,
+    "peak_measurement_scope": "timed-region-after-warmup"
+  },
+  "int4_separate_modiff": {
+    "mode": "int4_separate_modiff",
+    "label": "INT4 separate MoDiff",
+    "precision": "int4",
+    "implementation": "separate",
+    "quant_mode": "static",
+    "batch_size": 32,
+    "steps": 50,
+    "warmup_runs": 1,
+    "timing_iterations": 2,
+    "timing_repeats": 3,
+    "timed_calls": 6,
+    "repeat_mean_call_ms": [
+      3617.485284805298,
+      3601.394534111023,
+      3594.6959257125854
+    ],
+    "repeat_total_ms": [
+      7234.970569610596,
+      7202.789068222046,
+      7189.391851425171
+    ],
+    "per_repeat_iteration_ms": [
+      [
+        3633.603096008301,
+        3601.367473602295
+      ],
+      [
+        3599.973201751709,
+        3602.815866470337
+      ],
+      [
+        3595.277786254883,
+        3594.114065170288
+      ]
+    ],
+    "mean_call_ms": 3604.5252482096353,
+    "median_call_ms": 3601.394534111023,
+    "std_call_ms": 9.56346346046893,
+    "min_call_ms": 3594.6959257125854,
+    "max_call_ms": 3617.485284805298,
+    "time_per_sample_ms": 112.6414140065511,
+    "time_per_step_ms": 2.252828280131022,
+    "memory_allocated_mb": 3214.07421875,
+    "memory_reserved_mb": 4654.0,
+    "memory_setup_allocated_mb": 1934.03759765625,
+    "memory_setup_reserved_mb": 2948.0,
+    "memory_ready_allocated_mb": 3214.07421875,
+    "memory_ready_reserved_mb": 4654.0,
+    "memory_peak_mb": 3870.79052734375,
+    "memory_peak_delta_mb": 656.71630859375,
+    "loaded_static_scales": 70,
+    "scale_path": "/workspace/MoDiff/integration/calibration/int4_calibration.pt",
+    "scale_status": "loaded-file",
+    "scale_source": "loaded-file",
+    "released_calibration_buffers_mb": 0.0,
+    "timing_mode": "synchronized_wall_clock_per_full_sampling_call",
+    "decode_in_timed_region": false,
+    "reset_state_before_each_call": true,
+    "sampler_output_suppressed": true,
+    "buffer_pool_enabled": false,
+    "peak_measurement_scope": "timed-region-after-warmup"
+  }
+}

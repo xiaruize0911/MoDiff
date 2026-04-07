@@ -1,0 +1,162 @@
+{
+  "generated_at": "2026-04-07 03:14:05",
+  "quant_mode": "dynamic",
+  "gpu_name": "NVIDIA A40",
+  "layerwise_config": {
+    "generated_at": "2026-04-07 03:10:34",
+    "gpu_name": "NVIDIA A40",
+    "torch_version": "2.6.0+cu124",
+    "torch_cuda_version": "12.4",
+    "conv_backend": "cudnn",
+    "config_path": "/workspace/MoDiff/models/ldm/lsun_churches256/config.yaml",
+    "batch_size": 32,
+    "warmup": 5,
+    "iters": 20,
+    "timed_repeats": 3,
+    "quant_mode": "dynamic",
+    "activation_scale_policy": "per-call dynamic scale recomputed from the current activation tensor"
+  },
+  "modelwise_reference_mode": {
+    "mode": "int8_fused_modiff",
+    "label": "INT8 fused MoDiff",
+    "precision": "int8",
+    "implementation": "fused",
+    "quant_mode": "dynamic",
+    "batch_size": 32,
+    "steps": 50,
+    "warmup_runs": 1,
+    "timing_iterations": 2,
+    "timing_repeats": 3,
+    "timed_calls": 6,
+    "repeat_mean_call_ms": [
+      2892.213225364685,
+      2880.977153778076,
+      2874.4916915893555
+    ],
+    "repeat_total_ms": [
+      5784.42645072937,
+      5761.954307556152,
+      5748.983383178711
+    ],
+    "per_repeat_iteration_ms": [
+      [
+        2857.8333854675293,
+        2926.593065261841
+      ],
+      [
+        2881.1264038085938,
+        2880.8279037475586
+      ],
+      [
+        2865.1983737945557,
+        2883.7850093841553
+      ]
+    ],
+    "mean_call_ms": 2882.560690244039,
+    "median_call_ms": 2880.977153778076,
+    "std_call_ms": 7.320923468243249,
+    "min_call_ms": 2874.4916915893555,
+    "max_call_ms": 2892.213225364685,
+    "time_per_sample_ms": 90.08002157012622,
+    "time_per_step_ms": 1.8016004314025245,
+    "memory_allocated_mb": 4152.09765625,
+    "memory_reserved_mb": 5406.0,
+    "memory_setup_allocated_mb": 2164.830078125,
+    "memory_setup_reserved_mb": 3826.0,
+    "memory_ready_allocated_mb": 4152.09765625,
+    "memory_ready_reserved_mb": 5406.0,
+    "memory_peak_mb": 4933.078125,
+    "memory_peak_delta_mb": 780.98046875,
+    "loaded_static_scales": 0,
+    "scale_path": null,
+    "scale_status": "disabled-dynamic",
+    "scale_source": "dynamic-disabled",
+    "released_calibration_buffers_mb": 1802.25,
+    "timing_mode": "synchronized_wall_clock_per_full_sampling_call",
+    "decode_in_timed_region": false,
+    "reset_state_before_each_call": true,
+    "sampler_output_suppressed": true,
+    "buffer_pool_enabled": false,
+    "peak_measurement_scope": "timed-region-after-warmup"
+  },
+  "overall_summary": {
+    "rows": [
+      {
+        "precision": "int8",
+        "layerwise_weighted_speedup": 2.1534301069404407,
+        "layerwise_fused_total_ms": 20.355010155464214,
+        "layerwise_separate_total_ms": 43.83309169585506,
+        "modelwise_speedup": 1.4932839265631097,
+        "modelwise_fused_call_ms": 2882.560690244039,
+        "modelwise_separate_call_ms": 4304.481546084086
+      },
+      {
+        "precision": "int4",
+        "layerwise_weighted_speedup": 2.3422233438574347,
+        "layerwise_fused_total_ms": 16.347124245514472,
+        "layerwise_separate_total_ms": 38.28861601278185,
+        "modelwise_speedup": 1.26374580360011,
+        "modelwise_fused_call_ms": 2989.0859921773276,
+        "modelwise_separate_call_ms": 3777.4448792139688
+      }
+    ]
+  },
+  "layerwise_weighted_summary": {
+    "int8": {
+      "weighted_fused_step1_ms": 8.665047464985397,
+      "weighted_separate_step1_ms": 30.833834102998182,
+      "weighted_fused_conv_ms": 12.011714693841835,
+      "weighted_separate_conv_ms": 14.214710934211812,
+      "weighted_fused_total_ms": 20.355010155464214,
+      "weighted_separate_total_ms": 43.83309169585506,
+      "benchmarked_calls": 70,
+      "benchmarked_shapes": 20,
+      "weighted_step1_speedup": 3.558414910892833,
+      "weighted_conv_speedup": 1.183403976577916,
+      "weighted_total_speedup": 2.1534301069404407
+    },
+    "int4": {
+      "weighted_fused_step1_ms": 8.50095731470113,
+      "weighted_separate_step1_ms": 27.736605258782717,
+      "weighted_fused_conv_ms": 8.007499757222833,
+      "weighted_separate_conv_ms": 10.375232539201775,
+      "weighted_fused_total_ms": 16.347124245514472,
+      "weighted_separate_total_ms": 38.28861601278185,
+      "benchmarked_calls": 70,
+      "benchmarked_shapes": 20,
+      "weighted_step1_speedup": 3.262762560966683,
+      "weighted_conv_speedup": 1.2956893979101562,
+      "weighted_total_speedup": 2.3422233438574347
+    }
+  },
+  "modelwise_summary": [
+    {
+      "precision": "int8",
+      "fused_mean_call_ms": 2882.560690244039,
+      "separate_mean_call_ms": 4304.481546084086,
+      "fusion_speedup": 1.4932839265631097,
+      "fused_ready_memory_mb": 4152.09765625,
+      "separate_ready_memory_mb": 3454.40234375,
+      "fused_peak_memory_mb": 4933.078125,
+      "separate_peak_memory_mb": 4068.94677734375,
+      "fused_peak_delta_mb": 780.98046875,
+      "separate_peak_delta_mb": 614.54443359375,
+      "fused_scale_status": "disabled-dynamic",
+      "separate_scale_status": "disabled-dynamic"
+    },
+    {
+      "precision": "int4",
+      "fused_mean_call_ms": 2989.0859921773276,
+      "separate_mean_call_ms": 3777.4448792139688,
+      "fusion_speedup": 1.26374580360011,
+      "fused_ready_memory_mb": 3913.34765625,
+      "separate_ready_memory_mb": 3212.85546875,
+      "fused_peak_memory_mb": 4380.3125,
+      "separate_peak_memory_mb": 3872.47802734375,
+      "fused_peak_delta_mb": 466.96484375,
+      "separate_peak_delta_mb": 659.62255859375,
+      "fused_scale_status": "disabled-dynamic",
+      "separate_scale_status": "disabled-dynamic"
+    }
+  ]
+}

@@ -1,0 +1,3 @@
+Precision,Weighted Fused Step1 (ms),Weighted Separate Step1 (ms),Weighted Step1 Speedup,Weighted Fused Conv (ms),Weighted Separate Conv (ms),Weighted Conv Speedup,Weighted Fused Total (ms),Weighted Separate Total (ms),Weighted Total Speedup,Benchmarked Calls,Benchmarked Shapes
+INT8,4.893926,23.732007,4.849278,12.028567,14.239285,1.183789,16.351538,36.632455,2.240306,70,20
+INT4,4.724379,21.456100,4.541571,8.015520,10.371502,1.293928,12.451363,31.061007,2.494587,70,20

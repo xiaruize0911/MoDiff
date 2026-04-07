@@ -1,0 +1,14 @@
+Shape,Total Count,Excluded Count,Reasons,Example Layers
+2x2 | 1536->768 | k1x1 s1x1 p0x0,3,3,skip_connection; pointwise_1x1,output_blocks.0.0.skip_connection; output_blocks.1.0.skip_connection; output_blocks.2.0.skip_connection
+32x32 | 384->192 | k1x1 s1x1 p0x0,2,2,skip_connection; pointwise_1x1,output_blocks.13.0.skip_connection; output_blocks.14.0.skip_connection
+16x16 | 768->384 | k1x1 s1x1 p0x0,2,2,skip_connection; pointwise_1x1,output_blocks.9.0.skip_connection; output_blocks.10.0.skip_connection
+8x8 | 768->384 | k1x1 s1x1 p0x0,2,2,skip_connection; pointwise_1x1,output_blocks.7.0.skip_connection; output_blocks.8.0.skip_connection
+4x4 | 1536->768 | k1x1 s1x1 p0x0,2,2,skip_connection; pointwise_1x1,output_blocks.3.0.skip_connection; output_blocks.4.0.skip_connection
+32x32 | 576->192 | k1x1 s1x1 p0x0,1,1,skip_connection; pointwise_1x1,output_blocks.12.0.skip_connection
+32x32 | 192->4 | k3x3 s1x1 p1x1,1,1,final_out,out.2
+32x32 | 4->192 | k3x3 s1x1 p1x1,1,1,in_channels<32,input_blocks.0.0
+16x16 | 576->384 | k1x1 s1x1 p0x0,1,1,skip_connection; pointwise_1x1,output_blocks.11.0.skip_connection
+16x16 | 192->384 | k1x1 s1x1 p0x0,1,1,skip_connection; pointwise_1x1,input_blocks.4.0.skip_connection
+8x8 | 1152->384 | k1x1 s1x1 p0x0,1,1,skip_connection; pointwise_1x1,output_blocks.6.0.skip_connection
+4x4 | 1152->768 | k1x1 s1x1 p0x0,1,1,skip_connection; pointwise_1x1,output_blocks.5.0.skip_connection
+4x4 | 384->768 | k1x1 s1x1 p0x0,1,1,skip_connection; pointwise_1x1,input_blocks.10.0.skip_connection

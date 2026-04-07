@@ -1,0 +1,5 @@
+Mode,Precision,Implementation,Mean Call (ms),Std Call (ms),Time/Sample (ms),Time/Step (ms),Ready Memory (MB),Timed Peak Memory (MB),Peak Delta (MB),Loaded Static Scales,Scale Status,Timed Calls
+INT8 fused MoDiff,INT8,fused,2882.560690,7.320923,90.080022,1.801600,4152.097656,4933.078125,780.980469,0,disabled-dynamic,6
+INT8 separate MoDiff,INT8,separate,4304.481546,78.488228,134.515048,2.690301,3454.402344,4068.946777,614.544434,0,disabled-dynamic,6
+INT4 fused MoDiff,INT4,fused,2989.085992,190.238556,93.408937,1.868179,3913.347656,4380.312500,466.964844,0,disabled-dynamic,6
+INT4 separate MoDiff,INT4,separate,3777.444879,228.016269,118.045152,2.360903,3212.855469,3872.478027,659.622559,0,disabled-dynamic,6

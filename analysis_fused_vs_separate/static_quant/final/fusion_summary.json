@@ -1,0 +1,162 @@
+{
+  "generated_at": "2026-04-07 03:18:17",
+  "quant_mode": "static",
+  "gpu_name": "NVIDIA A40",
+  "layerwise_config": {
+    "generated_at": "2026-04-07 03:14:42",
+    "gpu_name": "NVIDIA A40",
+    "torch_version": "2.6.0+cu124",
+    "torch_cuda_version": "12.4",
+    "conv_backend": "cudnn",
+    "config_path": "/workspace/MoDiff/models/ldm/lsun_churches256/config.yaml",
+    "batch_size": 32,
+    "warmup": 5,
+    "iters": 20,
+    "timed_repeats": 3,
+    "quant_mode": "static",
+    "activation_scale_policy": "per-shape static scale calibrated once from the synthetic activation tensor"
+  },
+  "modelwise_reference_mode": {
+    "mode": "int8_fused_modiff",
+    "label": "INT8 fused MoDiff",
+    "precision": "int8",
+    "implementation": "fused",
+    "quant_mode": "static",
+    "batch_size": 32,
+    "steps": 50,
+    "warmup_runs": 1,
+    "timing_iterations": 2,
+    "timing_repeats": 3,
+    "timed_calls": 6,
+    "repeat_mean_call_ms": [
+      2731.6339015960693,
+      2716.9930934906006,
+      2657.0509672164917
+    ],
+    "repeat_total_ms": [
+      5463.267803192139,
+      5433.986186981201,
+      5314.101934432983
+    ],
+    "per_repeat_iteration_ms": [
+      [
+        2678.452968597412,
+        2784.8148345947266
+      ],
+      [
+        2776.4828205108643,
+        2657.503366470337
+      ],
+      [
+        2663.057565689087,
+        2651.0443687438965
+      ]
+    ],
+    "mean_call_ms": 2701.8926541010537,
+    "median_call_ms": 2716.9930934906006,
+    "std_call_ms": 32.26629797466831,
+    "min_call_ms": 2657.0509672164917,
+    "max_call_ms": 2731.6339015960693,
+    "time_per_sample_ms": 84.43414544065793,
+    "time_per_step_ms": 1.6886829088131585,
+    "memory_allocated_mb": 4152.416015625,
+    "memory_reserved_mb": 5684.0,
+    "memory_setup_allocated_mb": 2173.74267578125,
+    "memory_setup_reserved_mb": 3828.0,
+    "memory_ready_allocated_mb": 4152.416015625,
+    "memory_ready_reserved_mb": 5684.0,
+    "memory_peak_mb": 4932.1767578125,
+    "memory_peak_delta_mb": 779.7607421875,
+    "loaded_static_scales": 70,
+    "scale_path": "/workspace/MoDiff/analysis_fused_vs_separate/static_quant/modelwise_results/int8_generated_static_scales.pt",
+    "scale_status": "generated-calibration",
+    "scale_source": "generated-calibration",
+    "released_calibration_buffers_mb": 1802.25,
+    "timing_mode": "synchronized_wall_clock_per_full_sampling_call",
+    "decode_in_timed_region": false,
+    "reset_state_before_each_call": true,
+    "sampler_output_suppressed": true,
+    "buffer_pool_enabled": false,
+    "peak_measurement_scope": "timed-region-after-warmup"
+  },
+  "overall_summary": {
+    "rows": [
+      {
+        "precision": "int8",
+        "layerwise_weighted_speedup": 2.2403064016763894,
+        "layerwise_fused_total_ms": 16.35153810034196,
+        "layerwise_separate_total_ms": 36.63245548345148,
+        "modelwise_speedup": 1.4958612981725001,
+        "modelwise_fused_call_ms": 2701.8926541010537,
+        "modelwise_separate_call_ms": 4041.6566530863442
+      },
+      {
+        "precision": "int4",
+        "layerwise_weighted_speedup": 2.494586959585811,
+        "layerwise_fused_total_ms": 12.451362654504678,
+        "layerwise_separate_total_ms": 31.061006907001136,
+        "modelwise_speedup": 1.4456683822961065,
+        "modelwise_fused_call_ms": 2493.327856063843,
+        "modelwise_separate_call_ms": 3604.5252482096353
+      }
+    ]
+  },
+  "layerwise_weighted_summary": {
+    "int8": {
+      "weighted_fused_step1_ms": 4.893926394016791,
+      "weighted_separate_step1_ms": 23.73200747234126,
+      "weighted_fused_conv_ms": 12.02856693093975,
+      "weighted_separate_conv_ms": 14.239285319112241,
+      "weighted_fused_total_ms": 16.35153810034196,
+      "weighted_separate_total_ms": 36.63245548345148,
+      "benchmarked_calls": 70,
+      "benchmarked_shapes": 20,
+      "weighted_step1_speedup": 4.849277566036853,
+      "weighted_conv_speedup": 1.1837890083552767,
+      "weighted_total_speedup": 2.2403064016763894
+    },
+    "int4": {
+      "weighted_fused_step1_ms": 4.724378660786897,
+      "weighted_separate_step1_ms": 21.456100253760813,
+      "weighted_fused_conv_ms": 8.015519996422034,
+      "weighted_separate_conv_ms": 10.371501876351735,
+      "weighted_fused_total_ms": 12.451362654504678,
+      "weighted_separate_total_ms": 31.061006907001136,
+      "benchmarked_calls": 70,
+      "benchmarked_shapes": 20,
+      "weighted_step1_speedup": 4.541570816888557,
+      "weighted_conv_speedup": 1.2939275157421306,
+      "weighted_total_speedup": 2.494586959585811
+    }
+  },
+  "modelwise_summary": [
+    {
+      "precision": "int8",
+      "fused_mean_call_ms": 2701.8926541010537,
+      "separate_mean_call_ms": 4041.6566530863442,
+      "fusion_speedup": 1.4958612981725001,
+      "fused_ready_memory_mb": 4152.416015625,
+      "separate_ready_memory_mb": 3452.66796875,
+      "fused_peak_memory_mb": 4932.1767578125,
+      "separate_peak_memory_mb": 4065.33740234375,
+      "fused_peak_delta_mb": 779.7607421875,
+      "separate_peak_delta_mb": 612.66943359375,
+      "fused_scale_status": "generated-calibration",
+      "separate_scale_status": "generated-calibration"
+    },
+    {
+      "precision": "int4",
+      "fused_mean_call_ms": 2493.327856063843,
+      "separate_mean_call_ms": 3604.5252482096353,
+      "fusion_speedup": 1.4456683822961065,
+      "fused_ready_memory_mb": 3209.310546875,
+      "separate_ready_memory_mb": 3214.07421875,
+      "fused_peak_memory_mb": 3680.478515625,
+      "separate_peak_memory_mb": 3870.79052734375,
+      "fused_peak_delta_mb": 471.16796875,
+      "separate_peak_delta_mb": 656.71630859375,
+      "fused_scale_status": "loaded-file",
+      "separate_scale_status": "loaded-file"
+    }
+  ]
+}
