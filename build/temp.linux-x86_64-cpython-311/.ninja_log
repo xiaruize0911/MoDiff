@@ -1,0 +1,8 @@
+# ninja log v7
+35	39371	1780058317000000000	/workspace/MoDiff/build/temp.linux-x86_64-cpython-311/csrc/pybind.o	df1a6ab71458dc36
+28	81503	1780058317000000000	/workspace/MoDiff/build/temp.linux-x86_64-cpython-311/csrc/cuda_kernels.o	d82c173c4ac11432
+306	37760	1780118971000000000	/workspace/MoDiff/build/temp.linux-x86_64-cpython-311/csrc/pybind.o	df1a6ab71458dc36
+303	83709	1780118971000000000	/workspace/MoDiff/build/temp.linux-x86_64-cpython-311/csrc/cuda_kernels.o	d82c173c4ac11432
+423	95956	1780122539000000000	/workspace/MoDiff/build/temp.linux-x86_64-cpython-311/csrc/cuda_kernels.o	d82c173c4ac11432
+484	44237	1780131799000000000	/workspace/MoDiff/build/temp.linux-x86_64-cpython-311/csrc/pybind.o	df1a6ab71458dc36
+478	85795	1780131799000000000	/workspace/MoDiff/build/temp.linux-x86_64-cpython-311/csrc/cuda_kernels.o	d82c173c4ac11432

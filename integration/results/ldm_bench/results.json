@@ -1,0 +1,43 @@
+{
+  "fp32": {
+    "total_time": 12.089914321899414,
+    "num_samples": 32,
+    "time_per_sample": 0.3778098225593567,
+    "time_per_step_ms": 7.556196451187134
+  },
+  "fp16": {
+    "total_time": 9.597575664520264,
+    "num_samples": 32,
+    "time_per_sample": 0.29992423951625824,
+    "time_per_step_ms": 5.998484790325165,
+    "speedup": 1.2596841894763775
+  },
+  "int8": {
+    "total_time": 6.883204698562622,
+    "num_samples": 32,
+    "time_per_sample": 0.21510014683008194,
+    "time_per_step_ms": 4.302002936601639,
+    "speedup": 1.7564368417554221
+  },
+  "int8_baseline": {
+    "total_time": 7.702218532562256,
+    "num_samples": 32,
+    "time_per_sample": 0.2406943291425705,
+    "time_per_step_ms": 4.81388658285141,
+    "speedup": 1.5696664890495553
+  },
+  "int4": {
+    "total_time": 7.1400792598724365,
+    "num_samples": 32,
+    "time_per_sample": 0.22312747687101364,
+    "time_per_step_ms": 4.462549537420273,
+    "speedup": 1.6932465147614357
+  },
+  "int4_baseline": {
+    "total_time": 7.285293102264404,
+    "num_samples": 32,
+    "time_per_sample": 0.22766540944576263,
+    "time_per_step_ms": 4.553308188915253,
+    "speedup": 1.65949593958569
+  }
+}

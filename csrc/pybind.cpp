@@ -86,6 +86,13 @@ torch::Tensor step1_static_quantize_fprop(
     torch::Tensor smooth_inv
 );
 
+torch::Tensor fp16_ncw_delta_to_int8_cl(
+    torch::Tensor x,
+    torch::Tensor a_hat,
+    torch::Tensor scale_t,
+    int N, int C, int L
+);
+
 torch::Tensor step1_quantize_no_ahat_fprop(
     torch::Tensor x,
     torch::Tensor a_hat_cache,
@@ -159,6 +166,10 @@ torch::Tensor conv2d_int4_fprop_no_ohat_prealloc(
     int dilation_h, int dilation_w
 );
 
+// Fused layout-transpose + dtype-cast wrappers (K1+K2 and K7+K8 fusion)
+torch::Tensor fp16_ncw_to_fp32_cl(torch::Tensor src, int N, int C, int L);
+torch::Tensor fp32_cl_to_fp16_ncw(torch::Tensor src, int N, int C, int L);
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("conv2d_int4_fprop", &conv2d_int4_fprop, "Conv2d INT4 Forward (CUTLASS)");
     m.def("conv2d_int8_fprop", &conv2d_int8_fprop, "Conv2d INT8 Forward (CUTLASS)");
@@ -183,4 +194,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("conv2d_int4_fprop_no_ohat", &conv2d_int4_fprop_no_ohat, "Fused INT4 conv + dequant without o_hat update");
     m.def("conv2d_int8_fprop_no_ohat_prealloc", &conv2d_int8_fprop_no_ohat_prealloc, "Fused INT8 conv + dequant into a preallocated output buffer");
     m.def("conv2d_int4_fprop_no_ohat_prealloc", &conv2d_int4_fprop_no_ohat_prealloc, "Fused INT4 conv + dequant into a preallocated output buffer");
-}
+
+    m.def("fp16_ncw_to_fp32_cl", &fp16_ncw_to_fp32_cl,
+          "Fused FP16 [N,C,L] → FP32 [N*L,C,1,1] channels-last (K1+K2 fusion)");
+    m.def("fp32_cl_to_fp16_ncw", &fp32_cl_to_fp16_ncw,
+          "Fused FP32 [N*L,C,1,1] channels-last → FP16 [N,C,L] (K7+K8 fusion)");    m.def("fp16_ncw_delta_to_int8_cl", &fp16_ncw_delta_to_int8_cl,
+          "Fused FP16 [N,C,L] \u2192 INT8 [N*L,C,1,1] CL with MoDiff delta subtract+quantize (K1+K2+K3 fusion)");}

@@ -1,0 +1,8 @@
+{
+  "attn_modiff": {
+    "total_time": 10.675757884979248,
+    "num_samples": 84,
+    "time_per_sample": 0.12709235577356248,
+    "time_per_step_ms": 2.5418471154712496
+  }
+}

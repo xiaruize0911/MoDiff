@@ -1,0 +1,198 @@
+
+============================================================================
+ Attention Conv1d Kernel Microbenchmark — Isolated per-call latency
+ GPU : NVIDIA A40  (sm_86)
+ B=42, L=1024 (32×32 spatial),  warmup=200, iters=1000
+============================================================================
+
+ Extension capabilities detected:
+   ✓  K1+K2 (fp16_ncw_to_fp32_cl)
+   ✓  K1+K2+K3 (fp16_ncw_delta_to_int8)
+   ✓  INT8 scale_quantize_int8
+   ✓  INT8 step1_static_quantize_fprop
+   ✓  INT8 conv2d_int8_fprop
+   ✓  INT8 conv2d_int8_fprop_o_hat
+   ✓  INT4 scale_quantize_and_pack
+   ✓  INT4 step1_static_quantize_pack
+   ✓  INT4 conv2d_int4_fprop
+   ✓  INT4 conv2d_int4_fprop_o_hat
+
+  Benchmarking C192→qkv     (192→ 576) ... done
+  Benchmarking C192→proj    (192→ 192) ... done
+  Benchmarking C384→qkv     (384→1152) ... done
+  Benchmarking C384→proj    (384→ 384) ... done
+  Benchmarking C768→qkv     (768→2304) ... done
+  Benchmarking C768→proj    (768→ 768) ... done
+
+
+  ┌─ C192→qkv  [B=42, C_in=192, C_out=576, L=1024]  MACs: 9.51 G
+  │  Mode                    µs/call   vs fp32   vs fp16
+  │  ────────────────────────────────────────────────────
+  │  FP32 conv1d               315.6    1.00×    0.46×
+  │  FP16 conv1d               144.6    2.18×    1.00×
+  │  K1+K2 (cast in)           119.3    2.65×    1.21×
+  │  K7+K8 (cast out)          331.8    0.95×    0.44×
+  │  K4 INT8 GEMM              626.0    0.50×    0.23×
+  │  K4 INT4 GEMM              584.8    0.54×    0.25×
+  │  INT8  no-MoDiff          1146.2    0.28×    0.13×
+  │  INT8  w/ MoDiff          1339.3    0.24×    0.11×
+  │  INT4  no-MoDiff          1096.3    0.29×    0.13×
+  │  INT4  w/ MoDiff          1387.6    0.23×    0.10×
+  └───────────────────────────────────────────────────────
+
+  ┌─ C192→proj  [B=42, C_in=192, C_out=192, L=1024]  MACs: 3.17 G
+  │  Mode                    µs/call   vs fp32   vs fp16
+  │  ────────────────────────────────────────────────────
+  │  FP32 conv1d               122.8    1.00×    0.51×
+  │  FP16 conv1d                63.1    1.95×    1.00×
+  │  K1+K2 (cast in)           119.9    1.02×    0.53×
+  │  K7+K8 (cast out)          112.1    1.10×    0.56×
+  │  K4 INT8 GEMM              227.8    0.54×    0.28×
+  │  K4 INT4 GEMM              205.2    0.60×    0.31×
+  │  INT8  no-MoDiff           528.3    0.23×    0.12×
+  │  INT8  w/ MoDiff           598.5    0.21×    0.11×
+  │  INT4  no-MoDiff           498.0    0.25×    0.13×
+  │  INT4  w/ MoDiff           676.0    0.18×    0.09×
+  └───────────────────────────────────────────────────────
+
+  ┌─ C384→qkv  [B=42, C_in=384, C_out=1152, L=1024]  MACs: 38.05 G
+  │  Mode                    µs/call   vs fp32   vs fp16
+  │  ────────────────────────────────────────────────────
+  │  FP32 conv1d               898.3    1.00×    0.52×
+  │  FP16 conv1d               469.0    1.92×    1.00×
+  │  K1+K2 (cast in)           239.1    3.76×    1.96×
+  │  K7+K8 (cast out)          666.7    1.35×    0.70×
+  │  K4 INT8 GEMM             1363.3    0.66×    0.34×
+  │  K4 INT4 GEMM             1235.0    0.73×    0.38×
+  │  INT8  no-MoDiff          2403.2    0.37×    0.20×
+  │  INT8  w/ MoDiff          2764.2    0.32×    0.17×
+  │  INT4  no-MoDiff          2259.2    0.40×    0.21×
+  │  INT4  w/ MoDiff          2842.8    0.32×    0.16×
+  └───────────────────────────────────────────────────────
+
+  ┌─ C384→proj  [B=42, C_in=384, C_out=384, L=1024]  MACs: 12.68 G
+  │  Mode                    µs/call   vs fp32   vs fp16
+  │  ────────────────────────────────────────────────────
+  │  FP32 conv1d               318.4    1.00×    0.53×
+  │  FP16 conv1d               170.0    1.87×    1.00×
+  │  K1+K2 (cast in)           238.9    1.33×    0.71×
+  │  K7+K8 (cast out)          222.1    1.43×    0.77×
+  │  K4 INT8 GEMM              464.4    0.69×    0.37×
+  │  K4 INT4 GEMM              418.1    0.76×    0.41×
+  │  INT8  no-MoDiff          1061.1    0.30×    0.16×
+  │  INT8  w/ MoDiff          1191.7    0.27×    0.14×
+  │  INT4  no-MoDiff           998.6    0.32×    0.17×
+  │  INT4  w/ MoDiff          1355.9    0.23×    0.13×
+  └───────────────────────────────────────────────────────
+
+  ┌─ C768→qkv  [B=42, C_in=768, C_out=2304, L=1024]  MACs: 152.20 G
+  │  Mode                    µs/call   vs fp32   vs fp16
+  │  ────────────────────────────────────────────────────
+  │  FP32 conv1d              3205.2    1.00×    0.61×
+  │  FP16 conv1d              1939.8    1.65×    1.00×
+  │  K1+K2 (cast in)           483.2    6.63×    4.01×
+  │  K7+K8 (cast out)         1350.9    2.37×    1.44×
+  │  K4 INT8 GEMM             3305.1    0.97×    0.59×
+  │  K4 INT4 GEMM             2736.9    1.17×    0.71×
+  │  INT8  no-MoDiff          5411.6    0.59×    0.36×
+  │  INT8  w/ MoDiff          6116.6    0.52×    0.32×
+  │  INT4  no-MoDiff          4827.5    0.66×    0.40×
+  │  INT4  w/ MoDiff          5983.7    0.54×    0.32×
+  └───────────────────────────────────────────────────────
+
+  ┌─ C768→proj  [B=42, C_in=768, C_out=768, L=1024]  MACs: 50.73 G
+  │  Mode                    µs/call   vs fp32   vs fp16
+  │  ────────────────────────────────────────────────────
+  │  FP32 conv1d              1105.9    1.00×    0.60×
+  │  FP16 conv1d               660.8    1.67×    1.00×
+  │  K1+K2 (cast in)           483.2    2.29×    1.37×
+  │  K7+K8 (cast out)          444.2    2.49×    1.49×
+  │  K4 INT8 GEMM             1112.0    0.99×    0.59×
+  │  K4 INT4 GEMM              918.5    1.20×    0.72×
+  │  INT8  no-MoDiff          2308.6    0.48×    0.29×
+  │  INT8  w/ MoDiff          2556.6    0.43×    0.26×
+  │  INT4  no-MoDiff          2086.8    0.53×    0.32×
+  │  INT4  w/ MoDiff          2799.7    0.40×    0.24×
+  └───────────────────────────────────────────────────────
+
+============================================================================
+ SUMMARY TABLES
+============================================================================
+
+  Latency (µs per call)
+  Layer               FP32 conv1d       FP16 conv1d   K1+K2 (cast in)  K7+K8 (cast out)      K4 INT8 GEMM      K4 INT4 GEMM   INT8  no-MoDiff   INT8  w/ MoDiff   INT4  no-MoDiff   INT4  w/ MoDiff
+  ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  C192→qkv                  315.6             144.6             119.3             331.8             626.0             584.8            1146.2            1339.3            1096.3            1387.6
+  C192→proj                 122.8              63.1             119.9             112.1             227.8             205.2             528.3             598.5             498.0             676.0
+  C384→qkv                  898.3             469.0             239.1             666.7            1363.3            1235.0            2403.2            2764.2            2259.2            2842.8
+  C384→proj                 318.4             170.0             238.9             222.1             464.4             418.1            1061.1            1191.7             998.6            1355.9
+  C768→qkv                 3205.2            1939.8             483.2            1350.9            3305.1            2736.9            5411.6            6116.6            4827.5            5983.7
+  C768→proj                1105.9             660.8             483.2             444.2            1112.0             918.5            2308.6            2556.6            2086.8            2799.7
+
+  Speedup relative to FP16 F.conv1d (higher is faster)
+  Layer               FP32 conv1d       FP16 conv1d   K1+K2 (cast in)  K7+K8 (cast out)      K4 INT8 GEMM      K4 INT4 GEMM   INT8  no-MoDiff   INT8  w/ MoDiff   INT4  no-MoDiff   INT4  w/ MoDiff
+  ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  C192→qkv                  0.46×             1.00×             1.21×             0.44×             0.23×             0.25×             0.13×             0.11×             0.13×             0.10×
+  C192→proj                 0.51×             1.00×             0.53×             0.56×             0.28×             0.31×             0.12×             0.11×             0.13×             0.09×
+  C384→qkv                  0.52×             1.00×             1.96×             0.70×             0.34×             0.38×             0.20×             0.17×             0.21×             0.16×
+  C384→proj                 0.53×             1.00×             0.71×             0.77×             0.37×             0.41×             0.16×             0.14×             0.17×             0.13×
+  C768→qkv                  0.61×             1.00×             4.01×             1.44×             0.59×             0.71×             0.36×             0.32×             0.40×             0.32×
+  C768→proj                 0.60×             1.00×             1.37×             1.49×             0.59×             0.72×             0.29×             0.26×             0.32×             0.24×
+
+============================================================================
+ KERNEL BREAKDOWN — avg µs across all 6 layers
+============================================================================
+  FP32 conv1d           : avg= 994.4 µs  min= 122.8  max=3205.2
+  FP16 conv1d           : avg= 574.6 µs  min=  63.1  max=1939.8
+  K1+K2 (cast in)       : avg= 280.6 µs  min= 119.3  max= 483.2
+  K7+K8 (cast out)      : avg= 521.3 µs  min= 112.1  max=1350.9
+  K4 INT8 GEMM          : avg=1183.1 µs  min= 227.8  max=3305.1
+  K4 INT4 GEMM          : avg=1016.4 µs  min= 205.2  max=2736.9
+  INT8  no-MoDiff       : avg=2143.2 µs  min= 528.3  max=5411.6
+  INT8  w/ MoDiff       : avg=2427.8 µs  min= 598.5  max=6116.6
+  INT4  no-MoDiff       : avg=1961.1 µs  min= 498.0  max=4827.5
+  INT4  w/ MoDiff       : avg=2507.6 µs  min= 676.0  max=5983.7
+
+============================================================================
+ PIPELINE AGGREGATION — total for all 42 Conv1d calls per diffusion step
+ (21 AttentionBlocks × 2 projections each: qkv + proj_out)
+============================================================================
+  FP32 conv1d           : 40.225 ms / step
+  FP16 conv1d           : 23.033 ms / step
+  K1+K2 (cast in)       : 11.774 ms / step
+  K7+K8 (cast out)      : 21.877 ms / step
+  K4 INT8 GEMM          : 49.048 ms / step
+  K4 INT4 GEMM          : 42.414 ms / step
+  INT8  no-MoDiff       : 89.336 ms / step
+  INT8  w/ MoDiff       : 101.287 ms / step
+  INT4  no-MoDiff       : 82.035 ms / step
+  INT4  w/ MoDiff       : 105.006 ms / step
+
+  Reference full-pipeline measurements (200-step benchmark, bs=42):
+    fp32            : 4.52 ms/step   (incl. VAE + all UNet ops)
+    fp16            : 1.63 ms/step
+    int8_attn_modiff: 2.10 ms/step
+    int4_attn_modiff: 2.00 ms/step
+
+  Note: aggregated single-layer timings underestimate real pipeline cost;
+  full-pipeline includes LayerNorm, softmax, non-attn UNet layers, etc.
+
+============================================================================
+ LEGEND
+============================================================================
+  K1+K2  : fp16 [B,C,L] NCW → fp32 [B*L,C,1,1] channels-last
+           (tiled shared-memory transpose + dtype cast, single CUDA kernel)
+  K7+K8  : fp32 [B*L,C,1,1] CL → fp16 [B,C,L] NCW
+           (tiled shared-memory transpose + dtype cast, single CUDA kernel)
+  K4     : CUTLASS INT8/INT4 GEMM + dequantize (no layout overhead)
+
+  INT8 no-MoDiff : K1+K2 → K3(scale+quant) → K4(GEMM) → K5(scale) → K7+K8
+  INT8 w/MoDiff  : K1+K2+K3(fused delta,update_ahat) → K4(GEMM+acc) → K7+K8
+  INT4 no-MoDiff : K1+K2 → K3(scale+quant+pack) → K4(GEMM) → K5 → K7+K8
+  INT4 w/MoDiff  : K1+K2 → K3(delta+pack,update_ahat) → K4(GEMM+acc) → K7+K8
+
+  MoDiff temporal delta caching: instead of quantizing the full activation,
+  quantize only the temporal difference (input_t - a_hat_{t+1}) and accumulate
+  into o_hat cache. Reduces quantization error for temporally coherent inputs.
+  Reference: Gao et al. 'MoDiff' ICML 2025.
+

@@ -1,0 +1,286 @@
+GPU: NVIDIA A40
+Profiling: ['fp16', 'int8_baseline', 'int4_baseline']  |  batch=42  |  5 warmup + 15 timed steps
+
+
+──────────────────────────────────────────────────────────────────────
+  MODE: FP16
+Loading model from models/ldm/lsun_churches256/model.ckpt
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+
+============================================================
+Applying ResBlock Fusion Optimization
+============================================================
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+
+============================================================
+ResBlock Fusion Summary
+============================================================
+Total fused blocks: 35
+  - OpenAI ResBlocks: 35
+  - ResNet Blocks: 0
+Fusion method: PyTorch F.group_norm + F.silu (compiler-fused)
+Expected speedup: 8-12%
+============================================================
+
+  [warmup  5 steps] ...Data shape for DDIM sampling is (42, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 5 timesteps
+DDIM Sampler:   0%|          | 0/5 [00:00<?, ?it/s]DDIM Sampler:  20%|██        | 1/5 [00:02<00:11,  2.82s/it]DDIM Sampler:  60%|██████    | 3/5 [00:02<00:01,  1.28it/s]DDIM Sampler: 100%|██████████| 5/5 [00:03<00:00,  2.42it/s]DDIM Sampler: 100%|██████████| 5/5 [00:03<00:00,  1.62it/s]
+ done
+  [profile 15 steps] ...Data shape for DDIM sampling is (42, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 16 timesteps
+DDIM Sampler:   0%|          | 0/16 [00:00<?, ?it/s]DDIM Sampler:  12%|█▎        | 2/16 [00:00<00:01, 12.93it/s]DDIM Sampler:  25%|██▌       | 4/16 [00:00<00:00, 12.80it/s]DDIM Sampler:  38%|███▊      | 6/16 [00:00<00:00, 12.81it/s]DDIM Sampler:  50%|█████     | 8/16 [00:00<00:00, 12.74it/s]DDIM Sampler:  62%|██████▎   | 10/16 [00:00<00:00, 12.91it/s]DDIM Sampler:  75%|███████▌  | 12/16 [00:00<00:00, 13.07it/s]DDIM Sampler:  88%|████████▊ | 14/16 [00:01<00:00, 13.01it/s]DDIM Sampler: 100%|██████████| 16/16 [00:01<00:00, 12.93it/s]DDIM Sampler: 100%|██████████| 16/16 [00:01<00:00, 12.91it/s]
+ done  (1242 ms total, 82.805 ms/step)
+
+══════════════════════════════════════════════════════════════════════
+  FP16                            batch=42   15 timed steps
+  wall = 1242 ms   =  82.805 ms/step
+══════════════════════════════════════════════════════════════════════
+  Category                ms/step    % step   calls/step
+  ────────────────────────────────────────────────────────
+  attention                20.736      25.0           22
+  fp_conv                  28.005      33.8           95
+  groupnorm                11.151      13.5           38
+  silu                      0.510       0.6           39
+  linear                    2.137       2.6           39
+  upsample                  0.964       1.2            9
+  downsample                0.327       0.4            9
+  other                    18.975      22.9            —
+  ────────────────────────────────────────────────────────
+  TOTAL (wall)             82.805     100.0             
+
+──────────────────────────────────────────────────────────────────────
+  MODE: INT8_BASELINE
+Loading model from models/ldm/lsun_churches256/model.ckpt
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+
+============================================================
+Applying ResBlock Fusion Optimization
+============================================================
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+
+============================================================
+ResBlock Fusion Summary
+============================================================
+Total fused blocks: 35
+  - OpenAI ResBlocks: 35
+  - ResNet Blocks: 0
+Fusion method: PyTorch F.group_norm + F.silu (compiler-fused)
+Expected speedup: 8-12%
+============================================================
+
+Converting UNet to INT8 Baseline (INT8 kernels without MoDiff temporal caching) (89 conv layers)...
+Converting UNet linear layers to INT8 (37 linear layers)...
+Initializing buffer pool for batch_size=42, resolution=256
+✓ Buffer pool initialized: 140 layers, 0.0 MB
+Loading static calibration from integration/calibration/int8_calibration.pt
+✓ Loaded 70 INT8 conv layer scales for baseline (static quantization enabled)
+✓ Loaded 37 INT8 linear layer scales for baseline
+  [warmup  5 steps] ...Data shape for DDIM sampling is (42, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 5 timesteps
+DDIM Sampler:   0%|          | 0/5 [00:00<?, ?it/s]DDIM Sampler:  40%|████      | 2/5 [00:00<00:00, 14.34it/s]DDIM Sampler:  80%|████████  | 4/5 [00:00<00:00, 15.18it/s]DDIM Sampler: 100%|██████████| 5/5 [00:00<00:00, 15.18it/s]
+ done
+  [profile 15 steps] ...Data shape for DDIM sampling is (42, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 16 timesteps
+DDIM Sampler:   0%|          | 0/16 [00:00<?, ?it/s]DDIM Sampler:  12%|█▎        | 2/16 [00:00<00:00, 14.86it/s]DDIM Sampler:  25%|██▌       | 4/16 [00:00<00:00, 15.06it/s]DDIM Sampler:  38%|███▊      | 6/16 [00:00<00:00, 15.07it/s]DDIM Sampler:  50%|█████     | 8/16 [00:00<00:00, 15.07it/s]DDIM Sampler:  62%|██████▎   | 10/16 [00:00<00:00, 14.91it/s]DDIM Sampler:  75%|███████▌  | 12/16 [00:00<00:00, 15.10it/s]DDIM Sampler:  88%|████████▊ | 14/16 [00:00<00:00, 15.08it/s]DDIM Sampler: 100%|██████████| 16/16 [00:01<00:00, 10.30it/s]DDIM Sampler: 100%|██████████| 16/16 [00:01<00:00, 12.74it/s]
+ done  (1258 ms total, 83.895 ms/step)
+
+══════════════════════════════════════════════════════════════════════
+  INT8_BASELINE                   batch=42   15 timed steps
+  wall = 1258 ms   =  83.895 ms/step
+══════════════════════════════════════════════════════════════════════
+  Category                ms/step    % step   calls/step
+  ────────────────────────────────────────────────────────
+  attention                18.602      22.2           22
+  quant_conv               23.084      27.5           75
+  fp_conv                   3.325       4.0           20
+  groupnorm                 9.124      10.9           38
+  silu                      0.395       0.5           39
+  upsample                  0.744       0.9            9
+  downsample                0.348       0.4            9
+  other                    28.273      33.7            —
+  ────────────────────────────────────────────────────────
+  TOTAL (wall)             83.895     100.0             
+
+──────────────────────────────────────────────────────────────────────
+  MODE: INT4_BASELINE
+Loading model from models/ldm/lsun_churches256/model.ckpt
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+
+============================================================
+Applying ResBlock Fusion Optimization
+============================================================
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+
+============================================================
+ResBlock Fusion Summary
+============================================================
+Total fused blocks: 35
+  - OpenAI ResBlocks: 35
+  - ResNet Blocks: 0
+Fusion method: PyTorch F.group_norm + F.silu (compiler-fused)
+Expected speedup: 8-12%
+============================================================
+
+Converting UNet to INT4 Baseline (INT4 kernels without MoDiff temporal caching) (89 conv layers)...
+Converting UNet linear layers to INT4 (37 linear layers)...
+⚠️  Buffer pool already initialized, skipping
+Loading INT4 calibration from integration/calibration/int4_calibration.pt
+✓ Loaded static scales for 70 INT4 baseline conv layers
+✓ Loaded 37 INT4 linear layer scales for baseline
+  [warmup  5 steps] ...Data shape for DDIM sampling is (42, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 5 timesteps
+DDIM Sampler:   0%|          | 0/5 [00:00<?, ?it/s]DDIM Sampler:  40%|████      | 2/5 [00:00<00:00, 16.97it/s]DDIM Sampler:  80%|████████  | 4/5 [00:00<00:00, 17.03it/s]DDIM Sampler: 100%|██████████| 5/5 [00:00<00:00, 17.02it/s]
+ done
+  [profile 15 steps] ...Data shape for DDIM sampling is (42, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 16 timesteps
+DDIM Sampler:   0%|          | 0/16 [00:00<?, ?it/s]DDIM Sampler:  12%|█▎        | 2/16 [00:00<00:00, 16.85it/s]DDIM Sampler:  25%|██▌       | 4/16 [00:00<00:00, 16.30it/s]DDIM Sampler:  38%|███▊      | 6/16 [00:00<00:00, 16.53it/s]DDIM Sampler:  50%|█████     | 8/16 [00:00<00:00, 16.64it/s]DDIM Sampler:  62%|██████▎   | 10/16 [00:00<00:00, 16.70it/s]DDIM Sampler:  75%|███████▌  | 12/16 [00:00<00:00, 16.74it/s]DDIM Sampler:  88%|████████▊ | 14/16 [00:00<00:00, 16.77it/s]DDIM Sampler: 100%|██████████| 16/16 [00:00<00:00, 16.78it/s]DDIM Sampler: 100%|██████████| 16/16 [00:00<00:00, 16.70it/s]
+ done  (960 ms total, 63.974 ms/step)
+
+══════════════════════════════════════════════════════════════════════
+  INT4_BASELINE                   batch=42   15 timed steps
+  wall = 960 ms   =  63.974 ms/step
+══════════════════════════════════════════════════════════════════════
+  Category                ms/step    % step   calls/step
+  ────────────────────────────────────────────────────────
+  attention                17.915      28.0           22
+  quant_conv               18.184      28.4           75
+  fp_conv                   3.073       4.8           20
+  groupnorm                 8.871      13.9           38
+  silu                      0.366       0.6           39
+  upsample                  0.677       1.1            9
+  downsample                0.352       0.6            9
+  other                    14.537      22.7            —
+  ────────────────────────────────────────────────────────
+  TOTAL (wall)             63.974     100.0             
+
+
+════════════════════════════════════════════════════════════════════════════════
+  CROSS-MODE COMPARISON — ms/step  (batch=42, 15 timed steps)
+════════════════════════════════════════════════════════════════════════════════
+  Category                          fp16     int8_baseline     int4_baseline
+  ──────────────────────────────────────────────────────────────────────
+  attention                       20.736            18.602            17.915
+  quant_conv                         ---            23.084            18.184
+  fp_conv                         28.005             3.325             3.073
+  groupnorm                       11.151             9.124             8.871
+  silu                             0.510             0.395             0.366
+  linear                           2.137               ---               ---
+  upsample                         0.964             0.744             0.677
+  downsample                       0.327             0.348             0.352
+  other                           18.975            28.273            14.537
+  ──────────────────────────────────────────────────────────────────────
+  TOTAL (wall)                    82.805            83.895            63.974
+════════════════════════════════════════════════════════════════════════════════
+
+✓ Saved JSON to integration/results/profile_ops.json

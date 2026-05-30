@@ -1,43 +1,43 @@
 {
   "fp32": {
-    "total_time": 118.37143778800964,
-    "num_samples": 128,
-    "time_per_sample": 0.9247768577188253,
-    "time_per_step_ms": 4.623884288594127
+    "total_time": 28.4392831325531,
+    "num_samples": 126,
+    "time_per_sample": 0.22570859629010398,
+    "time_per_step_ms": 4.514171925802079
   },
   "fp16": {
-    "total_time": 53.104506492614746,
-    "num_samples": 128,
-    "time_per_sample": 0.4148789569735527,
-    "time_per_step_ms": 2.0743947848677635,
-    "speedup": 2.229028110909412
+    "total_time": 11.978845596313477,
+    "num_samples": 126,
+    "time_per_sample": 0.09507020314534505,
+    "time_per_step_ms": 1.9014040629069011,
+    "speedup": 2.3741255285321796
   },
   "int8": {
-    "total_time": 46.37914514541626,
-    "num_samples": 128,
-    "time_per_sample": 0.36233707144856453,
-    "time_per_step_ms": 1.8116853572428226,
-    "speedup": 2.552255704948208
+    "total_time": 10.537453651428223,
+    "num_samples": 126,
+    "time_per_sample": 0.08363058453514463,
+    "time_per_step_ms": 1.6726116907028925,
+    "speedup": 2.6988762250639655
   },
   "int8_baseline": {
-    "total_time": 45.955382108688354,
-    "num_samples": 128,
-    "time_per_sample": 0.35902642272412777,
-    "time_per_step_ms": 1.7951321136206388,
-    "speedup": 2.575790524558173
+    "total_time": 9.618292331695557,
+    "num_samples": 126,
+    "time_per_sample": 0.07633565342615521,
+    "time_per_step_ms": 1.526713068523104,
+    "speedup": 2.956791304713827
   },
   "int4": {
-    "total_time": 43.51865220069885,
-    "num_samples": 128,
-    "time_per_sample": 0.3399894703179598,
-    "time_per_step_ms": 1.699947351589799,
-    "speedup": 2.7200161724243093
+    "total_time": 9.659013986587524,
+    "num_samples": 126,
+    "time_per_sample": 0.07665884116339305,
+    "time_per_step_ms": 1.533176823267861,
+    "speedup": 2.944325701572003
   },
   "int4_baseline": {
-    "total_time": 37.40629243850708,
-    "num_samples": 128,
-    "time_per_sample": 0.29223665967583656,
-    "time_per_step_ms": 1.4611832983791828,
-    "speedup": 3.164479291354595
+    "total_time": 9.002505779266357,
+    "num_samples": 126,
+    "time_per_sample": 0.07144845856560601,
+    "time_per_step_ms": 1.4289691713121202,
+    "speedup": 3.159040808177155
   }
 }

@@ -266,7 +266,7 @@ class BenchmarkRunner:
     
     def __init__(self, config_path: str, ckpt_path: str, output_dir: str,
                  batch_size: int = 4, steps: int = 50, shape: tuple = (4, 32, 32),
-                 calibration_path: str = None):
+                 calibration_path: str = None, skip_attention: bool = False):
         self.config_path = config_path
         self.ckpt_path = ckpt_path
         self.output_dir = output_dir
@@ -274,6 +274,7 @@ class BenchmarkRunner:
         self.steps = steps
         self.shape = shape
         self.calibration_path = calibration_path
+        self.skip_attention = skip_attention
         self.results = {}
         
         os.makedirs(output_dir, exist_ok=True)
@@ -314,7 +315,12 @@ class BenchmarkRunner:
                 m.use_checkpoint = False
         # Patch AttentionBlock to bypass checkpoint (it hardcodes flag=True)
         from ldm.modules.diffusionmodules.openaimodel import AttentionBlock
-        AttentionBlock.forward = lambda self, x: self._forward(x)
+        if self.skip_attention:
+            # Ablation: replace AttentionBlock with identity (skip all attention compute)
+            AttentionBlock.forward = lambda self, x: x
+            print("  → AttentionBlock skipped (identity pass-through, ablation mode)")
+        else:
+            AttentionBlock.forward = lambda self, x: self._forward(x)
         
         # Apply ResBlock fusion for all modes (8-12% speedup)
         from integration.fused_ops.fused_resblock import fuse_resblocks_in_module, print_fusion_summary
@@ -454,6 +460,72 @@ class BenchmarkRunner:
             enable_modiff_mode_int4(model.model.diffusion_model, True)
             # Wrap model to handle end-to-end quantization
             model.model.diffusion_model = FullPipelineInt4Wrapper(model.model.diffusion_model)
+        elif mode == 'attn_modiff':
+            # MoDiff applied to attention blocks (QKV + proj_out Conv1d layers).
+            # ResBlocks remain in FP16 (no INT8/INT4 quantization).
+            # This isolates the benefit of applying MoDiff temporal delta-caching
+            # to the linear projections inside each AttentionBlock.
+            from integration.kernels.modiff_attention import convert_attention_to_modiff
+            n = convert_attention_to_modiff(model.model.diffusion_model, act_bits=8, verbose=True)
+            print(f"  → MoDiff attention applied to {n} AttentionBlocks")
+        elif mode == 'int8_attn_modiff' and HAS_INT8:
+            # Full MoDiff pipeline: INT8 on ResBlock Conv2d  +  MoDiff on AttentionBlock Conv1d.
+            # This extends the original MoDiff scope to the attention linear sub-layers.
+            print(f"Converting UNet to INT8 + Attention MoDiff ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
+            convert_model_to_optimized_int8(model.model.diffusion_model)
+            if HAS_INT8_LINEAR:
+                print(f"Converting UNet linear layers to INT8 ({count_linear_layers(model.model.diffusion_model)} linear layers)...")
+                convert_model_to_int8_linear(model.model.diffusion_model)
+            from integration.utils.buffer_pool import initialize_buffer_pool
+            initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
+            if self.calibration_path and os.path.exists(self.calibration_path):
+                print(f"Loading static calibration from {self.calibration_path}")
+                scales = torch.load(self.calibration_path, weights_only=True)
+                config = get_calibration_config_int8()
+                config.scales = scales
+                config.is_calibrated = True
+                loaded = apply_static_scales(model.model.diffusion_model, scales)
+                print(f"✓ Loaded {loaded} INT8 conv layer scales (static quantization enabled)")
+                if HAS_INT8_LINEAR:
+                    linear_scales = {k: v for k, v in scales.items() if k.startswith('linear:')}
+                    if linear_scales:
+                        clean_scales = {k.replace('linear:', ''): v for k, v in linear_scales.items()}
+                        loaded_lin = apply_linear_static_scales(model.model.diffusion_model, clean_scales)
+                        print(f"✓ Loaded {loaded_lin} INT8 linear layer scales")
+            enable_modiff_mode_int8(model.model.diffusion_model, True)
+            if HAS_INT8_LINEAR:
+                enable_modiff_mode_linear(model.model.diffusion_model, True)
+            # Extend MoDiff to AttentionBlock Conv1d projections
+            from integration.kernels.modiff_attention import convert_attention_to_modiff
+            n = convert_attention_to_modiff(model.model.diffusion_model, act_bits=8, verbose=True)
+            print(f"  → MoDiff attention applied to {n} AttentionBlocks")
+        elif mode == 'int4_attn_modiff' and HAS_INT4:
+            # Full MoDiff pipeline: INT4 on ResBlock Conv2d  +  MoDiff on AttentionBlock Conv1d.
+            print(f"Converting UNet to INT4 + Attention MoDiff ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
+            convert_model_to_optimized_int4(model.model.diffusion_model)
+            if HAS_INT4_LINEAR:
+                print(f"Converting UNet linear layers to INT4 ({count_linear_layers(model.model.diffusion_model)} linear layers)...")
+                convert_model_to_int4_linear(model.model.diffusion_model)
+            from integration.utils.buffer_pool import initialize_buffer_pool
+            initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
+            if self.calibration_path and os.path.exists(self.calibration_path):
+                print(f"Loading INT4 calibration from {self.calibration_path}")
+                scales = torch.load(self.calibration_path, weights_only=True)
+                loaded = apply_int4_static_scales(model.model.diffusion_model, scales)
+                print(f"✓ Loaded static scales for {loaded} INT4 conv layers")
+                if HAS_INT4_LINEAR:
+                    linear_scales = {k: v for k, v in scales.items() if k.startswith('linear:')}
+                    if linear_scales:
+                        clean_scales = {k.replace('linear:', ''): v for k, v in linear_scales.items()}
+                        loaded_lin = apply_int4_linear_static_scales(model.model.diffusion_model, clean_scales)
+                        print(f"✓ Loaded {loaded_lin} INT4 linear layer scales")
+            enable_modiff_mode_int4(model.model.diffusion_model, True)
+            if HAS_INT4_LINEAR:
+                enable_modiff_mode_int4_linear(model.model.diffusion_model, True)
+            # Extend MoDiff to AttentionBlock Conv1d projections
+            from integration.kernels.modiff_attention import convert_attention_to_modiff
+            n = convert_attention_to_modiff(model.model.diffusion_model, act_bits=8, verbose=True)
+            print(f"  → MoDiff attention applied to {n} AttentionBlocks")
         
         return model, DDIMSampler(model)
     
@@ -549,14 +621,17 @@ class BenchmarkRunner:
         # Full warmup at actual batch size + step count to let cuDNN benchmark
         # select optimal kernels. Without this, first timed run includes kernel selection.
         print(f"Warming up cuDNN (full {self.steps}-step pass at batch_size={self.batch_size})...")
-        if mode in ('int8', 'int8_baseline') and HAS_INT8:
+        if mode in ('int8', 'int8_baseline', 'int8_attn_modiff') and HAS_INT8:
             reset_modiff_state_int8(model.model.diffusion_model)
-        elif mode in ('int4', 'int4_baseline') and HAS_INT4:
+        elif mode in ('int4', 'int4_baseline', 'int4_attn_modiff') and HAS_INT4:
             reset_modiff_state_int4(model.model.diffusion_model)
-        if mode in ('int8', 'int8_baseline') and HAS_INT8_LINEAR:
+        if mode in ('int8', 'int8_baseline', 'int8_attn_modiff') and HAS_INT8_LINEAR:
             reset_modiff_state_linear(model.model.diffusion_model)
-        elif mode in ('int4', 'int4_baseline') and HAS_INT4_LINEAR:
+        elif mode in ('int4', 'int4_baseline', 'int4_attn_modiff') and HAS_INT4_LINEAR:
             reset_modiff_state_int4_linear(model.model.diffusion_model)
+        if mode in ('attn_modiff', 'int8_attn_modiff', 'int4_attn_modiff'):
+            from integration.kernels.modiff_attention import reset_attention_modiff
+            reset_attention_modiff(model.model.diffusion_model)
         with torch.inference_mode():
             sampler.sample(S=self.steps, batch_size=self.batch_size, shape=self.shape, eta=0.0, verbose=False)
         torch.cuda.synchronize()
@@ -568,14 +643,17 @@ class BenchmarkRunner:
         while generated < num_samples:
             batch = min(self.batch_size, num_samples - generated)
             
-            if mode in ('int8', 'int8_baseline') and HAS_INT8:
+            if mode in ('int8', 'int8_baseline', 'int8_attn_modiff') and HAS_INT8:
                 reset_modiff_state_int8(model.model.diffusion_model)
-            elif mode in ('int4', 'int4_baseline') and HAS_INT4:
+            elif mode in ('int4', 'int4_baseline', 'int4_attn_modiff') and HAS_INT4:
                 reset_modiff_state_int4(model.model.diffusion_model)
-            if mode in ('int8', 'int8_baseline') and HAS_INT8_LINEAR:
+            if mode in ('int8', 'int8_baseline', 'int8_attn_modiff') and HAS_INT8_LINEAR:
                 reset_modiff_state_linear(model.model.diffusion_model)
-            elif mode in ('int4', 'int4_baseline') and HAS_INT4_LINEAR:
+            elif mode in ('int4', 'int4_baseline', 'int4_attn_modiff') and HAS_INT4_LINEAR:
                 reset_modiff_state_int4_linear(model.model.diffusion_model)
+            if mode in ('attn_modiff', 'int8_attn_modiff', 'int4_attn_modiff'):
+                from integration.kernels.modiff_attention import reset_attention_modiff
+                reset_attention_modiff(model.model.diffusion_model)
             # Note: baseline modes have state reset but MoDiff optimizations disabled
             
             torch.cuda.synchronize()
@@ -608,9 +686,9 @@ class BenchmarkRunner:
         # Determine calibration path if not explicitly provided
         original_calib_path = self.calibration_path
         if not self.calibration_path:
-            if mode in ('int8', 'int8_baseline'):
+            if mode in ('int8', 'int8_baseline', 'int8_attn_modiff'):
                 self.calibration_path = 'integration/calibration/int8_calibration.pt'
-            elif mode in ('int4', 'int4_baseline'):
+            elif mode in ('int4', 'int4_baseline', 'int4_attn_modiff'):
                 self.calibration_path = 'integration/calibration/int4_calibration.pt'
 
         # If forcing recalibration, ignore existing file during setup
@@ -732,7 +810,7 @@ class BenchmarkRunner:
         print("-" * 55)
         
         baseline = self.results.get('fp32', {}).get('time_per_sample', 1.0)
-        for mode in ['fp32', 'fp16', 'int8', 'int8_baseline', 'int4', 'int4_baseline']:
+        for mode in ['fp32', 'fp16', 'int8', 'int8_baseline', 'int4', 'int4_baseline', 'attn_modiff', 'int8_attn_modiff', 'int4_attn_modiff']:
             if mode in self.results:
                 r = self.results[mode]
                 t = f"{r['time_per_sample']:.3f}s"
@@ -755,12 +833,17 @@ def main():
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--steps', type=int, default=200)
     parser.add_argument('--num_samples', type=int, default=128)
-    parser.add_argument('--mode', type=str, choices=['all', 'fp32', 'fp16', 'int8', 'int8_baseline', 'int4', 'int4_baseline'], default='all')
+    parser.add_argument('--mode', type=str,
+                       choices=['all', 'fp32', 'fp16', 'int8', 'int8_baseline', 'int4', 'int4_baseline',
+                                'attn_modiff', 'int8_attn_modiff', 'int4_attn_modiff'],
+                       default='all')
     parser.add_argument('--eval_fid', action='store_true', help='Compute FID between modes')
     parser.add_argument('--skip_calibration', action='store_true')
     parser.add_argument('--force_recalibrate', action='store_true', help='Force regeneration of calibration scales')
     parser.add_argument('--calibration', type=str, default=None,
                        help='Path to static calibration file (e.g., integration/calibration/int8_calibration.pt)')
+    parser.add_argument('--no_attention', action='store_true',
+                       help='Skip all AttentionBlocks (identity pass-through). Ablation: conv-only baseline.')
     args = parser.parse_args()
     
     print(f"GPU: {torch.cuda.get_device_name()}")
@@ -769,13 +852,19 @@ def main():
     if args.calibration:
         print(f"Static calibration: {args.calibration}")
     
+    if args.no_attention:
+        print("NOTE: --no_attention enabled – all AttentionBlocks replaced with identity.")
+        print("      Output images will be lower quality (ablation study only).\n")
+
     runner = BenchmarkRunner(
         args.config, args.ckpt, args.output_dir,
         args.batch_size, args.steps, shape=(4, 32, 32),
-        calibration_path=args.calibration
+        calibration_path=args.calibration,
+        skip_attention=args.no_attention,
     )
     
     modes = ['fp32', 'fp16', 'int8', 'int8_baseline', 'int4', 'int4_baseline'] if args.mode == 'all' else [args.mode]
+    # attn_modiff modes are not included in 'all' (they extend the existing modes; run explicitly)
     
     for mode in modes:
         if mode == 'int8' and not HAS_INT8:

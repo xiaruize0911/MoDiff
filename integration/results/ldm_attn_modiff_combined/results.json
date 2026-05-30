@@ -1,0 +1,8 @@
+{
+  "int4_attn_modiff": {
+    "total_time": 9.389814853668213,
+    "num_samples": 84,
+    "time_per_sample": 0.11178351016271681,
+    "time_per_step_ms": 2.2356702032543363
+  }
+}
