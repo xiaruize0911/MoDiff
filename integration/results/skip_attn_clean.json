@@ -1,0 +1,133 @@
+{
+  "config": {
+    "steps": 50,
+    "num_samples": 16,
+    "batch_size": 8,
+    "calib": "integration/calibration/int8_calibration.pt",
+    "output_dir": "integration/results/skip_attn_clean",
+    "modes": [
+      "fp16",
+      "int8_baseline",
+      "int4_baseline"
+    ],
+    "output_json": "integration/results/skip_attn_clean.json"
+  },
+  "results": [
+    {
+      "label": "fp16_full_attn",
+      "mode": "fp16",
+      "no_attention": false,
+      "time_per_sample_s": 0.33048510551452637,
+      "time_per_step_ms": 6.609702110290527,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 49.2
+    },
+    {
+      "label": "fp16_skip_attn",
+      "mode": "fp16",
+      "no_attention": true,
+      "time_per_sample_s": 0.17212837934494019,
+      "time_per_step_ms": 3.4425675868988037,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 26.9
+    },
+    {
+      "label": "int8_baseline_full_attn",
+      "mode": "int8_baseline",
+      "no_attention": false,
+      "time_per_sample_s": 0.19106461107730865,
+      "time_per_step_ms": 3.821292221546173,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 26.1
+    },
+    {
+      "label": "int8_baseline_skip_attn",
+      "mode": "int8_baseline",
+      "no_attention": true,
+      "time_per_sample_s": 0.2025822252035141,
+      "time_per_step_ms": 4.051644504070282,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 28.0
+    },
+    {
+      "label": "int4_baseline_full_attn",
+      "mode": "int4_baseline",
+      "no_attention": false,
+      "time_per_sample_s": 0.28782258927822113,
+      "time_per_step_ms": 5.756451785564423,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 29.3
+    },
+    {
+      "label": "int4_baseline_skip_attn",
+      "mode": "int4_baseline",
+      "no_attention": true,
+      "time_per_sample_s": 0.1983845829963684,
+      "time_per_step_ms": 3.9676916599273686,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 28.4
+    }
+  ],
+  "paired": {
+    "fp16": {
+      "full": {
+        "label": "fp16_full_attn",
+        "mode": "fp16",
+        "no_attention": false,
+        "time_per_sample_s": 0.33048510551452637,
+        "time_per_step_ms": 6.609702110290527,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 49.2
+      },
+      "skip": {
+        "label": "fp16_skip_attn",
+        "mode": "fp16",
+        "no_attention": true,
+        "time_per_sample_s": 0.17212837934494019,
+        "time_per_step_ms": 3.4425675868988037,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 26.9
+      }
+    },
+    "int8_baseline": {
+      "full": {
+        "label": "int8_baseline_full_attn",
+        "mode": "int8_baseline",
+        "no_attention": false,
+        "time_per_sample_s": 0.19106461107730865,
+        "time_per_step_ms": 3.821292221546173,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 26.1
+      },
+      "skip": {
+        "label": "int8_baseline_skip_attn",
+        "mode": "int8_baseline",
+        "no_attention": true,
+        "time_per_sample_s": 0.2025822252035141,
+        "time_per_step_ms": 4.051644504070282,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 28.0
+      }
+    },
+    "int4_baseline": {
+      "full": {
+        "label": "int4_baseline_full_attn",
+        "mode": "int4_baseline",
+        "no_attention": false,
+        "time_per_sample_s": 0.28782258927822113,
+        "time_per_step_ms": 5.756451785564423,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 29.3
+      },
+      "skip": {
+        "label": "int4_baseline_skip_attn",
+        "mode": "int4_baseline",
+        "no_attention": true,
+        "time_per_sample_s": 0.1983845829963684,
+        "time_per_step_ms": 3.9676916599273686,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 28.4
+      }
+    }
+  }
+}

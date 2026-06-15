@@ -1,0 +1,45 @@
+
+[FULL] Running FP16 ...
+  fp16_full_attn                          330.5 ms/sample     6.61 ms/step
+
+[SKIP] Running FP16 ...
+  fp16_skip_attn                          172.1 ms/sample     3.44 ms/step
+
+[FULL] Running INT8_BASELINE ...
+  int8_baseline_full_attn                 191.1 ms/sample     3.82 ms/step
+
+[SKIP] Running INT8_BASELINE ...
+  int8_baseline_skip_attn                 202.6 ms/sample     4.05 ms/step
+
+[FULL] Running INT4_BASELINE ...
+  int4_baseline_full_attn                 287.8 ms/sample     5.76 ms/step
+
+[SKIP] Running INT4_BASELINE ...
+  int4_baseline_skip_attn                 198.4 ms/sample     3.97 ms/step
+
+================================================================================
+SKIP ATTENTION BENCHMARK — CLEAN (subprocess-isolated)
+================================================================================
+GPU: NVIDIA A40  |  steps=50  batch=8  samples=16
+
+Mode                 Attn      ms/sample    ms/step    vs FP32   vs full_attn
+----------------------------------------------------------------------------
+  fp16               full          330.5       6.61          —          (ref)
+  fp16               SKIP          172.1       3.44          —         +47.9%
+
+  int8_baseline      full          191.1       3.82          —          (ref)
+  int8_baseline      SKIP          202.6       4.05          —          -6.0%
+
+  int4_baseline      full          287.8       5.76          —          (ref)
+  int4_baseline      SKIP          198.4       3.97          —         +31.1%
+
+================================================================================
+ATTENTION TIME ESTIMATE (from skip vs full delta)
+================================================================================
+  Mode                   Attn time (ms)    % of pipeline
+--------------------------------------------------------
+  fp16                 +         158.4 ms           47.9%
+  int8_baseline                 -11.5 ms           -6.0%
+  int4_baseline        +          89.4 ms           31.1%
+
+Results saved to integration/results/skip_attn_clean.json

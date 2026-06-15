@@ -1,0 +1,8 @@
+{
+  "int4_baseline": {
+    "total_time": 3.1741533279418945,
+    "num_samples": 16,
+    "time_per_sample": 0.1983845829963684,
+    "time_per_step_ms": 3.9676916599273686
+  }
+}

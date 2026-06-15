@@ -1,0 +1,185 @@
+{
+  "config": {
+    "config": "configs/latent-diffusion/lsun_churches-ldm-kl-8.yaml",
+    "ckpt": "models/ldm/lsun_churches256/model.ckpt",
+    "batch_sizes": [
+      1,
+      2,
+      4,
+      8,
+      16,
+      32
+    ],
+    "steps": 50,
+    "modes": [
+      "fp32",
+      "fp16",
+      "int8",
+      "int8_baseline",
+      "int4",
+      "int4_baseline"
+    ],
+    "int8_calib": "integration/calibration/int8_calibration.pt",
+    "int4_calib": "integration/calibration/int4_calibration.pt",
+    "num_batches": 3,
+    "output": "integration/results/batchsize_ablation.json"
+  },
+  "results": {
+    "fp32": {
+      "1": {
+        "time_per_sample_s": 1.3209,
+        "throughput": 0.757
+      },
+      "2": {
+        "time_per_sample_s": 0.7521,
+        "throughput": 1.33
+      },
+      "4": {
+        "time_per_sample_s": 0.4603,
+        "throughput": 2.172
+      },
+      "8": {
+        "time_per_sample_s": 0.3373,
+        "throughput": 2.965
+      },
+      "16": {
+        "time_per_sample_s": 0.2582,
+        "throughput": 3.873
+      },
+      "32": {
+        "time_per_sample_s": 0.2245,
+        "throughput": 4.455
+      }
+    },
+    "fp16": {
+      "1": {
+        "time_per_sample_s": 1.8935,
+        "throughput": 0.528
+      },
+      "2": {
+        "time_per_sample_s": 0.7004,
+        "throughput": 1.428
+      },
+      "4": {
+        "time_per_sample_s": 0.3145,
+        "throughput": 3.179
+      },
+      "8": {
+        "time_per_sample_s": 0.277,
+        "throughput": 3.61
+      },
+      "16": {
+        "time_per_sample_s": 0.2007,
+        "throughput": 4.983
+      },
+      "32": {
+        "time_per_sample_s": 0.1335,
+        "throughput": 7.491
+      }
+    },
+    "int8": {
+      "1": {
+        "time_per_sample_s": 2.5693,
+        "throughput": 0.389
+      },
+      "2": {
+        "time_per_sample_s": 0.6855,
+        "throughput": 1.459
+      },
+      "4": {
+        "time_per_sample_s": 0.8036,
+        "throughput": 1.244
+      },
+      "8": {
+        "time_per_sample_s": 0.2144,
+        "throughput": 4.665
+      },
+      "16": {
+        "time_per_sample_s": 0.1997,
+        "throughput": 5.007
+      },
+      "32": {
+        "time_per_sample_s": 0.1321,
+        "throughput": 7.569
+      }
+    },
+    "int8_baseline": {
+      "1": {
+        "time_per_sample_s": 1.1494,
+        "throughput": 0.87
+      },
+      "2": {
+        "time_per_sample_s": 0.5738,
+        "throughput": 1.743
+      },
+      "4": {
+        "time_per_sample_s": 0.3145,
+        "throughput": 3.18
+      },
+      "8": {
+        "time_per_sample_s": 0.1527,
+        "throughput": 6.549
+      },
+      "16": {
+        "time_per_sample_s": 0.0982,
+        "throughput": 10.186
+      },
+      "32": {
+        "time_per_sample_s": 0.0785,
+        "throughput": 12.732
+      }
+    },
+    "int4": {
+      "1": {
+        "time_per_sample_s": 1.2518,
+        "throughput": 0.799
+      },
+      "2": {
+        "time_per_sample_s": 0.6338,
+        "throughput": 1.578
+      },
+      "4": {
+        "time_per_sample_s": 0.3175,
+        "throughput": 3.15
+      },
+      "8": {
+        "time_per_sample_s": 0.1905,
+        "throughput": 5.249
+      },
+      "16": {
+        "time_per_sample_s": 0.1078,
+        "throughput": 9.276
+      },
+      "32": {
+        "time_per_sample_s": 0.0781,
+        "throughput": 12.797
+      }
+    },
+    "int4_baseline": {
+      "1": {
+        "time_per_sample_s": 1.1876,
+        "throughput": 0.842
+      },
+      "2": {
+        "time_per_sample_s": 0.5853,
+        "throughput": 1.709
+      },
+      "4": {
+        "time_per_sample_s": 0.2816,
+        "throughput": 3.551
+      },
+      "8": {
+        "time_per_sample_s": 0.1511,
+        "throughput": 6.616
+      },
+      "16": {
+        "time_per_sample_s": 0.0949,
+        "throughput": 10.54
+      },
+      "32": {
+        "time_per_sample_s": 0.0719,
+        "throughput": 13.911
+      }
+    }
+  }
+}

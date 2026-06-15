@@ -1,0 +1,35 @@
+
+[FULL] Running INT8 ...
+  int8_full_attn                          324.5 ms/sample     1.62 ms/step
+
+[SKIP] Running INT8 ...
+  int8_skip_attn                          248.6 ms/sample     1.24 ms/step
+
+[FULL] Running INT4 ...
+  int4_full_attn                          306.6 ms/sample     1.53 ms/step
+
+[SKIP] Running INT4 ...
+  int4_skip_attn                          235.3 ms/sample     1.18 ms/step
+
+================================================================================
+SKIP ATTENTION BENCHMARK — CLEAN (subprocess-isolated)
+================================================================================
+GPU: NVIDIA A40  |  steps=200  batch=42  samples=168
+
+Mode                 Attn      ms/sample    ms/step    vs FP32   vs full_attn
+----------------------------------------------------------------------------
+  int8               full          324.5       1.62          —          (ref)
+  int8               SKIP          248.6       1.24          —         +23.4%
+
+  int4               full          306.6       1.53          —          (ref)
+  int4               SKIP          235.3       1.18          —         +23.2%
+
+================================================================================
+ATTENTION TIME ESTIMATE (from skip vs full delta)
+================================================================================
+  Mode                   Attn time (ms)    % of pipeline
+--------------------------------------------------------
+  int8                 +          75.9 ms           23.4%
+  int4                 +          71.2 ms           23.2%
+
+Results saved to integration/results/skip_attn_clean_modiff_bs42_n168_s200.json

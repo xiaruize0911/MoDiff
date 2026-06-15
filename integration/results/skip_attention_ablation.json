@@ -1,0 +1,70 @@
+{
+  "config": {
+    "config": "configs/latent-diffusion/lsun_churches-ldm-kl-8.yaml",
+    "ckpt": "models/ldm/lsun_churches256/model.ckpt",
+    "batch_size": 8,
+    "steps": 50,
+    "int8_calib": "integration/calibration/int8_calibration.pt",
+    "int4_calib": "integration/calibration/int4_calibration.pt",
+    "num_batches": 3,
+    "output": "integration/results/skip_attention_ablation.json"
+  },
+  "results": {
+    "fp16_full_attn": {
+      "time_per_sample_s": 0.1813,
+      "time_per_step_ms": 3.625,
+      "throughput": 5.517,
+      "skip_attention": false,
+      "base_mode": "fp16"
+    },
+    "fp16_skip_attn": {
+      "time_per_sample_s": 0.1622,
+      "time_per_step_ms": 3.243,
+      "throughput": 6.167,
+      "skip_attention": true,
+      "base_mode": "fp16"
+    },
+    "int8_full_attn": {
+      "time_per_sample_s": 0.2664,
+      "time_per_step_ms": 5.329,
+      "throughput": 3.753,
+      "skip_attention": false,
+      "base_mode": "int8"
+    },
+    "int8_skip_attn": {
+      "time_per_sample_s": 0.383,
+      "time_per_step_ms": 7.659,
+      "throughput": 2.611,
+      "skip_attention": true,
+      "base_mode": "int8"
+    },
+    "int4_full_attn": {
+      "time_per_sample_s": 0.2006,
+      "time_per_step_ms": 4.012,
+      "throughput": 4.985,
+      "skip_attention": false,
+      "base_mode": "int4"
+    },
+    "int4_skip_attn": {
+      "time_per_sample_s": 0.1922,
+      "time_per_step_ms": 3.845,
+      "throughput": 5.202,
+      "skip_attention": true,
+      "base_mode": "int4"
+    },
+    "int8_base_full_attn": {
+      "time_per_sample_s": 0.2536,
+      "time_per_step_ms": 5.071,
+      "throughput": 3.944,
+      "skip_attention": false,
+      "base_mode": "int8_baseline"
+    },
+    "int8_base_skip_attn": {
+      "time_per_sample_s": 0.2732,
+      "time_per_step_ms": 5.464,
+      "throughput": 3.66,
+      "skip_attention": true,
+      "base_mode": "int8_baseline"
+    }
+  }
+}

@@ -1,0 +1,96 @@
+{
+  "config": {
+    "steps": 200,
+    "num_samples": 168,
+    "batch_size": 42,
+    "calib": null,
+    "int8_calib": "integration/calibration/int8_calibration.pt",
+    "int4_calib": "integration/calibration/int4_calibration.pt",
+    "output_dir": "integration/results/skip_attn_clean_modiff_bs42_n168_s200",
+    "modes": [
+      "int8",
+      "int4"
+    ],
+    "output_json": "integration/results/skip_attn_clean_modiff_bs42_n168_s200.json"
+  },
+  "results": [
+    {
+      "label": "int8_full_attn",
+      "mode": "int8",
+      "no_attention": false,
+      "time_per_sample_s": 0.3245157940047128,
+      "time_per_step_ms": 1.622578970023564,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 141.9
+    },
+    {
+      "label": "int8_skip_attn",
+      "mode": "int8",
+      "no_attention": true,
+      "time_per_sample_s": 0.24862004887490047,
+      "time_per_step_ms": 1.2431002443745023,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 100.7
+    },
+    {
+      "label": "int4_full_attn",
+      "mode": "int4",
+      "no_attention": false,
+      "time_per_sample_s": 0.3065530671959832,
+      "time_per_step_ms": 1.5327653359799158,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 114.9
+    },
+    {
+      "label": "int4_skip_attn",
+      "mode": "int4",
+      "no_attention": true,
+      "time_per_sample_s": 0.23533394648915246,
+      "time_per_step_ms": 1.1766697324457622,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 91.8
+    }
+  ],
+  "paired": {
+    "int8": {
+      "full": {
+        "label": "int8_full_attn",
+        "mode": "int8",
+        "no_attention": false,
+        "time_per_sample_s": 0.3245157940047128,
+        "time_per_step_ms": 1.622578970023564,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 141.9
+      },
+      "skip": {
+        "label": "int8_skip_attn",
+        "mode": "int8",
+        "no_attention": true,
+        "time_per_sample_s": 0.24862004887490047,
+        "time_per_step_ms": 1.2431002443745023,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 100.7
+      }
+    },
+    "int4": {
+      "full": {
+        "label": "int4_full_attn",
+        "mode": "int4",
+        "no_attention": false,
+        "time_per_sample_s": 0.3065530671959832,
+        "time_per_step_ms": 1.5327653359799158,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 114.9
+      },
+      "skip": {
+        "label": "int4_skip_attn",
+        "mode": "int4",
+        "no_attention": true,
+        "time_per_sample_s": 0.23533394648915246,
+        "time_per_step_ms": 1.1766697324457622,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 91.8
+      }
+    }
+  }
+}

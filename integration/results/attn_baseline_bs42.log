@@ -1,0 +1,46 @@
+GPU: NVIDIA A40
+CUTLASS available: True
+batch_size=42, steps=200
+
+============================================================
+PART 1: Per-Layer Attention Conv1d Microbenchmarks
+============================================================
+(Benchmarking FP16 vs INT8-CUTLASS-baseline vs INT8-naive vs MoDiff)
+
+  [res8_qkv_192→576]  Conv1d(192→576, L=1024, bs=42)
+    FP16:                 0.335 ms  (1.00×)
+    INT8 CUTLASS base         1.374 ms  (0.24×)
+    INT8 naive (sim)          1.877 ms  (0.18×)
+    MoDiff INT8 CUTLASS       1.678 ms  (0.20×)
+
+  [res16_qkv_384→1152]  Conv1d(384→1152, L=256, bs=42)
+    FP16:                 0.211 ms  (1.00×)
+    INT8 CUTLASS base         0.745 ms  (0.28×)
+    INT8 naive (sim)          1.222 ms  (0.17×)
+    MoDiff INT8 CUTLASS       0.884 ms  (0.24×)
+
+  [res32_qkv_768→2304]  Conv1d(768→2304, L=64, bs=42)
+    FP16:                 0.193 ms  (1.00×)
+    INT8 CUTLASS base         0.401 ms  (0.48×)
+    INT8 naive (sim)          0.905 ms  (0.21×)
+    MoDiff INT8 CUTLASS       0.458 ms  (0.42×)
+
+  [res8_proj_192→192]  Conv1d(192→192, L=1024, bs=42)
+    FP16:                 0.131 ms  (1.00×)
+    INT8 CUTLASS base         0.742 ms  (0.18×)
+    INT8 naive (sim)          1.276 ms  (0.10×)
+    MoDiff INT8 CUTLASS       0.943 ms  (0.14×)
+
+  [res16_proj_384→384]  Conv1d(384→384, L=256, bs=42)
+    FP16:                 0.079 ms  (1.00×)
+    INT8 CUTLASS base         0.398 ms  (0.20×)
+    INT8 naive (sim)          0.718 ms  (0.11×)
+    MoDiff INT8 CUTLASS       0.489 ms  (0.16×)
+
+  [res32_proj_768→768]  Conv1d(768→768, L=64, bs=42)
+    FP16:                 0.065 ms  (1.00×)
+    INT8 CUTLASS base         0.221 ms  (0.30×)
+    INT8 naive (sim)          0.467 ms  (0.14×)
+    MoDiff INT8 CUTLASS       0.252 ms  (0.26×)
+
+Results saved to integration/results/attn_baseline_benchmark_bs42.json

@@ -1,0 +1,135 @@
+{
+  "config": {
+    "steps": 200,
+    "num_samples": 168,
+    "batch_size": 42,
+    "calib": null,
+    "int8_calib": "integration/calibration/int8_calibration.pt",
+    "int4_calib": "integration/calibration/int4_calibration.pt",
+    "output_dir": "integration/results/skip_attn_clean_bs42_n168_s200",
+    "modes": [
+      "fp16",
+      "int8_baseline",
+      "int4_baseline"
+    ],
+    "output_json": "integration/results/skip_attn_clean_bs42_n168_s200.json"
+  },
+  "results": [
+    {
+      "label": "fp16_full_attn",
+      "mode": "fp16",
+      "no_attention": false,
+      "time_per_sample_s": 0.3066799399398622,
+      "time_per_step_ms": 1.5333996996993111,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 156.2
+    },
+    {
+      "label": "fp16_skip_attn",
+      "mode": "fp16",
+      "no_attention": true,
+      "time_per_sample_s": 0.227435759135655,
+      "time_per_step_ms": 1.137178795678275,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 112.7
+    },
+    {
+      "label": "int8_baseline_full_attn",
+      "mode": "int8_baseline",
+      "no_attention": false,
+      "time_per_sample_s": 0.348416207801728,
+      "time_per_step_ms": 1.7420810390086403,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 130.0
+    },
+    {
+      "label": "int8_baseline_skip_attn",
+      "mode": "int8_baseline",
+      "no_attention": true,
+      "time_per_sample_s": 0.2541944824513935,
+      "time_per_step_ms": 1.2709724122569674,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 110.4
+    },
+    {
+      "label": "int4_baseline_full_attn",
+      "mode": "int4_baseline",
+      "no_attention": false,
+      "time_per_sample_s": 0.2973575634615762,
+      "time_per_step_ms": 1.486787817307881,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 110.0
+    },
+    {
+      "label": "int4_baseline_skip_attn",
+      "mode": "int4_baseline",
+      "no_attention": true,
+      "time_per_sample_s": 0.21363519912674314,
+      "time_per_step_ms": 1.0681759956337156,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 88.3
+    }
+  ],
+  "paired": {
+    "fp16": {
+      "full": {
+        "label": "fp16_full_attn",
+        "mode": "fp16",
+        "no_attention": false,
+        "time_per_sample_s": 0.3066799399398622,
+        "time_per_step_ms": 1.5333996996993111,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 156.2
+      },
+      "skip": {
+        "label": "fp16_skip_attn",
+        "mode": "fp16",
+        "no_attention": true,
+        "time_per_sample_s": 0.227435759135655,
+        "time_per_step_ms": 1.137178795678275,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 112.7
+      }
+    },
+    "int8_baseline": {
+      "full": {
+        "label": "int8_baseline_full_attn",
+        "mode": "int8_baseline",
+        "no_attention": false,
+        "time_per_sample_s": 0.348416207801728,
+        "time_per_step_ms": 1.7420810390086403,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 130.0
+      },
+      "skip": {
+        "label": "int8_baseline_skip_attn",
+        "mode": "int8_baseline",
+        "no_attention": true,
+        "time_per_sample_s": 0.2541944824513935,
+        "time_per_step_ms": 1.2709724122569674,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 110.4
+      }
+    },
+    "int4_baseline": {
+      "full": {
+        "label": "int4_baseline_full_attn",
+        "mode": "int4_baseline",
+        "no_attention": false,
+        "time_per_sample_s": 0.2973575634615762,
+        "time_per_step_ms": 1.486787817307881,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 110.0
+      },
+      "skip": {
+        "label": "int4_baseline_skip_attn",
+        "mode": "int4_baseline",
+        "no_attention": true,
+        "time_per_sample_s": 0.21363519912674314,
+        "time_per_step_ms": 1.0681759956337156,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 88.3
+      }
+    }
+  }
+}

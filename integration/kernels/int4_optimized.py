@@ -534,18 +534,24 @@ class OptimizedInt4Conv2d(nn.Module):
 # Model conversion
 # ---------------------------------------------------------------------------
 
-def convert_model_to_optimized_int4(model: nn.Module, prefix: str = "", use_compile: bool = False) -> nn.Module:
+def convert_model_to_optimized_int4(model: nn.Module, prefix: str = "", use_compile: bool = False,
+                                     skip_pointwise: bool = True) -> nn.Module:
     for name, child in model.named_children():
         full_name = f"{prefix}.{name}" if prefix else name
         if isinstance(child, nn.Conv2d) and not isinstance(child, OptimizedInt4Conv2d):
             if child.in_channels < 32:
+                continue
+            # Require even in_channels for INT4 packing
+            if child.in_channels % 2 != 0:
                 continue
             is_skip = 'skip' in name
             is_final_out = full_name.startswith('out.')
             is_pointwise = child.kernel_size == (1, 1)
             is_grouped = child.groups != 1
 
-            if is_skip or is_final_out or is_pointwise or is_grouped:
+            if is_skip or is_final_out or is_grouped:
+                continue
+            if is_pointwise and skip_pointwise:
                 continue
 
             optimized_conv = OptimizedInt4Conv2d(child, layer_name=full_name, use_compile=use_compile)
@@ -554,7 +560,8 @@ def convert_model_to_optimized_int4(model: nn.Module, prefix: str = "", use_comp
                 optimized_conv = optimized_conv.to(target_device)
             setattr(model, name, optimized_conv)
         else:
-            convert_model_to_optimized_int4(child, prefix=full_name, use_compile=use_compile)
+            convert_model_to_optimized_int4(child, prefix=full_name, use_compile=use_compile,
+                                             skip_pointwise=skip_pointwise)
 
     # Convert remaining layers to channels_last for PyTorch perf,
     # then restore weight_packed buffers which must stay standard-contiguous
