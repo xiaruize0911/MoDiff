@@ -1,0 +1,127 @@
+
+[FULL              ] Running FP32 ...
+  fp32               full                     925.7 ms/sample     4.63 ms/step
+
+[SKIP_ATTN         ] Running FP32 ...
+  fp32               skip_attn                609.9 ms/sample     3.05 ms/step
+
+[SKIP_RES          ] Running FP32 ...
+  fp32               skip_res                 366.8 ms/sample     1.83 ms/step
+
+[SKIP_ATTN+SKIP_RES] Running FP32 ...
+  fp32               skip_attn+skip_res        44.1 ms/sample     0.22 ms/step
+
+[FULL              ] Running FP16 ...
+  fp16               full                     305.3 ms/sample     1.53 ms/step
+
+[SKIP_ATTN         ] Running FP16 ...
+  fp16               skip_attn                226.0 ms/sample     1.13 ms/step
+
+[SKIP_RES          ] Running FP16 ...
+  fp16               skip_res                 107.8 ms/sample     0.54 ms/step
+
+[SKIP_ATTN+SKIP_RES] Running FP16 ...
+  fp16               skip_attn+skip_res        26.2 ms/sample     0.13 ms/step
+
+[FULL              ] Running INT8_BASELINE ...
+  int8_baseline      full                     304.9 ms/sample     1.52 ms/step
+
+[SKIP_ATTN         ] Running INT8_BASELINE ...
+  int8_baseline      skip_attn                226.7 ms/sample     1.13 ms/step
+
+[SKIP_RES          ] Running INT8_BASELINE ...
+  int8_baseline      skip_res                 113.5 ms/sample     0.57 ms/step
+
+[SKIP_ATTN+SKIP_RES] Running INT8_BASELINE ...
+  int8_baseline      skip_attn+skip_res        27.4 ms/sample     0.14 ms/step
+
+[FULL              ] Running INT4_BASELINE ...
+  int4_baseline      full                     284.8 ms/sample     1.42 ms/step
+
+[SKIP_ATTN         ] Running INT4_BASELINE ...
+  int4_baseline      skip_attn                205.8 ms/sample     1.03 ms/step
+
+[SKIP_RES          ] Running INT4_BASELINE ...
+  int4_baseline      skip_res                 107.6 ms/sample     0.54 ms/step
+
+[SKIP_ATTN+SKIP_RES] Running INT4_BASELINE ...
+  int4_baseline      skip_attn+skip_res        25.0 ms/sample     0.13 ms/step
+
+[FULL              ] Running INT8 ...
+  int8               full                     319.4 ms/sample     1.60 ms/step
+
+[SKIP_ATTN         ] Running INT8 ...
+  int8               skip_attn                242.7 ms/sample     1.21 ms/step
+
+[SKIP_RES          ] Running INT8 ...
+  int8               skip_res                 106.2 ms/sample     0.53 ms/step
+
+[SKIP_ATTN+SKIP_RES] Running INT8 ...
+  int8               skip_attn+skip_res        24.6 ms/sample     0.12 ms/step
+
+[FULL              ] Running INT4 ...
+  int4               full                     302.2 ms/sample     1.51 ms/step
+
+[SKIP_ATTN         ] Running INT4 ...
+  int4               skip_attn                228.6 ms/sample     1.14 ms/step
+
+[SKIP_RES          ] Running INT4 ...
+  int4               skip_res                 108.9 ms/sample     0.54 ms/step
+
+[SKIP_ATTN+SKIP_RES] Running INT4 ...
+  int4               skip_attn+skip_res        26.0 ms/sample     0.13 ms/step
+
+==========================================================================================
+SKIP NON-LINEAR (RESBLOCK) BENCHMARK — CLEAN (subprocess-isolated)
+==========================================================================================
+GPU: NVIDIA A40  |  steps=200  batch=42  samples=168
+
+  Mode               Condition         ms/sample    ms/step   vs FP32    vs full
+--------------------------------------------------------------------------------
+  fp32               full                  925.7       4.63         —      (ref)
+  fp32               skip_attn             609.9       3.05         —     +34.1%
+  fp32               skip_resblock         366.8       1.83         —     +60.4%
+  fp32               skip_both              44.1       0.22         —     +95.2%
+
+  fp16               full                  305.3       1.53         —      (ref)
+  fp16               skip_attn             226.0       1.13         —     +26.0%
+  fp16               skip_resblock         107.8       0.54         —     +64.7%
+  fp16               skip_both              26.2       0.13         —     +91.4%
+
+  int8_baseline      full                  304.9       1.52         —      (ref)
+  int8_baseline      skip_attn             226.7       1.13         —     +25.7%
+  int8_baseline      skip_resblock         113.5       0.57         —     +62.8%
+  int8_baseline      skip_both              27.4       0.14         —     +91.0%
+
+  int4_baseline      full                  284.8       1.42         —      (ref)
+  int4_baseline      skip_attn             205.8       1.03         —     +27.8%
+  int4_baseline      skip_resblock         107.6       0.54         —     +62.2%
+  int4_baseline      skip_both              25.0       0.13         —     +91.2%
+
+  int8               full                  319.4       1.60         —      (ref)
+  int8               skip_attn             242.7       1.21         —     +24.0%
+  int8               skip_resblock         106.2       0.53         —     +66.7%
+  int8               skip_both              24.6       0.12         —     +92.3%
+
+  int4               full                  302.2       1.51         —      (ref)
+  int4               skip_attn             228.6       1.14         —     +24.4%
+  int4               skip_resblock         108.9       0.54         —     +64.0%
+  int4               skip_both              26.0       0.13         —     +91.4%
+
+==========================================================================================
+LAYER COST DECOMPOSITION (ms/sample at batch_size=42)
+==========================================================================================
+  Mode                ResBlock (ms)   Attention (ms)   Other (ms)   Total (ms)
+----------------------------------------------------------------------------
+  fp32                      565.8            322.8         44.1        925.7
+  fp16                      199.8             81.6         26.2        305.3
+  int8_baseline             199.3             86.1         27.4        304.9
+  int4_baseline             180.7             82.5         25.0        284.8
+  int8                      218.2             81.7         24.6        319.4
+  int4                      202.6             82.9         26.0        302.2
+
+  Note: Other = time embedding, GroupNorm outside blocks, decoder input/output, etc.
+        ResBlock + Attention + Other may not sum exactly to Total due to interaction
+        effects (memory bandwidth, cache, kernel overlap).
+
+Results saved to integration/results/skip_nonlinear_fixed_bs42_n168_s200.json

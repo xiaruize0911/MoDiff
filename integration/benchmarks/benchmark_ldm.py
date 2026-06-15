@@ -266,7 +266,8 @@ class BenchmarkRunner:
     
     def __init__(self, config_path: str, ckpt_path: str, output_dir: str,
                  batch_size: int = 4, steps: int = 50, shape: tuple = (4, 32, 32),
-                 calibration_path: str = None, skip_attention: bool = False):
+                 calibration_path: str = None, skip_attention: bool = False,
+                 skip_resblock: bool = False, skip_groupnorm: bool = False):
         self.config_path = config_path
         self.ckpt_path = ckpt_path
         self.output_dir = output_dir
@@ -275,6 +276,8 @@ class BenchmarkRunner:
         self.shape = shape
         self.calibration_path = calibration_path
         self.skip_attention = skip_attention
+        self.skip_resblock = skip_resblock
+        self.skip_groupnorm = skip_groupnorm
         self.results = {}
         
         os.makedirs(output_dir, exist_ok=True)
@@ -314,21 +317,58 @@ class BenchmarkRunner:
             if hasattr(m, 'use_checkpoint'):
                 m.use_checkpoint = False
         # Patch AttentionBlock to bypass checkpoint (it hardcodes flag=True)
-        from ldm.modules.diffusionmodules.openaimodel import AttentionBlock
+        from ldm.modules.diffusionmodules.openaimodel import AttentionBlock, ResBlock
         if self.skip_attention:
             # Ablation: replace AttentionBlock with identity (skip all attention compute)
             AttentionBlock.forward = lambda self, x: x
             print("  → AttentionBlock skipped (identity pass-through, ablation mode)")
         else:
             AttentionBlock.forward = lambda self, x: self._forward(x)
-        
         # Apply ResBlock fusion for all modes (8-12% speedup)
+        # NOTE: fusion must happen BEFORE setting skip_resblock lambda,
+        # because FusedResBlock is a different class and ignores ResBlock.forward patches.
         from integration.fused_ops.fused_resblock import fuse_resblocks_in_module, print_fusion_summary
         print("\n" + "="*60)
         print("Applying ResBlock Fusion Optimization")
         print("="*60)
         fuse_resblocks_in_module(model.model.diffusion_model, inplace=True)
         print_fusion_summary(model.model.diffusion_model)
+
+        if self.skip_resblock:
+            # Ablation: skip the expensive GroupNorm+SiLU+Conv3x3x2 in each ResBlock.
+            # CRITICAL: for updown ResBlocks (spatial downsampling/upsampling), we MUST
+            # call x_upd(x) first to preserve correct spatial dimensions — otherwise
+            # downstream Attention blocks receive wrong-sized (too large) tensors and
+            # run O(n^2) attention on full-resolution features, causing ~6× slowdown.
+            # Must patch FusedResBlock AFTER fusion, not ResBlock before fusion.
+            from integration.fused_ops.fused_resblock import FusedResBlock
+
+            def _fused_resblock_skip(self, x, emb=None, split=0):
+                # Apply spatial downsampling/upsampling first (preserves correct resolution)
+                if self.updown:
+                    x = self.x_upd(x)
+                return self.skip_connection(x)
+
+            def _resblock_skip(self, x, emb, split=0):
+                if self.updown:
+                    x = self.x_upd(x)
+                return self.skip_connection(x) if hasattr(self, 'skip_connection') else x
+
+            FusedResBlock.forward = _fused_resblock_skip
+            ResBlock.forward = _resblock_skip
+            print("  → FusedResBlock + ResBlock skipped (x_upd + skip_connection only, ablation mode)")
+        else:
+            ResBlock.forward = lambda self, x, emb, split=0: self._forward(x, emb, split)
+
+        if self.skip_groupnorm:
+            # Ablation: replace FusedGroupNormSiLU with identity to measure GroupNorm cost.
+            # Only affects FusedResBlock internals (fused_in_norm_silu, fused_out_norm_silu).
+            # Conv2d layers still run normally → measures "Conv-only ResBlock" timing.
+            # T_GN  = T_full - T_skip_gnorm
+            # T_Conv = T_skip_gnorm - T_skip_res
+            from integration.fused_ops.fused_resblock import FusedGroupNormSiLU
+            FusedGroupNormSiLU.forward = lambda self, x: x
+            print("  → FusedGroupNormSiLU skipped (identity, conv-only ResBlock ablation mode)")
         
         if mode == 'int8' and HAS_INT8:
             print(f"Converting UNet to INT8 ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
@@ -844,6 +884,10 @@ def main():
                        help='Path to static calibration file (e.g., integration/calibration/int8_calibration.pt)')
     parser.add_argument('--no_attention', action='store_true',
                        help='Skip all AttentionBlocks (identity pass-through). Ablation: conv-only baseline.')
+    parser.add_argument('--no_resblock', action='store_true',
+                       help='Skip all ResBlocks (identity pass-through). Ablation: attention-only baseline.')
+    parser.add_argument('--no_groupnorm', action='store_true',
+                       help='Skip GroupNorm+SiLU in FusedResBlock (identity). Ablation: conv-only ResBlock.')
     args = parser.parse_args()
     
     print(f"GPU: {torch.cuda.get_device_name()}")
@@ -855,12 +899,20 @@ def main():
     if args.no_attention:
         print("NOTE: --no_attention enabled – all AttentionBlocks replaced with identity.")
         print("      Output images will be lower quality (ablation study only).\n")
+    if args.no_resblock:
+        print("NOTE: --no_resblock enabled – all ResBlocks replaced with identity.")
+        print("      Output images will be lower quality (ablation study only).\n")
+    if args.no_groupnorm:
+        print("NOTE: --no_groupnorm enabled – FusedGroupNormSiLU replaced with identity.")
+        print("      Conv2d still runs. Ablation: conv-only ResBlock cost measurement.\n")
 
     runner = BenchmarkRunner(
         args.config, args.ckpt, args.output_dir,
         args.batch_size, args.steps, shape=(4, 32, 32),
         calibration_path=args.calibration,
         skip_attention=args.no_attention,
+        skip_resblock=args.no_resblock,
+        skip_groupnorm=args.no_groupnorm,
     )
     
     modes = ['fp32', 'fp16', 'int8', 'int8_baseline', 'int4', 'int4_baseline'] if args.mode == 'all' else [args.mode]

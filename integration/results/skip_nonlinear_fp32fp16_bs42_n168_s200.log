@@ -1,0 +1,55 @@
+
+[FULL              ] Running FP32 ...
+  fp32               full                     928.5 ms/sample     4.64 ms/step
+
+[SKIP_ATTN         ] Running FP32 ...
+  fp32               skip_attn                605.9 ms/sample     3.03 ms/step
+
+[SKIP_RES          ] Running FP32 ...
+  fp32               skip_res                 930.4 ms/sample     4.65 ms/step
+
+[SKIP_ATTN+SKIP_RES] Running FP32 ...
+  fp32               skip_attn+skip_res       604.8 ms/sample     3.02 ms/step
+
+[FULL              ] Running FP16 ...
+  fp16               full                     308.5 ms/sample     1.54 ms/step
+
+[SKIP_ATTN         ] Running FP16 ...
+  fp16               skip_attn                226.1 ms/sample     1.13 ms/step
+
+[SKIP_RES          ] Running FP16 ...
+  fp16               skip_res                 313.3 ms/sample     1.57 ms/step
+
+[SKIP_ATTN+SKIP_RES] Running FP16 ...
+  fp16               skip_attn+skip_res       220.9 ms/sample     1.10 ms/step
+
+==========================================================================================
+SKIP NON-LINEAR (RESBLOCK) BENCHMARK — CLEAN (subprocess-isolated)
+==========================================================================================
+GPU: NVIDIA A40  |  steps=200  batch=42  samples=168
+
+  Mode               Condition         ms/sample    ms/step   vs FP32    vs full
+--------------------------------------------------------------------------------
+  fp32               full                  928.5       4.64         —      (ref)
+  fp32               skip_attn             605.9       3.03         —     +34.7%
+  fp32               skip_resblock         930.4       4.65         —      -0.2%
+  fp32               skip_both             604.8       3.02         —     +34.9%
+
+  fp16               full                  308.5       1.54         —      (ref)
+  fp16               skip_attn             226.1       1.13         —     +26.7%
+  fp16               skip_resblock         313.3       1.57         —      -1.5%
+  fp16               skip_both             220.9       1.10         —     +28.4%
+
+==========================================================================================
+LAYER COST DECOMPOSITION (ms/sample at batch_size=42)
+==========================================================================================
+  Mode                ResBlock (ms)   Attention (ms)   Other (ms)   Total (ms)
+----------------------------------------------------------------------------
+  fp32                        1.1            325.7        604.8        928.5
+  fp16                        5.2             92.4        220.9        308.5
+
+  Note: Other = time embedding, GroupNorm outside blocks, decoder input/output, etc.
+        ResBlock + Attention + Other may not sum exactly to Total due to interaction
+        effects (memory bandwidth, cache, kernel overlap).
+
+Results saved to integration/results/skip_nonlinear_fp32fp16_bs42_n168_s200.json

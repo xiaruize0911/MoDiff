@@ -1,0 +1,8 @@
+{
+  "int8_baseline": {
+    "total_time": 38.080230474472046,
+    "num_samples": 168,
+    "time_per_sample": 0.22666803853852407,
+    "time_per_step_ms": 1.1333401926926203
+  }
+}

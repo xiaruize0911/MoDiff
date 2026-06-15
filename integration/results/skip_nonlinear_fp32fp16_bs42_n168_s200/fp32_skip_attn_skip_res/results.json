@@ -1,0 +1,8 @@
+{
+  "fp32": {
+    "total_time": 101.60212922096252,
+    "num_samples": 168,
+    "time_per_sample": 0.6047745786962055,
+    "time_per_step_ms": 3.0238728934810273
+  }
+}

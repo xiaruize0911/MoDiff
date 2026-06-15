@@ -1,0 +1,365 @@
+{
+  "config": {
+    "steps": 200,
+    "num_samples": 168,
+    "batch_size": 42,
+    "int8_calib": "integration/calibration/int8_calibration.pt",
+    "int4_calib": "integration/calibration/int4_calibration.pt",
+    "output_dir": "integration/results/skip_nonlinear_clean_bs42_n168_s200",
+    "modes": [
+      "fp16",
+      "int8_baseline",
+      "int4_baseline",
+      "int8",
+      "int4"
+    ],
+    "output_json": "integration/results/skip_nonlinear_clean_bs42_n168_s200.json"
+  },
+  "results": [
+    {
+      "label": "fp16_full",
+      "mode": "fp16",
+      "no_attention": false,
+      "no_resblock": false,
+      "error": true
+    },
+    {
+      "label": "fp16_skip_attn",
+      "mode": "fp16",
+      "no_attention": true,
+      "no_resblock": false,
+      "error": true
+    },
+    {
+      "label": "fp16_skip_res",
+      "mode": "fp16",
+      "no_attention": false,
+      "no_resblock": true,
+      "error": true
+    },
+    {
+      "label": "fp16_skip_attn_skip_res",
+      "mode": "fp16",
+      "no_attention": true,
+      "no_resblock": true,
+      "error": true
+    },
+    {
+      "label": "int8_baseline_full",
+      "mode": "int8_baseline",
+      "no_attention": false,
+      "no_resblock": false,
+      "error": true
+    },
+    {
+      "label": "int8_baseline_skip_attn",
+      "mode": "int8_baseline",
+      "no_attention": true,
+      "no_resblock": false,
+      "time_per_sample_s": 0.2263435437565758,
+      "time_per_step_ms": 1.131717718782879,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 95.8
+    },
+    {
+      "label": "int8_baseline_skip_res",
+      "mode": "int8_baseline",
+      "no_attention": false,
+      "no_resblock": true,
+      "time_per_sample_s": 0.301679022255398,
+      "time_per_step_ms": 1.5083951112769898,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 113.9
+    },
+    {
+      "label": "int8_baseline_skip_attn_skip_res",
+      "mode": "int8_baseline",
+      "no_attention": true,
+      "no_resblock": true,
+      "time_per_sample_s": 0.24481500614257085,
+      "time_per_step_ms": 1.2240750307128543,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 85.1
+    },
+    {
+      "label": "int4_baseline_full",
+      "mode": "int4_baseline",
+      "no_attention": false,
+      "no_resblock": false,
+      "time_per_sample_s": 0.2838203594798133,
+      "time_per_step_ms": 1.4191017973990667,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 102.6
+    },
+    {
+      "label": "int4_baseline_skip_attn",
+      "mode": "int4_baseline",
+      "no_attention": true,
+      "no_resblock": false,
+      "time_per_sample_s": 0.20454691847165427,
+      "time_per_step_ms": 1.0227345923582714,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 77.6
+    },
+    {
+      "label": "int4_baseline_skip_res",
+      "mode": "int4_baseline",
+      "no_attention": false,
+      "no_resblock": true,
+      "time_per_sample_s": 0.28141161231767564,
+      "time_per_step_ms": 1.407058061588378,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 114.9
+    },
+    {
+      "label": "int4_baseline_skip_attn_skip_res",
+      "mode": "int4_baseline",
+      "no_attention": true,
+      "no_resblock": true,
+      "time_per_sample_s": 0.20149723688761392,
+      "time_per_step_ms": 1.0074861844380696,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 77.3
+    },
+    {
+      "label": "int8_full",
+      "mode": "int8",
+      "no_attention": false,
+      "no_resblock": false,
+      "time_per_sample_s": 0.3162446618080139,
+      "time_per_step_ms": 1.5812233090400696,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 106.7
+    },
+    {
+      "label": "int8_skip_attn",
+      "mode": "int8",
+      "no_attention": true,
+      "no_resblock": false,
+      "time_per_sample_s": 0.24121238362221492,
+      "time_per_step_ms": 1.2060619181110745,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 81.7
+    },
+    {
+      "label": "int8_skip_res",
+      "mode": "int8",
+      "no_attention": false,
+      "no_resblock": true,
+      "time_per_sample_s": 0.3156460864203317,
+      "time_per_step_ms": 1.5782304321016585,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 110.4
+    },
+    {
+      "label": "int8_skip_attn_skip_res",
+      "mode": "int8",
+      "no_attention": true,
+      "no_resblock": true,
+      "time_per_sample_s": 0.23820666046369643,
+      "time_per_step_ms": 1.191033302318482,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 86.6
+    },
+    {
+      "label": "int4_full",
+      "mode": "int4",
+      "no_attention": false,
+      "no_resblock": false,
+      "time_per_sample_s": 0.2954118705931164,
+      "time_per_step_ms": 1.477059352965582,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 100.0
+    },
+    {
+      "label": "int4_skip_attn",
+      "mode": "int4",
+      "no_attention": true,
+      "no_resblock": false,
+      "time_per_sample_s": 0.21627056314831689,
+      "time_per_step_ms": 1.0813528157415844,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 78.2
+    },
+    {
+      "label": "int4_skip_res",
+      "mode": "int4",
+      "no_attention": false,
+      "no_resblock": true,
+      "time_per_sample_s": 0.29521336158116657,
+      "time_per_step_ms": 1.476066807905833,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 100.3
+    },
+    {
+      "label": "int4_skip_attn_skip_res",
+      "mode": "int4",
+      "no_attention": true,
+      "no_resblock": true,
+      "time_per_sample_s": 0.21720425571714128,
+      "time_per_step_ms": 1.0860212785857066,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 78.8
+    }
+  ],
+  "by_mode": {
+    "int8_baseline": {
+      "(True, False)": {
+        "label": "int8_baseline_skip_attn",
+        "mode": "int8_baseline",
+        "no_attention": true,
+        "no_resblock": false,
+        "time_per_sample_s": 0.2263435437565758,
+        "time_per_step_ms": 1.131717718782879,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 95.8
+      },
+      "(False, True)": {
+        "label": "int8_baseline_skip_res",
+        "mode": "int8_baseline",
+        "no_attention": false,
+        "no_resblock": true,
+        "time_per_sample_s": 0.301679022255398,
+        "time_per_step_ms": 1.5083951112769898,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 113.9
+      },
+      "(True, True)": {
+        "label": "int8_baseline_skip_attn_skip_res",
+        "mode": "int8_baseline",
+        "no_attention": true,
+        "no_resblock": true,
+        "time_per_sample_s": 0.24481500614257085,
+        "time_per_step_ms": 1.2240750307128543,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 85.1
+      }
+    },
+    "int4_baseline": {
+      "(False, False)": {
+        "label": "int4_baseline_full",
+        "mode": "int4_baseline",
+        "no_attention": false,
+        "no_resblock": false,
+        "time_per_sample_s": 0.2838203594798133,
+        "time_per_step_ms": 1.4191017973990667,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 102.6
+      },
+      "(True, False)": {
+        "label": "int4_baseline_skip_attn",
+        "mode": "int4_baseline",
+        "no_attention": true,
+        "no_resblock": false,
+        "time_per_sample_s": 0.20454691847165427,
+        "time_per_step_ms": 1.0227345923582714,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 77.6
+      },
+      "(False, True)": {
+        "label": "int4_baseline_skip_res",
+        "mode": "int4_baseline",
+        "no_attention": false,
+        "no_resblock": true,
+        "time_per_sample_s": 0.28141161231767564,
+        "time_per_step_ms": 1.407058061588378,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 114.9
+      },
+      "(True, True)": {
+        "label": "int4_baseline_skip_attn_skip_res",
+        "mode": "int4_baseline",
+        "no_attention": true,
+        "no_resblock": true,
+        "time_per_sample_s": 0.20149723688761392,
+        "time_per_step_ms": 1.0074861844380696,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 77.3
+      }
+    },
+    "int8": {
+      "(False, False)": {
+        "label": "int8_full",
+        "mode": "int8",
+        "no_attention": false,
+        "no_resblock": false,
+        "time_per_sample_s": 0.3162446618080139,
+        "time_per_step_ms": 1.5812233090400696,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 106.7
+      },
+      "(True, False)": {
+        "label": "int8_skip_attn",
+        "mode": "int8",
+        "no_attention": true,
+        "no_resblock": false,
+        "time_per_sample_s": 0.24121238362221492,
+        "time_per_step_ms": 1.2060619181110745,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 81.7
+      },
+      "(False, True)": {
+        "label": "int8_skip_res",
+        "mode": "int8",
+        "no_attention": false,
+        "no_resblock": true,
+        "time_per_sample_s": 0.3156460864203317,
+        "time_per_step_ms": 1.5782304321016585,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 110.4
+      },
+      "(True, True)": {
+        "label": "int8_skip_attn_skip_res",
+        "mode": "int8",
+        "no_attention": true,
+        "no_resblock": true,
+        "time_per_sample_s": 0.23820666046369643,
+        "time_per_step_ms": 1.191033302318482,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 86.6
+      }
+    },
+    "int4": {
+      "(False, False)": {
+        "label": "int4_full",
+        "mode": "int4",
+        "no_attention": false,
+        "no_resblock": false,
+        "time_per_sample_s": 0.2954118705931164,
+        "time_per_step_ms": 1.477059352965582,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 100.0
+      },
+      "(True, False)": {
+        "label": "int4_skip_attn",
+        "mode": "int4",
+        "no_attention": true,
+        "no_resblock": false,
+        "time_per_sample_s": 0.21627056314831689,
+        "time_per_step_ms": 1.0813528157415844,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 78.2
+      },
+      "(False, True)": {
+        "label": "int4_skip_res",
+        "mode": "int4",
+        "no_attention": false,
+        "no_resblock": true,
+        "time_per_sample_s": 0.29521336158116657,
+        "time_per_step_ms": 1.476066807905833,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 100.3
+      },
+      "(True, True)": {
+        "label": "int4_skip_attn_skip_res",
+        "mode": "int4",
+        "no_attention": true,
+        "no_resblock": true,
+        "time_per_sample_s": 0.21720425571714128,
+        "time_per_step_ms": 1.0860212785857066,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 78.8
+      }
+    }
+  }
+}
