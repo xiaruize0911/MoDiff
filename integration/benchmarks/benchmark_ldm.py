@@ -267,7 +267,8 @@ class BenchmarkRunner:
     def __init__(self, config_path: str, ckpt_path: str, output_dir: str,
                  batch_size: int = 4, steps: int = 50, shape: tuple = (4, 32, 32),
                  calibration_path: str = None, skip_attention: bool = False,
-                 skip_resblock: bool = False, skip_groupnorm: bool = False):
+                 skip_resblock: bool = False, skip_groupnorm: bool = False,
+                 linear_backend: str = "fp16", linear_int_gemm_min_m: int = 64):
         self.config_path = config_path
         self.ckpt_path = ckpt_path
         self.output_dir = output_dir
@@ -278,6 +279,8 @@ class BenchmarkRunner:
         self.skip_attention = skip_attention
         self.skip_resblock = skip_resblock
         self.skip_groupnorm = skip_groupnorm
+        self.linear_backend = linear_backend
+        self.linear_int_gemm_min_m = linear_int_gemm_min_m
         self.results = {}
         
         os.makedirs(output_dir, exist_ok=True)
@@ -377,7 +380,11 @@ class BenchmarkRunner:
             # Also convert linear layers to INT8 with MoDiff
             if HAS_INT8_LINEAR:
                 print(f"Converting UNet linear layers to INT8 ({count_linear_layers(model.model.diffusion_model)} linear layers)...")
-                convert_model_to_int8_linear(model.model.diffusion_model)
+                convert_model_to_int8_linear(
+                    model.model.diffusion_model,
+                    backend=self.linear_backend,
+                    int_gemm_min_m=self.linear_int_gemm_min_m,
+                )
             
             # Initialize buffer pool for pre-allocated buffers
             from integration.utils.buffer_pool import initialize_buffer_pool
@@ -410,7 +417,11 @@ class BenchmarkRunner:
             # Also convert linear layers to INT4 with MoDiff
             if HAS_INT4_LINEAR:
                 print(f"Converting UNet linear layers to INT4 ({count_linear_layers(model.model.diffusion_model)} linear layers)...")
-                convert_model_to_int4_linear(model.model.diffusion_model)
+                convert_model_to_int4_linear(
+                    model.model.diffusion_model,
+                    backend=self.linear_backend,
+                    int_gemm_min_m=self.linear_int_gemm_min_m,
+                )
             
             # Initialize buffer pool for pre-allocated buffers
             from integration.utils.buffer_pool import initialize_buffer_pool
@@ -440,7 +451,11 @@ class BenchmarkRunner:
             # Also convert linear layers to INT8 (baseline = no temporal caching)
             if HAS_INT8_LINEAR:
                 print(f"Converting UNet linear layers to INT8 ({count_linear_layers(model.model.diffusion_model)} linear layers)...")
-                convert_model_to_int8_linear(model.model.diffusion_model)
+                convert_model_to_int8_linear(
+                    model.model.diffusion_model,
+                    backend=self.linear_backend,
+                    int_gemm_min_m=self.linear_int_gemm_min_m,
+                )
             
             from integration.utils.buffer_pool import initialize_buffer_pool
             initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
@@ -468,7 +483,11 @@ class BenchmarkRunner:
             # Also convert linear layers to INT4 (baseline = no temporal caching)
             if HAS_INT4_LINEAR:
                 print(f"Converting UNet linear layers to INT4 ({count_linear_layers(model.model.diffusion_model)} linear layers)...")
-                convert_model_to_int4_linear(model.model.diffusion_model)
+                convert_model_to_int4_linear(
+                    model.model.diffusion_model,
+                    backend=self.linear_backend,
+                    int_gemm_min_m=self.linear_int_gemm_min_m,
+                )
             
             from integration.utils.buffer_pool import initialize_buffer_pool
             initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
@@ -515,7 +534,11 @@ class BenchmarkRunner:
             convert_model_to_optimized_int8(model.model.diffusion_model)
             if HAS_INT8_LINEAR:
                 print(f"Converting UNet linear layers to INT8 ({count_linear_layers(model.model.diffusion_model)} linear layers)...")
-                convert_model_to_int8_linear(model.model.diffusion_model)
+                convert_model_to_int8_linear(
+                    model.model.diffusion_model,
+                    backend=self.linear_backend,
+                    int_gemm_min_m=self.linear_int_gemm_min_m,
+                )
             from integration.utils.buffer_pool import initialize_buffer_pool
             initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
             if self.calibration_path and os.path.exists(self.calibration_path):
@@ -545,7 +568,11 @@ class BenchmarkRunner:
             convert_model_to_optimized_int4(model.model.diffusion_model)
             if HAS_INT4_LINEAR:
                 print(f"Converting UNet linear layers to INT4 ({count_linear_layers(model.model.diffusion_model)} linear layers)...")
-                convert_model_to_int4_linear(model.model.diffusion_model)
+                convert_model_to_int4_linear(
+                    model.model.diffusion_model,
+                    backend=self.linear_backend,
+                    int_gemm_min_m=self.linear_int_gemm_min_m,
+                )
             from integration.utils.buffer_pool import initialize_buffer_pool
             initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
             if self.calibration_path and os.path.exists(self.calibration_path):
@@ -882,6 +909,11 @@ def main():
     parser.add_argument('--force_recalibrate', action='store_true', help='Force regeneration of calibration scales')
     parser.add_argument('--calibration', type=str, default=None,
                        help='Path to static calibration file (e.g., integration/calibration/int8_calibration.pt)')
+    parser.add_argument('--linear_backend', type=str, default='fp16',
+                       choices=['fp16', 'int_gemm'],
+                       help='Linear layer backend for INT8/INT4 modes. fp16 preserves old behavior; int_gemm uses true INT GEMM when large enough.')
+    parser.add_argument('--linear_int_gemm_min_m', type=int, default=64,
+                       help='Minimum flattened M dimension required before Linear layers use true INT GEMM.')
     parser.add_argument('--no_attention', action='store_true',
                        help='Skip all AttentionBlocks (identity pass-through). Ablation: conv-only baseline.')
     parser.add_argument('--no_resblock', action='store_true',
@@ -893,6 +925,7 @@ def main():
     print(f"GPU: {torch.cuda.get_device_name()}")
     print(f"Config: {args.config}")
     print(f"Steps: {args.steps} | Batch: {args.batch_size} | Samples: {args.num_samples}")
+    print(f"Linear backend: {args.linear_backend} | int_gemm_min_m={args.linear_int_gemm_min_m}")
     if args.calibration:
         print(f"Static calibration: {args.calibration}")
     
@@ -913,6 +946,8 @@ def main():
         skip_attention=args.no_attention,
         skip_resblock=args.no_resblock,
         skip_groupnorm=args.no_groupnorm,
+        linear_backend=args.linear_backend,
+        linear_int_gemm_min_m=args.linear_int_gemm_min_m,
     )
     
     modes = ['fp32', 'fp16', 'int8', 'int8_baseline', 'int4', 'int4_baseline'] if args.mode == 'all' else [args.mode]

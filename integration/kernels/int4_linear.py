@@ -38,14 +38,23 @@ class OptimizedInt4Linear(nn.Module):
     and FP16 F.linear for actual computation (fastest for small M dimensions).
     """
 
-    def __init__(self, linear: nn.Linear, layer_name: str = ""):
+    def __init__(self, linear: nn.Linear, layer_name: str = "",
+                 backend: str = "fp16", int_gemm_min_m: int = 64):
         super().__init__()
         self.layer_name = layer_name
         self.in_features = linear.in_features
         self.out_features = linear.out_features
+        self.backend = backend
+        self.int_gemm_min_m = int_gemm_min_m
 
         # Store weights in FP16 for fast matmul
         self.register_buffer('weight_fp16', linear.weight.data.half())
+
+        # Store packed per-tensor INT4 weights for the optional true INT GEMM backend.
+        from modiff_triton.kernels.gemm_w4a4 import pack_int4_weight
+        weight_packed, weight_scale = pack_int4_weight(linear.weight.data.float().t().contiguous())
+        self.register_buffer('weight_packed_t', weight_packed.contiguous())
+        self.register_buffer('weight_dequant_scale', weight_scale.float().reshape(1))
 
         # --- Bias ---
         if linear.bias is not None:
@@ -110,13 +119,56 @@ class OptimizedInt4Linear(nn.Module):
         out = F.linear(x_fp16, self.weight_fp16, self.bias if with_bias else None)
         return out.float()
 
+    def _int4_gemm_linear(self, x: torch.Tensor, with_bias: bool = True,
+                          input_scale: Optional[float | torch.Tensor] = None) -> torch.Tensor:
+        """True W4A4 GEMM path: pack activation, int4 GEMM, dequantize."""
+        x_2d = x.reshape(-1, self.in_features)
+        if x_2d.shape[0] < self.int_gemm_min_m or not x_2d.is_cuda:
+            return self._fp16_linear(x, with_bias=with_bias)
+
+        from modiff_triton.kernels.quantize import quantize_symmetric_int4
+        from modiff_triton.kernels.gemm_w4a4 import gemm_w4a4
+
+        if input_scale is None:
+            abs_max = x_2d.abs().amax()
+            act_dequant_scale = torch.clamp(abs_max / 7.0, min=1e-8)
+        else:
+            # Existing calibration stores quantization scale (7 / absmax).
+            if isinstance(input_scale, torch.Tensor):
+                act_dequant_scale = 1.0 / torch.clamp(input_scale.float(), min=1e-8)
+            else:
+                act_dequant_scale = torch.tensor(
+                    1.0 / max(float(input_scale), 1e-8),
+                    device=x_2d.device,
+                    dtype=torch.float32,
+                )
+
+        x_packed, scale_a, _ = quantize_symmetric_int4(x_2d, scale=act_dequant_scale)
+        x_packed = x_packed.view(x_2d.shape[0], self.in_features // 2)
+        bias = self.bias if (with_bias and self.bias is not None) else None
+        out = gemm_w4a4(
+            x_packed,
+            self.weight_packed_t,
+            scale_a,
+            self.weight_dequant_scale,
+            self.in_features,
+            bias,
+        )
+        return out.reshape(*x.shape[:-1], self.out_features)
+
+    def _linear(self, x: torch.Tensor, with_bias: bool = True,
+                input_scale: Optional[float | torch.Tensor] = None) -> torch.Tensor:
+        if self.backend == "int_gemm":
+            return self._int4_gemm_linear(x, with_bias=with_bias, input_scale=input_scale)
+        return self._fp16_linear(x, with_bias=with_bias)
+
     # ==================================================================
     # Forward paths
     # ==================================================================
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if not self.modiff_enabled:
-            return self._fp16_linear(x, with_bias=True)
+            return self._linear(x, with_bias=True)
 
         if x.dtype != torch.float32:
             x = x.float()
@@ -134,13 +186,13 @@ class OptimizedInt4Linear(nn.Module):
         if input_scale is None:
             input_scale = float(self.static_input_scale.item())
         a_hat = self._dequantize_activation(x, input_scale)
-        o_hat = self._fp16_linear(a_hat, with_bias=True)
+        o_hat = self._linear(a_hat, with_bias=True, input_scale=input_scale)
 
         for _ in range(self.warmup_steps - 1):
             residual = x - a_hat
             r_scale = input_scale if self.is_calibrated else self._compute_activation_scale(residual, is_residual=True)
             r_dq = self._dequantize_activation(residual, r_scale)
-            o_hat = o_hat + self._fp16_linear(r_dq, with_bias=False)
+            o_hat = o_hat + self._linear(r_dq, with_bias=False, input_scale=r_scale)
             a_hat = a_hat + r_dq
 
         self.a_hat_cache = a_hat
@@ -173,7 +225,7 @@ class OptimizedInt4Linear(nn.Module):
 
         residual = x - self.a_hat_cache
         r_dq = (residual * scale).round().clamp(-7, 7) / scale
-        linear_r = self._fp16_linear(r_dq, with_bias=False)
+        linear_r = self._linear(r_dq, with_bias=False, input_scale=scale)
 
         self.a_hat_cache.add_(r_dq)
         self.o_hat_cache.add_(linear_r)
@@ -208,7 +260,7 @@ class OptimizedInt4Linear(nn.Module):
         # Quant-dequant residual + FP16 matmul
         residual_2d = self._residual_buf.reshape(B, D)
         r_dq = (residual_2d * self._scale_buf).round().clamp(-7, 7) * self._inv_scale_buf
-        linear_r = self._fp16_linear(r_dq, with_bias=False)
+        linear_r = self._linear(r_dq, with_bias=False, input_scale=self._scale_buf)
 
         # Fused kernel 2: dequant + a_hat cache accumulate
         modiff_cutlass.dequant_accumulate_int4(
@@ -228,7 +280,7 @@ class OptimizedInt4Linear(nn.Module):
         scale = 7.0 / torch.clamp(abs_max, min=1e-6)
         r_dq = (residual * scale).round().clamp(-7, 7) / scale
 
-        linear_r = self._fp16_linear(r_dq, with_bias=False)
+        linear_r = self._linear(r_dq, with_bias=False, input_scale=scale)
 
         self.a_hat_cache.add_(r_dq)
         self.o_hat_cache.add_(linear_r)
@@ -286,20 +338,33 @@ class OptimizedInt4Linear(nn.Module):
 # ---------------------------------------------------------------------------
 
 def convert_model_to_int4_linear(model: nn.Module, prefix: str = "",
-                                  min_features: int = 128) -> nn.Module:
+                                  min_features: int = 128,
+                                  backend: str = "fp16",
+                                  int_gemm_min_m: int = 64) -> nn.Module:
     """Convert nn.Linear layers to OptimizedInt4Linear with MoDiff support."""
     for name, child in model.named_children():
         full_name = f"{prefix}.{name}" if prefix else name
         if isinstance(child, nn.Linear) and not isinstance(child, OptimizedInt4Linear):
             if child.in_features < min_features:
                 continue
-            optimized = OptimizedInt4Linear(child, layer_name=full_name)
+            optimized = OptimizedInt4Linear(
+                child,
+                layer_name=full_name,
+                backend=backend,
+                int_gemm_min_m=int_gemm_min_m,
+            )
             target_device = child.weight.device
             if target_device.type != 'cpu':
                 optimized = optimized.to(target_device)
             setattr(model, name, optimized)
         else:
-            convert_model_to_int4_linear(child, prefix=full_name, min_features=min_features)
+            convert_model_to_int4_linear(
+                child,
+                prefix=full_name,
+                min_features=min_features,
+                backend=backend,
+                int_gemm_min_m=int_gemm_min_m,
+            )
     return model
 
 

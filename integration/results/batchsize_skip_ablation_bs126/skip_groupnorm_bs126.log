@@ -1,0 +1,50 @@
+
+[SKIP_GNORM] Running FP32 ...
+  fp32               skip_gnorm     726.4 ms/sample     3.63 ms/step  (wall 451s)
+
+[SKIP_GNORM] Running FP16 ...
+  fp16               skip_gnorm     234.0 ms/sample     1.17 ms/step  (wall 184s)
+
+[SKIP_GNORM] Running INT8_BASELINE ...
+  int8_baseline      skip_gnorm     261.2 ms/sample     1.31 ms/step  (wall 126s)
+
+[SKIP_GNORM] Running INT4_BASELINE ...
+  int4_baseline      skip_gnorm     287.8 ms/sample     1.44 ms/step  (wall 133s)
+
+[SKIP_GNORM] Running INT8 ...
+  int8               skip_gnorm     274.8 ms/sample     1.37 ms/step  (wall 132s)
+
+[SKIP_GNORM] Running INT4 ...
+  int4               skip_gnorm     256.5 ms/sample     1.28 ms/step  (wall 131s)
+
+====================================================================================================
+RESBLOCK INTERNAL DECOMPOSITION: T_GN  vs  T_Conv
+====================================================================================================
+GPU: NVIDIA A40 | steps=200 | batch=126 | samples=126
+
+  T_GN   = T_full      - T_skip_gnorm   (GroupNorm+SiLU in each FusedResBlock)
+  T_Conv = T_skip_gnorm - T_skip_res    (Conv2d 3×3 ×2 per ResBlock)
+  T_O    = T_skip_both                  (Other: time_emb, decoder I/O, etc.)
+
+  Mode                  T_full      T_sg      T_sr     T_GN   T_Conv   T_GN/T_R   T_Conv/T_R
+------------------------------------------------------------------------------------------
+  fp32                   771.5     726.4     353.9     45.2    372.5      10.8%       89.2%
+  fp16                   288.5     234.0     100.0     54.5    134.0      28.9%       71.1%
+  int8_baseline          307.4     261.2     100.1     46.2    161.1      22.3%       77.7%
+  int4_baseline          331.2     287.8     100.1     43.3    187.8      18.8%       81.2%
+  int8                   320.0     274.8     100.1     45.3    174.7      20.6%       79.4%
+  int4                   301.4     256.5     100.3     44.9    156.2      22.3%       77.7%
+
+====================================================================================================
+PER-COMPONENT SPEEDUP vs FP32
+====================================================================================================
+  Mode                   T_GN   T_Conv   SpeedGN   SpeedConv
+------------------------------------------------------------
+  fp32                   45.2    372.5     1.00x       1.00x
+  fp16                   54.5    134.0     0.83x       2.78x
+  int8_baseline          46.2    161.1     0.98x       2.31x
+  int4_baseline          43.3    187.8     1.04x       1.98x
+  int8                   45.3    174.7     1.00x       2.13x
+  int4                   44.9    156.2     1.01x       2.38x
+
+Results saved to integration/results/batchsize_skip_ablation_bs126/skip_groupnorm_bs126.json

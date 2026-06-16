@@ -37,7 +37,8 @@ SCRIPT = os.path.join(os.path.dirname(__file__), "benchmark_ldm.py")
 
 def run_one(mode: str, no_attention: bool, no_resblock: bool,
             steps: int, num_samples: int, batch_size: int,
-            calib: str, output_dir: str) -> dict:
+            calib: str, output_dir: str,
+            linear_backend: str, linear_int_gemm_min_m: int) -> dict:
     """Run benchmark_ldm.py in a subprocess and parse the JSON result."""
     suffix = []
     if no_attention:
@@ -59,6 +60,8 @@ def run_one(mode: str, no_attention: bool, no_resblock: bool,
         "--calibration", calib,
         "--output_dir", out_dir,
         "--skip_calibration",
+        "--linear_backend", linear_backend,
+        "--linear_int_gemm_min_m", str(linear_int_gemm_min_m),
     ]
     if no_attention:
         cmd.append("--no_attention")
@@ -128,6 +131,9 @@ def main():
                                  "int8", "int4"])
     parser.add_argument("--output_json",
                         default="integration/results/skip_nonlinear_clean.json")
+    parser.add_argument("--linear_backend", choices=["fp16", "int_gemm"],
+                        default="fp16")
+    parser.add_argument("--linear_int_gemm_min_m", type=int, default=64)
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -153,6 +159,8 @@ def main():
                 batch_size=args.batch_size,
                 calib=calib,
                 output_dir=args.output_dir,
+                linear_backend=args.linear_backend,
+                linear_int_gemm_min_m=args.linear_int_gemm_min_m,
             )
             results.append(r)
             if "error" not in r:

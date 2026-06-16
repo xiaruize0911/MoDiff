@@ -1,0 +1,8 @@
+{
+  "fp16": {
+    "total_time": 0.3728630542755127,
+    "num_samples": 1,
+    "time_per_sample": 0.3728630542755127,
+    "time_per_step_ms": 372.8630542755127
+  }
+}

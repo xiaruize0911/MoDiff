@@ -1,0 +1,120 @@
+{
+  "config": {
+    "steps": 200,
+    "num_samples": 126,
+    "batch_size": 126,
+    "modes": [
+      "fp32",
+      "fp16",
+      "int8_baseline",
+      "int4_baseline",
+      "int8",
+      "int4"
+    ],
+    "int8_calib": "integration/calibration/int8_calibration.pt",
+    "int4_calib": "integration/calibration/int4_calibration.pt",
+    "output_dir": "integration/results/batchsize_skip_ablation_bs126/skip_groupnorm",
+    "existing_json": "integration/results/batchsize_skip_ablation_bs126/skip_nonlinear_bs126.json",
+    "output_json": "integration/results/batchsize_skip_ablation_bs126/skip_groupnorm_bs126.json"
+  },
+  "skip_gnorm_results": {
+    "fp32": {
+      "mode": "fp32",
+      "time_per_sample_s": 0.726358833767119,
+      "time_per_step_ms": 3.6317941688355946,
+      "wall_time_s": 450.8
+    },
+    "fp16": {
+      "mode": "fp16",
+      "time_per_sample_s": 0.23402506775326198,
+      "time_per_step_ms": 1.17012533876631,
+      "wall_time_s": 183.6
+    },
+    "int8_baseline": {
+      "mode": "int8_baseline",
+      "time_per_sample_s": 0.2611595524681939,
+      "time_per_step_ms": 1.3057977623409696,
+      "wall_time_s": 126.2
+    },
+    "int4_baseline": {
+      "mode": "int4_baseline",
+      "time_per_sample_s": 0.2878358969612727,
+      "time_per_step_ms": 1.4391794848063635,
+      "wall_time_s": 133.0
+    },
+    "int8": {
+      "mode": "int8",
+      "time_per_sample_s": 0.27476567692226833,
+      "time_per_step_ms": 1.3738283846113415,
+      "wall_time_s": 132.2
+    },
+    "int4": {
+      "mode": "int4",
+      "time_per_sample_s": 0.2564923744353037,
+      "time_per_step_ms": 1.2824618721765184,
+      "wall_time_s": 131.1
+    }
+  },
+  "decomposition": {
+    "fp32": {
+      "T_full_ms": 771.5,
+      "T_skip_gnorm_ms": 726.4,
+      "T_skip_res_ms": 353.9,
+      "T_R_ms": 417.7,
+      "T_GN_ms": 45.2,
+      "T_Conv_ms": 372.5,
+      "T_GN_pct": 10.8,
+      "T_Conv_pct": 89.2
+    },
+    "fp16": {
+      "T_full_ms": 288.5,
+      "T_skip_gnorm_ms": 234.0,
+      "T_skip_res_ms": 100.0,
+      "T_R_ms": 188.5,
+      "T_GN_ms": 54.5,
+      "T_Conv_ms": 134.0,
+      "T_GN_pct": 28.9,
+      "T_Conv_pct": 71.1
+    },
+    "int8_baseline": {
+      "T_full_ms": 307.4,
+      "T_skip_gnorm_ms": 261.2,
+      "T_skip_res_ms": 100.1,
+      "T_R_ms": 207.3,
+      "T_GN_ms": 46.2,
+      "T_Conv_ms": 161.1,
+      "T_GN_pct": 22.3,
+      "T_Conv_pct": 77.7
+    },
+    "int4_baseline": {
+      "T_full_ms": 331.2,
+      "T_skip_gnorm_ms": 287.8,
+      "T_skip_res_ms": 100.1,
+      "T_R_ms": 231.1,
+      "T_GN_ms": 43.3,
+      "T_Conv_ms": 187.8,
+      "T_GN_pct": 18.8,
+      "T_Conv_pct": 81.2
+    },
+    "int8": {
+      "T_full_ms": 320.0,
+      "T_skip_gnorm_ms": 274.8,
+      "T_skip_res_ms": 100.1,
+      "T_R_ms": 219.9,
+      "T_GN_ms": 45.3,
+      "T_Conv_ms": 174.7,
+      "T_GN_pct": 20.6,
+      "T_Conv_pct": 79.4
+    },
+    "int4": {
+      "T_full_ms": 301.4,
+      "T_skip_gnorm_ms": 256.5,
+      "T_skip_res_ms": 100.3,
+      "T_R_ms": 201.1,
+      "T_GN_ms": 44.9,
+      "T_Conv_ms": 156.2,
+      "T_GN_pct": 22.3,
+      "T_Conv_pct": 77.7
+    }
+  }
+}

@@ -1,0 +1,100 @@
+{
+  "config": {
+    "steps": 1,
+    "num_samples": 1,
+    "batch_size": 1,
+    "int8_calib": "integration/calibration/int8_calibration.pt",
+    "int4_calib": "integration/calibration/int4_calibration.pt",
+    "output_dir": "integration/results/smoke_skip_nonlinear",
+    "modes": [
+      "fp16"
+    ],
+    "output_json": "integration/results/smoke_skip_nonlinear.json"
+  },
+  "results": [
+    {
+      "label": "fp16_full",
+      "mode": "fp16",
+      "no_attention": false,
+      "no_resblock": false,
+      "time_per_sample_s": 0.8618946075439453,
+      "time_per_step_ms": 861.8946075439453,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 22.0
+    },
+    {
+      "label": "fp16_skip_attn",
+      "mode": "fp16",
+      "no_attention": true,
+      "no_resblock": false,
+      "time_per_sample_s": 0.594214916229248,
+      "time_per_step_ms": 594.214916229248,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 22.9
+    },
+    {
+      "label": "fp16_skip_res",
+      "mode": "fp16",
+      "no_attention": false,
+      "no_resblock": true,
+      "time_per_sample_s": 0.6344625949859619,
+      "time_per_step_ms": 634.4625949859619,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 18.9
+    },
+    {
+      "label": "fp16_skip_attn_skip_res",
+      "mode": "fp16",
+      "no_attention": true,
+      "no_resblock": true,
+      "time_per_sample_s": 0.3728630542755127,
+      "time_per_step_ms": 372.8630542755127,
+      "speedup_vs_fp32": null,
+      "wall_time_s": 22.4
+    }
+  ],
+  "by_mode": {
+    "fp16": {
+      "(False, False)": {
+        "label": "fp16_full",
+        "mode": "fp16",
+        "no_attention": false,
+        "no_resblock": false,
+        "time_per_sample_s": 0.8618946075439453,
+        "time_per_step_ms": 861.8946075439453,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 22.0
+      },
+      "(True, False)": {
+        "label": "fp16_skip_attn",
+        "mode": "fp16",
+        "no_attention": true,
+        "no_resblock": false,
+        "time_per_sample_s": 0.594214916229248,
+        "time_per_step_ms": 594.214916229248,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 22.9
+      },
+      "(False, True)": {
+        "label": "fp16_skip_res",
+        "mode": "fp16",
+        "no_attention": false,
+        "no_resblock": true,
+        "time_per_sample_s": 0.6344625949859619,
+        "time_per_step_ms": 634.4625949859619,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 18.9
+      },
+      "(True, True)": {
+        "label": "fp16_skip_attn_skip_res",
+        "mode": "fp16",
+        "no_attention": true,
+        "no_resblock": true,
+        "time_per_sample_s": 0.3728630542755127,
+        "time_per_step_ms": 372.8630542755127,
+        "speedup_vs_fp32": null,
+        "wall_time_s": 22.4
+      }
+    }
+  }
+}

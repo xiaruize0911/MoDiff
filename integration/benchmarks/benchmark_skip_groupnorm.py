@@ -28,7 +28,8 @@ _ROOT  = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 
 def run_skip_gnorm(mode: str, steps: int, num_samples: int, batch_size: int,
-                   calib: str, output_dir: str) -> dict | None:
+                   calib: str, output_dir: str,
+                   linear_backend: str, linear_int_gemm_min_m: int) -> dict | None:
     """Run benchmark_ldm.py --no_groupnorm in a subprocess."""
     out_dir     = os.path.join(output_dir, f"{mode}_skip_gnorm")
     result_json = os.path.join(out_dir, "results.json")
@@ -43,6 +44,8 @@ def run_skip_gnorm(mode: str, steps: int, num_samples: int, batch_size: int,
         "--output_dir", out_dir,
         "--skip_calibration",
         "--no_groupnorm",
+        "--linear_backend", linear_backend,
+        "--linear_int_gemm_min_m", str(linear_int_gemm_min_m),
     ]
 
     print(f"\n[SKIP_GNORM] Running {mode.upper()} ...", flush=True)
@@ -116,6 +119,9 @@ def main():
     parser.add_argument("--output_json",
                         default="integration/results/"
                                 "skip_groupnorm_bs42_n168_s200.json")
+    parser.add_argument("--linear_backend", choices=["fp16", "int_gemm"],
+                        default="fp16")
+    parser.add_argument("--linear_int_gemm_min_m", type=int, default=64)
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -125,7 +131,8 @@ def main():
     for mode in args.modes:
         calib = args.int4_calib if "int4" in mode else args.int8_calib
         r = run_skip_gnorm(mode, args.steps, args.num_samples, args.batch_size,
-                           calib, args.output_dir)
+                           calib, args.output_dir,
+                           args.linear_backend, args.linear_int_gemm_min_m)
         if r:
             skip_gnorm_results[mode] = r
 
