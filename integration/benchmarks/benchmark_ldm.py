@@ -481,7 +481,10 @@ class BenchmarkRunner:
             else:
                 label = "INT8 Baseline"
             print(f"Converting UNet to {label} (INT8 kernels without MoDiff temporal caching) ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
-            convert_model_to_optimized_int8(model.model.diffusion_model)
+            convert_model_to_optimized_int8(
+                model.model.diffusion_model,
+                skip_pointwise=(mode != 'int8_awq_full_baseline'),
+            )
             
             # Also convert linear layers to INT8 (baseline = no temporal caching)
             if HAS_INT8_LINEAR:
@@ -496,8 +499,16 @@ class BenchmarkRunner:
                 if not HAS_AWQ_CONV1D:
                     raise RuntimeError("int8_awq_full_baseline requested, but AWQ Conv1d support is not available")
                 n_conv1d = count_conv1d_layers(model.model.diffusion_model)
-                converted_conv1d = convert_model_conv1d_1x1_to_awq(model.model.diffusion_model)
-                print(f"Converting Conv1d-1x1 projection layers to AWQ ({converted_conv1d}/{n_conv1d} layers converted)...")
+                awq_conv1d_min_channels = 1024
+                converted_conv1d = convert_model_conv1d_1x1_to_awq(
+                    model.model.diffusion_model,
+                    min_in_channels=awq_conv1d_min_channels,
+                )
+                print(
+                    f"Converting profitable Conv1d-1x1 projection layers to AWQ "
+                    f"({converted_conv1d}/{n_conv1d} layers converted, "
+                    f"min_in_channels={awq_conv1d_min_channels})..."
+                )
             
             from integration.utils.buffer_pool import initialize_buffer_pool
             initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')

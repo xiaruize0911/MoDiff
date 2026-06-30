@@ -135,6 +135,55 @@ class OptimizedInt8Linear(nn.Module):
         if x_2d.shape[0] < self.int_gemm_min_m or not x_2d.is_cuda:
             return self._fp16_linear(x, with_bias=with_bias)
 
+        # Prefer AWQ's tuned CUTLASS W8A8 GEMM for verified projection shapes. The
+        # local PyTorch/Triton path below is kept as a correctness fallback, but
+        # it pays separate global-memory round trips for activation quantization
+        # and is much slower for LDM square attention projections. Non-square
+        # linears are left on the local fallback because AWQ's kernel showed
+        # illegal accesses on repeated FFN expansion/contraction dispatches on
+        # this host.
+        if (
+            self.out_features % 2 == 0
+            and self.out_features == self.in_features
+            and self.out_features in (512, 2048, 4096)
+            and x_2d.shape[0] > 128
+        ):
+            try:
+                from modiff_triton.kernels.awq_w8a8 import (
+                    awq_fused_quant_gemm_w8a8,
+                    awq_gemm_w8a8,
+                )
+
+                bias = self.bias if (with_bias and self.bias is not None) else None
+                if input_scale is None:
+                    out = awq_fused_quant_gemm_w8a8(
+                        x_2d,
+                        self.weight_int8_awq,
+                        self.weight_dequant_scale,
+                        bias,
+                        weight_is_awq_layout=True,
+                    )
+                else:
+                    if isinstance(input_scale, torch.Tensor):
+                        q_scale = input_scale.to(device=x_2d.device, dtype=torch.float32)
+                    else:
+                        q_scale = torch.tensor(float(input_scale), device=x_2d.device, dtype=torch.float32)
+                    act_dequant_scale = 1.0 / torch.clamp(q_scale, min=1e-8)
+                    x_int8 = torch.round(x_2d.float() / act_dequant_scale).clamp(-128, 127).to(torch.int8)
+                    scale_a = act_dequant_scale.reshape(1).expand(x_2d.shape[0]).to(torch.float16)
+                    out = awq_gemm_w8a8(
+                        x_int8,
+                        self.weight_int8_awq,
+                        self.weight_dequant_scale,
+                        scale_a,
+                        bias,
+                        weight_is_awq_layout=True,
+                    )
+                out = out.reshape(*x.shape[:-1], self.out_features)
+                return out if self.standard_output_fp16 else out.float()
+            except ImportError:
+                pass
+
         from modiff_triton.kernels.gemm_w8a8 import gemm_w8a8
 
         if input_scale is None:

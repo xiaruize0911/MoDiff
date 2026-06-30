@@ -31,6 +31,32 @@ class AWQW8A8Conv1d1x1(nn.Module):
             self.register_buffer("bias", conv.bias.data.half())
         else:
             self.bias = None
+        self.register_buffer("_weight_scale_awq", weight_scale.half().reshape(1), persistent=False)
+        self._x_int8_buf = None
+        self._scale_a_buf = None
+        self._out_2d_buf = None
+
+    def _ensure_awq_buffers(self, x_2d: torch.Tensor) -> None:
+        m = x_2d.shape[0]
+        if (
+            self._x_int8_buf is None
+            or self._x_int8_buf.shape != x_2d.shape
+            or self._x_int8_buf.device != x_2d.device
+        ):
+            self._x_int8_buf = torch.empty_like(x_2d, dtype=torch.int8)
+        if (
+            self._scale_a_buf is None
+            or self._scale_a_buf.shape != (m,)
+            or self._scale_a_buf.device != x_2d.device
+        ):
+            self._scale_a_buf = torch.empty((m,), device=x_2d.device, dtype=torch.float16)
+        out_shape = (m, self.out_channels)
+        if (
+            self._out_2d_buf is None
+            or self._out_2d_buf.shape != out_shape
+            or self._out_2d_buf.device != x_2d.device
+        ):
+            self._out_2d_buf = torch.empty(out_shape, device=x_2d.device, dtype=torch.float16)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if x.dim() != 3:
@@ -42,24 +68,32 @@ class AWQW8A8Conv1d1x1(nn.Module):
                 self.bias.float() if self.bias is not None else None,
             )
 
-        from modiff_triton.kernels.awq_w8a8 import awq_fused_quant_gemm_w8a8
+        from modiff_triton.kernels.awq_w8a8 import awq_fused_quant_gemm_w8a8_prealloc
 
         b, c, length = x.shape
         if c != self.in_channels:
             raise ValueError(f"expected {self.in_channels} input channels, got {c}")
 
         x_2d = x.transpose(1, 2).reshape(-1, c)
-        out_2d = awq_fused_quant_gemm_w8a8(
+        self._ensure_awq_buffers(x_2d)
+        out_2d = awq_fused_quant_gemm_w8a8_prealloc(
             x_2d,
             self.weight_int8_awq,
-            self.weight_dequant_scale,
+            self._weight_scale_awq,
+            self._x_int8_buf,
+            self._scale_a_buf,
+            self._out_2d_buf,
             self.bias,
             weight_is_awq_layout=True,
         )
         return out_2d.reshape(b, length, self.out_channels).transpose(1, 2).contiguous()
 
 
-def convert_model_conv1d_1x1_to_awq(model: nn.Module, prefix: str = "") -> int:
+def convert_model_conv1d_1x1_to_awq(
+    model: nn.Module,
+    prefix: str = "",
+    min_in_channels: int = 0,
+) -> int:
     """Replace eligible Conv1d-1x1 layers with AWQ W8A8 GEMM wrappers."""
     converted = 0
     for name, child in model.named_children():
@@ -72,6 +106,7 @@ def convert_model_conv1d_1x1_to_awq(model: nn.Module, prefix: str = "") -> int:
                 and child.dilation == (1,)
                 and child.groups == 1
                 and child.out_channels % 2 == 0
+                and child.in_channels >= min_in_channels
             ):
                 optimized = AWQW8A8Conv1d1x1(child, layer_name=full_name)
                 target_device = child.weight.device
@@ -80,9 +115,17 @@ def convert_model_conv1d_1x1_to_awq(model: nn.Module, prefix: str = "") -> int:
                 setattr(model, name, optimized)
                 converted += 1
             else:
-                converted += convert_model_conv1d_1x1_to_awq(child, prefix=full_name)
+                converted += convert_model_conv1d_1x1_to_awq(
+                    child,
+                    prefix=full_name,
+                    min_in_channels=min_in_channels,
+                )
         else:
-            converted += convert_model_conv1d_1x1_to_awq(child, prefix=full_name)
+            converted += convert_model_conv1d_1x1_to_awq(
+                child,
+                prefix=full_name,
+                min_in_channels=min_in_channels,
+            )
     return converted
 
 

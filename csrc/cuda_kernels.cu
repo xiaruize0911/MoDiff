@@ -6,6 +6,7 @@
 
 #include "cutlass/cutlass.h"
 #include "cutlass/numeric_types.h"
+#include "cutlass/numeric_conversion.h"
 #include "cutlass/gemm/device/gemm.h"
 #include "cutlass/conv/device/implicit_gemm_convolution.h"
 #include "cutlass/conv/kernel/default_conv2d_fprop.h"
@@ -460,6 +461,60 @@ __global__ void scale_store_half_kernel(
     }
 }
 
+__device__ __forceinline__ float bias_value(const float* bias, int ch) {
+    return bias[ch];
+}
+
+__device__ __forceinline__ float bias_value(const __half* bias, int ch) {
+    return __half2float(bias[ch]);
+}
+
+template <typename BiasT>
+__global__ void scale_bias_store_half_kernel(
+    const float* __restrict__ conv_output,
+    const float* __restrict__ weight_scale,
+    const BiasT* __restrict__ bias,
+    __half* __restrict__ output,
+    int num_elements,
+    int num_channels
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    for (int i = idx; i < num_elements; i += blockDim.x * gridDim.x) {
+        int ch = i % num_channels;
+        float value = conv_output[i] * weight_scale[ch] + bias_value(bias, ch);
+        output[i] = __float2half_rn(value);
+    }
+}
+
+template <typename BiasT>
+__global__ void scale_bias_store_kernel(
+    const float* __restrict__ conv_output,
+    const float* __restrict__ weight_scale,
+    const BiasT* __restrict__ bias,
+    float* __restrict__ output,
+    int num_elements,
+    int num_channels
+) {
+    int idx4 = blockIdx.x * blockDim.x + threadIdx.x;
+    int base = idx4 * 4;
+
+    if (base + 3 < num_elements && (base % num_channels) <= num_channels - 4) {
+        float4 conv_v = reinterpret_cast<const float4*>(conv_output)[idx4];
+        int ch_base = base % num_channels;
+        float4 out_v;
+        out_v.x = conv_v.x * weight_scale[ch_base] + bias_value(bias, ch_base);
+        out_v.y = conv_v.y * weight_scale[ch_base + 1] + bias_value(bias, ch_base + 1);
+        out_v.z = conv_v.z * weight_scale[ch_base + 2] + bias_value(bias, ch_base + 2);
+        out_v.w = conv_v.w * weight_scale[ch_base + 3] + bias_value(bias, ch_base + 3);
+        reinterpret_cast<float4*>(output)[idx4] = out_v;
+    } else {
+        for (int i = base; i < num_elements; i++) {
+            int ch = i % num_channels;
+            output[i] = conv_output[i] * weight_scale[ch] + bias_value(bias, ch);
+        }
+    }
+}
+
 void scale_accumulate(
     torch::Tensor conv_output,
     torch::Tensor weight_scale,
@@ -802,6 +857,100 @@ using Conv2dInt8Kernel = typename cutlass::conv::kernel::DefaultConv2dFprop<
 // 2. Define the Device Operator
 using Conv2dInt8Op = cutlass::conv::device::ImplicitGemmConvolution<Conv2dInt8Kernel>;
 
+template <int Count>
+class Int8DequantScaleSource {
+public:
+  using ElementOutput = cutlass::half_t;
+  using ElementSource = cutlass::half_t;
+  using ElementAccumulator = int32_t;
+  using ElementCompute = float;
+  using ElementScalar = ElementCompute;
+  using ElementC = ElementSource;
+  using ElementD = ElementOutput;
+
+  static int const kCount = Count;
+  static cutlass::epilogue::thread::ScaleType::Kind const kScale =
+      cutlass::epilogue::thread::ScaleType::Default;
+
+  using FragmentOutput = cutlass::Array<ElementOutput, kCount>;
+  using FragmentSource = cutlass::Array<ElementSource, kCount>;
+  using FragmentAccumulator = cutlass::Array<ElementAccumulator, kCount>;
+
+  struct Params {
+    ElementCompute alpha;
+    ElementCompute const *alpha_ptr;
+
+    CUTLASS_HOST_DEVICE
+    Params(): alpha(ElementCompute(1)), alpha_ptr(nullptr) {}
+
+    CUTLASS_HOST_DEVICE
+    Params(ElementCompute alpha): alpha(alpha), alpha_ptr(nullptr) {}
+
+    CUTLASS_HOST_DEVICE
+    Params(ElementCompute const *alpha_ptr): alpha(ElementCompute(1)), alpha_ptr(alpha_ptr) {}
+  };
+
+private:
+  ElementCompute alpha_;
+
+public:
+  CUTLASS_HOST_DEVICE
+  explicit Int8DequantScaleSource(Params const &params) {
+    alpha_ = params.alpha_ptr ? *params.alpha_ptr : params.alpha;
+  }
+
+  CUTLASS_HOST_DEVICE
+  bool is_source_needed() const {
+    return true;
+  }
+
+  CUTLASS_HOST_DEVICE
+  void set_k_partition(int, int) {}
+
+  CUTLASS_HOST_DEVICE
+  FragmentOutput operator()(
+      FragmentAccumulator const &accumulator,
+      FragmentSource const &source) const {
+    FragmentOutput output;
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < kCount; ++i) {
+      float value = float(accumulator[i]) * alpha_ * float(source[i]);
+      output[i] = ElementOutput(value);
+    }
+    return output;
+  }
+
+  CUTLASS_HOST_DEVICE
+  FragmentOutput operator()(FragmentAccumulator const &accumulator) const {
+    FragmentOutput output;
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < kCount; ++i) {
+      output[i] = ElementOutput(float(accumulator[i]) * alpha_);
+    }
+    return output;
+  }
+};
+
+using Conv2dInt8DequantFp16Kernel = typename cutlass::conv::kernel::DefaultConv2dFprop<
+  int8_t, cutlass::layout::TensorNHWC,
+  int8_t, cutlass::layout::TensorNHWC,
+  cutlass::half_t, cutlass::layout::TensorNHWC,
+  int32_t,
+  cutlass::arch::OpClassTensorOp,
+  Arch,
+  cutlass::gemm::GemmShape<128, 128, 128>,
+  cutlass::gemm::GemmShape<64, 64, 64>,
+  cutlass::gemm::GemmShape<16, 8, 32>,
+  Int8DequantScaleSource<8>,
+  cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>,
+  3,
+  cutlass::arch::OpMultiplyAddSaturate,
+  cutlass::conv::IteratorAlgorithm::kOptimized,
+  cutlass::conv::StrideSupport::kStrided
+>::Kernel;
+
+using Conv2dInt8DequantFp16Op = cutlass::conv::device::ImplicitGemmConvolution<Conv2dInt8DequantFp16Kernel>;
+
 // =========================================================================
 // INT4 Kernel Definition
 // =========================================================================
@@ -911,6 +1060,91 @@ torch::Tensor conv2d_int8_fprop(
     if (status != cutlass::Status::kSuccess) {
         std::cerr << "CUTLASS INT8 Kernel Failed: " << cutlass::cutlassGetStatusString(status) << std::endl;
         TORCH_CHECK(false, "CUTLASS Kernel failed");
+    }
+
+    return output;
+}
+
+torch::Tensor conv2d_int8_fprop_dequant_fp16_prealloc(
+    torch::Tensor input,
+    torch::Tensor weight,
+    torch::Tensor inv_scale,
+    torch::Tensor weight_scales_half,
+    torch::Tensor output,
+    int stride_h, int stride_w,
+    int padding_h, int padding_w,
+    int dilation_h, int dilation_w
+) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    CHECK_CUDA(input);
+    CHECK_CONTIGUOUS(input);
+    CHECK_CUDA(output);
+    CHECK_CONTIGUOUS(output);
+    CHECK_CUDA(weight_scales_half);
+    TORCH_CHECK(input.scalar_type() == torch::kInt8, "input must be int8");
+    TORCH_CHECK(weight.scalar_type() == torch::kInt8, "weight must be int8");
+    TORCH_CHECK(output.scalar_type() == torch::kFloat16, "output must be float16");
+    TORCH_CHECK(weight_scales_half.scalar_type() == torch::kFloat16, "weight scales must be float16");
+    TORCH_CHECK(weight_scales_half.is_contiguous(), "weight scales must be contiguous");
+
+    int N = input.size(0);
+    int C = input.size(1);
+    int H = input.size(2);
+    int W = input.size(3);
+    int K = weight.size(0);
+    int R = weight.size(1);
+    int S = weight.size(2);
+
+    int H_out = (H + 2 * padding_h - dilation_h * (R - 1) - 1) / stride_h + 1;
+    int W_out = (W + 2 * padding_w - dilation_w * (S - 1) - 1) / stride_w + 1;
+    TORCH_CHECK(output.size(0) == N && output.size(1) == K && output.size(2) == H_out && output.size(3) == W_out,
+                "output shape mismatch for conv2d_int8_fprop_dequant_fp16_prealloc");
+    TORCH_CHECK(weight_scales_half.numel() == K, "weight scales size must match output channels");
+
+    cutlass::conv::Conv2dProblemSize problem_size(
+        {N, H, W, C},
+        {K, R, S, C},
+        {padding_h, padding_h, padding_w, padding_w},
+        {stride_h, stride_w},
+        {dilation_h, dilation_w},
+        {N, H_out, W_out, K},
+        cutlass::conv::Mode::kCrossCorrelation,
+        1
+    );
+
+    int8_t* input_ptr = reinterpret_cast<int8_t*>(input.data_ptr());
+    int8_t* weight_ptr = reinterpret_cast<int8_t*>(weight.data_ptr());
+    auto* scale_ptr = reinterpret_cast<cutlass::half_t*>(weight_scales_half.data_ptr<at::Half>());
+    auto* output_ptr = reinterpret_cast<cutlass::half_t*>(output.data_ptr<at::Half>());
+
+    using DequantEpilogueParams = typename Conv2dInt8DequantFp16Op::EpilogueOutputOp::Params;
+    DequantEpilogueParams ep(inv_scale.data_ptr<float>());
+
+    Conv2dInt8DequantFp16Op op;
+    Conv2dInt8DequantFp16Op::Arguments args(
+        problem_size,
+        {input_ptr, {C, W * C, H * W * C}},
+        {weight_ptr, {C, S * C, R * S * C}},
+        {scale_ptr, {0, 0, 0}},
+        {output_ptr, {K, W_out * K, H_out * W_out * K}},
+        ep
+    );
+
+    cutlass::Status can_status = Conv2dInt8DequantFp16Op::can_implement(args);
+    if (can_status != cutlass::Status::kSuccess) {
+        std::cerr << "CUTLASS INT8 dequant FP16 Kernel cannot implement: "
+                  << cutlass::cutlassGetStatusString(can_status) << std::endl;
+        TORCH_CHECK(false, "CUTLASS INT8 dequant FP16 Kernel cannot implement");
+    }
+
+    size_t workspace_size = op.get_workspace_size(args);
+    auto workspace = torch::empty({(long)workspace_size}, torch::TensorOptions().dtype(torch::kByte).device(input.device()));
+
+    cutlass::Status status = op(args, workspace.data_ptr(), stream);
+    if (status != cutlass::Status::kSuccess) {
+        std::cerr << "CUTLASS INT8 dequant FP16 Kernel Failed: "
+                  << cutlass::cutlassGetStatusString(status) << std::endl;
+        TORCH_CHECK(false, "CUTLASS INT8 dequant FP16 Kernel failed");
     }
 
     return output;
@@ -1444,6 +1678,90 @@ torch::Tensor conv2d_int8_fprop_no_ohat_prealloc(
             num_elements,
             num_channels
         );
+    }
+
+    return output;
+}
+
+torch::Tensor conv2d_int8_fprop_no_ohat_prealloc_bias(
+    torch::Tensor input,
+    torch::Tensor weight,
+    torch::Tensor inv_scale,
+    torch::Tensor weight_scales,
+    torch::Tensor bias,
+    torch::Tensor output,
+    int stride_h, int stride_w,
+    int padding_h, int padding_w,
+    int dilation_h, int dilation_w
+) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    auto empty_bias = torch::empty({0}, torch::TensorOptions().device(input.device()));
+    auto conv_out = conv2d_int8_fprop(
+        input, weight, inv_scale, empty_bias,
+        stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w
+    );
+
+    CHECK_CUDA(output);
+    CHECK_CONTIGUOUS(output);
+    CHECK_CUDA(bias);
+    TORCH_CHECK(bias.is_contiguous(), "bias must be contiguous");
+    TORCH_CHECK(
+        bias.scalar_type() == torch::kFloat32 || bias.scalar_type() == torch::kFloat16,
+        "bias must be float32 or float16"
+    );
+    TORCH_CHECK(
+        output.scalar_type() == torch::kFloat32 || output.scalar_type() == torch::kFloat16,
+        "output must be float32 or float16"
+    );
+    TORCH_CHECK(output.sizes() == conv_out.sizes(), "output shape mismatch for conv2d_int8_fprop_no_ohat_prealloc_bias");
+    TORCH_CHECK(bias.numel() == weight_scales.numel(), "bias size must match output channels");
+
+    int num_elements = conv_out.numel();
+    int num_channels = weight_scales.numel();
+    int block_size = 256;
+    int num_work_items = (num_elements + 3) / 4;
+    int grid_size = (num_work_items + block_size - 1) / block_size;
+
+    if (output.scalar_type() == torch::kFloat16) {
+        if (bias.scalar_type() == torch::kFloat16) {
+            scale_bias_store_half_kernel<__half><<<grid_size, block_size, 0, stream>>>(
+                conv_out.data_ptr<float>(),
+                weight_scales.data_ptr<float>(),
+                reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
+                reinterpret_cast<__half*>(output.data_ptr<at::Half>()),
+                num_elements,
+                num_channels
+            );
+        } else {
+            scale_bias_store_half_kernel<float><<<grid_size, block_size, 0, stream>>>(
+                conv_out.data_ptr<float>(),
+                weight_scales.data_ptr<float>(),
+                bias.data_ptr<float>(),
+                reinterpret_cast<__half*>(output.data_ptr<at::Half>()),
+                num_elements,
+                num_channels
+            );
+        }
+    } else {
+        if (bias.scalar_type() == torch::kFloat16) {
+            scale_bias_store_kernel<__half><<<grid_size, block_size, 0, stream>>>(
+                conv_out.data_ptr<float>(),
+                weight_scales.data_ptr<float>(),
+                reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
+                output.data_ptr<float>(),
+                num_elements,
+                num_channels
+            );
+        } else {
+            scale_bias_store_kernel<float><<<grid_size, block_size, 0, stream>>>(
+                conv_out.data_ptr<float>(),
+                weight_scales.data_ptr<float>(),
+                bias.data_ptr<float>(),
+                output.data_ptr<float>(),
+                num_elements,
+                num_channels
+            );
+        }
     }
 
     return output;

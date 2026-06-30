@@ -13,6 +13,37 @@ import torch
 import triton
 import triton.language as tl
 
+_AWQ_WEIGHT_CACHE: dict[tuple[int, tuple[int, int], tuple[int, int], str], torch.Tensor] = {}
+
+
+def _cached_awq_weight(weight_int8: torch.Tensor) -> torch.Tensor:
+    """Return AWQ's [N, K] layout without paying transpose cost every call."""
+    key = (
+        weight_int8.data_ptr(),
+        tuple(weight_int8.shape),
+        tuple(weight_int8.stride()),
+        str(weight_int8.device),
+    )
+    cached = _AWQ_WEIGHT_CACHE.get(key)
+    if cached is None or cached.device != weight_int8.device:
+        cached = weight_int8.t().contiguous()
+        _AWQ_WEIGHT_CACHE[key] = cached
+    return cached
+
+
+def _should_use_awq_fused(x: torch.Tensor, weight_int8: torch.Tensor) -> bool:
+    if not x.is_cuda or x.dim() != 2 or weight_int8.dim() != 2:
+        return False
+    m, k = x.shape
+    k_weight, n = weight_int8.shape
+    return (
+        k == k_weight
+        and m > 128
+        and n == k
+        and n % 2 == 0
+        and n in (512, 2048, 4096)
+    )
+
 
 @triton.autotune(
     configs=[
@@ -188,6 +219,24 @@ def gemm_w8a8_fused(
     
     M, K = x.shape
     K, N = weight_int8.shape
+
+    # AWQ-style fused path for verified square projection GEMMs. The original
+    # Triton kernel below computes per-row activation scales inside every N tile,
+    # which repeats the full K scan for each output-column block. AWQ quantizes
+    # once per token, then runs a tuned dense INT8 kernel with fused dequant/bias.
+    if _should_use_awq_fused(x, weight_int8):
+        try:
+            from .awq_w8a8 import awq_fused_quant_gemm_w8a8
+
+            return awq_fused_quant_gemm_w8a8(
+                x,
+                _cached_awq_weight(weight_int8),
+                scale_w,
+                bias,
+                weight_is_awq_layout=True,
+            )
+        except ImportError:
+            pass
     
     # Allocate output
     output = torch.empty((M, N), device=x.device, dtype=x.dtype)

@@ -58,6 +58,7 @@ class OptimizedInt8Conv2d(nn.Module):
         ch_max = w_flat.abs().max(dim=1).values  # [K]
         ch_scale = torch.clamp(ch_max / 127.0, min=1e-8)  # [K]
         self.register_buffer('weight_scale_channel', ch_scale.view(1, K, 1, 1))
+        self.register_buffer('weight_scale_channel_half', ch_scale.half().contiguous())
 
         w_quant = (w_flat / ch_scale.unsqueeze(1)).round().clamp(-127, 127).to(torch.int8)
         w_quant = w_quant.reshape_as(w_data)
@@ -73,6 +74,7 @@ class OptimizedInt8Conv2d(nn.Module):
 
         self._empty_bias = None
         self.use_cutlass = HAS_CUTLASS and self.groups == 1
+        self.enable_awq_1x1 = True
 
         # --- MoDiff state ---
         self.modiff_enabled = False
@@ -94,6 +96,11 @@ class OptimizedInt8Conv2d(nn.Module):
         self._cached_scale_tensor: Optional[torch.Tensor] = None  # for _forward_standard fused path
         self.standard_output_fp16 = False
         self._standard_output_buf: Optional[torch.Tensor] = None
+        self.register_buffer('_awq_weight_1x1', None, persistent=False)
+        self.register_buffer('_awq_scale_w_1x1', None, persistent=False)
+        self._awq_x_int8_buf: Optional[torch.Tensor] = None
+        self._awq_scale_a_buf: Optional[torch.Tensor] = None
+        self._awq_out_2d_buf: Optional[torch.Tensor] = None
 
         # --- SmoothQuant identity flag for fast path ---
         self._smooth_is_identity = True
@@ -263,6 +270,73 @@ class OptimizedInt8Conv2d(nn.Module):
             self.dilation[0], self.dilation[1]
         )
 
+    def _can_use_awq_1x1(self, x: torch.Tensor) -> bool:
+        return (
+            self.enable_awq_1x1
+            and self.kernel_size == (1, 1)
+            and self.stride == (1, 1)
+            and self.padding == (0, 0)
+            and self.dilation == (1, 1)
+            and self.groups == 1
+            and x.is_cuda
+            and x.shape[1] == self.in_channels
+            and x.is_contiguous(memory_format=torch.channels_last)
+        )
+
+    def _invalidate_awq_1x1_cache(self):
+        self._awq_weight_1x1 = None
+        self._awq_scale_w_1x1 = None
+        self._awq_x_int8_buf = None
+        self._awq_scale_a_buf = None
+        self._awq_out_2d_buf = None
+
+    def _ensure_awq_1x1_cache(self, x_2d: torch.Tensor):
+        m = x_2d.shape[0]
+        if self._awq_weight_1x1 is None or self._awq_weight_1x1.device != x_2d.device:
+            self._awq_weight_1x1 = self.weight_int8[:, 0, 0, :].contiguous()
+        if self._awq_scale_w_1x1 is None or self._awq_scale_w_1x1.device != x_2d.device:
+            self._awq_scale_w_1x1 = self.weight_scale_channel.view(-1).contiguous().to(torch.float16)
+        if (
+            self._awq_x_int8_buf is None
+            or self._awq_x_int8_buf.shape != x_2d.shape
+            or self._awq_x_int8_buf.device != x_2d.device
+        ):
+            self._awq_x_int8_buf = torch.empty_like(x_2d, dtype=torch.int8)
+        if (
+            self._awq_scale_a_buf is None
+            or self._awq_scale_a_buf.shape != (m,)
+            or self._awq_scale_a_buf.device != x_2d.device
+        ):
+            self._awq_scale_a_buf = torch.empty((m,), device=x_2d.device, dtype=torch.float16)
+        out_shape = (m, self.out_channels)
+        if (
+            self._awq_out_2d_buf is None
+            or self._awq_out_2d_buf.shape != out_shape
+            or self._awq_out_2d_buf.device != x_2d.device
+        ):
+            self._awq_out_2d_buf = torch.empty(out_shape, device=x_2d.device, dtype=torch.float16)
+
+    def _forward_awq_1x1(self, x: torch.Tensor) -> torch.Tensor:
+        """1x1 Conv2d as AWQ W8A8 GEMM over flattened NHWC activations."""
+        from modiff_triton.kernels.awq_w8a8 import awq_fused_quant_gemm_w8a8_prealloc
+
+        b, _, h, w = x.shape
+        x_2d = x.permute(0, 2, 3, 1).reshape(-1, self.in_channels)
+        self._ensure_awq_1x1_cache(x_2d)
+        bias = self.bias.view(-1).contiguous() if self.bias is not None else None
+        out_2d = awq_fused_quant_gemm_w8a8_prealloc(
+            x_2d,
+            self._awq_weight_1x1,
+            self._awq_scale_w_1x1,
+            self._awq_x_int8_buf,
+            self._awq_scale_a_buf,
+            self._awq_out_2d_buf,
+            bias,
+            weight_is_awq_layout=True,
+        )
+        out = out_2d.view(b, h, w, self.out_channels).permute(0, 3, 1, 2)
+        return out if self.standard_output_fp16 else out.float()
+
     # ==================================================================
     # Forward paths
     # ==================================================================
@@ -304,6 +378,12 @@ class OptimizedInt8Conv2d(nn.Module):
         includes a CPU-GPU sync via .item() in _compute_activation_scale).
         """
         if self.is_calibrated and HAS_CUTLASS and self.use_cutlass:
+            if self._can_use_awq_1x1(x):
+                try:
+                    return self._forward_awq_1x1(x)
+                except ImportError:
+                    pass
+
             # Use fused scale+quantize kernel — no CPU sync, no intermediate allocations.
             # Lazy init the cached scale/inv_scale tensors (re-used every step).
             if self._cached_scale_float is None:
@@ -325,6 +405,7 @@ class OptimizedInt8Conv2d(nn.Module):
             h_out = ((x.shape[2] + 2 * self.padding[0] - self.dilation[0] * (self.kernel_size[0] - 1) - 1) // self.stride[0]) + 1
             w_out = ((x.shape[3] + 2 * self.padding[1] - self.dilation[1] * (self.kernel_size[1] - 1) - 1) // self.stride[1]) + 1
             output_shape = (x.shape[0], self.out_channels, h_out, w_out)
+            bias_fused = False
             if self.standard_output_fp16:
                 if (self._standard_output_buf is None
                         or self._standard_output_buf.shape != output_shape
@@ -333,16 +414,46 @@ class OptimizedInt8Conv2d(nn.Module):
                     self._standard_output_buf = torch.empty(
                         output_shape, device=x.device, dtype=torch.float16
                     ).contiguous(memory_format=torch.channels_last)
-                out = modiff_cutlass.conv2d_int8_fprop_no_ohat_prealloc(
-                    x_int8,
-                    self.weight_int8,
-                    self._cached_alpha_tensor,
-                    self.weight_scale_channel.view(-1),
-                    self._standard_output_buf,
-                    self.stride[0], self.stride[1],
-                    self.padding[0], self.padding[1],
-                    self.dilation[0], self.dilation[1]
+                use_deep_fuse = (
+                    hasattr(modiff_cutlass, "conv2d_int8_fprop_dequant_fp16_prealloc")
+                    and self.out_channels % 8 == 0
+                    and (self.bias is None or self._standard_output_buf.numel() >= 2_000_000)
                 )
+                if use_deep_fuse:
+                    out = modiff_cutlass.conv2d_int8_fprop_dequant_fp16_prealloc(
+                        x_int8,
+                        self.weight_int8,
+                        self._cached_alpha_tensor,
+                        self.weight_scale_channel_half.view(-1),
+                        self._standard_output_buf,
+                        self.stride[0], self.stride[1],
+                        self.padding[0], self.padding[1],
+                        self.dilation[0], self.dilation[1]
+                    )
+                elif self.bias is not None and hasattr(modiff_cutlass, "conv2d_int8_fprop_no_ohat_prealloc_bias"):
+                    out = modiff_cutlass.conv2d_int8_fprop_no_ohat_prealloc_bias(
+                        x_int8,
+                        self.weight_int8,
+                        self._cached_alpha_tensor,
+                        self.weight_scale_channel.view(-1),
+                        self.bias.view(-1).contiguous(),
+                        self._standard_output_buf,
+                        self.stride[0], self.stride[1],
+                        self.padding[0], self.padding[1],
+                        self.dilation[0], self.dilation[1]
+                    )
+                    bias_fused = True
+                else:
+                    out = modiff_cutlass.conv2d_int8_fprop_no_ohat_prealloc(
+                        x_int8,
+                        self.weight_int8,
+                        self._cached_alpha_tensor,
+                        self.weight_scale_channel.view(-1),
+                        self._standard_output_buf,
+                        self.stride[0], self.stride[1],
+                        self.padding[0], self.padding[1],
+                        self.dilation[0], self.dilation[1]
+                    )
             else:
                 out_raw = modiff_cutlass.conv2d_int8_fprop(
                     x_int8, self.weight_int8, self._cached_alpha_tensor, self._empty_bias,
@@ -351,7 +462,7 @@ class OptimizedInt8Conv2d(nn.Module):
                     self.dilation[0], self.dilation[1]
                 )
                 out = out_raw * self.weight_scale_channel
-            if self.bias is not None:
+            if self.bias is not None and not bias_fused:
                 bias = self.bias.to(out.dtype) if out.dtype != self.bias.dtype else self.bias
                 out = out + bias
             return out
@@ -487,6 +598,7 @@ class OptimizedInt8Conv2d(nn.Module):
         self.standard_output_fp16 = enabled
         if not enabled:
             self._standard_output_buf = None
+        self._invalidate_awq_1x1_cache()
 
     def reset_state(self):
         self.is_first_step = True
@@ -560,11 +672,13 @@ class OptimizedInt8Conv2d(nn.Module):
         ch_scale = torch.clamp(ch_max / 127.0, min=1e-8)
 
         self.weight_scale_channel.copy_(ch_scale.view(1, K, 1, 1))
+        self.weight_scale_channel_half.copy_(ch_scale.half().to(self.weight_scale_channel_half.device))
 
         w_quant = (w_flat / ch_scale.unsqueeze(1)).round().clamp(-127, 127).to(torch.int8)
         w_quant = w_quant.reshape(K, self.in_channels, *self.kernel_size)
         w_nhwc = w_quant.permute(0, 2, 3, 1).contiguous()
         self.weight_int8.data = w_nhwc.to(self.weight_int8.device)
+        self._invalidate_awq_1x1_cache()
 
     def set_calibrating(self, calibrating: bool):
         if calibrating:

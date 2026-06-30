@@ -176,8 +176,63 @@ def awq_fused_quant_gemm_w8a8(
     )
 
 
+def awq_fused_quant_gemm_w8a8_prealloc(
+    x: torch.Tensor,
+    weight_int8: torch.Tensor,
+    scale_w: torch.Tensor,
+    x_int8: torch.Tensor,
+    scale_a: torch.Tensor,
+    out: torch.Tensor,
+    bias: Optional[torch.Tensor] = None,
+    weight_is_awq_layout: bool = False,
+) -> torch.Tensor:
+    """
+    Quantize activations and run AWQ W8A8 GEMM into caller-owned buffers.
+
+    This is intended for hot Conv1x1 paths where allocating x_int8, per-token
+    scales, and output on every layer call shows up in whole-pipeline timing.
+    """
+    if not x.is_cuda:
+        raise ValueError("AWQ kernels require CUDA tensors")
+    if x.dim() != 2:
+        raise ValueError("x must be 2D [M, K]")
+    if x_int8.shape != x.shape or x_int8.dtype != torch.int8:
+        raise ValueError("x_int8 must be int8 with the same shape as x")
+
+    weight_awq = weight_int8.contiguous() if weight_is_awq_layout else _as_awq_weight(weight_int8)
+    m, k = x.shape
+    n, k_weight = weight_awq.shape
+    if k != k_weight:
+        raise ValueError(f"shape mismatch: x K={k}, weight K={k_weight}")
+    if scale_a.shape != (m,) or scale_a.dtype != torch.float16:
+        raise ValueError("scale_a must be fp16 with shape [M]")
+    if out.shape != (m, n) or out.dtype != torch.float16:
+        raise ValueError("out must be fp16 with shape [M, N]")
+    if n % 2 != 0:
+        raise ValueError("AWQ W8A8 GEMM requires an even output feature dimension")
+
+    engine = get_awq_engine()
+    x_contig = x.contiguous()
+    engine.invoke_quant(x_int8, x_contig, scale_a)
+
+    w_scales = _as_awq_scales(scale_w.to(x.device), n)
+    if bias is None:
+        engine.w8a8_gemm_forward_cuda(x_int8, weight_awq, w_scales, scale_a, out)
+    else:
+        engine.w8a8_gemm_fuse_bias_forward_cuda(
+            x_int8,
+            weight_awq,
+            w_scales,
+            scale_a,
+            out,
+            bias.contiguous().to(torch.float16),
+        )
+    return out
+
+
 __all__ = [
     "awq_fused_quant_gemm_w8a8",
+    "awq_fused_quant_gemm_w8a8_prealloc",
     "awq_gemm_w8a8",
     "get_awq_engine",
     "is_awq_available",
