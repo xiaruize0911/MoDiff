@@ -6,6 +6,8 @@ Supports:
 - FP16: Half precision with autocast
 - INT8: MoDiff INT8 with optimized kernels + temporal caching
 - INT8_baseline: INT8 optimized kernels WITHOUT temporal caching
+- INT8_awq_baseline: INT8 conv baseline + AWQ W8A8 linear kernels WITHOUT temporal caching
+- INT8_awq_full_baseline: INT8 conv baseline + AWQ W8A8 Linear/Conv1d-1x1 projections WITHOUT temporal caching
 - INT4: MoDiff INT4 with optimized kernels + temporal caching
 - INT4_baseline: INT4 optimized kernels WITHOUT temporal caching
 
@@ -28,6 +30,8 @@ Performance hierarchy (expected after fair comparison fix):
 Usage:
     python integration/benchmark_ldm.py --mode all --steps 50
     python integration/benchmark_ldm.py --mode int8_baseline --num_samples 100 --eval_fid
+    python integration/benchmark_ldm.py --mode int8_awq_baseline --num_samples 100
+    python integration/benchmark_ldm.py --mode int8_awq_full_baseline --num_samples 100
     python integration/benchmark_ldm.py --mode int8 --steps 50  # With temporal caching
 """
 import argparse
@@ -100,6 +104,16 @@ try:
 except ImportError:
     HAS_INT8_LINEAR = False
     print("Warning: INT8 Linear not available")
+
+try:
+    from integration.kernels.awq_conv1d import (
+        AWQW8A8Conv1d1x1,
+        convert_model_conv1d_1x1_to_awq,
+    )
+    HAS_AWQ_CONV1D = True
+except ImportError:
+    HAS_AWQ_CONV1D = False
+    print("Warning: AWQ Conv1d not available")
 
 # INT4 imports
 try:
@@ -184,6 +198,14 @@ def count_linear_layers(model: nn.Module) -> int:
     if HAS_INT4_LINEAR:
         linear_types.append(OptimizedInt4Linear)
     return sum(1 for m in model.modules() if isinstance(m, tuple(linear_types)))
+
+
+def count_conv1d_layers(model: nn.Module) -> int:
+    """Count Conv1d-style projection layers."""
+    conv1d_types = [nn.Conv1d]
+    if HAS_AWQ_CONV1D:
+        conv1d_types.append(AWQW8A8Conv1d1x1)
+    return sum(1 for m in model.modules() if isinstance(m, tuple(conv1d_types)))
 
 
 def convert_to_int8_baseline(model: nn.Module):
@@ -449,18 +471,33 @@ class BenchmarkRunner:
             enable_modiff_mode_int4(model.model.diffusion_model, True)
             if HAS_INT4_LINEAR:
                 enable_modiff_mode_int4_linear(model.model.diffusion_model, True)
-        elif mode == 'int8_baseline' and HAS_INT8:
-            print(f"Converting UNet to INT8 Baseline (INT8 kernels without MoDiff temporal caching) ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
+        elif mode in ('int8_baseline', 'int8_awq_baseline', 'int8_awq_full_baseline') and HAS_INT8:
+            use_awq = mode in ('int8_awq_baseline', 'int8_awq_full_baseline')
+            linear_backend = 'awq' if use_awq else self.linear_backend
+            if mode == 'int8_awq_full_baseline':
+                label = "INT8 AWQ Full Baseline"
+            elif mode == 'int8_awq_baseline':
+                label = "INT8 AWQ Baseline"
+            else:
+                label = "INT8 Baseline"
+            print(f"Converting UNet to {label} (INT8 kernels without MoDiff temporal caching) ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
             convert_model_to_optimized_int8(model.model.diffusion_model)
             
             # Also convert linear layers to INT8 (baseline = no temporal caching)
             if HAS_INT8_LINEAR:
-                print(f"Converting UNet linear layers to INT8 ({count_linear_layers(model.model.diffusion_model)} linear layers)...")
+                print(f"Converting UNet linear layers to INT8 using {linear_backend} backend ({count_linear_layers(model.model.diffusion_model)} linear layers)...")
                 convert_model_to_int8_linear(
                     model.model.diffusion_model,
-                    backend=self.linear_backend,
+                    backend=linear_backend,
                     int_gemm_min_m=self.linear_int_gemm_min_m,
                 )
+
+            if mode == 'int8_awq_full_baseline':
+                if not HAS_AWQ_CONV1D:
+                    raise RuntimeError("int8_awq_full_baseline requested, but AWQ Conv1d support is not available")
+                n_conv1d = count_conv1d_layers(model.model.diffusion_model)
+                converted_conv1d = convert_model_conv1d_1x1_to_awq(model.model.diffusion_model)
+                print(f"Converting Conv1d-1x1 projection layers to AWQ ({converted_conv1d}/{n_conv1d} layers converted)...")
             
             from integration.utils.buffer_pool import initialize_buffer_pool
             initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
@@ -697,11 +734,11 @@ class BenchmarkRunner:
         # Full warmup at actual batch size + step count to let cuDNN benchmark
         # select optimal kernels. Without this, first timed run includes kernel selection.
         print(f"Warming up cuDNN (full {self.steps}-step pass at batch_size={self.batch_size})...")
-        if mode in ('int8', 'int8_baseline', 'int8_attn_modiff') and HAS_INT8:
+        if mode in ('int8', 'int8_baseline', 'int8_awq_baseline', 'int8_awq_full_baseline', 'int8_attn_modiff') and HAS_INT8:
             reset_modiff_state_int8(model.model.diffusion_model)
         elif mode in ('int4', 'int4_baseline', 'int4_attn_modiff') and HAS_INT4:
             reset_modiff_state_int4(model.model.diffusion_model)
-        if mode in ('int8', 'int8_baseline', 'int8_attn_modiff') and HAS_INT8_LINEAR:
+        if mode in ('int8', 'int8_baseline', 'int8_awq_baseline', 'int8_awq_full_baseline', 'int8_attn_modiff') and HAS_INT8_LINEAR:
             reset_modiff_state_linear(model.model.diffusion_model)
         elif mode in ('int4', 'int4_baseline', 'int4_attn_modiff') and HAS_INT4_LINEAR:
             reset_modiff_state_int4_linear(model.model.diffusion_model)
@@ -722,11 +759,11 @@ class BenchmarkRunner:
         while generated < num_samples:
             batch = min(self.batch_size, num_samples - generated)
             
-            if mode in ('int8', 'int8_baseline', 'int8_attn_modiff') and HAS_INT8:
+            if mode in ('int8', 'int8_baseline', 'int8_awq_baseline', 'int8_awq_full_baseline', 'int8_attn_modiff') and HAS_INT8:
                 reset_modiff_state_int8(model.model.diffusion_model)
             elif mode in ('int4', 'int4_baseline', 'int4_attn_modiff') and HAS_INT4:
                 reset_modiff_state_int4(model.model.diffusion_model)
-            if mode in ('int8', 'int8_baseline', 'int8_attn_modiff') and HAS_INT8_LINEAR:
+            if mode in ('int8', 'int8_baseline', 'int8_awq_baseline', 'int8_awq_full_baseline', 'int8_attn_modiff') and HAS_INT8_LINEAR:
                 reset_modiff_state_linear(model.model.diffusion_model)
             elif mode in ('int4', 'int4_baseline', 'int4_attn_modiff') and HAS_INT4_LINEAR:
                 reset_modiff_state_int4_linear(model.model.diffusion_model)
@@ -765,7 +802,7 @@ class BenchmarkRunner:
         # Determine calibration path if not explicitly provided
         original_calib_path = self.calibration_path
         if not self.calibration_path:
-            if mode in ('int8', 'int8_baseline', 'int8_attn_modiff'):
+            if mode in ('int8', 'int8_baseline', 'int8_awq_baseline', 'int8_awq_full_baseline', 'int8_attn_modiff'):
                 self.calibration_path = 'integration/calibration/int8_calibration.pt'
             elif mode in ('int4', 'int4_baseline', 'int4_attn_modiff'):
                 self.calibration_path = 'integration/calibration/int4_calibration.pt'
@@ -890,7 +927,7 @@ class BenchmarkRunner:
         print("-" * 55)
         
         baseline = self.results.get('fp32', {}).get('time_per_sample', 1.0)
-        for mode in ['fp32', 'fp16', 'int8', 'int8_baseline', 'int4', 'int4_baseline', 'attn_modiff', 'int8_attn_modiff', 'int4_attn_modiff']:
+        for mode in ['fp32', 'fp16', 'int8', 'int8_baseline', 'int8_awq_baseline', 'int8_awq_full_baseline', 'int4', 'int4_baseline', 'attn_modiff', 'int8_attn_modiff', 'int4_attn_modiff']:
             if mode in self.results:
                 r = self.results[mode]
                 t = f"{r['time_per_sample']:.3f}s"
@@ -914,7 +951,7 @@ def main():
     parser.add_argument('--steps', type=int, default=200)
     parser.add_argument('--num_samples', type=int, default=128)
     parser.add_argument('--mode', type=str,
-                       choices=['all', 'fp32', 'fp16', 'int8', 'int8_baseline', 'int4', 'int4_baseline',
+                       choices=['all', 'fp32', 'fp16', 'int8', 'int8_baseline', 'int8_awq_baseline', 'int8_awq_full_baseline', 'int4', 'int4_baseline',
                                 'attn_modiff', 'int8_attn_modiff', 'int4_attn_modiff'],
                        default='all')
     parser.add_argument('--eval_fid', action='store_true', help='Compute FID between modes')
@@ -923,8 +960,8 @@ def main():
     parser.add_argument('--calibration', type=str, default=None,
                        help='Path to static calibration file (e.g., integration/calibration/int8_calibration.pt)')
     parser.add_argument('--linear_backend', type=str, default='fp16',
-                       choices=['fp16', 'int_gemm'],
-                       help='Linear layer backend for INT8/INT4 modes. fp16 preserves old behavior; int_gemm uses true INT GEMM when large enough.')
+                       choices=['fp16', 'int_gemm', 'awq'],
+                       help='Linear layer backend for INT8/INT4 modes. fp16 preserves old behavior; int_gemm uses true INT GEMM when large enough; awq uses llm-awq W8A8 GEMM for INT8 linear layers. AWQ baseline modes always use awq.')
     parser.add_argument('--linear_int_gemm_min_m', type=int, default=64,
                        help='Minimum flattened M dimension required before Linear layers use true INT GEMM.')
     parser.add_argument('--no_attention', action='store_true',
@@ -967,10 +1004,10 @@ def main():
     # attn_modiff modes are not included in 'all' (they extend the existing modes; run explicitly)
     
     for mode in modes:
-        if mode == 'int8' and not HAS_INT8:
+        if mode in ('int8', 'int8_baseline', 'int8_awq_baseline', 'int8_awq_full_baseline', 'int8_attn_modiff') and not HAS_INT8:
             print(f"Skipping {mode}: not available")
             continue
-        if mode == 'int4' and not HAS_INT4:
+        if mode in ('int4', 'int4_baseline', 'int4_attn_modiff') and not HAS_INT4:
             print(f"Skipping {mode}: not available")
             continue
         runner.run_mode(mode, args.num_samples, calibrate=not args.skip_calibration, force_recalibrate=args.force_recalibrate)

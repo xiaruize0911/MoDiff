@@ -16,6 +16,8 @@ modiff_triton/data
 /benchmark_results
 integration/results_ldm_benchmark
 *.so
+*.nsys-rep
+*.sqlite
 PHASE2_PLAN.md
 *.png
 /integration/lsun_val

@@ -12,6 +12,15 @@ LINEAR_BACKEND="${LINEAR_BACKEND:-int_gemm}"
 BENCHMARK="${BENCHMARK:-integration/benchmarks/benchmark_ldm.py}"
 MODES="${MODES:-fp16 int8 int8_baseline int4 int4_baseline}"
 ANALYZE_MODES="${ANALYZE_MODES:-$MODES}"
+NSYS_ENV_DENYLIST=(
+  RUNPOD_API_KEY
+  VSCODE_CLI_REQUIRE_TOKEN
+  GH_TOKEN
+  GITHUB_TOKEN
+  HF_TOKEN
+  HUGGINGFACE_HUB_TOKEN
+  WANDB_API_KEY
+)
 
 mkdir -p "$OUT_DIR/profiles" "$OUT_DIR/benchmarks"
 
@@ -26,10 +35,15 @@ run_profile() {
   shift
   local base="$OUT_DIR/profiles/${mode}_s${STEPS}_b${BATCH_SIZE}"
   local bench_out="$OUT_DIR/benchmarks/${mode}"
+  local sanitized_env=()
+  local var
 
   mkdir -p "$bench_out"
   echo "==> Profiling $mode"
-  nsys profile \
+  for var in "${NSYS_ENV_DENYLIST[@]}"; do
+    sanitized_env+=(-u "$var")
+  done
+  env "${sanitized_env[@]}" nsys profile \
     --force-overwrite=true \
     --stats=true \
     --trace=cuda,nvtx,osrt \

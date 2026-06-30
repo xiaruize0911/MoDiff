@@ -1,0 +1,112 @@
+{
+  "ours_fused": [
+    {
+      "key": "_fused_quantize_gemm_w8a8_kernel",
+      "device_time_total_us": 14584.794000000002,
+      "device_time_avg_us": 729.2397000000001,
+      "count": 20
+    }
+  ],
+  "ours_gemm_scalar": [
+    {
+      "key": "_gemm_w8a8_kernel",
+      "device_time_total_us": 5821.482000000002,
+      "device_time_avg_us": 291.0741000000001,
+      "count": 20
+    },
+    {
+      "key": "aten::to",
+      "device_time_total_us": 78.65599999999995,
+      "device_time_avg_us": 3.9327999999999976,
+      "count": 20
+    },
+    {
+      "key": "aten::_to_copy",
+      "device_time_total_us": 78.65599999999995,
+      "device_time_avg_us": 3.9327999999999976,
+      "count": 20
+    },
+    {
+      "key": "aten::copy_",
+      "device_time_total_us": 78.65599999999995,
+      "device_time_avg_us": 3.9327999999999976,
+      "count": 20
+    },
+    {
+      "key": "void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}::operator()() const::{lambda()#7}::operator()() const::{lambda(float)#1}, at::detail::Array<char*, 2>, TrivialOffsetCalculator<1, unsigned int>, TrivialOffsetCalculator<1, unsigned int>, at::native::memory::LoadWithCast<1>, at::native::memory::StoreWithCast<1> >(int, at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}::operator()() const::{lambda()#7}::operator()() const::{lambda(float)#1}, at::detail::Array<char*, 2>, TrivialOffsetCalculator<1, unsigned int>, TrivialOffsetCalculator<1, unsigned int>, at::native::memory::LoadWithCast<1>, at::native::memory::StoreWithCast<1>)",
+      "device_time_total_us": 78.65599999999995,
+      "device_time_avg_us": 3.9327999999999976,
+      "count": 20
+    }
+  ],
+  "awq_gemm_awq_quant": [
+    {
+      "key": "void dense_kernel0_fuse_bias<128, 128, 64, 64, 32, 64, 6>(signed char*, signed char*, __half2*, __half*, __half*, __half*, int, int, int)",
+      "device_time_total_us": 4174.375,
+      "device_time_avg_us": 208.71875,
+      "count": 20
+    },
+    {
+      "key": "aten::to",
+      "device_time_total_us": 75.93600000000015,
+      "device_time_avg_us": 0.9492000000000018,
+      "count": 80
+    },
+    {
+      "key": "aten::_to_copy",
+      "device_time_total_us": 75.93600000000015,
+      "device_time_avg_us": 3.7968000000000073,
+      "count": 20
+    },
+    {
+      "key": "aten::copy_",
+      "device_time_total_us": 75.93600000000015,
+      "device_time_avg_us": 3.7968000000000073,
+      "count": 20
+    },
+    {
+      "key": "void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}::operator()() const::{lambda()#10}::operator()() const::{lambda(c10::Half)#1}, at::detail::Array<char*, 2>, TrivialOffsetCalculator<1, unsigned int>, TrivialOffsetCalculator<1, unsigned int>, at::native::memory::LoadWithCast<1>, at::native::memory::StoreWithCast<1> >(int, at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}::operator()() const::{lambda()#10}::operator()() const::{lambda(c10::Half)#1}, at::detail::Array<char*, 2>, TrivialOffsetCalculator<1, unsigned int>, TrivialOffsetCalculator<1, unsigned int>, at::native::memory::LoadWithCast<1>, at::native::memory::StoreWithCast<1>)",
+      "device_time_total_us": 75.93600000000015,
+      "device_time_avg_us": 3.7968000000000073,
+      "count": 20
+    }
+  ],
+  "awq_quant_plus_gemm": [
+    {
+      "key": "void dense_kernel0_fuse_bias<128, 128, 64, 64, 32, 64, 6>(signed char*, signed char*, __half2*, __half*, __half*, __half*, int, int, int)",
+      "device_time_total_us": 4168.934999999999,
+      "device_time_avg_us": 208.44674999999992,
+      "count": 20
+    },
+    {
+      "key": "void vllm::quant_kernel<c10::Half, c10::Half*, true>(c10::Half const*, signed char*, c10::Half*, int, int)",
+      "device_time_total_us": 817.3470000000007,
+      "device_time_avg_us": 40.86735000000003,
+      "count": 20
+    },
+    {
+      "key": "aten::to",
+      "device_time_total_us": 77.02399999999989,
+      "device_time_avg_us": 0.9627999999999985,
+      "count": 80
+    },
+    {
+      "key": "aten::_to_copy",
+      "device_time_total_us": 77.02399999999989,
+      "device_time_avg_us": 3.851199999999994,
+      "count": 20
+    },
+    {
+      "key": "aten::copy_",
+      "device_time_total_us": 77.02399999999989,
+      "device_time_avg_us": 3.851199999999994,
+      "count": 20
+    },
+    {
+      "key": "void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}::operator()() const::{lambda()#10}::operator()() const::{lambda(c10::Half)#1}, at::detail::Array<char*, 2>, TrivialOffsetCalculator<1, unsigned int>, TrivialOffsetCalculator<1, unsigned int>, at::native::memory::LoadWithCast<1>, at::native::memory::StoreWithCast<1> >(int, at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}::operator()() const::{lambda()#10}::operator()() const::{lambda(c10::Half)#1}, at::detail::Array<char*, 2>, TrivialOffsetCalculator<1, unsigned int>, TrivialOffsetCalculator<1, unsigned int>, at::native::memory::LoadWithCast<1>, at::native::memory::StoreWithCast<1>)",
+      "device_time_total_us": 77.02399999999989,
+      "device_time_avg_us": 3.851199999999994,
+      "count": 20
+    }
+  ]
+}

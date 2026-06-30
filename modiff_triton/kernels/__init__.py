@@ -33,6 +33,13 @@ from .conv_w8a8_fused import (
     conv2d_w8a8_3x3_standard,
 )
 
+from .awq_w8a8 import (
+    awq_fused_quant_gemm_w8a8,
+    awq_gemm_w8a8,
+    is_awq_available,
+    quantize_awq_per_token,
+)
+
 __all__ = [
     # Quantization
     "quantize_symmetric_int8",
@@ -57,4 +64,9 @@ __all__ = [
     # Fused Conv2d
     "conv2d_w8a8_3x3_fused",
     "conv2d_w8a8_3x3_standard",
+    # Optional AWQ baseline
+    "awq_fused_quant_gemm_w8a8",
+    "awq_gemm_w8a8",
+    "is_awq_available",
+    "quantize_awq_per_token",
 ]
