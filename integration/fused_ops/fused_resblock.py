@@ -57,7 +57,9 @@ class FusedGroupNormSiLU(nn.Module):
     def forward(self, x):
         # Use PyTorch native operations which get fused by the JIT compiler
         # This is faster than separate GroupNorm + SiLU layers due to reduced overhead
-        x = F.group_norm(x, self.num_groups, self.weight, self.bias, self.eps)
+        weight = self.weight.to(x.dtype) if self.weight is not None and self.weight.dtype != x.dtype else self.weight
+        bias = self.bias.to(x.dtype) if self.bias is not None and self.bias.dtype != x.dtype else self.bias
+        x = F.group_norm(x, self.num_groups, weight, bias, self.eps)
         return F.silu(x)
 
 
@@ -217,9 +219,13 @@ class FusedResBlock(TimestepBlock):
         if self.use_scale_shift_norm:
             scale, shift = torch.chunk(emb_out, 2, dim=1)
             # Manual GroupNorm since we need scale/shift modulation
+            weight = self.fused_out_norm_silu.weight
+            bias = self.fused_out_norm_silu.bias
+            weight = weight.to(h.dtype) if weight is not None and weight.dtype != h.dtype else weight
+            bias = bias.to(h.dtype) if bias is not None and bias.dtype != h.dtype else bias
             h_norm = F.group_norm(h, self.fused_out_norm_silu.num_groups, 
-                                  self.fused_out_norm_silu.weight, 
-                                  self.fused_out_norm_silu.bias, 
+                                  weight, 
+                                  bias, 
                                   self.fused_out_norm_silu.eps)
             h = h_norm * (1 + scale) + shift
             h = F.silu(h)

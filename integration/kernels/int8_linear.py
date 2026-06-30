@@ -93,6 +93,7 @@ class OptimizedInt8Linear(nn.Module):
         self._absmax_buf: Optional[torch.Tensor] = None
         self._retire_count: Optional[torch.Tensor] = None
         self._smooth_inv_flat: Optional[torch.Tensor] = None
+        self.standard_output_fp16 = False
 
     # ==================================================================
     # Quantization helpers
@@ -124,7 +125,7 @@ class OptimizedInt8Linear(nn.Module):
         """Fast FP16 linear. Input can be FP32 (auto-cast) or FP16."""
         x_fp16 = x.half() if x.dtype != torch.float16 else x
         out = F.linear(x_fp16, self.weight_fp16, self.bias if with_bias else None)
-        return out.float()
+        return out if self.standard_output_fp16 else out.float()
 
     def _int8_gemm_linear(self, x: torch.Tensor, with_bias: bool = True,
                           input_scale: Optional[float | torch.Tensor] = None) -> torch.Tensor:
@@ -158,7 +159,8 @@ class OptimizedInt8Linear(nn.Module):
             self.weight_dequant_scale,
             bias,
         )
-        return out.reshape(*x.shape[:-1], self.out_features)
+        out = out.reshape(*x.shape[:-1], self.out_features)
+        return out.half() if self.standard_output_fp16 else out
 
     def _linear(self, x: torch.Tensor, with_bias: bool = True,
                 input_scale: Optional[float | torch.Tensor] = None) -> torch.Tensor:
@@ -312,6 +314,9 @@ class OptimizedInt8Linear(nn.Module):
         if not enabled:
             self.reset_state()
 
+    def set_standard_output_fp16(self, enabled: bool = True):
+        self.standard_output_fp16 = enabled
+
     def reset_state(self):
         self.is_first_step = True
         self.a_hat_cache = None
@@ -401,6 +406,13 @@ def reset_modiff_state_linear(model: nn.Module):
     for module in model.modules():
         if isinstance(module, OptimizedInt8Linear):
             module.reset_state()
+
+
+def set_standard_output_fp16_linear(model: nn.Module, enabled: bool = True):
+    """Return FP16 outputs from baseline OptimizedInt8Linear layers."""
+    for module in model.modules():
+        if isinstance(module, OptimizedInt8Linear):
+            module.set_standard_output_fp16(enabled)
 
 
 def set_calibrating_linear(model: nn.Module, calibrating: bool):

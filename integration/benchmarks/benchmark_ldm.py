@@ -61,6 +61,7 @@ torch.backends.cudnn.benchmark = True
 sys.path.insert(0, os.getcwd())
 
 from integration.utils.profiler import profiler
+from integration.utils.quant_memory import format_quant_memory_report, report_quant_memory
 from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 
@@ -75,6 +76,7 @@ try:
         set_calibrating as set_calibrating_int8,
         get_calibration_config as get_calibration_config_int8,
         reset_calibration as reset_calibration_int8,
+        set_standard_output_fp16 as set_int8_standard_output_fp16,
     )
     from integration.utils.profiler import profiler  # Added for profiling
     HAS_INT8 = True
@@ -92,6 +94,7 @@ try:
         set_calibrating_linear,
         export_linear_static_scales,
         apply_linear_static_scales,
+        set_standard_output_fp16_linear as set_int8_linear_standard_output_fp16,
     )
     HAS_INT8_LINEAR = True
 except ImportError:
@@ -107,6 +110,7 @@ try:
         reset_modiff_state as reset_modiff_state_int4,
         apply_int4_static_scales,
         export_int4_static_scales,
+        set_standard_output_fp16 as set_int4_standard_output_fp16,
     )
     HAS_INT4 = True
 except ImportError:
@@ -123,6 +127,7 @@ try:
         set_calibrating_int4_linear,
         export_int4_linear_static_scales,
         apply_int4_linear_static_scales,
+        set_standard_output_fp16_linear as set_int4_linear_standard_output_fp16,
     )
     HAS_INT4_LINEAR = True
 except ImportError:
@@ -474,8 +479,10 @@ class BenchmarkRunner:
                         loaded_lin = apply_linear_static_scales(model.model.diffusion_model, clean_scales)
                         print(f"✓ Loaded {loaded_lin} INT8 linear layer scales for baseline")
             enable_modiff_mode_int8(model.model.diffusion_model, False)  # Disable temporal caching
+            set_int8_standard_output_fp16(model.model.diffusion_model, True)
             if HAS_INT8_LINEAR:
                 enable_modiff_mode_linear(model.model.diffusion_model, False)  # Disable temporal caching
+                set_int8_linear_standard_output_fp16(model.model.diffusion_model, True)
         elif mode == 'int4_baseline' and HAS_INT4:
             print(f"Converting UNet to INT4 Baseline (INT4 kernels without MoDiff temporal caching) ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
             convert_model_to_optimized_int4(model.model.diffusion_model)
@@ -503,8 +510,10 @@ class BenchmarkRunner:
                         loaded_lin = apply_int4_linear_static_scales(model.model.diffusion_model, clean_scales)
                         print(f"✓ Loaded {loaded_lin} INT4 linear layer scales for baseline")
             enable_modiff_mode_int4(model.model.diffusion_model, False)  # Disable temporal caching
+            set_int4_standard_output_fp16(model.model.diffusion_model, True)
             if HAS_INT4_LINEAR:
                 enable_modiff_mode_int4_linear(model.model.diffusion_model, False)  # Disable temporal caching
+                set_int4_linear_standard_output_fp16(model.model.diffusion_model, True)
         elif mode == 'int8_full_pipeline' and HAS_INT8:
             print(f"Converting UNet to Full INT8 Pipeline (no per-layer Q/DQ) ({count_conv_layers(model.model.diffusion_model)} conv layers)...")
             # Full INT8: quantize once at input, stay quantized throughout
@@ -702,6 +711,9 @@ class BenchmarkRunner:
         with torch.inference_mode():
             sampler.sample(S=self.steps, batch_size=self.batch_size, shape=self.shape, eta=0.0, verbose=False)
         torch.cuda.synchronize()
+        quant_memory_after_warmup = report_quant_memory(model.model.diffusion_model)
+        if quant_memory_after_warmup["total_tracked_mib"] > 0:
+            print(f"Quant memory after warmup: {format_quant_memory_report(quant_memory_after_warmup)}")
         print("Warmup complete.")
         
         total_time = 0.0
@@ -744,7 +756,7 @@ class BenchmarkRunner:
             
             generated += batch
 
-        return total_time, generated
+        return total_time, generated, quant_memory_after_warmup
     
     def run_mode(self, mode: str, num_samples: int = 16, calibrate: bool = True, force_recalibrate: bool = False):
         """Run benchmark for a specific mode."""
@@ -802,7 +814,7 @@ class BenchmarkRunner:
         
         # Generate samples
         try:
-            total_time, num_gen = self._generate_samples(
+            total_time, num_gen, quant_memory_after_warmup = self._generate_samples(
                 model, sampler, mode, num_samples, use_autocast, dtype
             )
         except Exception as e:
@@ -821,6 +833,7 @@ class BenchmarkRunner:
             'num_samples': num_gen,
             'time_per_sample': time_per_sample,
             'time_per_step_ms': time_per_step,
+            'quant_memory_after_warmup': quant_memory_after_warmup,
         }
         
         # Restore original path for next mode in 'all' loop

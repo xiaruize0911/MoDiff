@@ -1,0 +1,866 @@
+{
+  "steps": 50,
+  "batch_size": 168,
+  "modes": {
+    "fp16": {
+      "sqlite": "integration/results/nsys_memory_repro_20260624_fp16_baseline/profiles/fp16_s50_b168.sqlite",
+      "kind": {
+        "Host-to-Device": {
+          "count": 1461,
+          "mib": 2569.9509048461914,
+          "ms": 248.7902469999982
+        },
+        "Device-to-Device": {
+          "count": 210,
+          "mib": 111.7001953125,
+          "ms": 0.6761949999999993
+        },
+        "Device-to-Host": {
+          "count": 433,
+          "mib": 126.04806518554688,
+          "ms": 35.807247
+        }
+      },
+      "runtime": {
+        "cudaMemcpyAsync_v3020": {
+          "count": 2104,
+          "mib": 2807.6991653442383,
+          "ms": 285.2736889999992
+        }
+      },
+      "total": {
+        "count": 2104,
+        "mib": 2807.6991653442383,
+        "ms": 285.2736889999982
+      },
+      "d2d_sizes": {
+        "294912": 6,
+        "1179648": 10,
+        "4718592": 10,
+        "3538944": 2,
+        "1769472": 2,
+        "884736": 2,
+        "442368": 2,
+        "131072": 2,
+        "524288": 2,
+        "1048576": 8,
+        "256": 1,
+        "64": 1,
+        "768": 20,
+        "1536": 48,
+        "3072": 54,
+        "6144": 10,
+        "4608": 4,
+        "2304": 4,
+        "4000": 6,
+        "2752512": 12,
+        "1344": 4
+      },
+      "d2d_size_runtime_names": {
+        "294912": {
+          "cudaMemcpyAsync_v3020": 6
+        },
+        "1179648": {
+          "cudaMemcpyAsync_v3020": 10
+        },
+        "4718592": {
+          "cudaMemcpyAsync_v3020": 10
+        },
+        "3538944": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "1769472": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "884736": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "442368": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "131072": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "524288": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "1048576": {
+          "cudaMemcpyAsync_v3020": 8
+        },
+        "256": {
+          "cudaMemcpyAsync_v3020": 1
+        },
+        "64": {
+          "cudaMemcpyAsync_v3020": 1
+        },
+        "768": {
+          "cudaMemcpyAsync_v3020": 20
+        },
+        "1536": {
+          "cudaMemcpyAsync_v3020": 48
+        },
+        "3072": {
+          "cudaMemcpyAsync_v3020": 54
+        },
+        "6144": {
+          "cudaMemcpyAsync_v3020": 10
+        },
+        "4608": {
+          "cudaMemcpyAsync_v3020": 4
+        },
+        "2304": {
+          "cudaMemcpyAsync_v3020": 4
+        },
+        "4000": {
+          "cudaMemcpyAsync_v3020": 6
+        },
+        "2752512": {
+          "cudaMemcpyAsync_v3020": 12
+        },
+        "1344": {
+          "cudaMemcpyAsync_v3020": 4
+        }
+      }
+    },
+    "int8": {
+      "sqlite": "integration/results/nsys_memory_repro_20260624_fp16_baseline/profiles/int8_s50_b168.sqlite",
+      "kind": {
+        "Host-to-Device": {
+          "count": 5943,
+          "mib": 2570.6231842041016,
+          "ms": 247.46641900001853
+        },
+        "Device-to-Device": {
+          "count": 1264,
+          "mib": 8615.7978515625,
+          "ms": 33.38392
+        },
+        "Device-to-Host": {
+          "count": 433,
+          "mib": 126.04806518554688,
+          "ms": 34.30838500000001
+        }
+      },
+      "runtime": {
+        "cudaMemcpyAsync_v3020": {
+          "count": 7640,
+          "mib": 11312.469100952148,
+          "ms": 315.1587239999676
+        }
+      },
+      "total": {
+        "count": 7640,
+        "mib": 11312.469100952148,
+        "ms": 315.15872400001854
+      },
+      "d2d_sizes": {
+        "294912": 6,
+        "1179648": 10,
+        "4718592": 10,
+        "3538944": 2,
+        "1769472": 2,
+        "884736": 2,
+        "442368": 2,
+        "131072": 2,
+        "524288": 2,
+        "1048576": 8,
+        "256": 1,
+        "64": 1,
+        "768": 108,
+        "1536": 256,
+        "3072": 282,
+        "6144": 30,
+        "4608": 12,
+        "2304": 12,
+        "1327104": 18,
+        "2654208": 6,
+        "5308416": 42,
+        "10616832": 10,
+        "21233664": 46,
+        "42467328": 10,
+        "31850496": 2,
+        "15925248": 2,
+        "7962624": 2,
+        "3981312": 2,
+        "4000": 6,
+        "2752512": 12,
+        "516096": 32,
+        "66060288": 38,
+        "258048": 12,
+        "16515072": 22,
+        "33030144": 40,
+        "8257536": 46,
+        "2064384": 16,
+        "4128768": 40,
+        "1032192": 88,
+        "6193152": 2,
+        "24772608": 2,
+        "49545216": 2,
+        "132120576": 12,
+        "198180864": 2,
+        "1344": 4
+      },
+      "d2d_size_runtime_names": {
+        "294912": {
+          "cudaMemcpyAsync_v3020": 6
+        },
+        "1179648": {
+          "cudaMemcpyAsync_v3020": 10
+        },
+        "4718592": {
+          "cudaMemcpyAsync_v3020": 10
+        },
+        "3538944": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "1769472": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "884736": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "442368": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "131072": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "524288": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "1048576": {
+          "cudaMemcpyAsync_v3020": 8
+        },
+        "256": {
+          "cudaMemcpyAsync_v3020": 1
+        },
+        "64": {
+          "cudaMemcpyAsync_v3020": 1
+        },
+        "768": {
+          "cudaMemcpyAsync_v3020": 108
+        },
+        "1536": {
+          "cudaMemcpyAsync_v3020": 256
+        },
+        "3072": {
+          "cudaMemcpyAsync_v3020": 282
+        },
+        "6144": {
+          "cudaMemcpyAsync_v3020": 30
+        },
+        "4608": {
+          "cudaMemcpyAsync_v3020": 12
+        },
+        "2304": {
+          "cudaMemcpyAsync_v3020": 12
+        },
+        "1327104": {
+          "cudaMemcpyAsync_v3020": 18
+        },
+        "2654208": {
+          "cudaMemcpyAsync_v3020": 6
+        },
+        "5308416": {
+          "cudaMemcpyAsync_v3020": 42
+        },
+        "10616832": {
+          "cudaMemcpyAsync_v3020": 10
+        },
+        "21233664": {
+          "cudaMemcpyAsync_v3020": 46
+        },
+        "42467328": {
+          "cudaMemcpyAsync_v3020": 10
+        },
+        "31850496": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "15925248": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "7962624": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "3981312": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "4000": {
+          "cudaMemcpyAsync_v3020": 6
+        },
+        "2752512": {
+          "cudaMemcpyAsync_v3020": 12
+        },
+        "516096": {
+          "cudaMemcpyAsync_v3020": 32
+        },
+        "66060288": {
+          "cudaMemcpyAsync_v3020": 38
+        },
+        "258048": {
+          "cudaMemcpyAsync_v3020": 12
+        },
+        "16515072": {
+          "cudaMemcpyAsync_v3020": 22
+        },
+        "33030144": {
+          "cudaMemcpyAsync_v3020": 40
+        },
+        "8257536": {
+          "cudaMemcpyAsync_v3020": 46
+        },
+        "2064384": {
+          "cudaMemcpyAsync_v3020": 16
+        },
+        "4128768": {
+          "cudaMemcpyAsync_v3020": 40
+        },
+        "1032192": {
+          "cudaMemcpyAsync_v3020": 88
+        },
+        "6193152": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "24772608": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "49545216": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "132120576": {
+          "cudaMemcpyAsync_v3020": 12
+        },
+        "198180864": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "1344": {
+          "cudaMemcpyAsync_v3020": 4
+        }
+      }
+    },
+    "int8_baseline": {
+      "sqlite": "integration/results/nsys_memory_repro_20260624_fp16_baseline/profiles/int8_baseline_s50_b168.sqlite",
+      "kind": {
+        "Host-to-Device": {
+          "count": 2095,
+          "mib": 2570.6085052490234,
+          "ms": 401.4654899999949
+        },
+        "Device-to-Device": {
+          "count": 910,
+          "mib": 1915.1572265625,
+          "ms": 8.340078999999978
+        },
+        "Device-to-Host": {
+          "count": 433,
+          "mib": 126.04806518554688,
+          "ms": 30.598651999999998
+        }
+      },
+      "runtime": {
+        "cudaMemcpyAsync_v3020": {
+          "count": 3438,
+          "mib": 4611.81379699707,
+          "ms": 440.404220999997
+        }
+      },
+      "total": {
+        "count": 3438,
+        "mib": 4611.81379699707,
+        "ms": 440.4042209999949
+      },
+      "d2d_sizes": {
+        "294912": 6,
+        "1179648": 10,
+        "4718592": 10,
+        "3538944": 2,
+        "1769472": 2,
+        "884736": 2,
+        "442368": 2,
+        "131072": 2,
+        "524288": 2,
+        "1048576": 8,
+        "256": 1,
+        "64": 1,
+        "768": 108,
+        "1536": 256,
+        "3072": 282,
+        "6144": 30,
+        "4608": 12,
+        "2304": 12,
+        "1327104": 18,
+        "2654208": 6,
+        "5308416": 42,
+        "10616832": 10,
+        "21233664": 46,
+        "42467328": 10,
+        "31850496": 2,
+        "15925248": 2,
+        "7962624": 2,
+        "3981312": 2,
+        "4000": 6,
+        "2752512": 12,
+        "1344": 4
+      },
+      "d2d_size_runtime_names": {
+        "294912": {
+          "cudaMemcpyAsync_v3020": 6
+        },
+        "1179648": {
+          "cudaMemcpyAsync_v3020": 10
+        },
+        "4718592": {
+          "cudaMemcpyAsync_v3020": 10
+        },
+        "3538944": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "1769472": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "884736": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "442368": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "131072": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "524288": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "1048576": {
+          "cudaMemcpyAsync_v3020": 8
+        },
+        "256": {
+          "cudaMemcpyAsync_v3020": 1
+        },
+        "64": {
+          "cudaMemcpyAsync_v3020": 1
+        },
+        "768": {
+          "cudaMemcpyAsync_v3020": 108
+        },
+        "1536": {
+          "cudaMemcpyAsync_v3020": 256
+        },
+        "3072": {
+          "cudaMemcpyAsync_v3020": 282
+        },
+        "6144": {
+          "cudaMemcpyAsync_v3020": 30
+        },
+        "4608": {
+          "cudaMemcpyAsync_v3020": 12
+        },
+        "2304": {
+          "cudaMemcpyAsync_v3020": 12
+        },
+        "1327104": {
+          "cudaMemcpyAsync_v3020": 18
+        },
+        "2654208": {
+          "cudaMemcpyAsync_v3020": 6
+        },
+        "5308416": {
+          "cudaMemcpyAsync_v3020": 42
+        },
+        "10616832": {
+          "cudaMemcpyAsync_v3020": 10
+        },
+        "21233664": {
+          "cudaMemcpyAsync_v3020": 46
+        },
+        "42467328": {
+          "cudaMemcpyAsync_v3020": 10
+        },
+        "31850496": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "15925248": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "7962624": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "3981312": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "4000": {
+          "cudaMemcpyAsync_v3020": 6
+        },
+        "2752512": {
+          "cudaMemcpyAsync_v3020": 12
+        },
+        "1344": {
+          "cudaMemcpyAsync_v3020": 4
+        }
+      }
+    },
+    "int4": {
+      "sqlite": "integration/results/nsys_memory_repro_20260624_fp16_baseline/profiles/int4_s50_b168.sqlite",
+      "kind": {
+        "Host-to-Device": {
+          "count": 5943,
+          "mib": 2570.6231842041016,
+          "ms": 397.9538499999602
+        },
+        "Device-to-Device": {
+          "count": 984,
+          "mib": 1963.3916015625,
+          "ms": 8.43935199999999
+        },
+        "Device-to-Host": {
+          "count": 433,
+          "mib": 126.04806518554688,
+          "ms": 32.705681
+        }
+      },
+      "runtime": {
+        "cudaMemcpyAsync_v3020": {
+          "count": 7360,
+          "mib": 4660.062850952148,
+          "ms": 439.09888299996135
+        }
+      },
+      "total": {
+        "count": 7360,
+        "mib": 4660.062850952148,
+        "ms": 439.0988829999602
+      },
+      "d2d_sizes": {
+        "294912": 6,
+        "1179648": 10,
+        "4718592": 10,
+        "3538944": 2,
+        "1769472": 2,
+        "884736": 2,
+        "442368": 2,
+        "131072": 2,
+        "524288": 2,
+        "1048576": 8,
+        "256": 1,
+        "64": 1,
+        "768": 108,
+        "1536": 256,
+        "3072": 282,
+        "6144": 30,
+        "4608": 12,
+        "2304": 12,
+        "1327104": 18,
+        "2654208": 6,
+        "5308416": 42,
+        "10616832": 10,
+        "21233664": 46,
+        "42467328": 10,
+        "31850496": 2,
+        "15925248": 2,
+        "7962624": 2,
+        "3981312": 2,
+        "4000": 6,
+        "2752512": 12,
+        "516096": 32,
+        "258048": 12,
+        "1032192": 30,
+        "1344": 4
+      },
+      "d2d_size_runtime_names": {
+        "294912": {
+          "cudaMemcpyAsync_v3020": 6
+        },
+        "1179648": {
+          "cudaMemcpyAsync_v3020": 10
+        },
+        "4718592": {
+          "cudaMemcpyAsync_v3020": 10
+        },
+        "3538944": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "1769472": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "884736": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "442368": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "131072": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "524288": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "1048576": {
+          "cudaMemcpyAsync_v3020": 8
+        },
+        "256": {
+          "cudaMemcpyAsync_v3020": 1
+        },
+        "64": {
+          "cudaMemcpyAsync_v3020": 1
+        },
+        "768": {
+          "cudaMemcpyAsync_v3020": 108
+        },
+        "1536": {
+          "cudaMemcpyAsync_v3020": 256
+        },
+        "3072": {
+          "cudaMemcpyAsync_v3020": 282
+        },
+        "6144": {
+          "cudaMemcpyAsync_v3020": 30
+        },
+        "4608": {
+          "cudaMemcpyAsync_v3020": 12
+        },
+        "2304": {
+          "cudaMemcpyAsync_v3020": 12
+        },
+        "1327104": {
+          "cudaMemcpyAsync_v3020": 18
+        },
+        "2654208": {
+          "cudaMemcpyAsync_v3020": 6
+        },
+        "5308416": {
+          "cudaMemcpyAsync_v3020": 42
+        },
+        "10616832": {
+          "cudaMemcpyAsync_v3020": 10
+        },
+        "21233664": {
+          "cudaMemcpyAsync_v3020": 46
+        },
+        "42467328": {
+          "cudaMemcpyAsync_v3020": 10
+        },
+        "31850496": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "15925248": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "7962624": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "3981312": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "4000": {
+          "cudaMemcpyAsync_v3020": 6
+        },
+        "2752512": {
+          "cudaMemcpyAsync_v3020": 12
+        },
+        "516096": {
+          "cudaMemcpyAsync_v3020": 32
+        },
+        "258048": {
+          "cudaMemcpyAsync_v3020": 12
+        },
+        "1032192": {
+          "cudaMemcpyAsync_v3020": 30
+        },
+        "1344": {
+          "cudaMemcpyAsync_v3020": 4
+        }
+      }
+    },
+    "int4_baseline": {
+      "sqlite": "integration/results/nsys_memory_repro_20260624_fp16_baseline/profiles/int4_baseline_s50_b168.sqlite",
+      "kind": {
+        "Host-to-Device": {
+          "count": 2095,
+          "mib": 2570.6085052490234,
+          "ms": 350.0938349999947
+        },
+        "Device-to-Device": {
+          "count": 910,
+          "mib": 1915.1572265625,
+          "ms": 8.294948999999981
+        },
+        "Device-to-Host": {
+          "count": 433,
+          "mib": 126.04806518554688,
+          "ms": 33.631783999999996
+        }
+      },
+      "runtime": {
+        "cudaMemcpyAsync_v3020": {
+          "count": 3438,
+          "mib": 4611.81379699707,
+          "ms": 392.02056799999514
+        }
+      },
+      "total": {
+        "count": 3438,
+        "mib": 4611.81379699707,
+        "ms": 392.0205679999947
+      },
+      "d2d_sizes": {
+        "294912": 6,
+        "1179648": 10,
+        "4718592": 10,
+        "3538944": 2,
+        "1769472": 2,
+        "884736": 2,
+        "442368": 2,
+        "131072": 2,
+        "524288": 2,
+        "1048576": 8,
+        "256": 1,
+        "64": 1,
+        "768": 108,
+        "1536": 256,
+        "3072": 282,
+        "6144": 30,
+        "4608": 12,
+        "2304": 12,
+        "1327104": 18,
+        "2654208": 6,
+        "5308416": 42,
+        "10616832": 10,
+        "21233664": 46,
+        "42467328": 10,
+        "31850496": 2,
+        "15925248": 2,
+        "7962624": 2,
+        "3981312": 2,
+        "4000": 6,
+        "2752512": 12,
+        "1344": 4
+      },
+      "d2d_size_runtime_names": {
+        "294912": {
+          "cudaMemcpyAsync_v3020": 6
+        },
+        "1179648": {
+          "cudaMemcpyAsync_v3020": 10
+        },
+        "4718592": {
+          "cudaMemcpyAsync_v3020": 10
+        },
+        "3538944": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "1769472": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "884736": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "442368": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "131072": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "524288": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "1048576": {
+          "cudaMemcpyAsync_v3020": 8
+        },
+        "256": {
+          "cudaMemcpyAsync_v3020": 1
+        },
+        "64": {
+          "cudaMemcpyAsync_v3020": 1
+        },
+        "768": {
+          "cudaMemcpyAsync_v3020": 108
+        },
+        "1536": {
+          "cudaMemcpyAsync_v3020": 256
+        },
+        "3072": {
+          "cudaMemcpyAsync_v3020": 282
+        },
+        "6144": {
+          "cudaMemcpyAsync_v3020": 30
+        },
+        "4608": {
+          "cudaMemcpyAsync_v3020": 12
+        },
+        "2304": {
+          "cudaMemcpyAsync_v3020": 12
+        },
+        "1327104": {
+          "cudaMemcpyAsync_v3020": 18
+        },
+        "2654208": {
+          "cudaMemcpyAsync_v3020": 6
+        },
+        "5308416": {
+          "cudaMemcpyAsync_v3020": 42
+        },
+        "10616832": {
+          "cudaMemcpyAsync_v3020": 10
+        },
+        "21233664": {
+          "cudaMemcpyAsync_v3020": 46
+        },
+        "42467328": {
+          "cudaMemcpyAsync_v3020": 10
+        },
+        "31850496": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "15925248": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "7962624": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "3981312": {
+          "cudaMemcpyAsync_v3020": 2
+        },
+        "4000": {
+          "cudaMemcpyAsync_v3020": 6
+        },
+        "2752512": {
+          "cudaMemcpyAsync_v3020": 12
+        },
+        "1344": {
+          "cudaMemcpyAsync_v3020": 4
+        }
+      }
+    }
+  },
+  "extra_vs_fp16": {
+    "fp16": {
+      "total_mib": 0.0,
+      "total_count": 0,
+      "d2d_mib": 0.0,
+      "d2d_count": 0
+    },
+    "int8": {
+      "total_mib": 8504.76993560791,
+      "total_count": 5536,
+      "d2d_mib": 8504.09765625,
+      "d2d_count": 1054
+    },
+    "int8_baseline": {
+      "total_mib": 1804.114631652832,
+      "total_count": 1334,
+      "d2d_mib": 1803.45703125,
+      "d2d_count": 700
+    },
+    "int4": {
+      "total_mib": 1852.3636856079102,
+      "total_count": 5256,
+      "d2d_mib": 1851.69140625,
+      "d2d_count": 774
+    },
+    "int4_baseline": {
+      "total_mib": 1804.114631652832,
+      "total_count": 1334,
+      "d2d_mib": 1803.45703125,
+      "d2d_count": 700
+    }
+  }
+}

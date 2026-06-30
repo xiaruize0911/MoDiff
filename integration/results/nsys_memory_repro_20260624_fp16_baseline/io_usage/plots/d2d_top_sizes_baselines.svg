@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="420" viewBox="0 0 900 420">
+<style>text{font-family:Arial,sans-serif;font-size:13px}.title{font-size:20px;font-weight:700}.axis{stroke:#333;stroke-width:1}.grid{stroke:#ddd;stroke-width:1}.label{font-size:11px}</style>
+<rect width="900" height="420" fill="white"/>
+<text class="title" x="450.0" y="28" text-anchor="middle">Baseline D2D copies by repeated tensor size</text>
+<text x="18" y="210.0" transform="rotate(-90 18 210.0)" text-anchor="middle">Count</text>
+<line class="grid" x1="80" y1="330.0" x2="870" y2="330.0"/>
+<text x="72" y="334.0" text-anchor="end">0.0</text>
+<line class="grid" x1="80" y1="276.0" x2="870" y2="276.0"/>
+<text x="72" y="280.0" text-anchor="end">9.2</text>
+<line class="grid" x1="80" y1="222.0" x2="870" y2="222.0"/>
+<text x="72" y="226.0" text-anchor="end">18.4</text>
+<line class="grid" x1="80" y1="168.0" x2="870" y2="168.0"/>
+<text x="72" y="172.0" text-anchor="end">27.6</text>
+<line class="grid" x1="80" y1="114.0" x2="870" y2="114.0"/>
+<text x="72" y="118.0" text-anchor="end">36.8</text>
+<line class="grid" x1="80" y1="60.0" x2="870" y2="60.0"/>
+<text x="72" y="64.0" text-anchor="end">46.0</text>
+<line class="axis" x1="80" y1="60" x2="80" y2="330"/>
+<line class="axis" x1="80" y1="330" x2="870" y2="330"/>
+<rect x="96.5" y="60.0" width="27.0" height="270.0" fill="#4c78a8"/>
+<text class="label" x="110.0" y="56.0" text-anchor="middle">46.0</text>
+<rect x="129.4" y="60.0" width="27.0" height="270.0" fill="#f58518"/>
+<text class="label" x="142.9" y="56.0" text-anchor="middle">46.0</text>
+<text x="129.4" y="348" text-anchor="middle">20.25MiB</text>
+<rect x="195.2" y="83.5" width="27.0" height="246.5" fill="#4c78a8"/>
+<text class="label" x="208.7" y="79.5" text-anchor="middle">42.0</text>
+<rect x="228.1" y="83.5" width="27.0" height="246.5" fill="#f58518"/>
+<text class="label" x="241.6" y="79.5" text-anchor="middle">42.0</text>
+<text x="228.1" y="348" text-anchor="middle">5.06MiB</text>
+<rect x="294.0" y="271.3" width="27.0" height="58.7" fill="#4c78a8"/>
+<text class="label" x="307.5" y="267.3" text-anchor="middle">10.0</text>
+<rect x="326.9" y="271.3" width="27.0" height="58.7" fill="#f58518"/>
+<text class="label" x="340.4" y="267.3" text-anchor="middle">10.0</text>
+<text x="326.9" y="348" text-anchor="middle">4.50MiB</text>
+<rect x="392.7" y="259.6" width="27.0" height="70.4" fill="#4c78a8"/>
+<text class="label" x="406.2" y="255.6" text-anchor="middle">12.0</text>
+<rect x="425.6" y="259.6" width="27.0" height="70.4" fill="#f58518"/>
+<text class="label" x="439.1" y="255.6" text-anchor="middle">12.0</text>
+<text x="425.6" y="348" text-anchor="middle">2.62MiB</text>
+<rect x="491.5" y="224.3" width="27.0" height="105.7" fill="#4c78a8"/>
+<text class="label" x="505.0" y="220.3" text-anchor="middle">18.0</text>
+<rect x="524.4" y="224.3" width="27.0" height="105.7" fill="#f58518"/>
+<text class="label" x="537.9" y="220.3" text-anchor="middle">18.0</text>
+<text x="524.4" y="348" text-anchor="middle">1.27MiB</text>
+<rect x="590.2" y="271.3" width="27.0" height="58.7" fill="#4c78a8"/>
+<text class="label" x="603.7" y="267.3" text-anchor="middle">10.0</text>
+<rect x="623.1" y="271.3" width="27.0" height="58.7" fill="#f58518"/>
+<text class="label" x="636.6" y="267.3" text-anchor="middle">10.0</text>
+<text x="623.1" y="348" text-anchor="middle">1.12MiB</text>
+<rect x="689.0" y="153.9" width="27.0" height="176.1" fill="#4c78a8"/>
+<text class="label" x="702.5" y="149.9" text-anchor="middle">30.0</text>
+<rect x="721.9" y="153.9" width="27.0" height="176.1" fill="#f58518"/>
+<text class="label" x="735.4" y="149.9" text-anchor="middle">30.0</text>
+<text x="721.9" y="348" text-anchor="middle">0.01MiB</text>
+<rect x="787.7" y="259.6" width="27.0" height="70.4" fill="#4c78a8"/>
+<text class="label" x="801.2" y="255.6" text-anchor="middle">12.0</text>
+<rect x="820.6" y="259.6" width="27.0" height="70.4" fill="#f58518"/>
+<text class="label" x="834.1" y="255.6" text-anchor="middle">12.0</text>
+<text x="820.6" y="348" text-anchor="middle">0.00MiB</text>
+<rect x="80" y="373" width="14" height="14" fill="#4c78a8"/>
+<text x="100" y="385">INT8 baseline count</text>
+<rect x="250" y="373" width="14" height="14" fill="#f58518"/>
+<text x="270" y="385">INT4 baseline count</text>
+</svg>

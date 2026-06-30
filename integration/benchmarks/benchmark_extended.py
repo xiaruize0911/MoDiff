@@ -45,6 +45,7 @@ sys.path.insert(0, os.getcwd())
 
 from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
+from integration.utils.quant_memory import format_quant_memory_report, report_quant_memory
 
 # Import existing MoDiff INT8/INT4
 try:
@@ -425,6 +426,9 @@ class ExtendedBenchmarkRunner:
         with torch.inference_mode():
             sampler.sample(S=self.steps, batch_size=self.batch_size, shape=self.shape, eta=0.0, verbose=False)
         torch.cuda.synchronize()
+        quant_memory_after_warmup = report_quant_memory(model.model.diffusion_model)
+        if quant_memory_after_warmup["total_tracked_mib"] > 0:
+            print(f"  Quant memory after warmup: {format_quant_memory_report(quant_memory_after_warmup)}")
 
         # For CUDA Graph modes, try to capture the graph after warmup
         if 'cudagraph' in mode:
@@ -494,6 +498,7 @@ class ExtendedBenchmarkRunner:
             'time_per_step_ms': time_per_step,
             'memory_allocated_mb': mem_after_setup['allocated_mb'],
             'memory_peak_mb': mem_peak['max_allocated_mb'],
+            'quant_memory_after_warmup': quant_memory_after_warmup,
             'batch_size': self.batch_size,
             'steps': self.steps,
         }

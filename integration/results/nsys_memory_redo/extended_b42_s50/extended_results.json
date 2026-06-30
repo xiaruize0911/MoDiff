@@ -1,0 +1,28 @@
+{
+  "int4": {
+    "total_time": 3.5822699069976807,
+    "num_samples": 42.0,
+    "time_per_sample": 0.08529214064280193,
+    "time_per_step_ms": 1.7058428128560386,
+    "memory_allocated_mb": 3736.1171875,
+    "memory_peak_mb": 7227.5478515625,
+    "quant_memory_after_warmup": {
+      "total_tracked_mib": 1889.591,
+      "cache_and_residual_mib": 1663.102,
+      "weight_mib": 225.281,
+      "scale_and_bias_mib": 1.208,
+      "buckets_mib": {
+        "conv_a_hat_cache_mib": 920.883,
+        "conv_bias_mib": 0.275,
+        "conv_o_hat_cache_mib": 742.219,
+        "conv_quant_weights_mib": 225.281,
+        "conv_scale_state_mib": 0.933
+      },
+      "module_counts": {
+        "OptimizedInt4Conv2d": 140
+      }
+    },
+    "batch_size": 42.0,
+    "steps": 50.0
+  }
+}

@@ -1,0 +1,1106 @@
+{
+  "modes": {
+    "fp16": {
+      "benchmark": {
+        "total_time": 13.070895910263062,
+        "num_samples": 168,
+        "time_per_sample": 0.07780295184680394,
+        "time_per_step_ms": 1.5560590369360787,
+        "quant_memory_after_warmup": {
+          "total_tracked_mib": 0,
+          "cache_and_residual_mib": 0,
+          "weight_mib": 0,
+          "scale_and_bias_mib": 0,
+          "buckets_mib": {},
+          "module_counts": {}
+        }
+      },
+      "nsys": {
+        "sqlite": "integration/results/nsys_memory_repro_20260624_fp16_baseline/profiles/fp16_s50_b168.sqlite",
+        "memcpy": {
+          "Host-to-Device": {
+            "count": 1461,
+            "total_mib": 2569.9509048461914,
+            "total_ms": 248.7902469999982
+          },
+          "Device-to-Host": {
+            "count": 433,
+            "total_mib": 126.04806518554688,
+            "total_ms": 35.807247
+          },
+          "Device-to-Device": {
+            "count": 210,
+            "total_mib": 111.7001953125,
+            "total_ms": 0.6761949999999993
+          }
+        },
+        "memcpy_total": {
+          "count": 2104,
+          "total_mib": 2807.6991653442383,
+          "total_ms": 285.2736889999982
+        },
+        "osrt_io": {
+          "read": {
+            "count": 15796,
+            "total_ms": 2346.1968000000616,
+            "avg_us": 148.53107115725498
+          },
+          "write": {
+            "count": 692,
+            "total_ms": 2206.116056000003,
+            "avg_us": 3188.0289826589587
+          },
+          "open64": {
+            "count": 7370,
+            "total_ms": 256.97187399999973,
+            "avg_us": 34.86728276797833
+          },
+          "fgets": {
+            "count": 3119,
+            "total_ms": 3.942694999999994,
+            "avg_us": 1.264089451747357
+          },
+          "fopen": {
+            "count": 121,
+            "total_ms": 0.7427620000000003,
+            "avg_us": 6.138528925619832
+          },
+          "fopen64": {
+            "count": 7,
+            "total_ms": 0.394625,
+            "avg_us": 56.375
+          },
+          "fread": {
+            "count": 1,
+            "total_ms": 0.270895,
+            "avg_us": 270.895
+          },
+          "open": {
+            "count": 15,
+            "total_ms": 0.10952999999999999,
+            "avg_us": 7.3020000000000005
+          },
+          "fwrite": {
+            "count": 2,
+            "total_ms": 0.007918999999999999,
+            "avg_us": 3.9595
+          }
+        },
+        "top_kernels": [
+          {
+            "kernel": "void cudnn::cnn::conv2d_grouped_direct_kernel<(bool)0, (bool)1, (bool)0, (bool)1, (bool)0, (bool)0, (int)0, (int)0, int, float, float, float, float, float, float>(cudnn::cnn::GroupedDirectFpropParams, const T11 *, const T13 *, T12 *, T14, T14, const T14 *, const T14 *, const T12 *, const T15 *, cudnnActivationStruct)",
+            "count": 50,
+            "total_ms": 15236.020406,
+            "avg_us": 304720.40812000004
+          },
+          {
+            "kernel": "fmha_cutlassF_f32_aligned_64x64_rf_sm80(PyTorchMemEffAttention::AttentionKernel<float, cutlass::arch::Sm80, (bool)1, (int)64, (int)64, (int)64, (bool)1, (bool)1>::Params)",
+            "count": 750,
+            "total_ms": 8680.789263999995,
+            "avg_us": 11574.38568533333
+          },
+          {
+            "kernel": "_5x_cudnn_ampere_scudnn_winograd_128x128_ldg1_ldg4_relu_tile148t_nt_v1",
+            "count": 884,
+            "total_ms": 5065.937592999997,
+            "avg_us": 5730.698634615378
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)2, void at::native::gpu_kernel_impl_nocast<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase &)::[lambda() (instance 3)]::operator ()() const::[lambda() (instance 7)]::operator ()() const::[lambda(float) (instance 1)]>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 15932,
+            "total_ms": 4752.977516000002,
+            "avg_us": 298.3289929701239
+          },
+          {
+            "kernel": "void convolve_common_engine_float_NHWC<float, float, (int)512, (int)6, (int)8, (int)3, (int)3, (int)5, (bool)1, (bool)0, (bool)0, (bool)0, (bool)0>(int, int, int, const T1 *, const T1 *, int, T2 *, conv_kernel_common_params, unsigned long long, unsigned long, float, float, bool, const T2 *, const T2 *, bool, bool)",
+            "count": 1464,
+            "total_ms": 3320.151680000001,
+            "avg_us": 2267.863169398906
+          },
+          {
+            "kernel": "_5x_cudnn_ampere_scudnn_winograd_128x128_ldg1_ldg4_relu_tile148n_nt_v1",
+            "count": 1130,
+            "total_ms": 2935.4905949999984,
+            "avg_us": 2597.7792876106228
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)2, void at::native::gpu_kernel_impl_nocast<at::native::CUDAFunctor_add<float>>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 9450,
+            "total_ms": 2102.626460000009,
+            "avg_us": 222.5001544973543
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)2, void at::native::gpu_kernel_impl_nocast<void at::native::<unnamed>::GroupNormKernelImplInternal<float>(const at::Tensor &, const at::Tensor &, const at::Tensor &, long, long, long, long, T1, at::Tensor &, at::Tensor &, at::Tensor &)::[lambda(float, float, float) (instance 2)]>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 9830,
+            "total_ms": 2061.2321700000084,
+            "avg_us": 209.68791149542253
+          },
+          {
+            "kernel": "_5x_cudnn_ampere_scudnn_128x128_relu_medium_nn_v1",
+            "count": 1536,
+            "total_ms": 1782.969032,
+            "avg_us": 1160.7871302083315
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)4, void at::native::gpu_kernel_impl_nocast<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase &)::[lambda() (instance 3)]::operator ()() const::[lambda() (instance 10)]::operator ()() const::[lambda(c10::Half) (instance 1)]>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 6414,
+            "total_ms": 1504.93747,
+            "avg_us": 234.63321951979975
+          },
+          {
+            "kernel": "void at::native::<unnamed>::RowwiseMomentsCUDAKernel<float>(long, T1, const T1 *, T1 *, T1 *)",
+            "count": 9830,
+            "total_ms": 1458.5042489999944,
+            "avg_us": 148.37276185147502
+          },
+          {
+            "kernel": "void at::native::vectorized_elementwise_kernel<(int)4, at::native::<unnamed>::silu_kernel(at::TensorIteratorBase &)::[lambda() (instance 1)]::operator ()() const::[lambda() (instance 2)]::operator ()() const::[lambda(float) (instance 1)], at::detail::Array<char *, (int)2>>(int, T2, T3)",
+            "count": 8900,
+            "total_ms": 1380.7251910000025,
+            "avg_us": 155.1376619101119
+          },
+          {
+            "kernel": "void cutlass__5x_cudnn::Kernel<cutlass_tensorop_f16_s16816fprop_optimized_f16_128x128_32x3_nhwc_align8>(T1::Params)",
+            "count": 1533,
+            "total_ms": 1262.8170300000015,
+            "avg_us": 823.7554011741684
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)4, void at::native::gpu_kernel_impl_nocast<at::native::CUDAFunctor_add<c10::Half>>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 8440,
+            "total_ms": 1182.5090540000024,
+            "avg_us": 140.10770781990615
+          },
+          {
+            "kernel": "void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase &)::[lambda() (instance 3)]::operator ()() const::[lambda() (instance 10)]::operator ()() const::[lambda(c10::Half) (instance 1)], at::detail::Array<char *, (int)2>, TrivialOffsetCalculator<(int)1, unsigned int>, TrivialOffsetCalculator<(int)1, unsigned int>, at::native::memory::LoadWithCast<(int)1>, at::native::memory::StoreWithCast<(int)1>>(int, T1, T2, T3, T4, T5, T6)",
+            "count": 14293,
+            "total_ms": 1066.8057650000028,
+            "avg_us": 74.6383379976207
+          },
+          {
+            "kernel": "void pointwise_mult_and_sum_complex<float2, (int)8, (int)4>(T1 *, T1 *, T1 *, int, int, int, int, int, float2)",
+            "count": 12,
+            "total_ms": 971.7229149999998,
+            "avg_us": 80976.90958333333
+          },
+          {
+            "kernel": "void convolve_common_engine_float_NHWC<float, float, (int)128, (int)6, (int)7, (int)3, (int)3, (int)5, (bool)1, (bool)0, (bool)0, (bool)0, (bool)0>(int, int, int, const T1 *, const T1 *, int, T2 *, conv_kernel_common_params, unsigned long long, unsigned long, float, float, bool, const T2 *, const T2 *, bool, bool)",
+            "count": 114,
+            "total_ms": 871.7253339999999,
+            "avg_us": 7646.713456140351
+          },
+          {
+            "kernel": "void cudnn::engines_precompiled::nhwcToNchwKernel<float, float, float, (bool)1, (bool)0, (cudnnKernelDataType_t)0>(cudnn::engines_precompiled::nhwc2nchw_params_t<T3>, const T1 *, T2 *)",
+            "count": 4558,
+            "total_ms": 833.4850970000022,
+            "avg_us": 182.86202215884128
+          },
+          {
+            "kernel": "void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase &)::[lambda() (instance 3)]::operator ()() const::[lambda() (instance 7)]::operator ()() const::[lambda(float) (instance 1)], at::detail::Array<char *, (int)2>, TrivialOffsetCalculator<(int)1, unsigned int>, TrivialOffsetCalculator<(int)1, unsigned int>, at::native::memory::LoadWithCast<(int)1>, at::native::memory::StoreWithCast<(int)1>>(int, T1, T2, T3, T4, T5, T6)",
+            "count": 11915,
+            "total_ms": 827.577965000012,
+            "avg_us": 69.45681619807053
+          },
+          {
+            "kernel": "void convolve_common_engine_float_NHWC<float, float, (int)1024, (int)5, (int)5, (int)3, (int)3, (int)3, (bool)1, (bool)0, (bool)0, (bool)0, (bool)0>(int, int, int, const T1 *, const T1 *, int, T2 *, conv_kernel_common_params, unsigned long long, unsigned long, float, float, bool, const T2 *, const T2 *, bool, bool)",
+            "count": 718,
+            "total_ms": 703.8895239999995,
+            "avg_us": 980.3475264623949
+          }
+        ]
+      }
+    },
+    "int8": {
+      "benchmark": {
+        "total_time": 13.674087762832642,
+        "num_samples": 168,
+        "time_per_sample": 0.08139337954067048,
+        "time_per_step_ms": 1.6278675908134097,
+        "quant_memory_after_warmup": {
+          "total_tracked_mib": 3901.427,
+          "cache_and_residual_mib": 3368.162,
+          "weight_mib": 531.984,
+          "scale_and_bias_mib": 1.28,
+          "buckets_mib": {
+            "conv_a_hat_cache_mib": 1841.766,
+            "conv_bias_mib": 0.275,
+            "conv_o_hat_cache_mib": 1484.438,
+            "conv_quant_weights_mib": 450.562,
+            "conv_scale_state_mib": 0.933,
+            "linear_a_hat_cache_mib": 17.842,
+            "linear_bias_mib": 0.072,
+            "linear_fp16_weights_mib": 54.281,
+            "linear_o_hat_cache_mib": 24.117,
+            "linear_quant_weights_mib": 27.141,
+            "linear_scale_state_mib": 0.0
+          },
+          "module_counts": {
+            "OptimizedInt8Conv2d": 140,
+            "OptimizedInt8Linear": 37
+          }
+        }
+      },
+      "nsys": {
+        "sqlite": "integration/results/nsys_memory_repro_20260624_fp16_baseline/profiles/int8_s50_b168.sqlite",
+        "memcpy": {
+          "Device-to-Device": {
+            "count": 1264,
+            "total_mib": 8615.7978515625,
+            "total_ms": 33.38392
+          },
+          "Host-to-Device": {
+            "count": 5943,
+            "total_mib": 2570.6231842041016,
+            "total_ms": 247.46641900001853
+          },
+          "Device-to-Host": {
+            "count": 433,
+            "total_mib": 126.04806518554688,
+            "total_ms": 34.30838500000001
+          }
+        },
+        "memcpy_total": {
+          "count": 7640,
+          "total_mib": 11312.469100952148,
+          "total_ms": 315.15872400001854
+        },
+        "osrt_io": {
+          "read": {
+            "count": 15848,
+            "total_ms": 2369.5485230000527,
+            "avg_us": 149.51719604997498
+          },
+          "write": {
+            "count": 696,
+            "total_ms": 2105.1378670000013,
+            "avg_us": 3024.623372126435
+          },
+          "open64": {
+            "count": 7392,
+            "total_ms": 457.2148009999999,
+            "avg_us": 61.85265165043281
+          },
+          "fgets": {
+            "count": 3119,
+            "total_ms": 1.7243110000000084,
+            "avg_us": 0.5528409746713581
+          },
+          "fread": {
+            "count": 1,
+            "total_ms": 0.804015,
+            "avg_us": 804.015
+          },
+          "fopen64": {
+            "count": 7,
+            "total_ms": 0.779299,
+            "avg_us": 111.32842857142859
+          },
+          "fopen": {
+            "count": 121,
+            "total_ms": 0.7253979999999998,
+            "avg_us": 5.9950247933884295
+          },
+          "open": {
+            "count": 15,
+            "total_ms": 0.10336900000000003,
+            "avg_us": 6.891266666666667
+          },
+          "fwrite": {
+            "count": 2,
+            "total_ms": 0.011697,
+            "avg_us": 5.8485
+          }
+        },
+        "top_kernels": [
+          {
+            "kernel": "fmha_cutlassF_f32_aligned_64x64_rf_sm80(PyTorchMemEffAttention::AttentionKernel<float, cutlass::arch::Sm80, (bool)1, (int)64, (int)64, (int)64, (bool)1, (bool)1>::Params)",
+            "count": 750,
+            "total_ms": 8518.079694000002,
+            "avg_us": 11357.439592000017
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)2, void at::native::gpu_kernel_impl_nocast<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase &)::[lambda() (instance 3)]::operator ()() const::[lambda() (instance 7)]::operator ()() const::[lambda(float) (instance 1)]>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 19422,
+            "total_ms": 5409.366950000007,
+            "avg_us": 278.5175033467202
+          },
+          {
+            "kernel": "void cutlass::Kernel<cutlass::conv::kernel::ImplicitGemmConvolution<cutlass::conv::threadblock::ImplicitGemmMultistage<cutlass::gemm::GemmShape<(int)128, (int)128, (int)128>, cutlass::conv::threadblock::Conv2dFpropActivationTileAccessIteratorOptimized<cutlass::MatrixShape<(int)128, (int)128>, signed char, cutlass::layout::TensorNHWC, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)128, (int)128>, (int)256, cutlass::PitchLinearShape<(int)8, (int)4>, (int)16>, cutlass::AlignedArray<signed char, (int)16, (int)16>>, cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<(int)128, (int)128>, signed char, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)8, (int)128>, (int)0, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)128, (int)128>, (int)256, cutlass::PitchLinearShape<(int)8, (int)4>, (int)16>, (int)16>, (cutlass::arch::CacheOperation::Kind)0, cutlass::conv::threadblock::Conv2dFpropFilterTileAccessIteratorOptimized<cutlass::MatrixShape<(int)128, (int)128>, signed char, cutlass::layout::TensorNHWC, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)128, (int)128>, (int)256, cutlass::PitchLinearShape<(int)8, (int)4>, (int)16>, cutlass::AlignedArray<signed char, (int)16, (int)16>, (bool)0>, cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<(int)128, (int)128>, signed char, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)8, (int)128>, (int)1, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)128, (int)128>, (int)256, cutlass::PitchLinearShape<(int)8, (int)4>, (int)16>, (int)16>, (cutlass::arch::CacheOperation::Kind)1, cutlass::gemm::threadblock::MmaPolicy<cutlass::gemm::warp::MmaTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)64>, signed char, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)8, (int)128>, signed char, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)8, (int)128>, int, cutlass::layout::RowMajor, cutlass::gemm::warp::MmaTensorOpPolicy<cutlass::arch::Mma<cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, (int)32, signed char, cutlass::layout::RowMajor, signed char, cutlass::layout::ColumnMajor, int, cutlass::layout::RowMajor, cutlass::arch::OpMultiplyAddSaturate>, cutlass::MatrixShape<(int)1, (int)1>>, (int)2, (bool)0, bool>, cutlass::MatrixShape<(int)0, (int)0>, cutlass::MatrixShape<(int)0, (int)0>, (int)2>, (int)3, bool>, cutlass::epilogue::threadblock::Epilogue<cutlass::gemm::GemmShape<(int)128, (int)128, (int)128>, cutlass::gemm::warp::MmaTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)64>, signed char, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)8, (int)128>, signed char, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)8, (int)128>, int, cutlass::layout::RowMajor, cutlass::gemm::warp::MmaTensorOpPolicy<cutlass::arch::Mma<cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, (int)32, signed char, cutlass::layout::RowMajor, signed char, cutlass::layout::ColumnMajor, int, cutlass::layout::RowMajor, cutlass::arch::OpMultiplyAddSaturate>, cutlass::MatrixShape<(int)1, (int)1>>, (int)2, (bool)0, bool>, (int)2, cutlass::epilogue::threadblock::PredicatedTileIteratorConv<cutlass::epilogue::threadblock::OutputTileOptimalThreadMap<cutlass::epilogue::threadblock::OutputTileShape<(int)128, (int)8, (int)2, (int)1, (int)1>, cutlass::epilogue::threadblock::OutputTileShape<(int)1, (int)8, (int)1, (int)1, (int)8>, (int)256, (int)1, (int)32>, float, (bool)0, cutlass::layout::NoPermute, (bool)0, (int)4>, cutlass::epilogue::warp::FragmentIteratorTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)64>, cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, int, cutlass::Array<int, (int)4, (bool)1>, cutlass::layout::RowMajor>, cutlass::epilogue::warp::TileIteratorTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)64>, cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, int, cutlass::layout::RowMajor>, cutlass::epilogue::threadblock::SharedLoadIterator<cutlass::epilogue::threadblock::OutputTileOptimalThreadMap<cutlass::epilogue::threadblock::OutputTileShape<(int)128, (int)8, (int)2, (int)1, (int)1>, cutlass::epilogue::threadblock::OutputTileShape<(int)1, (int)8, (int)1, (int)1, (int)8>, (int)256, (int)1, (int)32>::CompactedThreadMap, int, (int)4>, cutlass::epilogue::thread::LinearCombination<float, (int)1, int, float, (cutlass::epilogue::thread::ScaleType::Kind)0, (cutlass::FloatRoundStyle)2, float>, cutlass::MatrixShape<(int)0, (int)8>, (int)1, (int)1>, cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<(int)1>, (cutlass::conv::Operator)0, cutlass::conv::Conv2dProblemSize, (cutlass::conv::GroupMode)0>>(T1::Params)",
+            "count": 7280,
+            "total_ms": 3179.023680999993,
+            "avg_us": 436.6790770604389
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)2, void at::native::gpu_kernel_impl_nocast<void at::native::<unnamed>::GroupNormKernelImplInternal<float>(const at::Tensor &, const at::Tensor &, const at::Tensor &, long, long, long, long, T1, at::Tensor &, at::Tensor &, at::Tensor &)::[lambda(float, float, float) (instance 2)]>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 9830,
+            "total_ms": 2062.735850999993,
+            "avg_us": 209.84088006103875
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)2, void at::native::gpu_kernel_impl_nocast<at::native::CUDAFunctor_add<float>>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 7840,
+            "total_ms": 1848.12312,
+            "avg_us": 235.72998979591782
+          },
+          {
+            "kernel": "_5x_cudnn_ampere_scudnn_128x128_relu_medium_nn_v1",
+            "count": 1536,
+            "total_ms": 1757.6511179999954,
+            "avg_us": 1144.3041132812493
+          },
+          {
+            "kernel": "static_quantize_and_update_ahat_kernel_int8_half_cache(const float *, __half *, signed char *, const float *, const float *, int, int)",
+            "count": 6860,
+            "total_ms": 1529.5312620000052,
+            "avg_us": 222.96374081632698
+          },
+          {
+            "kernel": "void at::native::<unnamed>::RowwiseMomentsCUDAKernel<float>(long, T1, const T1 *, T1 *, T1 *)",
+            "count": 9830,
+            "total_ms": 1439.3834100000042,
+            "avg_us": 146.4276103763991
+          },
+          {
+            "kernel": "void at::native::vectorized_elementwise_kernel<(int)4, at::native::<unnamed>::silu_kernel(at::TensorIteratorBase &)::[lambda() (instance 1)]::operator ()() const::[lambda() (instance 2)]::operator ()() const::[lambda(float) (instance 1)], at::detail::Array<char *, (int)2>>(int, T2, T3)",
+            "count": 10700,
+            "total_ms": 1384.9785059999983,
+            "avg_us": 129.43724355140162
+          },
+          {
+            "kernel": "void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase &)::[lambda() (instance 3)]::operator ()() const::[lambda() (instance 7)]::operator ()() const::[lambda(float) (instance 1)], at::detail::Array<char *, (int)2>, TrivialOffsetCalculator<(int)1, unsigned int>, TrivialOffsetCalculator<(int)1, unsigned int>, at::native::memory::LoadWithCast<(int)1>, at::native::memory::StoreWithCast<(int)1>>(int, T1, T2, T3, T4, T5, T6)",
+            "count": 11713,
+            "total_ms": 1067.555432999994,
+            "avg_us": 91.14278434218112
+          },
+          {
+            "kernel": "scale_accumulate_half_cache_kernel(const float *, const float *, __half *, int, int)",
+            "count": 6860,
+            "total_ms": 1050.0538929999998,
+            "avg_us": 153.06908061224442
+          },
+          {
+            "kernel": "void convolve_common_engine_float_NHWC<float, float, (int)512, (int)6, (int)8, (int)3, (int)3, (int)5, (bool)1, (bool)0, (bool)0, (bool)0, (bool)0>(int, int, int, const T1 *, const T1 *, int, T2 *, conv_kernel_common_params, unsigned long long, unsigned long, float, float, bool, const T2 *, const T2 *, bool, bool)",
+            "count": 726,
+            "total_ms": 859.2537589999991,
+            "avg_us": 1183.545122589534
+          },
+          {
+            "kernel": "void at::native::vectorized_elementwise_kernel<(int)4, at::native::CUDAFunctor_add<float>, at::detail::Array<char *, (int)3>>(int, T2, T3)",
+            "count": 14762,
+            "total_ms": 859.1777689999886,
+            "avg_us": 58.20198950007116
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)4, void at::native::gpu_kernel_impl_nocast<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase &)::[lambda() (instance 3)]::operator ()() const::[lambda() (instance 10)]::operator ()() const::[lambda(c10::Half) (instance 1)]>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 3054,
+            "total_ms": 854.6931719999984,
+            "avg_us": 279.8602396856584
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)2, void at::native::gpu_kernel_impl_nocast<at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float>>>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 12058,
+            "total_ms": 731.8204710000063,
+            "avg_us": 60.691696052412325
+          },
+          {
+            "kernel": "void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase &)::[lambda() (instance 3)]::operator ()() const::[lambda() (instance 10)]::operator ()() const::[lambda(c10::Half) (instance 1)], at::detail::Array<char *, (int)2>, TrivialOffsetCalculator<(int)1, unsigned int>, TrivialOffsetCalculator<(int)1, unsigned int>, at::native::memory::LoadWithCast<(int)1>, at::native::memory::StoreWithCast<(int)1>>(int, T1, T2, T3, T4, T5, T6)",
+            "count": 5033,
+            "total_ms": 684.7546580000004,
+            "avg_us": 136.05298191933065
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)4, void at::native::gpu_kernel_impl_nocast<at::native::CUDAFunctor_add<c10::Half>>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 3890,
+            "total_ms": 684.2546669999989,
+            "avg_us": 175.90094267352188
+          },
+          {
+            "kernel": "void pytorch_flash::flash_fwd_kernel<pytorch_flash::Flash_fwd_kernel_traits<(int)32, (int)128, (int)128, (int)4, (bool)0, (bool)0, cutlass::half_t, pytorch_flash::Flash_kernel_traits<(int)32, (int)128, (int)128, (int)4, cutlass::half_t>>, (bool)0, (bool)0, (bool)0, (bool)0, (bool)0, (bool)0, (bool)0>(pytorch_flash::Flash_fwd_params)",
+            "count": 250,
+            "total_ms": 577.5600480000004,
+            "avg_us": 2310.2401920000016
+          },
+          {
+            "kernel": "void cutlass__5x_cudnn::Kernel<cutlass_tensorop_f16_s16816fprop_optimized_f16_128x128_32x3_nhwc_align8>(T1::Params)",
+            "count": 424,
+            "total_ms": 538.1490279999996,
+            "avg_us": 1269.2194056603769
+          },
+          {
+            "kernel": "void at::native::<unnamed>::CatArrayBatchedCopy_aligned16_contig<at::native::<unnamed>::OpaqueType<(unsigned int)4>, unsigned int, (int)4, (int)128, (int)1>(T1 *, at::native::<unnamed>::CatArrInputTensorMetadata<T1, T2, T4, T5>, at::native::<unnamed>::TensorSizeStride<T2, (unsigned int)4>, int, T2)",
+            "count": 1450,
+            "total_ms": 506.57723899999985,
+            "avg_us": 349.3636131034483
+          }
+        ]
+      }
+    },
+    "int8_baseline": {
+      "benchmark": {
+        "total_time": 12.325620412826538,
+        "num_samples": 168,
+        "time_per_sample": 0.07336678817158654,
+        "time_per_step_ms": 1.4673357634317308,
+        "quant_memory_after_warmup": {
+          "total_tracked_mib": 533.265,
+          "cache_and_residual_mib": 0.0,
+          "weight_mib": 531.984,
+          "scale_and_bias_mib": 1.28,
+          "buckets_mib": {
+            "conv_bias_mib": 0.275,
+            "conv_quant_weights_mib": 450.562,
+            "conv_scale_state_mib": 0.933,
+            "linear_bias_mib": 0.072,
+            "linear_fp16_weights_mib": 54.281,
+            "linear_quant_weights_mib": 27.141,
+            "linear_scale_state_mib": 0.0
+          },
+          "module_counts": {
+            "OptimizedInt8Conv2d": 140,
+            "OptimizedInt8Linear": 37
+          }
+        }
+      },
+      "nsys": {
+        "sqlite": "integration/results/nsys_memory_repro_20260624_fp16_baseline/profiles/int8_baseline_s50_b168.sqlite",
+        "memcpy": {
+          "Host-to-Device": {
+            "count": 2095,
+            "total_mib": 2570.6085052490234,
+            "total_ms": 401.4654899999949
+          },
+          "Device-to-Device": {
+            "count": 910,
+            "total_mib": 1915.1572265625,
+            "total_ms": 8.340078999999978
+          },
+          "Device-to-Host": {
+            "count": 433,
+            "total_mib": 126.04806518554688,
+            "total_ms": 30.598651999999998
+          }
+        },
+        "memcpy_total": {
+          "count": 3438,
+          "total_mib": 4611.81379699707,
+          "total_ms": 440.4042209999949
+        },
+        "osrt_io": {
+          "read": {
+            "count": 15848,
+            "total_ms": 2591.343249000024,
+            "avg_us": 163.5123201034834
+          },
+          "write": {
+            "count": 780,
+            "total_ms": 2423.528992999997,
+            "avg_us": 3107.0884525641045
+          },
+          "open64": {
+            "count": 7392,
+            "total_ms": 346.68455299999965,
+            "avg_us": 46.89996658549778
+          },
+          "fgets": {
+            "count": 3119,
+            "total_ms": 1.9977740000000377,
+            "avg_us": 0.6405174735491957
+          },
+          "fopen": {
+            "count": 121,
+            "total_ms": 0.6775879999999997,
+            "avg_us": 5.599900826446282
+          },
+          "fopen64": {
+            "count": 7,
+            "total_ms": 0.414606,
+            "avg_us": 59.22942857142857
+          },
+          "fread": {
+            "count": 1,
+            "total_ms": 0.336113,
+            "avg_us": 336.113
+          },
+          "open": {
+            "count": 15,
+            "total_ms": 0.09802400000000001,
+            "avg_us": 6.534933333333333
+          },
+          "fwrite": {
+            "count": 2,
+            "total_ms": 0.009157,
+            "avg_us": 4.5785
+          }
+        },
+        "top_kernels": [
+          {
+            "kernel": "fmha_cutlassF_f32_aligned_64x64_rf_sm80(PyTorchMemEffAttention::AttentionKernel<float, cutlass::arch::Sm80, (bool)1, (int)64, (int)64, (int)64, (bool)1, (bool)1>::Params)",
+            "count": 750,
+            "total_ms": 8553.914796000001,
+            "avg_us": 11405.219728000011
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)2, void at::native::gpu_kernel_impl_nocast<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase &)::[lambda() (instance 3)]::operator ()() const::[lambda() (instance 7)]::operator ()() const::[lambda(float) (instance 1)]>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 16072,
+            "total_ms": 4852.6624280000215,
+            "avg_us": 301.9327045793942
+          },
+          {
+            "kernel": "void cutlass::Kernel<cutlass::conv::kernel::ImplicitGemmConvolution<cutlass::conv::threadblock::ImplicitGemmMultistage<cutlass::gemm::GemmShape<(int)128, (int)128, (int)128>, cutlass::conv::threadblock::Conv2dFpropActivationTileAccessIteratorOptimized<cutlass::MatrixShape<(int)128, (int)128>, signed char, cutlass::layout::TensorNHWC, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)128, (int)128>, (int)256, cutlass::PitchLinearShape<(int)8, (int)4>, (int)16>, cutlass::AlignedArray<signed char, (int)16, (int)16>>, cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<(int)128, (int)128>, signed char, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)8, (int)128>, (int)0, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)128, (int)128>, (int)256, cutlass::PitchLinearShape<(int)8, (int)4>, (int)16>, (int)16>, (cutlass::arch::CacheOperation::Kind)0, cutlass::conv::threadblock::Conv2dFpropFilterTileAccessIteratorOptimized<cutlass::MatrixShape<(int)128, (int)128>, signed char, cutlass::layout::TensorNHWC, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)128, (int)128>, (int)256, cutlass::PitchLinearShape<(int)8, (int)4>, (int)16>, cutlass::AlignedArray<signed char, (int)16, (int)16>, (bool)0>, cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<(int)128, (int)128>, signed char, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)8, (int)128>, (int)1, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)128, (int)128>, (int)256, cutlass::PitchLinearShape<(int)8, (int)4>, (int)16>, (int)16>, (cutlass::arch::CacheOperation::Kind)1, cutlass::gemm::threadblock::MmaPolicy<cutlass::gemm::warp::MmaTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)64>, signed char, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)8, (int)128>, signed char, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)8, (int)128>, int, cutlass::layout::RowMajor, cutlass::gemm::warp::MmaTensorOpPolicy<cutlass::arch::Mma<cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, (int)32, signed char, cutlass::layout::RowMajor, signed char, cutlass::layout::ColumnMajor, int, cutlass::layout::RowMajor, cutlass::arch::OpMultiplyAddSaturate>, cutlass::MatrixShape<(int)1, (int)1>>, (int)2, (bool)0, bool>, cutlass::MatrixShape<(int)0, (int)0>, cutlass::MatrixShape<(int)0, (int)0>, (int)2>, (int)3, bool>, cutlass::epilogue::threadblock::Epilogue<cutlass::gemm::GemmShape<(int)128, (int)128, (int)128>, cutlass::gemm::warp::MmaTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)64>, signed char, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)8, (int)128>, signed char, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)8, (int)128>, int, cutlass::layout::RowMajor, cutlass::gemm::warp::MmaTensorOpPolicy<cutlass::arch::Mma<cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, (int)32, signed char, cutlass::layout::RowMajor, signed char, cutlass::layout::ColumnMajor, int, cutlass::layout::RowMajor, cutlass::arch::OpMultiplyAddSaturate>, cutlass::MatrixShape<(int)1, (int)1>>, (int)2, (bool)0, bool>, (int)2, cutlass::epilogue::threadblock::PredicatedTileIteratorConv<cutlass::epilogue::threadblock::OutputTileOptimalThreadMap<cutlass::epilogue::threadblock::OutputTileShape<(int)128, (int)8, (int)2, (int)1, (int)1>, cutlass::epilogue::threadblock::OutputTileShape<(int)1, (int)8, (int)1, (int)1, (int)8>, (int)256, (int)1, (int)32>, float, (bool)0, cutlass::layout::NoPermute, (bool)0, (int)4>, cutlass::epilogue::warp::FragmentIteratorTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)64>, cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, int, cutlass::Array<int, (int)4, (bool)1>, cutlass::layout::RowMajor>, cutlass::epilogue::warp::TileIteratorTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)64>, cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, int, cutlass::layout::RowMajor>, cutlass::epilogue::threadblock::SharedLoadIterator<cutlass::epilogue::threadblock::OutputTileOptimalThreadMap<cutlass::epilogue::threadblock::OutputTileShape<(int)128, (int)8, (int)2, (int)1, (int)1>, cutlass::epilogue::threadblock::OutputTileShape<(int)1, (int)8, (int)1, (int)1, (int)8>, (int)256, (int)1, (int)32>::CompactedThreadMap, int, (int)4>, cutlass::epilogue::thread::LinearCombination<float, (int)1, int, float, (cutlass::epilogue::thread::ScaleType::Kind)0, (cutlass::FloatRoundStyle)2, float>, cutlass::MatrixShape<(int)0, (int)8>, (int)1, (int)1>, cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<(int)1>, (cutlass::conv::Operator)0, cutlass::conv::Conv2dProblemSize, (cutlass::conv::GroupMode)0>>(T1::Params)",
+            "count": 7000,
+            "total_ms": 3117.110449999993,
+            "avg_us": 445.3014928571432
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)2, void at::native::gpu_kernel_impl_nocast<void at::native::<unnamed>::GroupNormKernelImplInternal<float>(const at::Tensor &, const at::Tensor &, const at::Tensor &, long, long, long, long, T1, at::Tensor &, at::Tensor &, at::Tensor &)::[lambda(float, float, float) (instance 2)]>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 8080,
+            "total_ms": 1784.021897999999,
+            "avg_us": 220.79478935643579
+          },
+          {
+            "kernel": "_5x_cudnn_ampere_scudnn_128x128_relu_medium_nn_v1",
+            "count": 1536,
+            "total_ms": 1760.985301000001,
+            "avg_us": 1146.474805338543
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)4, void at::native::gpu_kernel_impl_nocast<at::native::CUDAFunctor_add<c10::Half>>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 13690,
+            "total_ms": 1593.901136,
+            "avg_us": 116.42813265157014
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)4, void at::native::gpu_kernel_impl_nocast<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase &)::[lambda() (instance 3)]::operator ()() const::[lambda() (instance 10)]::operator ()() const::[lambda(c10::Half) (instance 1)]>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 6484,
+            "total_ms": 1350.2311249999982,
+            "avg_us": 208.24045727945705
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)2, void at::native::gpu_kernel_impl_nocast<at::native::CUDAFunctor_add<float>>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 4200,
+            "total_ms": 1262.2079189999977,
+            "avg_us": 300.5256949999996
+          },
+          {
+            "kernel": "void at::native::<unnamed>::RowwiseMomentsCUDAKernel<float>(long, T1, const T1 *, T1 *, T1 *)",
+            "count": 8080,
+            "total_ms": 1241.414765999992,
+            "avg_us": 153.64044133663506
+          },
+          {
+            "kernel": "void at::native::vectorized_elementwise_kernel<(int)4, at::native::<unnamed>::silu_kernel(at::TensorIteratorBase &)::[lambda() (instance 1)]::operator ()() const::[lambda() (instance 2)]::operator ()() const::[lambda(float) (instance 1)], at::detail::Array<char *, (int)2>>(int, T2, T3)",
+            "count": 5350,
+            "total_ms": 1097.475290000001,
+            "avg_us": 205.1355682243017
+          },
+          {
+            "kernel": "void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase &)::[lambda() (instance 3)]::operator ()() const::[lambda() (instance 7)]::operator ()() const::[lambda(float) (instance 1)], at::detail::Array<char *, (int)2>, TrivialOffsetCalculator<(int)1, unsigned int>, TrivialOffsetCalculator<(int)1, unsigned int>, at::native::memory::LoadWithCast<(int)1>, at::native::memory::StoreWithCast<(int)1>>(int, T1, T2, T3, T4, T5, T6)",
+            "count": 17365,
+            "total_ms": 1048.0190910000065,
+            "avg_us": 60.352380708321256
+          },
+          {
+            "kernel": "void convolve_common_engine_float_NHWC<float, float, (int)512, (int)6, (int)8, (int)3, (int)3, (int)5, (bool)1, (bool)0, (bool)0, (bool)0, (bool)0>(int, int, int, const T1 *, const T1 *, int, T2 *, conv_kernel_common_params, unsigned long long, unsigned long, float, float, bool, const T2 *, const T2 *, bool, bool)",
+            "count": 726,
+            "total_ms": 863.5462230000006,
+            "avg_us": 1189.4576074380184
+          },
+          {
+            "kernel": "scale_store_half_kernel(const float *, const float *, __half *, int, int)",
+            "count": 7000,
+            "total_ms": 825.1956280000035,
+            "avg_us": 117.88508971428607
+          },
+          {
+            "kernel": "scale_quantize_int8_kernel(const float *, signed char *, const float *, int)",
+            "count": 7000,
+            "total_ms": 797.6768180000009,
+            "avg_us": 113.95383114285511
+          },
+          {
+            "kernel": "void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase &)::[lambda() (instance 3)]::operator ()() const::[lambda() (instance 10)]::operator ()() const::[lambda(c10::Half) (instance 1)], at::detail::Array<char *, (int)2>, TrivialOffsetCalculator<(int)1, unsigned int>, TrivialOffsetCalculator<(int)1, unsigned int>, at::native::memory::LoadWithCast<(int)1>, at::native::memory::StoreWithCast<(int)1>>(int, T1, T2, T3, T4, T5, T6)",
+            "count": 24803,
+            "total_ms": 597.0324949999948,
+            "avg_us": 24.07097911542924
+          },
+          {
+            "kernel": "void pytorch_flash::flash_fwd_kernel<pytorch_flash::Flash_fwd_kernel_traits<(int)32, (int)128, (int)128, (int)4, (bool)0, (bool)0, cutlass::half_t, pytorch_flash::Flash_kernel_traits<(int)32, (int)128, (int)128, (int)4, cutlass::half_t>>, (bool)0, (bool)0, (bool)0, (bool)0, (bool)0, (bool)0, (bool)0>(pytorch_flash::Flash_fwd_params)",
+            "count": 250,
+            "total_ms": 577.8809980000001,
+            "avg_us": 2311.523991999999
+          },
+          {
+            "kernel": "void cutlass__5x_cudnn::Kernel<cutlass_tensorop_f16_s16816fprop_optimized_f16_128x128_32x3_nhwc_align8>(T1::Params)",
+            "count": 445,
+            "total_ms": 546.9363579999999,
+            "avg_us": 1229.07046741573
+          },
+          {
+            "kernel": "void at::native::unrolled_elementwise_kernel<at::native::CUDAFunctor_add<float>, at::detail::Array<char *, (int)3>, TrivialOffsetCalculator<(int)2, unsigned int>, TrivialOffsetCalculator<(int)1, unsigned int>, at::native::memory::LoadWithCast<(int)2>, at::native::memory::StoreWithCast<(int)1>>(int, T1, T2, T3, T4, T5, T6)",
+            "count": 1950,
+            "total_ms": 437.67040900000046,
+            "avg_us": 224.4463635897433
+          },
+          {
+            "kernel": "void at::native::vectorized_elementwise_kernel<(int)4, at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float>>, at::detail::Array<char *, (int)3>>(int, T2, T3)",
+            "count": 611,
+            "total_ms": 406.33052300000054,
+            "avg_us": 665.0254058919796
+          },
+          {
+            "kernel": "void cudnn::cnn::conv2d_grouped_direct_kernel<(bool)0, (bool)1, (bool)0, (bool)1, (bool)0, (bool)0, (int)0, (int)0, int, float, float, float, float, float, float>(cudnn::cnn::GroupedDirectFpropParams, const T11 *, const T13 *, T12 *, T14, T14, const T14 *, const T14 *, const T12 *, const T15 *, cudnnActivationStruct)",
+            "count": 10,
+            "total_ms": 341.544693,
+            "avg_us": 34154.4693
+          }
+        ]
+      }
+    },
+    "int4": {
+      "benchmark": {
+        "total_time": 12.885540246963501,
+        "num_samples": 168,
+        "time_per_sample": 0.0766996443271637,
+        "time_per_step_ms": 1.533992886543274,
+        "quant_memory_after_warmup": {
+          "total_tracked_mib": 3662.575,
+          "cache_and_residual_mib": 3368.162,
+          "weight_mib": 293.133,
+          "scale_and_bias_mib": 1.28,
+          "buckets_mib": {
+            "conv_a_hat_cache_mib": 1841.766,
+            "conv_bias_mib": 0.275,
+            "conv_o_hat_cache_mib": 1484.438,
+            "conv_quant_weights_mib": 225.281,
+            "conv_scale_state_mib": 0.933,
+            "linear_a_hat_cache_mib": 17.842,
+            "linear_bias_mib": 0.072,
+            "linear_fp16_weights_mib": 54.281,
+            "linear_o_hat_cache_mib": 24.117,
+            "linear_quant_weights_mib": 13.57,
+            "linear_scale_state_mib": 0.0
+          },
+          "module_counts": {
+            "OptimizedInt4Conv2d": 140,
+            "OptimizedInt4Linear": 37
+          }
+        }
+      },
+      "nsys": {
+        "sqlite": "integration/results/nsys_memory_repro_20260624_fp16_baseline/profiles/int4_s50_b168.sqlite",
+        "memcpy": {
+          "Host-to-Device": {
+            "count": 5943,
+            "total_mib": 2570.6231842041016,
+            "total_ms": 397.9538499999602
+          },
+          "Device-to-Device": {
+            "count": 984,
+            "total_mib": 1963.3916015625,
+            "total_ms": 8.43935199999999
+          },
+          "Device-to-Host": {
+            "count": 433,
+            "total_mib": 126.04806518554688,
+            "total_ms": 32.705681
+          }
+        },
+        "memcpy_total": {
+          "count": 7360,
+          "total_mib": 4660.062850952148,
+          "total_ms": 439.0988829999602
+        },
+        "osrt_io": {
+          "read": {
+            "count": 16471,
+            "total_ms": 2480.81669100004,
+            "avg_us": 150.6172479509444
+          },
+          "write": {
+            "count": 674,
+            "total_ms": 1378.4817080000003,
+            "avg_us": 2045.2250860534118
+          },
+          "open64": {
+            "count": 7476,
+            "total_ms": 312.23619100000013,
+            "avg_us": 41.76514058319957
+          },
+          "fgets": {
+            "count": 3119,
+            "total_ms": 1.5021399999999951,
+            "avg_us": 0.4816094902212228
+          },
+          "fread": {
+            "count": 1,
+            "total_ms": 1.286966,
+            "avg_us": 1286.966
+          },
+          "fopen": {
+            "count": 121,
+            "total_ms": 0.553644,
+            "avg_us": 4.575570247933883
+          },
+          "fopen64": {
+            "count": 7,
+            "total_ms": 0.454388,
+            "avg_us": 64.91257142857143
+          },
+          "open": {
+            "count": 15,
+            "total_ms": 0.087966,
+            "avg_us": 5.8644
+          },
+          "fwrite": {
+            "count": 2,
+            "total_ms": 0.008709,
+            "avg_us": 4.3545
+          }
+        },
+        "top_kernels": [
+          {
+            "kernel": "fmha_cutlassF_f32_aligned_64x64_rf_sm80(PyTorchMemEffAttention::AttentionKernel<float, cutlass::arch::Sm80, (bool)1, (int)64, (int)64, (int)64, (bool)1, (bool)1>::Params)",
+            "count": 750,
+            "total_ms": 8524.610629999997,
+            "avg_us": 11366.14750666667
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)2, void at::native::gpu_kernel_impl_nocast<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase &)::[lambda() (instance 3)]::operator ()() const::[lambda() (instance 7)]::operator ()() const::[lambda(float) (instance 1)]>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 19459,
+            "total_ms": 5406.261930000037,
+            "avg_us": 277.8283534611239
+          },
+          {
+            "kernel": "void at::native::vectorized_elementwise_kernel<(int)4, at::native::FillFunctor<int>, at::detail::Array<char *, (int)1>>(int, T2, T3)",
+            "count": 6912,
+            "total_ms": 3060.2270670000003,
+            "avg_us": 442.7411844618066
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)2, void at::native::gpu_kernel_impl_nocast<void at::native::<unnamed>::GroupNormKernelImplInternal<float>(const at::Tensor &, const at::Tensor &, const at::Tensor &, long, long, long, long, T1, at::Tensor &, at::Tensor &, at::Tensor &)::[lambda(float, float, float) (instance 2)]>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 9830,
+            "total_ms": 2062.177968999993,
+            "avg_us": 209.78412706002013
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)2, void at::native::gpu_kernel_impl_nocast<at::native::CUDAFunctor_add<float>>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 7840,
+            "total_ms": 1847.927241000001,
+            "avg_us": 235.70500522959225
+          },
+          {
+            "kernel": "_5x_cudnn_ampere_scudnn_128x128_relu_medium_nn_v1",
+            "count": 1536,
+            "total_ms": 1758.4958530000001,
+            "avg_us": 1144.854070963542
+          },
+          {
+            "kernel": "void cutlass::Kernel<cutlass::conv::kernel::ImplicitGemmConvolution<cutlass::conv::threadblock::ImplicitGemmMultistage<cutlass::gemm::GemmShape<(int)128, (int)128, (int)128>, cutlass::conv::threadblock::Conv2dFpropActivationTileAccessIteratorOptimized<cutlass::MatrixShape<(int)128, (int)128>, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::TensorNHWC, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)128, (int)128>, (int)128, cutlass::PitchLinearShape<(int)4, (int)8>, (int)32>, cutlass::AlignedArray<cutlass::integer_subbyte<(int)4, (bool)1>, (int)32, (int)16>>, cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<(int)128, (int)128>, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)4, (int)128>, (int)0, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)128, (int)128>, (int)128, cutlass::PitchLinearShape<(int)4, (int)8>, (int)32>, (int)16>, (cutlass::arch::CacheOperation::Kind)0, cutlass::conv::threadblock::Conv2dFpropFilterTileAccessIteratorOptimized<cutlass::MatrixShape<(int)128, (int)128>, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::TensorNHWC, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)128, (int)128>, (int)128, cutlass::PitchLinearShape<(int)4, (int)8>, (int)32>, cutlass::AlignedArray<cutlass::integer_subbyte<(int)4, (bool)1>, (int)32, (int)16>, (bool)0>, cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<(int)128, (int)128>, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)4, (int)128>, (int)1, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)128, (int)128>, (int)128, cutlass::PitchLinearShape<(int)4, (int)8>, (int)32>, (int)16>, (cutlass::arch::CacheOperation::Kind)1, cutlass::gemm::threadblock::MmaPolicy<cutlass::gemm::warp::MmaTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)128>, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)4, (int)128>, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)4, (int)128>, int, cutlass::layout::RowMajor, cutlass::gemm::warp::MmaTensorOpPolicy<cutlass::arch::Mma<cutlass::gemm::GemmShape<(int)16, (int)8, (int)64>, (int)32, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::RowMajor, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::ColumnMajor, int, cutlass::layout::RowMajor, cutlass::arch::OpMultiplyAddSaturate>, cutlass::MatrixShape<(int)1, (int)1>>, (int)1, (bool)0, bool>, cutlass::MatrixShape<(int)0, (int)0>, cutlass::MatrixShape<(int)0, (int)0>, (int)1>, (int)3, bool>, cutlass::epilogue::threadblock::Epilogue<cutlass::gemm::GemmShape<(int)128, (int)128, (int)128>, cutlass::gemm::warp::MmaTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)128>, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)4, (int)128>, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)4, (int)128>, int, cutlass::layout::RowMajor, cutlass::gemm::warp::MmaTensorOpPolicy<cutlass::arch::Mma<cutlass::gemm::GemmShape<(int)16, (int)8, (int)64>, (int)32, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::RowMajor, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::ColumnMajor, int, cutlass::layout::RowMajor, cutlass::arch::OpMultiplyAddSaturate>, cutlass::MatrixShape<(int)1, (int)1>>, (int)1, (bool)0, bool>, (int)1, cutlass::epilogue::threadblock::PredicatedTileIteratorConv<cutlass::epilogue::threadblock::OutputTileOptimalThreadMap<cutlass::epilogue::threadblock::OutputTileShape<(int)128, (int)8, (int)2, (int)1, (int)1>, cutlass::epilogue::threadblock::OutputTileShape<(int)1, (int)8, (int)1, (int)1, (int)8>, (int)128, (int)1, (int)32>, float, (bool)0, cutlass::layout::NoPermute, (bool)0, (int)4>, cutlass::epilogue::warp::FragmentIteratorTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)128>, cutlass::gemm::GemmShape<(int)16, (int)8, (int)64>, int, cutlass::Array<int, (int)4, (bool)1>, cutlass::layout::RowMajor>, cutlass::epilogue::warp::TileIteratorTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)128>, cutlass::gemm::GemmShape<(int)16, (int)8, (int)64>, int, cutlass::layout::RowMajor>, cutlass::epilogue::threadblock::SharedLoadIterator<cutlass::epilogue::threadblock::OutputTileOptimalThreadMap<cutlass::epilogue::threadblock::OutputTileShape<(int)128, (int)8, (int)2, (int)1, (int)1>, cutlass::epilogue::threadblock::OutputTileShape<(int)1, (int)8, (int)1, (int)1, (int)8>, (int)128, (int)1, (int)32>::CompactedThreadMap, int, (int)4>, cutlass::epilogue::thread::LinearCombination<float, (int)1, int, float, (cutlass::epilogue::thread::ScaleType::Kind)0, (cutlass::FloatRoundStyle)2, float>, cutlass::MatrixShape<(int)0, (int)8>, (int)1, (int)1>, cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<(int)1>, (cutlass::conv::Operator)0, cutlass::conv::Conv2dProblemSize, (cutlass::conv::GroupMode)0>>(T1::Params)",
+            "count": 7280,
+            "total_ms": 1645.8870379999985,
+            "avg_us": 226.08338434065894
+          },
+          {
+            "kernel": "void at::native::<unnamed>::RowwiseMomentsCUDAKernel<float>(long, T1, const T1 *, T1 *, T1 *)",
+            "count": 9830,
+            "total_ms": 1438.5496899999937,
+            "avg_us": 146.3427965412005
+          },
+          {
+            "kernel": "void at::native::vectorized_elementwise_kernel<(int)4, at::native::<unnamed>::silu_kernel(at::TensorIteratorBase &)::[lambda() (instance 1)]::operator ()() const::[lambda() (instance 2)]::operator ()() const::[lambda(float) (instance 1)], at::detail::Array<char *, (int)2>>(int, T2, T3)",
+            "count": 10700,
+            "total_ms": 1384.9765489999936,
+            "avg_us": 129.43706065420503
+          },
+          {
+            "kernel": "void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase &)::[lambda() (instance 3)]::operator ()() const::[lambda() (instance 7)]::operator ()() const::[lambda(float) (instance 1)], at::detail::Array<char *, (int)2>, TrivialOffsetCalculator<(int)1, unsigned int>, TrivialOffsetCalculator<(int)1, unsigned int>, at::native::memory::LoadWithCast<(int)1>, at::native::memory::StoreWithCast<(int)1>>(int, T1, T2, T3, T4, T5, T6)",
+            "count": 7865,
+            "total_ms": 1053.906474,
+            "avg_us": 133.99955168467855
+          },
+          {
+            "kernel": "scale_accumulate_half_cache_kernel(const float *, const float *, __half *, int, int)",
+            "count": 6860,
+            "total_ms": 1050.0038659999989,
+            "avg_us": 153.06178804664683
+          },
+          {
+            "kernel": "void convolve_common_engine_float_NHWC<float, float, (int)512, (int)6, (int)8, (int)3, (int)3, (int)5, (bool)1, (bool)0, (bool)0, (bool)0, (bool)0>(int, int, int, const T1 *, const T1 *, int, T2 *, conv_kernel_common_params, unsigned long long, unsigned long, float, float, bool, const T2 *, const T2 *, bool, bool)",
+            "count": 726,
+            "total_ms": 860.7933190000001,
+            "avg_us": 1185.6657286501377
+          },
+          {
+            "kernel": "void at::native::vectorized_elementwise_kernel<(int)4, at::native::CUDAFunctor_add<float>, at::detail::Array<char *, (int)3>>(int, T2, T3)",
+            "count": 14762,
+            "total_ms": 859.2130459999811,
+            "avg_us": 58.2043792169132
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)4, void at::native::gpu_kernel_impl_nocast<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase &)::[lambda() (instance 3)]::operator ()() const::[lambda() (instance 10)]::operator ()() const::[lambda(c10::Half) (instance 1)]>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 2914,
+            "total_ms": 832.7834409999989,
+            "avg_us": 285.787042210021
+          },
+          {
+            "kernel": "static_quantize_pack_and_update_ahat_kernel_int4_half_cache(const float *, __half *, signed char *, const float *, const float *, int, int)",
+            "count": 6860,
+            "total_ms": 725.2717109999969,
+            "avg_us": 105.72473921282754
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)2, void at::native::gpu_kernel_impl_nocast<at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float>>>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 4362,
+            "total_ms": 712.0587329999995,
+            "avg_us": 163.24134181568118
+          },
+          {
+            "kernel": "void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase &)::[lambda() (instance 3)]::operator ()() const::[lambda() (instance 10)]::operator ()() const::[lambda(c10::Half) (instance 1)], at::detail::Array<char *, (int)2>, TrivialOffsetCalculator<(int)1, unsigned int>, TrivialOffsetCalculator<(int)1, unsigned int>, at::native::memory::LoadWithCast<(int)1>, at::native::memory::StoreWithCast<(int)1>>(int, T1, T2, T3, T4, T5, T6)",
+            "count": 5033,
+            "total_ms": 684.6840530000011,
+            "avg_us": 136.03895350685306
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)4, void at::native::gpu_kernel_impl_nocast<at::native::CUDAFunctor_add<c10::Half>>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 3890,
+            "total_ms": 684.130029000001,
+            "avg_us": 175.86890205655519
+          },
+          {
+            "kernel": "void pytorch_flash::flash_fwd_kernel<pytorch_flash::Flash_fwd_kernel_traits<(int)32, (int)128, (int)128, (int)4, (bool)0, (bool)0, cutlass::half_t, pytorch_flash::Flash_kernel_traits<(int)32, (int)128, (int)128, (int)4, cutlass::half_t>>, (bool)0, (bool)0, (bool)0, (bool)0, (bool)0, (bool)0, (bool)0>(pytorch_flash::Flash_fwd_params)",
+            "count": 250,
+            "total_ms": 577.7346830000001,
+            "avg_us": 2310.9387319999996
+          },
+          {
+            "kernel": "void cutlass__5x_cudnn::Kernel<cutlass_tensorop_f16_s16816fprop_optimized_f16_128x128_32x3_nhwc_align8>(T1::Params)",
+            "count": 474,
+            "total_ms": 540.6752439999995,
+            "avg_us": 1140.6650717299578
+          }
+        ]
+      }
+    },
+    "int4_baseline": {
+      "benchmark": {
+        "total_time": 11.468069076538086,
+        "num_samples": 168,
+        "time_per_sample": 0.06826231593177431,
+        "time_per_step_ms": 1.3652463186354864,
+        "quant_memory_after_warmup": {
+          "total_tracked_mib": 294.413,
+          "cache_and_residual_mib": 0.0,
+          "weight_mib": 293.133,
+          "scale_and_bias_mib": 1.28,
+          "buckets_mib": {
+            "conv_bias_mib": 0.275,
+            "conv_quant_weights_mib": 225.281,
+            "conv_scale_state_mib": 0.933,
+            "linear_bias_mib": 0.072,
+            "linear_fp16_weights_mib": 54.281,
+            "linear_quant_weights_mib": 13.57,
+            "linear_scale_state_mib": 0.0
+          },
+          "module_counts": {
+            "OptimizedInt4Conv2d": 140,
+            "OptimizedInt4Linear": 37
+          }
+        }
+      },
+      "nsys": {
+        "sqlite": "integration/results/nsys_memory_repro_20260624_fp16_baseline/profiles/int4_baseline_s50_b168.sqlite",
+        "memcpy": {
+          "Host-to-Device": {
+            "count": 2095,
+            "total_mib": 2570.6085052490234,
+            "total_ms": 350.0938349999947
+          },
+          "Device-to-Device": {
+            "count": 910,
+            "total_mib": 1915.1572265625,
+            "total_ms": 8.294948999999981
+          },
+          "Device-to-Host": {
+            "count": 433,
+            "total_mib": 126.04806518554688,
+            "total_ms": 33.631783999999996
+          }
+        },
+        "memcpy_total": {
+          "count": 3438,
+          "total_mib": 4611.81379699707,
+          "total_ms": 392.0205679999947
+        },
+        "osrt_io": {
+          "read": {
+            "count": 16467,
+            "total_ms": 2884.005199000037,
+            "avg_us": 175.13847082042872
+          },
+          "write": {
+            "count": 757,
+            "total_ms": 1383.4263490000005,
+            "avg_us": 1827.5116895640665
+          },
+          "open64": {
+            "count": 7509,
+            "total_ms": 339.00414300000045,
+            "avg_us": 45.14637674790263
+          },
+          "fgets": {
+            "count": 3119,
+            "total_ms": 2.7066329999999836,
+            "avg_us": 0.8677887143315275
+          },
+          "fopen": {
+            "count": 133,
+            "total_ms": 1.3773940000000002,
+            "avg_us": 10.356345864661654
+          },
+          "fread": {
+            "count": 29,
+            "total_ms": 0.5935139999999999,
+            "avg_us": 20.466
+          },
+          "fopen64": {
+            "count": 7,
+            "total_ms": 0.420274,
+            "avg_us": 60.039142857142856
+          },
+          "fwrite": {
+            "count": 2166,
+            "total_ms": 0.3069850000000073,
+            "avg_us": 0.14172899353647214
+          },
+          "open": {
+            "count": 19,
+            "total_ms": 0.30485,
+            "avg_us": 16.044736842105266
+          }
+        },
+        "top_kernels": [
+          {
+            "kernel": "fmha_cutlassF_f32_aligned_64x64_rf_sm80(PyTorchMemEffAttention::AttentionKernel<float, cutlass::arch::Sm80, (bool)1, (int)64, (int)64, (int)64, (bool)1, (bool)1>::Params)",
+            "count": 750,
+            "total_ms": 8559.756595,
+            "avg_us": 11413.008793333333
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)2, void at::native::gpu_kernel_impl_nocast<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase &)::[lambda() (instance 3)]::operator ()() const::[lambda() (instance 7)]::operator ()() const::[lambda(float) (instance 1)]>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 16109,
+            "total_ms": 4851.55796300003,
+            "avg_us": 301.1706476503809
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)2, void at::native::gpu_kernel_impl_nocast<void at::native::<unnamed>::GroupNormKernelImplInternal<float>(const at::Tensor &, const at::Tensor &, const at::Tensor &, long, long, long, long, T1, at::Tensor &, at::Tensor &, at::Tensor &)::[lambda(float, float, float) (instance 2)]>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 8080,
+            "total_ms": 1785.8062889999917,
+            "avg_us": 221.01562982673306
+          },
+          {
+            "kernel": "void cutlass::Kernel<cutlass::conv::kernel::ImplicitGemmConvolution<cutlass::conv::threadblock::ImplicitGemmMultistage<cutlass::gemm::GemmShape<(int)128, (int)128, (int)128>, cutlass::conv::threadblock::Conv2dFpropActivationTileAccessIteratorOptimized<cutlass::MatrixShape<(int)128, (int)128>, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::TensorNHWC, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)128, (int)128>, (int)128, cutlass::PitchLinearShape<(int)4, (int)8>, (int)32>, cutlass::AlignedArray<cutlass::integer_subbyte<(int)4, (bool)1>, (int)32, (int)16>>, cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<(int)128, (int)128>, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)4, (int)128>, (int)0, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)128, (int)128>, (int)128, cutlass::PitchLinearShape<(int)4, (int)8>, (int)32>, (int)16>, (cutlass::arch::CacheOperation::Kind)0, cutlass::conv::threadblock::Conv2dFpropFilterTileAccessIteratorOptimized<cutlass::MatrixShape<(int)128, (int)128>, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::TensorNHWC, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)128, (int)128>, (int)128, cutlass::PitchLinearShape<(int)4, (int)8>, (int)32>, cutlass::AlignedArray<cutlass::integer_subbyte<(int)4, (bool)1>, (int)32, (int)16>, (bool)0>, cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<(int)128, (int)128>, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)4, (int)128>, (int)1, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)128, (int)128>, (int)128, cutlass::PitchLinearShape<(int)4, (int)8>, (int)32>, (int)16>, (cutlass::arch::CacheOperation::Kind)1, cutlass::gemm::threadblock::MmaPolicy<cutlass::gemm::warp::MmaTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)128>, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)4, (int)128>, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)4, (int)128>, int, cutlass::layout::RowMajor, cutlass::gemm::warp::MmaTensorOpPolicy<cutlass::arch::Mma<cutlass::gemm::GemmShape<(int)16, (int)8, (int)64>, (int)32, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::RowMajor, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::ColumnMajor, int, cutlass::layout::RowMajor, cutlass::arch::OpMultiplyAddSaturate>, cutlass::MatrixShape<(int)1, (int)1>>, (int)1, (bool)0, bool>, cutlass::MatrixShape<(int)0, (int)0>, cutlass::MatrixShape<(int)0, (int)0>, (int)1>, (int)3, bool>, cutlass::epilogue::threadblock::Epilogue<cutlass::gemm::GemmShape<(int)128, (int)128, (int)128>, cutlass::gemm::warp::MmaTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)128>, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)4, (int)128>, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)4, (int)128>, int, cutlass::layout::RowMajor, cutlass::gemm::warp::MmaTensorOpPolicy<cutlass::arch::Mma<cutlass::gemm::GemmShape<(int)16, (int)8, (int)64>, (int)32, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::RowMajor, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::ColumnMajor, int, cutlass::layout::RowMajor, cutlass::arch::OpMultiplyAddSaturate>, cutlass::MatrixShape<(int)1, (int)1>>, (int)1, (bool)0, bool>, (int)1, cutlass::epilogue::threadblock::PredicatedTileIteratorConv<cutlass::epilogue::threadblock::OutputTileOptimalThreadMap<cutlass::epilogue::threadblock::OutputTileShape<(int)128, (int)8, (int)2, (int)1, (int)1>, cutlass::epilogue::threadblock::OutputTileShape<(int)1, (int)8, (int)1, (int)1, (int)8>, (int)128, (int)1, (int)32>, float, (bool)0, cutlass::layout::NoPermute, (bool)0, (int)4>, cutlass::epilogue::warp::FragmentIteratorTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)128>, cutlass::gemm::GemmShape<(int)16, (int)8, (int)64>, int, cutlass::Array<int, (int)4, (bool)1>, cutlass::layout::RowMajor>, cutlass::epilogue::warp::TileIteratorTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)128>, cutlass::gemm::GemmShape<(int)16, (int)8, (int)64>, int, cutlass::layout::RowMajor>, cutlass::epilogue::threadblock::SharedLoadIterator<cutlass::epilogue::threadblock::OutputTileOptimalThreadMap<cutlass::epilogue::threadblock::OutputTileShape<(int)128, (int)8, (int)2, (int)1, (int)1>, cutlass::epilogue::threadblock::OutputTileShape<(int)1, (int)8, (int)1, (int)1, (int)8>, (int)128, (int)1, (int)32>::CompactedThreadMap, int, (int)4>, cutlass::epilogue::thread::LinearCombination<float, (int)1, int, float, (cutlass::epilogue::thread::ScaleType::Kind)0, (cutlass::FloatRoundStyle)2, float>, cutlass::MatrixShape<(int)0, (int)8>, (int)1, (int)1>, cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<(int)1>, (cutlass::conv::Operator)0, cutlass::conv::Conv2dProblemSize, (cutlass::conv::GroupMode)0>>(T1::Params)",
+            "count": 7000,
+            "total_ms": 1596.8741609999936,
+            "avg_us": 228.12488014285677
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)4, void at::native::gpu_kernel_impl_nocast<at::native::CUDAFunctor_add<c10::Half>>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 13690,
+            "total_ms": 1594.5420109999989,
+            "avg_us": 116.47494601899159
+          },
+          {
+            "kernel": "void at::native::vectorized_elementwise_kernel<(int)4, at::native::FillFunctor<int>, at::detail::Array<char *, (int)1>>(int, T2, T3)",
+            "count": 3463,
+            "total_ms": 1533.0961510000022,
+            "avg_us": 442.7075226682062
+          },
+          {
+            "kernel": "_5x_cudnn_ampere_scudnn_128x128_relu_medium_nn_v1",
+            "count": 1286,
+            "total_ms": 1528.1450250000005,
+            "avg_us": 1188.2931765163285
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)4, void at::native::gpu_kernel_impl_nocast<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase &)::[lambda() (instance 3)]::operator ()() const::[lambda() (instance 10)]::operator ()() const::[lambda(c10::Half) (instance 1)]>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 6484,
+            "total_ms": 1350.47769,
+            "avg_us": 208.27848396051849
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)2, void at::native::gpu_kernel_impl_nocast<at::native::CUDAFunctor_add<float>>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 4200,
+            "total_ms": 1262.4068399999994,
+            "avg_us": 300.57305714285667
+          },
+          {
+            "kernel": "void at::native::<unnamed>::RowwiseMomentsCUDAKernel<float>(long, T1, const T1 *, T1 *, T1 *)",
+            "count": 8080,
+            "total_ms": 1241.9015899999984,
+            "avg_us": 153.70069183168337
+          },
+          {
+            "kernel": "void at::native::vectorized_elementwise_kernel<(int)4, at::native::<unnamed>::silu_kernel(at::TensorIteratorBase &)::[lambda() (instance 1)]::operator ()() const::[lambda() (instance 2)]::operator ()() const::[lambda(float) (instance 1)], at::detail::Array<char *, (int)2>>(int, T2, T3)",
+            "count": 5350,
+            "total_ms": 1096.5392120000026,
+            "avg_us": 204.96060037383435
+          },
+          {
+            "kernel": "void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase &)::[lambda() (instance 3)]::operator ()() const::[lambda() (instance 7)]::operator ()() const::[lambda(float) (instance 1)], at::detail::Array<char *, (int)2>, TrivialOffsetCalculator<(int)1, unsigned int>, TrivialOffsetCalculator<(int)1, unsigned int>, at::native::memory::LoadWithCast<(int)1>, at::native::memory::StoreWithCast<(int)1>>(int, T1, T2, T3, T4, T5, T6)",
+            "count": 13665,
+            "total_ms": 1032.9962670000114,
+            "avg_us": 75.59431152579559
+          },
+          {
+            "kernel": "void convolve_common_engine_float_NHWC<float, float, (int)512, (int)6, (int)8, (int)3, (int)3, (int)5, (bool)1, (bool)0, (bool)0, (bool)0, (bool)0>(int, int, int, const T1 *, const T1 *, int, T2 *, conv_kernel_common_params, unsigned long long, unsigned long, float, float, bool, const T2 *, const T2 *, bool, bool)",
+            "count": 726,
+            "total_ms": 864.2996479999999,
+            "avg_us": 1190.4953829201108
+          },
+          {
+            "kernel": "scale_store_half_kernel(const float *, const float *, __half *, int, int)",
+            "count": 7000,
+            "total_ms": 825.8171340000058,
+            "avg_us": 117.97387628571414
+          },
+          {
+            "kernel": "scale_quantize_pack_kernel(const float *, signed char *, const float *, int)",
+            "count": 7000,
+            "total_ms": 725.2381600000053,
+            "avg_us": 103.60545142857177
+          },
+          {
+            "kernel": "void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase &)::[lambda() (instance 3)]::operator ()() const::[lambda() (instance 10)]::operator ()() const::[lambda(c10::Half) (instance 1)], at::detail::Array<char *, (int)2>, TrivialOffsetCalculator<(int)1, unsigned int>, TrivialOffsetCalculator<(int)1, unsigned int>, at::native::memory::LoadWithCast<(int)1>, at::native::memory::StoreWithCast<(int)1>>(int, T1, T2, T3, T4, T5, T6)",
+            "count": 24803,
+            "total_ms": 596.4414419999985,
+            "avg_us": 24.047149215820344
+          },
+          {
+            "kernel": "void cutlass__5x_cudnn::Kernel<cutlass_tensorop_f16_s16816fprop_optimized_f16_128x128_32x3_nhwc_align8>(T1::Params)",
+            "count": 445,
+            "total_ms": 592.5887590000001,
+            "avg_us": 1331.6601325842703
+          },
+          {
+            "kernel": "void pytorch_flash::flash_fwd_kernel<pytorch_flash::Flash_fwd_kernel_traits<(int)32, (int)128, (int)128, (int)4, (bool)0, (bool)0, cutlass::half_t, pytorch_flash::Flash_kernel_traits<(int)32, (int)128, (int)128, (int)4, cutlass::half_t>>, (bool)0, (bool)0, (bool)0, (bool)0, (bool)0, (bool)0, (bool)0>(pytorch_flash::Flash_fwd_params)",
+            "count": 250,
+            "total_ms": 577.4257799999998,
+            "avg_us": 2309.70312
+          },
+          {
+            "kernel": "void at::native::unrolled_elementwise_kernel<at::native::CUDAFunctor_add<float>, at::detail::Array<char *, (int)3>, TrivialOffsetCalculator<(int)2, unsigned int>, TrivialOffsetCalculator<(int)1, unsigned int>, at::native::memory::LoadWithCast<(int)2>, at::native::memory::StoreWithCast<(int)1>>(int, T1, T2, T3, T4, T5, T6)",
+            "count": 1950,
+            "total_ms": 437.2219109999998,
+            "avg_us": 224.2163646153848
+          },
+          {
+            "kernel": "void at::native::vectorized_elementwise_kernel<(int)4, at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float>>, at::detail::Array<char *, (int)3>>(int, T2, T3)",
+            "count": 611,
+            "total_ms": 407.83592900000014,
+            "avg_us": 667.4892454991817
+          }
+        ]
+      }
+    }
+  }
+}

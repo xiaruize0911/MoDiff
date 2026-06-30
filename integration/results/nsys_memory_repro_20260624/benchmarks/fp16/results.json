@@ -1,0 +1,16 @@
+{
+  "fp16": {
+    "total_time": 13.1697359085083,
+    "num_samples": 168,
+    "time_per_sample": 0.07839128516969227,
+    "time_per_step_ms": 1.5678257033938452,
+    "quant_memory_after_warmup": {
+      "total_tracked_mib": 0,
+      "cache_and_residual_mib": 0,
+      "weight_mib": 0,
+      "scale_and_bias_mib": 0,
+      "buckets_mib": {},
+      "module_counts": {}
+    }
+  }
+}

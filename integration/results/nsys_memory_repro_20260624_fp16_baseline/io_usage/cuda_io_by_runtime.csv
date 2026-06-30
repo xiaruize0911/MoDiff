@@ -1,0 +1,6 @@
+mode,runtime,mib,count,ms
+fp16,cudaMemcpyAsync_v3020,2807.699165,2104,285.273689
+int8,cudaMemcpyAsync_v3020,11312.469101,7640,315.158724
+int8_baseline,cudaMemcpyAsync_v3020,4611.813797,3438,440.404221
+int4,cudaMemcpyAsync_v3020,4660.062851,7360,439.098883
+int4_baseline,cudaMemcpyAsync_v3020,4611.813797,3438,392.020568

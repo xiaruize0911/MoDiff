@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="420" viewBox="0 0 900 420">
+<style>text{font-family:Arial,sans-serif;font-size:13px}.title{font-size:20px;font-weight:700}.axis{stroke:#333;stroke-width:1}.grid{stroke:#ddd;stroke-width:1}.label{font-size:11px}</style>
+<rect width="900" height="420" fill="white"/>
+<text class="title" x="450.0" y="28" text-anchor="middle">D2D memcpy event count</text>
+<text x="18" y="210.0" transform="rotate(-90 18 210.0)" text-anchor="middle">Count</text>
+<line class="grid" x1="80" y1="330.0" x2="870" y2="330.0"/>
+<text x="72" y="334.0" text-anchor="end">0.0</text>
+<line class="grid" x1="80" y1="276.0" x2="870" y2="276.0"/>
+<text x="72" y="280.0" text-anchor="end">252.8</text>
+<line class="grid" x1="80" y1="222.0" x2="870" y2="222.0"/>
+<text x="72" y="226.0" text-anchor="end">505.6</text>
+<line class="grid" x1="80" y1="168.0" x2="870" y2="168.0"/>
+<text x="72" y="172.0" text-anchor="end">758.4</text>
+<line class="grid" x1="80" y1="114.0" x2="870" y2="114.0"/>
+<text x="72" y="118.0" text-anchor="end">1,011.2</text>
+<line class="grid" x1="80" y1="60.0" x2="870" y2="60.0"/>
+<text x="72" y="64.0" text-anchor="end">1,264.0</text>
+<line class="axis" x1="80" y1="60" x2="80" y2="330"/>
+<line class="axis" x1="80" y1="330" x2="870" y2="330"/>
+<rect x="119.5" y="285.1" width="64.8" height="44.9" fill="#54a24b"/>
+<text class="label" x="151.9" y="281.1" text-anchor="middle">210.0</text>
+<text x="159.0" y="348" text-anchor="middle">fp16</text>
+<rect x="277.5" y="60.0" width="64.8" height="270.0" fill="#54a24b"/>
+<text class="label" x="309.9" y="56.0" text-anchor="middle">1,264.0</text>
+<text x="317.0" y="348" text-anchor="middle">int8</text>
+<rect x="435.5" y="135.6" width="64.8" height="194.4" fill="#54a24b"/>
+<text class="label" x="467.9" y="131.6" text-anchor="middle">910.0</text>
+<text x="475.0" y="348" text-anchor="middle">int8_baseline</text>
+<rect x="593.5" y="119.8" width="64.8" height="210.2" fill="#54a24b"/>
+<text class="label" x="625.9" y="115.8" text-anchor="middle">984.0</text>
+<text x="633.0" y="348" text-anchor="middle">int4</text>
+<rect x="751.5" y="135.6" width="64.8" height="194.4" fill="#54a24b"/>
+<text class="label" x="783.9" y="131.6" text-anchor="middle">910.0</text>
+<text x="791.0" y="348" text-anchor="middle">int4_baseline</text>
+<rect x="80" y="373" width="14" height="14" fill="#54a24b"/>
+<text x="100" y="385">D2D Count</text>
+</svg>

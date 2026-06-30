@@ -238,6 +238,31 @@ __global__ void static_quantize_and_update_ahat_kernel_int8(
     }
 }
 
+__global__ void static_quantize_and_update_ahat_kernel_int8_half_cache(
+    const float* __restrict__ x,
+    __half* __restrict__ a_hat_cache,
+    int8_t* __restrict__ output_int8,
+    const float* __restrict__ scale_ptr,
+    const float* __restrict__ smooth_inv,
+    int num_channels,
+    int num_elements
+) {
+    float scale = *scale_ptr;
+    float inv_scale = 1.0f / scale;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    for (int i = idx; i < num_elements; i += blockDim.x * gridDim.x) {
+        float xval = x[i];
+        if (smooth_inv != nullptr) {
+            xval *= smooth_inv[i % num_channels];
+        }
+        float cache = __half2float(a_hat_cache[i]);
+        float q = fmaxf(-127.0f, fminf(127.0f, roundf((xval - cache) * scale)));
+        a_hat_cache[i] = __float2half_rn(cache + q * inv_scale);
+        output_int8[i] = static_cast<int8_t>(q);
+    }
+}
+
 __global__ void static_quantize_pack_and_update_ahat_kernel_int4(
     const float* __restrict__ x,
     float* __restrict__ a_hat_cache,
@@ -301,6 +326,46 @@ __global__ void static_quantize_pack_and_update_ahat_kernel_int4(
     }
 }
 
+__global__ void static_quantize_pack_and_update_ahat_kernel_int4_half_cache(
+    const float* __restrict__ x,
+    __half* __restrict__ a_hat_cache,
+    int8_t* __restrict__ output_packed,
+    const float* __restrict__ scale_ptr,
+    const float* __restrict__ smooth_inv,
+    int num_channels,
+    int num_elements
+) {
+    float scale = *scale_ptr;
+    float inv_scale = 1.0f / scale;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int base = idx * 2;
+
+    if (base < num_elements) {
+        float x0 = x[base];
+        if (smooth_inv != nullptr) {
+            x0 *= smooth_inv[base % num_channels];
+        }
+        float c0 = __half2float(a_hat_cache[base]);
+        float q0 = fmaxf(-7.0f, fminf(7.0f, roundf((x0 - c0) * scale)));
+        a_hat_cache[base] = __float2half_rn(c0 + q0 * inv_scale);
+
+        float q1 = 0.0f;
+        if (base + 1 < num_elements) {
+            float x1 = x[base + 1];
+            if (smooth_inv != nullptr) {
+                x1 *= smooth_inv[(base + 1) % num_channels];
+            }
+            float c1 = __half2float(a_hat_cache[base + 1]);
+            q1 = fmaxf(-7.0f, fminf(7.0f, roundf((x1 - c1) * scale)));
+            a_hat_cache[base + 1] = __float2half_rn(c1 + q1 * inv_scale);
+        }
+
+        output_packed[base / 2] =
+            (static_cast<int8_t>(q0) & 0x0F) |
+            ((static_cast<int8_t>(q1) & 0x0F) << 4);
+    }
+}
+
 // =========================================================================
 // Fused: o_hat_cache += conv_output * weight_scale (per-channel broadcast)
 // Vectorized float4 loads for better memory bandwidth.
@@ -336,6 +401,21 @@ __global__ void scale_accumulate_kernel(
     }
 }
 
+__global__ void scale_accumulate_half_cache_kernel(
+    const float* __restrict__ conv_output,
+    const float* __restrict__ weight_scale,
+    __half* __restrict__ o_hat_cache,
+    int num_elements,
+    int num_channels
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    for (int i = idx; i < num_elements; i += blockDim.x * gridDim.x) {
+        int ch = i % num_channels;
+        float cache = __half2float(o_hat_cache[i]);
+        o_hat_cache[i] = __float2half_rn(cache + conv_output[i] * weight_scale[ch]);
+    }
+}
+
 __global__ void scale_store_kernel(
     const float* __restrict__ conv_output,
     const float* __restrict__ weight_scale,
@@ -363,6 +443,20 @@ __global__ void scale_store_kernel(
             int ch = i % num_channels;
             output[i] = conv_output[i] * weight_scale[ch];
         }
+    }
+}
+
+__global__ void scale_store_half_kernel(
+    const float* __restrict__ conv_output,
+    const float* __restrict__ weight_scale,
+    __half* __restrict__ output,
+    int num_elements,
+    int num_channels
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    for (int i = idx; i < num_elements; i += blockDim.x * gridDim.x) {
+        int ch = i % num_channels;
+        output[i] = __float2half_rn(conv_output[i] * weight_scale[ch]);
     }
 }
 
@@ -952,15 +1046,26 @@ torch::Tensor conv2d_int8_fprop_o_hat(
     int num_work_items = (num_elements + 3) / 4;
     int grid_size = (num_work_items + block_size - 1) / block_size;
     
-    // 4) Launch native CUDA kernel for per-channel scale + accumulation into o_hat_cache
-    // this directly overwrites o_hat_cache (C/D matrix) in global memory.
-    scale_accumulate_kernel<<<grid_size, block_size, 0, stream>>>(
-        conv_out.data_ptr<float>(),
-        weight_scales.data_ptr<float>(),
-        o_hat_cache.data_ptr<float>(),
-        num_elements,
-        num_channels
-    );
+    // 4) Launch native CUDA kernel for per-channel scale + accumulation into o_hat_cache.
+    // FP16 cache support cuts resident MoDiff cache memory/bandwidth while preserving
+    // the existing FP32 path for dynamic/un-calibrated runs.
+    if (o_hat_cache.scalar_type() == torch::kFloat16) {
+        scale_accumulate_half_cache_kernel<<<grid_size, block_size, 0, stream>>>(
+            conv_out.data_ptr<float>(),
+            weight_scales.data_ptr<float>(),
+            reinterpret_cast<__half*>(o_hat_cache.data_ptr<at::Half>()),
+            num_elements,
+            num_channels
+        );
+    } else {
+        scale_accumulate_kernel<<<grid_size, block_size, 0, stream>>>(
+            conv_out.data_ptr<float>(),
+            weight_scales.data_ptr<float>(),
+            o_hat_cache.data_ptr<float>(),
+            num_elements,
+            num_channels
+        );
+    }
     
     // Return o_hat_cache itself for identical graph tracking
     return o_hat_cache;
@@ -1136,15 +1241,27 @@ torch::Tensor step1_static_quantize_fprop(
         num_channels = smooth_inv.numel();
     }
 
-    static_quantize_and_update_ahat_kernel_int8<<<grid_size, block_size, 0, stream>>>(
-        x.data_ptr<float>(),
-        a_hat_cache.data_ptr<float>(),
-        x_int8.data_ptr<int8_t>(),
-        scale_buf.data_ptr<float>(),
-        smooth_ptr,
-        num_channels,
-        num_elements
-    );
+    if (a_hat_cache.scalar_type() == torch::kFloat16) {
+        static_quantize_and_update_ahat_kernel_int8_half_cache<<<grid_size, block_size, 0, stream>>>(
+            x.data_ptr<float>(),
+            reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>()),
+            x_int8.data_ptr<int8_t>(),
+            scale_buf.data_ptr<float>(),
+            smooth_ptr,
+            num_channels,
+            num_elements
+        );
+    } else {
+        static_quantize_and_update_ahat_kernel_int8<<<grid_size, block_size, 0, stream>>>(
+            x.data_ptr<float>(),
+            a_hat_cache.data_ptr<float>(),
+            x_int8.data_ptr<int8_t>(),
+            scale_buf.data_ptr<float>(),
+            smooth_ptr,
+            num_channels,
+            num_elements
+        );
+    }
 
     return x_int8;
 }
@@ -1214,15 +1331,27 @@ torch::Tensor step1_quantize_pack_int4_fprop(
             num_channels = smooth_inv.numel();
         }
 
-        static_quantize_pack_and_update_ahat_kernel_int4<<<grid_size, block_size, 0, stream>>>(
-            x.data_ptr<float>(),
-            a_hat_cache.data_ptr<float>(),
-            x_packed.data_ptr<int8_t>(),
-            scale_buf.data_ptr<float>(),
-            smooth_ptr,
-            num_channels,
-            num_input
-        );
+        if (a_hat_cache.scalar_type() == torch::kFloat16) {
+            static_quantize_pack_and_update_ahat_kernel_int4_half_cache<<<grid_size, block_size, 0, stream>>>(
+                x.data_ptr<float>(),
+                reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>()),
+                x_packed.data_ptr<int8_t>(),
+                scale_buf.data_ptr<float>(),
+                smooth_ptr,
+                num_channels,
+                num_input
+            );
+        } else {
+            static_quantize_pack_and_update_ahat_kernel_int4<<<grid_size, block_size, 0, stream>>>(
+                x.data_ptr<float>(),
+                a_hat_cache.data_ptr<float>(),
+                x_packed.data_ptr<int8_t>(),
+                scale_buf.data_ptr<float>(),
+                smooth_ptr,
+                num_channels,
+                num_input
+            );
+        }
 
         int N = x.size(0);
         int C = x.size(1);
@@ -1287,7 +1416,10 @@ torch::Tensor conv2d_int8_fprop_no_ohat_prealloc(
 
     CHECK_CUDA(output);
     CHECK_CONTIGUOUS(output);
-    TORCH_CHECK(output.scalar_type() == torch::kFloat32, "output must be float32");
+    TORCH_CHECK(
+        output.scalar_type() == torch::kFloat32 || output.scalar_type() == torch::kFloat16,
+        "output must be float32 or float16"
+    );
     TORCH_CHECK(output.sizes() == conv_out.sizes(), "output shape mismatch for conv2d_int8_fprop_no_ohat_prealloc");
 
     int num_elements = conv_out.numel();
@@ -1296,13 +1428,23 @@ torch::Tensor conv2d_int8_fprop_no_ohat_prealloc(
     int num_work_items = (num_elements + 3) / 4;
     int grid_size = (num_work_items + block_size - 1) / block_size;
 
-    scale_store_kernel<<<grid_size, block_size, 0, stream>>>(
-        conv_out.data_ptr<float>(),
-        weight_scales.data_ptr<float>(),
-        output.data_ptr<float>(),
-        num_elements,
-        num_channels
-    );
+    if (output.scalar_type() == torch::kFloat16) {
+        scale_store_half_kernel<<<grid_size, block_size, 0, stream>>>(
+            conv_out.data_ptr<float>(),
+            weight_scales.data_ptr<float>(),
+            reinterpret_cast<__half*>(output.data_ptr<at::Half>()),
+            num_elements,
+            num_channels
+        );
+    } else {
+        scale_store_kernel<<<grid_size, block_size, 0, stream>>>(
+            conv_out.data_ptr<float>(),
+            weight_scales.data_ptr<float>(),
+            output.data_ptr<float>(),
+            num_elements,
+            num_channels
+        );
+    }
 
     return output;
 }
@@ -1364,7 +1506,10 @@ torch::Tensor conv2d_int4_fprop_no_ohat_prealloc(
 
     CHECK_CUDA(output);
     CHECK_CONTIGUOUS(output);
-    TORCH_CHECK(output.scalar_type() == torch::kFloat32, "output must be float32");
+    TORCH_CHECK(
+        output.scalar_type() == torch::kFloat32 || output.scalar_type() == torch::kFloat16,
+        "output must be float32 or float16"
+    );
     TORCH_CHECK(output.sizes() == conv_out.sizes(), "output shape mismatch for conv2d_int4_fprop_no_ohat_prealloc");
 
     int num_elements = conv_out.numel();
@@ -1373,13 +1518,23 @@ torch::Tensor conv2d_int4_fprop_no_ohat_prealloc(
     int num_work_items = (num_elements + 3) / 4;
     int grid_size = (num_work_items + block_size - 1) / block_size;
 
-    scale_store_kernel<<<grid_size, block_size, 0, stream>>>(
-        conv_out.data_ptr<float>(),
-        weight_scales.data_ptr<float>(),
-        output.data_ptr<float>(),
-        num_elements,
-        num_channels
-    );
+    if (output.scalar_type() == torch::kFloat16) {
+        scale_store_half_kernel<<<grid_size, block_size, 0, stream>>>(
+            conv_out.data_ptr<float>(),
+            weight_scales.data_ptr<float>(),
+            reinterpret_cast<__half*>(output.data_ptr<at::Half>()),
+            num_elements,
+            num_channels
+        );
+    } else {
+        scale_store_kernel<<<grid_size, block_size, 0, stream>>>(
+            conv_out.data_ptr<float>(),
+            weight_scales.data_ptr<float>(),
+            output.data_ptr<float>(),
+            num_elements,
+            num_channels
+        );
+    }
 
     return output;
 }
@@ -1446,13 +1601,23 @@ torch::Tensor conv2d_int4_fprop_o_hat(
     int num_work_items = (num_elements + 3) / 4;
     int grid_size = (num_work_items + block_size - 1) / block_size;
     
-    scale_accumulate_kernel<<<grid_size, block_size, 0, stream>>>(
-        conv_out.data_ptr<float>(),
-        weight_scales.data_ptr<float>(),
-        o_hat_cache.data_ptr<float>(),
-        num_elements,
-        num_channels
-    );
+    if (o_hat_cache.scalar_type() == torch::kFloat16) {
+        scale_accumulate_half_cache_kernel<<<grid_size, block_size, 0, stream>>>(
+            conv_out.data_ptr<float>(),
+            weight_scales.data_ptr<float>(),
+            reinterpret_cast<__half*>(o_hat_cache.data_ptr<at::Half>()),
+            num_elements,
+            num_channels
+        );
+    } else {
+        scale_accumulate_kernel<<<grid_size, block_size, 0, stream>>>(
+            conv_out.data_ptr<float>(),
+            weight_scales.data_ptr<float>(),
+            o_hat_cache.data_ptr<float>(),
+            num_elements,
+            num_channels
+        );
+    }
     
     return o_hat_cache;
 }

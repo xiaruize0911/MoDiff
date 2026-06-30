@@ -122,6 +122,8 @@ class OptimizedInt4Conv2d(nn.Module):
         self._cached_scale_float: Optional[float] = None
         self._cached_alpha_tensor: Optional[torch.Tensor] = None
         self._cached_scale_tensor: Optional[torch.Tensor] = None  # for _forward_standard fused path
+        self.standard_output_fp16 = False
+        self._standard_output_buf: Optional[torch.Tensor] = None
 
         # --- SmoothQuant identity flag for fast path ---
         self._smooth_is_identity = True
@@ -132,6 +134,19 @@ class OptimizedInt4Conv2d(nn.Module):
         self._inv_scale_buf: Optional[torch.Tensor] = None
         self._absmax_buf: Optional[torch.Tensor] = None
         self._retire_count: Optional[torch.Tensor] = None
+
+    def _cache_dtype(self) -> torch.dtype:
+        return torch.float16 if self.is_calibrated else torch.float32
+
+    def _new_cache_like(self, tensor: torch.Tensor) -> torch.Tensor:
+        return torch.zeros(
+            tensor.shape, device=tensor.device, dtype=self._cache_dtype()
+        ).contiguous(memory_format=torch.channels_last)
+
+    def _module_output(self) -> torch.Tensor:
+        if self.o_hat_cache is not None and self.o_hat_cache.dtype != torch.float32:
+            return self.o_hat_cache.float()
+        return self.o_hat_cache
 
     # ==================================================================
     # Quantization helpers
@@ -254,7 +269,7 @@ class OptimizedInt4Conv2d(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         fwd_start = profiler.start("Layer: OptimizedInt4Conv2d.forward")
 
-        if x.dtype != torch.float32:
+        if x.dtype != torch.float32 and (self.modiff_enabled or self.calibrating):
             x = x.float()
         if not x.is_contiguous(memory_format=torch.channels_last):
             x = x.contiguous(memory_format=torch.channels_last)
@@ -298,18 +313,43 @@ class OptimizedInt4Conv2d(nn.Module):
                     [self._cached_scale_float], device=x.device, dtype=torch.float32)
             if not x.is_contiguous(memory_format=torch.channels_last):
                 x = x.contiguous(memory_format=torch.channels_last)
-            x_packed = modiff_cutlass.scale_quantize_and_pack(x, self._cached_scale_tensor)
+            x_for_quant = x.float() if x.dtype != torch.float32 else x
+            x_packed = modiff_cutlass.scale_quantize_and_pack(x_for_quant, self._cached_scale_tensor)
             if self._empty_bias is None or self._empty_bias.device != x.device:
                 self._empty_bias = torch.empty(0, device=x.device)
-            out_raw = modiff_cutlass.conv2d_int4_fprop(
-                x_packed, self.weight_packed, self._cached_alpha_tensor, self._empty_bias,
-                self.stride[0], self.stride[1],
-                self.padding[0], self.padding[1],
-                self.dilation[0], self.dilation[1]
-            )
-            out = out_raw * self.weight_scale_channel
+
+            h_out = ((x.shape[2] + 2 * self.padding[0] - self.dilation[0] * (self.kernel_size[0] - 1) - 1) // self.stride[0]) + 1
+            w_out = ((x.shape[3] + 2 * self.padding[1] - self.dilation[1] * (self.kernel_size[1] - 1) - 1) // self.stride[1]) + 1
+            output_shape = (x.shape[0], self.out_channels, h_out, w_out)
+            if self.standard_output_fp16:
+                if (self._standard_output_buf is None
+                        or self._standard_output_buf.shape != output_shape
+                        or self._standard_output_buf.device != x.device
+                        or self._standard_output_buf.dtype != torch.float16):
+                    self._standard_output_buf = torch.empty(
+                        output_shape, device=x.device, dtype=torch.float16
+                    ).contiguous(memory_format=torch.channels_last)
+                out = modiff_cutlass.conv2d_int4_fprop_no_ohat_prealloc(
+                    x_packed,
+                    self.weight_packed,
+                    self._cached_alpha_tensor,
+                    self.weight_scale_channel.view(-1),
+                    self._standard_output_buf,
+                    self.stride[0], self.stride[1],
+                    self.padding[0], self.padding[1],
+                    self.dilation[0], self.dilation[1]
+                )
+            else:
+                out_raw = modiff_cutlass.conv2d_int4_fprop(
+                    x_packed, self.weight_packed, self._cached_alpha_tensor, self._empty_bias,
+                    self.stride[0], self.stride[1],
+                    self.padding[0], self.padding[1],
+                    self.dilation[0], self.dilation[1]
+                )
+                out = out_raw * self.weight_scale_channel
             if self.bias is not None:
-                out = out + self.bias
+                bias = self.bias.to(out.dtype) if out.dtype != self.bias.dtype else self.bias
+                out = out + bias
             return out
         # Fallback: naive PyTorch path (dynamic scale, includes CPU-GPU sync)
         input_scale = self._compute_activation_scale(x)
@@ -332,9 +372,10 @@ class OptimizedInt4Conv2d(nn.Module):
             a_hat   = a_hat + r_dq
             o_hat   = o_hat + conv_r
 
-        self.a_hat_cache = a_hat
-        self.o_hat_cache = o_hat
-        return o_hat.clone()
+        cache_dtype = self._cache_dtype()
+        self.a_hat_cache = a_hat.to(cache_dtype).contiguous(memory_format=torch.channels_last)
+        self.o_hat_cache = o_hat.to(cache_dtype).contiguous(memory_format=torch.channels_last)
+        return self._module_output()
 
     def _forward_modulated(self, x: torch.Tensor) -> torch.Tensor:
         """MoDiff modulated step (t<T).  No periodic reset per paper.
@@ -345,6 +386,13 @@ class OptimizedInt4Conv2d(nn.Module):
         self.step_count += 1
 
         if self.a_hat_cache is None or self.a_hat_cache.shape != x.shape:
+            self.is_first_step = True
+            if not self._smooth_is_identity:
+                x = x * self._smooth_inv
+            out = self._forward_first_step(x)
+            self.is_first_step = False
+            return out
+        if self.a_hat_cache.dtype != self._cache_dtype():
             self.is_first_step = True
             if not self._smooth_is_identity:
                 x = x * self._smooth_inv
@@ -384,7 +432,7 @@ class OptimizedInt4Conv2d(nn.Module):
                 self.dilation[0], self.dilation[1]
             )
             profiler.stop("MoDiff INT4 Static Conv2d", p_conv)
-            return self.o_hat_cache
+            return self._module_output()
 
         # Lazy-init persistent buffers (reused across timesteps, never reallocated)
         if self._residual_buf is None or self._residual_buf.shape != x.shape:
@@ -423,7 +471,7 @@ class OptimizedInt4Conv2d(nn.Module):
             self.dilation[0], self.dilation[1]
         )
         profiler.stop("MoDiff INT4 Fused Conv2d", p_conv)
-        return self.o_hat_cache
+        return self._module_output()
 
     # ==================================================================
     # MoDiff controls
@@ -433,6 +481,11 @@ class OptimizedInt4Conv2d(nn.Module):
         self.modiff_enabled = enabled
         if not enabled:
             self.reset_state()
+
+    def set_standard_output_fp16(self, enabled: bool = True):
+        self.standard_output_fp16 = enabled
+        if not enabled:
+            self._standard_output_buf = None
 
     def reset_state(self):
         self.is_first_step = True
@@ -587,6 +640,12 @@ def reset_modiff_state(model: nn.Module):
     for module in model.modules():
         if isinstance(module, OptimizedInt4Conv2d):
             module.reset_state()
+
+
+def set_standard_output_fp16(model: nn.Module, enabled: bool = True):
+    for module in model.modules():
+        if isinstance(module, OptimizedInt4Conv2d):
+            module.set_standard_output_fp16(enabled)
 
 
 def set_calibrating_int4(model: nn.Module, calibrating: bool):

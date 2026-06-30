@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="420" viewBox="0 0 900 420">
+<style>text{font-family:Arial,sans-serif;font-size:13px}.title{font-size:20px;font-weight:700}.axis{stroke:#333;stroke-width:1}.grid{stroke:#ddd;stroke-width:1}.label{font-size:11px}</style>
+<rect width="900" height="420" fill="white"/>
+<text class="title" x="450.0" y="28" text-anchor="middle">Total CUDA memcpy I/O</text>
+<text x="18" y="210.0" transform="rotate(-90 18 210.0)" text-anchor="middle">MiB</text>
+<line class="grid" x1="80" y1="330.0" x2="870" y2="330.0"/>
+<text x="72" y="334.0" text-anchor="end">0.0</text>
+<line class="grid" x1="80" y1="276.0" x2="870" y2="276.0"/>
+<text x="72" y="280.0" text-anchor="end">2,262.5</text>
+<line class="grid" x1="80" y1="222.0" x2="870" y2="222.0"/>
+<text x="72" y="226.0" text-anchor="end">4,525.0</text>
+<line class="grid" x1="80" y1="168.0" x2="870" y2="168.0"/>
+<text x="72" y="172.0" text-anchor="end">6,787.5</text>
+<line class="grid" x1="80" y1="114.0" x2="870" y2="114.0"/>
+<text x="72" y="118.0" text-anchor="end">9,050.0</text>
+<line class="grid" x1="80" y1="60.0" x2="870" y2="60.0"/>
+<text x="72" y="64.0" text-anchor="end">11,312.5</text>
+<line class="axis" x1="80" y1="60" x2="80" y2="330"/>
+<line class="axis" x1="80" y1="330" x2="870" y2="330"/>
+<rect x="119.5" y="263.0" width="64.8" height="67.0" fill="#4c78a8"/>
+<text class="label" x="151.9" y="259.0" text-anchor="middle">2,807.7</text>
+<text x="159.0" y="348" text-anchor="middle">fp16</text>
+<rect x="277.5" y="60.0" width="64.8" height="270.0" fill="#4c78a8"/>
+<text class="label" x="309.9" y="56.0" text-anchor="middle">11,312.5</text>
+<text x="317.0" y="348" text-anchor="middle">int8</text>
+<rect x="435.5" y="219.9" width="64.8" height="110.1" fill="#4c78a8"/>
+<text class="label" x="467.9" y="215.9" text-anchor="middle">4,611.8</text>
+<text x="475.0" y="348" text-anchor="middle">int8_baseline</text>
+<rect x="593.5" y="218.8" width="64.8" height="111.2" fill="#4c78a8"/>
+<text class="label" x="625.9" y="214.8" text-anchor="middle">4,660.1</text>
+<text x="633.0" y="348" text-anchor="middle">int4</text>
+<rect x="751.5" y="219.9" width="64.8" height="110.1" fill="#4c78a8"/>
+<text class="label" x="783.9" y="215.9" text-anchor="middle">4,611.8</text>
+<text x="791.0" y="348" text-anchor="middle">int4_baseline</text>
+<rect x="80" y="373" width="14" height="14" fill="#4c78a8"/>
+<text x="100" y="385">Total MiB</text>
+</svg>

@@ -1,0 +1,16 @@
+mode,kind,mib,count,ms
+fp16,Host-to-Device,2569.950905,1461,248.790247
+fp16,Device-to-Device,111.700195,210,0.676195
+fp16,Device-to-Host,126.048065,433,35.807247
+int8,Host-to-Device,2570.623184,5943,247.466419
+int8,Device-to-Device,8615.797852,1264,33.383920
+int8,Device-to-Host,126.048065,433,34.308385
+int8_baseline,Host-to-Device,2570.608505,2095,401.465490
+int8_baseline,Device-to-Device,1915.157227,910,8.340079
+int8_baseline,Device-to-Host,126.048065,433,30.598652
+int4,Host-to-Device,2570.623184,5943,397.953850
+int4,Device-to-Device,1963.391602,984,8.439352
+int4,Device-to-Host,126.048065,433,32.705681
+int4_baseline,Host-to-Device,2570.608505,2095,350.093835
+int4_baseline,Device-to-Device,1915.157227,910,8.294949
+int4_baseline,Device-to-Host,126.048065,433,33.631784
