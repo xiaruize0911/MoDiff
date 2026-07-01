@@ -1,0 +1,25 @@
+\begin{tikzpicture}
+\begin{axis}[
+  ybar,
+  width=\linewidth,
+  height=0.62\textheight,
+  ymin=0,
+  ymax=1.55,
+  ylabel={speedup, FP16 / INT8},
+  symbolic x coords={{[1]},{[2]},{[3]},{[4]},{[5]},{[6]},{[7]},{[8]},{[9]},{[10]},{[11]}},
+  xtick=data,
+  xlabel={conv shape index},
+  bar width=8pt,
+  nodes near coords,
+  nodes near coords style={font=\tiny, /pgf/number format/fixed, /pgf/number format/precision=2},
+  grid=major,
+  major grid style={draw=gray!20},
+]
+\addplot+[fill=orange!70, draw=orange!80!black] coordinates {
+  ({[1]},0.70) ({[2]},0.73) ({[3]},0.93) ({[4]},0.96) ({[5]},0.94)
+  ({[6]},1.12) ({[7]},1.36) ({[8]},0.96) ({[9]},0.70) ({[10]},0.70) ({[11]},0.56)
+};
+\addplot+[black, dashed, mark=none] coordinates {({[1]},1.0) ({[11]},1.0)};
+\end{axis}
+\end{tikzpicture}
+

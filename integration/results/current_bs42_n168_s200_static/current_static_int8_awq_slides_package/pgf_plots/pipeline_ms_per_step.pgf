@@ -1,0 +1,26 @@
+\begin{tikzpicture}
+\begin{axis}[
+  ybar,
+  width=\linewidth,
+  height=0.62\textheight,
+  ymin=0,
+  ymax=1.75,
+  ylabel={ms / DDIM step},
+  symbolic x coords={{[1] FP16},{[2] INT8 current},{[3] INT8 AWQ}},
+  xtick=data,
+  x tick label style={align=center},
+  nodes near coords,
+  nodes near coords style={font=\scriptsize},
+  bar width=20pt,
+  enlarge x limits=0.25,
+  grid=major,
+  major grid style={draw=gray!20},
+]
+\addplot+[fill=blue!55, draw=blue!70!black] coordinates {
+  ({[1] FP16},1.568)
+  ({[2] INT8 current},1.537)
+  ({[3] INT8 AWQ},1.453)
+};
+\end{axis}
+\end{tikzpicture}
+

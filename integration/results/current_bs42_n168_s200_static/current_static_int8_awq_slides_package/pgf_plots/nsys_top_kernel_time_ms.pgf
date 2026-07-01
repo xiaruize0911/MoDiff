@@ -1,0 +1,32 @@
+\begin{tikzpicture}
+\begin{axis}[
+  xbar,
+  width=0.78\linewidth,
+  height=0.64\textheight,
+  xmin=0,
+  xmax=11000,
+  xlabel={total kernel time (ms)},
+  symbolic y coords={{[8] INT8 rowwise moments},{[7] INT8 implicit GEMM conv},{[6] INT8 attention},{[5] INT8 elementwise},{[4] FP16 tensorop conv},{[3] FP16 implicit conv},{[2] FP16 elementwise},{[1] FP16 attention}},
+  ytick=data,
+  y tick label style={font=\tiny, align=right},
+  nodes near coords,
+  nodes near coords style={font=\scriptsize, /pgf/number format/fixed, /pgf/number format/precision=0},
+  bar width=6pt,
+  enlarge y limits=0.10,
+  grid=major,
+  major grid style={draw=gray!20},
+]
+\addplot+[fill=blue!55, draw=blue!70!black] coordinates {
+  (8708.7,{[1] FP16 attention})
+  (7992.7,{[2] FP16 elementwise})
+  (4407.5,{[3] FP16 implicit conv})
+  (4228.7,{[4] FP16 tensorop conv})
+};
+\addplot+[fill=orange!70, draw=orange!80!black] coordinates {
+  (10398.1,{[5] INT8 elementwise})
+  (8514.8,{[6] INT8 attention})
+  (5900.1,{[7] INT8 implicit GEMM conv})
+  (3440.1,{[8] INT8 rowwise moments})
+};
+\end{axis}
+\end{tikzpicture}

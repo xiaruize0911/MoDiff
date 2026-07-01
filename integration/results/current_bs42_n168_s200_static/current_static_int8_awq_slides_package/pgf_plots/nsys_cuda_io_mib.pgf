@@ -1,0 +1,30 @@
+\begin{tikzpicture}
+\begin{axis}[
+  ybar,
+  width=0.92\linewidth,
+  height=0.62\textheight,
+  ymin=0,
+  ymax=5000,
+  ylabel={CUDA memcpy volume (MiB)},
+  symbolic x coords={{[1] FP16},{[2] INT8 baseline}},
+  xtick=data,
+  x tick label style={align=center},
+  bar width=16pt,
+  enlarge x limits=0.35,
+  legend style={at={(0.5,1.03)}, anchor=south, legend columns=2, font=\scriptsize},
+  nodes near coords,
+  nodes near coords style={font=\scriptsize, /pgf/number format/fixed, /pgf/number format/precision=0},
+  grid=major,
+  major grid style={draw=gray!20},
+]
+\addplot+[fill=blue!55, draw=blue!70!black] coordinates {
+  ({[1] FP16},2802.6)
+  ({[2] INT8 baseline},4606.8)
+};
+\addplot+[fill=orange!70, draw=orange!80!black] coordinates {
+  ({[1] FP16},106.5)
+  ({[2] INT8 baseline},1909.9)
+};
+\legend{Total,D2D}
+\end{axis}
+\end{tikzpicture}

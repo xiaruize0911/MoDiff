@@ -1,0 +1,33 @@
+\begin{tikzpicture}
+\begin{axis}[
+  ybar,
+  width=\linewidth,
+  height=0.62\textheight,
+  ymin=0,
+  ymax=0.95,
+  ylabel={median latency (ms)},
+  symbolic x coords={{[1] res\_128\_32},{[2] res\_256\_16},{[3] mid\_512\_8},{[4] up\_128\_64}},
+  xtick=data,
+  x tick label style={rotate=18, anchor=east, font=\scriptsize},
+  bar width=9pt,
+  enlarge x limits=0.15,
+  legend style={at={(0.5,1.03)}, anchor=south, legend columns=2, font=\scriptsize},
+  grid=major,
+  major grid style={draw=gray!20},
+]
+\addplot+[fill=blue!55, draw=blue!70!black] coordinates {
+  ({[1] res\_128\_32},0.1682)
+  ({[2] res\_256\_16},0.1296)
+  ({[3] mid\_512\_8},0.1229)
+  ({[4] up\_128\_64},0.5663)
+};
+\addplot+[fill=orange!70, draw=orange!80!black] coordinates {
+  ({[1] res\_128\_32},0.2320)
+  ({[2] res\_256\_16},0.1434)
+  ({[3] mid\_512\_8},0.0965)
+  ({[4] up\_128\_64},0.8627)
+};
+\legend{FP16 cuDNN,INT8 conv}
+\end{axis}
+\end{tikzpicture}
+

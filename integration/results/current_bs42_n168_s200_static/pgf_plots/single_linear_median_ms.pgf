@@ -1,0 +1,39 @@
+\begin{tikzpicture}
+\begin{axis}[
+  ybar,
+  width=\linewidth,
+  height=0.62\textheight,
+  ymin=0,
+  ymax=1.25,
+  ylabel={median latency (ms)},
+  symbolic x coords={{[1] attn\_proj\_512},{[2] ffn\_512\_2048},{[3] large\_4096},{[4] small\_m\_4096}},
+  xtick=data,
+  x tick label style={rotate=18, anchor=east, font=\scriptsize},
+  bar width=6pt,
+  enlarge x limits=0.12,
+  legend style={at={(0.5,1.03)}, anchor=south, legend columns=3, font=\scriptsize},
+  grid=major,
+  major grid style={draw=gray!20},
+]
+\addplot+[fill=blue!55, draw=blue!70!black] coordinates {
+  ({[1] attn\_proj\_512},0.0624)
+  ({[2] ffn\_512\_2048},0.1449)
+  ({[3] large\_4096},0.3277)
+  ({[4] small\_m\_4096},0.0800)
+};
+\addplot+[fill=orange!70, draw=orange!80!black] coordinates {
+  ({[1] attn\_proj\_512},0.2920)
+  ({[2] ffn\_512\_2048},1.0963)
+  ({[3] large\_4096},0.2579)
+  ({[4] small\_m\_4096},0.2266)
+};
+\addplot+[fill=green!55!black, draw=green!40!black] coordinates {
+  ({[1] attn\_proj\_512},0.1425)
+  ({[2] ffn\_512\_2048},0.1703)
+  ({[3] large\_4096},0.2571)
+  ({[4] small\_m\_4096},0.4360)
+};
+\legend{FP16,current int\_gemm,AWQ}
+\end{axis}
+\end{tikzpicture}
+
