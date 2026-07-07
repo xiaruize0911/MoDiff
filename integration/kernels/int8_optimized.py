@@ -51,7 +51,14 @@ class OptimizedInt8Conv2d(nn.Module):
         # --- SmoothQuant ---
         self.register_buffer('smooth_scale', torch.ones(1, self.in_channels, 1, 1))
         self.register_buffer('_smooth_inv', torch.ones(1, self.in_channels, 1, 1))
-        self.register_buffer('_orig_weight', w_data.clone(), persistent=False)
+        # No .clone(): w_data is conv.weight.data (already detached from autograd),
+        # and only ever read (never mutated) by _apply_smoothquant(). Aliasing it
+        # avoids a full-weight D2D copy at construction time that is pure waste
+        # whenever calibration is loaded from a file instead of run live (the
+        # common case — see apply_static_scales, which never calls
+        # begin_calibration()/end_calibration() so this buffer would otherwise
+        # sit around unused for the life of the model).
+        self.register_buffer('_orig_weight', w_data, persistent=False)
 
         # --- Per-output-channel symmetric INT8 weight quantization ---
         w_flat = w_data.reshape(K, -1)
@@ -476,9 +483,16 @@ class OptimizedInt8Conv2d(nn.Module):
         return self._int8_conv(x, input_scale, with_bias=True)
 
     def _forward_first_step(self, x: torch.Tensor) -> torch.Tensor:
-        """First timestep (t=T): warm-up with repeated quantisation."""
-        self._ensure_state_buffers(x)
+        """First timestep (t=T): warm-up with repeated quantisation.
 
+        Does not call _ensure_state_buffers(): a_hat/o_hat are computed fresh
+        below and adopted directly as the cache (see the assignment at the end),
+        so pre-zeroing a persistent buffer just to immediately .copy_() over it
+        would be a wasted full-tensor allocation + D2D copy per layer. The other
+        scratch buffers _ensure_state_buffers() sets up (_residual_buf,
+        _scale_buf, ...) aren't used by this method — they're allocated by
+        _forward_modulated()'s own _ensure_state_buffers() call on step 2.
+        """
         if self.is_calibrated:
             input_scale = self.static_input_scale
             if input_scale.device != x.device:
@@ -504,8 +518,9 @@ class OptimizedInt8Conv2d(nn.Module):
             a_hat = a_hat + r_dq
             o_hat = o_hat + conv_r
 
-        self.a_hat_cache.copy_(a_hat.to(self.a_hat_cache.dtype))
-        self.o_hat_cache.copy_(o_hat.to(self.o_hat_cache.dtype))
+        cache_dtype = torch.float16 if self.is_calibrated else torch.float32
+        self.a_hat_cache = a_hat.to(cache_dtype).contiguous(memory_format=torch.channels_last)
+        self.o_hat_cache = o_hat.to(cache_dtype).contiguous(memory_format=torch.channels_last)
         return self._module_output()
 
     def _forward_modulated(self, x: torch.Tensor) -> torch.Tensor:
@@ -729,11 +744,16 @@ def convert_model_to_optimized_int8(model: nn.Module, prefix: str = "", use_comp
             convert_model_to_optimized_int8(child, prefix=full_name, use_compile=use_compile,
                                              skip_pointwise=skip_pointwise)
 
-    # Convert to channels_last for PyTorch perf, then restore weight_int8
-    model = model.to(memory_format=torch.channels_last)
-    for m in model.modules():
-        if isinstance(m, OptimizedInt8Conv2d):
-            m.weight_int8.data = m.weight_int8.data.contiguous()
+    # Convert to channels_last for PyTorch perf, then restore weight_int8.
+    # Only at the top-level call: this function recurses, and re-running the
+    # whole-subtree conversion at every nesting level would re-scramble and
+    # re-fix every already-fixed descendant's weight_int8 once per level of
+    # nesting instead of once overall.
+    if not prefix:
+        model = model.to(memory_format=torch.channels_last)
+        for m in model.modules():
+            if isinstance(m, OptimizedInt8Conv2d):
+                m.weight_int8.data = m.weight_int8.data.contiguous()
     return model
 
 

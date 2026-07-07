@@ -26,7 +26,12 @@ setup(
             name='modiff_cutlass',
             sources=[
                 'csrc/pybind.cpp',
-                'csrc/cuda_kernels.cu',
+                'csrc/kernels/quantize.cu',
+                'csrc/kernels/modiff_delta_quantize.cu',
+                'csrc/kernels/conv_epilogue.cu',
+                'csrc/kernels/conv2d_int8.cu',
+                'csrc/kernels/conv2d_int4.cu',
+                'csrc/kernels/layout_transform.cu',
             ],
             include_dirs=[
                 os.path.join(CUTLASS_PATH, 'include'),

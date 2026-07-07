@@ -10,9 +10,10 @@ Compared paths:
    UNet forward pass.
 
 2. INT8 / INT4 fused baseline (dynamic-scale):
-    fused dynamic scale discovery -> quantize(+pack) without a_hat update ->
-    CUTLASS conv -> dequantized write into a preallocated output buffer
-    (no o_hat update)
+    cache-free fused dynamic scale discovery -> quantize(+pack) -> CUTLASS conv
+    -> dequantized write into a preallocated output buffer. No MoDiff state
+    (a_hat/o_hat) is allocated or touched anywhere in this path; it is plain
+    dynamic Q/DQ of the activation itself.
 
 3. INT8 / INT4 fused baseline (static-scale):
    quantize(+pack) -> CUTLASS conv -> dequant
@@ -500,10 +501,10 @@ def benchmark_single_shape(spec: ConvShapeSpec, warmup: int, iters: int, repeats
         repeats=repeats,
     )
 
-    baseline_cache_d8 = torch.zeros_like(x)
-    baseline_cache_d4 = torch.zeros_like(x)
-    baseline_residual_d8 = torch.empty_like(x)
-    baseline_residual_d4 = torch.empty_like(x)
+    # Plain dynamic-scale baseline: no MoDiff temporal cache anywhere (no a_hat,
+    # no o_hat). dynamic_quantize_int8_fprop/dynamic_quantize_pack_int4_fprop are
+    # cache-free fused absmax+quantize kernels -- normal Q/DQ of x itself, not a
+    # residual against any cache.
     baseline_absmax_d8 = torch.zeros(1, device="cuda", dtype=torch.float32)
     baseline_absmax_d4 = torch.zeros(1, device="cuda", dtype=torch.float32)
     baseline_scale_d8 = torch.empty(1, device="cuda", dtype=torch.float32)
@@ -519,16 +520,12 @@ def benchmark_single_shape(spec: ConvShapeSpec, warmup: int, iters: int, repeats
     def baseline_dynamic_int8():
         baseline_absmax_d8.zero_()
         baseline_retire_d8.zero_()
-        xq = modiff_cutlass.step1_quantize_no_ahat_fprop(
+        xq = modiff_cutlass.dynamic_quantize_int8_fprop(
             x,
-            baseline_cache_d8,
-            baseline_residual_d8,
             baseline_absmax_d8,
             baseline_scale_d8,
             baseline_inv_d8,
             baseline_retire_d8,
-            127.0,
-            smooth_inv,
         )
         out = modiff_cutlass.conv2d_int8_fprop_no_ohat_prealloc(
             xq,
@@ -548,16 +545,12 @@ def benchmark_single_shape(spec: ConvShapeSpec, warmup: int, iters: int, repeats
     def baseline_dynamic_int4():
         baseline_absmax_d4.zero_()
         baseline_retire_d4.zero_()
-        xq = modiff_cutlass.step1_quantize_pack_int4_no_ahat_fprop(
+        xq = modiff_cutlass.dynamic_quantize_pack_int4_fprop(
             x,
-            baseline_cache_d4,
-            baseline_residual_d4,
             baseline_absmax_d4,
             baseline_scale_d4,
             baseline_inv_d4,
             baseline_retire_d4,
-            7.0,
-            smooth_inv,
         )
         out = modiff_cutlass.conv2d_int4_fprop_no_ohat_prealloc(
             xq,
@@ -932,7 +925,6 @@ def benchmark_single_shape(spec: ConvShapeSpec, warmup: int, iters: int, repeats
     })
 
     del conv, x, cache_s8, cache_d8, cache_s4, cache_d4
-    del baseline_cache_d8, baseline_cache_d4, baseline_residual_d8, baseline_residual_d4
     del baseline_out_d8, baseline_out_d4
     del o_hat_s8, o_hat_d8, o_hat_s4, o_hat_d4
     del residual_s8, residual_d8, residual_s4, residual_d4

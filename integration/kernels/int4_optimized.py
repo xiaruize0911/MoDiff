@@ -77,7 +77,8 @@ class OptimizedInt4Conv2d(nn.Module):
         # --- SmoothQuant ---
         self.register_buffer('smooth_scale', torch.ones(1, self.in_channels, 1, 1))
         self.register_buffer('_smooth_inv', torch.ones(1, self.in_channels, 1, 1))
-        self.register_buffer('_orig_weight', w_data.clone(), persistent=False)
+        # No .clone(): see the matching comment in int8_optimized.py.
+        self.register_buffer('_orig_weight', w_data, persistent=False)
 
         # --- Per-output-channel symmetric INT4 weight quantization ---
         w_flat = w_data.reshape(K, -1)
@@ -619,10 +620,15 @@ def convert_model_to_optimized_int4(model: nn.Module, prefix: str = "", use_comp
     # Convert remaining layers to channels_last for PyTorch perf,
     # then restore weight_packed buffers which must stay standard-contiguous
     # (CUTLASS reads raw memory in packed NHWC row-major order).
-    model = model.to(memory_format=torch.channels_last)
-    for m in model.modules():
-        if isinstance(m, OptimizedInt4Conv2d):
-            m.weight_packed.data = m.weight_packed.data.contiguous()
+    # Only at the top-level call: this function recurses, and re-running the
+    # whole-subtree conversion at every nesting level would re-scramble and
+    # re-fix every already-fixed descendant's weight_packed once per level of
+    # nesting instead of once overall.
+    if not prefix:
+        model = model.to(memory_format=torch.channels_last)
+        for m in model.modules():
+            if isinstance(m, OptimizedInt4Conv2d):
+                m.weight_packed.data = m.weight_packed.data.contiguous()
     return model
 
 

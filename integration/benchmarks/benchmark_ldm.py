@@ -714,8 +714,12 @@ class BenchmarkRunner:
                 reset_modiff_state_int4(model.model.diffusion_model)
                 if HAS_INT4_LINEAR:
                     reset_modiff_state_int4_linear(model.model.diffusion_model)
-                # Sample a few steps to get representative activations
-                sampler.sample(S=5, batch_size=self.batch_size, shape=self.shape, eta=0.0, verbose=False)
+                # Sample a few steps to get representative activations.
+                # Small fixed batch (matches _calibrate_int8): calibration only
+                # needs representative activation statistics, not production-size
+                # batches, so using self.batch_size here was doing up to ~84x more
+                # compute/memory than calibration requires.
+                sampler.sample(S=5, batch_size=2, shape=self.shape, eta=0.0, verbose=False)
         
         set_calibrating_int4(model.model.diffusion_model, False)
         if HAS_INT4_LINEAR:

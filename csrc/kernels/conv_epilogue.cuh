@@ -1,0 +1,118 @@
+// Internal header shared by conv_epilogue.cu, conv2d_int8.cu and conv2d_int4.cu.
+//
+// The CUTLASS convolutions in this project run in two phases: first the raw
+// INT8xINT8 (or INT4xINT4) matmul accumulates into an int32/float32 buffer,
+// then one of these kernels applies the per-output-channel dequant scale
+// (and optionally bias) and writes/accumulates into the final buffer. This
+// second phase is small and layout-simple enough to hand-write instead of
+// using a CUTLASS epilogue, and is shared between the INT8 and INT4 paths.
+#pragma once
+
+#include <cuda_runtime.h>
+#include <cuda_fp16.h>
+#include <torch/extension.h>
+
+__device__ __forceinline__ float bias_value(const float* bias, int ch) {
+    return bias[ch];
+}
+
+__device__ __forceinline__ float bias_value(const __half* bias, int ch) {
+    return __half2float(bias[ch]);
+}
+
+// Defined in conv_epilogue.cu; declared here so conv2d_int8.cu / conv2d_int4.cu
+// can launch them directly (kernel launches only need a __global__ declaration
+// visible at the call site — this does not require relocatable device code).
+__global__ void scale_accumulate_kernel(
+    const float* __restrict__ conv_output,
+    const float* __restrict__ weight_scale,
+    float* __restrict__ o_hat_cache,
+    int num_elements,
+    int num_channels
+);
+
+__global__ void scale_accumulate_half_cache_kernel(
+    const float* __restrict__ conv_output,
+    const float* __restrict__ weight_scale,
+    __half* __restrict__ o_hat_cache,
+    int num_elements,
+    int num_channels
+);
+
+__global__ void scale_store_kernel(
+    const float* __restrict__ conv_output,
+    const float* __restrict__ weight_scale,
+    float* __restrict__ output,
+    int num_elements,
+    int num_channels
+);
+
+__global__ void scale_store_half_kernel(
+    const float* __restrict__ conv_output,
+    const float* __restrict__ weight_scale,
+    __half* __restrict__ output,
+    int num_elements,
+    int num_channels
+);
+
+// Templates must be fully defined here (not just declared) so each including
+// .cu instantiates its own copy for BiasT in {float, __half}.
+//
+// Vectorized float4 path is only taken when the 4-lane group doesn't straddle
+// a channel boundary (`(base % num_channels) <= num_channels - 4`); otherwise
+// it falls back to a scalar loop over exactly this thread's own elements
+// (`min(base + 4, num_elements)` — never scans past this thread's chunk, so
+// concurrent threads never write overlapping ranges).
+template <typename BiasT>
+__global__ void scale_bias_store_half_kernel(
+    const float* __restrict__ conv_output,
+    const float* __restrict__ weight_scale,
+    const BiasT* __restrict__ bias,
+    __half* __restrict__ output,
+    int num_elements,
+    int num_channels
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    for (int i = idx; i < num_elements; i += blockDim.x * gridDim.x) {
+        int ch = i % num_channels;
+        float value = conv_output[i] * weight_scale[ch] + bias_value(bias, ch);
+        output[i] = __float2half_rn(value);
+    }
+}
+
+template <typename BiasT>
+__global__ void scale_bias_store_kernel(
+    const float* __restrict__ conv_output,
+    const float* __restrict__ weight_scale,
+    const BiasT* __restrict__ bias,
+    float* __restrict__ output,
+    int num_elements,
+    int num_channels
+) {
+    int idx4 = blockIdx.x * blockDim.x + threadIdx.x;
+    int base = idx4 * 4;
+
+    if (base + 3 < num_elements && (base % num_channels) <= num_channels - 4) {
+        float4 conv_v = reinterpret_cast<const float4*>(conv_output)[idx4];
+        int ch_base = base % num_channels;
+        float4 out_v;
+        out_v.x = conv_v.x * weight_scale[ch_base] + bias_value(bias, ch_base);
+        out_v.y = conv_v.y * weight_scale[ch_base + 1] + bias_value(bias, ch_base + 1);
+        out_v.z = conv_v.z * weight_scale[ch_base + 2] + bias_value(bias, ch_base + 2);
+        out_v.w = conv_v.w * weight_scale[ch_base + 3] + bias_value(bias, ch_base + 3);
+        reinterpret_cast<float4*>(output)[idx4] = out_v;
+    } else {
+        int end = min(base + 4, num_elements);
+        for (int i = base; i < end; i++) {
+            int ch = i % num_channels;
+            output[i] = conv_output[i] * weight_scale[ch] + bias_value(bias, ch);
+        }
+    }
+}
+
+// Host-facing wrapper, defined in conv_epilogue.cu, bound directly by pybind.cpp.
+void scale_accumulate(
+    torch::Tensor conv_output,
+    torch::Tensor weight_scale,
+    torch::Tensor o_hat_cache
+);
