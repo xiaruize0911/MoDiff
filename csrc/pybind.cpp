@@ -9,6 +9,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("scale_quantize_int8", &scale_quantize_int8, "Fused Scale + Quantize for INT8");
     m.def("dequant_accumulate_int4", &dequant_accumulate_int4, "Fused Dequant + Accumulate for INT4 cache");
     m.def("dequant_accumulate_int8", &dequant_accumulate_int8, "Fused Dequant + Accumulate for INT8 cache");
+    m.def("dequant_accumulate_and_return_int4", &dequant_accumulate_and_return_int4,
+          "Fused Dequant + Accumulate for INT4 cache, also returning the dequantized value");
+    m.def("dequant_accumulate_and_return_int8", &dequant_accumulate_and_return_int8,
+          "Fused Dequant + Accumulate for INT8 cache, also returning the dequantized value");
     // compute_dynamic_scale is intentionally NOT bound here: it's an internal C++
     // helper used by dynamic_quantize_int8_fprop/dynamic_quantize_pack_int4_fprop
     // below, never called directly from Python.

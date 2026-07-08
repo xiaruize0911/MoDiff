@@ -89,6 +89,7 @@ class OptimizedInt8Linear(nn.Module):
 
         # --- Fused kernel persistent buffers (lazy-initialized) ---
         self._residual_buf: Optional[torch.Tensor] = None
+        self._r_dq_buf: Optional[torch.Tensor] = None
         self._scale_buf: Optional[torch.Tensor] = None
         self._inv_scale_buf: Optional[torch.Tensor] = None
         self._absmax_buf: Optional[torch.Tensor] = None
@@ -362,6 +363,7 @@ class OptimizedInt8Linear(nn.Module):
         # Lazy-init persistent kernel buffers
         if self._residual_buf is None or self._residual_buf.shape != x_4d.shape:
             self._residual_buf = torch.empty_like(x_4d)
+            self._r_dq_buf = torch.empty_like(x_4d)
             self._scale_buf = torch.empty(1, device=x.device, dtype=torch.float32)
             self._inv_scale_buf = torch.empty(1, device=x.device, dtype=torch.float32)
             self._absmax_buf = torch.zeros(1, device=x.device, dtype=torch.float32)
@@ -375,15 +377,18 @@ class OptimizedInt8Linear(nn.Module):
             self._retire_count, 127.0, self._smooth_inv_flat
         )
 
-        # Quant-dequant residual + FP16 matmul
-        residual_2d = self._residual_buf.reshape(B, D)
-        r_dq = (residual_2d * self._scale_buf).round().clamp(-127, 127) * self._inv_scale_buf
-        linear_r = self._linear(r_dq, with_bias=False, input_scale=self._scale_buf)
-
-        # Fused kernel 2: dequant + a_hat cache accumulate
-        modiff_cutlass.dequant_accumulate_int8(
-            self._residual_buf, a_hat_4d, self._scale_buf
+        # Fused kernel 2: quantize+dequantize the residual (writing r_dq for the
+        # FP16 GEMM below) AND accumulate into a_hat_cache, in one launch. This
+        # used to be 4 separate PyTorch ops (mul/round/clamp/mul) to compute
+        # r_dq, followed by a separate dequant_accumulate_int8 call that
+        # recomputed the identical quantize-dequantize value again just to
+        # update the cache -- profiling showed that redundant recompute was
+        # ~35% of this method's own GPU time.
+        modiff_cutlass.dequant_accumulate_and_return_int8(
+            self._residual_buf, a_hat_4d, self._scale_buf, self._r_dq_buf
         )
+        r_dq = self._r_dq_buf.reshape(B, D)
+        linear_r = self._linear(r_dq, with_bias=False, input_scale=self._scale_buf)
         self.a_hat_cache = a_hat_4d.reshape(B, D)
 
         # Update o_hat cache

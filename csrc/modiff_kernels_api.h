@@ -11,6 +11,10 @@ torch::Tensor scale_quantize_and_pack(torch::Tensor input, torch::Tensor scale);
 torch::Tensor scale_quantize_int8(torch::Tensor input, torch::Tensor scale);
 void dequant_accumulate_int4(torch::Tensor residual, torch::Tensor a_hat_cache, torch::Tensor scale);
 void dequant_accumulate_int8(torch::Tensor residual, torch::Tensor a_hat_cache, torch::Tensor scale);
+void dequant_accumulate_and_return_int4(torch::Tensor residual, torch::Tensor a_hat_cache,
+                                         torch::Tensor scale, torch::Tensor r_dq_out);
+void dequant_accumulate_and_return_int8(torch::Tensor residual, torch::Tensor a_hat_cache,
+                                         torch::Tensor scale, torch::Tensor r_dq_out);
 
 // Cache-free dynamic scale discovery for the plain (non-MoDiff) baseline.
 // (compute_dynamic_scale itself is an internal helper, defined+used within

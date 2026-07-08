@@ -106,6 +106,85 @@ __global__ void dequant_accumulate_int8_kernel(
     }
 }
 
+// Same as dequant_accumulate_int4_kernel, but also writes the dequantized
+// quantize-then-dequantize value to r_dq_out. Used by OptimizedInt4Linear's
+// _forward_modulated_fused, which used to compute this exact value itself via
+// 4 separate PyTorch ops (mul/round/clamp/mul) purely to feed the FP16 GEMM,
+// then call dequant_accumulate_int4 to recompute the identical value *again*
+// just to update the cache. This fuses both into the one kernel launch that
+// was already doing the work.
+__global__ void dequant_accumulate_and_return_int4_kernel(
+    const float* __restrict__ residual,
+    float* __restrict__ a_hat_cache,
+    float* __restrict__ r_dq_out,
+    const float* __restrict__ scale_ptr,
+    int num_elements
+) {
+    float scale = *scale_ptr;
+    float inv_scale = 1.0f / scale;
+    int idx4 = blockIdx.x * blockDim.x + threadIdx.x;
+    int base = idx4 * 4;
+    if (base + 3 < num_elements) {
+        float4 r_v = reinterpret_cast<const float4*>(residual)[idx4];
+        float4 c_v = reinterpret_cast<float4*>(a_hat_cache)[idx4];
+        float4 dq_v;
+        dq_v.x = fmaxf(-7.0f, fminf(7.0f, roundf(r_v.x * scale))) * inv_scale;
+        dq_v.y = fmaxf(-7.0f, fminf(7.0f, roundf(r_v.y * scale))) * inv_scale;
+        dq_v.z = fmaxf(-7.0f, fminf(7.0f, roundf(r_v.z * scale))) * inv_scale;
+        dq_v.w = fmaxf(-7.0f, fminf(7.0f, roundf(r_v.w * scale))) * inv_scale;
+        c_v.x += dq_v.x;
+        c_v.y += dq_v.y;
+        c_v.z += dq_v.z;
+        c_v.w += dq_v.w;
+        reinterpret_cast<float4*>(a_hat_cache)[idx4] = c_v;
+        reinterpret_cast<float4*>(r_dq_out)[idx4] = dq_v;
+    } else {
+        for (int i = base; i < num_elements; i++) {
+            float r = residual[i];
+            float dq = fmaxf(-7.0f, fminf(7.0f, roundf(r * scale))) * inv_scale;
+            a_hat_cache[i] += dq;
+            r_dq_out[i] = dq;
+        }
+    }
+}
+
+// INT8 counterpart of dequant_accumulate_and_return_int4_kernel; see that
+// kernel's comment for why r_dq_out exists.
+__global__ void dequant_accumulate_and_return_int8_kernel(
+    const float* __restrict__ residual,
+    float* __restrict__ a_hat_cache,
+    float* __restrict__ r_dq_out,
+    const float* __restrict__ scale_ptr,
+    int num_elements
+) {
+    float scale = *scale_ptr;
+    float inv_scale = 1.0f / scale;
+    int idx4 = blockIdx.x * blockDim.x + threadIdx.x;
+    int base = idx4 * 4;
+    if (base + 3 < num_elements) {
+        float4 r_v = reinterpret_cast<const float4*>(residual)[idx4];
+        float4 c_v = reinterpret_cast<float4*>(a_hat_cache)[idx4];
+        float4 dq_v;
+        dq_v.x = fmaxf(-127.0f, fminf(127.0f, roundf(r_v.x * scale))) * inv_scale;
+        dq_v.y = fmaxf(-127.0f, fminf(127.0f, roundf(r_v.y * scale))) * inv_scale;
+        dq_v.z = fmaxf(-127.0f, fminf(127.0f, roundf(r_v.z * scale))) * inv_scale;
+        dq_v.w = fmaxf(-127.0f, fminf(127.0f, roundf(r_v.w * scale))) * inv_scale;
+        c_v.x += dq_v.x;
+        c_v.y += dq_v.y;
+        c_v.z += dq_v.z;
+        c_v.w += dq_v.w;
+        reinterpret_cast<float4*>(a_hat_cache)[idx4] = c_v;
+        reinterpret_cast<float4*>(r_dq_out)[idx4] = dq_v;
+    } else {
+        for (int i = base; i < num_elements; i++) {
+            float r = residual[i];
+            float dq = fmaxf(-127.0f, fminf(127.0f, roundf(r * scale))) * inv_scale;
+            a_hat_cache[i] += dq;
+            r_dq_out[i] = dq;
+        }
+    }
+}
+
 // Packs 2 already-clamped-to-[-7,7] float values per output byte (low nibble = the
 // first/even element, high nibble = the second/odd element). No scaling is applied
 // here — the caller is expected to have pre-scaled the input into int4 range; see
@@ -257,6 +336,42 @@ void dequant_accumulate_int8(torch::Tensor residual, torch::Tensor a_hat_cache, 
     dequant_accumulate_int8_kernel<<<grid_size, block_size, 0, stream>>>(
         residual.data_ptr<float>(),
         a_hat_cache.data_ptr<float>(),
+        scale.data_ptr<float>(),
+        num_elements
+    );
+}
+
+// In-place: a_hat_cache += dq; r_dq_out = dq, where dq = round(clamp(residual * scale, -7, 7)) / scale.
+void dequant_accumulate_and_return_int4(torch::Tensor residual, torch::Tensor a_hat_cache,
+                                         torch::Tensor scale, torch::Tensor r_dq_out) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    int num_elements = residual.numel();
+    int block_size = 256;
+    int num_work_items = (num_elements + 3) / 4;
+    int grid_size = (num_work_items + block_size - 1) / block_size;
+
+    dequant_accumulate_and_return_int4_kernel<<<grid_size, block_size, 0, stream>>>(
+        residual.data_ptr<float>(),
+        a_hat_cache.data_ptr<float>(),
+        r_dq_out.data_ptr<float>(),
+        scale.data_ptr<float>(),
+        num_elements
+    );
+}
+
+// In-place: a_hat_cache += dq; r_dq_out = dq, where dq = round(clamp(residual * scale, -127, 127)) / scale.
+void dequant_accumulate_and_return_int8(torch::Tensor residual, torch::Tensor a_hat_cache,
+                                         torch::Tensor scale, torch::Tensor r_dq_out) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    int num_elements = residual.numel();
+    int block_size = 256;
+    int num_work_items = (num_elements + 3) / 4;
+    int grid_size = (num_work_items + block_size - 1) / block_size;
+
+    dequant_accumulate_and_return_int8_kernel<<<grid_size, block_size, 0, stream>>>(
+        residual.data_ptr<float>(),
+        a_hat_cache.data_ptr<float>(),
+        r_dq_out.data_ptr<float>(),
         scale.data_ptr<float>(),
         num_elements
     );

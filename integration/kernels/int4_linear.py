@@ -81,6 +81,7 @@ class OptimizedInt4Linear(nn.Module):
 
         # --- Fused kernel persistent buffers (lazy-initialized) ---
         self._residual_buf: Optional[torch.Tensor] = None
+        self._r_dq_buf: Optional[torch.Tensor] = None
         self._scale_buf: Optional[torch.Tensor] = None
         self._inv_scale_buf: Optional[torch.Tensor] = None
         self._absmax_buf: Optional[torch.Tensor] = None
@@ -246,6 +247,7 @@ class OptimizedInt4Linear(nn.Module):
         # Lazy-init persistent kernel buffers
         if self._residual_buf is None or self._residual_buf.shape != x_4d.shape:
             self._residual_buf = torch.empty_like(x_4d)
+            self._r_dq_buf = torch.empty_like(x_4d)
             self._scale_buf = torch.empty(1, device=x.device, dtype=torch.float32)
             self._inv_scale_buf = torch.empty(1, device=x.device, dtype=torch.float32)
             self._absmax_buf = torch.zeros(1, device=x.device, dtype=torch.float32)
@@ -259,15 +261,16 @@ class OptimizedInt4Linear(nn.Module):
             self._retire_count, 7.0, self._smooth_inv_flat
         )
 
-        # Quant-dequant residual + FP16 matmul
-        residual_2d = self._residual_buf.reshape(B, D)
-        r_dq = (residual_2d * self._scale_buf).round().clamp(-7, 7) * self._inv_scale_buf
-        linear_r = self._linear(r_dq, with_bias=False, input_scale=self._scale_buf)
-
-        # Fused kernel 2: dequant + a_hat cache accumulate
-        modiff_cutlass.dequant_accumulate_int4(
-            self._residual_buf, a_hat_4d, self._scale_buf
+        # Fused kernel 2: quantize+dequantize the residual (writing r_dq for the
+        # FP16 GEMM below) AND accumulate into a_hat_cache, in one launch. See
+        # int8_linear.py's identical comment -- this used to be 4 separate
+        # PyTorch ops plus a separate dequant_accumulate_int4 call recomputing
+        # the same value again just for the cache update.
+        modiff_cutlass.dequant_accumulate_and_return_int4(
+            self._residual_buf, a_hat_4d, self._scale_buf, self._r_dq_buf
         )
+        r_dq = self._r_dq_buf.reshape(B, D)
+        linear_r = self._linear(r_dq, with_bias=False, input_scale=self._scale_buf)
         self.a_hat_cache = a_hat_4d.reshape(B, D)
 
         # Update o_hat cache
