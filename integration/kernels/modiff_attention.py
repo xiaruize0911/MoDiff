@@ -217,10 +217,19 @@ class MoDiffConv1dCUTLASS(nn.Module):
             # Replaces:  _fp16_ncw_to_fp32_cl  (1 kernel)
             #          + step1_static_quantize_fprop  (1 kernel)
             # With a single tiled kernel → saves 1 kernel / call × 42 calls/step
+            #
+            # fp16_ncw_delta_to_int8_cl's CUDA kernel only has an FP32 a_hat_cache
+            # code path (see csrc/kernels/layout_transform.cu), but a *calibrated*
+            # OptimizedInt8Conv2d switches its cache to FP16 once calibration
+            # finishes (see cache_dtype in int8_optimized.py). So this fused
+            # shortcut is only valid pre-calibration-switch / when the cache
+            # happens to still be FP32; otherwise fall through to the generic
+            # path below, which dispatches on cache dtype correctly.
             if (_HAS_FUSED_PREQUANT
                     and not int8c.is_first_step
                     and int8c.is_calibrated
                     and int8c.a_hat_cache is not None
+                    and int8c.a_hat_cache.dtype == torch.float32
                     and int8c._cached_alpha_tensor is not None):
                 import modiff_cutlass as _mc_
                 # K1+K2+K3 fused: FP16 NCW → INT8 CL + update a_hat_cache (1 kernel)
@@ -339,15 +348,26 @@ class MoDiffConv1dCUTLASS(nn.Module):
 
     def reset_cache(self):
         """Reset MoDiff caches between DDIM samples.
-        The CUDA graph (if any) remains valid — it reads from the same cache
-        tensor pointers, which will be correctly re-initialised by the next
-        first-step eager call.
+
+        Must destroy any captured CUDA graph here: OptimizedInt8Conv2d's
+        first-step path (run on the very next forward call, not by this
+        reset itself) does `self.a_hat_cache = a_hat.to(...).contiguous(...)`
+        and the same for o_hat_cache -- a *reassignment* to new tensor
+        objects, not an in-place write. A previously captured graph has the
+        old tensors' addresses baked in, so once those old tensors are
+        reassigned away (and their memory is freed/reused by the caching
+        allocator) a stale graph replay reads/writes freed memory --
+        surfacing as an illegal memory access on the first replay after a
+        reset. Clearing graph state forces a fresh capture (still gated by
+        _GRAPH_WARMUP_STEPS eager calls) against the post-reset tensors.
         """
         self.int8conv2d.reset_state()
-        # Do NOT destroy the CUDA graph here: it is still valid after a cache
-        # reset because reset_state() zeroes the cache tensors in-place
-        # (same GPU pointers) and sets is_first_step=True so the next call
-        # takes the eager first-step path before graph replay resumes.
+        self._cuda_graph = None
+        self._graph_x_static = None
+        self._graph_out_ref = None
+        self._graph_shape = None
+        self._graph_warmup_n = 0
+        self._graph_capture_failed = False
 
     @property
     def layer_name(self) -> str:
@@ -542,12 +562,23 @@ def convert_attention_to_modiff(
             continue
 
         channels = module.channels
+        # Wrapping nn.Conv1d in a fresh nn.Module (both branches build a plain nn.Conv2d
+        # internally, which defaults to CPU) leaves some buffers -- e.g. smooth_scale,
+        # created via torch.ones(...) with no device= -- stranded on CPU even though the
+        # weight/bias tensors cloned from the original conv1d land on CUDA. This is silent
+        # during plain inference (every buffer actually read there is either cloned from a
+        # CUDA source or created matching x.device at call time) and only surfaces once
+        # calibration reads a CPU-defaulted buffer like smooth_scale against a CUDA tensor.
+        target_device = module.qkv.weight.device
         if HAS_CUTLASS_ATTN:
             module.qkv      = MoDiffConv1dCUTLASS(module.qkv,      layer_name=f"{name}.qkv")
             module.proj_out = MoDiffConv1dCUTLASS(module.proj_out,  layer_name=f"{name}.proj_out")
         else:
             module.qkv      = MoDiffConv1d(module.qkv,      act_bits=act_bits, layer_name=f"{name}.qkv")
             module.proj_out = MoDiffConv1d(module.proj_out,  act_bits=act_bits, layer_name=f"{name}.proj_out")
+        if target_device.type != 'cpu':
+            module.qkv = module.qkv.to(target_device)
+            module.proj_out = module.proj_out.to(target_device)
 
         module._forward = types.MethodType(_modiff_attention_forward, module)
         converted += 1

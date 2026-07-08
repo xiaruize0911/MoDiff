@@ -9,21 +9,25 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("scale_quantize_int8", &scale_quantize_int8, "Fused Scale + Quantize for INT8");
     m.def("dequant_accumulate_int4", &dequant_accumulate_int4, "Fused Dequant + Accumulate for INT4 cache");
     m.def("dequant_accumulate_int8", &dequant_accumulate_int8, "Fused Dequant + Accumulate for INT8 cache");
-    m.def("compute_dynamic_scale", &compute_dynamic_scale, "Cache-free fused absmax + scale computation (no MoDiff cache)");
+    // compute_dynamic_scale is intentionally NOT bound here: it's an internal C++
+    // helper used by dynamic_quantize_int8_fprop/dynamic_quantize_pack_int4_fprop
+    // below, never called directly from Python.
     m.def("dynamic_quantize_int8_fprop", &dynamic_quantize_int8_fprop, "Cache-free dynamic INT8 quantize (plain baseline, no a_hat)");
     m.def("dynamic_quantize_pack_int4_fprop", &dynamic_quantize_pack_int4_fprop, "Cache-free dynamic INT4 quantize+pack (plain baseline, no a_hat)");
 
     // MoDiff temporal-delta cache update (kernels/modiff_delta_quantize.cu)
     m.def("sub_absmax_scale", &sub_absmax_scale, "Fused Subtract + AbsMax + Scale computation");
     m.def("step1_quantize_fprop", &step1_quantize_fprop, "Fused sub_absmax_scale + dequant + quantize for step 1");
-    m.def("step1_quantize_no_ahat_fprop", &step1_quantize_no_ahat_fprop, "Fused sub_absmax_scale + quantize for INT8 step 1 without a_hat update");
+    m.def("step1_quantize_no_ahat_fprop", &step1_quantize_no_ahat_fprop,
+          "Benchmark-only: same as step1_quantize_fprop but skips the a_hat_cache write, to isolate the "
+          "write's cost in microbenchmarks. Still READS a_hat_cache (required to form the residual) -- "
+          "this is NOT a no-cache substitute. For a true cache-free baseline use dynamic_quantize_int8_fprop.");
     m.def("step1_static_quantize_fprop", &step1_static_quantize_fprop, "Fused static-scale subtract + dequant + quantize for INT8 step 1");
     m.def("step1_quantize_pack_int4_fprop", &step1_quantize_pack_int4_fprop, "Fused sub_absmax_scale + dequant + quantize+pack for INT4 step 1");
     m.def("step1_static_quantize_pack_int4_fprop", &step1_static_quantize_pack_int4_fprop, "Fused static-scale subtract + dequant + quantize+pack for INT4 step 1");
-    m.def("step1_quantize_pack_int4_no_ahat_fprop", &step1_quantize_pack_int4_no_ahat_fprop, "Fused sub_absmax_scale + quantize+pack for INT4 step 1 without a_hat update");
-
-    // Post-conv per-channel scale/bias epilogue (kernels/conv_epilogue.cu)
-    m.def("scale_accumulate", &scale_accumulate, "Fused Scale + Accumulate (o_hat += conv * weight_scale)");
+    m.def("step1_quantize_pack_int4_no_ahat_fprop", &step1_quantize_pack_int4_no_ahat_fprop,
+          "Benchmark-only: INT4 counterpart of step1_quantize_no_ahat_fprop -- see that entry for why this "
+          "still takes a_hat_cache. For a true cache-free baseline use dynamic_quantize_pack_int4_fprop.");
 
     // CUTLASS INT8 Conv2d (kernels/conv2d_int8.cu)
     m.def("conv2d_int8_fprop", &conv2d_int8_fprop, "Conv2d INT8 Forward (CUTLASS)");

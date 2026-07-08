@@ -110,9 +110,3 @@ __global__ void scale_bias_store_kernel(
     }
 }
 
-// Host-facing wrapper, defined in conv_epilogue.cu, bound directly by pybind.cpp.
-void scale_accumulate(
-    torch::Tensor conv_output,
-    torch::Tensor weight_scale,
-    torch::Tensor o_hat_cache
-);

@@ -13,8 +13,8 @@ void dequant_accumulate_int4(torch::Tensor residual, torch::Tensor a_hat_cache, 
 void dequant_accumulate_int8(torch::Tensor residual, torch::Tensor a_hat_cache, torch::Tensor scale);
 
 // Cache-free dynamic scale discovery for the plain (non-MoDiff) baseline.
-void compute_dynamic_scale(torch::Tensor x, torch::Tensor absmax_buf, torch::Tensor scale_out,
-                            torch::Tensor inv_scale_out, torch::Tensor retire_count, float Q_level);
+// (compute_dynamic_scale itself is an internal helper, defined+used within
+// modiff_delta_quantize.cu; not declared here since pybind.cpp never binds it.)
 torch::Tensor dynamic_quantize_int8_fprop(torch::Tensor x, torch::Tensor absmax_buf, torch::Tensor scale_buf,
                                            torch::Tensor inv_scale_buf, torch::Tensor retire_count);
 torch::Tensor dynamic_quantize_pack_int4_fprop(torch::Tensor x, torch::Tensor absmax_buf, torch::Tensor scale_buf,
@@ -50,9 +50,6 @@ torch::Tensor step1_quantize_pack_int4_no_ahat_fprop(
     torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor residual_buf,
     torch::Tensor absmax_buf, torch::Tensor scale_buf, torch::Tensor inv_scale_buf,
     torch::Tensor retire_count, float Q_level, torch::Tensor smooth_inv);
-
-// ---- csrc/kernels/conv_epilogue.cu ----
-void scale_accumulate(torch::Tensor conv_output, torch::Tensor weight_scale, torch::Tensor o_hat_cache);
 
 // ---- csrc/kernels/conv2d_int8.cu ----
 torch::Tensor conv2d_int8_fprop(

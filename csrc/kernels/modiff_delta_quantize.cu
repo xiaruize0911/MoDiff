@@ -33,6 +33,10 @@
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 
+// For scale_quantize_int8 / scale_quantize_and_pack (quantize.cu), used by
+// dynamic_quantize_int8_fprop / dynamic_quantize_pack_int4_fprop below.
+#include "../modiff_kernels_api.h"
+
 // ---- Dynamic path: quantize + update a_hat, scale derived elsewhere ----
 
 // Fused step 1: quantize residual and accumulate into a_hat_cache simultaneously.
@@ -357,6 +361,17 @@ __global__ void static_quantize_pack_and_update_ahat_kernel_int4(
 }
 
 // FP16-cache version of the INT4 static packer.
+//
+// Grid-stride loop (2 elements/iteration): the host wrapper sizes its launch
+// grid for the *fp32*-cache sibling kernel below, which processes 4
+// elements/thread via float4 vectorization. Without a loop here, a thread
+// that only advances 2 elements once would leave roughly the back half of
+// a_hat_cache/output_packed (in flat index order) untouched -- this was a
+// real bug (fixed): stale/uninitialized cache values and garbage packed
+// output for that tail half of every tensor on the static INT4 + FP16-cache
+// path (int4_optimized.py's calibrated OptimizedInt4Conv2d._forward_modulated).
+// Matches the loop structure already used by the INT8 sibling,
+// static_quantize_and_update_ahat_kernel_int8_half_cache, above.
 __global__ void static_quantize_pack_and_update_ahat_kernel_int4_half_cache(
     const float* __restrict__ x,
     __half* __restrict__ a_hat_cache,
@@ -369,9 +384,9 @@ __global__ void static_quantize_pack_and_update_ahat_kernel_int4_half_cache(
     float scale = *scale_ptr;
     float inv_scale = 1.0f / scale;
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int base = idx * 2;
+    int stride = blockDim.x * gridDim.x;
 
-    if (base < num_elements) {
+    for (int base = idx * 2; base < num_elements; base += stride * 2) {
         float x0 = x[base];
         if (smooth_inv != nullptr) {
             x0 *= smooth_inv[base % num_channels];
@@ -404,10 +419,22 @@ __global__ void static_quantize_pack_and_update_ahat_kernel_int4_half_cache(
 // Replaces 6 separate kernel launches (sub, abs, amax, clamp, div, div) with one
 // cooperative kernel using atomic float-max + a block-retirement counter to elect
 // a single "last" block to finalize the scale.
+//
+// a_hat_cache and residual are independently nullable, subsuming what used to be
+// a separate near-duplicate kernel (quantize.cu's absmax_scale_kernel) for the
+// cache-free baseline case:
+//   a_hat_cache == nullptr -> no cache to subtract, "residual" is just x itself
+//                             (still smoothed if smooth_inv is set)
+//   residual == nullptr    -> pure reduction, nothing to materialize (this is
+//                             exactly what the baseline path needs: it only wants
+//                             scale/inv_scale, and quantizing straight from x
+//                             costs nothing extra since x is already resident)
+// Both null is the baseline case (compute_dynamic_scale); both non-null is the
+// original MoDiff dynamic case (sub_absmax_scale).
 __global__ void sub_absmax_scale_kernel(
     const float* __restrict__ x,
-    const float* __restrict__ a_hat_cache,
-    float* __restrict__ residual,
+    const float* __restrict__ a_hat_cache,   // nullptr => baseline, no cache to subtract
+    float* __restrict__ residual,            // nullptr => don't materialize, reduction only
     float* __restrict__ absmax_buf,     // Must be 0 on entry (self-resetting)
     float* __restrict__ scale_out,      // Q_level / max(absmax, eps)
     float* __restrict__ inv_scale_out,  // max(absmax, eps) / Q_level  (CUTLASS alpha)
@@ -428,7 +455,6 @@ __global__ void sub_absmax_scale_kernel(
     // Vectorized loop: process 4 elements at a time
     for (int i4 = blockIdx.x * blockDim.x + tid; i4 < num_elements4; i4 += num_threads) {
         float4 x_v = reinterpret_cast<const float4*>(x)[i4];
-        float4 c_v = reinterpret_cast<const float4*>(a_hat_cache)[i4];
         // Fused SmoothQuant: x_smooth = x * smooth_inv[channel]
         if (smooth_inv != nullptr) {
             int ch = (i4 * 4) % num_channels;
@@ -438,11 +464,18 @@ __global__ void sub_absmax_scale_kernel(
             x_v.w *= smooth_inv[ch + 3];
         }
         float4 r_v;
-        r_v.x = x_v.x - c_v.x;
-        r_v.y = x_v.y - c_v.y;
-        r_v.z = x_v.z - c_v.z;
-        r_v.w = x_v.w - c_v.w;
-        reinterpret_cast<float4*>(residual)[i4] = r_v;
+        if (a_hat_cache != nullptr) {
+            float4 c_v = reinterpret_cast<const float4*>(a_hat_cache)[i4];
+            r_v.x = x_v.x - c_v.x;
+            r_v.y = x_v.y - c_v.y;
+            r_v.z = x_v.z - c_v.z;
+            r_v.w = x_v.w - c_v.w;
+        } else {
+            r_v = x_v;
+        }
+        if (residual != nullptr) {
+            reinterpret_cast<float4*>(residual)[i4] = r_v;
+        }
         local_max = fmaxf(local_max, fmaxf(fmaxf(fabsf(r_v.x), fabsf(r_v.y)),
                                             fmaxf(fabsf(r_v.z), fabsf(r_v.w))));
     }
@@ -453,8 +486,10 @@ __global__ void sub_absmax_scale_kernel(
         if (smooth_inv != nullptr) {
             xval *= smooth_inv[i % num_channels];
         }
-        float r = xval - a_hat_cache[i];
-        residual[i] = r;
+        float r = (a_hat_cache != nullptr) ? (xval - a_hat_cache[i]) : xval;
+        if (residual != nullptr) {
+            residual[i] = r;
+        }
         local_max = fmaxf(local_max, fabsf(r));
     }
 
@@ -532,6 +567,77 @@ void sub_absmax_scale(
         Q_level,
         num_elements
     );
+}
+
+// =========================================================================
+// Dynamic per-tensor scale discovery for the plain (non-MoDiff) baseline.
+//
+// Cache-free counterpart of sub_absmax_scale above: reduces absmax(x) over
+// the whole tensor and writes scale = Q_level/max(absmax,eps) and
+// inv_scale = 1/scale, entirely on GPU (no host sync), by calling
+// sub_absmax_scale_kernel with a_hat_cache=nullptr and residual=nullptr
+// (formerly a separate near-duplicate kernel, absmax_scale_kernel in
+// quantize.cu; merged here since the only difference was the nullable
+// subtract/materialize this kernel already supports).
+//
+// Before this existed, callers that wanted a fused dynamic-scale baseline had
+// to fake it by passing a permanently-zero a_hat_cache into the MoDiff
+// kernels (sub_absmax_scale / step1_quantize_no_ahat_fprop), which still paid
+// for reading and subtracting that zero tensor on every call. This kernel
+// does only the work a baseline actually needs.
+// =========================================================================
+void compute_dynamic_scale(
+    torch::Tensor x,
+    torch::Tensor absmax_buf,      // 1-element float32, init 0
+    torch::Tensor scale_out,       // 1-element float32 output
+    torch::Tensor inv_scale_out,   // 1-element float32 output
+    torch::Tensor retire_count,    // 1-element int32, init 0
+    float Q_level
+) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    int num_elements = x.numel();
+    int block_size = 256;
+    int grid_size = min((num_elements + block_size - 1) / block_size, 1024);
+
+    sub_absmax_scale_kernel<<<grid_size, block_size, block_size * sizeof(float), stream>>>(
+        x.data_ptr<float>(),
+        nullptr,  // a_hat_cache: no cache in the baseline
+        nullptr,  // residual: nothing to materialize, pure reduction
+        absmax_buf.data_ptr<float>(),
+        scale_out.data_ptr<float>(),
+        inv_scale_out.data_ptr<float>(),
+        (unsigned int*)retire_count.data_ptr<int>(),
+        nullptr,  // smooth_inv: baseline callers apply smoothing in Python beforehand
+        0,
+        Q_level,
+        num_elements
+    );
+}
+
+// Fused compute_dynamic_scale + scale_quantize_int8: plain dynamic INT8
+// quantization of x with no MoDiff cache involved anywhere.
+torch::Tensor dynamic_quantize_int8_fprop(
+    torch::Tensor x,
+    torch::Tensor absmax_buf,
+    torch::Tensor scale_buf,
+    torch::Tensor inv_scale_buf,
+    torch::Tensor retire_count
+) {
+    compute_dynamic_scale(x, absmax_buf, scale_buf, inv_scale_buf, retire_count, 127.0f);
+    return scale_quantize_int8(x, scale_buf);
+}
+
+// Fused compute_dynamic_scale + scale_quantize_and_pack: plain dynamic INT4
+// quantization of x (packed 2-per-byte) with no MoDiff cache involved anywhere.
+torch::Tensor dynamic_quantize_pack_int4_fprop(
+    torch::Tensor x,
+    torch::Tensor absmax_buf,
+    torch::Tensor scale_buf,
+    torch::Tensor inv_scale_buf,
+    torch::Tensor retire_count
+) {
+    compute_dynamic_scale(x, absmax_buf, scale_buf, inv_scale_buf, retire_count, 7.0f);
+    return scale_quantize_and_pack(x, scale_buf);
 }
 
 // ---- step1_* : the Python-facing pipelines that compose the kernels above ----

@@ -673,13 +673,18 @@ class BenchmarkRunner:
         if HAS_INT8_LINEAR:
             set_calibrating_linear(model.model.diffusion_model, True)
         
+        from integration.kernels.modiff_attention import reset_attention_modiff
         with torch.no_grad():
             for _ in range(num_runs):
                 reset_modiff_state_int8(model.model.diffusion_model)
                 if HAS_INT8_LINEAR:
                     reset_modiff_state_linear(model.model.diffusion_model)
+                # No-op unless convert_attention_to_modiff has already run (int8_attn_modiff):
+                # without this, attention's temporal cache would carry state across what are
+                # meant to be independent calibration samples.
+                reset_attention_modiff(model.model.diffusion_model)
                 sampler.sample(S=5, batch_size=2, shape=self.shape, eta=0.0, verbose=False)
-        
+
         get_calibration_config_int8().finalize()
         set_calibrating_int8(model.model.diffusion_model, False)
         if HAS_INT8_LINEAR:
@@ -704,26 +709,40 @@ class BenchmarkRunner:
         """Calibrate INT4 quantization scales (dynamic to static transition)."""
         print(f"Calibrating INT4 ({num_runs} runs for speed)...")
         from integration.kernels.int4_optimized import set_calibrating_int4
-        
+        from integration.kernels.modiff_attention import reset_attention_modiff
+
         set_calibrating_int4(model.model.diffusion_model, True)
         if HAS_INT4_LINEAR:
             set_calibrating_int4_linear(model.model.diffusion_model, True)
-        
+        # Attention (int4_attn_modiff) always runs its qkv/proj_out projections
+        # through MoDiffConv1dCUTLASS, which is INT8-internal regardless of the
+        # base conv precision -- so it calibrates via the INT8 calibration API,
+        # not set_calibrating_int4. No-op when no attention layers were converted.
+        set_calibrating_int8(model.model.diffusion_model, True)
+
         with torch.no_grad():
             for _ in range(num_runs):
                 reset_modiff_state_int4(model.model.diffusion_model)
                 if HAS_INT4_LINEAR:
                     reset_modiff_state_int4_linear(model.model.diffusion_model)
+                # No-op unless convert_attention_to_modiff has already run: without this,
+                # attention's temporal cache would carry state across what are meant to
+                # be independent calibration samples.
+                reset_attention_modiff(model.model.diffusion_model)
                 # Sample a few steps to get representative activations.
                 # Small fixed batch (matches _calibrate_int8): calibration only
                 # needs representative activation statistics, not production-size
                 # batches, so using self.batch_size here was doing up to ~84x more
                 # compute/memory than calibration requires.
                 sampler.sample(S=5, batch_size=2, shape=self.shape, eta=0.0, verbose=False)
-        
+
         set_calibrating_int4(model.model.diffusion_model, False)
         if HAS_INT4_LINEAR:
             set_calibrating_int4_linear(model.model.diffusion_model, False)
+        # Finalizes attention's static_input_scale/is_calibrated in-process (see comment
+        # above); its scale isn't persisted into the INT4 calibration file below, so a
+        # fresh live calibration is needed each time this mode is loaded from disk.
+        set_calibrating_int8(model.model.diffusion_model, False)
         scales = export_int4_static_scales(model.model.diffusion_model)
         
         # Merge linear scales
@@ -840,11 +859,15 @@ class BenchmarkRunner:
             self.calibration_path = actual_calib_file
 
         # INT8/INT4 calibration (skip if static scales already loaded or force_recalibrate is False)
-        if mode == 'int8' and HAS_INT8:
+        # attn_modiff modes are included here too: convert_attention_to_modiff (already run by
+        # _setup_model above) adds fresh OptimizedInt8Conv2d instances inside the attention
+        # MoDiffConv1dCUTLASS wrappers that are never covered by a conv-only calibration file,
+        # so without this they'd stay permanently uncalibrated (dynamic) even in "static" runs.
+        if mode in ('int8', 'int8_attn_modiff') and HAS_INT8:
             config = get_calibration_config_int8()
             if calibrate and (force_recalibrate or not config.is_calibrated):
                 self._calibrate_int8(model, sampler)
-        elif mode == 'int4' and HAS_INT4:
+        elif mode in ('int4', 'int4_attn_modiff') and HAS_INT4:
             # Check if we already have static scales loaded
             # Note: _setup_model already called apply_int4_static_scales if path existed
             # but if we are forcing recalibration, we want to run _calibrate_int4

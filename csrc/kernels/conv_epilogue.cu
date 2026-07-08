@@ -123,27 +123,8 @@ __global__ void scale_store_half_kernel(
     }
 }
 
-// Host wrapper: o_hat_cache += conv_output * weight_scale[channel] (FP32 cache only;
-// the FP16-cache path is only reachable through conv2d_int8_fprop_o_hat /
-// conv2d_int4_fprop_o_hat, which dispatch to scale_accumulate_half_cache_kernel directly).
-void scale_accumulate(
-    torch::Tensor conv_output,
-    torch::Tensor weight_scale,
-    torch::Tensor o_hat_cache
-) {
-    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-    int num_elements = conv_output.numel();
-    int num_channels = weight_scale.numel();
-    int block_size = 256;
-    // Each thread processes 4 elements (float4)
-    int num_work_items = (num_elements + 3) / 4;
-    int grid_size = (num_work_items + block_size - 1) / block_size;
-
-    scale_accumulate_kernel<<<grid_size, block_size, 0, stream>>>(
-        conv_output.data_ptr<float>(),
-        weight_scale.data_ptr<float>(),
-        o_hat_cache.data_ptr<float>(),
-        num_elements,
-        num_channels
-    );
-}
+// Note: there used to be a standalone `scale_accumulate` host wrapper here
+// (FP32-only) exposed to Python, but it had zero callers -- every real
+// accumulate path goes through conv2d_int8_fprop_o_hat/conv2d_int4_fprop_o_hat,
+// which dispatch to scale_accumulate_kernel/scale_accumulate_half_cache_kernel
+// directly. Removed; the two __global__ kernels above remain in use.

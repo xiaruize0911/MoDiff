@@ -136,6 +136,14 @@ class OptimizedInt4Conv2d(nn.Module):
         self._absmax_buf: Optional[torch.Tensor] = None
         self._retire_count: Optional[torch.Tensor] = None
 
+        # --- Dynamic (uncalibrated) baseline buffers: no cache, so these are
+        # smaller/separate from the MoDiff buffers above (no _residual_buf,
+        # no a_hat/o_hat needed) ---
+        self._dyn_scale_buf: Optional[torch.Tensor] = None
+        self._dyn_inv_scale_buf: Optional[torch.Tensor] = None
+        self._dyn_absmax_buf: Optional[torch.Tensor] = None
+        self._dyn_retire_count: Optional[torch.Tensor] = None
+
     def _cache_dtype(self) -> torch.dtype:
         return torch.float16 if self.is_calibrated else torch.float32
 
@@ -237,6 +245,50 @@ class OptimizedInt4Conv2d(nn.Module):
                 f"Build modiff_cutlass extension."
             )
 
+        if with_bias and self.bias is not None:
+            out = out + self.bias
+        return out
+
+    def _ensure_dynamic_buffers(self, x: torch.Tensor):
+        if self._dyn_scale_buf is None or self._dyn_scale_buf.device != x.device:
+            self._dyn_scale_buf = torch.empty(1, device=x.device, dtype=torch.float32)
+            self._dyn_inv_scale_buf = torch.empty(1, device=x.device, dtype=torch.float32)
+            self._dyn_absmax_buf = torch.zeros(1, device=x.device, dtype=torch.float32)
+            self._dyn_retire_count = torch.zeros(1, device=x.device, dtype=torch.int32)
+
+    def _int4_conv_dynamic_fused(self, x: torch.Tensor, with_bias: bool = True) -> torch.Tensor:
+        """Cache-free dynamic (uncalibrated) INT4 conv: fuses the absmax
+        reduction + scale/inv_scale computation into one kernel
+        (dynamic_quantize_pack_int4_fprop -> compute_dynamic_scale), instead
+        of the generic _int4_conv's tensor-scale path, which does the
+        reduction via a plain `.abs().amax()` PyTorch call and a separate
+        `1.0/scale` reciprocal. See int8_optimized.py's
+        _int8_conv_dynamic_fused for the identical INT8 rationale.
+        """
+        if x.dtype != torch.float32:
+            x = x.float()
+        if not x.is_contiguous(memory_format=torch.channels_last):
+            x = x.contiguous(memory_format=torch.channels_last)
+        self._ensure_dynamic_buffers(x)
+
+        x_packed = modiff_cutlass.dynamic_quantize_pack_int4_fprop(
+            x, self._dyn_absmax_buf, self._dyn_scale_buf,
+            self._dyn_inv_scale_buf, self._dyn_retire_count
+        )
+
+        if self._empty_bias is None or self._empty_bias.device != x.device:
+            self._empty_bias = torch.empty(0, device=x.device)
+
+        out_raw = modiff_cutlass.conv2d_int4_fprop(
+            x_packed,
+            self.weight_packed,
+            self._dyn_inv_scale_buf.view(1),
+            self._empty_bias,
+            self.stride[0], self.stride[1],
+            self.padding[0], self.padding[1],
+            self.dilation[0], self.dilation[1]
+        )
+        out = out_raw * self.weight_scale_channel
         if with_bias and self.bias is not None:
             out = out + self.bias
         return out
@@ -352,9 +404,17 @@ class OptimizedInt4Conv2d(nn.Module):
                 bias = self.bias.to(out.dtype) if out.dtype != self.bias.dtype else self.bias
                 out = out + bias
             return out
-        # Fallback: naive PyTorch path (dynamic scale, includes CPU-GPU sync)
-        input_scale = self._compute_activation_scale(x)
-        return self._int4_conv(x, input_scale, with_bias=True)
+        # Fallback: during calibration we need the host-visible scale path so the
+        # module can accumulate static activation statistics (the .item() sync in
+        # _compute_activation_scale is required there). Outside calibration we use
+        # the fully-fused cache-free dynamic-scale kernel (see
+        # _int4_conv_dynamic_fused) -- this used to call _compute_activation_scale
+        # here too, which cost a CPU-GPU sync on every uncalibrated forward call
+        # for no reason (the tensor path below never needed a host-visible float).
+        if self.calibrating:
+            input_scale = self._compute_activation_scale(x)
+            return self._int4_conv(x, input_scale, with_bias=True)
+        return self._int4_conv_dynamic_fused(x, with_bias=True)
 
     def _forward_first_step(self, x: torch.Tensor) -> torch.Tensor:
         """First timestep (t=T): warm-up with repeated quantisation.

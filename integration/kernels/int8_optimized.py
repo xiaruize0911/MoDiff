@@ -119,6 +119,14 @@ class OptimizedInt8Conv2d(nn.Module):
         self._absmax_buf: Optional[torch.Tensor] = None
         self._retire_count: Optional[torch.Tensor] = None
 
+        # --- Dynamic (uncalibrated) baseline buffers: no cache, so these are
+        # smaller/separate from the MoDiff buffers above (no _residual_buf,
+        # no a_hat/o_hat needed) ---
+        self._dyn_scale_buf: Optional[torch.Tensor] = None
+        self._dyn_inv_scale_buf: Optional[torch.Tensor] = None
+        self._dyn_absmax_buf: Optional[torch.Tensor] = None
+        self._dyn_retire_count: Optional[torch.Tensor] = None
+
     def _ensure_state_buffers(self, x: torch.Tensor):
         if not x.is_contiguous(memory_format=torch.channels_last):
             x = x.contiguous(memory_format=torch.channels_last)
@@ -251,6 +259,57 @@ class OptimizedInt8Conv2d(nn.Module):
                 f"(groups={self.groups}). Build modiff_cutlass extension."
             )
 
+        if with_bias and self.bias is not None:
+            out = out + self.bias
+        return out
+
+    def _ensure_dynamic_buffers(self, x: torch.Tensor):
+        if self._dyn_scale_buf is None or self._dyn_scale_buf.device != x.device:
+            self._dyn_scale_buf = torch.empty(1, device=x.device, dtype=torch.float32)
+            self._dyn_inv_scale_buf = torch.empty(1, device=x.device, dtype=torch.float32)
+            self._dyn_absmax_buf = torch.zeros(1, device=x.device, dtype=torch.float32)
+            self._dyn_retire_count = torch.zeros(1, device=x.device, dtype=torch.int32)
+
+    def _int8_conv_dynamic_fused(self, x: torch.Tensor, with_bias: bool = True) -> torch.Tensor:
+        """Cache-free dynamic (uncalibrated) INT8 conv: fuses the absmax
+        reduction + scale/inv_scale computation into one kernel
+        (dynamic_quantize_int8_fprop -> compute_dynamic_scale), instead of
+        the generic _int8_conv's tensor-scale path, which does the reduction
+        via a plain `.abs().amax()` PyTorch call and a separate `1.0/scale`
+        reciprocal — this collapses those into the same fused kernel already
+        used elsewhere, and avoids ever materializing a residual buffer
+        (there is no cache here, so unlike the MoDiff dynamic path there is
+        nothing to subtract).
+        """
+        # dynamic_quantize_int8_fprop's kernels read x via data_ptr<float>(); unlike
+        # _int8_conv's tensor-scale branch (which happens to promote to fp32 through
+        # `x * input_scale` in its scalar branch, or would hard-error via data_ptr<float>()
+        # in its tensor branch), cast explicitly so this path is correct regardless of
+        # what dtype the previous layer produced.
+        if x.dtype != torch.float32:
+            x = x.float()
+        if not x.is_contiguous(memory_format=torch.channels_last):
+            x = x.contiguous(memory_format=torch.channels_last)
+        self._ensure_dynamic_buffers(x)
+
+        x_int8 = modiff_cutlass.dynamic_quantize_int8_fprop(
+            x, self._dyn_absmax_buf, self._dyn_scale_buf,
+            self._dyn_inv_scale_buf, self._dyn_retire_count
+        )
+
+        if self._empty_bias is None or self._empty_bias.device != x.device:
+            self._empty_bias = torch.empty(0, device=x.device)
+
+        out_raw = modiff_cutlass.conv2d_int8_fprop(
+            x_int8,
+            self.weight_int8,
+            self._dyn_inv_scale_buf.view(1),
+            self._empty_bias,
+            self.stride[0], self.stride[1],
+            self.padding[0], self.padding[1],
+            self.dilation[0], self.dilation[1]
+        )
+        out = out_raw * self.weight_scale_channel
         if with_bias and self.bias is not None:
             out = out + self.bias
         return out
@@ -475,12 +534,14 @@ class OptimizedInt8Conv2d(nn.Module):
             return out
         # Fallback: during calibration we need the host-visible scale path so the
         # module can accumulate static activation statistics. Outside calibration
-        # we stay on the GPU-only scale path to avoid CPU-GPU synchronization.
+        # we use the fully-fused cache-free dynamic-scale kernel (no cache, no
+        # residual -- see _int8_conv_dynamic_fused) instead of _compute_scale_tensor's
+        # separate .amax() + reciprocal + _int8_conv's tensor-scale branch, which
+        # needlessly cost 2 extra small kernel launches on every uncalibrated call.
         if self.calibrating:
             input_scale = self._compute_activation_scale(x)
-        else:
-            input_scale = self._compute_scale_tensor(x)
-        return self._int8_conv(x, input_scale, with_bias=True)
+            return self._int8_conv(x, input_scale, with_bias=True)
+        return self._int8_conv_dynamic_fused(x, with_bias=True)
 
     def _forward_first_step(self, x: torch.Tensor) -> torch.Tensor:
         """First timestep (t=T): warm-up with repeated quantisation.
