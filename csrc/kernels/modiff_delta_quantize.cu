@@ -37,6 +37,17 @@
 // dynamic_quantize_int8_fprop / dynamic_quantize_pack_int4_fprop below.
 #include "../modiff_kernels_api.h"
 
+// Scalar-load helper so the static-scale half-cache kernels below can be
+// templated on the input activation's dtype (fp32 or fp16) instead of always
+// requiring a pre-cast to fp32. The MoDiff modulated hot path calls these
+// once per quantized conv layer per sampling step; forcing every caller to
+// materialize a full fp32 copy of x first (a separate elementwise kernel
+// launch touching the whole activation tensor) was costing more GPU time
+// than the quantized conv itself. Reading fp16 directly and upconverting
+// per-element in registers removes that extra full-tensor pass.
+__device__ __forceinline__ float load_as_float(const float* p, int i) { return p[i]; }
+__device__ __forceinline__ float load_as_float(const __half* p, int i) { return __half2float(p[i]); }
+
 // ---- Dynamic path: quantize + update a_hat, scale derived elsewhere ----
 
 // Fused step 1: quantize residual and accumulate into a_hat_cache simultaneously.
@@ -270,8 +281,9 @@ __global__ void static_quantize_and_update_ahat_kernel_int8(
 // Same as above but a_hat_cache is stored as FP16 (halves resident cache memory
 // for calibrated/static-scale layers). Uses a simple grid-stride scalar loop
 // since __half doesn't have a convenient 4-wide vector load like float4.
+template <typename T_IN>
 __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache(
-    const float* __restrict__ x,
+    const T_IN* __restrict__ x,
     __half* __restrict__ a_hat_cache,
     int8_t* __restrict__ output_int8,
     const float* __restrict__ scale_ptr,
@@ -284,7 +296,7 @@ __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache(
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
     for (int i = idx; i < num_elements; i += blockDim.x * gridDim.x) {
-        float xval = x[i];
+        float xval = load_as_float(x, i);
         if (smooth_inv != nullptr) {
             xval *= smooth_inv[i % num_channels];
         }
@@ -372,8 +384,9 @@ __global__ void static_quantize_pack_and_update_ahat_kernel_int4(
 // path (int4_optimized.py's calibrated OptimizedInt4Conv2d._forward_modulated).
 // Matches the loop structure already used by the INT8 sibling,
 // static_quantize_and_update_ahat_kernel_int8_half_cache, above.
+template <typename T_IN>
 __global__ void static_quantize_pack_and_update_ahat_kernel_int4_half_cache(
-    const float* __restrict__ x,
+    const T_IN* __restrict__ x,
     __half* __restrict__ a_hat_cache,
     int8_t* __restrict__ output_packed,
     const float* __restrict__ scale_ptr,
@@ -387,7 +400,7 @@ __global__ void static_quantize_pack_and_update_ahat_kernel_int4_half_cache(
     int stride = blockDim.x * gridDim.x;
 
     for (int base = idx * 2; base < num_elements; base += stride * 2) {
-        float x0 = x[base];
+        float x0 = load_as_float(x, base);
         if (smooth_inv != nullptr) {
             x0 *= smooth_inv[base % num_channels];
         }
@@ -397,7 +410,7 @@ __global__ void static_quantize_pack_and_update_ahat_kernel_int4_half_cache(
 
         float q1 = 0.0f;
         if (base + 1 < num_elements) {
-            float x1 = x[base + 1];
+            float x1 = load_as_float(x, base + 1);
             if (smooth_inv != nullptr) {
                 x1 *= smooth_inv[(base + 1) % num_channels];
             }
@@ -730,15 +743,27 @@ torch::Tensor step1_static_quantize_fprop(
     }
 
     if (a_hat_cache.scalar_type() == torch::kFloat16) {
-        static_quantize_and_update_ahat_kernel_int8_half_cache<<<grid_size, block_size, 0, stream>>>(
-            x.data_ptr<float>(),
-            reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>()),
-            x_int8.data_ptr<int8_t>(),
-            scale_buf.data_ptr<float>(),
-            smooth_ptr,
-            num_channels,
-            num_elements
-        );
+        if (x.scalar_type() == torch::kHalf) {
+            static_quantize_and_update_ahat_kernel_int8_half_cache<__half><<<grid_size, block_size, 0, stream>>>(
+                reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
+                reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>()),
+                x_int8.data_ptr<int8_t>(),
+                scale_buf.data_ptr<float>(),
+                smooth_ptr,
+                num_channels,
+                num_elements
+            );
+        } else {
+            static_quantize_and_update_ahat_kernel_int8_half_cache<float><<<grid_size, block_size, 0, stream>>>(
+                x.data_ptr<float>(),
+                reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>()),
+                x_int8.data_ptr<int8_t>(),
+                scale_buf.data_ptr<float>(),
+                smooth_ptr,
+                num_channels,
+                num_elements
+            );
+        }
     } else {
         static_quantize_and_update_ahat_kernel_int8<<<grid_size, block_size, 0, stream>>>(
             x.data_ptr<float>(),
@@ -820,15 +845,27 @@ torch::Tensor step1_static_quantize_pack_int4_fprop(
     }
 
     if (a_hat_cache.scalar_type() == torch::kFloat16) {
-        static_quantize_pack_and_update_ahat_kernel_int4_half_cache<<<grid_size, block_size, 0, stream>>>(
-            x.data_ptr<float>(),
-            reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>()),
-            x_packed.data_ptr<int8_t>(),
-            scale_buf.data_ptr<float>(),
-            smooth_ptr,
-            num_channels,
-            num_input
-        );
+        if (x.scalar_type() == torch::kHalf) {
+            static_quantize_pack_and_update_ahat_kernel_int4_half_cache<__half><<<grid_size, block_size, 0, stream>>>(
+                reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
+                reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>()),
+                x_packed.data_ptr<int8_t>(),
+                scale_buf.data_ptr<float>(),
+                smooth_ptr,
+                num_channels,
+                num_input
+            );
+        } else {
+            static_quantize_pack_and_update_ahat_kernel_int4_half_cache<float><<<grid_size, block_size, 0, stream>>>(
+                x.data_ptr<float>(),
+                reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>()),
+                x_packed.data_ptr<int8_t>(),
+                scale_buf.data_ptr<float>(),
+                smooth_ptr,
+                num_channels,
+                num_input
+            );
+        }
     } else {
         static_quantize_pack_and_update_ahat_kernel_int4<<<grid_size, block_size, 0, stream>>>(
             x.data_ptr<float>(),

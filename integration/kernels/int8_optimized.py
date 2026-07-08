@@ -167,8 +167,12 @@ class OptimizedInt8Conv2d(nn.Module):
                 self._smooth_inv_flat = torch.empty(0, device=x.device, dtype=torch.float32)
 
     def _module_output(self) -> torch.Tensor:
-        if self.o_hat_cache is not None and self.o_hat_cache.dtype != torch.float32:
-            return self.o_hat_cache.float()
+        # Used to force-cast a fp16 o_hat_cache up to fp32 here, which meant every
+        # calibrated MoDiff conv call materialized a full extra fp32 copy of its
+        # output on the way out -- only for the very next op (autocast-managed
+        # conv/linear, or our own autocast-disabled GroupNorm+SiLU) to want fp16
+        # again anyway. The rest of the fp16-autocast pipeline already tolerates
+        # fp16 activations natively, so just return the cache as-is.
         return self.o_hat_cache
 
     # ==================================================================
@@ -410,7 +414,14 @@ class OptimizedInt8Conv2d(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         fwd_start = profiler.start("Layer: OptimizedInt8Conv2d.forward")
 
-        if x.dtype != torch.float32 and (self.modiff_enabled or self.calibrating):
+        # The calibrated MoDiff modulated path's CUDA kernel (step1_static_quantize_fprop)
+        # reads fp16 x directly, so skip this cast there -- it used to force a full-tensor
+        # fp16->fp32 copy of every activation before every quantized conv call, which cost
+        # more GPU time than the quantized conv itself (see FusedGroupNormSiLU's sibling
+        # analysis; profiling showed aten::copy_ as the single largest kernel-time bucket
+        # in int8/int4 mode). The other paths (calibration, uncalibrated dynamic MoDiff)
+        # still use fp32-only kernels, so they keep the upfront cast.
+        if x.dtype != torch.float32 and (self.calibrating or (self.modiff_enabled and not self.is_calibrated)):
             x = x.float()
         if not x.is_contiguous(memory_format=torch.channels_last):
             x = x.contiguous(memory_format=torch.channels_last)
@@ -553,7 +564,17 @@ class OptimizedInt8Conv2d(nn.Module):
         scratch buffers _ensure_state_buffers() sets up (_residual_buf,
         _scale_buf, ...) aren't used by this method — they're allocated by
         _forward_modulated()'s own _ensure_state_buffers() call on step 2.
+
+        Unlike _forward_modulated's hot path, this one still needs fp32 x:
+        the tensor-scale branch of _int8_conv calls the vectorized
+        scale_quantize_int8 kernel, which reinterpret_casts its input as
+        float4 and would read garbage (wrong stride, half the needed bytes)
+        given fp16 memory. This only runs once per layer per sample() call
+        (t=T warm-up), so the cast's cost is negligible next to the N-1
+        _forward_modulated calls that now skip it.
         """
+        if x.dtype != torch.float32:
+            x = x.float()
         if self.is_calibrated:
             input_scale = self.static_input_scale
             if input_scale.device != x.device:

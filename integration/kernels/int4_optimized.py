@@ -153,8 +153,9 @@ class OptimizedInt4Conv2d(nn.Module):
         ).contiguous(memory_format=torch.channels_last)
 
     def _module_output(self) -> torch.Tensor:
-        if self.o_hat_cache is not None and self.o_hat_cache.dtype != torch.float32:
-            return self.o_hat_cache.float()
+        # See OptimizedInt8Conv2d._module_output: forcing fp32 here just to have
+        # the next fp16-autocast op cast back down again is a wasted full-tensor
+        # copy. Return the cache (fp16 when calibrated) as-is.
         return self.o_hat_cache
 
     # ==================================================================
@@ -322,7 +323,12 @@ class OptimizedInt4Conv2d(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         fwd_start = profiler.start("Layer: OptimizedInt4Conv2d.forward")
 
-        if x.dtype != torch.float32 and (self.modiff_enabled or self.calibrating):
+        # See OptimizedInt8Conv2d.forward for the rationale: the calibrated MoDiff
+        # modulated path's kernel (step1_static_quantize_pack_int4_fprop) now reads
+        # fp16 x directly, so skip the upfront full-tensor fp32 cast there. Other
+        # paths (calibration, uncalibrated dynamic MoDiff) still use fp32-only
+        # kernels and keep it.
+        if x.dtype != torch.float32 and (self.calibrating or (self.modiff_enabled and not self.is_calibrated)):
             x = x.float()
         if not x.is_contiguous(memory_format=torch.channels_last):
             x = x.contiguous(memory_format=torch.channels_last)
@@ -420,7 +426,14 @@ class OptimizedInt4Conv2d(nn.Module):
         """First timestep (t=T): warm-up with repeated quantisation.
 
         Paper Appendix B.6: 4-5 warm-up steps converge error.
+
+        Still needs fp32 x (unlike _forward_modulated's calibrated hot path):
+        _int4_conv's tensor-scale branch calls scale_quantize_and_pack, which
+        reads its input via a vectorized float2 pointer cast and would read
+        garbage given fp16 memory. Only runs once per layer per sample() call.
         """
+        if x.dtype != torch.float32:
+            x = x.float()
         input_scale = self.static_input_scale if self.is_calibrated else self._compute_activation_scale(x)
         a_hat = self._dequantize_activation(x, input_scale)
         o_hat = self._int4_conv(x, input_scale, with_bias=True)

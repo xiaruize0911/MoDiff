@@ -86,9 +86,29 @@ class FusedGroupNormSiLU(nn.Module):
             self.register_parameter('weight', None)
             self.register_parameter('bias', None)
 
+        # weight/bias stay fp32 (the nn.Parameter default) while activations run
+        # fp16 under this inference-only quantized pipeline, so every call used to
+        # re-launch 2 small cast kernels just to match x's dtype. Since the
+        # parameters don't change between calls in eval/inference mode, cache the
+        # cast result per dtype instead of recomputing it on every forward.
+        self._cast_dtype = None
+        self._cast_weight = None
+        self._cast_bias = None
+
+    def _cast_params(self, dtype):
+        if self._cast_dtype is not dtype:
+            # .detach() first: Parameter.to(dtype) is a no-op returning `self`
+            # (still a Parameter) when dtype already matches, which would let
+            # nn.Module's __setattr__ register _cast_weight as a real parameter
+            # slot on that call -- then break on the next call with a different
+            # dtype, since a registered parameter slot rejects a plain Tensor.
+            self._cast_weight = self.weight.detach().to(dtype) if self.weight is not None else None
+            self._cast_bias = self.bias.detach().to(dtype) if self.bias is not None else None
+            self._cast_dtype = dtype
+        return self._cast_weight, self._cast_bias
+
     def forward(self, x):
-        weight = self.weight.to(x.dtype) if self.weight is not None and self.weight.dtype != x.dtype else self.weight
-        bias = self.bias.to(x.dtype) if self.bias is not None and self.bias.dtype != x.dtype else self.bias
+        weight, bias = self._cast_params(x.dtype)
         with torch.amp.autocast(device_type=x.device.type, enabled=False):
             x = F.group_norm(x, self.num_groups, weight, bias, self.eps)
             return F.silu(x)
@@ -220,10 +240,7 @@ class FusedResBlock(TimestepBlock):
         if self.use_scale_shift_norm:
             scale, shift = torch.chunk(emb_out, 2, dim=1)
             # Manual GroupNorm since we need scale/shift modulation
-            weight = self.fused_out_norm_silu.weight
-            bias = self.fused_out_norm_silu.bias
-            weight = weight.to(h.dtype) if weight is not None and weight.dtype != h.dtype else weight
-            bias = bias.to(h.dtype) if bias is not None and bias.dtype != h.dtype else bias
+            weight, bias = self.fused_out_norm_silu._cast_params(h.dtype)
             with torch.amp.autocast(device_type=h.device.type, enabled=False):
                 h_norm = F.group_norm(h, self.fused_out_norm_silu.num_groups,
                                       weight,
