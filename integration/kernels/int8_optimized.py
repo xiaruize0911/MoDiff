@@ -102,6 +102,11 @@ class OptimizedInt8Conv2d(nn.Module):
         self._cached_scale_tensor: Optional[torch.Tensor] = None  # for _forward_standard fused path
         self.standard_output_fp16 = False
         self._standard_output_buf: Optional[torch.Tensor] = None
+        # Persistent scratch for the cast-free fp16 quantize in _forward_standard
+        # (see there): a zeroed a_hat lets the fused step1 kernel consume fp16
+        # activations directly, avoiding a per-layer fp16->fp32 cast.
+        self._zero_ahat_buf: Optional[torch.Tensor] = None
+        self._empty_smooth: Optional[torch.Tensor] = None
 
         # --- SmoothQuant identity flag for fast path ---
         self._smooth_is_identity = True
@@ -472,8 +477,27 @@ class OptimizedInt8Conv2d(nn.Module):
                     [self._cached_scale_float], device=x.device, dtype=torch.float32)
             if not x.is_contiguous(memory_format=torch.channels_last):
                 x = x.contiguous(memory_format=torch.channels_last)
-            x_for_quant = x.float() if x.dtype != torch.float32 else x
-            x_int8 = modiff_cutlass.scale_quantize_int8(x_for_quant, self._cached_scale_tensor)
+            if x.dtype == torch.float16:
+                # Cast-free quantize: scale_quantize_int8 reinterpret-casts its
+                # input as float4 and so requires fp32, forcing an fp16->fp32 cast
+                # here whose bandwidth (2x traffic + an extra launch) exceeds the
+                # quantize itself. step1_static_quantize_fprop consumes fp16
+                # directly; feeding it a zeroed a_hat makes it quantize x as-is,
+                # bit-identically to scale_quantize_int8(x.float(), scale). Any
+                # SmoothQuant scaling is already applied to x upstream, so smooth
+                # is empty (identity) here.
+                if (self._zero_ahat_buf is None
+                        or self._zero_ahat_buf.shape != x.shape
+                        or self._zero_ahat_buf.device != x.device):
+                    self._zero_ahat_buf = torch.zeros_like(x)
+                if self._empty_smooth is None or self._empty_smooth.device != x.device:
+                    self._empty_smooth = torch.empty(0, device=x.device, dtype=torch.float32)
+                x_int8 = modiff_cutlass.step1_static_quantize_fprop(
+                    x, self._zero_ahat_buf, self.static_input_scale.view(1), self._empty_smooth
+                )
+            else:
+                x_for_quant = x if x.dtype == torch.float32 else x.float()
+                x_int8 = modiff_cutlass.scale_quantize_int8(x_for_quant, self._cached_scale_tensor)
             if self._empty_bias is None or self._empty_bias.device != x.device:
                 self._empty_bias = torch.empty(0, device=x.device)
 
