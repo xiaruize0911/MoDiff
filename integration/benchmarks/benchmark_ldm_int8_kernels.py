@@ -4,15 +4,15 @@ Focused INT8 kernel benchmark for the exact modules used by benchmark_ldm.py.
 
 This script benchmarks:
   - integration.kernels.int8_optimized.OptimizedInt8Conv2d baseline path
-  - integration.kernels.int8_linear.OptimizedInt8Linear backends: fp16, int_gemm, awq
+  - integration.kernels.int8_linear.OptimizedInt8Linear backends: fp16, int_gemm
 
 Profile examples:
   env -u RUNPOD_API_KEY -u VSCODE_CLI_REQUIRE_TOKEN \
-    nsys profile -t cuda,nvtx -o integration/results/ldm_int8_kernel_compare/nsys/linear_awq \
-    python integration/benchmarks/benchmark_ldm_int8_kernels.py --profile linear_awq
+    nsys profile -t cuda,nvtx -o integration/results/ldm_int8_kernel_compare/nsys/linear_int_gemm \
+    python integration/benchmarks/benchmark_ldm_int8_kernels.py --profile linear_int_gemm
 
   ncu --target-processes all --launch-skip 20 --launch-count 1 --set roofline \
-    python integration/benchmarks/benchmark_ldm_int8_kernels.py --profile linear_awq
+    python integration/benchmarks/benchmark_ldm_int8_kernels.py --profile linear_int_gemm
 """
 
 from __future__ import annotations
@@ -161,7 +161,7 @@ def benchmark_all(warmup: int, iters: int, rounds: int) -> list[dict]:
             })
     for name, m, k, n in LINEAR_SHAPES:
         refs = {}
-        for backend in ("fp16", "int_gemm", "awq"):
+        for backend in ("fp16", "int_gemm"):
             opt, x = make_linear_case(m, k, n, backend)
             timing = _bench_rounds(lambda opt=opt, x=x: opt(x), warmup, iters, rounds)
             out = opt(x).float()
@@ -190,9 +190,6 @@ def run_profile(target: str, repeats: int):
     elif target == "linear_int_gemm":
         opt, x = make_linear_case(1024, 4096, 4096, "int_gemm")
         fn = lambda: opt(x)
-    elif target == "linear_awq":
-        opt, x = make_linear_case(1024, 4096, 4096, "awq")
-        fn = lambda: opt(x)
     else:
         raise ValueError(target)
 
@@ -212,7 +209,7 @@ def main() -> int:
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--iters", type=int, default=100)
     parser.add_argument("--rounds", type=int, default=1)
-    parser.add_argument("--profile", choices=["conv", "linear_int_gemm", "linear_awq"])
+    parser.add_argument("--profile", choices=["conv", "linear_int_gemm"])
     parser.add_argument("--profile-repeats", type=int, default=200)
     args = parser.parse_args()
 
