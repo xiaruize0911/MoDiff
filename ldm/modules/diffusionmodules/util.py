@@ -12,6 +12,7 @@ import os
 import math
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 from einops import repeat
 
@@ -213,7 +214,23 @@ class SiLU(nn.Module):
 
 class GroupNorm32(nn.GroupNorm):
     def forward(self, x):
-        return super().forward(x.float()).type(x.dtype)
+        # Run GroupNorm at the input's native dtype instead of force-upcasting to
+        # fp32. Under autocast(fp16), nn.GroupNorm is on the fp32-cast list, so a
+        # plain call (or the old x.float()) materializes an fp32 tensor and costs
+        # an fp16->fp32->fp16 round-trip on every attention-block norm and out_norm
+        # (profiled: a large share of the pipeline's aten::copy_ time). PyTorch's
+        # GroupNorm CUDA kernel already accumulates mean/var in fp32 internally
+        # regardless of tensor dtype, so disabling autocast here keeps numerical
+        # stability while running natively in fp16 with no cast kernels. Mirrors
+        # the fused-ResBlock GroupNorm path in integration/fused_ops/fused_resblock.py.
+        with torch.autocast(device_type=x.device.type, enabled=False):
+            # Match affine params to x's dtype: with autocast off, F.group_norm
+            # requires weight/bias to share x's dtype (the params are stored fp32).
+            # The affine vectors are tiny (num_channels), so this cast is
+            # negligible next to the full-activation fp32 round-trip it avoids.
+            w = self.weight.to(x.dtype) if self.weight is not None else None
+            b = self.bias.to(x.dtype) if self.bias is not None else None
+            return F.group_norm(x, self.num_groups, w, b, self.eps)
 
 def conv_nd(dims, *args, **kwargs):
     """
