@@ -30,6 +30,11 @@ try:
 except ImportError:
     HAS_CUTLASS = False
 
+# INT8 linear only beats fp16 once the contraction dim K (in_features) is large
+# enough for Ampere IMMA to reach peak (measured crossover ~1500-2048 on A40).
+# Below this the int_gemm backend falls back to fp16 (see _int8_gemm_linear).
+K_INT8_GATE = 2048
+
 
 class OptimizedInt8Linear(nn.Module):
     """
@@ -95,6 +100,8 @@ class OptimizedInt8Linear(nn.Module):
         self._retire_count: Optional[torch.Tensor] = None
         self._smooth_inv_flat: Optional[torch.Tensor] = None
         self.standard_output_fp16 = False
+        # Col-major [K,N] INT8 weight for the fused static W8A8 kernel (lazy).
+        self._weight_int8_km: Optional[torch.Tensor] = None
 
     # ==================================================================
     # Quantization helpers
@@ -130,12 +137,21 @@ class OptimizedInt8Linear(nn.Module):
 
     def _int8_gemm_linear(self, x: torch.Tensor, with_bias: bool = True,
                           input_scale: Optional[float | torch.Tensor] = None) -> torch.Tensor:
-        """True W8A8 GEMM path: quantize activation, int8 GEMM, dequantize."""
+        """True W8A8 GEMM path via a fully-fused static-scale kernel.
+
+        K-gated: the INT8 tensor-core GEMM only out-throughputs fp16 cuBLAS once
+        the contraction dim (in_features) is large (measured crossover ~1500-2048
+        on A40 Ampere; below that Ampere IMMA can't reach peak and fp16 wins). So
+        for small-K linears we fall back to fp16 -- this makes the int_gemm backend
+        never slower than fp16, while still winning ~1.1-1.9x on large-K linears
+        (e.g. SDXL-style UNets). See modiff_triton/kernels/gemm_w8a8_fused_static.py.
+        """
         x_2d = x.reshape(-1, self.in_features)
-        if x_2d.shape[0] < self.int_gemm_min_m or not x_2d.is_cuda:
+        if (x_2d.shape[0] < self.int_gemm_min_m or not x_2d.is_cuda
+                or self.in_features < K_INT8_GATE):
             return self._fp16_linear(x, with_bias=with_bias)
 
-        from modiff_triton.kernels.gemm_w8a8 import gemm_w8a8
+        from modiff_triton.kernels.gemm_w8a8_fused_static import fused_static_w8a8_linear
 
         if input_scale is None:
             abs_max = x_2d.abs().amax()
@@ -147,21 +163,18 @@ class OptimizedInt8Linear(nn.Module):
             else:
                 act_dequant_scale = torch.tensor(
                     1.0 / max(float(input_scale), 1e-8),
-                    device=x_2d.device,
-                    dtype=torch.float32,
-                )
+                    device=x_2d.device, dtype=torch.float32)
 
-        x_int8 = torch.round(x_2d / act_dequant_scale).clamp(-128, 127).to(torch.int8)
+        # Col-major [K, N] weight (K contiguous) -- tl.dot needs the contraction
+        # dim contiguous in B for the fast INT8 path (row-major is ~40% slower).
+        # Cached once; the .t() view keeps the [N, K]-contiguous buffer alive.
+        if self._weight_int8_km is None:
+            self._weight_int8_km = self.weight_int8_t.t().contiguous().t()
         bias = self.bias if (with_bias and self.bias is not None) else None
-        out = gemm_w8a8(
-            x_int8,
-            self.weight_int8_t,
-            act_dequant_scale,
-            self.weight_dequant_scale,
-            bias,
-        )
+        out = fused_static_w8a8_linear(
+            x_2d, self._weight_int8_km, act_dequant_scale, self.weight_dequant_scale, bias)
         out = out.reshape(*x.shape[:-1], self.out_features)
-        return out.half() if self.standard_output_fp16 else out
+        return out if self.standard_output_fp16 else out.float()
 
     def _linear(self, x: torch.Tensor, with_bias: bool = True,
                 input_scale: Optional[float | torch.Tensor] = None) -> torch.Tensor:
