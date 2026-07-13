@@ -218,18 +218,16 @@ class MoDiffConv1dCUTLASS(nn.Module):
             #          + step1_static_quantize_fprop  (1 kernel)
             # With a single tiled kernel → saves 1 kernel / call × 42 calls/step
             #
-            # fp16_ncw_delta_to_int8_cl's CUDA kernel only has an FP32 a_hat_cache
-            # code path (see csrc/kernels/layout_transform.cu), but a *calibrated*
-            # OptimizedInt8Conv2d switches its cache to FP16 once calibration
-            # finishes (see cache_dtype in int8_optimized.py). So this fused
-            # shortcut is only valid pre-calibration-switch / when the cache
-            # happens to still be FP32; otherwise fall through to the generic
-            # path below, which dispatches on cache dtype correctly.
+            # fp16_ncw_delta_to_int8_cl's CUDA kernel now has both an FP32 and an
+            # FP16 a_hat_cache code path (see csrc/kernels/layout_transform.cu,
+            # dispatched on a_hat.scalar_type()), so this fused shortcut applies
+            # whether or not a *calibrated* OptimizedInt8Conv2d has switched its
+            # cache to FP16 (see cache_dtype in int8_optimized.py) -- which it
+            # always has by the time this modulated-step condition is reached.
             if (_HAS_FUSED_PREQUANT
                     and not int8c.is_first_step
                     and int8c.is_calibrated
                     and int8c.a_hat_cache is not None
-                    and int8c.a_hat_cache.dtype == torch.float32
                     and int8c._cached_alpha_tensor is not None):
                 import modiff_cutlass as _mc_
                 # K1+K2+K3 fused: FP16 NCW → INT8 CL + update a_hat_cache (1 kernel)

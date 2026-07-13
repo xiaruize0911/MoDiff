@@ -48,6 +48,12 @@
 __device__ __forceinline__ float load_as_float(const float* p, int i) { return p[i]; }
 __device__ __forceinline__ float load_as_float(const __half* p, int i) { return __half2float(p[i]); }
 
+// SiLU(v) = v * sigmoid(v), used by the "_silu" kernel variants below to fuse
+// a ResBlock's activation function directly into the quantize step instead of
+// materializing a separate F.silu(x) pass over the same full-size tensor
+// beforehand (see step1_static_quantize_fprop_silu / _pack_int4_fprop_silu).
+__device__ __forceinline__ float silu_f(float v) { return v / (1.0f + expf(-v)); }
+
 // ---- Dynamic path: quantize + update a_hat, scale derived elsewhere ----
 
 // Fused step 1: quantize residual and accumulate into a_hat_cache simultaneously.
@@ -307,6 +313,38 @@ __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache(
     }
 }
 
+// Same as static_quantize_and_update_ahat_kernel_int8_half_cache above, but
+// `x` is the ResBlock's GroupNorm output *before* SiLU: applies SiLU inline
+// to each element before forming the residual, instead of requiring a
+// separate F.silu(x) kernel pass over the same full-size activation first
+// (see step1_static_quantize_fprop_silu, ResBlock's fused_in_norm_silu /
+// fused_out_norm_silu -> in_conv / out_conv hot path in int8_optimized.py).
+template <typename T_IN>
+__global__ void static_quantize_and_update_ahat_kernel_int8_half_cache_silu(
+    const T_IN* __restrict__ x,
+    __half* __restrict__ a_hat_cache,
+    int8_t* __restrict__ output_int8,
+    const float* __restrict__ scale_ptr,
+    const float* __restrict__ smooth_inv,
+    int num_channels,
+    int num_elements
+) {
+    float scale = *scale_ptr;
+    float inv_scale = 1.0f / scale;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    for (int i = idx; i < num_elements; i += blockDim.x * gridDim.x) {
+        float xval = silu_f(load_as_float(x, i));
+        if (smooth_inv != nullptr) {
+            xval *= smooth_inv[i % num_channels];
+        }
+        float cache = __half2float(a_hat_cache[i]);
+        float q = fmaxf(-127.0f, fminf(127.0f, roundf((xval - cache) * scale)));
+        a_hat_cache[i] = __float2half_rn(cache + q * inv_scale);
+        output_int8[i] = static_cast<int8_t>(q);
+    }
+}
+
 // INT4 static-scale variant of static_quantize_and_update_ahat_kernel_int8,
 // packing 2 elements per output byte.
 __global__ void static_quantize_pack_and_update_ahat_kernel_int4(
@@ -411,6 +449,52 @@ __global__ void static_quantize_pack_and_update_ahat_kernel_int4_half_cache(
         float q1 = 0.0f;
         if (base + 1 < num_elements) {
             float x1 = load_as_float(x, base + 1);
+            if (smooth_inv != nullptr) {
+                x1 *= smooth_inv[(base + 1) % num_channels];
+            }
+            float c1 = __half2float(a_hat_cache[base + 1]);
+            q1 = fmaxf(-7.0f, fminf(7.0f, roundf((x1 - c1) * scale)));
+            a_hat_cache[base + 1] = __float2half_rn(c1 + q1 * inv_scale);
+        }
+
+        output_packed[base / 2] =
+            (static_cast<int8_t>(q0) & 0x0F) |
+            ((static_cast<int8_t>(q1) & 0x0F) << 4);
+    }
+}
+
+// Same as static_quantize_pack_and_update_ahat_kernel_int4_half_cache above,
+// but applies SiLU inline to each element of `x` before forming the residual
+// -- see static_quantize_and_update_ahat_kernel_int8_half_cache_silu's
+// comment for the rationale (fuses ResBlock's activation into the quantize
+// step instead of a separate full-tensor F.silu(x) pass).
+template <typename T_IN>
+__global__ void static_quantize_pack_and_update_ahat_kernel_int4_half_cache_silu(
+    const T_IN* __restrict__ x,
+    __half* __restrict__ a_hat_cache,
+    int8_t* __restrict__ output_packed,
+    const float* __restrict__ scale_ptr,
+    const float* __restrict__ smooth_inv,
+    int num_channels,
+    int num_elements
+) {
+    float scale = *scale_ptr;
+    float inv_scale = 1.0f / scale;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for (int base = idx * 2; base < num_elements; base += stride * 2) {
+        float x0 = silu_f(load_as_float(x, base));
+        if (smooth_inv != nullptr) {
+            x0 *= smooth_inv[base % num_channels];
+        }
+        float c0 = __half2float(a_hat_cache[base]);
+        float q0 = fmaxf(-7.0f, fminf(7.0f, roundf((x0 - c0) * scale)));
+        a_hat_cache[base] = __float2half_rn(c0 + q0 * inv_scale);
+
+        float q1 = 0.0f;
+        if (base + 1 < num_elements) {
+            float x1 = silu_f(load_as_float(x, base + 1));
             if (smooth_inv != nullptr) {
                 x1 *= smooth_inv[(base + 1) % num_channels];
             }
@@ -779,6 +863,61 @@ torch::Tensor step1_static_quantize_fprop(
     return x_int8;
 }
 
+// Same as step1_static_quantize_fprop, but `x` is the pre-activation (ResBlock
+// GroupNorm output *before* SiLU) -- applies SiLU inline in the kernel instead
+// of requiring a separate F.silu(x) elementwise pass over the whole tensor
+// first. Only implemented for the FP16-cache path: that's the only case the
+// calibrated (production) modulated hot path actually uses -- see cache_dtype
+// in int8_optimized.py, always FP16 once a layer is calibrated.
+torch::Tensor step1_static_quantize_fprop_silu(
+    torch::Tensor x,
+    torch::Tensor a_hat_cache,
+    torch::Tensor scale_buf,
+    torch::Tensor smooth_inv
+) {
+    TORCH_CHECK(a_hat_cache.scalar_type() == torch::kFloat16,
+                "step1_static_quantize_fprop_silu: only implemented for FP16 a_hat_cache");
+
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+
+    auto x_int8 = torch::empty_like(x, torch::TensorOptions().dtype(torch::kInt8));
+    int num_elements = x.numel();
+    int block_size = 256;
+    int num_work_items = (num_elements + 3) / 4;
+    int grid_size = (num_work_items + block_size - 1) / block_size;
+
+    const float* smooth_ptr = nullptr;
+    int num_channels = x.size(1);
+    if (smooth_inv.numel() > 0) {
+        smooth_ptr = smooth_inv.data_ptr<float>();
+        num_channels = smooth_inv.numel();
+    }
+
+    if (x.scalar_type() == torch::kHalf) {
+        static_quantize_and_update_ahat_kernel_int8_half_cache_silu<__half><<<grid_size, block_size, 0, stream>>>(
+            reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
+            reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>()),
+            x_int8.data_ptr<int8_t>(),
+            scale_buf.data_ptr<float>(),
+            smooth_ptr,
+            num_channels,
+            num_elements
+        );
+    } else {
+        static_quantize_and_update_ahat_kernel_int8_half_cache_silu<float><<<grid_size, block_size, 0, stream>>>(
+            x.data_ptr<float>(),
+            reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>()),
+            x_int8.data_ptr<int8_t>(),
+            scale_buf.data_ptr<float>(),
+            smooth_ptr,
+            num_channels,
+            num_elements
+        );
+    }
+
+    return x_int8;
+}
+
 // Dynamic INT4: like step1_quantize_fprop but quantizes to [-7,7] and packs 2
 // elements per byte; updates a_hat_cache.
 torch::Tensor step1_quantize_pack_int4_fprop(
@@ -870,6 +1009,66 @@ torch::Tensor step1_static_quantize_pack_int4_fprop(
         static_quantize_pack_and_update_ahat_kernel_int4<<<grid_size, block_size, 0, stream>>>(
             x.data_ptr<float>(),
             a_hat_cache.data_ptr<float>(),
+            x_packed.data_ptr<int8_t>(),
+            scale_buf.data_ptr<float>(),
+            smooth_ptr,
+            num_channels,
+            num_input
+        );
+    }
+
+    int N = x.size(0);
+    int C = x.size(1);
+    int H = x.size(2);
+    int W = x.size(3);
+
+    return x_packed.view({N, H, W, C / 2});
+}
+
+// Same as step1_static_quantize_pack_int4_fprop, but `x` is the pre-activation
+// (ResBlock GroupNorm output *before* SiLU) -- applies SiLU inline in the
+// kernel. See step1_static_quantize_fprop_silu's comment; only implemented
+// for the FP16-cache path used by the calibrated modulated hot path.
+torch::Tensor step1_static_quantize_pack_int4_fprop_silu(
+    torch::Tensor x,
+    torch::Tensor a_hat_cache,
+    torch::Tensor scale_buf,
+    torch::Tensor smooth_inv
+) {
+    TORCH_CHECK(a_hat_cache.scalar_type() == torch::kFloat16,
+                "step1_static_quantize_pack_int4_fprop_silu: only implemented for FP16 a_hat_cache");
+
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+
+    int num_input = x.numel();
+    int num_output = num_input / 2;
+    auto x_packed = torch::empty({num_output}, torch::TensorOptions().dtype(torch::kInt8).device(x.device()));
+
+    int block_size = 256;
+    int num_work_items = (num_input + 3) / 4;
+    int grid_size = (num_work_items + block_size - 1) / block_size;
+
+    const float* smooth_ptr = nullptr;
+    int num_channels = x.size(1);
+    if (smooth_inv.numel() > 0) {
+        smooth_ptr = smooth_inv.data_ptr<float>();
+        num_channels = smooth_inv.numel();
+    }
+
+    if (x.scalar_type() == torch::kHalf) {
+        static_quantize_pack_and_update_ahat_kernel_int4_half_cache_silu<__half><<<grid_size, block_size, 0, stream>>>(
+            reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
+            reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>()),
+            x_packed.data_ptr<int8_t>(),
+            scale_buf.data_ptr<float>(),
+            smooth_ptr,
+            num_channels,
+            num_input
+        );
+    } else {
+        static_quantize_pack_and_update_ahat_kernel_int4_half_cache_silu<float><<<grid_size, block_size, 0, stream>>>(
+            x.data_ptr<float>(),
+            reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>()),
             x_packed.data_ptr<int8_t>(),
             scale_buf.data_ptr<float>(),
             smooth_ptr,

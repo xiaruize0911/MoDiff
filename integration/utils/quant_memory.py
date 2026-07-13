@@ -58,7 +58,7 @@ def report_quant_memory(model: torch.nn.Module) -> Dict[str, Any]:
             _add_attr(buckets, module, "linear_scale_state_mib", "static_input_scale")
             _add_attr(buckets, module, "linear_bias_mib", "bias")
 
-        elif name in ("MoDiffAttentionConv1d", "Int8MoDiffAttentionConv1d"):
+        elif name == "MoDiffConv1dCUTLASS":
             module_counts[name] += 1
             _add_attr(buckets, module, "attention_a_hat_cache_mib", "a_hat_cache")
             _add_attr(buckets, module, "attention_o_hat_cache_mib", "o_hat_cache")

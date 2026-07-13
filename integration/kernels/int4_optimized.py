@@ -129,6 +129,12 @@ class OptimizedInt4Conv2d(nn.Module):
         # --- SmoothQuant identity flag for fast path ---
         self._smooth_is_identity = True
 
+        # --- SiLU fusion: set by fused_resblock.py's wire_silu_fusion() when
+        # this layer directly follows a ResBlock's GroupNorm (i.e. it's a
+        # ResBlock in_conv/out_conv). See OptimizedInt8Conv2d's identical flag
+        # for the full rationale.
+        self.fuse_input_silu = False
+
         # --- Fused kernel persistent buffers (lazy-initialized) ---
         self._residual_buf: Optional[torch.Tensor] = None
         self._scale_buf: Optional[torch.Tensor] = None
@@ -320,8 +326,69 @@ class OptimizedInt4Conv2d(nn.Module):
     # Forward paths
     # ==================================================================
 
+    def _can_fuse_input_silu(self, x: torch.Tensor) -> bool:
+        """See OptimizedInt8Conv2d._can_fuse_input_silu for the rationale."""
+        return (self.fuse_input_silu and self.modiff_enabled and not self.is_first_step
+                and self.is_calibrated and HAS_CUTLASS and self.use_cutlass
+                and self.a_hat_cache is not None
+                and self.a_hat_cache.dtype == torch.float16
+                and self.a_hat_cache.shape == x.shape
+                and x.dtype == torch.float16)
+
+    def _forward_modulated_static_fused_silu(self, x: torch.Tensor) -> torch.Tensor:
+        """Same as _forward_modulated's calibrated CUTLASS branch, but `x` is
+        the pre-activation input -- SiLU is applied inline inside
+        step1_static_quantize_pack_int4_fprop_silu's CUDA kernel instead of a
+        separate F.silu(x) Python call over the whole activation tensor first.
+        """
+        self.step_count += 1
+        if not x.is_contiguous(memory_format=torch.channels_last):
+            x = x.contiguous(memory_format=torch.channels_last)
+
+        if self._cached_alpha_tensor is None or self._cached_alpha_tensor.device != x.device:
+            scale = float(self.static_input_scale.item())
+            self._cached_scale_float = scale
+            self._cached_alpha_tensor = torch.tensor([1.0 / scale], device=x.device, dtype=torch.float32)
+        if not hasattr(self, '_smooth_inv_flat') or self._smooth_inv_flat.device != x.device:
+            if not self._smooth_is_identity:
+                self._smooth_inv_flat = self._smooth_inv.view(-1).contiguous()
+            else:
+                self._smooth_inv_flat = torch.empty(0, device=x.device, dtype=torch.float32)
+
+        p_step1 = profiler.start("MoDiff INT4 Static Step1 (fused SiLU)")
+        x_packed = modiff_cutlass.step1_static_quantize_pack_int4_fprop_silu(
+            x,
+            self.a_hat_cache,
+            self.static_input_scale.view(1),
+            self._smooth_inv_flat,
+        )
+        profiler.stop("MoDiff INT4 Static Step1 (fused SiLU)", p_step1)
+
+        p_conv = profiler.start("MoDiff INT4 Static Conv2d")
+        modiff_cutlass.conv2d_int4_fprop_o_hat(
+            x_packed,
+            self.weight_packed,
+            self._cached_alpha_tensor.view(1),
+            self.weight_scale_channel.view(-1),
+            self.o_hat_cache,
+            self.stride[0], self.stride[1],
+            self.padding[0], self.padding[1],
+            self.dilation[0], self.dilation[1]
+        )
+        profiler.stop("MoDiff INT4 Static Conv2d", p_conv)
+        return self._module_output()
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         fwd_start = profiler.start("Layer: OptimizedInt4Conv2d.forward")
+
+        if self.fuse_input_silu:
+            if self._can_fuse_input_silu(x):
+                output = self._forward_modulated_static_fused_silu(x)
+                profiler.stop("Layer: OptimizedInt4Conv2d.forward", fwd_start)
+                return output
+            # Fast path not applicable this call -- caller passed pre-activation
+            # input expecting this layer to apply SiLU itself, so do it explicitly.
+            x = F.silu(x)
 
         # See OptimizedInt8Conv2d.forward for the rationale: the calibrated MoDiff
         # modulated path's kernel (step1_static_quantize_pack_int4_fprop) now reads
@@ -380,6 +447,7 @@ class OptimizedInt4Conv2d(nn.Module):
             h_out = ((x.shape[2] + 2 * self.padding[0] - self.dilation[0] * (self.kernel_size[0] - 1) - 1) // self.stride[0]) + 1
             w_out = ((x.shape[3] + 2 * self.padding[1] - self.dilation[1] * (self.kernel_size[1] - 1) - 1) // self.stride[1]) + 1
             output_shape = (x.shape[0], self.out_channels, h_out, w_out)
+            bias_fused = False
             if self.standard_output_fp16:
                 if (self._standard_output_buf is None
                         or self._standard_output_buf.shape != output_shape
@@ -388,16 +456,30 @@ class OptimizedInt4Conv2d(nn.Module):
                     self._standard_output_buf = torch.empty(
                         output_shape, device=x.device, dtype=torch.float16
                     ).contiguous(memory_format=torch.channels_last)
-                out = modiff_cutlass.conv2d_int4_fprop_no_ohat_prealloc(
-                    x_packed,
-                    self.weight_packed,
-                    self._cached_alpha_tensor,
-                    self.weight_scale_channel.view(-1),
-                    self._standard_output_buf,
-                    self.stride[0], self.stride[1],
-                    self.padding[0], self.padding[1],
-                    self.dilation[0], self.dilation[1]
-                )
+                if self.bias is not None and hasattr(modiff_cutlass, "conv2d_int4_fprop_no_ohat_prealloc_bias"):
+                    out = modiff_cutlass.conv2d_int4_fprop_no_ohat_prealloc_bias(
+                        x_packed,
+                        self.weight_packed,
+                        self._cached_alpha_tensor,
+                        self.weight_scale_channel.view(-1),
+                        self.bias.view(-1).contiguous(),
+                        self._standard_output_buf,
+                        self.stride[0], self.stride[1],
+                        self.padding[0], self.padding[1],
+                        self.dilation[0], self.dilation[1]
+                    )
+                    bias_fused = True
+                else:
+                    out = modiff_cutlass.conv2d_int4_fprop_no_ohat_prealloc(
+                        x_packed,
+                        self.weight_packed,
+                        self._cached_alpha_tensor,
+                        self.weight_scale_channel.view(-1),
+                        self._standard_output_buf,
+                        self.stride[0], self.stride[1],
+                        self.padding[0], self.padding[1],
+                        self.dilation[0], self.dilation[1]
+                    )
             else:
                 out_raw = modiff_cutlass.conv2d_int4_fprop(
                     x_packed, self.weight_packed, self._cached_alpha_tensor, self._empty_bias,
@@ -406,7 +488,7 @@ class OptimizedInt4Conv2d(nn.Module):
                     self.dilation[0], self.dilation[1]
                 )
                 out = out_raw * self.weight_scale_channel
-            if self.bias is not None:
+            if self.bias is not None and not bias_fused:
                 bias = self.bias.to(out.dtype) if out.dtype != self.bias.dtype else self.bias
                 out = out + bias
             return out

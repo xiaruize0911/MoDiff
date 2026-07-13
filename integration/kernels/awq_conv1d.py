@@ -19,16 +19,36 @@ class AWQW8A8Conv1d1x1(nn.Module):
         self.layer_name = layer_name
         self.in_channels = conv.in_channels
         self.out_channels = conv.out_channels
+        # The AWQ W8A8 GEMM tiles its N (output-feature) dimension in blocks of 128
+        # (CTA_N). For an N that is not a multiple of 128 (e.g. this UNet's 576/192-wide
+        # attention projections at the finest resolution) the kernel's fused-bias
+        # variant reads a full CTA_N-wide bias slice for the last tile, running past the
+        # end of a length-N bias array. Padding N (and weight/bias) up to a full tile
+        # keeps that read in-bounds and avoids partial-tile handling entirely.
+        # NOTE: this is a robustness fix, not a cure-all -- it does NOT resolve the
+        # separate batch>=16 illegal-memory-access in dense_kernel0_fuse_bias (see the
+        # batch-aware gate in benchmark_ldm.py); that is a distinct, memory-layout-
+        # dependent defect in the vendored kernel that only manifests with the INT8
+        # Conv2d path also active.
+        self._padded_out_channels = ((conv.out_channels + 127) // 128) * 128
+        pad = self._padded_out_channels - conv.out_channels
 
         weight_fp32 = conv.weight.data.reshape(conv.out_channels, conv.in_channels).float()
         weight_absmax = weight_fp32.abs().max()
         weight_scale = torch.clamp(weight_absmax / 127.0, min=1e-8)
         weight_int8_awq = torch.round(weight_fp32 / weight_scale).clamp(-128, 127).to(torch.int8).contiguous()
+        if pad:
+            weight_int8_awq = torch.cat(
+                [weight_int8_awq, weight_int8_awq.new_zeros(pad, conv.in_channels)], dim=0
+            )
         self.register_buffer("weight_int8_awq", weight_int8_awq)
         self.register_buffer("weight_dequant_scale", weight_scale.float().reshape(1))
 
         if conv.bias is not None:
-            self.register_buffer("bias", conv.bias.data.half())
+            bias = conv.bias.data.half()
+            if pad:
+                bias = torch.cat([bias, bias.new_zeros(pad)])
+            self.register_buffer("bias", bias)
         else:
             self.bias = None
         self.register_buffer("_weight_scale_awq", weight_scale.half().reshape(1), persistent=False)
@@ -50,7 +70,7 @@ class AWQW8A8Conv1d1x1(nn.Module):
             or self._scale_a_buf.device != x_2d.device
         ):
             self._scale_a_buf = torch.empty((m,), device=x_2d.device, dtype=torch.float16)
-        out_shape = (m, self.out_channels)
+        out_shape = (m, self._padded_out_channels)
         if (
             self._out_2d_buf is None
             or self._out_2d_buf.shape != out_shape
@@ -62,10 +82,12 @@ class AWQW8A8Conv1d1x1(nn.Module):
         if x.dim() != 3:
             raise ValueError("Conv1d input must be [B, C, L]")
         if not x.is_cuda:
+            weight = self.weight_int8_awq[: self.out_channels]
+            bias = self.bias[: self.out_channels] if self.bias is not None else None
             return torch.nn.functional.conv1d(
                 x,
-                (self.weight_int8_awq.float() * self.weight_dequant_scale).reshape(self.out_channels, self.in_channels, 1),
-                self.bias.float() if self.bias is not None else None,
+                (weight.float() * self.weight_dequant_scale).reshape(self.out_channels, self.in_channels, 1),
+                bias.float() if bias is not None else None,
             )
 
         from modiff_triton.kernels.awq_w8a8 import awq_fused_quant_gemm_w8a8_prealloc
@@ -86,6 +108,8 @@ class AWQW8A8Conv1d1x1(nn.Module):
             self.bias,
             weight_is_awq_layout=True,
         )
+        if self._padded_out_channels != self.out_channels:
+            out_2d = out_2d[:, : self.out_channels]
         return out_2d.reshape(b, length, self.out_channels).transpose(1, 2).contiguous()
 
 

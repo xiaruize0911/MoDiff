@@ -1,13 +1,24 @@
 """
 Pre-allocated Buffer Pool for MoDiff Layers.
 
+*** CONFIRMED INERT / DEAD CODE (kept only because other scripts still import it) ***
+`_allocate_int8_buffers`/`_allocate_int4_buffers` gate on `hasattr(module, '_residual_buffer')`,
+but the real attribute on OptimizedInt8Conv2d/OptimizedInt4Conv2d is `_residual_buf` (no "fer") -
+this hasattr check is always False, so no buffer is ever actually assigned to a layer. Separately,
+every caller invokes `initialize_buffer_pool(...)` BEFORE `enable_modiff_mode(...)`, so the
+`module.modiff_enabled` gate is also always False at pool-init time. Both are silently swallowed by
+bare `except: pass` around the allocation calls. The real, working per-layer buffer caching that
+avoids realloc churn across timesteps lives independently in each layer class (see
+`_ensure_state_buffers` in integration/kernels/int8_optimized.py) - this module contributes nothing.
+Do not build on this file; it has been removed from integration/benchmarks/benchmark_ldm.py.
+
 Eliminates runtime cudaMalloc overhead by pre-allocating all buffers during model initialization.
 Expected speedup: 3-5% (eliminates ~100-500 allocations per forward pass).
 
 Usage:
     pool = BufferPool()
     pool.initialize_for_model(model, max_batch_size=64, device='cuda')
-    
+
     # Layers will automatically use pre-allocated buffers
     # No changes needed in layer code
 """

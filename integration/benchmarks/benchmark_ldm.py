@@ -55,8 +55,8 @@ warnings.filterwarnings('ignore', message='Could not initialize NNPACK')
 warnings.filterwarnings('ignore', category=UserWarning, module='torchmetrics')
 
 # Enable TF32 for faster FP32 operations on Ampere+ GPUs
-torch.backends.cuda.matmul.allow_tf32 = False
-torch.backends.cudnn.allow_tf32 = False
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
 
 # Enable cuDNN for optimized convolution kernels
 torch.backends.cudnn.enabled = True
@@ -413,9 +413,6 @@ class BenchmarkRunner:
                     int_gemm_min_m=self.linear_int_gemm_min_m,
                 )
             
-            # Initialize buffer pool for pre-allocated buffers
-            from integration.utils.buffer_pool import initialize_buffer_pool
-            initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
             
             # Load static calibration if available
             if self.calibration_path and os.path.exists(self.calibration_path):
@@ -450,9 +447,6 @@ class BenchmarkRunner:
                     int_gemm_min_m=self.linear_int_gemm_min_m,
                 )
             
-            # Initialize buffer pool for pre-allocated buffers
-            from integration.utils.buffer_pool import initialize_buffer_pool
-            initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
 
             # Load static INT4 activation scales if provided
             if self.calibration_path and os.path.exists(self.calibration_path):
@@ -499,19 +493,31 @@ class BenchmarkRunner:
                 if not HAS_AWQ_CONV1D:
                     raise RuntimeError("int8_awq_full_baseline requested, but AWQ Conv1d support is not available")
                 n_conv1d = count_conv1d_layers(model.model.diffusion_model)
-                awq_conv1d_min_channels = 1024
+                # Converting ALL Conv1d-1x1 attention projections to AWQ (the finest,
+                # L=1024 resolution included) is the fastest configuration, but the
+                # vendored AWQ W8A8 GEMM (dense_kernel0_fuse_bias) has a latent
+                # memory-layout-dependent bug that triggers a CUDA illegal-memory-access
+                # once the res32 qkv GEMM's M dimension (= batch_size * 1024) reaches
+                # 16384, i.e. batch_size >= 16, but only when the INT8 Conv2d path is
+                # also active (extensively bisected: works at batch<=15, crashes at
+                # batch>=16; neither quantization path crashes alone; not the bias-load
+                # OOB, not N-tile alignment). Below the threshold, convert everything;
+                # at/above it, skip only the small-channel projections that route
+                # through that GEMM shape (min_in_channels=384 keeps 32/42 layers, which
+                # runs cleanly at batch>=16; its speed vs the FP16/CUTLASS baseline is
+                # within run-to-run noise at short benchmark lengths -- treat as safety,
+                # not a guaranteed win, pending a longer benchmark).
+                awq_conv1d_min_channels = 0 if self.batch_size < 16 else 384
                 converted_conv1d = convert_model_conv1d_1x1_to_awq(
                     model.model.diffusion_model,
                     min_in_channels=awq_conv1d_min_channels,
                 )
                 print(
-                    f"Converting profitable Conv1d-1x1 projection layers to AWQ "
+                    f"Converting Conv1d-1x1 projection layers to AWQ "
                     f"({converted_conv1d}/{n_conv1d} layers converted, "
-                    f"min_in_channels={awq_conv1d_min_channels})..."
+                    f"min_in_channels={awq_conv1d_min_channels} for batch_size={self.batch_size})..."
                 )
             
-            from integration.utils.buffer_pool import initialize_buffer_pool
-            initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
             if self.calibration_path and os.path.exists(self.calibration_path):
                 print(f"Loading static calibration from {self.calibration_path}")
                 scales = torch.load(self.calibration_path, weights_only=True)
@@ -544,8 +550,6 @@ class BenchmarkRunner:
                     int_gemm_min_m=self.linear_int_gemm_min_m,
                 )
             
-            from integration.utils.buffer_pool import initialize_buffer_pool
-            initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
             if self.calibration_path and os.path.exists(self.calibration_path):
                 print(f"Loading INT4 calibration from {self.calibration_path}")
                 scales = torch.load(self.calibration_path, weights_only=True)
@@ -596,8 +600,6 @@ class BenchmarkRunner:
                     backend=self.linear_backend,
                     int_gemm_min_m=self.linear_int_gemm_min_m,
                 )
-            from integration.utils.buffer_pool import initialize_buffer_pool
-            initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
             if self.calibration_path and os.path.exists(self.calibration_path):
                 print(f"Loading static calibration from {self.calibration_path}")
                 scales = torch.load(self.calibration_path, weights_only=True)
@@ -630,8 +632,6 @@ class BenchmarkRunner:
                     backend=self.linear_backend,
                     int_gemm_min_m=self.linear_int_gemm_min_m,
                 )
-            from integration.utils.buffer_pool import initialize_buffer_pool
-            initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
             if self.calibration_path and os.path.exists(self.calibration_path):
                 print(f"Loading INT4 calibration from {self.calibration_path}")
                 scales = torch.load(self.calibration_path, weights_only=True)
@@ -650,7 +650,15 @@ class BenchmarkRunner:
             from integration.kernels.modiff_attention import convert_attention_to_modiff
             n = convert_attention_to_modiff(model.model.diffusion_model, act_bits=8, verbose=True)
             print(f"  → MoDiff attention applied to {n} AttentionBlocks")
-        
+
+        # Wire SiLU fusion between each FusedResBlock's GroupNorm and its
+        # quantized conv (no-op for modes where in_conv/out_conv are still
+        # plain nn.Conv2d, e.g. fp32/fp16).
+        from integration.fused_ops.fused_resblock import wire_silu_fusion
+        n_silu_wired = wire_silu_fusion(model.model.diffusion_model)
+        if n_silu_wired > 0:
+            print(f"✓ Wired SiLU fusion for {n_silu_wired} quantized conv layers")
+
         return model, DDIMSampler(model)
     
     def _try_compile_unet(self, model):
@@ -877,11 +885,6 @@ class BenchmarkRunner:
         # Reset profiler AFTER calibration so generation-only timing is accurate
         if mode in ['int8', 'int4']:
             profiler.reset()
-        
-        # Initialize Buffer Pool for zero-copy MoDiff
-        if mode in ('int8', 'int4'):
-            from integration.utils.buffer_pool import initialize_buffer_pool
-            initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size)
         
         # Configure autocast - enable for all modes except fp32 to maximize bandwidth
         use_autocast = mode != 'fp32'

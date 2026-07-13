@@ -112,6 +112,14 @@ class OptimizedInt8Conv2d(nn.Module):
         # --- SmoothQuant identity flag for fast path ---
         self._smooth_is_identity = True
 
+        # --- SiLU fusion: set by fused_resblock.py's wire_silu_fusion() when
+        # this layer directly follows a ResBlock's GroupNorm (i.e. it's a
+        # ResBlock in_conv/out_conv). When True, callers pass the *pre-SiLU*
+        # activation and this layer applies SiLU itself -- either fused into
+        # the quantize kernel (fast path) or via a plain F.silu(x) call
+        # (first-step/uncalibrated fallback) -- see forward().
+        self.fuse_input_silu = False
+
         # --- Fused kernel persistent buffers (lazy-initialized) ---
         self._residual_buf: Optional[torch.Tensor] = None
         self._scale_buf: Optional[torch.Tensor] = None
@@ -411,8 +419,77 @@ class OptimizedInt8Conv2d(nn.Module):
     # Forward paths
     # ==================================================================
 
+    def _can_fuse_input_silu(self, x: torch.Tensor) -> bool:
+        """True when this call can take the fused SiLU+quantize kernel path:
+        `x` must be the pre-activation ResBlock GroupNorm output (see
+        fuse_input_silu / fused_resblock.py's wire_silu_fusion), not yet
+        SiLU'd, and everything the fused kernel requires (calibrated, FP16
+        cache, matching shape/dtype) must already hold.
+        """
+        return (self.fuse_input_silu and self.modiff_enabled and not self.is_first_step
+                and self.is_calibrated and HAS_CUTLASS and self.use_cutlass
+                and self.a_hat_cache is not None
+                and self.a_hat_cache.dtype == torch.float16
+                and self.a_hat_cache.shape == x.shape
+                and x.dtype == torch.float16)
+
+    def _forward_modulated_static_fused_silu(self, x: torch.Tensor) -> torch.Tensor:
+        """Same as _forward_modulated's calibrated CUTLASS branch, but `x` is
+        the pre-activation input -- SiLU is applied inline inside
+        step1_static_quantize_fprop_silu's CUDA kernel instead of a separate
+        F.silu(x) Python call over the whole activation tensor beforehand.
+        """
+        self.step_count += 1
+        if not x.is_contiguous(memory_format=torch.channels_last):
+            x = x.contiguous(memory_format=torch.channels_last)
+        self._ensure_state_buffers(x)
+
+        if self._cached_alpha_tensor is None or self._cached_alpha_tensor.device != x.device:
+            scale = float(self.static_input_scale.item())
+            self._cached_scale_float = scale
+            self._cached_alpha_tensor = torch.tensor([1.0 / scale], device=x.device, dtype=torch.float32)
+
+        if not hasattr(self, '_smooth_inv_flat') or self._smooth_inv_flat.device != x.device:
+            if not self._smooth_is_identity:
+                self._smooth_inv_flat = self._smooth_inv.view(-1).contiguous()
+            else:
+                self._smooth_inv_flat = torch.empty(0, device=x.device, dtype=torch.float32)
+
+        p_step1 = profiler.start("MoDiff INT8 Static Step1 (fused SiLU)")
+        x_int8 = modiff_cutlass.step1_static_quantize_fprop_silu(
+            x,
+            self.a_hat_cache,
+            self.static_input_scale.view(1),
+            self._smooth_inv_flat,
+        )
+        profiler.stop("MoDiff INT8 Static Step1 (fused SiLU)", p_step1)
+
+        p_conv = profiler.start("MoDiff INT8 Static Conv2d")
+        modiff_cutlass.conv2d_int8_fprop_o_hat(
+            x_int8,
+            self.weight_int8,
+            self._cached_alpha_tensor.view(1),
+            self.weight_scale_channel.view(-1),
+            self.o_hat_cache,
+            self.stride[0], self.stride[1],
+            self.padding[0], self.padding[1],
+            self.dilation[0], self.dilation[1]
+        )
+        profiler.stop("MoDiff INT8 Static Conv2d", p_conv)
+        return self._module_output()
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         fwd_start = profiler.start("Layer: OptimizedInt8Conv2d.forward")
+
+        if self.fuse_input_silu:
+            if self._can_fuse_input_silu(x):
+                output = self._forward_modulated_static_fused_silu(x)
+                profiler.stop("Layer: OptimizedInt8Conv2d.forward", fwd_start)
+                return output
+            # Fast path not applicable this call (first step / uncalibrated /
+            # dtype mismatch) -- the caller passed the pre-activation input
+            # expecting this layer to apply SiLU itself, so do it explicitly.
+            x = F.silu(x)
 
         # The calibrated MoDiff modulated path's CUDA kernel (step1_static_quantize_fprop)
         # reads fp16 x directly, so skip this cast there -- it used to force a full-tensor

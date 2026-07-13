@@ -1,6 +1,14 @@
-torch>=2.4.1
-torchvision>=0.19.1
-torchaudio>=2.4.1
+--extra-index-url https://download.pytorch.org/whl/cu124
+# Pinned exactly (not a floor): modiff_cutlass is a prebuilt CUDAExtension (see setup.py)
+# linked against this specific torch build via CUDA 12.4 (nvcc at /usr/local/cuda-12.4,
+# CUTLASS at /workspace/cutlass). An unpinned floor here lets pip resolve a newer/ABI-
+# incompatible torch (e.g. cu13x) on a fresh install, which silently breaks the already
+# -built modiff_cutlass.so ("CUTLASS backend not available") until torch is reinstalled
+# at this exact version and the extension is rebuilt. If you bump this, rebuild the
+# extension (`pip install .` with CUTLASS_PATH set) against the new torch/CUDA pair.
+torch==2.4.1+cu124
+torchvision==0.19.1+cu124
+torchaudio==2.4.1+cu124
 triton>=2.1.0
 numpy>=1.26.3
 albumentations==0.4.3

@@ -1,6 +1,15 @@
 """
 Fused GroupNorm + SiLU Triton kernel.
 
+*** NOT USED IN PRODUCTION - measured slower than the plain-PyTorch alternative ***
+Benchmarked at ~3.4ms/call vs ~1.9ms/call for `FusedGroupNormSiLU` in
+integration/fused_ops/fused_resblock.py (which disables autocast locally and calls
+native F.group_norm + F.silu instead) at this model's channel/resolution sizes - see
+fused_resblock.py's module docstring for the comparison. `fuse_resblocks_in_module`
+wires up fused_resblock.py's version, never this one. This module is kept only for the
+one-off comparison in integration/benchmarks/benchmark_bottleneck.py; do not wire it
+into any production conversion path without re-validating the timing claim above.
+
 Fuses GroupNorm normalization with SiLU activation into a single kernel pass,
 eliminating one full read+write of the feature tensor compared to separate ops.
 

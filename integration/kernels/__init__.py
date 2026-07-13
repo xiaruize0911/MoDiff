@@ -8,5 +8,4 @@ Modules:
     fused_baseline   - Separate-kernel (unfused) baseline for INT8/INT4
     int8_linear      - INT8 quantized linear layer
     int4_linear      - INT4 quantized linear layer
-    modiff_layers    - Legacy CUTLASS conv implementation
 """

@@ -27,8 +27,13 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "write's cost in microbenchmarks. Still READS a_hat_cache (required to form the residual) -- "
           "this is NOT a no-cache substitute. For a true cache-free baseline use dynamic_quantize_int8_fprop.");
     m.def("step1_static_quantize_fprop", &step1_static_quantize_fprop, "Fused static-scale subtract + dequant + quantize for INT8 step 1");
+    m.def("step1_static_quantize_fprop_silu", &step1_static_quantize_fprop_silu,
+          "Same as step1_static_quantize_fprop but applies SiLU to x inline (FP16 a_hat_cache only) -- "
+          "fuses a ResBlock's activation function into the quantize step");
     m.def("step1_quantize_pack_int4_fprop", &step1_quantize_pack_int4_fprop, "Fused sub_absmax_scale + dequant + quantize+pack for INT4 step 1");
     m.def("step1_static_quantize_pack_int4_fprop", &step1_static_quantize_pack_int4_fprop, "Fused static-scale subtract + dequant + quantize+pack for INT4 step 1");
+    m.def("step1_static_quantize_pack_int4_fprop_silu", &step1_static_quantize_pack_int4_fprop_silu,
+          "Same as step1_static_quantize_pack_int4_fprop but applies SiLU to x inline (FP16 a_hat_cache only)");
     m.def("step1_quantize_pack_int4_no_ahat_fprop", &step1_quantize_pack_int4_no_ahat_fprop,
           "Benchmark-only: INT4 counterpart of step1_quantize_no_ahat_fprop -- see that entry for why this "
           "still takes a_hat_cache. For a true cache-free baseline use dynamic_quantize_pack_int4_fprop.");
@@ -44,6 +49,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // CUTLASS INT4 Conv2d (kernels/conv2d_int4.cu)
     m.def("conv2d_int4_fprop", &conv2d_int4_fprop, "Conv2d INT4 Forward (CUTLASS)");
     m.def("conv2d_int4_fprop_no_ohat_prealloc", &conv2d_int4_fprop_no_ohat_prealloc, "Fused INT4 conv + dequant into a preallocated output buffer");
+    m.def("conv2d_int4_fprop_no_ohat_prealloc_bias", &conv2d_int4_fprop_no_ohat_prealloc_bias, "Fused INT4 conv + dequant + bias into a preallocated output buffer");
     m.def("conv2d_int4_fprop_no_ohat", &conv2d_int4_fprop_no_ohat, "Fused INT4 conv + dequant without o_hat update");
     m.def("conv2d_int4_fprop_o_hat", &conv2d_int4_fprop_o_hat, "Fused INT4 Conv + o_hat accumulate");
 
@@ -54,4 +60,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "Fused FP32 [N*L,C,1,1] channels-last → FP16 [N,C,L] (K7+K8 fusion)");
     m.def("fp16_ncw_delta_to_int8_cl", &fp16_ncw_delta_to_int8_cl,
           "Fused FP16 [N,C,L] → INT8 [N*L,C,1,1] CL with MoDiff delta subtract+quantize (K1+K2+K3 fusion)");
+
+    // Native channels_last GroupNorm(+SiLU) (kernels/group_norm_silu.cu)
+    m.def("group_norm_silu_nhwc", &group_norm_silu_nhwc,
+          "GroupNorm (+ optional fused SiLU) operating natively on NHWC-physical memory, "
+          "never materializing an NCHW intermediate");
 }

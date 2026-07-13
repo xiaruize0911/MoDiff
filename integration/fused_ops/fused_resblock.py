@@ -4,15 +4,44 @@ Fused ResBlock operations for MoDiff optimizations.
 This module provides fused implementations of ResBlock operations to reduce
 memory bandwidth and kernel launch overhead. The main optimizations:
 
-1. Fused GroupNorm + SiLU: uses F.group_norm + F.silu with autocast locally
-   disabled (see FusedGroupNormSiLU below), so GroupNorm runs natively in
-   the input's own dtype instead of paying two dtype-cast kernels per call.
+1. Fused GroupNorm + SiLU: prefers a native channels_last CUDA kernel
+   (csrc/kernels/group_norm_silu.cu, see _group_norm_silu below) that reads
+   and writes NHWC-physical memory directly, so it never forces the
+   channels_last -> NCHW -> channels_last round-trip that plain F.group_norm
+   causes for every downstream quantized conv. Falls back to F.group_norm +
+   F.silu with autocast locally disabled (see FusedGroupNormSiLU below) when
+   the native kernel doesn't apply (CPU, non-channels_last input, dtype other
+   than fp32/fp16).
 2. Fused residual addition: Combines skip connection with final output
 3. In-place operations where possible to reduce memory allocations
 
-Measured speedup: ~11% wall-time reduction on the fp16 LSUN-churches UNet
-(no measurable effect in int8/int4 modes -- see FusedGroupNormSiLU docstring
-for why their GroupNorm inputs are already fp32 for an unrelated reason).
+Measured speedup (autocast-disabled F.group_norm path, before the native
+channels_last kernel was added): ~11% wall-time reduction on the fp16
+LSUN-churches UNet (no measurable effect in int8/int4 modes -- see
+FusedGroupNormSiLU docstring for why their GroupNorm inputs are already fp32
+for an unrelated reason).
+
+After adding the native channels_last kernel: full `benchmark_ldm.py --mode
+all --steps 200 --batch_size 16 --num_samples 32` run, time/sample before ->
+after (int8/int4 unlike fp16 DO benefit here, since their GroupNorm inputs
+are channels_last fp32, the exact case the old F.group_norm round-trip hit):
+    fp32:          1.180s -> 1.151s  (~2%)
+    fp16:          0.419s -> 0.400s  (~5%)
+    int8 (MoDiff): 0.442s -> 0.341s  (~23%)
+    int8_baseline: 0.417s -> 0.318s  (~24%)
+    int4 (MoDiff): 0.409s -> 0.318s  (~22%)
+    int4_baseline: 0.409s -> 0.343s  (~16%)
+The int4 (MoDiff) vs int4_baseline ordering above (0.318s vs 0.343s) did NOT
+reproduce under controlled re-profiling (matched 30-step runs with static
+calibration explicitly loaded): there they came out statistically tied
+(1308ms vs 1311ms total GPU time, ~0.2% apart) -- so treat that single-run
+flip as cuDNN benchmark-mode algorithm-selection noise across separate model
+loads, not a real effect of this kernel. See analysis_int4_vs_int8/ for why
+int4 doesn't show its ~2x theoretical speedup over int8 pipeline-wide even
+though the raw CUTLASS INT4 conv kernel itself does (~1.8x faster than INT8's
+in this same profiling run): conv is only ~8-14% of total GPU time, while
+attention (unquantized, ~38-40%) and non-quantized fp32/fp16 convs (~17-18%)
+are identical between precisions and dominate the pipeline.
 """
 
 import torch
@@ -29,6 +58,39 @@ except ImportError:
     class TimestepBlock(nn.Module):
         pass
 
+try:
+    import modiff_cutlass
+    HAS_NATIVE_GN_SILU = hasattr(modiff_cutlass, "group_norm_silu_nhwc")
+except ImportError:
+    modiff_cutlass = None
+    HAS_NATIVE_GN_SILU = False
+
+
+def _group_norm_silu(x, num_groups, weight, bias, eps, apply_silu):
+    """GroupNorm (+ optional SiLU), preferring the native channels_last CUDA
+    kernel (csrc/kernels/group_norm_silu.cu) that reads/writes NHWC-physical
+    memory directly. F.group_norm always returns NCHW-contiguous output
+    regardless of its input's memory format, which forces a real copy back
+    to channels_last for every downstream quantized conv (profiled and
+    confirmed on this pipeline) -- the native kernel never materializes that
+    NCHW intermediate. Falls back to F.group_norm(+F.silu) with autocast
+    disabled locally for shapes/dtypes/devices the kernel doesn't cover
+    (CPU, non-channels_last input, non-power-of-32-divisible channel counts,
+    dtypes other than fp32/fp16).
+    """
+    can_use_native = (
+        HAS_NATIVE_GN_SILU
+        and x.is_cuda
+        and x.dtype in (torch.float32, torch.float16)
+        and x.is_contiguous(memory_format=torch.channels_last)
+        and x.size(1) % num_groups == 0
+    )
+    if can_use_native:
+        return modiff_cutlass.group_norm_silu_nhwc(x, weight, bias, num_groups, eps, apply_silu)
+    with torch.amp.autocast(device_type=x.device.type, enabled=False):
+        out = F.group_norm(x, num_groups, weight, bias, eps)
+        return F.silu(out) if apply_silu else out
+
 
 class FusedGroupNormSiLU(nn.Module):
     """
@@ -40,8 +102,9 @@ class FusedGroupNormSiLU(nn.Module):
             nn.SiLU()
         )
 
-    Uses PyTorch's native F.group_norm + F.silu, with autocast locally
-    disabled around the call.
+    Delegates to _group_norm_silu(), which prefers the native channels_last
+    CUDA kernel and falls back to PyTorch's native F.group_norm + F.silu with
+    autocast locally disabled around the call.
 
     F.group_norm is on autocast's fp32-cast list (numerical stability for its
     mean/var reduction), so under `torch.amp.autocast(dtype=torch.float16)`
@@ -95,6 +158,14 @@ class FusedGroupNormSiLU(nn.Module):
         self._cast_weight = None
         self._cast_bias = None
 
+        # Set by wire_silu_fusion() below when the following conv is a
+        # calibrated OptimizedInt8Conv2d/OptimizedInt4Conv2d with
+        # fuse_input_silu=True: that layer applies SiLU itself (fused into
+        # its quantize kernel, or via its own F.silu fallback), so this
+        # module should return its GroupNorm-only output instead of also
+        # applying SiLU here.
+        self.skip_silu = False
+
     def _cast_params(self, dtype):
         if self._cast_dtype is not dtype:
             # .detach() first: Parameter.to(dtype) is a no-op returning `self`
@@ -109,9 +180,7 @@ class FusedGroupNormSiLU(nn.Module):
 
     def forward(self, x):
         weight, bias = self._cast_params(x.dtype)
-        with torch.amp.autocast(device_type=x.device.type, enabled=False):
-            x = F.group_norm(x, self.num_groups, weight, bias, self.eps)
-            return F.silu(x)
+        return _group_norm_silu(x, self.num_groups, weight, bias, self.eps, not self.skip_silu)
 
 
 class FusedResBlock(TimestepBlock):
@@ -241,13 +310,16 @@ class FusedResBlock(TimestepBlock):
             scale, shift = torch.chunk(emb_out, 2, dim=1)
             # Manual GroupNorm since we need scale/shift modulation
             weight, bias = self.fused_out_norm_silu._cast_params(h.dtype)
-            with torch.amp.autocast(device_type=h.device.type, enabled=False):
-                h_norm = F.group_norm(h, self.fused_out_norm_silu.num_groups,
-                                      weight,
-                                      bias,
-                                      self.fused_out_norm_silu.eps)
+            h_norm = _group_norm_silu(h, self.fused_out_norm_silu.num_groups,
+                                       weight, bias,
+                                       self.fused_out_norm_silu.eps,
+                                       apply_silu=False)
             h = h_norm * (1 + scale) + shift
-            h = F.silu(h)
+            # If out_conv is a calibrated quantized conv with fuse_input_silu
+            # set (see wire_silu_fusion), it applies SiLU itself (fused into
+            # its quantize kernel) -- skip the separate F.silu(h) pass here.
+            if not getattr(self.out_conv, 'fuse_input_silu', False):
+                h = F.silu(h)
             h = self.out_dropout(h)
             h = self.out_conv(h)
         else:
@@ -318,6 +390,58 @@ def fuse_resblocks_in_module(module, inplace=True):
     return module
 
 
+def wire_silu_fusion(module):
+    """
+    Wire SiLU fusion between each FusedResBlock's GroupNorm and its quantized
+    conv, for ResBlocks whose in_conv/out_conv have already been converted to
+    OptimizedInt8Conv2d/OptimizedInt4Conv2d (call this AFTER
+    convert_model_to_optimized_int8/int4, once per model setup).
+
+    For each eligible conv, sets `fuse_input_silu=True` so the conv applies
+    SiLU itself -- fused into its quantize kernel on the calibrated hot path,
+    or via a plain F.silu(x) call otherwise (see OptimizedInt8Conv2d.forward)
+    -- and pairs it with `fused_in_norm_silu.skip_silu=True` so the preceding
+    GroupNorm no longer also applies SiLU (avoiding a double activation).
+
+    `out_conv` is always eligible: nothing spatial sits between its GroupNorm
+    and the conv (out_dropout is `nn.Dropout`, a no-op in eval/inference
+    mode). `in_conv` is only eligible when `updown=False`: for `updown=True`
+    ResBlocks, `h_upd` (a spatial resize) runs between GroupNorm and in_conv,
+    and SiLU does not commute with resizing -- deferring SiLU into in_conv
+    there would apply it after the resize instead of before, changing the
+    computation, not just how it's scheduled. Returns the number of conv
+    layers wired.
+    """
+    try:
+        from integration.kernels.int8_optimized import OptimizedInt8Conv2d
+    except ImportError:
+        OptimizedInt8Conv2d = None
+    try:
+        from integration.kernels.int4_optimized import OptimizedInt4Conv2d
+    except ImportError:
+        OptimizedInt4Conv2d = None
+
+    fusable_types = tuple(t for t in (OptimizedInt8Conv2d, OptimizedInt4Conv2d) if t is not None)
+    if not fusable_types:
+        return 0
+
+    wired = 0
+    for m in module.modules():
+        if not isinstance(m, FusedResBlock) or m.resblock_type != 'openai':
+            continue
+        if (not m.updown and hasattr(m, 'in_conv') and hasattr(m, 'fused_in_norm_silu')
+                and isinstance(m.in_conv, fusable_types)):
+            m.in_conv.fuse_input_silu = True
+            m.fused_in_norm_silu.skip_silu = True
+            wired += 1
+        if hasattr(m, 'out_conv') and isinstance(m.out_conv, fusable_types):
+            m.out_conv.fuse_input_silu = True
+            if hasattr(m, 'fused_out_norm_silu'):
+                m.fused_out_norm_silu.skip_silu = True
+            wired += 1
+    return wired
+
+
 def print_fusion_summary(module):
     """Print summary of fused blocks in the module"""
     fused_blocks = [m for m in module.modules() if isinstance(m, FusedResBlock)]
@@ -330,6 +454,7 @@ def print_fusion_summary(module):
     print(f"Total fused blocks: {len(fused_blocks)}")
     print(f"  - OpenAI ResBlocks: {openai_blocks}")
     print(f"  - ResNet Blocks: {resnet_blocks}")
-    print(f"Fusion method: F.group_norm + F.silu with autocast locally disabled (no fp32 round-trip)")
-    print(f"Measured: ~11% wall-time reduction in fp16 mode; no effect in int8/int4 (see FusedGroupNormSiLU docstring)")
+    print(f"Fusion method: native channels_last GroupNorm(+SiLU) CUDA kernel, "
+          f"falling back to F.group_norm + F.silu with autocast locally disabled "
+          f"(HAS_NATIVE_GN_SILU={HAS_NATIVE_GN_SILU})")
     print(f"{'='*60}\n")

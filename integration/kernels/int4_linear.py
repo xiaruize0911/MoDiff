@@ -213,6 +213,8 @@ class OptimizedInt4Linear(nn.Module):
             return out
 
         if self.is_calibrated:
+            if HAS_CUTLASS:
+                return self._forward_modulated_static_fused(x)
             return self._forward_modulated_static(x)
 
         if HAS_CUTLASS:
@@ -231,6 +233,33 @@ class OptimizedInt4Linear(nn.Module):
         linear_r = self._linear(r_dq, with_bias=False, input_scale=scale)
 
         self.a_hat_cache.add_(r_dq)
+        self.o_hat_cache.add_(linear_r)
+        return self.o_hat_cache
+
+    def _forward_modulated_static_fused(self, x: torch.Tensor) -> torch.Tensor:
+        """Calibrated modulated step using the same fused CUTLASS kernel the
+        dynamic path already uses (dequant_accumulate_and_return_int4), just
+        with a precomputed static scale instead of one from sub_absmax_scale's
+        absmax reduction. Replaces 5 separate elementwise kernels (sub/mul/
+        round/clamp/div) plus a manual a_hat_cache.add_ with 1 subtract + 1
+        fused quantize+dequantize+cache-accumulate kernel.
+        """
+        scale = self._cached_scale_float
+        if scale is None:
+            scale = float(self.static_input_scale.item())
+            self._cached_scale_float = scale
+        if self._cached_scale_tensor is None:
+            self._cached_scale_tensor = torch.tensor([scale], device=x.device, dtype=torch.float32)
+
+        residual = x - self.a_hat_cache
+        if self._r_dq_buf is None or self._r_dq_buf.shape != residual.shape:
+            self._r_dq_buf = torch.empty_like(residual)
+
+        modiff_cutlass.dequant_accumulate_and_return_int4(
+            residual, self.a_hat_cache, self._cached_scale_tensor, self._r_dq_buf
+        )
+        linear_r = self._linear(self._r_dq_buf, with_bias=False, input_scale=scale)
+
         self.o_hat_cache.add_(linear_r)
         return self.o_hat_cache
 
