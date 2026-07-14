@@ -136,7 +136,11 @@ def main():
     models = {"fp16": build_fp16()}
     n_conv = sum(1 for _ in models["fp16"].modules() if isinstance(_, nn.Conv2d))
     print(f"fp16: {n_conv} conv layers")
-    for kind in ("int8", "int4", "int8_chained", "int8_fullchain"):
+    # int8/int8_chained are omitted from the timed set: int8_fullchain (whole-net
+    # threading) strictly dominates both (same accuracy, faster). build_quantized
+    # still supports "int8"/"int8_chained" for reference; int8_fullchain builds on
+    # the plain "int8" path internally.
+    for kind in ("int4", "int8_fullchain"):
         sp = a.skip_pointwise
         # int8_fullchain = whole-net int8 threading: build a plain calibrated int8
         # model, then wrap so the block-entry quantize is fused into the previous
@@ -160,7 +164,7 @@ def main():
             assert torch.isfinite(o).all(), f"{k} produced non-finite output"
 
     # warmup each model, then interleave the timed runs to spread any drift evenly
-    order = ["fp16", "int8", "int4", "int8_chained", "int8_fullchain"]
+    order = ["fp16", "int4", "int8_fullchain"]
     for k in order:
         timed(models[k], x, repeats=0, warmups=a.warmups)
     samples = {k: [] for k in order}
@@ -175,11 +179,7 @@ def main():
     for k in order:
         spd = med["fp16"] / med[k]
         print(f"{k:<14}{med[k]:>12.3f}{std[k]:>9.3f}{spd:>9.2f}x")
-    print(f"int4 vs int8:              {med['int8']/med['int4']:.2f}x")
-    print(f"int8_chained   vs int8:    {med['int8']/med['int8_chained']:.2f}x")
-    print(f"int8_chained   vs fp16:    {med['fp16']/med['int8_chained']:.2f}x  "
-          f"({'WIN' if med['int8_chained'] < med['fp16'] else 'no win'})")
-    print(f"int8_fullchain vs chained: {med['int8_chained']/med['int8_fullchain']:.2f}x")
+    print(f"int4           vs fp16:    {med['fp16']/med['int4']:.2f}x")
     print(f"int8_fullchain vs fp16:    {med['fp16']/med['int8_fullchain']:.2f}x  "
           f"({'WIN' if med['int8_fullchain'] < med['fp16'] else 'no win'})")
 
