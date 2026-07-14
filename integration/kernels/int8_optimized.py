@@ -14,6 +14,7 @@ MoDiff equations (Gao et al., ICML 2025):
         o_hat_t = A(Q(a_t - a_hat_{t+1})) + o_hat_{t+1}     -- Eq. (ec6)
 """
 
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -26,6 +27,13 @@ try:
 except ImportError:
     HAS_CUTLASS = False
     print("Warning: modiff_cutlass extension not found.")
+
+# Per-shape CUTLASS tile autotuning for the deep-fuse int8 conv. On first call
+# each conv times all tile configs on its actual input and caches the fastest
+# (the cuDNN-style per-shape selection). Kill-switch: MODIFF_DISABLE_CONV_AUTOTUNE=1
+# reverts to the single fixed 128^3 tile.
+_CONV_AUTOTUNE = (os.environ.get("MODIFF_DISABLE_CONV_AUTOTUNE") != "1"
+                  and HAS_CUTLASS and hasattr(modiff_cutlass, "conv2d_int8_dequant_fp16_tuned"))
 
 
 class OptimizedInt8Conv2d(nn.Module):
@@ -109,6 +117,9 @@ class OptimizedInt8Conv2d(nn.Module):
         self.output_requant_scale: Optional[torch.Tensor] = None
         self.fuse_output_relu: bool = False
         self._int8_output_buf: Optional[torch.Tensor] = None
+        # Autotuned CUTLASS tile config id for the deep-fuse int8 conv (lazy, per
+        # this conv's shape). None = not yet tuned; -1 = fixed default tile.
+        self._tuned_config_id: Optional[int] = None
         # Persistent scratch for the cast-free fp16 quantize in _forward_standard
         # (see there): a zeroed a_hat lets the fused step1 kernel consume fp16
         # activations directly, avoiding a per-layer fp16->fp32 cast.
@@ -528,6 +539,42 @@ class OptimizedInt8Conv2d(nn.Module):
         if self._empty_smooth is None or self._empty_smooth.device != device:
             self._empty_smooth = torch.empty(0, device=device, dtype=torch.float32)
 
+    def _ensure_tuned_config(self, x_int8: torch.Tensor, output_shape) -> Optional[int]:
+        """Lazily pick the fastest CUTLASS tile config for this conv's shape by
+        timing all configs on the actual int8 input (cuDNN-style per-shape select).
+        Cached in _tuned_config_id. Returns -1 (use fixed default tile) when
+        autotuning is disabled or the deep-fuse tuned kernel is unavailable."""
+        if self._tuned_config_id is not None:
+            return self._tuned_config_id
+        if not _CONV_AUTOTUNE:
+            self._tuned_config_id = -1
+            return -1
+        ncfg = modiff_cutlass.conv2d_int8_num_tuned_configs()
+        buf = torch.empty(output_shape, device=x_int8.device, dtype=torch.float16
+                          ).contiguous(memory_format=torch.channels_last)
+        wscale_h = self.weight_scale_channel_half.view(-1)
+        args = (x_int8, self.weight_int8, self._cached_alpha_tensor, wscale_h, buf)
+        strides = (self.stride[0], self.stride[1], self.padding[0], self.padding[1],
+                   self.dilation[0], self.dilation[1])
+        best_t, best_id = float("inf"), -1
+        for cid in range(ncfg):
+            try:
+                for _ in range(3):
+                    modiff_cutlass.conv2d_int8_dequant_fp16_tuned(*args, cid, *strides)
+                torch.cuda.synchronize()
+                s = torch.cuda.Event(enable_timing=True); e = torch.cuda.Event(enable_timing=True)
+                s.record()
+                for _ in range(10):
+                    modiff_cutlass.conv2d_int8_dequant_fp16_tuned(*args, cid, *strides)
+                e.record(); torch.cuda.synchronize()
+                t = s.elapsed_time(e)
+            except Exception:
+                continue
+            if t < best_t:
+                best_t, best_id = t, cid
+        self._tuned_config_id = best_id  # -1 if every config failed -> fixed default
+        return self._tuned_config_id
+
     def _conv_from_int8(self, x_int8: torch.Tensor, residual: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Run the calibrated INT8 conv (dequant/bias/store dispatch) on an already
         -quantized channels_last int8 activation. Shared by _forward_standard (which
@@ -567,11 +614,19 @@ class OptimizedInt8Conv2d(nn.Module):
                 and (self.bias is None or self._standard_output_buf.numel() >= 2_000_000)
             )
             if use_deep_fuse:
-                out = modiff_cutlass.conv2d_int8_fprop_dequant_fp16_prealloc(
-                    x_int8, self.weight_int8, self._cached_alpha_tensor,
-                    self.weight_scale_channel_half.view(-1), self._standard_output_buf,
-                    self.stride[0], self.stride[1], self.padding[0], self.padding[1],
-                    self.dilation[0], self.dilation[1])
+                cid = self._ensure_tuned_config(x_int8, output_shape)
+                if cid is not None and cid >= 0:
+                    out = modiff_cutlass.conv2d_int8_dequant_fp16_tuned(
+                        x_int8, self.weight_int8, self._cached_alpha_tensor,
+                        self.weight_scale_channel_half.view(-1), self._standard_output_buf, cid,
+                        self.stride[0], self.stride[1], self.padding[0], self.padding[1],
+                        self.dilation[0], self.dilation[1])
+                else:
+                    out = modiff_cutlass.conv2d_int8_fprop_dequant_fp16_prealloc(
+                        x_int8, self.weight_int8, self._cached_alpha_tensor,
+                        self.weight_scale_channel_half.view(-1), self._standard_output_buf,
+                        self.stride[0], self.stride[1], self.padding[0], self.padding[1],
+                        self.dilation[0], self.dilation[1])
             elif self.bias is not None and hasattr(modiff_cutlass, "conv2d_int8_fprop_no_ohat_prealloc_bias"):
                 out = modiff_cutlass.conv2d_int8_fprop_no_ohat_prealloc_bias(
                     x_int8, self.weight_int8, self._cached_alpha_tensor,
@@ -656,10 +711,12 @@ class OptimizedInt8Conv2d(nn.Module):
         # the fp32 intermediate the plain path pays. Requires out_channels%8==0.
         if (self.out_channels % 8 == 0
                 and hasattr(modiff_cutlass, "conv2d_int8_fprop_deepfuse_relu_requant_int8")):
+            cid = self._ensure_tuned_config(x_int8, tuple(self._int8_output_buf.shape))
             return modiff_cutlass.conv2d_int8_fprop_deepfuse_relu_requant_int8(
                 x_int8, self.weight_int8, self._cached_alpha_tensor,
                 self.weight_scale_channel_half.view(-1), bias_arg,
                 self.output_requant_scale.view(1), self._int8_output_buf, apply_relu,
+                cid if cid is not None else -1,
                 self.stride[0], self.stride[1], self.padding[0], self.padding[1],
                 self.dilation[0], self.dilation[1])
         return modiff_cutlass.conv2d_int8_fprop_relu_requant_int8(

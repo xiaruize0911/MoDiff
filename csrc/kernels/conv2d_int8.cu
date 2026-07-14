@@ -787,6 +787,7 @@ torch::Tensor conv2d_int8_fprop_deepfuse_relu_requant_int8(
     torch::Tensor requant_scale,
     torch::Tensor output,
     bool apply_relu,
+    int64_t config_id,
     int stride_h, int stride_w,
     int padding_h, int padding_w,
     int dilation_h, int dilation_w
@@ -799,10 +800,17 @@ torch::Tensor conv2d_int8_fprop_deepfuse_relu_requant_int8(
     TORCH_CHECK(requant_scale.numel() == 1, "requant_scale must be a scalar tensor");
 
     // fp16 scratch: the deep-fuse GEMM writes dequantized fp16 here (no fp32 temp).
+    // config_id < 0 keeps the fixed default tile; >= 0 uses the autotuned tile.
     auto scratch = torch::empty_like(output, output.options().dtype(torch::kFloat16));
-    conv2d_int8_fprop_dequant_fp16_prealloc(
-        input, weight, inv_scale, weight_scales_half, scratch,
-        stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w);
+    if (config_id < 0) {
+        conv2d_int8_fprop_dequant_fp16_prealloc(
+            input, weight, inv_scale, weight_scales_half, scratch,
+            stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w);
+    } else {
+        conv2d_int8_dequant_fp16_tuned(
+            input, weight, inv_scale, weight_scales_half, scratch, config_id,
+            stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w);
+    }
 
     const bool has_bias = bias.numel() > 0;
     if (has_bias) {
