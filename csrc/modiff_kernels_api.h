@@ -132,7 +132,8 @@ torch::Tensor fp16_ncw_delta_to_int8_cl(torch::Tensor x, torch::Tensor a_hat, to
 // ---- csrc/kernels/group_norm_silu.cu ----
 torch::Tensor group_norm_silu_nhwc(
     torch::Tensor x, torch::Tensor weight, torch::Tensor bias,
-    int64_t num_groups, double eps, bool apply_silu);
+    int64_t num_groups, double eps, bool apply_silu,
+    torch::Tensor mod_scale, torch::Tensor mod_shift);
 
 torch::Tensor group_norm_silu_quantize_nhwc(
     torch::Tensor x, torch::Tensor weight, torch::Tensor bias,

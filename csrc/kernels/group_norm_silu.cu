@@ -46,6 +46,8 @@ __global__ void group_norm_silu_nhwc_kernel(
     T* __restrict__ Y,            // same shape/layout as X
     const T* __restrict__ gamma,  // [C], affine weight
     const T* __restrict__ beta,   // [C], affine bias
+    const T* __restrict__ mod_scale, // [N, C] scale-shift modulation, or nullptr
+    const T* __restrict__ mod_shift, // [N, C] scale-shift modulation, or nullptr
     int C,
     long HW,
     int G,
@@ -111,6 +113,11 @@ __global__ void group_norm_silu_nhwc_kernel(
         float w = gn_load(gamma, c_global);
         float b = gn_load(beta, c_global);
         float normed = (v - mean) * inv_std * w + b;
+        // Optional scale-shift modulation (use_scale_shift_norm) before SiLU.
+        if (mod_scale != nullptr) {
+            long midx = (long)n * C + c_global;
+            normed = normed * (1.0f + gn_load(mod_scale, midx)) + gn_load(mod_shift, midx);
+        }
         float out = apply_silu ? (normed / (1.0f + expf(-normed))) : normed;
         gn_store(y_base, mem_idx, out);
     }
@@ -125,7 +132,9 @@ torch::Tensor group_norm_silu_nhwc(
     torch::Tensor bias,
     int64_t num_groups,
     double eps,
-    bool apply_silu
+    bool apply_silu,
+    torch::Tensor mod_scale,   // [N, C] scale-shift modulation, or empty for none
+    torch::Tensor mod_shift
 ) {
     CHECK_CUDA(x);
     CHECK_CONTIGUOUS(x);
@@ -134,6 +143,9 @@ torch::Tensor group_norm_silu_nhwc(
                 "group_norm_silu_nhwc: weight/bias dtype must match input dtype");
     TORCH_CHECK(x.scalar_type() == torch::kFloat32 || x.scalar_type() == torch::kFloat16,
                 "group_norm_silu_nhwc: only float32 and float16 are supported");
+    const bool has_mod = mod_scale.numel() > 0;
+    TORCH_CHECK(!has_mod || (mod_scale.scalar_type() == x.scalar_type() && mod_shift.scalar_type() == x.scalar_type()),
+                "group_norm_silu_nhwc: mod_scale/mod_shift dtype must match input dtype");
 
     const int N = x.size(0);
     const int C = x.size(1);
@@ -158,6 +170,8 @@ torch::Tensor group_norm_silu_nhwc(
         group_norm_silu_nhwc_kernel<float><<<grid, block, shmem_bytes, stream>>>(
             x.data_ptr<float>(), y.data_ptr<float>(),
             weight.data_ptr<float>(), bias.data_ptr<float>(),
+            has_mod ? mod_scale.data_ptr<float>() : nullptr,
+            has_mod ? mod_shift.data_ptr<float>() : nullptr,
             C, HW, (int)num_groups, (float)eps, apply_silu
         );
     } else {
@@ -166,6 +180,8 @@ torch::Tensor group_norm_silu_nhwc(
             reinterpret_cast<__half*>(y.data_ptr<at::Half>()),
             reinterpret_cast<const __half*>(weight.data_ptr<at::Half>()),
             reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
+            has_mod ? reinterpret_cast<const __half*>(mod_scale.data_ptr<at::Half>()) : nullptr,
+            has_mod ? reinterpret_cast<const __half*>(mod_shift.data_ptr<at::Half>()) : nullptr,
             C, HW, (int)num_groups, (float)eps, apply_silu
         );
     }

@@ -79,7 +79,7 @@ if os.environ.get("MODIFF_DISABLE_GN_INT8_FUSION") == "1":
     HAS_GN_SILU_QUANTIZE_PACK = False
 
 
-def _group_norm_silu(x, num_groups, weight, bias, eps, apply_silu):
+def _group_norm_silu(x, num_groups, weight, bias, eps, apply_silu, mod_scale=None, mod_shift=None):
     """GroupNorm (+ optional SiLU), preferring the native channels_last CUDA
     kernel (csrc/kernels/group_norm_silu.cu) that reads/writes NHWC-physical
     memory directly. F.group_norm always returns NCHW-contiguous output
@@ -98,10 +98,21 @@ def _group_norm_silu(x, num_groups, weight, bias, eps, apply_silu):
         and x.is_contiguous(memory_format=torch.channels_last)
         and x.size(1) % num_groups == 0
     )
+    # Optional use_scale_shift_norm modulation `normed*(1+scale)+shift`, folded into
+    # the kernel (fp16 output) so the MoDiff modulated path avoids a separate
+    # elementwise mul+add before its delta-quantize.
+    if mod_scale is not None:
+        N, C = x.size(0), x.size(1)
+        ms2d = mod_scale.reshape(N, C).contiguous()
+        sh2d = mod_shift.reshape(N, C).contiguous()
+    else:
+        ms2d = sh2d = x.new_empty(0)
     if can_use_native:
-        return modiff_cutlass.group_norm_silu_nhwc(x, weight, bias, num_groups, eps, apply_silu)
+        return modiff_cutlass.group_norm_silu_nhwc(x, weight, bias, num_groups, eps, apply_silu, ms2d, sh2d)
     with torch.amp.autocast(device_type=x.device.type, enabled=False):
         out = F.group_norm(x, num_groups, weight, bias, eps)
+        if mod_scale is not None:
+            out = out * (1 + mod_scale) + mod_shift
         return F.silu(out) if apply_silu else out
 
 
@@ -449,18 +460,18 @@ class FusedResBlock(TimestepBlock):
                 h = fused
                 residual_fused = residual_arg is not None
             else:
-                # Manual GroupNorm since we need scale/shift modulation
+                # Not eligible for the GN->intX fusion (e.g. the MoDiff modulated
+                # path, whose delta-quantize needs the fp16 activation). Still fold
+                # the scale-shift modulation `normed*(1+scale)+shift` into the GN
+                # kernel (fp16 output) so it isn't a separate elementwise mul+add.
                 weight, bias = self.fused_out_norm_silu._cast_params(h.dtype)
-                h_norm = _group_norm_silu(h, self.fused_out_norm_silu.num_groups,
-                                           weight, bias,
-                                           self.fused_out_norm_silu.eps,
-                                           apply_silu=False)
-                h = h_norm * (1 + scale) + shift
-                # If out_conv is a calibrated quantized conv with fuse_input_silu
-                # set (see wire_silu_fusion), it applies SiLU itself (fused into
-                # its quantize kernel) -- skip the separate F.silu(h) pass here.
-                if not getattr(self.out_conv, 'fuse_input_silu', False):
-                    h = F.silu(h)
+                apply_silu_here = not getattr(self.out_conv, 'fuse_input_silu', False)
+                h = _group_norm_silu(h, self.fused_out_norm_silu.num_groups,
+                                     weight, bias, self.fused_out_norm_silu.eps,
+                                     apply_silu=apply_silu_here,
+                                     mod_scale=scale, mod_shift=shift)
+                # If out_conv applies SiLU itself (fuse_input_silu, e.g. MoDiff's
+                # step1_silu kernel), apply_silu_here is False and SiLU is deferred.
                 h = self.out_dropout(h)
                 h = self.out_conv(h)
         else:

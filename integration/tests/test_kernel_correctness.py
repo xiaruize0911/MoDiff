@@ -140,7 +140,8 @@ def test_group_norm_silu():
     w = torch.randn(256, device=DEV, dtype=torch.float16)
     b = torch.randn(256, device=DEV, dtype=torch.float16)
     ng, eps = 32, 1e-5
-    out = mc.group_norm_silu_nhwc(x, w, b, ng, eps, True)
+    _empty = torch.empty(0, device=DEV, dtype=torch.float16)
+    out = mc.group_norm_silu_nhwc(x, w, b, ng, eps, True, _empty, _empty)
     ref = F.silu(F.group_norm(x.float(), ng, w.float(), b.float(), eps))
     re = rel_err(out, ref)
     g = check_golden("group_norm_silu_res32", out)
