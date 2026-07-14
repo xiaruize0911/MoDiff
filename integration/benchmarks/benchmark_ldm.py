@@ -598,6 +598,17 @@ class BenchmarkRunner:
             n = convert_attention_to_modiff(model.model.diffusion_model, act_bits=8, verbose=True)
             print(f"  → MoDiff attention applied to {n} AttentionBlocks")
 
+        # Token-major AttentionBlock: eliminate the channel-major<->flash layout
+        # copies (numerically identical; skips MoDiff-wrapped attention and is
+        # itself gated by MODIFF_DISABLE_TOKEN_MAJOR_ATTN). Shared across all modes.
+        try:
+            from integration.fused_ops.token_major_attention import convert_attention_to_token_major
+            n_tm = convert_attention_to_token_major(model.model.diffusion_model)
+            if n_tm > 0:
+                print(f"✓ Converted {n_tm} AttentionBlocks to token-major layout")
+        except Exception as e:
+            print(f"  (token-major attention conversion skipped: {e})")
+
         # Wire SiLU fusion between each FusedResBlock's GroupNorm and its
         # quantized conv (no-op for modes where in_conv/out_conv are still
         # plain nn.Conv2d, e.g. fp32/fp16).
