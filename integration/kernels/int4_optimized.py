@@ -491,17 +491,21 @@ class OptimizedInt4Conv2d(nn.Module):
         if self._empty_smooth is None or self._empty_smooth.device != device:
             self._empty_smooth = torch.empty(0, device=device, dtype=torch.float32)
 
-    def _conv_from_int4(self, x_packed: torch.Tensor, h_in: int, w_in: int) -> torch.Tensor:
+    def _conv_from_int4(self, x_packed: torch.Tensor, h_in: int, w_in: int,
+                        residual: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Run the calibrated INT4 conv (dequant/bias/store dispatch) on an
         already-quantized+packed activation ([N, H, W, C/2], the layout produced by
         scale_quantize_and_pack). Shared by _forward_standard (which quantizes first)
         and forward_from_int4 (which skips the quantize). h_in/w_in are the conv
-        input's spatial dims (== x_packed.shape[1:3])."""
+        input's spatial dims (== x_packed.shape[1:3]). Optional `residual` (fp16
+        channels_last, same shape as output) is fused into the store epilogue as the
+        ResBlock skip-add."""
         self._ensure_conv_caches(x_packed.device)
         h_out = ((h_in + 2 * self.padding[0] - self.dilation[0] * (self.kernel_size[0] - 1) - 1) // self.stride[0]) + 1
         w_out = ((w_in + 2 * self.padding[1] - self.dilation[1] * (self.kernel_size[1] - 1) - 1) // self.stride[1]) + 1
         output_shape = (x_packed.shape[0], self.out_channels, h_out, w_out)
         bias_fused = False
+        residual_fused = False
         if self.standard_output_fp16:
             if (self._standard_output_buf is None
                     or self._standard_output_buf.shape != output_shape
@@ -510,6 +514,15 @@ class OptimizedInt4Conv2d(nn.Module):
                 self._standard_output_buf = torch.empty(
                     output_shape, device=x_packed.device, dtype=torch.float16
                 ).contiguous(memory_format=torch.channels_last)
+            if residual is not None and hasattr(modiff_cutlass, "conv2d_int4_fprop_no_ohat_prealloc_bias_residual"):
+                bias_arg = (self.bias.view(-1).contiguous()
+                            if self.bias is not None else self._empty_bias)
+                return modiff_cutlass.conv2d_int4_fprop_no_ohat_prealloc_bias_residual(
+                    x_packed, self.weight_packed, self._cached_alpha_tensor,
+                    self.weight_scale_channel.view(-1), bias_arg, residual,
+                    self._standard_output_buf,
+                    self.stride[0], self.stride[1], self.padding[0], self.padding[1],
+                    self.dilation[0], self.dilation[1])
             if self.bias is not None and hasattr(modiff_cutlass, "conv2d_int4_fprop_no_ohat_prealloc_bias"):
                 out = modiff_cutlass.conv2d_int4_fprop_no_ohat_prealloc_bias(
                     x_packed, self.weight_packed, self._cached_alpha_tensor,
@@ -533,16 +546,20 @@ class OptimizedInt4Conv2d(nn.Module):
         if self.bias is not None and not bias_fused:
             bias = self.bias.to(out.dtype) if out.dtype != self.bias.dtype else self.bias
             out = out + bias
+        if residual is not None and not residual_fused:
+            out = out + (residual.to(out.dtype) if out.dtype != residual.dtype else residual)
         return out
 
-    def forward_from_int4(self, x_packed: torch.Tensor, h_in: int, w_in: int) -> torch.Tensor:
+    def forward_from_int4(self, x_packed: torch.Tensor, h_in: int, w_in: int,
+                          residual: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Baseline fast path: the activation is already quantized+packed to int4
         (SiLU applied upstream by the GN->int4 fusion in fused_resblock.py), so skip
         the per-layer quantize+pack and go straight to the conv. Only valid when
-        calibrated + not modiff_enabled."""
+        calibrated + not modiff_enabled. Optional `residual` (fp16 channels_last) is
+        fused into the store epilogue as the ResBlock skip-add."""
         if not x_packed.is_contiguous():
             x_packed = x_packed.contiguous()
-        return self._conv_from_int4(x_packed, h_in, w_in)
+        return self._conv_from_int4(x_packed, h_in, w_in, residual=residual)
 
     def _forward_first_step(self, x: torch.Tensor) -> torch.Tensor:
         """First timestep (t=T): warm-up with repeated quantisation.

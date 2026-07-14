@@ -86,6 +86,11 @@ torch::Tensor conv2d_int8_fprop_no_ohat_prealloc_bias(
     torch::Tensor weight_scales, torch::Tensor bias, torch::Tensor output,
     int stride_h, int stride_w, int padding_h, int padding_w, int dilation_h, int dilation_w);
 
+torch::Tensor conv2d_int8_fprop_no_ohat_prealloc_bias_residual(
+    torch::Tensor input, torch::Tensor weight, torch::Tensor inv_scale,
+    torch::Tensor weight_scales, torch::Tensor bias, torch::Tensor residual, torch::Tensor output,
+    int stride_h, int stride_w, int padding_h, int padding_w, int dilation_h, int dilation_w);
+
 torch::Tensor conv2d_int8_fprop_no_ohat(
     torch::Tensor input, torch::Tensor weight, torch::Tensor inv_scale, torch::Tensor weight_scales,
     int stride_h, int stride_w, int padding_h, int padding_w, int dilation_h, int dilation_w);
@@ -103,6 +108,11 @@ torch::Tensor conv2d_int4_fprop_no_ohat_prealloc(
 torch::Tensor conv2d_int4_fprop_no_ohat_prealloc_bias(
     torch::Tensor input, torch::Tensor weight_packed, torch::Tensor inv_scale,
     torch::Tensor weight_scales, torch::Tensor bias, torch::Tensor output,
+    int stride_h, int stride_w, int padding_h, int padding_w, int dilation_h, int dilation_w);
+
+torch::Tensor conv2d_int4_fprop_no_ohat_prealloc_bias_residual(
+    torch::Tensor input, torch::Tensor weight_packed, torch::Tensor inv_scale,
+    torch::Tensor weight_scales, torch::Tensor bias, torch::Tensor residual, torch::Tensor output,
     int stride_h, int stride_w, int padding_h, int padding_w, int dilation_h, int dilation_w);
 
 torch::Tensor conv2d_int4_fprop_no_ohat(

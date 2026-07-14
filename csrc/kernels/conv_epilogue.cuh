@@ -80,6 +80,34 @@ __global__ void scale_bias_store_half_kernel(
     }
 }
 
+// Same as scale_bias_store_half_kernel, but also adds a per-element residual
+// (channels_last FP16, same layout/shape as output) -- fuses a ResBlock's skip
+// connection add into the conv's dequant/bias store, so the conv writes
+// conv*weight_scale[ch] + bias[ch] + residual[i] in one pass instead of a
+// separate aten::add. `bias` may be nullptr (skips the bias term). Accumulates in
+// FP32 and rounds once (slightly more accurate than the fp16-accumulated add it
+// replaces). Scalar loop: residual[i] aligns with output[i] under identical
+// channels_last layout.
+template <typename BiasT>
+__global__ void scale_bias_residual_store_half_kernel(
+    const float* __restrict__ conv_output,
+    const float* __restrict__ weight_scale,
+    const BiasT* __restrict__ bias,
+    const __half* __restrict__ residual,
+    __half* __restrict__ output,
+    int num_elements,
+    int num_channels
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    for (int i = idx; i < num_elements; i += blockDim.x * gridDim.x) {
+        int ch = i % num_channels;
+        float value = conv_output[i] * weight_scale[ch]
+                    + (bias != nullptr ? bias_value(bias, ch) : 0.0f)
+                    + __half2float(residual[i]);
+        output[i] = __float2half_rn(value);
+    }
+}
+
 template <typename BiasT>
 __global__ void scale_bias_store_kernel(
     const float* __restrict__ conv_output,

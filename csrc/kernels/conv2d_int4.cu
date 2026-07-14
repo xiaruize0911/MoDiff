@@ -289,6 +289,69 @@ torch::Tensor conv2d_int4_fprop_no_ohat_prealloc_bias(
     return output;
 }
 
+// Same as conv2d_int4_fprop_no_ohat_prealloc_bias, but also adds a per-element
+// residual (channels_last FP16, same shape as output) in the store epilogue --
+// fuses a ResBlock's skip-connection add into the conv. `bias` may be empty.
+// FP16 output only. Reuses the shared scale_bias_residual_store_half_kernel.
+torch::Tensor conv2d_int4_fprop_no_ohat_prealloc_bias_residual(
+    torch::Tensor input,
+    torch::Tensor weight_packed,
+    torch::Tensor inv_scale,
+    torch::Tensor weight_scales,
+    torch::Tensor bias,
+    torch::Tensor residual,
+    torch::Tensor output,
+    int stride_h, int stride_w,
+    int padding_h, int padding_w,
+    int dilation_h, int dilation_w
+) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    auto empty_bias = torch::empty({0}, torch::TensorOptions().device(input.device()));
+    auto conv_out = conv2d_int4_fprop(
+        input, weight_packed, inv_scale, empty_bias,
+        stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w
+    );
+
+    CHECK_CUDA(output);
+    CHECK_CONTIGUOUS(output);
+    CHECK_CUDA(residual);
+    TORCH_CHECK(residual.is_contiguous(residual.suggest_memory_format()),
+                "residual must be contiguous");
+    TORCH_CHECK(output.scalar_type() == torch::kFloat16,
+                "conv2d_int4_fprop_no_ohat_prealloc_bias_residual: output must be float16");
+    TORCH_CHECK(residual.scalar_type() == torch::kFloat16, "residual must be float16");
+    TORCH_CHECK(output.sizes() == conv_out.sizes(), "output shape mismatch");
+    TORCH_CHECK(residual.numel() == conv_out.numel(), "residual size must match output");
+    const bool has_bias = bias.numel() > 0;
+    if (has_bias) {
+        TORCH_CHECK(bias.is_contiguous(), "bias must be contiguous");
+        TORCH_CHECK(bias.numel() == weight_scales.numel(), "bias size must match output channels");
+    }
+
+    int num_elements = conv_out.numel();
+    int num_channels = weight_scales.numel();
+    int block_size = 256;
+    int grid_size = (num_elements + block_size - 1) / block_size;
+    const __half* res_ptr = reinterpret_cast<const __half*>(residual.data_ptr<at::Half>());
+    __half* out_ptr = reinterpret_cast<__half*>(output.data_ptr<at::Half>());
+
+    if (has_bias && bias.scalar_type() == torch::kFloat16) {
+        scale_bias_residual_store_half_kernel<__half><<<grid_size, block_size, 0, stream>>>(
+            conv_out.data_ptr<float>(), weight_scales.data_ptr<float>(),
+            reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
+            res_ptr, out_ptr, num_elements, num_channels);
+    } else if (has_bias) {
+        scale_bias_residual_store_half_kernel<float><<<grid_size, block_size, 0, stream>>>(
+            conv_out.data_ptr<float>(), weight_scales.data_ptr<float>(),
+            bias.data_ptr<float>(), res_ptr, out_ptr, num_elements, num_channels);
+    } else {
+        scale_bias_residual_store_half_kernel<__half><<<grid_size, block_size, 0, stream>>>(
+            conv_out.data_ptr<float>(), weight_scales.data_ptr<float>(),
+            (const __half*)nullptr, res_ptr, out_ptr, num_elements, num_channels);
+    }
+    return output;
+}
+
 // Same as conv2d_int4_fprop_no_ohat_prealloc, but allocates its own output buffer.
 torch::Tensor conv2d_int4_fprop_no_ohat(
     torch::Tensor input,

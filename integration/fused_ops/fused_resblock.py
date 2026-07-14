@@ -124,7 +124,7 @@ def _prequant_common_ok(conv):
     )
 
 
-def _prequant_gn_conv(x, gn, conv, mod_scale=None, mod_shift=None):
+def _prequant_gn_conv(x, gn, conv, mod_scale=None, mod_shift=None, residual=None):
     """If (GroupNorm+SiLU `gn` -> quantized conv `conv`) is eligible for the
     GN->intX K1-fusion, run GroupNorm(+optional scale-shift modulation)+SiLU
     emitting the conv's quantized input directly (int8, or packed int4) and then
@@ -133,12 +133,16 @@ def _prequant_gn_conv(x, gn, conv, mod_scale=None, mod_shift=None):
 
     `mod_scale`/`mod_shift` (each [N, C, 1, 1] from the timestep embedding, or None)
     add the use_scale_shift_norm modulation `normed*(1+scale)+shift` between the GN
-    affine and the SiLU, folding it (and the SiLU) into the one kernel too. The
-    quantize multiplier is conv.static_input_scale (=127/absmax); smooth_inv is
-    identity (gated above).
+    affine and the SiLU, folding it (and the SiLU) into the one kernel too.
+    `residual` (the ResBlock skip tensor, or None) is fused into the conv's store
+    epilogue as a skip-add, removing the trailing aten::add. The quantize multiplier
+    is conv.static_input_scale (=127/absmax); smooth_inv is identity (gated above).
     """
     if not _prequant_common_ok(conv):
         return None
+    # Residual must be fp16 channels_last matching the conv output's flat layout.
+    if residual is not None:
+        residual = residual.to(torch.float16).contiguous(memory_format=torch.channels_last)
     is_int4 = hasattr(conv, 'forward_from_int4')
     if is_int4 and not HAS_GN_SILU_QUANTIZE_PACK:
         return None
@@ -177,7 +181,7 @@ def _prequant_gn_conv(x, gn, conv, mod_scale=None, mod_shift=None):
         else:
             packed = modiff_cutlass.scale_quantize_and_pack(
                 _gn_mod_silu_fp32_cl(x, ng, w, b, eps, mod_scale, mod_shift), scale)
-        return conv.forward_from_int4(packed, h_in, w_in)
+        return conv.forward_from_int4(packed, h_in, w_in, residual=residual)
     else:
         if native_ok:
             q = modiff_cutlass.group_norm_silu_quantize_nhwc(
@@ -185,7 +189,7 @@ def _prequant_gn_conv(x, gn, conv, mod_scale=None, mod_shift=None):
         else:
             q = modiff_cutlass.scale_quantize_int8(
                 _gn_mod_silu_fp32_cl(x, ng, w, b, eps, mod_scale, mod_shift), scale)
-        return conv.forward_from_int8(q)
+        return conv.forward_from_int8(q, residual=residual)
 
 
 def _gn_mod_silu_fp32_cl(x, num_groups, weight, bias, eps, mod_scale, mod_shift):
@@ -424,16 +428,26 @@ class FusedResBlock(TimestepBlock):
         while len(emb_out.shape) < len(h.shape):
             emb_out = emb_out[..., None]
         
-        # Output path: fused GroupNorm + SiLU, then Dropout + Conv
+        # Skip/residual source (computed with the live x, after any updown resize).
+        # When split==0 we hand it to the out-conv so the skip-add is fused into the
+        # conv's store epilogue; the split>0 path can't fuse and adds it at the end.
+        if split > 0:
+            skip = self.skip_connection(x, split=split)
+            residual_arg = None
+        else:
+            skip = self.skip_connection(x)
+            residual_arg = skip
+        residual_fused = False
+
+        # Output path: fused GroupNorm + SiLU (+ scale-shift modulation) + skip-add,
+        # then Conv. out_dropout is nn.Dropout (no-op in eval), elided on the fused path.
         if self.use_scale_shift_norm:
             scale, shift = torch.chunk(emb_out, 2, dim=1)
-            # K1->GN fusion with scale-shift modulation folded in: GroupNorm ->
-            # normed*(1+scale)+shift -> SiLU -> quantize, all in one kernel, then
-            # out_conv.forward_from_intX. out_dropout is nn.Dropout (no-op in eval).
             fused = _prequant_gn_conv(h, self.fused_out_norm_silu, self.out_conv,
-                                      mod_scale=scale, mod_shift=shift)
+                                      mod_scale=scale, mod_shift=shift, residual=residual_arg)
             if fused is not None:
                 h = fused
+                residual_fused = residual_arg is not None
             else:
                 # Manual GroupNorm since we need scale/shift modulation
                 weight, bias = self.fused_out_norm_silu._cast_params(h.dtype)
@@ -451,22 +465,20 @@ class FusedResBlock(TimestepBlock):
                 h = self.out_conv(h)
         else:
             h = h + emb_out
-            # K1->GN fusion: GroupNorm+SiLU emits the conv's quantized input
-            # directly; out_conv skips its own quantize. out_dropout is nn.Dropout
-            # (no-op in eval/inference), so it's elided on the fused path.
-            fused = _prequant_gn_conv(h, self.fused_out_norm_silu, self.out_conv)
+            fused = _prequant_gn_conv(h, self.fused_out_norm_silu, self.out_conv,
+                                      residual=residual_arg)
             if fused is not None:
                 h = fused
+                residual_fused = residual_arg is not None
             else:
                 h = self.fused_out_norm_silu(h)
                 h = self.out_dropout(h)
                 h = self.out_conv(h)
-        
-        # Fused residual addition
-        if split > 0:
-            return torch.add(self.skip_connection(x, split=split), h)
-        else:
-            return torch.add(self.skip_connection(x), h)
+
+        # Residual addition (skipped when already fused into the out-conv epilogue)
+        if residual_fused:
+            return h
+        return torch.add(skip, h)
     
     def _forward_resnet(self, x, temb):
         """Fused forward for model.ResnetBlock"""

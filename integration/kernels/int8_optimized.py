@@ -521,15 +521,20 @@ class OptimizedInt8Conv2d(nn.Module):
         if self._empty_smooth is None or self._empty_smooth.device != device:
             self._empty_smooth = torch.empty(0, device=device, dtype=torch.float32)
 
-    def _conv_from_int8(self, x_int8: torch.Tensor) -> torch.Tensor:
+    def _conv_from_int8(self, x_int8: torch.Tensor, residual: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Run the calibrated INT8 conv (dequant/bias/store dispatch) on an already
         -quantized channels_last int8 activation. Shared by _forward_standard (which
-        quantizes first) and forward_from_int8 (which skips the quantize)."""
+        quantizes first) and forward_from_int8 (which skips the quantize).
+
+        If `residual` (fp16 channels_last, same shape as the conv output) is given,
+        it is added in the store epilogue (fusing a ResBlock skip-add) rather than
+        as a separate aten::add."""
         self._ensure_conv_caches(x_int8.device)
         h_out = ((x_int8.shape[2] + 2 * self.padding[0] - self.dilation[0] * (self.kernel_size[0] - 1) - 1) // self.stride[0]) + 1
         w_out = ((x_int8.shape[3] + 2 * self.padding[1] - self.dilation[1] * (self.kernel_size[1] - 1) - 1) // self.stride[1]) + 1
         output_shape = (x_int8.shape[0], self.out_channels, h_out, w_out)
         bias_fused = False
+        residual_fused = False
         if self.standard_output_fp16:
             if (self._standard_output_buf is None
                     or self._standard_output_buf.shape != output_shape
@@ -538,6 +543,17 @@ class OptimizedInt8Conv2d(nn.Module):
                 self._standard_output_buf = torch.empty(
                     output_shape, device=x_int8.device, dtype=torch.float16
                 ).contiguous(memory_format=torch.channels_last)
+            if residual is not None and hasattr(modiff_cutlass, "conv2d_int8_fprop_no_ohat_prealloc_bias_residual"):
+                # Fuse dequant + bias + skip-residual into one store pass.
+                bias_arg = (self.bias.view(-1).contiguous()
+                            if self.bias is not None else self._empty_bias)
+                out = modiff_cutlass.conv2d_int8_fprop_no_ohat_prealloc_bias_residual(
+                    x_int8, self.weight_int8, self._cached_alpha_tensor,
+                    self.weight_scale_channel.view(-1), bias_arg, residual,
+                    self._standard_output_buf,
+                    self.stride[0], self.stride[1], self.padding[0], self.padding[1],
+                    self.dilation[0], self.dilation[1])
+                return out
             use_deep_fuse = (
                 hasattr(modiff_cutlass, "conv2d_int8_fprop_dequant_fp16_prealloc")
                 and self.out_channels % 8 == 0
@@ -572,16 +588,22 @@ class OptimizedInt8Conv2d(nn.Module):
         if self.bias is not None and not bias_fused:
             bias = self.bias.to(out.dtype) if out.dtype != self.bias.dtype else self.bias
             out = out + bias
+        # Residual not fused in the epilogue (non-fp16 output / kernel unavailable):
+        # add it here so behaviour is identical, just unfused.
+        if residual is not None and not residual_fused:
+            out = out + (residual.to(out.dtype) if out.dtype != residual.dtype else residual)
         return out
 
-    def forward_from_int8(self, x_int8: torch.Tensor) -> torch.Tensor:
+    def forward_from_int8(self, x_int8: torch.Tensor,
+                          residual: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Baseline fast path: the activation is already quantized to int8 (with SiLU
         applied upstream, e.g. by the GN->int8 fusion in fused_resblock.py), so skip
         the per-layer quantize (K1) and go straight to the conv. Only valid when
-        calibrated + not modiff_enabled."""
+        calibrated + not modiff_enabled. Optional `residual` (fp16 channels_last) is
+        fused into the store epilogue as the ResBlock skip-add."""
         if not x_int8.is_contiguous(memory_format=torch.channels_last):
             x_int8 = x_int8.contiguous(memory_format=torch.channels_last)
-        return self._conv_from_int8(x_int8)
+        return self._conv_from_int8(x_int8, residual=residual)
 
     def _forward_first_step(self, x: torch.Tensor) -> torch.Tensor:
         """First timestep (t=T): warm-up with repeated quantisation.
