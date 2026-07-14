@@ -47,21 +47,24 @@ def fold_bn(model):
     return model
 
 
-def build_fp16():
-    m = tvm.resnet50(weights=None).eval().cuda()
+def build_fp16(weights=None):
+    m = tvm.resnet50(weights=weights).eval().cuda()
     fold_bn(m)
     return m.to(memory_format=torch.channels_last).half()
 
 
-def build_quantized(kind, x_calib, skip_pointwise):
-    """kind in {'int8','int4','int8_chained'}. Returns a calibrated static model."""
-    m = build_fp16().float()  # convert works from fp32 weights
+def build_quantized(kind, x_calib, skip_pointwise, weights=None):
+    """kind in {'int8','int4','int8_chained'}. Returns a calibrated static model.
+    `weights` (a torchvision ResNet50_Weights enum) uses pretrained weights so the
+    static PTQ scales are meaningful for real-accuracy checks (random weights only
+    give valid *speed*, not accuracy)."""
+    m = build_fp16(weights).float()  # convert works from fp32 weights
     convert = (convert_model_to_optimized_int4 if kind == "int4"
                else convert_model_to_optimized_int8)
     convert(m, skip_pointwise=skip_pointwise)
     # First conv has in_channels=3 -> too small for the 128-tile CUTLASS GEMM; keep fp16.
     # convert leaves it as OptimizedConv; restore a plain fp16 conv from a fresh model.
-    fresh = build_fp16()
+    fresh = build_fp16(weights)
     m.conv1 = fresh.conv1
     # NOTE: do NOT .half() -- that would cast the OptimizedConv's fp32 scale buffers
     # (static_input_scale / weight_scale_channel) to fp16, but the CUTLASS kernels
@@ -73,7 +76,7 @@ def build_quantized(kind, x_calib, skip_pointwise):
     # scales come out ~10x wrong (saturating int8) -- fatal for chaining. Instead
     # hook the fp16 model, record each conv's input absmax, and set_static_scale.
     absmax = {}
-    ref = build_fp16()
+    ref = build_fp16(weights)
     handles = []
     for name, mod in ref.named_modules():
         if isinstance(mod, nn.Conv2d):
@@ -133,13 +136,20 @@ def main():
     models = {"fp16": build_fp16()}
     n_conv = sum(1 for _ in models["fp16"].modules() if isinstance(_, nn.Conv2d))
     print(f"fp16: {n_conv} conv layers")
-    for kind in ("int8", "int4", "int8_chained"):
+    for kind in ("int8", "int4", "int8_chained", "int8_fullchain"):
         sp = a.skip_pointwise
+        # int8_fullchain = whole-net int8 threading: build a plain calibrated int8
+        # model, then wrap so the block-entry quantize is fused into the previous
+        # block's conv3 store (one quantize for the whole net). See chained_bottleneck.
+        build_kind = "int8" if kind == "int8_fullchain" else kind
         try:
-            m, nq = build_quantized(kind, x, skip_pointwise=sp)
+            m, nq = build_quantized(build_kind, x, skip_pointwise=sp)
         except Exception as ex:
             print(f"{kind}: all-conv convert failed ({str(ex)[:60]}...), retrying 3x3-only")
-            m, nq = build_quantized(kind, x, skip_pointwise=True)
+            m, nq = build_quantized(build_kind, x, skip_pointwise=True)
+        if kind == "int8_fullchain":
+            from integration.fused_ops.chained_bottleneck import build_fully_chained
+            m = build_fully_chained(m)
         models[kind] = m
         print(f"{kind}: {nq} calibrated quantized conv layers")
 
@@ -150,7 +160,7 @@ def main():
             assert torch.isfinite(o).all(), f"{k} produced non-finite output"
 
     # warmup each model, then interleave the timed runs to spread any drift evenly
-    order = ["fp16", "int8", "int4", "int8_chained"]
+    order = ["fp16", "int8", "int4", "int8_chained", "int8_fullchain"]
     for k in order:
         timed(models[k], x, repeats=0, warmups=a.warmups)
     samples = {k: [] for k in order}
@@ -165,10 +175,13 @@ def main():
     for k in order:
         spd = med["fp16"] / med[k]
         print(f"{k:<14}{med[k]:>12.3f}{std[k]:>9.3f}{spd:>9.2f}x")
-    print(f"int4 vs int8:          {med['int8']/med['int4']:.2f}x")
-    print(f"int8_chained vs int8:  {med['int8']/med['int8_chained']:.2f}x")
-    print(f"int8_chained vs fp16:  {med['fp16']/med['int8_chained']:.2f}x  "
+    print(f"int4 vs int8:              {med['int8']/med['int4']:.2f}x")
+    print(f"int8_chained   vs int8:    {med['int8']/med['int8_chained']:.2f}x")
+    print(f"int8_chained   vs fp16:    {med['fp16']/med['int8_chained']:.2f}x  "
           f"({'WIN' if med['int8_chained'] < med['fp16'] else 'no win'})")
+    print(f"int8_fullchain vs chained: {med['int8_chained']/med['int8_fullchain']:.2f}x")
+    print(f"int8_fullchain vs fp16:    {med['fp16']/med['int8_fullchain']:.2f}x  "
+          f"({'WIN' if med['int8_fullchain'] < med['fp16'] else 'no win'})")
 
     microbench_convs(a.batch)
 

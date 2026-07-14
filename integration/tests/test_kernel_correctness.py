@@ -101,6 +101,52 @@ def test_int8_conv():
     return "int8_conv", ok, f"rel_err_vs_fp32={re:.3f} | {g}"
 
 
+def test_int8_conv_channels_last():
+    """Regression: model.to(memory_format=channels_last) must NOT corrupt the packed
+    weight_int8. It reformats the 4D [K,R,S,C] buffer to a channels_last stride, which
+    for 3x3 convs silently transposes the layout the CUTLASS kernel reads (garbage,
+    rel~0.87) unless OptimizedInt8Conv2d._apply re-contiguates it. 1x1 convs are
+    immune, so this MUST use a 3x3 conv."""
+    from integration.kernels.int8_optimized import OptimizedInt8Conv2d
+    torch.manual_seed(0)
+    conv = nn.Conv2d(256, 256, 3, padding=1).to(DEV)
+    opt = _calib_conv(OptimizedInt8Conv2d(conv).to(DEV),
+                      torch.randn(32, 256, 32, 32, device=DEV))
+    opt = opt.to(memory_format=torch.channels_last)   # the operation that triggered the bug
+    x = torch.randn(32, 256, 32, 32, device=DEV, dtype=torch.float16
+                    ).contiguous(memory_format=torch.channels_last)
+    out = opt._forward_standard(x)
+    re = rel_err(out, conv(x.float()))
+    contig = opt.weight_int8.is_contiguous()
+    ok = re < 0.15 and contig
+    return "int8_conv_CL", ok, f"rel_err_vs_fp32={re:.3f} weight_contig={contig}"
+
+
+def test_int8_dual_store():
+    """The block-entry-quantize fusion kernel: conv3 dual store must equal
+    relu(forward_from_int8 + residual) in fp16 AND its requantization to int8."""
+    import modiff_cutlass as mc
+    if not hasattr(mc, "conv2d_int8_fprop_deepfuse_bias_residual_dual"):
+        return "int8_dual_store", False, "dual-store kernel missing (rebuild)"
+    from integration.kernels.int8_optimized import OptimizedInt8Conv2d
+    torch.manual_seed(0)
+    conv = nn.Conv2d(256, 256, 3, padding=1).to(DEV)
+    opt = _calib_conv(OptimizedInt8Conv2d(conv).to(DEV),
+                      torch.randn(16, 256, 32, 32, device=DEV)).to(memory_format=torch.channels_last)
+    nxt = _calib_conv(OptimizedInt8Conv2d(nn.Conv2d(256, 256, 1).to(DEV)).to(DEV),
+                      torch.randn(16, 256, 32, 32, device=DEV)).to(memory_format=torch.channels_last)
+    x = torch.randn(16, 256, 32, 32, device=DEV, dtype=torch.float16).contiguous(memory_format=torch.channels_last)
+    xi = opt.quantize_input(x)
+    resid = torch.randn(16, 256, 32, 32, device=DEV, dtype=torch.float16).contiguous(memory_format=torch.channels_last)
+    fp16_ref = torch.relu(opt.forward_from_int8(xi, residual=resid))
+    int8_ref = nxt.quantize_input(fp16_ref)
+    fp16_out, int8_out = opt.forward_from_int8_dual(xi, resid, nxt.static_input_scale, apply_relu=True)
+    re_fp16 = rel_err(fp16_out, fp16_ref)
+    re_int8 = (int8_out.float() - int8_ref.float()).abs().mean().item()
+    ok = re_fp16 < 1e-3 and re_int8 < 0.02
+    return "int8_dual_store", ok, f"fp16_rel={re_fp16:.4f} int8_mean|Δ|={re_int8:.4f}"
+
+
 def test_int4_conv():
     from integration.kernels.int4_optimized import OptimizedInt4Conv2d
     torch.manual_seed(0)
@@ -149,7 +195,8 @@ def test_group_norm_silu():
     return "group_norm_silu", ok, f"rel_err_vs_fp32={re:.3f} | {g}"
 
 
-TESTS = [test_int8_conv, test_int4_conv, test_int8_linear, test_group_norm_silu]
+TESTS = [test_int8_conv, test_int8_conv_channels_last, test_int8_dual_store,
+         test_int4_conv, test_int8_linear, test_group_norm_silu]
 
 
 def main():

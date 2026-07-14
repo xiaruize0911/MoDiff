@@ -112,6 +112,12 @@ torch::Tensor conv2d_int8_fprop_deepfuse_bias_residual_fp16(
     torch::Tensor weight_scales_half, torch::Tensor bias, torch::Tensor residual, torch::Tensor output,
     int64_t config_id, int stride_h, int stride_w, int padding_h, int padding_w, int dilation_h, int dilation_w);
 
+torch::Tensor conv2d_int8_fprop_deepfuse_bias_residual_dual(
+    torch::Tensor input, torch::Tensor weight, torch::Tensor inv_scale,
+    torch::Tensor weight_scales_half, torch::Tensor bias, torch::Tensor residual,
+    torch::Tensor requant_scale, torch::Tensor out_half, torch::Tensor out_int8, bool apply_relu,
+    int64_t config_id, int stride_h, int stride_w, int padding_h, int padding_w, int dilation_h, int dilation_w);
+
 torch::Tensor conv2d_int8_fprop_no_ohat(
     torch::Tensor input, torch::Tensor weight, torch::Tensor inv_scale, torch::Tensor weight_scales,
     int stride_h, int stride_w, int padding_h, int padding_w, int dilation_h, int dilation_w);

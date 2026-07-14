@@ -900,6 +900,74 @@ torch::Tensor conv2d_int8_fprop_deepfuse_bias_residual_fp16(
     return output;
 }
 
+// DUAL-OUTPUT deep-fuse conv3 for cross-block int8 chaining: same GEMM->fp16 as
+// conv2d_int8_fprop_deepfuse_bias_residual_fp16, but the store writes BOTH the fp16
+// residual output (out_half, post-ReLU) AND the requantized int8 (out_int8,
+// = the NEXT block conv1's input) in one pass. Folds bias + skip-residual + ReLU +
+// the block-entry quantize together, so the standalone per-block quantize kernel
+// disappears. config_id<0 = fixed default tile.
+torch::Tensor conv2d_int8_fprop_deepfuse_bias_residual_dual(
+    torch::Tensor input,
+    torch::Tensor weight,
+    torch::Tensor inv_scale,
+    torch::Tensor weight_scales_half,
+    torch::Tensor bias,
+    torch::Tensor residual,
+    torch::Tensor requant_scale,
+    torch::Tensor out_half,
+    torch::Tensor out_int8,
+    bool apply_relu,
+    int64_t config_id,
+    int stride_h, int stride_w,
+    int padding_h, int padding_w,
+    int dilation_h, int dilation_w
+) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    CHECK_CUDA(out_half); CHECK_CONTIGUOUS(out_half);
+    CHECK_CUDA(out_int8); CHECK_CONTIGUOUS(out_int8);
+    CHECK_CUDA(residual);
+    TORCH_CHECK(out_half.scalar_type() == torch::kFloat16, "out_half must be float16");
+    TORCH_CHECK(out_int8.scalar_type() == torch::kInt8, "out_int8 must be int8");
+    TORCH_CHECK(residual.scalar_type() == torch::kFloat16, "residual must be float16");
+    TORCH_CHECK(requant_scale.numel() == 1, "requant_scale must be a scalar tensor");
+
+    auto scratch = torch::empty_like(out_half);
+    if (config_id < 0) {
+        conv2d_int8_fprop_dequant_fp16_prealloc(
+            input, weight, inv_scale, weight_scales_half, scratch,
+            stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w);
+    } else {
+        conv2d_int8_dequant_fp16_tuned(
+            input, weight, inv_scale, weight_scales_half, scratch, config_id,
+            stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w);
+    }
+
+    const bool has_bias = bias.numel() > 0;
+    if (has_bias) TORCH_CHECK(bias.numel() == weight_scales_half.numel(), "bias size mismatch");
+    int num_elements = scratch.numel();
+    int num_channels = weight_scales_half.numel();
+    int block_size = 256, grid_size = (num_elements + block_size - 1) / block_size;
+    const __half* deq_ptr = reinterpret_cast<const __half*>(scratch.data_ptr<at::Half>());
+    const __half* res_ptr = reinterpret_cast<const __half*>(residual.data_ptr<at::Half>());
+    const float* rq_ptr = requant_scale.data_ptr<float>();
+    __half* outh_ptr = reinterpret_cast<__half*>(out_half.data_ptr<at::Half>());
+    int8_t* outi_ptr = reinterpret_cast<int8_t*>(out_int8.data_ptr<int8_t>());
+    if (has_bias && bias.scalar_type() == torch::kFloat16) {
+        bias_residual_relu_dual_store_from_half_kernel<__half><<<grid_size, block_size, 0, stream>>>(
+            deq_ptr, reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()), res_ptr,
+            rq_ptr, outh_ptr, outi_ptr, num_elements, num_channels, apply_relu);
+    } else if (has_bias) {
+        bias_residual_relu_dual_store_from_half_kernel<float><<<grid_size, block_size, 0, stream>>>(
+            deq_ptr, bias.data_ptr<float>(), res_ptr,
+            rq_ptr, outh_ptr, outi_ptr, num_elements, num_channels, apply_relu);
+    } else {
+        bias_residual_relu_dual_store_from_half_kernel<__half><<<grid_size, block_size, 0, stream>>>(
+            deq_ptr, (const __half*)nullptr, res_ptr,
+            rq_ptr, outh_ptr, outi_ptr, num_elements, num_channels, apply_relu);
+    }
+    return out_half;
+}
+
 // Same as conv2d_int8_fprop_no_ohat_prealloc, but allocates its own output buffer.
 torch::Tensor conv2d_int8_fprop_no_ohat(
     torch::Tensor input,

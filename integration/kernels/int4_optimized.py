@@ -476,6 +476,18 @@ class OptimizedInt4Conv2d(nn.Module):
             return self._int4_conv(x, input_scale, with_bias=True)
         return self._int4_conv_dynamic_fused(x, with_bias=True)
 
+    def _apply(self, *args, **kwargs):
+        """Keep the packed INT4 weight standard-contiguous through any tensor
+        transform. `model.to(memory_format=torch.channels_last)` reformats the 4D
+        [K,R,S,C/2] `weight_packed` buffer to a channels_last stride, which for R,S>1
+        (3x3 convs) silently transposes the layout the CUTLASS int4 conv kernel reads
+        -> garbage output (1x1 unaffected). See the twin guard in OptimizedInt8Conv2d."""
+        out = super()._apply(*args, **kwargs)
+        wp = getattr(self, "weight_packed", None)
+        if wp is not None and wp.dim() == 4 and not wp.is_contiguous():
+            self.weight_packed = wp.contiguous()
+        return out
+
     def _ensure_conv_caches(self, device):
         """Lazy-init the per-tensor scale caches reused by the calibrated conv path."""
         if self._cached_scale_float is None:

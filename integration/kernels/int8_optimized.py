@@ -524,6 +524,21 @@ class OptimizedInt8Conv2d(nn.Module):
             return self._int8_conv(x, input_scale, with_bias=True)
         return self._int8_conv_dynamic_fused(x, with_bias=True)
 
+    def _apply(self, *args, **kwargs):
+        """Keep the packed INT8 weight standard-contiguous through any tensor
+        transform. `model.to(memory_format=torch.channels_last)` (applied to make
+        activations channels_last) also reformats the [K,R,S,C] `weight_int8` buffer
+        to a channels_last stride -- which for R,S>1 (3x3 convs) silently transposes
+        the physical layout the CUTLASS conv kernel reads, producing garbage output
+        (1x1 convs are unaffected: channels_last == contiguous there). This was
+        invisible to random-weight consistency and speed checks; only real accuracy
+        vs fp16 exposed it. Re-contiguating after the transform costs one small copy."""
+        out = super()._apply(*args, **kwargs)
+        wi = getattr(self, "weight_int8", None)
+        if wi is not None and wi.dim() == 4 and not wi.is_contiguous():
+            self.weight_int8 = wi.contiguous()
+        return out
+
     def _ensure_conv_caches(self, device):
         """Lazy-init the per-tensor scale caches reused by the calibrated conv path."""
         if self._cached_scale_float is None:
@@ -675,6 +690,51 @@ class OptimizedInt8Conv2d(nn.Module):
         if not x_int8.is_contiguous(memory_format=torch.channels_last):
             x_int8 = x_int8.contiguous(memory_format=torch.channels_last)
         return self._conv_from_int8(x_int8, residual=residual)
+
+    def forward_from_int8_dual(self, x_int8: torch.Tensor, residual: torch.Tensor,
+                               requant_scale: torch.Tensor, apply_relu: bool = True):
+        """Cross-block-chaining conv3: dequant + bias + fp16 skip-residual + ReLU, and
+        emit BOTH the fp16 block output (x_{N+1}, for the next block's identity) AND
+        that output requantized to int8 by `requant_scale` (= the next block conv1's
+        static_input_scale) -- in one fused store. This folds the block-entry quantize
+        (the standalone per-block K1) into this conv3's epilogue. Returns
+        (out_fp16, out_int8), both channels_last. Requires the deep-fuse dual kernel,
+        out_channels%8==0, calibrated + standard_output_fp16."""
+        assert self.standard_output_fp16, "dual store requires standard_output_fp16"
+        assert hasattr(modiff_cutlass, "conv2d_int8_fprop_deepfuse_bias_residual_dual"), \
+            "dual-store kernel unavailable (rebuild the extension)"
+        assert self.out_channels % 8 == 0, "dual store requires out_channels%8==0"
+        self._ensure_conv_caches(x_int8.device)
+        if not x_int8.is_contiguous(memory_format=torch.channels_last):
+            x_int8 = x_int8.contiguous(memory_format=torch.channels_last)
+        if not residual.is_contiguous(memory_format=torch.channels_last):
+            residual = residual.contiguous(memory_format=torch.channels_last)
+        h_out = ((x_int8.shape[2] + 2 * self.padding[0] - self.dilation[0] * (self.kernel_size[0] - 1) - 1) // self.stride[0]) + 1
+        w_out = ((x_int8.shape[3] + 2 * self.padding[1] - self.dilation[1] * (self.kernel_size[1] - 1) - 1) // self.stride[1]) + 1
+        output_shape = (x_int8.shape[0], self.out_channels, h_out, w_out)
+        if (self._standard_output_buf is None
+                or self._standard_output_buf.shape != output_shape
+                or self._standard_output_buf.device != x_int8.device
+                or self._standard_output_buf.dtype != torch.float16):
+            self._standard_output_buf = torch.empty(
+                output_shape, device=x_int8.device, dtype=torch.float16
+            ).contiguous(memory_format=torch.channels_last)
+        if (self._int8_output_buf is None
+                or self._int8_output_buf.shape != output_shape
+                or self._int8_output_buf.device != x_int8.device):
+            self._int8_output_buf = torch.empty(
+                output_shape, device=x_int8.device, dtype=torch.int8
+            ).contiguous(memory_format=torch.channels_last)
+        bias_arg = (self.bias.view(-1).contiguous() if self.bias is not None else self._empty_bias)
+        cid = self._ensure_tuned_config(x_int8, output_shape)
+        modiff_cutlass.conv2d_int8_fprop_deepfuse_bias_residual_dual(
+            x_int8, self.weight_int8, self._cached_alpha_tensor,
+            self.weight_scale_channel_half.view(-1), bias_arg, residual.half(),
+            requant_scale.view(1), self._standard_output_buf, self._int8_output_buf,
+            apply_relu, cid if cid is not None else -1,
+            self.stride[0], self.stride[1], self.padding[0], self.padding[1],
+            self.dilation[0], self.dilation[1])
+        return self._standard_output_buf, self._int8_output_buf
 
     def quantize_input(self, x: torch.Tensor) -> torch.Tensor:
         """Quantize an fp16/fp32 activation to channels_last int8 using this conv's

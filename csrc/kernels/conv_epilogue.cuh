@@ -187,6 +187,44 @@ __global__ void bias_residual_store_half_from_half_kernel(
     }
 }
 
+// DUAL-OUTPUT store for cross-block int8 chaining (ResNet "block-entry-quantize
+// fusion"). From an already-dequantized fp16 conv output (deep-fuse GEMM, no fp32
+// temp), computes v = deq + bias[ch] + residual (the ResBlock skip add), applies
+// ReLU, then writes BOTH:
+//   out_half[i]  = fp16 v            (the post-ReLU block output x_{N+1}, needed as
+//                                     the next block's fp16 identity/residual), and
+//   out_int8[i]  = round(clamp(v * rq))  (v requantized by the NEXT block conv1's
+//                                     127/absmax input scale).
+// This lets the previous block's conv3 emit the next block's conv1 input int8 in
+// the same pass that already materializes the fp16 output -- eliminating the
+// standalone per-block-entry quantize kernel. `bias` may be nullptr. ReLU is folded
+// in (commutes with positive scaling), so the outer F.relu is also dropped for
+// chained-boundary blocks. Post-ReLU int8 codes land in [0,127].
+template <typename BiasT>
+__global__ void bias_residual_relu_dual_store_from_half_kernel(
+    const __half* __restrict__ deq,        // fp16, = acc * alpha * weight_scale[ch]
+    const BiasT* __restrict__ bias,
+    const __half* __restrict__ residual,
+    const float* __restrict__ requant_scale_ptr,
+    __half* __restrict__ out_half,
+    int8_t* __restrict__ out_int8,
+    int num_elements,
+    int num_channels,
+    bool apply_relu
+) {
+    const float rq = *requant_scale_ptr;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    for (int i = idx; i < num_elements; i += blockDim.x * gridDim.x) {
+        int ch = i % num_channels;
+        float value = __half2float(deq[i])
+                    + (bias != nullptr ? bias_value(bias, ch) : 0.0f)
+                    + __half2float(residual[i]);
+        if (apply_relu) value = fmaxf(value, 0.0f);
+        out_half[i] = __float2half_rn(value);
+        out_int8[i] = (int8_t)fmaxf(-127.0f, fminf(127.0f, roundf(value * rq)));
+    }
+}
+
 template <typename BiasT>
 __global__ void scale_bias_store_kernel(
     const float* __restrict__ conv_output,

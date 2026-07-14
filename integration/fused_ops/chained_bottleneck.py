@@ -74,6 +74,77 @@ class Int8ChainedBottleneck(nn.Module):
         return self._relu(out)
 
 
+class Int8FullyChainedResNet(nn.Module):
+    """Whole-ResNet int8 threading (prototype for the block-entry-quantize fusion).
+
+    Int8ChainedBottleneck keeps activations int8 WITHIN a bottleneck but pays a
+    standalone quantize (`conv1.quantize_input`) at EVERY block entry -- nsys shows
+    that quantize is the single largest kernel on ResNet-50 int8 (~58 ms, > the conv
+    GEMM savings), because a BN-folded CNN has no norm to hide it in.
+
+    This wrapper folds each block-entry quantize into the PREVIOUS block's conv3
+    store: conv3's dual epilogue emits both the fp16 block output (the next block's
+    identity/residual) AND that output requantized to int8 (the next block's conv1
+    input), so the whole network quantizes to int8 exactly ONCE (after maxpool) and
+    stays int8 through every conv until the final avgpool. Removes N-1 of the N
+    per-block quantize kernels."""
+
+    def __init__(self, model):
+        super().__init__()
+        self.stem_conv, self.stem_bn = model.conv1, model.bn1   # bn1 is Identity (BN folded)
+        self.stem_relu, self.maxpool = model.relu, model.maxpool
+        self.avgpool, self.fc = model.avgpool, model.fc
+        blocks = []
+        for lname in ("layer1", "layer2", "layer3", "layer4"):
+            layer = getattr(model, lname, None)
+            if layer is not None:
+                blocks.extend(list(layer))
+        assert all(bottleneck_chainable(b) for b in blocks), \
+            "every bottleneck must be int8-chainable (calibrated CUTLASS int8, conv3 fp16-out)"
+        self.blocks = nn.ModuleList(blocks)
+        self.relus = [b.relu if hasattr(b, "relu") else None for b in blocks]
+        self.downsamples = [b.downsample for b in blocks]
+        # Intra-block chaining (conv1->conv2->conv3) + cross-block conv3->next-conv1.
+        self._next_scale = []
+        for i, b in enumerate(blocks):
+            b.conv1.output_requant_scale = b.conv2.static_input_scale
+            b.conv1.fuse_output_relu = True
+            b.conv2.output_requant_scale = b.conv3.static_input_scale
+            b.conv2.fuse_output_relu = True
+            self._next_scale.append(blocks[i + 1].conv1.static_input_scale
+                                    if i + 1 < len(blocks) else None)
+
+    def forward(self, x):
+        x = self.maxpool(self.stem_relu(self.stem_bn(self.stem_conv(x))))
+        x_fp16 = x.contiguous(memory_format=torch.channels_last)
+        x_int8 = self.blocks[0].conv1.quantize_input(x_fp16)   # the ONE entry quantize
+        for i, b in enumerate(self.blocks):
+            ds = self.downsamples[i]
+            identity = (x_fp16 if ds is None else ds(x_fp16))
+            identity = identity.contiguous(memory_format=torch.channels_last).half()
+            h = b.conv1.forward_to_int8(x_int8, apply_relu=True)
+            h = b.conv2.forward_to_int8(h, apply_relu=True)
+            ns = self._next_scale[i]
+            if ns is not None:
+                # dual store: fp16 x_{i+1} (post-ReLU) + its int8 for the next conv1
+                x_fp16, x_int8 = b.conv3.forward_from_int8_dual(h, identity, ns, apply_relu=True)
+            else:
+                out = b.conv3.forward_from_int8(h, residual=identity)   # last block: fp16 only
+                x_fp16 = (self.relus[i](out) if self.relus[i] is not None else F.relu(out))
+        x = self.avgpool(x_fp16)
+        return self.fc(torch.flatten(x, 1))
+
+
+def build_fully_chained(model, verbose=False):
+    """Wrap a calibrated (set_standard_output_fp16 + enable_modiff(False)) ResNet whose
+    bottlenecks are int8-chainable into an Int8FullyChainedResNet. Must run instead of
+    chain_int8_bottlenecks (not after). Returns the wrapper module."""
+    w = Int8FullyChainedResNet(model)
+    if verbose:
+        print(f"build_fully_chained: threaded {len(w.blocks)} bottlenecks, 1 entry quantize")
+    return w
+
+
 def chain_int8_bottlenecks(model, verbose=False):
     """Replace every chainable Bottleneck in model.layer1..layer4 with
     Int8ChainedBottleneck (in place). Must run AFTER calibration +

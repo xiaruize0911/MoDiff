@@ -50,6 +50,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("conv2d_int8_fprop_relu_requant_int8", &conv2d_int8_fprop_relu_requant_int8, "INT8 conv + dequant + bias + optional ReLU, requantized to INT8 output (for int8 conv->conv chaining)");
     m.def("conv2d_int8_fprop_deepfuse_relu_requant_int8", &conv2d_int8_fprop_deepfuse_relu_requant_int8, "Deep-fuse INT8 conv (weight_scale in CUTLASS epilogue, no fp32 temp) + bias + ReLU + requant to INT8");
     m.def("conv2d_int8_fprop_deepfuse_bias_residual_fp16", &conv2d_int8_fprop_deepfuse_bias_residual_fp16, "Deep-fuse + tunable INT8 conv (no fp32 temp) + bias + skip residual, FP16 out");
+    m.def("conv2d_int8_fprop_deepfuse_bias_residual_dual", &conv2d_int8_fprop_deepfuse_bias_residual_dual, "Deep-fuse INT8 conv3 + bias + skip residual + ReLU, DUAL output: FP16 (x_{N+1}) + requantized INT8 (next block conv1 input) -- fuses the block-entry quantize");
     m.def("conv2d_int8_fprop_no_ohat", &conv2d_int8_fprop_no_ohat, "Fused INT8 conv + dequant without o_hat update");
 
     // CUTLASS INT4 Conv2d (kernels/conv2d_int4.cu)
