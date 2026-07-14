@@ -170,6 +170,15 @@ class OptimizedInt4Linear(nn.Module):
     # ==================================================================
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # See OptimizedInt8Linear.forward: flatten 3D transformer linears
+        # [B, seq, D] -> [B*seq, D] so the 2D-only MoDiff modulated/first-step
+        # paths work; restore shape after. 2D inputs (churches) are untouched.
+        if x.dim() <= 2:
+            return self._forward_2d(x)
+        out = self._forward_2d(x.reshape(-1, self.in_features))
+        return out.reshape(*x.shape[:-1], self.out_features)
+
+    def _forward_2d(self, x: torch.Tensor) -> torch.Tensor:
         if not self.modiff_enabled:
             return self._linear(x, with_bias=True)
 

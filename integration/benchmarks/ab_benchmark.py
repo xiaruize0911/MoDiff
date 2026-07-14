@@ -35,28 +35,31 @@ bldm = importlib.util.module_from_spec(spec); spec.loader.exec_module(bldm)
 
 
 def build(mode, args):
+    # A mode may carry a per-run linear backend as "base:backend", e.g.
+    # "int8:int_gemm" -> base mode int8 with the fused W8A8 linear kernel.
+    base, _, lb = mode.partition(":")
+    lb = lb or args.linear_backend
     cal = (args.calibration or
-           ("integration/calibration/int8_calibration.pt" if "int8" in mode or mode in ("fp16", "fp32")
+           ("integration/calibration/int8_calibration.pt" if "int8" in base or base in ("fp16", "fp32")
             else "integration/calibration/int4_calibration.pt"))
     runner = bldm.BenchmarkRunner(
         config_path=args.config, ckpt_path=args.ckpt, output_dir="/tmp/ab_out",
-        batch_size=args.batch_size, steps=args.steps, calibration_path=cal)
-    model, sampler = runner._setup_model(mode)
-    if mode in ("int8", "int8_attn_modiff"):
-        cfg = bldm.get_calibration_config_int8()
-        if not cfg.is_calibrated:
-            runner._calibrate_int8(model, sampler)
+        batch_size=args.batch_size, steps=args.steps, calibration_path=cal, linear_backend=lb)
+    model, sampler = runner._setup_model(base)
+    # Calibration comes from the --calibration file (loaded by _setup_model), so
+    # int8 and int8_baseline are calibrated identically. Pre-generate it once.
     return runner, model, sampler
 
 
-def timed_step_ms(runner, sampler, mode, args):
+def timed_step_ms(runner, model, sampler, mode, args):
     """One timed sample() call -> per-step ms."""
     use_ac = mode != "fp32"
+    cond = runner._cond_kwargs(model, args.batch_size)
     torch.cuda.synchronize()
     t0 = time.time()
     with torch.inference_mode(), torch.autocast("cuda", dtype=torch.float16, enabled=use_ac):
         sampler.sample(S=args.steps, batch_size=args.batch_size,
-                       shape=runner.shape, eta=0.0, verbose=False)
+                       shape=runner.shape, eta=0.0, verbose=False, **cond)
     torch.cuda.synchronize()
     dt = time.time() - t0
     return dt / args.steps * 1000.0
@@ -81,6 +84,8 @@ def main():
     ap.add_argument("--config", default="configs/latent-diffusion/lsun_churches-ldm-kl-8.yaml")
     ap.add_argument("--ckpt", default="models/ldm/lsun_churches256/model.ckpt")
     ap.add_argument("--calibration", default=None)
+    ap.add_argument("--linear_backend", default="fp16", choices=["fp16", "int_gemm"],
+                    help="default linear backend; override per-mode with 'int8:int_gemm'")
     ap.add_argument("--label", default="run")
     ap.add_argument("--out", default=None)
     ap.add_argument("--compare", default=None, help="baseline json to diff against")
@@ -93,16 +98,16 @@ def main():
     for m in args.modes:
         print(f"[build] {m} ...")
         runner, model, sampler = build(m, args)
-        built[m] = (runner, sampler)
+        built[m] = (runner, model, sampler)
         for _ in range(args.warmups):
-            timed_step_ms(runner, sampler, m, args)  # warmup (untimed)
+            timed_step_ms(runner, model, sampler, m, args)  # warmup (untimed)
     torch.cuda.synchronize()
 
     samples = {m: [] for m in args.modes}
     for r in range(args.repeats):              # interleave: round-robin over modes
         for m in args.modes:
-            runner, sampler = built[m]
-            samples[m].append(timed_step_ms(runner, sampler, m, args))
+            runner, model, sampler = built[m]
+            samples[m].append(timed_step_ms(runner, model, sampler, m, args))
         print(f"[round {r+1}/{args.repeats}] " +
               " | ".join(f"{m}={samples[m][-1]:.3f}ms" for m in args.modes))
 

@@ -196,6 +196,17 @@ class OptimizedInt8Linear(nn.Module):
     # ==================================================================
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Transformer/cross-attention linears receive 3D [B, seq, D]; the MoDiff
+        # modulated + first-step paths below assume 2D [B, D] (the time-embedding
+        # case). Flatten seq into the batch and restore afterward. MoDiff's
+        # per-element temporal cache stays valid: token positions are fixed across
+        # diffusion steps, so [B*seq, D] tracks each position's activation over t.
+        if x.dim() <= 2:
+            return self._forward_2d(x)
+        out = self._forward_2d(x.reshape(-1, self.in_features))
+        return out.reshape(*x.shape[:-1], self.out_features)
+
+    def _forward_2d(self, x: torch.Tensor) -> torch.Tensor:
         if not self.modiff_enabled:
             return self._linear(x, with_bias=True)
 

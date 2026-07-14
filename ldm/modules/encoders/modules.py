@@ -1,10 +1,22 @@
 import torch
 import torch.nn as nn
 from functools import partial
-import clip
 from einops import rearrange, repeat
-from transformers import CLIPTokenizer, CLIPTextModel
-import kornia
+# Optional heavy deps: only the CLIP/BERT text-encoder classes below use these.
+# Import lazily so class-conditional / unconditional models (e.g. ClassEmbedder)
+# work without clip / transformers / kornia installed.
+try:
+    import clip
+except ImportError:
+    clip = None
+try:
+    from transformers import CLIPTokenizer, CLIPTextModel
+except ImportError:
+    CLIPTokenizer = CLIPTextModel = None
+try:
+    import kornia
+except ImportError:
+    kornia = None
 
 from ldm.modules.x_transformer import Encoder, TransformerWrapper  # TODO: can we directly rely on lucidrains code and simply add this as a reuirement? --> test
 

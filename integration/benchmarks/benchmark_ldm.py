@@ -606,7 +606,27 @@ class BenchmarkRunner:
         if n_silu_wired > 0:
             print(f"✓ Wired SiLU fusion for {n_silu_wired} quantized conv layers")
 
+        # Class-conditional models (e.g. cin256) need cross-attention class
+        # conditioning and a model-specific latent shape; derive both here so the
+        # unconditional path (churches) is untouched.
+        if getattr(model, 'cond_stage_key', None) == 'class_label':
+            self.shape = (model.channels, model.image_size, model.image_size)
+            print(f"Class-conditional model: latent shape -> {self.shape}, "
+                  f"sampling class {getattr(self, 'sample_class', 0)}")
+
         return model, DDIMSampler(model)
+
+    def _cond_kwargs(self, model, batch):
+        """Extra sampler.sample kwargs: class-conditioning for class-conditional
+        models (cin256), empty for unconditional (churches)."""
+        if getattr(model, 'cond_stage_key', None) == 'class_label':
+            cls = int(getattr(self, 'sample_class', 0))
+            dev = next(model.parameters()).device
+            xc = {model.cond_stage_key: torch.full((batch,), cls, dtype=torch.long, device=dev)}
+            with torch.no_grad():
+                c = model.get_learned_conditioning(xc)
+            return {'conditioning': c}
+        return {}
     
     def _try_compile_unet(self, model):
         """Try to torch.compile the UNet for fused element-wise kernels."""
@@ -638,7 +658,8 @@ class BenchmarkRunner:
                 # without this, attention's temporal cache would carry state across what are
                 # meant to be independent calibration samples.
                 reset_attention_modiff(model.model.diffusion_model)
-                sampler.sample(S=5, batch_size=2, shape=self.shape, eta=0.0, verbose=False)
+                sampler.sample(S=5, batch_size=2, shape=self.shape, eta=0.0, verbose=False,
+                               **self._cond_kwargs(model, 2))
 
         get_calibration_config_int8().finalize()
         set_calibrating_int8(model.model.diffusion_model, False)
@@ -689,7 +710,8 @@ class BenchmarkRunner:
                 # needs representative activation statistics, not production-size
                 # batches, so using self.batch_size here was doing up to ~84x more
                 # compute/memory than calibration requires.
-                sampler.sample(S=5, batch_size=2, shape=self.shape, eta=0.0, verbose=False)
+                sampler.sample(S=5, batch_size=2, shape=self.shape, eta=0.0, verbose=False,
+                               **self._cond_kwargs(model, 2))
 
         set_calibrating_int4(model.model.diffusion_model, False)
         if HAS_INT4_LINEAR:
@@ -734,8 +756,13 @@ class BenchmarkRunner:
         if mode in ('attn_modiff', 'int8_attn_modiff', 'int4_attn_modiff'):
             from integration.kernels.modiff_attention import reset_attention_modiff
             reset_attention_modiff(model.model.diffusion_model)
-        with torch.inference_mode():
-            sampler.sample(S=self.steps, batch_size=self.batch_size, shape=self.shape, eta=0.0, verbose=False)
+        # Match the timed run's autocast: quantized convs emit fp16 regardless,
+        # and some models (cin256) feed that into plain fp32 nn.Conv2d skips, which
+        # errors without autocast to reconcile the dtypes.
+        _use_ac = mode != 'fp32'
+        with torch.inference_mode(), torch.amp.autocast('cuda', enabled=_use_ac, dtype=torch.float16):
+            sampler.sample(S=self.steps, batch_size=self.batch_size, shape=self.shape, eta=0.0, verbose=False,
+                           **self._cond_kwargs(model, self.batch_size))
         torch.cuda.synchronize()
         quant_memory_after_warmup = report_quant_memory(model.model.diffusion_model)
         if quant_memory_after_warmup["total_tracked_mib"] > 0:
@@ -766,7 +793,8 @@ class BenchmarkRunner:
             
             with torch.inference_mode(), torch.amp.autocast('cuda', enabled=use_autocast, dtype=dtype):
                 samples, _ = sampler.sample(S=self.steps, batch_size=batch,
-                                           shape=self.shape, eta=0.0, verbose=False)
+                                           shape=self.shape, eta=0.0, verbose=False,
+                                           **self._cond_kwargs(model, batch))
             
             torch.cuda.synchronize()
             total_time += time.time() - start
