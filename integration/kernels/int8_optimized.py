@@ -486,10 +486,16 @@ class OptimizedInt8Conv2d(nn.Module):
                 # bit-identically to scale_quantize_int8(x.float(), scale). Any
                 # SmoothQuant scaling is already applied to x upstream, so smooth
                 # is empty (identity) here.
+                # NOTE: step1_static_quantize_fprop UPDATES a_hat in place
+                # (a_hat += dequant(Q(x-a_hat))), so the buffer must be re-zeroed
+                # every call -- otherwise the 2nd+ step quantizes x against a
+                # stale a_hat and silently corrupts the output.
                 if (self._zero_ahat_buf is None
                         or self._zero_ahat_buf.shape != x.shape
                         or self._zero_ahat_buf.device != x.device):
                     self._zero_ahat_buf = torch.zeros_like(x)
+                else:
+                    self._zero_ahat_buf.zero_()
                 if self._empty_smooth is None or self._empty_smooth.device != x.device:
                     self._empty_smooth = torch.empty(0, device=x.device, dtype=torch.float32)
                 x_int8 = modiff_cutlass.step1_static_quantize_fprop(
