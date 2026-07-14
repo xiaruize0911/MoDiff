@@ -145,6 +145,114 @@ torch::Tensor conv2d_int4_fprop(
     return output;
 }
 
+// ---- Multi-tile (autotunable) INT4 conv, FP32 out ----
+// Tile-parametric mirror of Conv2dInt4Kernel: threadblock/warp shape + pipeline
+// stages are template params so several configs can be instantiated and the fastest
+// picked per-shape at calibration time (the int4 analogue of the int8 tuned tile set;
+// closes the "int4 is single-tile" gap). Epilogue stays fp32 LinearCombination (the
+// per-channel weight_scale is applied in the store kernels, orthogonal to the tile).
+template <typename ThreadblockShape, typename WarpShape, int Stages>
+struct Int4ConvConfig {
+  using Kernel = typename cutlass::conv::kernel::DefaultConv2dFprop<
+    cutlass::int4b_t, cutlass::layout::TensorNHWC,
+    cutlass::int4b_t, cutlass::layout::TensorNHWC,
+    float, cutlass::layout::TensorNHWC,
+    int32_t,
+    cutlass::arch::OpClassTensorOp,
+    Arch,
+    ThreadblockShape, WarpShape, cutlass::gemm::GemmShape<16, 8, 64>,
+    cutlass::epilogue::thread::LinearCombination<float, 1, int32_t, float>,
+    cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>,
+    Stages,
+    cutlass::arch::OpMultiplyAddSaturate,
+    cutlass::conv::IteratorAlgorithm::kOptimized,
+    cutlass::conv::StrideSupport::kStrided
+  >::Kernel;
+  using Op = cutlass::conv::device::ImplicitGemmConvolution<Kernel>;
+};
+
+template <typename Op>
+static bool run_int4_fprop_tuned(
+    cutlass::conv::Conv2dProblemSize const& ps,
+    cutlass::int4b_t* ip, cutlass::int4b_t* wp, float* out_ptr, float* alpha_ptr,
+    int C, int W, int H, int K, int R, int S, int H_out, int W_out,
+    torch::TensorOptions const& opts, cudaStream_t stream) {
+  using EpParams = typename Op::EpilogueOutputOp::Params;
+  EpParams ep(alpha_ptr);   // device-side scalar alpha (= inv_scale), beta = 0
+  typename Op::Arguments args(
+      ps,
+      {ip, {C, W * C, H * W * C}},
+      {wp, {C, S * C, R * S * C}},
+      {(float*)nullptr, {0, 0, 0}},
+      {out_ptr, {K, W_out * K, H_out * W_out * K}},
+      ep);
+  if (Op::can_implement(args) != cutlass::Status::kSuccess) return false;
+  Op op;
+  size_t ws = op.get_workspace_size(args);
+  auto workspace = torch::empty({(long)ws}, opts.dtype(torch::kByte));
+  return op(args, workspace.data_ptr(), stream) == cutlass::Status::kSuccess;
+}
+
+// int4 tile set (K=128 threadblock, instruction K=64). Wide-N tiles (2,5) target the
+// memory-bound 1x1 expand convs; square tiles the big-K 3x3s. 0 = default.
+using I4Cfg0 = Int4ConvConfig<cutlass::gemm::GemmShape<128,128,128>, cutlass::gemm::GemmShape<64,64,128>, 3>;
+using I4Cfg1 = Int4ConvConfig<cutlass::gemm::GemmShape<256,128,128>, cutlass::gemm::GemmShape<64,64,128>, 3>;
+using I4Cfg2 = Int4ConvConfig<cutlass::gemm::GemmShape<128,256,128>, cutlass::gemm::GemmShape<64,64,128>, 3>;
+using I4Cfg3 = Int4ConvConfig<cutlass::gemm::GemmShape<128, 64,128>, cutlass::gemm::GemmShape<64,32,128>, 4>;
+using I4Cfg4 = Int4ConvConfig<cutlass::gemm::GemmShape< 64,128,128>, cutlass::gemm::GemmShape<32,64,128>, 4>;
+using I4Cfg5 = Int4ConvConfig<cutlass::gemm::GemmShape< 64,256,128>, cutlass::gemm::GemmShape<32,64,128>, 3>;
+
+int64_t conv2d_int4_num_tuned_configs() { return 6; }
+
+// Run tile `config_id` of the int4 conv -> fresh FP32 [N,K,H_out,W_out] channels_last
+// output (= raw_int32 * inv_scale). config_id < 0 uses the default fixed-tile
+// conv2d_int4_fprop. The autotuner in Python tries each and skips ones that can't
+// implement the shape.
+torch::Tensor conv2d_int4_fprop_tuned(
+    torch::Tensor input, torch::Tensor weight_packed, torch::Tensor inv_scale,
+    int64_t config_id,
+    int stride_h, int stride_w, int padding_h, int padding_w, int dilation_h, int dilation_w) {
+  if (config_id < 0) {
+    auto empty_bias = torch::empty({0}, torch::TensorOptions().device(input.device()));
+    return conv2d_int4_fprop(input, weight_packed, inv_scale, empty_bias,
+        stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w);
+  }
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  CHECK_CUDA(input);
+  int N = input.size(0), H = input.size(1), W = input.size(2);
+  int K = weight_packed.size(0), R = weight_packed.size(1), S = weight_packed.size(2);
+  int C = weight_packed.size(3) * 2;
+  TORCH_CHECK(input.size(3) == weight_packed.size(3), "Input/Weight channel mismatch");
+  int H_out = (H + 2 * padding_h - dilation_h * (R - 1) - 1) / stride_h + 1;
+  int W_out = (W + 2 * padding_w - dilation_w * (S - 1) - 1) / stride_w + 1;
+  auto out_options = torch::TensorOptions().dtype(torch::kFloat32).device(input.device())
+      .memory_format(torch::MemoryFormat::ChannelsLast);
+  auto output = torch::empty({N, K, H_out, W_out}, out_options);
+  cutlass::conv::Conv2dProblemSize ps(
+      {N, H, W, C}, {K, R, S, C}, {padding_h, padding_h, padding_w, padding_w},
+      {stride_h, stride_w}, {dilation_h, dilation_w}, {N, H_out, W_out, K},
+      cutlass::conv::Mode::kCrossCorrelation, 1);
+  auto* ip = (cutlass::int4b_t*)input.data_ptr();
+  auto* wp = (cutlass::int4b_t*)weight_packed.data_ptr();
+  float* alpha = inv_scale.data_ptr<float>();
+  auto opts = input.options();
+  bool ok = false;
+#define RUN_I4CFG(CFG) run_int4_fprop_tuned<CFG::Op>(ps, ip, wp, output.data_ptr<float>(), alpha, C, W, H, K, R, S, H_out, W_out, opts, stream)
+  switch (config_id) {
+    case 0: ok = RUN_I4CFG(I4Cfg0); break;
+    case 1: ok = RUN_I4CFG(I4Cfg1); break;
+    case 2: ok = RUN_I4CFG(I4Cfg2); break;
+    case 3: ok = RUN_I4CFG(I4Cfg3); break;
+    case 4: ok = RUN_I4CFG(I4Cfg4); break;
+    case 5: ok = RUN_I4CFG(I4Cfg5); break;
+    default: TORCH_CHECK(false, "invalid int4 config_id ", config_id);
+  }
+#undef RUN_I4CFG
+  TORCH_CHECK(ok, "int4 tuned config ", config_id, " cannot implement (N=", N,
+              " C=", C, " H=", H, " W=", W, " K=", K, " R=", R, ")");
+  return output;
+}
+
 // conv2d_int4_fprop, then output = raw_output * weight_scales[channel], written
 // into a caller-provided buffer (see conv2d_int8_fprop_no_ohat_prealloc for the
 // same "prealloc only covers the final buffer" caveat).
@@ -365,14 +473,14 @@ torch::Tensor conv2d_int4_fprop_relu_requant_int4(
     torch::Tensor requant_scale,
     torch::Tensor output,
     bool apply_relu,
+    int64_t config_id,
     int stride_h, int stride_w,
     int padding_h, int padding_w,
     int dilation_h, int dilation_w
 ) {
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-    auto empty_bias = torch::empty({0}, torch::TensorOptions().device(input.device()));
-    auto conv_out = conv2d_int4_fprop(
-        input, weight_packed, inv_scale, empty_bias,
+    auto conv_out = conv2d_int4_fprop_tuned(
+        input, weight_packed, inv_scale, config_id,
         stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w);
     CHECK_CUDA(output);
     TORCH_CHECK(output.is_contiguous(), "packed int4 output must be contiguous");
@@ -417,14 +525,14 @@ torch::Tensor conv2d_int4_fprop_bias_residual_dual(
     torch::Tensor out_half,
     torch::Tensor out_packed,
     bool apply_relu,
+    int64_t config_id,
     int stride_h, int stride_w,
     int padding_h, int padding_w,
     int dilation_h, int dilation_w
 ) {
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-    auto empty_bias = torch::empty({0}, torch::TensorOptions().device(input.device()));
-    auto conv_out = conv2d_int4_fprop(
-        input, weight_packed, inv_scale, empty_bias,
+    auto conv_out = conv2d_int4_fprop_tuned(
+        input, weight_packed, inv_scale, config_id,
         stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w);
     CHECK_CUDA(out_half); CHECK_CONTIGUOUS(out_half);
     CHECK_CUDA(out_packed);

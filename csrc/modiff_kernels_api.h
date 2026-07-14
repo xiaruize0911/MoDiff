@@ -142,15 +142,21 @@ torch::Tensor conv2d_int4_fprop_no_ohat_prealloc_bias_residual(
     torch::Tensor weight_scales, torch::Tensor bias, torch::Tensor residual, torch::Tensor output,
     int stride_h, int stride_w, int padding_h, int padding_w, int dilation_h, int dilation_w);
 
+int64_t conv2d_int4_num_tuned_configs();
+
+torch::Tensor conv2d_int4_fprop_tuned(
+    torch::Tensor input, torch::Tensor weight_packed, torch::Tensor inv_scale, int64_t config_id,
+    int stride_h, int stride_w, int padding_h, int padding_w, int dilation_h, int dilation_w);
+
 torch::Tensor conv2d_int4_fprop_relu_requant_int4(
     torch::Tensor input, torch::Tensor weight_packed, torch::Tensor inv_scale,
     torch::Tensor weight_scales, torch::Tensor bias, torch::Tensor requant_scale, torch::Tensor output,
-    bool apply_relu, int stride_h, int stride_w, int padding_h, int padding_w, int dilation_h, int dilation_w);
+    bool apply_relu, int64_t config_id, int stride_h, int stride_w, int padding_h, int padding_w, int dilation_h, int dilation_w);
 
 torch::Tensor conv2d_int4_fprop_bias_residual_dual(
     torch::Tensor input, torch::Tensor weight_packed, torch::Tensor inv_scale,
     torch::Tensor weight_scales, torch::Tensor bias, torch::Tensor residual, torch::Tensor requant_scale,
-    torch::Tensor out_half, torch::Tensor out_packed, bool apply_relu,
+    torch::Tensor out_half, torch::Tensor out_packed, bool apply_relu, int64_t config_id,
     int stride_h, int stride_w, int padding_h, int padding_w, int dilation_h, int dilation_w);
 
 torch::Tensor conv2d_int4_fprop_no_ohat(

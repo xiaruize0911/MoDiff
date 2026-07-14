@@ -1,4 +1,5 @@
 
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -12,6 +13,12 @@ try:
 except ImportError:
     HAS_CUTLASS = False
     print("Warning: modiff_cutlass extension not found. Please compile it using setup.py.")
+
+# Per-shape CUTLASS tile autotuning for the int4 conv (mirror of the int8 tuned tile
+# set). Each conv times all tile configs on its actual packed input and caches the
+# fastest. Shared kill-switch with int8: MODIFF_DISABLE_CONV_AUTOTUNE=1 -> fixed tile.
+_INT4_CONV_AUTOTUNE = (os.environ.get("MODIFF_DISABLE_CONV_AUTOTUNE") != "1"
+                       and HAS_CUTLASS and hasattr(modiff_cutlass, "conv2d_int4_fprop_tuned"))
 
 def pack_int4(tensor: torch.Tensor) -> torch.Tensor:
     """
@@ -573,6 +580,42 @@ class OptimizedInt4Conv2d(nn.Module):
             x_packed = x_packed.contiguous()
         return self._conv_from_int4(x_packed, h_in, w_in, residual=residual)
 
+    def _ensure_tuned_config(self, x_packed: torch.Tensor) -> int:
+        """Lazily pick the fastest int4 CUTLASS tile for this conv's shape by timing
+        all configs on the actual packed input (mirror of OptimizedInt8Conv2d). Cached
+        in _tuned_config_id. Returns -1 (fixed default tile) when autotune is off or
+        unavailable."""
+        cid = getattr(self, "_tuned_config_id", None)
+        if cid is not None:
+            return cid
+        if not _INT4_CONV_AUTOTUNE:
+            self._tuned_config_id = -1
+            return -1
+        self._ensure_conv_caches(x_packed.device)
+        ncfg = modiff_cutlass.conv2d_int4_num_tuned_configs()
+        strides = (self.stride[0], self.stride[1], self.padding[0], self.padding[1],
+                   self.dilation[0], self.dilation[1])
+        best_t, best_id = float("inf"), -1
+        for c in range(ncfg):
+            try:
+                for _ in range(3):
+                    modiff_cutlass.conv2d_int4_fprop_tuned(
+                        x_packed, self.weight_packed, self._cached_alpha_tensor, c, *strides)
+                torch.cuda.synchronize()
+                s = torch.cuda.Event(enable_timing=True); e = torch.cuda.Event(enable_timing=True)
+                s.record()
+                for _ in range(10):
+                    modiff_cutlass.conv2d_int4_fprop_tuned(
+                        x_packed, self.weight_packed, self._cached_alpha_tensor, c, *strides)
+                e.record(); torch.cuda.synchronize()
+                t = s.elapsed_time(e)
+            except Exception:
+                continue
+            if t < best_t:
+                best_t, best_id = t, c
+        self._tuned_config_id = best_id  # -1 if all configs failed -> fixed default
+        return self._tuned_config_id
+
     def _out_hw(self, h_in: int, w_in: int):
         h_out = ((h_in + 2 * self.padding[0] - self.dilation[0] * (self.kernel_size[0] - 1) - 1) // self.stride[0]) + 1
         w_out = ((w_in + 2 * self.padding[1] - self.dilation[1] * (self.kernel_size[1] - 1) - 1) // self.stride[1]) + 1
@@ -610,10 +653,11 @@ class OptimizedInt4Conv2d(nn.Module):
         h_out, w_out = self._out_hw(h_in, w_in)
         out = self._ensure_packed_out_buf(x_packed.shape[0], h_out, w_out, x_packed.device)
         bias_arg = (self.bias.view(-1).contiguous() if self.bias is not None else self._empty_bias)
+        cid = self._ensure_tuned_config(x_packed)
         modiff_cutlass.conv2d_int4_fprop_relu_requant_int4(
             x_packed, self.weight_packed, self._cached_alpha_tensor,
             self.weight_scale_channel.view(-1), bias_arg, requant_scale.view(1),
-            out, apply_relu,
+            out, apply_relu, cid,
             self.stride[0], self.stride[1], self.padding[0], self.padding[1],
             self.dilation[0], self.dilation[1])
         return out
@@ -645,10 +689,11 @@ class OptimizedInt4Conv2d(nn.Module):
             ).contiguous(memory_format=torch.channels_last)
         out_packed = self._ensure_packed_out_buf(N, h_out, w_out, x_packed.device)
         bias_arg = (self.bias.view(-1).contiguous() if self.bias is not None else self._empty_bias)
+        cid = self._ensure_tuned_config(x_packed)
         modiff_cutlass.conv2d_int4_fprop_bias_residual_dual(
             x_packed, self.weight_packed, self._cached_alpha_tensor,
             self.weight_scale_channel.view(-1), bias_arg, residual.half(),
-            requant_scale.view(1), self._standard_output_buf, out_packed, apply_relu,
+            requant_scale.view(1), self._standard_output_buf, out_packed, apply_relu, cid,
             self.stride[0], self.stride[1], self.padding[0], self.padding[1],
             self.dilation[0], self.dilation[1])
         return self._standard_output_buf, out_packed

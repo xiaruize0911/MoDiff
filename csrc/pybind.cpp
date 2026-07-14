@@ -58,6 +58,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("conv2d_int4_fprop_no_ohat_prealloc", &conv2d_int4_fprop_no_ohat_prealloc, "Fused INT4 conv + dequant into a preallocated output buffer");
     m.def("conv2d_int4_fprop_no_ohat_prealloc_bias", &conv2d_int4_fprop_no_ohat_prealloc_bias, "Fused INT4 conv + dequant + bias into a preallocated output buffer");
     m.def("conv2d_int4_fprop_no_ohat_prealloc_bias_residual", &conv2d_int4_fprop_no_ohat_prealloc_bias_residual, "Fused INT4 conv + dequant + bias + residual (skip-add) into a preallocated output buffer");
+    m.def("conv2d_int4_num_tuned_configs", &conv2d_int4_num_tuned_configs, "Number of autotunable tile configs for the INT4 conv");
+    m.def("conv2d_int4_fprop_tuned", &conv2d_int4_fprop_tuned, "INT4 conv (FP32 out) using tile config `config_id` (per-shape autotuning; <0 = default tile)");
     m.def("conv2d_int4_fprop_relu_requant_int4", &conv2d_int4_fprop_relu_requant_int4, "INT4 conv + dequant + bias + ReLU, requantized+packed to INT4 output (int4 conv->conv chaining)");
     m.def("conv2d_int4_fprop_bias_residual_dual", &conv2d_int4_fprop_bias_residual_dual, "INT4 conv3 + bias + residual + ReLU, DUAL output: FP16 (x_{N+1}) + requantized packed INT4 (next block conv1) -- fuses the block-entry quantize");
     m.def("conv2d_int4_fprop_no_ohat", &conv2d_int4_fprop_no_ohat, "Fused INT4 conv + dequant without o_hat update");
