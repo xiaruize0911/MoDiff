@@ -23,6 +23,7 @@ if REPO not in sys.path:
 import torchvision.models as tvm
 from integration.kernels.int8_optimized import convert_model_to_optimized_int8, OptimizedInt8Conv2d
 from integration.kernels.int4_optimized import convert_model_to_optimized_int4, OptimizedInt4Conv2d
+from integration.fused_ops.chained_bottleneck import chain_int8_bottlenecks
 
 QCONV = (OptimizedInt8Conv2d, OptimizedInt4Conv2d)
 
@@ -53,9 +54,10 @@ def build_fp16():
 
 
 def build_quantized(kind, x_calib, skip_pointwise):
-    """kind in {'int8','int4'}. Returns a calibrated static model, or raises."""
+    """kind in {'int8','int4','int8_chained'}. Returns a calibrated static model."""
     m = build_fp16().float()  # convert works from fp32 weights
-    convert = convert_model_to_optimized_int8 if kind == "int8" else convert_model_to_optimized_int4
+    convert = (convert_model_to_optimized_int4 if kind == "int4"
+               else convert_model_to_optimized_int8)
     convert(m, skip_pointwise=skip_pointwise)
     # First conv has in_channels=3 -> too small for the 128-tile CUTLASS GEMM; keep fp16.
     # convert leaves it as OptimizedConv; restore a plain fp16 conv from a fresh model.
@@ -65,20 +67,39 @@ def build_quantized(kind, x_calib, skip_pointwise):
     # (static_input_scale / weight_scale_channel) to fp16, but the CUTLASS kernels
     # read them as float*. Keep params fp32; autocast makes the activations fp16.
     m = m.to(memory_format=torch.channels_last)
-    # Calibrate: collect static activation scales so the fast CUTLASS path is used.
-    for mod in m.modules():
-        if isinstance(mod, QCONV):
-            mod.begin_calibration()
+    # Calibrate each conv's input scale from the FP16 reference activations (standard
+    # PTQ). The module-level begin/end_calibration runs convs in "calibrating mode"
+    # whose output magnitude differs from the calibrated fast path, so downstream
+    # scales come out ~10x wrong (saturating int8) -- fatal for chaining. Instead
+    # hook the fp16 model, record each conv's input absmax, and set_static_scale.
+    absmax = {}
+    ref = build_fp16()
+    handles = []
+    for name, mod in ref.named_modules():
+        if isinstance(mod, nn.Conv2d):
+            def hook(m_, inp, _n=name):
+                a = inp[0].detach().abs().amax().item()
+                absmax[_n] = max(absmax.get(_n, 0.0), a)
+            handles.append(mod.register_forward_pre_hook(hook))
     with torch.no_grad(), torch.autocast("cuda", dtype=torch.float16):
         for _ in range(3):
-            m(x_calib)
+            ref(x_calib)
+    for h in handles:
+        h.remove()
     n = 0
-    for mod in m.modules():
+    for name, mod in m.named_modules():
         if isinstance(mod, QCONV):
-            mod.end_calibration()
+            a = absmax.get(name, None)
+            if a is None or a <= 0:
+                continue
+            mod.set_static_scale(127.0 / a)
             mod.set_standard_output_fp16(True)
             mod.enable_modiff(False)
             n += mod.is_calibrated
+    del ref
+    if kind == "int8_chained":
+        # Keep activations int8 across conv1->conv2->conv3 within each bottleneck.
+        chain_int8_bottlenecks(m)
     return m, n
 
 
@@ -112,7 +133,7 @@ def main():
     models = {"fp16": build_fp16()}
     n_conv = sum(1 for _ in models["fp16"].modules() if isinstance(_, nn.Conv2d))
     print(f"fp16: {n_conv} conv layers")
-    for kind in ("int8", "int4"):
+    for kind in ("int8", "int4", "int8_chained"):
         sp = a.skip_pointwise
         try:
             m, nq = build_quantized(kind, x, skip_pointwise=sp)
@@ -129,7 +150,7 @@ def main():
             assert torch.isfinite(o).all(), f"{k} produced non-finite output"
 
     # warmup each model, then interleave the timed runs to spread any drift evenly
-    order = ["fp16", "int8", "int4"]
+    order = ["fp16", "int8", "int4", "int8_chained"]
     for k in order:
         timed(models[k], x, repeats=0, warmups=a.warmups)
     samples = {k: [] for k in order}
@@ -139,12 +160,15 @@ def main():
 
     med = {k: statistics.median(v) for k, v in samples.items()}
     std = {k: statistics.pstdev(v) for k, v in samples.items()}
-    print(f"\n=== END-TO-END (per-conv quantize NOT hidden; no norm layer to absorb it) ===")
-    print(f"{'mode':<8}{'median ms':>12}{'stdev':>9}{'vs fp16':>10}")
+    print(f"\n=== END-TO-END ===")
+    print(f"{'mode':<14}{'median ms':>12}{'stdev':>9}{'vs fp16':>10}")
     for k in order:
         spd = med["fp16"] / med[k]
-        print(f"{k:<8}{med[k]:>12.3f}{std[k]:>9.3f}{spd:>9.2f}x")
-    print(f"int4 vs int8: {med['int8']/med['int4']:.2f}x")
+        print(f"{k:<14}{med[k]:>12.3f}{std[k]:>9.3f}{spd:>9.2f}x")
+    print(f"int4 vs int8:          {med['int8']/med['int4']:.2f}x")
+    print(f"int8_chained vs int8:  {med['int8']/med['int8_chained']:.2f}x")
+    print(f"int8_chained vs fp16:  {med['fp16']/med['int8_chained']:.2f}x  "
+          f"({'WIN' if med['int8_chained'] < med['fp16'] else 'no win'})")
 
     microbench_convs(a.batch)
 

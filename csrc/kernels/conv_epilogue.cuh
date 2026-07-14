@@ -108,6 +108,36 @@ __global__ void scale_bias_residual_store_half_kernel(
     }
 }
 
+// INT8-OUTPUT (requantizing) epilogue for conv->conv int8 chaining. Dequantizes
+// the accumulator (conv*weight_scale[ch] + bias[ch]) to real units, optionally
+// applies ReLU (folds the activation into the requantize since ReLU commutes with
+// positive scaling), then re-quantizes by `*requant_scale_ptr` (= the NEXT conv's
+// 127/absmax input scale) straight to int8 -- so the following conv reads int8
+// directly with no fp16 round-trip + separate quantize. `bias` may be nullptr.
+// Post-ReLU values land in [0,127]; the negative codes go unused (no zero-point in
+// the s8xs8 GEMM). Reuses the clamp/round-to-int8 idiom from quantize.cu.
+template <typename BiasT>
+__global__ void scale_bias_relu_requant_store_int8_kernel(
+    const float* __restrict__ conv_output,
+    const float* __restrict__ weight_scale,
+    const BiasT* __restrict__ bias,
+    const float* __restrict__ requant_scale_ptr,
+    int8_t* __restrict__ output,
+    int num_elements,
+    int num_channels,
+    bool apply_relu
+) {
+    const float rq = *requant_scale_ptr;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    for (int i = idx; i < num_elements; i += blockDim.x * gridDim.x) {
+        int ch = i % num_channels;
+        float value = conv_output[i] * weight_scale[ch]
+                    + (bias != nullptr ? bias_value(bias, ch) : 0.0f);
+        if (apply_relu) value = fmaxf(value, 0.0f);
+        output[i] = (int8_t)fmaxf(-127.0f, fminf(127.0f, roundf(value * rq)));
+    }
+}
+
 template <typename BiasT>
 __global__ void scale_bias_store_kernel(
     const float* __restrict__ conv_output,

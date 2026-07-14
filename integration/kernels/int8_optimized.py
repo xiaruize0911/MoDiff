@@ -102,6 +102,13 @@ class OptimizedInt8Conv2d(nn.Module):
         self._cached_scale_tensor: Optional[torch.Tensor] = None  # for _forward_standard fused path
         self.standard_output_fp16 = False
         self._standard_output_buf: Optional[torch.Tensor] = None
+        # INT8 conv->conv chaining (TensorRT-style): when output_requant_scale is
+        # set (to the NEXT conv's static_input_scale), forward_to_int8 emits int8
+        # requantized by it (+ optional fused ReLU), so the next conv reads int8
+        # directly with no fp16 round-trip. See integration/fused_ops/chained_bottleneck.py.
+        self.output_requant_scale: Optional[torch.Tensor] = None
+        self.fuse_output_relu: bool = False
+        self._int8_output_buf: Optional[torch.Tensor] = None
         # Persistent scratch for the cast-free fp16 quantize in _forward_standard
         # (see there): a zeroed a_hat lets the fused step1 kernel consume fp16
         # activations directly, avoiding a per-layer fp16->fp32 cast.
@@ -604,6 +611,52 @@ class OptimizedInt8Conv2d(nn.Module):
         if not x_int8.is_contiguous(memory_format=torch.channels_last):
             x_int8 = x_int8.contiguous(memory_format=torch.channels_last)
         return self._conv_from_int8(x_int8, residual=residual)
+
+    def quantize_input(self, x: torch.Tensor) -> torch.Tensor:
+        """Quantize an fp16/fp32 activation to channels_last int8 using this conv's
+        calibrated static_input_scale -- the block-entry K1 for int8 chaining. Reuses
+        the cast-free fp16 path from _forward_standard (step1 with a zeroed a_hat)."""
+        self._ensure_conv_caches(x.device)
+        if not x.is_contiguous(memory_format=torch.channels_last):
+            x = x.contiguous(memory_format=torch.channels_last)
+        if x.dtype == torch.float16:
+            if (self._zero_ahat_buf is None
+                    or self._zero_ahat_buf.shape != x.shape
+                    or self._zero_ahat_buf.device != x.device):
+                self._zero_ahat_buf = torch.zeros_like(x)
+            else:
+                self._zero_ahat_buf.zero_()
+            return modiff_cutlass.step1_static_quantize_fprop(
+                x, self._zero_ahat_buf, self.static_input_scale.view(1), self._empty_smooth)
+        x_for_quant = x if x.dtype == torch.float32 else x.float()
+        return modiff_cutlass.scale_quantize_int8(x_for_quant, self._cached_scale_tensor)
+
+    def forward_to_int8(self, x_int8: torch.Tensor, apply_relu: bool = True) -> torch.Tensor:
+        """INT8-in, INT8-out conv for chaining: dequant + optional ReLU + requantize
+        by output_requant_scale (the next conv's input scale), in one fused kernel,
+        so the next conv reads int8 directly. Requires output_requant_scale set,
+        calibrated, use_cutlass. Returns a channels_last int8 tensor."""
+        self._ensure_conv_caches(x_int8.device)
+        assert self.output_requant_scale is not None, "output_requant_scale not wired"
+        if not x_int8.is_contiguous(memory_format=torch.channels_last):
+            x_int8 = x_int8.contiguous(memory_format=torch.channels_last)
+        h_out = ((x_int8.shape[2] + 2 * self.padding[0] - self.dilation[0] * (self.kernel_size[0] - 1) - 1) // self.stride[0]) + 1
+        w_out = ((x_int8.shape[3] + 2 * self.padding[1] - self.dilation[1] * (self.kernel_size[1] - 1) - 1) // self.stride[1]) + 1
+        output_shape = (x_int8.shape[0], self.out_channels, h_out, w_out)
+        if (self._int8_output_buf is None
+                or self._int8_output_buf.shape != output_shape
+                or self._int8_output_buf.device != x_int8.device):
+            self._int8_output_buf = torch.empty(
+                output_shape, device=x_int8.device, dtype=torch.int8
+            ).contiguous(memory_format=torch.channels_last)
+        bias_arg = (self.bias.view(-1).contiguous()
+                    if self.bias is not None else self._empty_bias)
+        return modiff_cutlass.conv2d_int8_fprop_relu_requant_int8(
+            x_int8, self.weight_int8, self._cached_alpha_tensor,
+            self.weight_scale_channel.view(-1), bias_arg,
+            self.output_requant_scale.view(1), self._int8_output_buf, apply_relu,
+            self.stride[0], self.stride[1], self.padding[0], self.padding[1],
+            self.dilation[0], self.dilation[1])
 
     def _forward_first_step(self, x: torch.Tensor) -> torch.Tensor:
         """First timestep (t=T): warm-up with repeated quantisation.

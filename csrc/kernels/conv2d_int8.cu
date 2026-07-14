@@ -608,6 +608,67 @@ torch::Tensor conv2d_int8_fprop_no_ohat_prealloc_bias_residual(
     return output;
 }
 
+// INT8-output (requantizing) conv for int8 conv->conv chaining. Dequantizes the
+// accumulator (per-channel weight_scale + optional bias), optionally applies ReLU,
+// then requantizes by `requant_scale` (the NEXT conv's 127/absmax) straight to
+// int8 -- so the next conv reads int8 with no fp16 round-trip + separate quantize.
+// `output` must be a preallocated channels_last INT8 tensor. `bias` may be empty.
+torch::Tensor conv2d_int8_fprop_relu_requant_int8(
+    torch::Tensor input,
+    torch::Tensor weight,
+    torch::Tensor inv_scale,
+    torch::Tensor weight_scales,
+    torch::Tensor bias,
+    torch::Tensor requant_scale,
+    torch::Tensor output,
+    bool apply_relu,
+    int stride_h, int stride_w,
+    int padding_h, int padding_w,
+    int dilation_h, int dilation_w
+) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    auto empty_bias = torch::empty({0}, torch::TensorOptions().device(input.device()));
+    auto conv_out = conv2d_int8_fprop(
+        input, weight, inv_scale, empty_bias,
+        stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w
+    );
+
+    CHECK_CUDA(output);
+    CHECK_CONTIGUOUS(output);
+    TORCH_CHECK(output.scalar_type() == torch::kInt8,
+                "conv2d_int8_fprop_relu_requant_int8: output must be int8");
+    TORCH_CHECK(output.sizes() == conv_out.sizes(), "output shape mismatch");
+    TORCH_CHECK(requant_scale.numel() == 1, "requant_scale must be a scalar tensor");
+    const bool has_bias = bias.numel() > 0;
+    if (has_bias) {
+        TORCH_CHECK(bias.is_contiguous(), "bias must be contiguous");
+        TORCH_CHECK(bias.numel() == weight_scales.numel(), "bias size must match output channels");
+    }
+
+    int num_elements = conv_out.numel();
+    int num_channels = weight_scales.numel();
+    int block_size = 256;
+    int grid_size = (num_elements + block_size - 1) / block_size;
+    const float* rq_ptr = requant_scale.data_ptr<float>();
+    int8_t* out_ptr = reinterpret_cast<int8_t*>(output.data_ptr<int8_t>());
+
+    if (has_bias && bias.scalar_type() == torch::kFloat16) {
+        scale_bias_relu_requant_store_int8_kernel<__half><<<grid_size, block_size, 0, stream>>>(
+            conv_out.data_ptr<float>(), weight_scales.data_ptr<float>(),
+            reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
+            rq_ptr, out_ptr, num_elements, num_channels, apply_relu);
+    } else if (has_bias) {
+        scale_bias_relu_requant_store_int8_kernel<float><<<grid_size, block_size, 0, stream>>>(
+            conv_out.data_ptr<float>(), weight_scales.data_ptr<float>(),
+            bias.data_ptr<float>(), rq_ptr, out_ptr, num_elements, num_channels, apply_relu);
+    } else {
+        scale_bias_relu_requant_store_int8_kernel<__half><<<grid_size, block_size, 0, stream>>>(
+            conv_out.data_ptr<float>(), weight_scales.data_ptr<float>(),
+            (const __half*)nullptr, rq_ptr, out_ptr, num_elements, num_channels, apply_relu);
+    }
+    return output;
+}
+
 // Same as conv2d_int8_fprop_no_ohat_prealloc, but allocates its own output buffer.
 torch::Tensor conv2d_int8_fprop_no_ohat(
     torch::Tensor input,
