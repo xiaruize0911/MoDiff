@@ -63,17 +63,20 @@ try:
     import modiff_cutlass
     HAS_NATIVE_GN_SILU = hasattr(modiff_cutlass, "group_norm_silu_nhwc")
     HAS_GN_SILU_QUANTIZE = hasattr(modiff_cutlass, "group_norm_silu_quantize_nhwc")
+    HAS_GN_SILU_QUANTIZE_PACK = hasattr(modiff_cutlass, "group_norm_silu_quantize_pack_nhwc")
 except ImportError:
     modiff_cutlass = None
     HAS_NATIVE_GN_SILU = False
     HAS_GN_SILU_QUANTIZE = False
+    HAS_GN_SILU_QUANTIZE_PACK = False
 
-# Kill-switch for the GN->int8 K1-fusion (baseline int8/int4). Set
+# Kill-switch for the GN->intX K1-fusion (baseline int8/int4). Set
 # MODIFF_DISABLE_GN_INT8_FUSION=1 to fall back to the exact two-kernel
-# (GroupNorm+SiLU, then standalone quantize) path -- used for A/B benchmarking
-# and as a production safety switch. The fusion is a pure optimization either way.
+# (GroupNorm+SiLU, then standalone quantize[/pack]) path -- used for A/B
+# benchmarking and as a production safety switch. Pure optimization either way.
 if os.environ.get("MODIFF_DISABLE_GN_INT8_FUSION") == "1":
     HAS_GN_SILU_QUANTIZE = False
+    HAS_GN_SILU_QUANTIZE_PACK = False
 
 
 def _group_norm_silu(x, num_groups, weight, bias, eps, apply_silu):
@@ -102,21 +105,17 @@ def _group_norm_silu(x, num_groups, weight, bias, eps, apply_silu):
         return F.silu(out) if apply_silu else out
 
 
-def _prequant_fusable(conv):
-    """True when `conv` is a calibrated baseline INT8/INT4 conv whose preceding
-    GroupNorm+SiLU can emit its quantized int8 input directly (the K1->GN fusion),
-    letting us call conv.forward_from_int8() and skip the per-conv quantize kernel.
+def _prequant_common_ok(conv):
+    """Common gates for the GN->intX K1-fusion, shared by int8 and int4.
 
     Baseline-only: the MoDiff modulated path (modiff_enabled=True) does an in-place
     a_hat cache update inside its quantize that a fused GN-emit would bypass and
-    corrupt, so we require modiff_enabled=False. Everything else (SmoothQuant,
-    grouped convs, non-fp16 output) falls back to the current exact path -- this is
-    a pure optimization, never a correctness change.
+    corrupt, so we require modiff_enabled=False. SmoothQuant / grouped convs /
+    non-fp16 output all fall back to the exact path -- pure optimization, never a
+    correctness change.
     """
     return (
-        HAS_GN_SILU_QUANTIZE
-        and hasattr(conv, 'forward_from_int8')
-        and getattr(conv, 'is_calibrated', False)
+        getattr(conv, 'is_calibrated', False)
         and not getattr(conv, 'modiff_enabled', True)
         and getattr(conv, 'standard_output_fp16', False)
         and getattr(conv, 'use_cutlass', False)
@@ -125,36 +124,65 @@ def _prequant_fusable(conv):
     )
 
 
-def _group_norm_silu_int8(x, num_groups, weight, bias, eps, apply_silu, conv):
-    """GroupNorm (+ optional SiLU) that emits its output already quantized to int8
-    (channels_last), fusing away the standalone per-conv quantize kernel (K1). Used
-    only when the following conv is _prequant_fusable(conv). Falls back to
-    _group_norm_silu + scale_quantize_int8 for shapes the native kernel doesn't
-    cover, so it stays a pure optimization.
-
-    The quantize multiplier is conv.static_input_scale (=127/absmax), matching the
-    conv's cached dequant alpha (=1/scale); smooth_inv is empty (identity) since
-    _prequant_fusable gates on _smooth_is_identity.
+def _prequant_gn_conv(x, gn, conv):
+    """If (GroupNorm+SiLU `gn` -> quantized conv `conv`) is eligible for the
+    GN->intX K1-fusion, run GroupNorm+SiLU emitting the conv's quantized input
+    directly (int8, or packed int4) and then conv.forward_from_intX, returning the
+    conv output. Otherwise return None so the caller uses the normal two-kernel
+    path. The quantize multiplier is conv.static_input_scale (=127/absmax), matching
+    the conv's cached dequant alpha; smooth_inv is identity (gated above).
     """
+    if not _prequant_common_ok(conv):
+        return None
+    is_int4 = hasattr(conv, 'forward_from_int4')
+    if is_int4 and not HAS_GN_SILU_QUANTIZE_PACK:
+        return None
+    if not is_int4 and (not HAS_GN_SILU_QUANTIZE or not hasattr(conv, 'forward_from_int8')):
+        return None
+
+    ng, eps = gn.num_groups, gn.eps
+    w, b = gn._cast_params(x.dtype)
     conv._ensure_conv_caches(x.device)
     scale = conv._cached_scale_tensor          # fp32 [1], =static_input_scale
     smooth_inv = conv._empty_smooth            # empty -> identity
-    can_use_native = (
-        HAS_GN_SILU_QUANTIZE
-        and x.is_cuda
+    C = x.size(1)
+    native_ok = (
+        x.is_cuda
         and x.dtype in (torch.float32, torch.float16)
         and x.is_contiguous(memory_format=torch.channels_last)
-        and x.size(1) % num_groups == 0
+        and C % ng == 0
     )
-    if can_use_native:
-        return modiff_cutlass.group_norm_silu_quantize_nhwc(
-            x, weight, bias, num_groups, eps, apply_silu, scale, smooth_inv)
-    # Fallback: exact same math, two kernels instead of one.
-    h = _group_norm_silu(x, num_groups, weight, bias, eps, apply_silu)
-    h_f32 = h if h.dtype == torch.float32 else h.float()
-    if not h_f32.is_contiguous(memory_format=torch.channels_last):
-        h_f32 = h_f32.contiguous(memory_format=torch.channels_last)
-    return modiff_cutlass.scale_quantize_int8(h_f32, scale)
+
+    if is_int4:
+        # int4 packs channel pairs within a group -> needs even channels-per-group.
+        if C % 2 != 0 or (C // ng) % 2 != 0:
+            return None
+        h_in, w_in = x.shape[2], x.shape[3]
+        if native_ok:
+            packed = modiff_cutlass.group_norm_silu_quantize_pack_nhwc(
+                x, w, b, ng, eps, True, scale, smooth_inv)
+        else:
+            packed = modiff_cutlass.scale_quantize_and_pack(
+                _gn_silu_fp32_cl(x, ng, w, b, eps), scale)
+        return conv.forward_from_int4(packed, h_in, w_in)
+    else:
+        if native_ok:
+            q = modiff_cutlass.group_norm_silu_quantize_nhwc(
+                x, w, b, ng, eps, True, scale, smooth_inv)
+        else:
+            q = modiff_cutlass.scale_quantize_int8(
+                _gn_silu_fp32_cl(x, ng, w, b, eps), scale)
+        return conv.forward_from_int8(q)
+
+
+def _gn_silu_fp32_cl(x, num_groups, weight, bias, eps):
+    """Fallback GroupNorm+SiLU producing an fp32 channels_last tensor, as required
+    by the standalone scale_quantize[_and_pack] kernels' float-vector reads."""
+    h = _group_norm_silu(x, num_groups, weight, bias, eps, apply_silu=True)
+    h = h if h.dtype == torch.float32 else h.float()
+    if not h.is_contiguous(memory_format=torch.channels_last):
+        h = h.contiguous(memory_format=torch.channels_last)
+    return h
 
 
 class FusedGroupNormSiLU(nn.Module):
@@ -362,14 +390,11 @@ class FusedResBlock(TimestepBlock):
             x = self.x_upd(x)
             h = self.in_conv(h)
         else:
-            if _prequant_fusable(self.in_conv):
-                # K1->GN fusion: GroupNorm+SiLU emits int8 directly; in_conv skips
-                # its own quantize and consumes it via forward_from_int8.
-                w, b = self.fused_in_norm_silu._cast_params(x.dtype)
-                h_int8 = _group_norm_silu_int8(
-                    x, self.fused_in_norm_silu.num_groups, w, b,
-                    self.fused_in_norm_silu.eps, apply_silu=True, conv=self.in_conv)
-                h = self.in_conv.forward_from_int8(h_int8)
+            # K1->GN fusion: GroupNorm+SiLU emits the conv's quantized input
+            # directly (int8, or packed int4), so in_conv skips its own quantize.
+            fused = _prequant_gn_conv(x, self.fused_in_norm_silu, self.in_conv)
+            if fused is not None:
+                h = fused
             else:
                 h = self.fused_in_norm_silu(x)
                 h = self.in_conv(h)
@@ -398,15 +423,12 @@ class FusedResBlock(TimestepBlock):
             h = self.out_conv(h)
         else:
             h = h + emb_out
-            if _prequant_fusable(self.out_conv):
-                # K1->GN fusion: GroupNorm+SiLU emits int8 directly; out_conv skips
-                # its own quantize. out_dropout is nn.Dropout (no-op in eval/
-                # inference), so it's elided on the int8 path.
-                w, b = self.fused_out_norm_silu._cast_params(h.dtype)
-                h_int8 = _group_norm_silu_int8(
-                    h, self.fused_out_norm_silu.num_groups, w, b,
-                    self.fused_out_norm_silu.eps, apply_silu=True, conv=self.out_conv)
-                h = self.out_conv.forward_from_int8(h_int8)
+            # K1->GN fusion: GroupNorm+SiLU emits the conv's quantized input
+            # directly; out_conv skips its own quantize. out_dropout is nn.Dropout
+            # (no-op in eval/inference), so it's elided on the fused path.
+            fused = _prequant_gn_conv(h, self.fused_out_norm_silu, self.out_conv)
+            if fused is not None:
+                h = fused
             else:
                 h = self.fused_out_norm_silu(h)
                 h = self.out_dropout(h)

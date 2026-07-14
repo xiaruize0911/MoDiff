@@ -433,15 +433,7 @@ class OptimizedInt4Conv2d(nn.Module):
         When not calibrated, falls back to the naive PyTorch path.
         """
         if self.is_calibrated and HAS_CUTLASS and self.use_cutlass:
-            if self._cached_scale_float is None:
-                self._cached_scale_float = float(self.static_input_scale.item())
-            if self._cached_alpha_tensor is None:
-                alpha = 1.0 / self._cached_scale_float
-                self._cached_alpha_tensor = torch.tensor(
-                    [alpha], device=x.device, dtype=torch.float32)
-            if self._cached_scale_tensor is None:
-                self._cached_scale_tensor = torch.tensor(
-                    [self._cached_scale_float], device=x.device, dtype=torch.float32)
+            self._ensure_conv_caches(x.device)
             if not x.is_contiguous(memory_format=torch.channels_last):
                 x = x.contiguous(memory_format=torch.channels_last)
             if x.dtype == torch.float16:
@@ -471,57 +463,7 @@ class OptimizedInt4Conv2d(nn.Module):
             else:
                 x_for_quant = x if x.dtype == torch.float32 else x.float()
                 x_packed = modiff_cutlass.scale_quantize_and_pack(x_for_quant, self._cached_scale_tensor)
-            if self._empty_bias is None or self._empty_bias.device != x.device:
-                self._empty_bias = torch.empty(0, device=x.device)
-
-            h_out = ((x.shape[2] + 2 * self.padding[0] - self.dilation[0] * (self.kernel_size[0] - 1) - 1) // self.stride[0]) + 1
-            w_out = ((x.shape[3] + 2 * self.padding[1] - self.dilation[1] * (self.kernel_size[1] - 1) - 1) // self.stride[1]) + 1
-            output_shape = (x.shape[0], self.out_channels, h_out, w_out)
-            bias_fused = False
-            if self.standard_output_fp16:
-                if (self._standard_output_buf is None
-                        or self._standard_output_buf.shape != output_shape
-                        or self._standard_output_buf.device != x.device
-                        or self._standard_output_buf.dtype != torch.float16):
-                    self._standard_output_buf = torch.empty(
-                        output_shape, device=x.device, dtype=torch.float16
-                    ).contiguous(memory_format=torch.channels_last)
-                if self.bias is not None and hasattr(modiff_cutlass, "conv2d_int4_fprop_no_ohat_prealloc_bias"):
-                    out = modiff_cutlass.conv2d_int4_fprop_no_ohat_prealloc_bias(
-                        x_packed,
-                        self.weight_packed,
-                        self._cached_alpha_tensor,
-                        self.weight_scale_channel.view(-1),
-                        self.bias.view(-1).contiguous(),
-                        self._standard_output_buf,
-                        self.stride[0], self.stride[1],
-                        self.padding[0], self.padding[1],
-                        self.dilation[0], self.dilation[1]
-                    )
-                    bias_fused = True
-                else:
-                    out = modiff_cutlass.conv2d_int4_fprop_no_ohat_prealloc(
-                        x_packed,
-                        self.weight_packed,
-                        self._cached_alpha_tensor,
-                        self.weight_scale_channel.view(-1),
-                        self._standard_output_buf,
-                        self.stride[0], self.stride[1],
-                        self.padding[0], self.padding[1],
-                        self.dilation[0], self.dilation[1]
-                    )
-            else:
-                out_raw = modiff_cutlass.conv2d_int4_fprop(
-                    x_packed, self.weight_packed, self._cached_alpha_tensor, self._empty_bias,
-                    self.stride[0], self.stride[1],
-                    self.padding[0], self.padding[1],
-                    self.dilation[0], self.dilation[1]
-                )
-                out = out_raw * self.weight_scale_channel
-            if self.bias is not None and not bias_fused:
-                bias = self.bias.to(out.dtype) if out.dtype != self.bias.dtype else self.bias
-                out = out + bias
-            return out
+            return self._conv_from_int4(x_packed, x.shape[2], x.shape[3])
         # Fallback: during calibration we need the host-visible scale path so the
         # module can accumulate static activation statistics (the .item() sync in
         # _compute_activation_scale is required there). Outside calibration we use
@@ -533,6 +475,74 @@ class OptimizedInt4Conv2d(nn.Module):
             input_scale = self._compute_activation_scale(x)
             return self._int4_conv(x, input_scale, with_bias=True)
         return self._int4_conv_dynamic_fused(x, with_bias=True)
+
+    def _ensure_conv_caches(self, device):
+        """Lazy-init the per-tensor scale caches reused by the calibrated conv path."""
+        if self._cached_scale_float is None:
+            self._cached_scale_float = float(self.static_input_scale.item())
+        if self._cached_alpha_tensor is None:
+            self._cached_alpha_tensor = torch.tensor(
+                [1.0 / self._cached_scale_float], device=device, dtype=torch.float32)
+        if self._cached_scale_tensor is None:
+            self._cached_scale_tensor = torch.tensor(
+                [self._cached_scale_float], device=device, dtype=torch.float32)
+        if self._empty_bias is None or self._empty_bias.device != device:
+            self._empty_bias = torch.empty(0, device=device)
+        if self._empty_smooth is None or self._empty_smooth.device != device:
+            self._empty_smooth = torch.empty(0, device=device, dtype=torch.float32)
+
+    def _conv_from_int4(self, x_packed: torch.Tensor, h_in: int, w_in: int) -> torch.Tensor:
+        """Run the calibrated INT4 conv (dequant/bias/store dispatch) on an
+        already-quantized+packed activation ([N, H, W, C/2], the layout produced by
+        scale_quantize_and_pack). Shared by _forward_standard (which quantizes first)
+        and forward_from_int4 (which skips the quantize). h_in/w_in are the conv
+        input's spatial dims (== x_packed.shape[1:3])."""
+        self._ensure_conv_caches(x_packed.device)
+        h_out = ((h_in + 2 * self.padding[0] - self.dilation[0] * (self.kernel_size[0] - 1) - 1) // self.stride[0]) + 1
+        w_out = ((w_in + 2 * self.padding[1] - self.dilation[1] * (self.kernel_size[1] - 1) - 1) // self.stride[1]) + 1
+        output_shape = (x_packed.shape[0], self.out_channels, h_out, w_out)
+        bias_fused = False
+        if self.standard_output_fp16:
+            if (self._standard_output_buf is None
+                    or self._standard_output_buf.shape != output_shape
+                    or self._standard_output_buf.device != x_packed.device
+                    or self._standard_output_buf.dtype != torch.float16):
+                self._standard_output_buf = torch.empty(
+                    output_shape, device=x_packed.device, dtype=torch.float16
+                ).contiguous(memory_format=torch.channels_last)
+            if self.bias is not None and hasattr(modiff_cutlass, "conv2d_int4_fprop_no_ohat_prealloc_bias"):
+                out = modiff_cutlass.conv2d_int4_fprop_no_ohat_prealloc_bias(
+                    x_packed, self.weight_packed, self._cached_alpha_tensor,
+                    self.weight_scale_channel.view(-1), self.bias.view(-1).contiguous(),
+                    self._standard_output_buf,
+                    self.stride[0], self.stride[1], self.padding[0], self.padding[1],
+                    self.dilation[0], self.dilation[1])
+                bias_fused = True
+            else:
+                out = modiff_cutlass.conv2d_int4_fprop_no_ohat_prealloc(
+                    x_packed, self.weight_packed, self._cached_alpha_tensor,
+                    self.weight_scale_channel.view(-1), self._standard_output_buf,
+                    self.stride[0], self.stride[1], self.padding[0], self.padding[1],
+                    self.dilation[0], self.dilation[1])
+        else:
+            out_raw = modiff_cutlass.conv2d_int4_fprop(
+                x_packed, self.weight_packed, self._cached_alpha_tensor, self._empty_bias,
+                self.stride[0], self.stride[1], self.padding[0], self.padding[1],
+                self.dilation[0], self.dilation[1])
+            out = out_raw * self.weight_scale_channel
+        if self.bias is not None and not bias_fused:
+            bias = self.bias.to(out.dtype) if out.dtype != self.bias.dtype else self.bias
+            out = out + bias
+        return out
+
+    def forward_from_int4(self, x_packed: torch.Tensor, h_in: int, w_in: int) -> torch.Tensor:
+        """Baseline fast path: the activation is already quantized+packed to int4
+        (SiLU applied upstream by the GN->int4 fusion in fused_resblock.py), so skip
+        the per-layer quantize+pack and go straight to the conv. Only valid when
+        calibrated + not modiff_enabled."""
+        if not x_packed.is_contiguous():
+            x_packed = x_packed.contiguous()
+        return self._conv_from_int4(x_packed, h_in, w_in)
 
     def _forward_first_step(self, x: torch.Tensor) -> torch.Tensor:
         """First timestep (t=T): warm-up with repeated quantisation.

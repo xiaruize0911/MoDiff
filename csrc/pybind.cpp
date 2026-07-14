@@ -68,4 +68,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("group_norm_silu_quantize_nhwc", &group_norm_silu_quantize_nhwc,
           "GroupNorm (+ optional SiLU) that quantizes its output to INT8 inline (out*scale, "
           "clamp/round; optional per-channel smooth_inv), fusing away the separate quantize kernel");
+    m.def("group_norm_silu_quantize_pack_nhwc", &group_norm_silu_quantize_pack_nhwc,
+          "GroupNorm (+ optional SiLU) that quantizes to INT4 and packs channel pairs inline "
+          "([N,H,W,C/2] byte layout matching scale_quantize_and_pack); requires even CPG");
 }
