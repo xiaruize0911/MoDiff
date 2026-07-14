@@ -53,11 +53,15 @@ def build_fp16(weights=None):
     return m.to(memory_format=torch.channels_last).half()
 
 
-def build_quantized(kind, x_calib, skip_pointwise, weights=None):
+def build_quantized(kind, x_calib, skip_pointwise, weights=None, modiff=False):
     """kind in {'int8','int4','int8_chained'}. Returns a calibrated static model.
     `weights` (a torchvision ResNet50_Weights enum) uses pretrained weights so the
     static PTQ scales are meaningful for real-accuracy checks (random weights only
-    give valid *speed*, not accuracy)."""
+    give valid *speed*, not accuracy).
+    `modiff=True` leaves MoDiff temporal caching ENABLED on every converted conv (the
+    per-conv forward() o_hat/a_hat delta path), for the sequence-driven MoDiff modes.
+    Note: modiff is incompatible with the fullchain wrappers (which require it off), so
+    a modiff model must be run via its stock torchvision forward()."""
     m = build_fp16(weights).float()  # convert works from fp32 weights
     convert = (convert_model_to_optimized_int4 if kind == "int4"
                else convert_model_to_optimized_int8)
@@ -97,7 +101,7 @@ def build_quantized(kind, x_calib, skip_pointwise, weights=None):
                 continue
             mod.set_static_scale(127.0 / a)
             mod.set_standard_output_fp16(True)
-            mod.enable_modiff(False)
+            mod.enable_modiff(modiff)
             n += mod.is_calibrated
     del ref
     if kind == "int8_chained":
