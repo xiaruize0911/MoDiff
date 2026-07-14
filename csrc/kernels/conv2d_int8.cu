@@ -354,6 +354,107 @@ torch::Tensor conv2d_int8_fprop_dequant_fp16_prealloc(
     return output;
 }
 
+// ---- Multi-tile (autotunable) deep-fuse INT8 conv, FP16 out ----
+// Same math as conv2d_int8_fprop_dequant_fp16_prealloc, but the threadblock/warp
+// tile + pipeline stages are template parameters, so we instantiate several
+// configs and pick the fastest per shape at calibration time (the CUTLASS analog
+// of cuDNN's per-shape kernel selection). The epilogue (Int8DequantScaleSource) is
+// orthogonal to the tile, so this same tile set can later back every epilogue
+// variant (o_hat/MoDiff, requant-int8, bias/residual) across all modes.
+template <typename ThreadblockShape, typename WarpShape, int Stages>
+struct DequantFp16ConvConfig {
+  using Kernel = typename cutlass::conv::kernel::DefaultConv2dFprop<
+    int8_t, cutlass::layout::TensorNHWC,
+    int8_t, cutlass::layout::TensorNHWC,
+    cutlass::half_t, cutlass::layout::TensorNHWC,
+    int32_t,
+    cutlass::arch::OpClassTensorOp,
+    Arch,
+    ThreadblockShape, WarpShape, cutlass::gemm::GemmShape<16, 8, 32>,
+    Int8DequantScaleSource<8>,
+    cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>,
+    Stages,
+    cutlass::arch::OpMultiplyAddSaturate,
+    cutlass::conv::IteratorAlgorithm::kOptimized,
+    cutlass::conv::StrideSupport::kStrided
+  >::Kernel;
+  using Op = cutlass::conv::device::ImplicitGemmConvolution<Kernel>;
+};
+
+template <typename Op>
+static bool run_dequant_fp16_tuned(
+    cutlass::conv::Conv2dProblemSize const& problem_size,
+    int8_t* input_ptr, int8_t* weight_ptr, cutlass::half_t* scale_ptr,
+    cutlass::half_t* output_ptr, float* inv_scale_ptr,
+    int C, int H, int W, int K, int R, int S, int H_out, int W_out,
+    torch::TensorOptions const& opts, cudaStream_t stream) {
+  using EpParams = typename Op::EpilogueOutputOp::Params;
+  EpParams ep(inv_scale_ptr);
+  typename Op::Arguments args(
+      problem_size,
+      {input_ptr, {C, W * C, H * W * C}},
+      {weight_ptr, {C, S * C, R * S * C}},
+      {scale_ptr, {0, 0, 0}},
+      {output_ptr, {K, W_out * K, H_out * W_out * K}},
+      ep);
+  if (Op::can_implement(args) != cutlass::Status::kSuccess) return false;
+  Op op;
+  size_t ws = op.get_workspace_size(args);
+  auto workspace = torch::empty({(long)ws}, opts.dtype(torch::kByte));
+  return op(args, workspace.data_ptr(), stream) == cutlass::Status::kSuccess;
+}
+
+// Tile set spanning the K=64..4608 / spatial range (0 = current default).
+using TCfg0 = DequantFp16ConvConfig<cutlass::gemm::GemmShape<128,128,128>, cutlass::gemm::GemmShape<64,64,64>, 3>;
+using TCfg1 = DequantFp16ConvConfig<cutlass::gemm::GemmShape<128,128, 64>, cutlass::gemm::GemmShape<64,64,64>, 4>;
+using TCfg2 = DequantFp16ConvConfig<cutlass::gemm::GemmShape<256,128, 64>, cutlass::gemm::GemmShape<64,64,64>, 3>;
+using TCfg3 = DequantFp16ConvConfig<cutlass::gemm::GemmShape<128, 64, 64>, cutlass::gemm::GemmShape<64,32,64>, 4>;
+using TCfg4 = DequantFp16ConvConfig<cutlass::gemm::GemmShape< 64, 64, 64>, cutlass::gemm::GemmShape<32,32,64>, 6>;
+
+int64_t conv2d_int8_num_tuned_configs() { return 5; }
+
+// Run tile `config_id` of the deep-fuse fp16 conv. Raises if the config can't
+// implement the problem (the autotuner in Python tries each and skips failures).
+torch::Tensor conv2d_int8_dequant_fp16_tuned(
+    torch::Tensor input, torch::Tensor weight, torch::Tensor inv_scale,
+    torch::Tensor weight_scales_half, torch::Tensor output, int64_t config_id,
+    int stride_h, int stride_w, int padding_h, int padding_w, int dilation_h, int dilation_w) {
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  CHECK_CUDA(input); CHECK_CONTIGUOUS(input);
+  CHECK_CUDA(output); CHECK_CONTIGUOUS(output);
+  TORCH_CHECK(output.scalar_type() == torch::kFloat16, "output must be float16");
+  TORCH_CHECK(weight_scales_half.scalar_type() == torch::kFloat16, "weight scales must be float16");
+
+  int N = input.size(0), C = input.size(1), H = input.size(2), W = input.size(3);
+  int K = weight.size(0), R = weight.size(1), S = weight.size(2);
+  int H_out = (H + 2 * padding_h - dilation_h * (R - 1) - 1) / stride_h + 1;
+  int W_out = (W + 2 * padding_w - dilation_w * (S - 1) - 1) / stride_w + 1;
+  cutlass::conv::Conv2dProblemSize problem_size(
+      {N, H, W, C}, {K, R, S, C}, {padding_h, padding_h, padding_w, padding_w},
+      {stride_h, stride_w}, {dilation_h, dilation_w}, {N, H_out, W_out, K},
+      cutlass::conv::Mode::kCrossCorrelation, 1);
+  int8_t* ip = reinterpret_cast<int8_t*>(input.data_ptr());
+  int8_t* wp = reinterpret_cast<int8_t*>(weight.data_ptr());
+  auto* sp = reinterpret_cast<cutlass::half_t*>(weight_scales_half.data_ptr<at::Half>());
+  auto* op = reinterpret_cast<cutlass::half_t*>(output.data_ptr<at::Half>());
+  float* isp = inv_scale.data_ptr<float>();
+  auto opts = input.options();
+  bool ok = false;
+#define RUN_TCFG(CFG) run_dequant_fp16_tuned<CFG::Op>(problem_size, ip, wp, sp, op, isp, C, H, W, K, R, S, H_out, W_out, opts, stream)
+  switch (config_id) {
+    case 0: ok = RUN_TCFG(TCfg0); break;
+    case 1: ok = RUN_TCFG(TCfg1); break;
+    case 2: ok = RUN_TCFG(TCfg2); break;
+    case 3: ok = RUN_TCFG(TCfg3); break;
+    case 4: ok = RUN_TCFG(TCfg4); break;
+    default: TORCH_CHECK(false, "invalid config_id ", config_id);
+  }
+#undef RUN_TCFG
+  TORCH_CHECK(ok, "tuned config ", config_id, " cannot implement (N=", N, " C=", C,
+              " H=", H, " W=", W, " K=", K, " R=", R, ")");
+  return output;
+}
+
 // conv2d_int8_fprop, then o_hat_cache += raw_output * weight_scales[channel].
 torch::Tensor conv2d_int8_fprop_o_hat(
     torch::Tensor input,

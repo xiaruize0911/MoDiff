@@ -71,6 +71,12 @@ torch::Tensor conv2d_int8_fprop_dequant_fp16_prealloc(
     torch::Tensor weight_scales_half, torch::Tensor output,
     int stride_h, int stride_w, int padding_h, int padding_w, int dilation_h, int dilation_w);
 
+int64_t conv2d_int8_num_tuned_configs();
+torch::Tensor conv2d_int8_dequant_fp16_tuned(
+    torch::Tensor input, torch::Tensor weight, torch::Tensor inv_scale,
+    torch::Tensor weight_scales_half, torch::Tensor output, int64_t config_id,
+    int stride_h, int stride_w, int padding_h, int padding_w, int dilation_h, int dilation_w);
+
 torch::Tensor conv2d_int8_fprop_o_hat(
     torch::Tensor input, torch::Tensor weight, torch::Tensor inv_scale,
     torch::Tensor weight_scales, torch::Tensor o_hat_cache,
