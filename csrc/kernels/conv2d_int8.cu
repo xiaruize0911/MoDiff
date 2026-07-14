@@ -669,6 +669,67 @@ torch::Tensor conv2d_int8_fprop_relu_requant_int8(
     return output;
 }
 
+// DEEP-FUSE int8-output chaining conv: runs the CUTLASS deep-fuse GEMM
+// (conv2d_int8_fprop_dequant_fp16_prealloc: per-channel weight_scale folded into
+// the epilogue, writes dequantized FP16 with NO fp32 temporary), then a minimal
+// bias+ReLU+requantize->int8 store. This is the churches Int8DequantScaleSource
+// deep-fuse extended to int8 output; it avoids the fp32 intermediate that
+// conv2d_int8_fprop_relu_requant_int8 pays (~2x the temporary traffic on the
+// memory-bound 1x1 bottleneck convs). Requires weight_scales_half (fp16, [K]) and
+// out_channels % 8 == 0 (the deep-fuse tile constraint).
+torch::Tensor conv2d_int8_fprop_deepfuse_relu_requant_int8(
+    torch::Tensor input,
+    torch::Tensor weight,
+    torch::Tensor inv_scale,
+    torch::Tensor weight_scales_half,
+    torch::Tensor bias,
+    torch::Tensor requant_scale,
+    torch::Tensor output,
+    bool apply_relu,
+    int stride_h, int stride_w,
+    int padding_h, int padding_w,
+    int dilation_h, int dilation_w
+) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    CHECK_CUDA(output);
+    CHECK_CONTIGUOUS(output);
+    TORCH_CHECK(output.scalar_type() == torch::kInt8,
+                "conv2d_int8_fprop_deepfuse_relu_requant_int8: output must be int8");
+    TORCH_CHECK(requant_scale.numel() == 1, "requant_scale must be a scalar tensor");
+
+    // fp16 scratch: the deep-fuse GEMM writes dequantized fp16 here (no fp32 temp).
+    auto scratch = torch::empty_like(output, output.options().dtype(torch::kFloat16));
+    conv2d_int8_fprop_dequant_fp16_prealloc(
+        input, weight, inv_scale, weight_scales_half, scratch,
+        stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w);
+
+    const bool has_bias = bias.numel() > 0;
+    if (has_bias) {
+        TORCH_CHECK(bias.is_contiguous(), "bias must be contiguous");
+        TORCH_CHECK(bias.numel() == weight_scales_half.numel(), "bias size must match output channels");
+    }
+    int num_elements = scratch.numel();
+    int num_channels = weight_scales_half.numel();
+    int block_size = 256;
+    int grid_size = (num_elements + block_size - 1) / block_size;
+    const __half* deq_ptr = reinterpret_cast<const __half*>(scratch.data_ptr<at::Half>());
+    const float* rq_ptr = requant_scale.data_ptr<float>();
+    int8_t* out_ptr = reinterpret_cast<int8_t*>(output.data_ptr<int8_t>());
+
+    if (has_bias && bias.scalar_type() == torch::kFloat16) {
+        bias_relu_requant_store_int8_from_half_kernel<__half><<<grid_size, block_size, 0, stream>>>(
+            deq_ptr, reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
+            rq_ptr, out_ptr, num_elements, num_channels, apply_relu);
+    } else if (has_bias) {
+        bias_relu_requant_store_int8_from_half_kernel<float><<<grid_size, block_size, 0, stream>>>(
+            deq_ptr, bias.data_ptr<float>(), rq_ptr, out_ptr, num_elements, num_channels, apply_relu);
+    } else {
+        bias_relu_requant_store_int8_from_half_kernel<__half><<<grid_size, block_size, 0, stream>>>(
+            deq_ptr, (const __half*)nullptr, rq_ptr, out_ptr, num_elements, num_channels, apply_relu);
+    }
+    return output;
+}
+
 // Same as conv2d_int8_fprop_no_ohat_prealloc, but allocates its own output buffer.
 torch::Tensor conv2d_int8_fprop_no_ohat(
     torch::Tensor input,

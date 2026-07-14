@@ -138,6 +138,32 @@ __global__ void scale_bias_relu_requant_store_int8_kernel(
     }
 }
 
+// INT8-output store from an ALREADY-dequantized fp16 conv output (the CUTLASS
+// deep-fuse epilogue Int8DequantScaleSource already applied per-channel
+// weight_scale, writing fp16 with no fp32 temporary). Adds per-channel bias,
+// optional ReLU, and requantizes to int8 by *requant_scale_ptr. This is the
+// deep-fuse int8 chaining store: GEMM->fp16(dequant) then this, avoiding the
+// fp32 intermediate the scale_bias_relu_requant_store_int8_kernel path pays.
+template <typename BiasT>
+__global__ void bias_relu_requant_store_int8_from_half_kernel(
+    const __half* __restrict__ deq,        // fp16, = acc * alpha * weight_scale[ch]
+    const BiasT* __restrict__ bias,
+    const float* __restrict__ requant_scale_ptr,
+    int8_t* __restrict__ output,
+    int num_elements,
+    int num_channels,
+    bool apply_relu
+) {
+    const float rq = *requant_scale_ptr;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    for (int i = idx; i < num_elements; i += blockDim.x * gridDim.x) {
+        int ch = i % num_channels;
+        float value = __half2float(deq[i]) + (bias != nullptr ? bias_value(bias, ch) : 0.0f);
+        if (apply_relu) value = fmaxf(value, 0.0f);
+        output[i] = (int8_t)fmaxf(-127.0f, fminf(127.0f, roundf(value * rq)));
+    }
+}
+
 template <typename BiasT>
 __global__ void scale_bias_store_kernel(
     const float* __restrict__ conv_output,

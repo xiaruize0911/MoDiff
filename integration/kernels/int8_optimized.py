@@ -651,6 +651,17 @@ class OptimizedInt8Conv2d(nn.Module):
             ).contiguous(memory_format=torch.channels_last)
         bias_arg = (self.bias.view(-1).contiguous()
                     if self.bias is not None else self._empty_bias)
+        # Deep-fuse path: fold per-channel weight_scale into the CUTLASS GEMM
+        # epilogue (fp16, no fp32 temporary), then bias+ReLU+requant->int8. Removes
+        # the fp32 intermediate the plain path pays. Requires out_channels%8==0.
+        if (self.out_channels % 8 == 0
+                and hasattr(modiff_cutlass, "conv2d_int8_fprop_deepfuse_relu_requant_int8")):
+            return modiff_cutlass.conv2d_int8_fprop_deepfuse_relu_requant_int8(
+                x_int8, self.weight_int8, self._cached_alpha_tensor,
+                self.weight_scale_channel_half.view(-1), bias_arg,
+                self.output_requant_scale.view(1), self._int8_output_buf, apply_relu,
+                self.stride[0], self.stride[1], self.padding[0], self.padding[1],
+                self.dilation[0], self.dilation[1])
         return modiff_cutlass.conv2d_int8_fprop_relu_requant_int8(
             x_int8, self.weight_int8, self._cached_alpha_tensor,
             self.weight_scale_channel.view(-1), bias_arg,
