@@ -147,6 +147,36 @@ def test_int8_dual_store():
     return "int8_dual_store", ok, f"fp16_rel={re_fp16:.4f} int8_mean|Δ|={re_int8:.4f}"
 
 
+def test_int4_dual_store():
+    """int4 block-entry-quantize fusion: conv3 dual store == relu(forward_from_int4 +
+    residual) in fp16, and its packed-int4 requantization is consistent."""
+    import modiff_cutlass as mc
+    if not hasattr(mc, "conv2d_int4_fprop_bias_residual_dual"):
+        return "int4_dual_store", False, "int4 dual-store kernel missing (rebuild)"
+    from integration.kernels.int4_optimized import OptimizedInt4Conv2d
+    torch.manual_seed(0)
+    H = W = 32
+    conv = nn.Conv2d(256, 256, 3, padding=1).to(DEV)
+    opt = _calib_conv(OptimizedInt4Conv2d(conv).to(DEV),
+                      torch.randn(16, 256, H, W, device=DEV))
+    nxt = _calib_conv(OptimizedInt4Conv2d(nn.Conv2d(256, 256, 1).to(DEV)).to(DEV),
+                      torch.randn(16, 256, H, W, device=DEV))
+    x = torch.randn(16, 256, H, W, device=DEV, dtype=torch.float16).contiguous(memory_format=torch.channels_last)
+    xp = opt.quantize_input(x)
+    resid = torch.randn(16, 256, H, W, device=DEV, dtype=torch.float16).contiguous(memory_format=torch.channels_last)
+    fp16_ref = torch.relu(opt.forward_from_int4(xp, H, W, residual=resid))
+    int4_ref = nxt.quantize_input(fp16_ref)
+    fp16_out, int4_out = opt.forward_from_int4_dual(xp, H, W, resid, nxt.static_input_scale, apply_relu=True)
+    re_fp16 = rel_err(fp16_out, fp16_ref)
+    def unpack(p):
+        p = p.to(torch.int16); lo = p & 0xF; hi = (p >> 4) & 0xF
+        lo = torch.where(lo >= 8, lo - 16, lo); hi = torch.where(hi >= 8, hi - 16, hi)
+        return torch.stack([lo, hi]).float()
+    nib = (unpack(int4_out) - unpack(int4_ref)).abs().mean().item()
+    ok = re_fp16 < 1e-3 and nib < 0.05
+    return "int4_dual_store", ok, f"fp16_rel={re_fp16:.4f} nibble_mean|Δ|={nib:.4f}"
+
+
 def test_int4_conv():
     from integration.kernels.int4_optimized import OptimizedInt4Conv2d
     torch.manual_seed(0)
@@ -196,7 +226,7 @@ def test_group_norm_silu():
 
 
 TESTS = [test_int8_conv, test_int8_conv_channels_last, test_int8_dual_store,
-         test_int4_conv, test_int8_linear, test_group_norm_silu]
+         test_int4_conv, test_int4_dual_store, test_int8_linear, test_group_norm_silu]
 
 
 def main():

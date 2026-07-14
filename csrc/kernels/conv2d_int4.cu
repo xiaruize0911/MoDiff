@@ -352,6 +352,116 @@ torch::Tensor conv2d_int4_fprop_no_ohat_prealloc_bias_residual(
     return output;
 }
 
+// INT4->INT4 chaining conv: dequant + bias + optional ReLU, requantized+packed to the
+// NEXT conv's int4 input scale. Lets activations stay int4 across conv1->conv2->conv3
+// (the int4 analogue of conv2d_int8_fprop_deepfuse_relu_requant_int8). `output` is the
+// packed int4 buffer [N, H_out, W_out, K/2] (int8 dtype, 2 nibbles/byte).
+torch::Tensor conv2d_int4_fprop_relu_requant_int4(
+    torch::Tensor input,
+    torch::Tensor weight_packed,
+    torch::Tensor inv_scale,
+    torch::Tensor weight_scales,
+    torch::Tensor bias,
+    torch::Tensor requant_scale,
+    torch::Tensor output,
+    bool apply_relu,
+    int stride_h, int stride_w,
+    int padding_h, int padding_w,
+    int dilation_h, int dilation_w
+) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    auto empty_bias = torch::empty({0}, torch::TensorOptions().device(input.device()));
+    auto conv_out = conv2d_int4_fprop(
+        input, weight_packed, inv_scale, empty_bias,
+        stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w);
+    CHECK_CUDA(output);
+    TORCH_CHECK(output.is_contiguous(), "packed int4 output must be contiguous");
+    TORCH_CHECK(output.scalar_type() == torch::kInt8, "output must be int8 (packed int4)");
+    TORCH_CHECK(requant_scale.numel() == 1, "requant_scale must be a scalar tensor");
+    const bool has_bias = bias.numel() > 0;
+    if (has_bias) TORCH_CHECK(bias.numel() == weight_scales.numel(), "bias size mismatch");
+    int num_channels = weight_scales.numel();
+    int num_packed = conv_out.numel() / 2;
+    TORCH_CHECK(output.numel() == num_packed, "packed output size mismatch");
+    int block_size = 256, grid_size = (num_packed + block_size - 1) / block_size;
+    const float* rq = requant_scale.data_ptr<float>();
+    int8_t* out_ptr = reinterpret_cast<int8_t*>(output.data_ptr<int8_t>());
+    if (has_bias && bias.scalar_type() == torch::kFloat16) {
+        scale_bias_relu_requant_pack_int4_kernel<__half><<<grid_size, block_size, 0, stream>>>(
+            conv_out.data_ptr<float>(), weight_scales.data_ptr<float>(),
+            reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
+            rq, out_ptr, num_packed, num_channels, apply_relu);
+    } else if (has_bias) {
+        scale_bias_relu_requant_pack_int4_kernel<float><<<grid_size, block_size, 0, stream>>>(
+            conv_out.data_ptr<float>(), weight_scales.data_ptr<float>(),
+            bias.data_ptr<float>(), rq, out_ptr, num_packed, num_channels, apply_relu);
+    } else {
+        scale_bias_relu_requant_pack_int4_kernel<__half><<<grid_size, block_size, 0, stream>>>(
+            conv_out.data_ptr<float>(), weight_scales.data_ptr<float>(),
+            (const __half*)nullptr, rq, out_ptr, num_packed, num_channels, apply_relu);
+    }
+    return output;
+}
+
+// INT4 DUAL-OUTPUT conv3 (block-entry-quantize fusion): dequant + bias + fp16 skip
+// residual + ReLU, emitting BOTH the fp16 block output (out_half) AND its requantized
+// packed-int4 (out_packed, the next block conv1's input) in one store.
+torch::Tensor conv2d_int4_fprop_bias_residual_dual(
+    torch::Tensor input,
+    torch::Tensor weight_packed,
+    torch::Tensor inv_scale,
+    torch::Tensor weight_scales,
+    torch::Tensor bias,
+    torch::Tensor residual,
+    torch::Tensor requant_scale,
+    torch::Tensor out_half,
+    torch::Tensor out_packed,
+    bool apply_relu,
+    int stride_h, int stride_w,
+    int padding_h, int padding_w,
+    int dilation_h, int dilation_w
+) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    auto empty_bias = torch::empty({0}, torch::TensorOptions().device(input.device()));
+    auto conv_out = conv2d_int4_fprop(
+        input, weight_packed, inv_scale, empty_bias,
+        stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w);
+    CHECK_CUDA(out_half); CHECK_CONTIGUOUS(out_half);
+    CHECK_CUDA(out_packed);
+    TORCH_CHECK(out_packed.is_contiguous(), "packed int4 output must be contiguous");
+    CHECK_CUDA(residual);
+    TORCH_CHECK(out_half.scalar_type() == torch::kFloat16, "out_half must be float16");
+    TORCH_CHECK(out_packed.scalar_type() == torch::kInt8, "out_packed must be int8 (packed int4)");
+    TORCH_CHECK(residual.scalar_type() == torch::kFloat16, "residual must be float16");
+    TORCH_CHECK(out_half.sizes() == conv_out.sizes(), "out_half shape mismatch");
+    TORCH_CHECK(requant_scale.numel() == 1, "requant_scale must be a scalar tensor");
+    const bool has_bias = bias.numel() > 0;
+    if (has_bias) TORCH_CHECK(bias.numel() == weight_scales.numel(), "bias size mismatch");
+    int num_channels = weight_scales.numel();
+    int num_packed = conv_out.numel() / 2;
+    TORCH_CHECK(out_packed.numel() == num_packed, "packed output size mismatch");
+    int block_size = 256, grid_size = (num_packed + block_size - 1) / block_size;
+    const __half* res_ptr = reinterpret_cast<const __half*>(residual.data_ptr<at::Half>());
+    const float* rq = requant_scale.data_ptr<float>();
+    __half* outh = reinterpret_cast<__half*>(out_half.data_ptr<at::Half>());
+    int8_t* outp = reinterpret_cast<int8_t*>(out_packed.data_ptr<int8_t>());
+    if (has_bias && bias.scalar_type() == torch::kFloat16) {
+        bias_residual_relu_dual_store_pack_int4_kernel<__half><<<grid_size, block_size, 0, stream>>>(
+            conv_out.data_ptr<float>(), weight_scales.data_ptr<float>(),
+            reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
+            res_ptr, rq, outh, outp, num_packed, num_channels, apply_relu);
+    } else if (has_bias) {
+        bias_residual_relu_dual_store_pack_int4_kernel<float><<<grid_size, block_size, 0, stream>>>(
+            conv_out.data_ptr<float>(), weight_scales.data_ptr<float>(),
+            bias.data_ptr<float>(), res_ptr, rq, outh, outp, num_packed, num_channels, apply_relu);
+    } else {
+        bias_residual_relu_dual_store_pack_int4_kernel<__half><<<grid_size, block_size, 0, stream>>>(
+            conv_out.data_ptr<float>(), weight_scales.data_ptr<float>(),
+            (const __half*)nullptr, res_ptr, rq, outh, outp, num_packed, num_channels, apply_relu);
+    }
+    return out_half;
+}
+
 // Same as conv2d_int4_fprop_no_ohat_prealloc, but allocates its own output buffer.
 torch::Tensor conv2d_int4_fprop_no_ohat(
     torch::Tensor input,

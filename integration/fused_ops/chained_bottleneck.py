@@ -22,6 +22,28 @@ try:
 except ImportError:
     OptimizedInt8Conv2d = None
 
+try:
+    from integration.kernels.int4_optimized import OptimizedInt4Conv2d
+except ImportError:
+    OptimizedInt4Conv2d = None
+
+
+def _chainable_conv_int4(m):
+    return (OptimizedInt4Conv2d is not None
+            and isinstance(m, OptimizedInt4Conv2d)
+            and getattr(m, "is_calibrated", False)
+            and getattr(m, "use_cutlass", False)
+            and not getattr(m, "modiff_enabled", True))
+
+
+def bottleneck_chainable_int4(block):
+    """int4 twin of bottleneck_chainable: conv1/2/3 are calibrated CUTLASS int4 convs
+    (conv3 needs standard_output_fp16 for the fp16 residual epilogue)."""
+    return (hasattr(block, "conv1") and hasattr(block, "conv2") and hasattr(block, "conv3")
+            and _chainable_conv_int4(block.conv1) and _chainable_conv_int4(block.conv2)
+            and _chainable_conv_int4(block.conv3)
+            and getattr(block.conv3, "standard_output_fp16", False))
+
 
 def _chainable_conv(m):
     return (OptimizedInt8Conv2d is not None
@@ -142,6 +164,64 @@ def build_fully_chained(model, verbose=False):
     w = Int8FullyChainedResNet(model)
     if verbose:
         print(f"build_fully_chained: threaded {len(w.blocks)} bottlenecks, 1 entry quantize")
+    return w
+
+
+class Int4FullyChainedResNet(nn.Module):
+    """int4 twin of Int8FullyChainedResNet: whole-net int4 threading. The per-block
+    entry quantize+pack is folded into the previous block's conv3 dual store (fp16 +
+    packed int4), so the net quantizes to int4 exactly once (after maxpool) and stays
+    int4-packed through every conv until avgpool. int4 convs are unpacked-channel aware,
+    so spatial dims (h,w) are threaded explicitly (conv2 may stride)."""
+
+    def __init__(self, model):
+        super().__init__()
+        self.stem_conv, self.stem_bn = model.conv1, model.bn1
+        self.stem_relu, self.maxpool = model.relu, model.maxpool
+        self.avgpool, self.fc = model.avgpool, model.fc
+        blocks = []
+        for lname in ("layer1", "layer2", "layer3", "layer4"):
+            layer = getattr(model, lname, None)
+            if layer is not None:
+                blocks.extend(list(layer))
+        assert all(bottleneck_chainable_int4(b) for b in blocks), \
+            "every bottleneck must be int4-chainable (calibrated CUTLASS int4, conv3 fp16-out)"
+        self.blocks = nn.ModuleList(blocks)
+        self.relus = [b.relu if hasattr(b, "relu") else None for b in blocks]
+        self.downsamples = [b.downsample for b in blocks]
+        self._next_scale = [blocks[i + 1].conv1.static_input_scale if i + 1 < len(blocks) else None
+                            for i in range(len(blocks))]
+
+    def forward(self, x):
+        x = self.maxpool(self.stem_relu(self.stem_bn(self.stem_conv(x))))
+        x_fp16 = x.contiguous(memory_format=torch.channels_last)
+        h, w = x_fp16.shape[2], x_fp16.shape[3]
+        x_packed = self.blocks[0].conv1.quantize_input(x_fp16)   # the ONE entry quantize+pack
+        for i, b in enumerate(self.blocks):
+            ds = self.downsamples[i]
+            identity = (x_fp16 if ds is None else ds(x_fp16))
+            identity = identity.contiguous(memory_format=torch.channels_last).half()
+            p = b.conv1.forward_to_int4(x_packed, h, w, b.conv2.static_input_scale, apply_relu=True)
+            h1, w1 = b.conv1._out_hw(h, w)
+            p = b.conv2.forward_to_int4(p, h1, w1, b.conv3.static_input_scale, apply_relu=True)
+            h2, w2 = b.conv2._out_hw(h1, w1)
+            ns = self._next_scale[i]
+            if ns is not None:
+                x_fp16, x_packed = b.conv3.forward_from_int4_dual(p, h2, w2, identity, ns, apply_relu=True)
+            else:
+                out = b.conv3.forward_from_int4(p, h2, w2, residual=identity)
+                x_fp16 = (self.relus[i](out) if self.relus[i] is not None else F.relu(out))
+            h, w = b.conv3._out_hw(h2, w2)
+        x = self.avgpool(x_fp16)
+        return self.fc(torch.flatten(x, 1))
+
+
+def build_fully_chained_int4(model, verbose=False):
+    """Wrap a calibrated (standard_output_fp16 + modiff off) int4 ResNet into an
+    Int4FullyChainedResNet. Returns the wrapper module."""
+    w = Int4FullyChainedResNet(model)
+    if verbose:
+        print(f"build_fully_chained_int4: threaded {len(w.blocks)} bottlenecks, 1 entry quantize")
     return w
 
 

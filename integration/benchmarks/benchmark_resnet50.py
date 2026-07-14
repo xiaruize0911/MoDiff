@@ -140,20 +140,20 @@ def main():
     # threading) strictly dominates both (same accuracy, faster). build_quantized
     # still supports "int8"/"int8_chained" for reference; int8_fullchain builds on
     # the plain "int8" path internally.
-    for kind in ("int4", "int8_fullchain"):
+    for kind in ("int8_fullchain", "int4_fullchain"):
         sp = a.skip_pointwise
-        # int8_fullchain = whole-net int8 threading: build a plain calibrated int8
-        # model, then wrap so the block-entry quantize is fused into the previous
-        # block's conv3 store (one quantize for the whole net). See chained_bottleneck.
-        build_kind = "int8" if kind == "int8_fullchain" else kind
+        # *_fullchain = whole-net int8/int4 threading: build a plain calibrated
+        # int8/int4 model, then wrap so the block-entry quantize is fused into the
+        # previous block's conv3 dual store (one quantize for the whole net). See
+        # chained_bottleneck. build_quantized still supports "int8"/"int8_chained"/"int4".
+        build_kind = "int8" if kind == "int8_fullchain" else "int4"
         try:
             m, nq = build_quantized(build_kind, x, skip_pointwise=sp)
         except Exception as ex:
             print(f"{kind}: all-conv convert failed ({str(ex)[:60]}...), retrying 3x3-only")
             m, nq = build_quantized(build_kind, x, skip_pointwise=True)
-        if kind == "int8_fullchain":
-            from integration.fused_ops.chained_bottleneck import build_fully_chained
-            m = build_fully_chained(m)
+        from integration.fused_ops.chained_bottleneck import build_fully_chained, build_fully_chained_int4
+        m = build_fully_chained(m) if kind == "int8_fullchain" else build_fully_chained_int4(m)
         models[kind] = m
         print(f"{kind}: {nq} calibrated quantized conv layers")
 
@@ -164,7 +164,7 @@ def main():
             assert torch.isfinite(o).all(), f"{k} produced non-finite output"
 
     # warmup each model, then interleave the timed runs to spread any drift evenly
-    order = ["fp16", "int4", "int8_fullchain"]
+    order = ["fp16", "int8_fullchain", "int4_fullchain"]
     for k in order:
         timed(models[k], x, repeats=0, warmups=a.warmups)
     samples = {k: [] for k in order}
@@ -179,9 +179,11 @@ def main():
     for k in order:
         spd = med["fp16"] / med[k]
         print(f"{k:<14}{med[k]:>12.3f}{std[k]:>9.3f}{spd:>9.2f}x")
-    print(f"int4           vs fp16:    {med['fp16']/med['int4']:.2f}x")
     print(f"int8_fullchain vs fp16:    {med['fp16']/med['int8_fullchain']:.2f}x  "
           f"({'WIN' if med['int8_fullchain'] < med['fp16'] else 'no win'})")
+    print(f"int4_fullchain vs fp16:    {med['fp16']/med['int4_fullchain']:.2f}x  "
+          f"({'WIN' if med['int4_fullchain'] < med['fp16'] else 'no win'})")
+    print(f"int4_fullchain vs int8_fullchain: {med['int8_fullchain']/med['int4_fullchain']:.2f}x")
 
     microbench_convs(a.batch)
 

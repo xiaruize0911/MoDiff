@@ -573,6 +573,86 @@ class OptimizedInt4Conv2d(nn.Module):
             x_packed = x_packed.contiguous()
         return self._conv_from_int4(x_packed, h_in, w_in, residual=residual)
 
+    def _out_hw(self, h_in: int, w_in: int):
+        h_out = ((h_in + 2 * self.padding[0] - self.dilation[0] * (self.kernel_size[0] - 1) - 1) // self.stride[0]) + 1
+        w_out = ((w_in + 2 * self.padding[1] - self.dilation[1] * (self.kernel_size[1] - 1) - 1) // self.stride[1]) + 1
+        return h_out, w_out
+
+    def quantize_input(self, x: torch.Tensor) -> torch.Tensor:
+        """Quantize+pack an fp16/fp32 activation to channels_last packed int4
+        ([N,H,W,C/2]) using this conv's static_input_scale -- the block-entry K1 for
+        int4 chaining. Mirror of OptimizedInt8Conv2d.quantize_input."""
+        self._ensure_conv_caches(x.device)
+        xf = x if x.dtype == torch.float32 else x.float()
+        if not xf.is_contiguous(memory_format=torch.channels_last):
+            xf = xf.contiguous(memory_format=torch.channels_last)
+        # Use static_input_scale directly (not _cached_scale_tensor, which can be stale
+        # if the caches were populated before set_static_scale) -- mirrors int8.
+        return modiff_cutlass.scale_quantize_and_pack(xf, self.static_input_scale.view(1))
+
+    def _ensure_packed_out_buf(self, N, h_out, w_out, device):
+        K = self.out_channels
+        shape = (N, h_out, w_out, K // 2)
+        buf = getattr(self, "_int4_output_packed_buf", None)
+        if buf is None or tuple(buf.shape) != shape or buf.device != device:
+            self._int4_output_packed_buf = torch.empty(shape, device=device, dtype=torch.int8).contiguous()
+        return self._int4_output_packed_buf
+
+    def forward_to_int4(self, x_packed: torch.Tensor, h_in: int, w_in: int,
+                        requant_scale: torch.Tensor, apply_relu: bool = True) -> torch.Tensor:
+        """INT4-in, INT4-out conv for chaining: dequant + bias + optional ReLU +
+        requantize+pack to `requant_scale` (the next conv's input scale), so the next
+        conv reads packed int4 directly with no fp16 round-trip. Returns packed int4
+        [N,h_out,w_out,K/2]. The int4 analogue of OptimizedInt8Conv2d.forward_to_int8."""
+        self._ensure_conv_caches(x_packed.device)
+        if not x_packed.is_contiguous():
+            x_packed = x_packed.contiguous()
+        h_out, w_out = self._out_hw(h_in, w_in)
+        out = self._ensure_packed_out_buf(x_packed.shape[0], h_out, w_out, x_packed.device)
+        bias_arg = (self.bias.view(-1).contiguous() if self.bias is not None else self._empty_bias)
+        modiff_cutlass.conv2d_int4_fprop_relu_requant_int4(
+            x_packed, self.weight_packed, self._cached_alpha_tensor,
+            self.weight_scale_channel.view(-1), bias_arg, requant_scale.view(1),
+            out, apply_relu,
+            self.stride[0], self.stride[1], self.padding[0], self.padding[1],
+            self.dilation[0], self.dilation[1])
+        return out
+
+    def forward_from_int4_dual(self, x_packed: torch.Tensor, h_in: int, w_in: int,
+                               residual: torch.Tensor, requant_scale: torch.Tensor,
+                               apply_relu: bool = True):
+        """Cross-block-chaining conv3: dequant + bias + fp16 skip-residual + ReLU,
+        emitting BOTH the fp16 block output (x_{N+1}) AND its requantized packed int4
+        (the next block conv1's input) in one store -- fusing the block-entry quantize.
+        Returns (out_fp16, out_packed_int4). Requires standard_output_fp16."""
+        assert self.standard_output_fp16, "dual store requires standard_output_fp16"
+        assert hasattr(modiff_cutlass, "conv2d_int4_fprop_bias_residual_dual"), \
+            "int4 dual-store kernel unavailable (rebuild the extension)"
+        self._ensure_conv_caches(x_packed.device)
+        if not x_packed.is_contiguous():
+            x_packed = x_packed.contiguous()
+        if not residual.is_contiguous(memory_format=torch.channels_last):
+            residual = residual.contiguous(memory_format=torch.channels_last)
+        h_out, w_out = self._out_hw(h_in, w_in)
+        N, K = x_packed.shape[0], self.out_channels
+        output_shape = (N, K, h_out, w_out)
+        if (self._standard_output_buf is None
+                or self._standard_output_buf.shape != output_shape
+                or self._standard_output_buf.device != x_packed.device
+                or self._standard_output_buf.dtype != torch.float16):
+            self._standard_output_buf = torch.empty(
+                output_shape, device=x_packed.device, dtype=torch.float16
+            ).contiguous(memory_format=torch.channels_last)
+        out_packed = self._ensure_packed_out_buf(N, h_out, w_out, x_packed.device)
+        bias_arg = (self.bias.view(-1).contiguous() if self.bias is not None else self._empty_bias)
+        modiff_cutlass.conv2d_int4_fprop_bias_residual_dual(
+            x_packed, self.weight_packed, self._cached_alpha_tensor,
+            self.weight_scale_channel.view(-1), bias_arg, residual.half(),
+            requant_scale.view(1), self._standard_output_buf, out_packed, apply_relu,
+            self.stride[0], self.stride[1], self.padding[0], self.padding[1],
+            self.dilation[0], self.dilation[1])
+        return self._standard_output_buf, out_packed
+
     def _forward_first_step(self, x: torch.Tensor) -> torch.Tensor:
         """First timestep (t=T): warm-up with repeated quantisation.
 
