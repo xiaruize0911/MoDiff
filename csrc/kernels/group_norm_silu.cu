@@ -172,3 +172,148 @@ torch::Tensor group_norm_silu_nhwc(
 
     return y;
 }
+
+// INT8-emitting variant of the kernel above: identical GroupNorm(+SiLU) math,
+// but pass 2 quantizes the result to int8 (out * scale, clamped/rounded) so the
+// following calibrated INT8 conv can read it directly -- fusing away the separate
+// per-conv quantize kernel. Optional per-channel `smooth_inv` (SmoothQuant) is
+// applied before quantize, mirroring modiff_delta_quantize's static quantize.
+template <typename TIn>
+__global__ void group_norm_silu_quantize_nhwc_kernel(
+    const TIn* __restrict__ X,
+    int8_t* __restrict__ Yq,          // [N, H, W, C] physical int8, same layout as X
+    const TIn* __restrict__ gamma,
+    const TIn* __restrict__ beta,
+    const float* __restrict__ scale_ptr,    // scalar quant multiplier = 127/absmax
+    const float* __restrict__ smooth_inv,   // [C] SmoothQuant, or nullptr
+    int C,
+    long HW,
+    int G,
+    float eps,
+    bool apply_silu
+) {
+    const int CPG = C / G;
+    const long group_size = (long)CPG * HW;
+
+    const int n = blockIdx.x / G;
+    const int g = blockIdx.x % G;
+    const int c_start = g * CPG;
+
+    const TIn* x_base = X + (long)n * HW * C;
+    int8_t* yq_base = Yq + (long)n * HW * C;
+
+    extern __shared__ float sdata[];
+    float* s_sum = sdata;
+    float* s_sumsq = sdata + blockDim.x;
+
+    // Pass 1: sum + sum-of-squares over this (sample, group).
+    float local_sum = 0.0f, local_sumsq = 0.0f;
+    for (long idx = threadIdx.x; idx < group_size; idx += blockDim.x) {
+        int c_local = idx % CPG;
+        long hw = idx / CPG;
+        long mem_idx = hw * C + c_start + c_local;
+        float v = gn_load(x_base, mem_idx);
+        local_sum += v;
+        local_sumsq += v * v;
+    }
+    s_sum[threadIdx.x] = local_sum;
+    s_sumsq[threadIdx.x] = local_sumsq;
+    __syncthreads();
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (threadIdx.x < s) {
+            s_sum[threadIdx.x] += s_sum[threadIdx.x + s];
+            s_sumsq[threadIdx.x] += s_sumsq[threadIdx.x + s];
+        }
+        __syncthreads();
+    }
+    __shared__ float mean_s, inv_std_s;
+    if (threadIdx.x == 0) {
+        float mean = s_sum[0] / (float)group_size;
+        float var = s_sumsq[0] / (float)group_size - mean * mean;
+        var = fmaxf(var, 0.0f);
+        mean_s = mean;
+        inv_std_s = rsqrtf(var + eps);
+    }
+    __syncthreads();
+    const float mean = mean_s;
+    const float inv_std = inv_std_s;
+    const float scale = *scale_ptr;
+
+    // Pass 2: normalize, affine, optional SiLU, optional SmoothQuant, quantize -> int8.
+    for (long idx = threadIdx.x; idx < group_size; idx += blockDim.x) {
+        int c_local = idx % CPG;
+        long hw = idx / CPG;
+        int c_global = c_start + c_local;
+        long mem_idx = hw * C + c_global;
+
+        float v = gn_load(x_base, mem_idx);
+        float w = gn_load(gamma, c_global);
+        float b = gn_load(beta, c_global);
+        float normed = (v - mean) * inv_std * w + b;
+        float out = apply_silu ? (normed / (1.0f + expf(-normed))) : normed;
+        if (smooth_inv != nullptr) out *= smooth_inv[c_global];
+        yq_base[mem_idx] = (int8_t)fmaxf(-127.0f, fminf(127.0f, roundf(out * scale)));
+    }
+}
+
+// Host wrapper for the INT8-emitting GroupNorm+SiLU. Returns an int8 tensor with
+// the same NHWC (channels_last) layout as x. `scale` is a 1-element device tensor
+// (127/absmax); `smooth_inv` is [C] or an empty tensor for identity.
+torch::Tensor group_norm_silu_quantize_nhwc(
+    torch::Tensor x,
+    torch::Tensor weight,
+    torch::Tensor bias,
+    int64_t num_groups,
+    double eps,
+    bool apply_silu,
+    torch::Tensor scale,
+    torch::Tensor smooth_inv
+) {
+    CHECK_CUDA(x);
+    CHECK_CONTIGUOUS(x);
+    TORCH_CHECK(x.dim() == 4, "group_norm_silu_quantize_nhwc expects a 4D [N, C, H, W] tensor");
+    TORCH_CHECK(x.scalar_type() == weight.scalar_type() && x.scalar_type() == bias.scalar_type(),
+                "group_norm_silu_quantize_nhwc: weight/bias dtype must match input dtype");
+    TORCH_CHECK(x.scalar_type() == torch::kFloat32 || x.scalar_type() == torch::kFloat16,
+                "group_norm_silu_quantize_nhwc: only float32 and float16 are supported");
+
+    const int N = x.size(0);
+    const int C = x.size(1);
+    const int H = x.size(2);
+    const int W = x.size(3);
+    TORCH_CHECK(C % num_groups == 0, "group_norm_silu_quantize_nhwc: num_channels must be divisible by num_groups");
+    const long HW = (long)H * W;
+    const int CPG = C / (int)num_groups;
+    const long group_size = (long)CPG * HW;
+
+    auto yq = torch::empty_like(x, x.options().dtype(torch::kInt8));
+
+    int block_size = 32;
+    while (block_size < group_size && block_size < 1024) block_size <<= 1;
+
+    dim3 grid((unsigned int)(N * num_groups));
+    dim3 block((unsigned int)block_size);
+    size_t shmem_bytes = 2 * (size_t)block_size * sizeof(float);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    const float* smooth_ptr = (smooth_inv.numel() > 0) ? smooth_inv.data_ptr<float>() : nullptr;
+
+    if (x.scalar_type() == torch::kFloat32) {
+        group_norm_silu_quantize_nhwc_kernel<float><<<grid, block, shmem_bytes, stream>>>(
+            x.data_ptr<float>(), reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
+            weight.data_ptr<float>(), bias.data_ptr<float>(),
+            scale.data_ptr<float>(), smooth_ptr,
+            C, HW, (int)num_groups, (float)eps, apply_silu
+        );
+    } else {
+        group_norm_silu_quantize_nhwc_kernel<__half><<<grid, block, shmem_bytes, stream>>>(
+            reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
+            reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
+            reinterpret_cast<const __half*>(weight.data_ptr<at::Half>()),
+            reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
+            scale.data_ptr<float>(), smooth_ptr,
+            C, HW, (int)num_groups, (float)eps, apply_silu
+        );
+    }
+
+    return yq;
+}

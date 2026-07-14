@@ -44,6 +44,7 @@ attention (unquantized, ~38-40%) and non-quantized fp32/fp16 convs (~17-18%)
 are identical between precisions and dominate the pipeline.
 """
 
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -61,9 +62,18 @@ except ImportError:
 try:
     import modiff_cutlass
     HAS_NATIVE_GN_SILU = hasattr(modiff_cutlass, "group_norm_silu_nhwc")
+    HAS_GN_SILU_QUANTIZE = hasattr(modiff_cutlass, "group_norm_silu_quantize_nhwc")
 except ImportError:
     modiff_cutlass = None
     HAS_NATIVE_GN_SILU = False
+    HAS_GN_SILU_QUANTIZE = False
+
+# Kill-switch for the GN->int8 K1-fusion (baseline int8/int4). Set
+# MODIFF_DISABLE_GN_INT8_FUSION=1 to fall back to the exact two-kernel
+# (GroupNorm+SiLU, then standalone quantize) path -- used for A/B benchmarking
+# and as a production safety switch. The fusion is a pure optimization either way.
+if os.environ.get("MODIFF_DISABLE_GN_INT8_FUSION") == "1":
+    HAS_GN_SILU_QUANTIZE = False
 
 
 def _group_norm_silu(x, num_groups, weight, bias, eps, apply_silu):
@@ -90,6 +100,61 @@ def _group_norm_silu(x, num_groups, weight, bias, eps, apply_silu):
     with torch.amp.autocast(device_type=x.device.type, enabled=False):
         out = F.group_norm(x, num_groups, weight, bias, eps)
         return F.silu(out) if apply_silu else out
+
+
+def _prequant_fusable(conv):
+    """True when `conv` is a calibrated baseline INT8/INT4 conv whose preceding
+    GroupNorm+SiLU can emit its quantized int8 input directly (the K1->GN fusion),
+    letting us call conv.forward_from_int8() and skip the per-conv quantize kernel.
+
+    Baseline-only: the MoDiff modulated path (modiff_enabled=True) does an in-place
+    a_hat cache update inside its quantize that a fused GN-emit would bypass and
+    corrupt, so we require modiff_enabled=False. Everything else (SmoothQuant,
+    grouped convs, non-fp16 output) falls back to the current exact path -- this is
+    a pure optimization, never a correctness change.
+    """
+    return (
+        HAS_GN_SILU_QUANTIZE
+        and hasattr(conv, 'forward_from_int8')
+        and getattr(conv, 'is_calibrated', False)
+        and not getattr(conv, 'modiff_enabled', True)
+        and getattr(conv, 'standard_output_fp16', False)
+        and getattr(conv, 'use_cutlass', False)
+        and getattr(conv, 'groups', 1) == 1
+        and getattr(conv, '_smooth_is_identity', False)
+    )
+
+
+def _group_norm_silu_int8(x, num_groups, weight, bias, eps, apply_silu, conv):
+    """GroupNorm (+ optional SiLU) that emits its output already quantized to int8
+    (channels_last), fusing away the standalone per-conv quantize kernel (K1). Used
+    only when the following conv is _prequant_fusable(conv). Falls back to
+    _group_norm_silu + scale_quantize_int8 for shapes the native kernel doesn't
+    cover, so it stays a pure optimization.
+
+    The quantize multiplier is conv.static_input_scale (=127/absmax), matching the
+    conv's cached dequant alpha (=1/scale); smooth_inv is empty (identity) since
+    _prequant_fusable gates on _smooth_is_identity.
+    """
+    conv._ensure_conv_caches(x.device)
+    scale = conv._cached_scale_tensor          # fp32 [1], =static_input_scale
+    smooth_inv = conv._empty_smooth            # empty -> identity
+    can_use_native = (
+        HAS_GN_SILU_QUANTIZE
+        and x.is_cuda
+        and x.dtype in (torch.float32, torch.float16)
+        and x.is_contiguous(memory_format=torch.channels_last)
+        and x.size(1) % num_groups == 0
+    )
+    if can_use_native:
+        return modiff_cutlass.group_norm_silu_quantize_nhwc(
+            x, weight, bias, num_groups, eps, apply_silu, scale, smooth_inv)
+    # Fallback: exact same math, two kernels instead of one.
+    h = _group_norm_silu(x, num_groups, weight, bias, eps, apply_silu)
+    h_f32 = h if h.dtype == torch.float32 else h.float()
+    if not h_f32.is_contiguous(memory_format=torch.channels_last):
+        h_f32 = h_f32.contiguous(memory_format=torch.channels_last)
+    return modiff_cutlass.scale_quantize_int8(h_f32, scale)
 
 
 class FusedGroupNormSiLU(nn.Module):
@@ -297,9 +362,18 @@ class FusedResBlock(TimestepBlock):
             x = self.x_upd(x)
             h = self.in_conv(h)
         else:
-            h = self.fused_in_norm_silu(x)
-            h = self.in_conv(h)
-        
+            if _prequant_fusable(self.in_conv):
+                # K1->GN fusion: GroupNorm+SiLU emits int8 directly; in_conv skips
+                # its own quantize and consumes it via forward_from_int8.
+                w, b = self.fused_in_norm_silu._cast_params(x.dtype)
+                h_int8 = _group_norm_silu_int8(
+                    x, self.fused_in_norm_silu.num_groups, w, b,
+                    self.fused_in_norm_silu.eps, apply_silu=True, conv=self.in_conv)
+                h = self.in_conv.forward_from_int8(h_int8)
+            else:
+                h = self.fused_in_norm_silu(x)
+                h = self.in_conv(h)
+
         # Time embedding
         emb_out = self.emb_layers(emb).type(h.dtype)
         while len(emb_out.shape) < len(h.shape):
@@ -324,9 +398,19 @@ class FusedResBlock(TimestepBlock):
             h = self.out_conv(h)
         else:
             h = h + emb_out
-            h = self.fused_out_norm_silu(h)
-            h = self.out_dropout(h)
-            h = self.out_conv(h)
+            if _prequant_fusable(self.out_conv):
+                # K1->GN fusion: GroupNorm+SiLU emits int8 directly; out_conv skips
+                # its own quantize. out_dropout is nn.Dropout (no-op in eval/
+                # inference), so it's elided on the int8 path.
+                w, b = self.fused_out_norm_silu._cast_params(h.dtype)
+                h_int8 = _group_norm_silu_int8(
+                    h, self.fused_out_norm_silu.num_groups, w, b,
+                    self.fused_out_norm_silu.eps, apply_silu=True, conv=self.out_conv)
+                h = self.out_conv.forward_from_int8(h_int8)
+            else:
+                h = self.fused_out_norm_silu(h)
+                h = self.out_dropout(h)
+                h = self.out_conv(h)
         
         # Fused residual addition
         if split > 0:

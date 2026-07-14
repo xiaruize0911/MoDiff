@@ -65,4 +65,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("group_norm_silu_nhwc", &group_norm_silu_nhwc,
           "GroupNorm (+ optional fused SiLU) operating natively on NHWC-physical memory, "
           "never materializing an NCHW intermediate");
+    m.def("group_norm_silu_quantize_nhwc", &group_norm_silu_quantize_nhwc,
+          "GroupNorm (+ optional SiLU) that quantizes its output to INT8 inline (out*scale, "
+          "clamp/round; optional per-channel smooth_inv), fusing away the separate quantize kernel");
 }
