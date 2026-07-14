@@ -184,6 +184,8 @@ __global__ void group_norm_silu_quantize_nhwc_kernel(
     int8_t* __restrict__ Yq,          // [N, H, W, C] physical int8, same layout as X
     const TIn* __restrict__ gamma,
     const TIn* __restrict__ beta,
+    const TIn* __restrict__ mod_scale, // [N, C] scale-shift modulation, or nullptr
+    const TIn* __restrict__ mod_shift, // [N, C] scale-shift modulation, or nullptr
     const float* __restrict__ scale_ptr,    // scalar quant multiplier = 127/absmax
     const float* __restrict__ smooth_inv,   // [C] SmoothQuant, or nullptr
     int C,
@@ -250,6 +252,12 @@ __global__ void group_norm_silu_quantize_nhwc_kernel(
         float w = gn_load(gamma, c_global);
         float b = gn_load(beta, c_global);
         float normed = (v - mean) * inv_std * w + b;
+        // Optional scale-shift modulation (use_scale_shift_norm): per-(sample,channel)
+        // affine from the timestep embedding, applied before SiLU. normed*(1+s)+sh.
+        if (mod_scale != nullptr) {
+            long midx = (long)n * C + c_global;
+            normed = normed * (1.0f + gn_load(mod_scale, midx)) + gn_load(mod_shift, midx);
+        }
         float out = apply_silu ? (normed / (1.0f + expf(-normed))) : normed;
         if (smooth_inv != nullptr) out *= smooth_inv[c_global];
         yq_base[mem_idx] = (int8_t)fmaxf(-127.0f, fminf(127.0f, roundf(out * scale)));
@@ -267,7 +275,9 @@ torch::Tensor group_norm_silu_quantize_nhwc(
     double eps,
     bool apply_silu,
     torch::Tensor scale,
-    torch::Tensor smooth_inv
+    torch::Tensor smooth_inv,
+    torch::Tensor mod_scale,   // [N, C] scale-shift modulation, or empty for none
+    torch::Tensor mod_shift
 ) {
     CHECK_CUDA(x);
     CHECK_CONTIGUOUS(x);
@@ -276,6 +286,9 @@ torch::Tensor group_norm_silu_quantize_nhwc(
                 "group_norm_silu_quantize_nhwc: weight/bias dtype must match input dtype");
     TORCH_CHECK(x.scalar_type() == torch::kFloat32 || x.scalar_type() == torch::kFloat16,
                 "group_norm_silu_quantize_nhwc: only float32 and float16 are supported");
+    const bool has_mod = mod_scale.numel() > 0;
+    TORCH_CHECK(!has_mod || (mod_scale.scalar_type() == x.scalar_type() && mod_shift.scalar_type() == x.scalar_type()),
+                "group_norm_silu_quantize_nhwc: mod_scale/mod_shift dtype must match input dtype");
 
     const int N = x.size(0);
     const int C = x.size(1);
@@ -301,6 +314,8 @@ torch::Tensor group_norm_silu_quantize_nhwc(
         group_norm_silu_quantize_nhwc_kernel<float><<<grid, block, shmem_bytes, stream>>>(
             x.data_ptr<float>(), reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
             weight.data_ptr<float>(), bias.data_ptr<float>(),
+            has_mod ? mod_scale.data_ptr<float>() : nullptr,
+            has_mod ? mod_shift.data_ptr<float>() : nullptr,
             scale.data_ptr<float>(), smooth_ptr,
             C, HW, (int)num_groups, (float)eps, apply_silu
         );
@@ -310,6 +325,8 @@ torch::Tensor group_norm_silu_quantize_nhwc(
             reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
             reinterpret_cast<const __half*>(weight.data_ptr<at::Half>()),
             reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
+            has_mod ? reinterpret_cast<const __half*>(mod_scale.data_ptr<at::Half>()) : nullptr,
+            has_mod ? reinterpret_cast<const __half*>(mod_shift.data_ptr<at::Half>()) : nullptr,
             scale.data_ptr<float>(), smooth_ptr,
             C, HW, (int)num_groups, (float)eps, apply_silu
         );
@@ -334,6 +351,8 @@ __global__ void group_norm_silu_quantize_pack_nhwc_kernel(
     int8_t* __restrict__ Yqp,         // [N, H, W, C/2] packed int4, channels_last-flat
     const TIn* __restrict__ gamma,
     const TIn* __restrict__ beta,
+    const TIn* __restrict__ mod_scale, // [N, C] scale-shift modulation, or nullptr
+    const TIn* __restrict__ mod_shift,
     const float* __restrict__ scale_ptr,
     const float* __restrict__ smooth_inv,
     int C,
@@ -406,6 +425,11 @@ __global__ void group_norm_silu_quantize_pack_nhwc_kernel(
         float w1 = gn_load(gamma, c_global0 + 1), b1 = gn_load(beta, c_global0 + 1);
         float n0 = (v0 - mean) * inv_std * w0 + b0;
         float n1 = (v1 - mean) * inv_std * w1 + b1;
+        if (mod_scale != nullptr) {
+            long midx0 = (long)n * C + c_global0;
+            n0 = n0 * (1.0f + gn_load(mod_scale, midx0))     + gn_load(mod_shift, midx0);
+            n1 = n1 * (1.0f + gn_load(mod_scale, midx0 + 1)) + gn_load(mod_shift, midx0 + 1);
+        }
         float o0 = apply_silu ? (n0 / (1.0f + expf(-n0))) : n0;
         float o1 = apply_silu ? (n1 / (1.0f + expf(-n1))) : n1;
         if (smooth_inv != nullptr) {
@@ -429,7 +453,9 @@ torch::Tensor group_norm_silu_quantize_pack_nhwc(
     double eps,
     bool apply_silu,
     torch::Tensor scale,
-    torch::Tensor smooth_inv
+    torch::Tensor smooth_inv,
+    torch::Tensor mod_scale,   // [N, C] scale-shift modulation, or empty for none
+    torch::Tensor mod_shift
 ) {
     CHECK_CUDA(x);
     CHECK_CONTIGUOUS(x);
@@ -438,6 +464,9 @@ torch::Tensor group_norm_silu_quantize_pack_nhwc(
                 "group_norm_silu_quantize_pack_nhwc: weight/bias dtype must match input dtype");
     TORCH_CHECK(x.scalar_type() == torch::kFloat32 || x.scalar_type() == torch::kFloat16,
                 "group_norm_silu_quantize_pack_nhwc: only float32 and float16 are supported");
+    const bool has_mod = mod_scale.numel() > 0;
+    TORCH_CHECK(!has_mod || (mod_scale.scalar_type() == x.scalar_type() && mod_shift.scalar_type() == x.scalar_type()),
+                "group_norm_silu_quantize_pack_nhwc: mod_scale/mod_shift dtype must match input dtype");
 
     const int N = x.size(0);
     const int C = x.size(1);
@@ -468,6 +497,8 @@ torch::Tensor group_norm_silu_quantize_pack_nhwc(
         group_norm_silu_quantize_pack_nhwc_kernel<float><<<grid, block, shmem_bytes, stream>>>(
             x.data_ptr<float>(), reinterpret_cast<int8_t*>(yqp.data_ptr<int8_t>()),
             weight.data_ptr<float>(), bias.data_ptr<float>(),
+            has_mod ? mod_scale.data_ptr<float>() : nullptr,
+            has_mod ? mod_shift.data_ptr<float>() : nullptr,
             scale.data_ptr<float>(), smooth_ptr,
             C, HW, (int)num_groups, (float)eps, apply_silu
         );
@@ -477,6 +508,8 @@ torch::Tensor group_norm_silu_quantize_pack_nhwc(
             reinterpret_cast<int8_t*>(yqp.data_ptr<int8_t>()),
             reinterpret_cast<const __half*>(weight.data_ptr<at::Half>()),
             reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
+            has_mod ? reinterpret_cast<const __half*>(mod_scale.data_ptr<at::Half>()) : nullptr,
+            has_mod ? reinterpret_cast<const __half*>(mod_shift.data_ptr<at::Half>()) : nullptr,
             scale.data_ptr<float>(), smooth_ptr,
             C, HW, (int)num_groups, (float)eps, apply_silu
         );

@@ -124,13 +124,18 @@ def _prequant_common_ok(conv):
     )
 
 
-def _prequant_gn_conv(x, gn, conv):
+def _prequant_gn_conv(x, gn, conv, mod_scale=None, mod_shift=None):
     """If (GroupNorm+SiLU `gn` -> quantized conv `conv`) is eligible for the
-    GN->intX K1-fusion, run GroupNorm+SiLU emitting the conv's quantized input
-    directly (int8, or packed int4) and then conv.forward_from_intX, returning the
-    conv output. Otherwise return None so the caller uses the normal two-kernel
-    path. The quantize multiplier is conv.static_input_scale (=127/absmax), matching
-    the conv's cached dequant alpha; smooth_inv is identity (gated above).
+    GN->intX K1-fusion, run GroupNorm(+optional scale-shift modulation)+SiLU
+    emitting the conv's quantized input directly (int8, or packed int4) and then
+    conv.forward_from_intX, returning the conv output. Otherwise return None so the
+    caller uses the normal path.
+
+    `mod_scale`/`mod_shift` (each [N, C, 1, 1] from the timestep embedding, or None)
+    add the use_scale_shift_norm modulation `normed*(1+scale)+shift` between the GN
+    affine and the SiLU, folding it (and the SiLU) into the one kernel too. The
+    quantize multiplier is conv.static_input_scale (=127/absmax); smooth_inv is
+    identity (gated above).
     """
     if not _prequant_common_ok(conv):
         return None
@@ -145,13 +150,21 @@ def _prequant_gn_conv(x, gn, conv):
     conv._ensure_conv_caches(x.device)
     scale = conv._cached_scale_tensor          # fp32 [1], =static_input_scale
     smooth_inv = conv._empty_smooth            # empty -> identity
-    C = x.size(1)
+    N, C = x.size(0), x.size(1)
     native_ok = (
         x.is_cuda
         and x.dtype in (torch.float32, torch.float16)
         and x.is_contiguous(memory_format=torch.channels_last)
         and C % ng == 0
     )
+
+    # Modulation: kernel wants [N, C] contiguous same-dtype tensors (nullptr when
+    # empty); the fallback broadcasts the original [N, C, 1, 1] form.
+    if mod_scale is not None:
+        ms2d = mod_scale.reshape(N, C).contiguous()
+        sh2d = mod_shift.reshape(N, C).contiguous()
+    else:
+        ms2d = sh2d = x.new_empty(0)
 
     if is_int4:
         # int4 packs channel pairs within a group -> needs even channels-per-group.
@@ -160,25 +173,32 @@ def _prequant_gn_conv(x, gn, conv):
         h_in, w_in = x.shape[2], x.shape[3]
         if native_ok:
             packed = modiff_cutlass.group_norm_silu_quantize_pack_nhwc(
-                x, w, b, ng, eps, True, scale, smooth_inv)
+                x, w, b, ng, eps, True, scale, smooth_inv, ms2d, sh2d)
         else:
             packed = modiff_cutlass.scale_quantize_and_pack(
-                _gn_silu_fp32_cl(x, ng, w, b, eps), scale)
+                _gn_mod_silu_fp32_cl(x, ng, w, b, eps, mod_scale, mod_shift), scale)
         return conv.forward_from_int4(packed, h_in, w_in)
     else:
         if native_ok:
             q = modiff_cutlass.group_norm_silu_quantize_nhwc(
-                x, w, b, ng, eps, True, scale, smooth_inv)
+                x, w, b, ng, eps, True, scale, smooth_inv, ms2d, sh2d)
         else:
             q = modiff_cutlass.scale_quantize_int8(
-                _gn_silu_fp32_cl(x, ng, w, b, eps), scale)
+                _gn_mod_silu_fp32_cl(x, ng, w, b, eps, mod_scale, mod_shift), scale)
         return conv.forward_from_int8(q)
 
 
-def _gn_silu_fp32_cl(x, num_groups, weight, bias, eps):
-    """Fallback GroupNorm+SiLU producing an fp32 channels_last tensor, as required
-    by the standalone scale_quantize[_and_pack] kernels' float-vector reads."""
-    h = _group_norm_silu(x, num_groups, weight, bias, eps, apply_silu=True)
+def _gn_mod_silu_fp32_cl(x, num_groups, weight, bias, eps, mod_scale, mod_shift):
+    """Fallback for _prequant_gn_conv: GroupNorm (+ optional scale-shift
+    modulation) + SiLU, returned as an fp32 channels_last tensor (the standalone
+    scale_quantize[_and_pack] kernels read via float vectors). Matches the native
+    kernel's op order exactly."""
+    if mod_scale is None:
+        h = _group_norm_silu(x, num_groups, weight, bias, eps, apply_silu=True)
+    else:
+        h = _group_norm_silu(x, num_groups, weight, bias, eps, apply_silu=False)
+        h = h * (1 + mod_scale) + mod_shift
+        h = F.silu(h)
     h = h if h.dtype == torch.float32 else h.float()
     if not h.is_contiguous(memory_format=torch.channels_last):
         h = h.contiguous(memory_format=torch.channels_last)
@@ -407,20 +427,28 @@ class FusedResBlock(TimestepBlock):
         # Output path: fused GroupNorm + SiLU, then Dropout + Conv
         if self.use_scale_shift_norm:
             scale, shift = torch.chunk(emb_out, 2, dim=1)
-            # Manual GroupNorm since we need scale/shift modulation
-            weight, bias = self.fused_out_norm_silu._cast_params(h.dtype)
-            h_norm = _group_norm_silu(h, self.fused_out_norm_silu.num_groups,
-                                       weight, bias,
-                                       self.fused_out_norm_silu.eps,
-                                       apply_silu=False)
-            h = h_norm * (1 + scale) + shift
-            # If out_conv is a calibrated quantized conv with fuse_input_silu
-            # set (see wire_silu_fusion), it applies SiLU itself (fused into
-            # its quantize kernel) -- skip the separate F.silu(h) pass here.
-            if not getattr(self.out_conv, 'fuse_input_silu', False):
-                h = F.silu(h)
-            h = self.out_dropout(h)
-            h = self.out_conv(h)
+            # K1->GN fusion with scale-shift modulation folded in: GroupNorm ->
+            # normed*(1+scale)+shift -> SiLU -> quantize, all in one kernel, then
+            # out_conv.forward_from_intX. out_dropout is nn.Dropout (no-op in eval).
+            fused = _prequant_gn_conv(h, self.fused_out_norm_silu, self.out_conv,
+                                      mod_scale=scale, mod_shift=shift)
+            if fused is not None:
+                h = fused
+            else:
+                # Manual GroupNorm since we need scale/shift modulation
+                weight, bias = self.fused_out_norm_silu._cast_params(h.dtype)
+                h_norm = _group_norm_silu(h, self.fused_out_norm_silu.num_groups,
+                                           weight, bias,
+                                           self.fused_out_norm_silu.eps,
+                                           apply_silu=False)
+                h = h_norm * (1 + scale) + shift
+                # If out_conv is a calibrated quantized conv with fuse_input_silu
+                # set (see wire_silu_fusion), it applies SiLU itself (fused into
+                # its quantize kernel) -- skip the separate F.silu(h) pass here.
+                if not getattr(self.out_conv, 'fuse_input_silu', False):
+                    h = F.silu(h)
+                h = self.out_dropout(h)
+                h = self.out_conv(h)
         else:
             h = h + emb_out
             # K1->GN fusion: GroupNorm+SiLU emits the conv's quantized input
