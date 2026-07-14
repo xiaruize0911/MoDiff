@@ -92,6 +92,10 @@ class OptimizedInt4Conv2d(nn.Module):
         ch_max = w_flat.abs().max(dim=1).values  # [K]
         ch_scale = torch.clamp(ch_max / 7.0, min=1e-8)  # [K]
         self.register_buffer('weight_scale_channel', ch_scale.view(1, K, 1, 1))
+        # FP16 per-channel weight scale for the deep-fuse conv epilogue (folds
+        # weight_scale into the CUTLASS GEMM -> fp16 out, no fp32 temp). Kept in sync
+        # with weight_scale_channel wherever the latter is (re)computed.
+        self.register_buffer('weight_scale_channel_half', ch_scale.half().contiguous())
 
         w_quant = (w_flat / ch_scale.unsqueeze(1)).round().clamp(-7, 7).to(torch.int8)
         w_quant = w_quant.reshape_as(w_data)
@@ -588,25 +592,31 @@ class OptimizedInt4Conv2d(nn.Module):
         cid = getattr(self, "_tuned_config_id", None)
         if cid is not None:
             return cid
-        if not _INT4_CONV_AUTOTUNE:
+        if not _INT4_CONV_AUTOTUNE or not hasattr(modiff_cutlass, "conv2d_int4_dequant_fp16_tuned"):
             self._tuned_config_id = -1
             return -1
         self._ensure_conv_caches(x_packed.device)
         ncfg = modiff_cutlass.conv2d_int4_num_tuned_configs()
+        h_in, w_in = x_packed.shape[1], x_packed.shape[2]
+        h_out, w_out = self._out_hw(h_in, w_in)
+        buf = torch.empty((x_packed.shape[0], self.out_channels, h_out, w_out),
+                          device=x_packed.device, dtype=torch.float16).contiguous(memory_format=torch.channels_last)
+        wsh = self.weight_scale_channel_half.view(-1)
         strides = (self.stride[0], self.stride[1], self.padding[0], self.padding[1],
                    self.dilation[0], self.dilation[1])
+        # time the actual deep-fuse kernel (fp16 out, weight_scale folded in)
         best_t, best_id = float("inf"), -1
         for c in range(ncfg):
             try:
                 for _ in range(3):
-                    modiff_cutlass.conv2d_int4_fprop_tuned(
-                        x_packed, self.weight_packed, self._cached_alpha_tensor, c, *strides)
+                    modiff_cutlass.conv2d_int4_dequant_fp16_tuned(
+                        x_packed, self.weight_packed, self._cached_alpha_tensor, wsh, buf, c, *strides)
                 torch.cuda.synchronize()
                 s = torch.cuda.Event(enable_timing=True); e = torch.cuda.Event(enable_timing=True)
                 s.record()
                 for _ in range(10):
-                    modiff_cutlass.conv2d_int4_fprop_tuned(
-                        x_packed, self.weight_packed, self._cached_alpha_tensor, c, *strides)
+                    modiff_cutlass.conv2d_int4_dequant_fp16_tuned(
+                        x_packed, self.weight_packed, self._cached_alpha_tensor, wsh, buf, c, *strides)
                 e.record(); torch.cuda.synchronize()
                 t = s.elapsed_time(e)
             except Exception:
@@ -656,7 +666,7 @@ class OptimizedInt4Conv2d(nn.Module):
         cid = self._ensure_tuned_config(x_packed)
         modiff_cutlass.conv2d_int4_fprop_relu_requant_int4(
             x_packed, self.weight_packed, self._cached_alpha_tensor,
-            self.weight_scale_channel.view(-1), bias_arg, requant_scale.view(1),
+            self.weight_scale_channel_half.view(-1), bias_arg, requant_scale.view(1),
             out, apply_relu, cid,
             self.stride[0], self.stride[1], self.padding[0], self.padding[1],
             self.dilation[0], self.dilation[1])
@@ -692,7 +702,7 @@ class OptimizedInt4Conv2d(nn.Module):
         cid = self._ensure_tuned_config(x_packed)
         modiff_cutlass.conv2d_int4_fprop_bias_residual_dual(
             x_packed, self.weight_packed, self._cached_alpha_tensor,
-            self.weight_scale_channel.view(-1), bias_arg, residual.half(),
+            self.weight_scale_channel_half.view(-1), bias_arg, residual.half(),
             requant_scale.view(1), self._standard_output_buf, out_packed, apply_relu, cid,
             self.stride[0], self.stride[1], self.padding[0], self.padding[1],
             self.dilation[0], self.dilation[1])
@@ -906,6 +916,7 @@ class OptimizedInt4Conv2d(nn.Module):
         ch_scale = torch.clamp(ch_max / 7.0, min=1e-8)
 
         self.weight_scale_channel.copy_(ch_scale.view(1, K, 1, 1))
+        self.weight_scale_channel_half.copy_(ch_scale.half().to(self.weight_scale_channel_half.device))
 
         w_quant = (w_flat / ch_scale.unsqueeze(1)).round().clamp(-7, 7).to(torch.int8)
         w_quant = w_quant.reshape(K, self.in_channels, *self.kernel_size)

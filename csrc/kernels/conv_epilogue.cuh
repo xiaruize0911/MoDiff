@@ -293,6 +293,62 @@ __global__ void bias_residual_relu_dual_store_pack_int4_kernel(
     }
 }
 
+// FROM-HALF int4 chaining epilogue (deep-fuse): the conv already applied per-channel
+// weight_scale in its CUTLASS epilogue and wrote fp16 (no fp32 temp), so `deq` is the
+// fully-scaled fp16 conv output. Add bias + optional ReLU, requantize by
+// *requant_scale_ptr, and pack to int4 nibbles. The int4 twin of
+// bias_relu_requant_store_int8_from_half_kernel.
+template <typename BiasT>
+__global__ void bias_relu_requant_pack_int4_from_half_kernel(
+    const __half* __restrict__ deq,             // = acc * alpha * weight_scale[ch]
+    const BiasT* __restrict__ bias,
+    const float* __restrict__ requant_scale_ptr,
+    int8_t* __restrict__ output,
+    int num_packed, int num_channels, bool apply_relu
+) {
+    const float rq = *requant_scale_ptr;
+    for (int p = blockIdx.x * blockDim.x + threadIdx.x; p < num_packed;
+         p += blockDim.x * gridDim.x) {
+        int e0 = p * 2, e1 = e0 + 1;
+        int c0 = e0 % num_channels, c1 = e1 % num_channels;
+        float v0 = __half2float(deq[e0]) + (bias != nullptr ? bias_value(bias, c0) : 0.0f);
+        float v1 = __half2float(deq[e1]) + (bias != nullptr ? bias_value(bias, c1) : 0.0f);
+        if (apply_relu) { v0 = fmaxf(v0, 0.0f); v1 = fmaxf(v1, 0.0f); }
+        int8_t i0 = (int8_t)fmaxf(-7.0f, fminf(7.0f, roundf(v0 * rq)));
+        int8_t i1 = (int8_t)fmaxf(-7.0f, fminf(7.0f, roundf(v1 * rq)));
+        output[p] = (i0 & 0x0F) | ((i1 & 0x0F) << 4);
+    }
+}
+
+// FROM-HALF int4 DUAL-OUTPUT conv3 store (deep-fuse): `deq` is the fully-scaled fp16
+// conv output; add bias + fp16 residual + ReLU, write BOTH fp16 (out_half) and packed
+// int4 (out_packed, requantized for the next block conv1). No fp32 temp.
+template <typename BiasT>
+__global__ void bias_residual_relu_dual_store_pack_int4_from_half_kernel(
+    const __half* __restrict__ deq,
+    const BiasT* __restrict__ bias,
+    const __half* __restrict__ residual,
+    const float* __restrict__ requant_scale_ptr,
+    __half* __restrict__ out_half,
+    int8_t* __restrict__ out_packed,
+    int num_packed, int num_channels, bool apply_relu
+) {
+    const float rq = *requant_scale_ptr;
+    for (int p = blockIdx.x * blockDim.x + threadIdx.x; p < num_packed;
+         p += blockDim.x * gridDim.x) {
+        int e0 = p * 2, e1 = e0 + 1;
+        int c0 = e0 % num_channels, c1 = e1 % num_channels;
+        float v0 = __half2float(deq[e0]) + (bias != nullptr ? bias_value(bias, c0) : 0.0f) + __half2float(residual[e0]);
+        float v1 = __half2float(deq[e1]) + (bias != nullptr ? bias_value(bias, c1) : 0.0f) + __half2float(residual[e1]);
+        if (apply_relu) { v0 = fmaxf(v0, 0.0f); v1 = fmaxf(v1, 0.0f); }
+        out_half[e0] = __float2half_rn(v0);
+        out_half[e1] = __float2half_rn(v1);
+        int8_t i0 = (int8_t)fmaxf(-7.0f, fminf(7.0f, roundf(v0 * rq)));
+        int8_t i1 = (int8_t)fmaxf(-7.0f, fminf(7.0f, roundf(v1 * rq)));
+        out_packed[p] = (i0 & 0x0F) | ((i1 & 0x0F) << 4);
+    }
+}
+
 template <typename BiasT>
 __global__ void scale_bias_store_kernel(
     const float* __restrict__ conv_output,

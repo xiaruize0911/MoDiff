@@ -45,6 +45,61 @@ using Conv2dInt4Kernel = typename cutlass::conv::kernel::DefaultConv2dFprop<
 
 using Conv2dInt4Op = cutlass::conv::device::ImplicitGemmConvolution<Conv2dInt4Kernel>;
 
+// Deep-fuse epilogue for int4 (identical logic to conv2d_int8.cu's
+// Int8DequantScaleSource; kept separate per TU to avoid an ODR clash). Dequantizes
+// the int32 accumulator straight to FP16 as accumulator * alpha * source, where
+// alpha = the activation inverse quant scale (scalar, device ptr) and source = the
+// per-output-channel weight scale (fp16, broadcast as the epilogue "C" operand). This
+// folds the per-channel weight_scale into the GEMM epilogue so the int4 conv writes
+// FP16 directly -- eliminating the FP32 conv_out temporary the plain path materialized.
+template <int Count>
+class Int4DequantScaleSource {
+public:
+  using ElementOutput = cutlass::half_t;
+  using ElementSource = cutlass::half_t;
+  using ElementAccumulator = int32_t;
+  using ElementCompute = float;
+  using ElementScalar = ElementCompute;
+  using ElementC = ElementSource;
+  using ElementD = ElementOutput;
+  static int const kCount = Count;
+  static cutlass::epilogue::thread::ScaleType::Kind const kScale =
+      cutlass::epilogue::thread::ScaleType::Default;
+  using FragmentOutput = cutlass::Array<ElementOutput, kCount>;
+  using FragmentSource = cutlass::Array<ElementSource, kCount>;
+  using FragmentAccumulator = cutlass::Array<ElementAccumulator, kCount>;
+  struct Params {
+    ElementCompute alpha;
+    ElementCompute const *alpha_ptr;
+    CUTLASS_HOST_DEVICE Params(): alpha(ElementCompute(1)), alpha_ptr(nullptr) {}
+    CUTLASS_HOST_DEVICE Params(ElementCompute alpha): alpha(alpha), alpha_ptr(nullptr) {}
+    CUTLASS_HOST_DEVICE Params(ElementCompute const *alpha_ptr): alpha(ElementCompute(1)), alpha_ptr(alpha_ptr) {}
+  };
+private:
+  ElementCompute alpha_;
+public:
+  CUTLASS_HOST_DEVICE explicit Int4DequantScaleSource(Params const &params) {
+    alpha_ = params.alpha_ptr ? *params.alpha_ptr : params.alpha;
+  }
+  CUTLASS_HOST_DEVICE bool is_source_needed() const { return true; }
+  CUTLASS_HOST_DEVICE void set_k_partition(int, int) {}
+  CUTLASS_HOST_DEVICE FragmentOutput operator()(
+      FragmentAccumulator const &accumulator, FragmentSource const &source) const {
+    FragmentOutput output;
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < kCount; ++i)
+      output[i] = ElementOutput(float(accumulator[i]) * alpha_ * float(source[i]));
+    return output;
+  }
+  CUTLASS_HOST_DEVICE FragmentOutput operator()(FragmentAccumulator const &accumulator) const {
+    FragmentOutput output;
+    CUTLASS_PRAGMA_UNROLL
+    for (int i = 0; i < kCount; ++i)
+      output[i] = ElementOutput(float(accumulator[i]) * alpha_);
+    return output;
+  }
+};
+
 // Base CUTLASS INT4 conv. `scales` is the *scalar* activation dequant factor,
 // same convention as conv2d_int8_fprop — per-channel weight dequant always
 // happens separately (scale_accumulate/scale_store, or a Python-side multiply).
@@ -249,6 +304,101 @@ torch::Tensor conv2d_int4_fprop_tuned(
   }
 #undef RUN_I4CFG
   TORCH_CHECK(ok, "int4 tuned config ", config_id, " cannot implement (N=", N,
+              " C=", C, " H=", H, " W=", W, " K=", K, " R=", R, ")");
+  return output;
+}
+
+// ---- Deep-fuse (FP16-out, no fp32 temp) INT4 conv, tile-autotunable ----
+// Folds per-channel weight_scale into the CUTLASS epilogue (Int4DequantScaleSource)
+// so the conv writes fully-scaled fp16 directly -- the int4 analogue of
+// conv2d_int8_dequant_fp16_tuned. Removes the fp32 conv_out round-trip.
+template <typename ThreadblockShape, typename WarpShape, int Stages>
+struct Int4DequantFp16Config {
+  using Kernel = typename cutlass::conv::kernel::DefaultConv2dFprop<
+    cutlass::int4b_t, cutlass::layout::TensorNHWC,
+    cutlass::int4b_t, cutlass::layout::TensorNHWC,
+    cutlass::half_t, cutlass::layout::TensorNHWC,
+    int32_t,
+    cutlass::arch::OpClassTensorOp, Arch,
+    ThreadblockShape, WarpShape, cutlass::gemm::GemmShape<16, 8, 64>,
+    Int4DequantScaleSource<8>,
+    cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>,
+    Stages, cutlass::arch::OpMultiplyAddSaturate,
+    cutlass::conv::IteratorAlgorithm::kOptimized, cutlass::conv::StrideSupport::kStrided
+  >::Kernel;
+  using Op = cutlass::conv::device::ImplicitGemmConvolution<Kernel>;
+};
+
+template <typename Op>
+static bool run_int4_dequant_fp16(
+    cutlass::conv::Conv2dProblemSize const& ps,
+    cutlass::int4b_t* ip, cutlass::int4b_t* wp, cutlass::half_t* scale_ptr,
+    cutlass::half_t* out_ptr, float* alpha_ptr,
+    int C, int W, int H, int K, int R, int S, int H_out, int W_out,
+    torch::TensorOptions const& opts, cudaStream_t stream) {
+  using EpParams = typename Op::EpilogueOutputOp::Params;
+  EpParams ep(alpha_ptr);
+  typename Op::Arguments args(
+      ps,
+      {ip, {C, W * C, H * W * C}},
+      {wp, {C, S * C, R * S * C}},
+      {scale_ptr, {0, 0, 0}},
+      {out_ptr, {K, W_out * K, H_out * W_out * K}},
+      ep);
+  if (Op::can_implement(args) != cutlass::Status::kSuccess) return false;
+  Op op;
+  size_t ws = op.get_workspace_size(args);
+  auto workspace = torch::empty({(long)ws}, opts.dtype(torch::kByte));
+  return op(args, workspace.data_ptr(), stream) == cutlass::Status::kSuccess;
+}
+
+using I4DF0 = Int4DequantFp16Config<cutlass::gemm::GemmShape<128,128,128>, cutlass::gemm::GemmShape<64,64,128>, 3>;
+using I4DF1 = Int4DequantFp16Config<cutlass::gemm::GemmShape<256,128,128>, cutlass::gemm::GemmShape<64,64,128>, 3>;
+using I4DF2 = Int4DequantFp16Config<cutlass::gemm::GemmShape<128,256,128>, cutlass::gemm::GemmShape<64,64,128>, 3>;
+using I4DF3 = Int4DequantFp16Config<cutlass::gemm::GemmShape<128, 64,128>, cutlass::gemm::GemmShape<64,32,128>, 4>;
+using I4DF4 = Int4DequantFp16Config<cutlass::gemm::GemmShape< 64,128,128>, cutlass::gemm::GemmShape<32,64,128>, 4>;
+using I4DF5 = Int4DequantFp16Config<cutlass::gemm::GemmShape< 64,256,128>, cutlass::gemm::GemmShape<32,64,128>, 3>;
+
+// Deep-fuse int4 conv writing fully-scaled FP16 into a preallocated `output`
+// (channels_last [N,K,H_out,W_out]). config_id<0 -> default tile (0).
+torch::Tensor conv2d_int4_dequant_fp16_tuned(
+    torch::Tensor input, torch::Tensor weight_packed, torch::Tensor inv_scale,
+    torch::Tensor weight_scales_half, torch::Tensor output, int64_t config_id,
+    int stride_h, int stride_w, int padding_h, int padding_w, int dilation_h, int dilation_w) {
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  CHECK_CUDA(input); CHECK_CUDA(output); CHECK_CONTIGUOUS(output);
+  TORCH_CHECK(output.scalar_type() == torch::kFloat16, "output must be float16");
+  TORCH_CHECK(weight_scales_half.scalar_type() == torch::kFloat16, "weight scales must be float16");
+  int N = input.size(0), H = input.size(1), W = input.size(2);
+  int K = weight_packed.size(0), R = weight_packed.size(1), S = weight_packed.size(2);
+  int C = weight_packed.size(3) * 2;
+  TORCH_CHECK(input.size(3) == weight_packed.size(3), "Input/Weight channel mismatch");
+  int H_out = (H + 2 * padding_h - dilation_h * (R - 1) - 1) / stride_h + 1;
+  int W_out = (W + 2 * padding_w - dilation_w * (S - 1) - 1) / stride_w + 1;
+  cutlass::conv::Conv2dProblemSize ps(
+      {N, H, W, C}, {K, R, S, C}, {padding_h, padding_h, padding_w, padding_w},
+      {stride_h, stride_w}, {dilation_h, dilation_w}, {N, H_out, W_out, K},
+      cutlass::conv::Mode::kCrossCorrelation, 1);
+  auto* ip = (cutlass::int4b_t*)input.data_ptr();
+  auto* wp = (cutlass::int4b_t*)weight_packed.data_ptr();
+  auto* sp = reinterpret_cast<cutlass::half_t*>(weight_scales_half.data_ptr<at::Half>());
+  auto* op = reinterpret_cast<cutlass::half_t*>(output.data_ptr<at::Half>());
+  float* alpha = inv_scale.data_ptr<float>();
+  auto opts = input.options();
+  if (config_id < 0) config_id = 0;
+  bool ok = false;
+#define RUN_I4DF(CFG) run_int4_dequant_fp16<CFG::Op>(ps, ip, wp, sp, op, alpha, C, W, H, K, R, S, H_out, W_out, opts, stream)
+  switch (config_id) {
+    case 0: ok = RUN_I4DF(I4DF0); break;
+    case 1: ok = RUN_I4DF(I4DF1); break;
+    case 2: ok = RUN_I4DF(I4DF2); break;
+    case 3: ok = RUN_I4DF(I4DF3); break;
+    case 4: ok = RUN_I4DF(I4DF4); break;
+    case 5: ok = RUN_I4DF(I4DF5); break;
+    default: TORCH_CHECK(false, "invalid int4 deep-fuse config_id ", config_id);
+  }
+#undef RUN_I4DF
+  TORCH_CHECK(ok, "int4 deep-fuse config ", config_id, " cannot implement (N=", N,
               " C=", C, " H=", H, " W=", W, " K=", K, " R=", R, ")");
   return output;
 }
@@ -479,8 +629,16 @@ torch::Tensor conv2d_int4_fprop_relu_requant_int4(
     int dilation_h, int dilation_w
 ) {
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-    auto conv_out = conv2d_int4_fprop_tuned(
-        input, weight_packed, inv_scale, config_id,
+    // Deep-fuse: conv writes fully-scaled fp16 scratch (weight_scale in the CUTLASS
+    // epilogue, no fp32 temp); then bias + ReLU + requant + pack read the fp16.
+    // `weight_scales` here is the FP16 per-channel scale (the epilogue source).
+    int N = input.size(0), H = input.size(1), W = input.size(2);
+    int K = weight_packed.size(0), R = weight_packed.size(1), S = weight_packed.size(2);
+    int H_out = (H + 2 * padding_h - dilation_h * (R - 1) - 1) / stride_h + 1;
+    int W_out = (W + 2 * padding_w - dilation_w * (S - 1) - 1) / stride_w + 1;
+    auto scratch = torch::empty({N, K, H_out, W_out},
+        input.options().dtype(torch::kFloat16).memory_format(torch::MemoryFormat::ChannelsLast));
+    conv2d_int4_dequant_fp16_tuned(input, weight_packed, inv_scale, weight_scales, scratch, config_id,
         stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w);
     CHECK_CUDA(output);
     TORCH_CHECK(output.is_contiguous(), "packed int4 output must be contiguous");
@@ -489,24 +647,22 @@ torch::Tensor conv2d_int4_fprop_relu_requant_int4(
     const bool has_bias = bias.numel() > 0;
     if (has_bias) TORCH_CHECK(bias.numel() == weight_scales.numel(), "bias size mismatch");
     int num_channels = weight_scales.numel();
-    int num_packed = conv_out.numel() / 2;
+    int num_packed = scratch.numel() / 2;
     TORCH_CHECK(output.numel() == num_packed, "packed output size mismatch");
     int block_size = 256, grid_size = (num_packed + block_size - 1) / block_size;
+    const __half* deq = reinterpret_cast<const __half*>(scratch.data_ptr<at::Half>());
     const float* rq = requant_scale.data_ptr<float>();
     int8_t* out_ptr = reinterpret_cast<int8_t*>(output.data_ptr<int8_t>());
     if (has_bias && bias.scalar_type() == torch::kFloat16) {
-        scale_bias_relu_requant_pack_int4_kernel<__half><<<grid_size, block_size, 0, stream>>>(
-            conv_out.data_ptr<float>(), weight_scales.data_ptr<float>(),
-            reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
+        bias_relu_requant_pack_int4_from_half_kernel<__half><<<grid_size, block_size, 0, stream>>>(
+            deq, reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
             rq, out_ptr, num_packed, num_channels, apply_relu);
     } else if (has_bias) {
-        scale_bias_relu_requant_pack_int4_kernel<float><<<grid_size, block_size, 0, stream>>>(
-            conv_out.data_ptr<float>(), weight_scales.data_ptr<float>(),
-            bias.data_ptr<float>(), rq, out_ptr, num_packed, num_channels, apply_relu);
+        bias_relu_requant_pack_int4_from_half_kernel<float><<<grid_size, block_size, 0, stream>>>(
+            deq, bias.data_ptr<float>(), rq, out_ptr, num_packed, num_channels, apply_relu);
     } else {
-        scale_bias_relu_requant_pack_int4_kernel<__half><<<grid_size, block_size, 0, stream>>>(
-            conv_out.data_ptr<float>(), weight_scales.data_ptr<float>(),
-            (const __half*)nullptr, rq, out_ptr, num_packed, num_channels, apply_relu);
+        bias_relu_requant_pack_int4_from_half_kernel<__half><<<grid_size, block_size, 0, stream>>>(
+            deq, (const __half*)nullptr, rq, out_ptr, num_packed, num_channels, apply_relu);
     }
     return output;
 }
@@ -531,8 +687,16 @@ torch::Tensor conv2d_int4_fprop_bias_residual_dual(
     int dilation_h, int dilation_w
 ) {
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-    auto conv_out = conv2d_int4_fprop_tuned(
-        input, weight_packed, inv_scale, config_id,
+    // Deep-fuse conv -> fully-scaled fp16 scratch (no fp32 temp); then bias + residual
+    // + ReLU + dual (fp16 + packed int4) store read the fp16. `weight_scales` is the
+    // FP16 per-channel scale (the CUTLASS epilogue source).
+    int N = input.size(0), H = input.size(1), W = input.size(2);
+    int K = weight_packed.size(0), R = weight_packed.size(1), S = weight_packed.size(2);
+    int H_out = (H + 2 * padding_h - dilation_h * (R - 1) - 1) / stride_h + 1;
+    int W_out = (W + 2 * padding_w - dilation_w * (S - 1) - 1) / stride_w + 1;
+    auto scratch = torch::empty({N, K, H_out, W_out},
+        input.options().dtype(torch::kFloat16).memory_format(torch::MemoryFormat::ChannelsLast));
+    conv2d_int4_dequant_fp16_tuned(input, weight_packed, inv_scale, weight_scales, scratch, config_id,
         stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w);
     CHECK_CUDA(out_half); CHECK_CONTIGUOUS(out_half);
     CHECK_CUDA(out_packed);
@@ -541,31 +705,29 @@ torch::Tensor conv2d_int4_fprop_bias_residual_dual(
     TORCH_CHECK(out_half.scalar_type() == torch::kFloat16, "out_half must be float16");
     TORCH_CHECK(out_packed.scalar_type() == torch::kInt8, "out_packed must be int8 (packed int4)");
     TORCH_CHECK(residual.scalar_type() == torch::kFloat16, "residual must be float16");
-    TORCH_CHECK(out_half.sizes() == conv_out.sizes(), "out_half shape mismatch");
+    TORCH_CHECK(out_half.sizes() == scratch.sizes(), "out_half shape mismatch");
     TORCH_CHECK(requant_scale.numel() == 1, "requant_scale must be a scalar tensor");
     const bool has_bias = bias.numel() > 0;
     if (has_bias) TORCH_CHECK(bias.numel() == weight_scales.numel(), "bias size mismatch");
     int num_channels = weight_scales.numel();
-    int num_packed = conv_out.numel() / 2;
+    int num_packed = scratch.numel() / 2;
     TORCH_CHECK(out_packed.numel() == num_packed, "packed output size mismatch");
     int block_size = 256, grid_size = (num_packed + block_size - 1) / block_size;
+    const __half* deq = reinterpret_cast<const __half*>(scratch.data_ptr<at::Half>());
     const __half* res_ptr = reinterpret_cast<const __half*>(residual.data_ptr<at::Half>());
     const float* rq = requant_scale.data_ptr<float>();
     __half* outh = reinterpret_cast<__half*>(out_half.data_ptr<at::Half>());
     int8_t* outp = reinterpret_cast<int8_t*>(out_packed.data_ptr<int8_t>());
     if (has_bias && bias.scalar_type() == torch::kFloat16) {
-        bias_residual_relu_dual_store_pack_int4_kernel<__half><<<grid_size, block_size, 0, stream>>>(
-            conv_out.data_ptr<float>(), weight_scales.data_ptr<float>(),
-            reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
+        bias_residual_relu_dual_store_pack_int4_from_half_kernel<__half><<<grid_size, block_size, 0, stream>>>(
+            deq, reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
             res_ptr, rq, outh, outp, num_packed, num_channels, apply_relu);
     } else if (has_bias) {
-        bias_residual_relu_dual_store_pack_int4_kernel<float><<<grid_size, block_size, 0, stream>>>(
-            conv_out.data_ptr<float>(), weight_scales.data_ptr<float>(),
-            bias.data_ptr<float>(), res_ptr, rq, outh, outp, num_packed, num_channels, apply_relu);
+        bias_residual_relu_dual_store_pack_int4_from_half_kernel<float><<<grid_size, block_size, 0, stream>>>(
+            deq, bias.data_ptr<float>(), res_ptr, rq, outh, outp, num_packed, num_channels, apply_relu);
     } else {
-        bias_residual_relu_dual_store_pack_int4_kernel<__half><<<grid_size, block_size, 0, stream>>>(
-            conv_out.data_ptr<float>(), weight_scales.data_ptr<float>(),
-            (const __half*)nullptr, res_ptr, rq, outh, outp, num_packed, num_channels, apply_relu);
+        bias_residual_relu_dual_store_pack_int4_from_half_kernel<__half><<<grid_size, block_size, 0, stream>>>(
+            deq, (const __half*)nullptr, res_ptr, rq, outh, outp, num_packed, num_channels, apply_relu);
     }
     return out_half;
 }
