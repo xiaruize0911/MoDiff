@@ -133,38 +133,20 @@ reach peak and the int8 quantize/dequant overhead dominates). The churches UNet'
 gate is correct and this lever is **not worth pursuing on this UNet.** (It *would* help a larger UNet with
 K ≥ 2048 attention, e.g. SDXL-scale — the code comment references exactly that regime.)
 
-## Prototype: fuse GroupNorm into the attention qkv — correct, but a speed loss
-
-GroupNorm is the biggest attention cost (40%), so the next lever was to fuse it into the qkv matmul —
-eliminate the normalized-tensor write+re-read. Implemented as a Triton kernel: per-(N,group) stats computed
-first, the GN affine folded analytically into the qkv weights (`Wqkv·w`, `bqkv+Wqkv·b`), and `(x−mean)·rstd`
-applied in the matmul's A-load prologue so the normalized tensor is never materialized.
-
-![gn-qkv fusion](15_gn_qkv_fusion.png)
-
-**Numerically correct (rel 0.0000 vs torch GroupNorm+Linear), but ~1.5–2× *slower*:**
-
-| shape | cuBLAS GN+Linear | Triton GN+matmul (unfused) | Triton **fused** |
-|---|--:|--:|--:|
-| C192·T1024 | 359 µs | 537 µs | 783 µs |
-| C384·T256 | 229 µs | 275 µs | 455 µs |
-
-Two reasons, both about kernel quality rather than the fusion idea:
-1. A hand-written **Triton matmul is ~1.5× slower than cuBLAS** to start with (537 vs 359 µs) — the memory
-   saved by fusion (one eliminated intermediate write) is smaller than that GEMM-quality gap.
-2. The naive fused kernel **re-normalizes A for every output N-tile** (the normalize lives in the K-loop,
-   repeated across the 3C/BN output tiles), so it's even slower than the unfused Triton.
-
-This is the same lesson as the ResNet fp16-scratch fusion: the fusion is *correct and saves traffic*, but
-realizing the win needs a **vendor-quality fused GEMM** (CUTLASS input/prologue fusion, or a tuned Triton
-GEMM that normalizes A once and matches cuBLAS throughput). A perfect such kernel could plausibly reach
-~1.3–1.4× on the GN+qkv slice (~0.5–1 ms/step), but that's a substantial kernel-engineering effort for a
-modest UNet-level gain — **not worth it at this problem size.**
-
 ## Where further speedup would have to come from
-- **GroupNorm — the largest lever, ~24% of the step and ~40% of attention.** It's memory-bound, so gains
-  come from *fewer passes* (fuse GN into the preceding conv store / into the attention qkv), not dtype.
-  Every attention block and ResBlock pays a GN.
+- **GroupNorm — the largest lever, ~24% of the step and ~40% of attention** — but hard to realize.
+  It's memory-bound; the only saving is fusing its normalize into the following qkv matmul (eliminate the
+  normalized-tensor write). Investigated in depth and found **not worth it here**:
+  - GroupNorm's normalize is a **per-(sample, channel-group) affine on the A operand** — `(x−mean_{n,g})·rstd_{n,g}`
+    depends on the row's sample `n`, so it's per-element on A, **not** a static per-row/per-col scale. That
+    rules out CUTLASS's fusion hooks: **EVT is epilogue-only** (output side) and **scaled-MMA is per-row/col
+    scalar only**. A true input-fused GEMM would need a **custom CUTE collective-mainloop A-transform** — a
+    large, high-risk kernel effort (CUTLASS 4.5 is present, but this is not a config-level change).
+  - The cheaper route (a Triton fused GN-GEMM) **can't win**: even an autotuned Triton fp16 GEMM is
+    **1.2–1.8× slower than cuBLAS** on these tall-skinny small-K shapes (measured), and the fusion only saves
+    one intermediate write — smaller than that gap.
+  - Net: the ~0.5–1 ms/step (~2–4% end-to-end) upside doesn't justify a bespoke CUTE mainloop. The lever is
+    real but gated behind vendor-class kernel engineering.
 - **Attention qkv/proj GEMMs — int8 does NOT help here (prototyped, 2–3× slower; small-K crossover).** The
   remaining attention cost is SDPA (flash) and GroupNorm, both hard to quantize; the O(T²) SDPA is
   concentrated in the single 32²/T=1024 block (a faster flash variant or lower-res attention would help).
