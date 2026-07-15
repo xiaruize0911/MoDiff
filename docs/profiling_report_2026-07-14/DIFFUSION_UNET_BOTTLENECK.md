@@ -109,13 +109,37 @@ Per resolution (each config runs 5× per step except the last):
 - **The qkv+proj GEMMs are 26% of attention (~2.3 ms/step) and are fp16** — this is the one clearly
   int8-quantizable slice of attention. SDPA and GroupNorm are much harder to quantize.
 
+## Prototype: int8 for the attention qkv/proj GEMMs — measured, **negative**
+
+The qkv/proj are plain fp16 GEMMs (~26% of attention, ~2.3 ms/step), so they looked like the one
+int8-quantizable slice of attention. Prototyped with `OptimizedInt8Linear(backend="int_gemm")` and, to
+rule out fallback, the true W8A8 kernel forced directly. Result: **int8 is 2–3× *slower*, not faster.**
+
+![int8 attention crossover](14_attn_int8_crossover.png)
+
+| K = channels | fp16 µs | int8 µs | int8/fp16 |
+|--:|--:|--:|--:|
+| 192 (attn) | 108 | 212 | **0.51×** |
+| 384 (attn) | 86 | 165 | **0.52×** |
+| 768 (attn) | 32 | 103 | **0.31×** |
+| 1536 | 257 | 330 | 0.78× |
+| 4096 | 1813 | 1822 | ~1.00× |
+
+**Why:** an Ampere INT8 tensor-core GEMM only out-throughputs fp16 cuBLAS once the **contraction dim K
+(= in_features = channels) is large** — the measured crossover is **K ≈ 2048–4096** (below it, IMMA can't
+reach peak and the int8 quantize/dequant overhead dominates). The churches UNet's attention channels are
+**192–768**, far below the crossover, so int8 loses badly. The codebase already encodes this as a K-gate
+(`K_INT8_GATE = 2048` in `int8_linear.py`, which silently falls back to fp16) — the prototype confirms the
+gate is correct and this lever is **not worth pursuing on this UNet.** (It *would* help a larger UNet with
+K ≥ 2048 attention, e.g. SDXL-scale — the code comment references exactly that regime.)
+
 ## Where further speedup would have to come from
 - **GroupNorm — the largest lever, ~24% of the step and ~40% of attention.** It's memory-bound, so gains
   come from *fewer passes* (fuse GN into the preceding conv store / into the attention qkv), not dtype.
   Every attention block and ResBlock pays a GN.
-- **Attention qkv/proj GEMMs (~26% of attention, ~2.3 ms/step) are the one int8-quantizable slice** —
-  currently fp16. SDPA (flash) and GroupNorm are much harder to quantize; the O(T²) SDPA is concentrated in
-  the single 32²/T=1024 block (a faster flash variant or lower-res attention would help there).
+- **Attention qkv/proj GEMMs — int8 does NOT help here (prototyped, 2–3× slower; small-K crossover).** The
+  remaining attention cost is SDPA (flash) and GroupNorm, both hard to quantize; the O(T²) SDPA is
+  concentrated in the single 32²/T=1024 block (a faster flash variant or lower-res attention would help).
 - **Convs are near their int8 ceiling** (see `KERNEL_BENCHMARK.md`); **int4 is not worth it on this UNet**
   (1×1 convs lose, and dispatch overhead erases the GPU-time win — wall-clock ≈ fp16).
 
