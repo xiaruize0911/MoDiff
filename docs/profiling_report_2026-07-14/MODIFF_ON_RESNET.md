@@ -20,15 +20,22 @@ forward, the per-conv `o_hat` accumulation **explodes geometrically across the s
 | 0.05% | diverges → NaN |
 | **0.02% (≈ static)** | **still diverges → NaN** |
 
-A *single* MoDiff conv is stable (the unit gate `test_int8_modiff_conv` converges on static input), but
-the **full network is not**: ~50 stateful convs coupled through the Bottleneck residual-add + ReLU make
-each conv's accumulating `o_hat` compound across both layers and timesteps. MoDiff's telescoping
+A *single* MoDiff conv is numerically near-exact — the unit gates now pass on accuracy, **int8 rel 0.012
+and int4 rel 0.223** vs the fp32 conv (at the int8/int4 quantization floor) — yet the **full network still
+diverges to NaN**. That gap is the whole point: the divergence is **purely structural**, not a
+first-step/calibration artifact. ~50 stateful convs coupled through the Bottleneck residual-add + ReLU
+make each conv's accumulating `o_hat` compound across both layers and timesteps. MoDiff's telescoping
 `o_hat_t = A(Q(a_t − a_hat_{t+1})) + o_hat_{t+1}` only stays bounded under diffusion's renormalized
 sampling loop; a feedforward residual CNN has no such renormalization. **Conclusion: MoDiff modes are not
 numerically usable on ResNet-50.**
 
-(Also: the int4 MoDiff first-step has a separate pre-existing scale bug, `_int4_conv` ~13× off vs the
-baseline `_conv_from_int4` — tracked as a follow-up; independent of the divergence above.)
+(The earlier "int4 first-step ~13× / rel ~1.0" symptom was **not** a kernel bug — `_int4_conv` matches the
+baseline `_conv_from_int4`/`_int8_conv` convention exactly. It was a **calibration-state inconsistency**
+in the test harness `_calib_conv`: a SmoothQuant-derived static scale left desynced from the cached dequant
+alpha, which int8's 8-bit range masked and int4's 4-bit range did not. Fixed in `d77c516`; the single-conv
+int4 gate now passes on numerics. Note the ResNet `build_quantized` MoDiff path still shows a
+mis-calibrated first frame in `--validate` — a separate builder-calibration issue — but it is moot here
+because the network diverges regardless.)
 
 ## Efficiency (speed + memory) — kernel-path cost
 
@@ -44,8 +51,8 @@ ResNet-50, A40, batch 64, T=24-frame sequence, per-frame latency:
 | fp16 | 21.85 | 1.00× | 0 | — |
 | int8_fullchain | 15.26 | 1.43× | 0 | — |
 | int4_fullchain | 14.13 | 1.55× | 0 | — |
-| **int8_modiff** | **36.11** | **0.61×** | **2.48 GB** | 315.5 |
-| **int4_modiff** | **32.99** | **0.66×** | **2.48 GB** | 306.5 |
+| **int8_modiff** | **36.15** | **0.60×** | **2.48 GB** | 315.8 |
+| **int4_modiff** | **33.07** | **0.66×** | **2.48 GB** | 306.7 |
 
 **Reading this:**
 - MoDiff modes are **~2.4× slower than fp16 and ~4× slower than the fullchain**. The `o_hat` path (per
@@ -64,8 +71,9 @@ ResNet-50, A40, batch 64, T=24-frame sequence, per-frame latency:
 - `integration/benchmarks/benchmark_resnet50_modiff.py` (new): denoising-sequence generator, stateless vs
   sequence-driven timing, cache-memory measurement, and a `--validate` path (dispatch counts, per-frame
   fidelity curve, reset isolation, memory).
-- `integration/tests/test_kernel_correctness.py`: `test_int8_modiff_conv` (state machine + numerics) and
-  `test_int4_modiff_conv` (state machine; int4 numerics flagged as known-broken). Gate stays ALL PASS.
+- `integration/tests/test_kernel_correctness.py`: `test_int8_modiff_conv` and `test_int4_modiff_conv` —
+  both now gate on the state machine **and** numerics (int8 rel 0.012, int4 rel 0.223) after the
+  `_calib_conv` calibration-consistency fix (`d77c516`). Gate is ALL PASS.
 
 ## Recommendation
 Do **not** ship MoDiff modes for ResNet/CNN inference — they diverge and are slower + memory-heavy. MoDiff
