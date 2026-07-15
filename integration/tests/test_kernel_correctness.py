@@ -243,6 +243,33 @@ def test_group_norm_silu():
     return "group_norm_silu", ok, f"rel_err_vs_fp32={re:.3f} | {g}"
 
 
+def test_fused_gn_qkv():
+    """Custom CUTLASS per-sample fused GroupNorm->qkv conv vs a GroupNorm + Linear
+    reference. Validates the per-sample scale-iterator offset + the ReLU-absorb SHIFT
+    folding produce the exact normalized qkv (fp16-level rel err)."""
+    import modiff_cutlass as mc
+    if not hasattr(mc, "fused_gn_qkv"):
+        return "fused_gn_qkv", False, "op missing from modiff_cutlass"
+    torch.manual_seed(0)
+    N, C, H, W, G, eps, SHIFT = 32, 192, 32, 32, 32, 1e-6, 16.0
+    T, M = H * W, 32 * 32 * 32
+    x = torch.randn(N, C, H, W, device=DEV, dtype=torch.float16).contiguous(memory_format=torch.channels_last)
+    qkv = nn.Linear(C, 3 * C).to(DEV).half()
+    gn = nn.GroupNorm(G, C, eps=eps).to(DEV).half()
+    Wt, bt = qkv.weight.detach().half(), qkv.bias.detach().half()
+    gw, gb = gn.weight.detach().half(), gn.bias.detach().half()
+    Wf = (Wt * gw[None, :]).contiguous()                       # [3C, C]
+    conv_w = Wf.view(3 * C, 1, 1, C).contiguous()
+    epi_bias = (bt + Wt @ gb - SHIFT * Wf.sum(dim=1)).contiguous().half()
+    out = mc.fused_gn_qkv(x, conv_w, epi_bias, G, eps, SHIFT)   # [N,3C,H,W] channels_last
+    got = out.permute(0, 2, 3, 1).reshape(M, 3 * C)
+    xn = F.group_norm(x.float(), G, gw.float(), gb.float(), eps)
+    ref = F.linear(xn.permute(0, 2, 3, 1).reshape(M, C), Wt.float(), bt.float())
+    re = rel_err(got, ref)
+    ok = re < 2e-2 and torch.isfinite(got).all().item()
+    return "fused_gn_qkv", ok, f"rel_err_vs_fp32={re:.4f}"
+
+
 def _modiff_check(opt, conv, C, HW, N):
     """Drive a static-input MoDiff sequence and return (lifecycle_ok, acc, detail).
     Validates the MoDiff STATE MACHINE — first-step builds cache, modulated steps
@@ -377,7 +404,7 @@ def test_int8_export_apply():
 TESTS = [test_int8_conv, test_int8_conv_channels_last, test_int8_dual_store,
          test_int4_conv, test_int4_dual_store, test_int8_modiff_conv, test_int4_modiff_conv,
          test_int4_export_apply, test_int8_export_apply,
-         test_int8_linear, test_group_norm_silu]
+         test_int8_linear, test_group_norm_silu, test_fused_gn_qkv]
 
 
 def main():

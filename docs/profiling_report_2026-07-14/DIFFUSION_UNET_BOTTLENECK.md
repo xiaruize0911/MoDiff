@@ -133,20 +133,94 @@ reach peak and the int8 quantize/dequant overhead dominates). The churches UNet'
 gate is correct and this lever is **not worth pursuing on this UNet.** (It *would* help a larger UNet with
 K ≥ 2048 attention, e.g. SDXL-scale — the code comment references exactly that regime.)
 
+## Fused GroupNorm→qkv — first a Triton dead-end, then a **working custom CUTLASS kernel** (+1.4% e2e)
+
+GroupNorm is the biggest single attention cost, and it is immediately followed by the qkv Linear, so
+fusing the GN *normalize* into the qkv GEMM (skip writing the normalized tensor) is the obvious lever.
+**A Triton fused GEMM cannot win here** (§ below), but a **custom CUTLASS per-sample mainloop-fusion conv
+does** — it is the shipping result:
+
+### The win: `fused_gn_qkv` (custom CUTLASS, `csrc/kernels/fused_gn_qkv.cu`)
+
+The qkv Linear is a 1×1 convolution, so it maps onto CUTLASS's **fprop mainloop fusion** (example 25),
+which applies a per-channel `scale·x+bias` to the activations *inside* the mainloop — exactly the GN
+normalize, with GN's γ folded into the conv weight and GN's β + qkv bias into the epilogue bias. Two
+custom pieces made it correct and fast:
+- **Per-sample scale/bias.** GroupNorm's scale/bias depend on the activation's sample `n`; the stock
+  fusion shares one `[1,C]` vector across the batch. `ImplicitGemmConvolutionFusionPerSample` offsets the
+  scale/bias pointer by `sample·C` per threadblock (valid when the M-tile stays within one sample, i.e.
+  tokens `T` is a multiple of the tile's `kM=128`; smaller blocks fall back to cuBLAS+GN).
+- **ReLU absorption.** The stock fusion does scale+bias+**ReLU**; GN→qkv must not ReLU the sign-bearing
+  normalized activations. A constant `SHIFT=16` added to the bias makes the pre-ReLU value always ≥0
+  (normalized activations are ~unit variance), and the induced per-output-channel constant `SHIFT·Σ_c Wf`
+  is subtracted back in the (static) epilogue bias.
+- Per-(sample,group) stats come from a two-pass CUDA kernel (coalesced per-channel reduce with token-tiled
+  atomics for occupancy).
+
+**Measured (int8_baseline UNet, batch 32, A40), numerically correct (output rel err 0.0016):**
+
+| | baseline (GN+cuBLAS) | fused CUTLASS | result |
+|---|--:|--:|--:|
+| wall-clock (interleaved A/B) | 24.56 ms/step | 24.20 ms/step | **1.015× (+1.5%)** |
+| GPU-busy (torch.profiler self-time) | 23.90 ms/step | 23.56 ms/step | **1.014× (+1.4%)** |
+
+Per-block: **C384/T256 1.23×**, **C192/T1024 1.10×** (the dominant block is capped by the CUTLASS-vs-cuBLAS
+gap below; its GN cost is real but its matmul can't beat cuBLAS). This is the **first** approach to win
+end-to-end — the Triton attempt lost 11%. **On by default** (kill-switch `MODIFF_FUSE_GN_QKV=0`); gate `test_fused_gn_qkv` PASS.
+
+### Why Triton could not do it (the dead-end that motivated CUTLASS)
+
+We first built the same fusion as a Triton GEMM (normalize `(x−mean_{n,g})·rstd_{n,g}` on the A operand,
+GN affine folded into the qkv weights, per-(sample,group) stats from a channels_last `var_mean`). It is
+**numerically correct** (rel err 0.0013) but **end-to-end slower** — and slower on **GPU-busy time**, not
+just launch overhead:
+
+| int8_baseline UNet, batch 32 | baseline | fused | result |
+|---|--:|--:|--:|
+| wall-clock (interleaved A/B) | 24.3 ms/step | 27.0 ms/step | **0.90× (−11%)** |
+| GPU-busy (torch.profiler self-time) | 23.7 ms/step | 26.4 ms/step | **0.90× (−12%)** |
+
+Per-block, in-context (real UNet inputs, vs the **actual** baseline `_group_norm_silu` + cuBLAS): the fused
+path loses on **every** block — 0.80× (C192/32²), 0.75× (C384/16²), 0.71× (C384/8²), 0.33× (C768/≤4²).
+
+**Root cause (three measured facts):**
+1. **cuBLAS is fast on these shapes; Triton cannot match it.** For the dominant `[M=32768, K=192, N=576]`
+   qkv GEMM, cuBLAS = **108 µs**; the *exhaustively* autotuned pure Triton GEMM (no normalize) bottoms out
+   at **152 µs = 1.41× slower** (C384 shape: 86 vs 105 µs, 1.23×). Small-K, fat-M GEMMs are exactly cuBLAS's
+   strength and Triton's weakness (too few K-iterations to pipeline the tensor cores).
+2. **The matmul penalty exceeds the whole GN cost.** GN (`_group_norm_silu`) ≈ 126 µs and cuBLAS qkv ≈ 108 µs
+   on the big block. Fusing *deletes* the GN write but *replaces* the 108 µs cuBLAS matmul with a ≥152 µs
+   Triton one — the +44 µs matmul penalty is larger than the intermediate-write saving, so it is net-negative
+   before the normalize overhead is even added.
+3. **The earlier "1.1× win" was a benchmarking artifact.** It compared against *native* `nn.GroupNorm`, which
+   is **1.35–1.43× slower** than the pipeline's real `_group_norm_silu` kernel (measured 180 vs 126 µs), and
+   ran in a tight loop where L2 residency flattered the Triton matmul. Against the real baseline on real
+   inputs, the win disappears.
+
+**Also tried (also negative):** keep cuBLAS untouched and just beat the *standalone* GroupNorm with a
+single-launch Triton GN (per-(sample,group) reduce+normalize). Correct (rel 0.0000) but it loses on the
+dominant C192/T=1024 block (**0.54×**; wins only on C384/16²). Channels_last GN with a small per-group
+channel count (`Cg=6`) reduces over 1024 tokens **strided by C** — scattered 12-byte reads, memory-access-
+limited — and the native kernel already handles that access pattern well.
+
+**Root cause of the Triton dead-end:** for the dominant `[M=32768, K=192, N=576]` qkv GEMM, cuBLAS = 108 µs
+but the *exhaustively* autotuned Triton GEMM bottoms out at 152 µs (1.41× slower); since the GN cost we'd
+save (~126 µs) ≈ the cuBLAS matmul cost, swapping to a 1.4× slower matmul is net-negative. (An earlier
+"1.1× win" was an artifact of comparing against *native* `nn.GroupNorm`, 1.4× slower than the pipeline's
+`_group_norm_silu`, plus L2 residency in a tight loop.) A standalone Triton GN also lost on the dominant
+block (channels_last scatter). The **CUTLASS kernel wins where Triton can't** because it *matches* cuBLAS's
+mainloop and fuses the normalize for free — but even it is capped by the same small-K gap: a plain CUTLASS
+GEMM is also 1.37× off cuBLAS on `K=192` (157 vs 115 µs), so the dominant block only reaches 1.10×, while
+the larger-K C384 blocks (where CUTLASS ≈ or beats cuBLAS) reach 1.23×. Net **+1.4% end-to-end** — a real,
+correct win, bounded by the fact that no kernel beats cuBLAS on the smallest-K block.
+
 ## Where further speedup would have to come from
-- **GroupNorm — the largest lever, ~24% of the step and ~40% of attention** — but hard to realize.
-  It's memory-bound; the only saving is fusing its normalize into the following qkv matmul (eliminate the
-  normalized-tensor write). Investigated in depth and found **not worth it here**:
-  - GroupNorm's normalize is a **per-(sample, channel-group) affine on the A operand** — `(x−mean_{n,g})·rstd_{n,g}`
-    depends on the row's sample `n`, so it's per-element on A, **not** a static per-row/per-col scale. That
-    rules out CUTLASS's fusion hooks: **EVT is epilogue-only** (output side) and **scaled-MMA is per-row/col
-    scalar only**. A true input-fused GEMM would need a **custom CUTE collective-mainloop A-transform** — a
-    large, high-risk kernel effort (CUTLASS 4.5 is present, but this is not a config-level change).
-  - The cheaper route (a Triton fused GN-GEMM) **can't win**: even an autotuned Triton fp16 GEMM is
-    **1.2–1.8× slower than cuBLAS** on these tall-skinny small-K shapes (measured), and the fusion only saves
-    one intermediate write — smaller than that gap.
-  - Net: the ~0.5–1 ms/step (~2–4% end-to-end) upside doesn't justify a bespoke CUTE mainloop. The lever is
-    real but gated behind vendor-class kernel engineering.
+- **GroupNorm — the largest lever, ~24% of the step and ~40% of attention — is now partially captured.**
+  The fused GN→qkv is **shipped as a custom CUTLASS per-sample mainloop-fusion conv** (`fused_gn_qkv`,
+  on by default, kill-switch `MODIFF_FUSE_GN_QKV=0`): **+1.4% end-to-end**, correct (rel 0.0016). The remaining GroupNorm cost is
+  bounded by the small-K CUTLASS-vs-cuBLAS gap on the dominant C192/T=1024 block (1.10× there vs 1.23× on
+  C384); closing it further would need a matmul that beats cuBLAS at `K=192`, which neither CUTLASS nor Triton
+  achieves. A Triton version of the same fusion was **−11% end-to-end** and is not used (see § above).
 - **Attention qkv/proj GEMMs — int8 does NOT help here (prototyped, 2–3× slower; small-K crossover).** The
   remaining attention cost is SDPA (flash) and GroupNorm, both hard to quantize; the O(T²) SDPA is
   concentrated in the single 32²/T=1024 block (a faster flash variant or lower-res attention would help).

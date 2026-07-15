@@ -195,3 +195,8 @@ torch::Tensor group_norm_silu_quantize_pack_nhwc(
     int64_t num_groups, double eps, bool apply_silu,
     torch::Tensor scale, torch::Tensor smooth_inv,
     torch::Tensor mod_scale, torch::Tensor mod_shift);
+
+// ---- csrc/kernels/fused_gn_qkv.cu ----
+torch::Tensor fused_gn_qkv(
+    torch::Tensor x, torch::Tensor weight, torch::Tensor epi_bias,
+    int groups, double eps, double shift);

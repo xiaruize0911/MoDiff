@@ -33,6 +33,7 @@ setup(
                 'csrc/kernels/conv2d_int4.cu',
                 'csrc/kernels/layout_transform.cu',
                 'csrc/kernels/group_norm_silu.cu',
+                'csrc/kernels/fused_gn_qkv.cu',
             ],
             include_dirs=[
                 os.path.join(CUTLASS_PATH, 'include'),

@@ -35,6 +35,20 @@ except Exception:
     _HAS_ATTN = False
     AttentionBlock = QKVAttentionLegacy = None
 
+try:
+    import modiff_cutlass as _mc
+    _HAS_FUSED_GN_QKV = hasattr(_mc, "fused_gn_qkv")
+except Exception:
+    _HAS_FUSED_GN_QKV = False
+
+# Constant that absorbs the CUTLASS fprop-fusion ReLU: bias carries +SHIFT so the
+# pre-ReLU value (x-mean)*rstd + SHIFT is always >= 0 (normalized activations are
+# ~unit variance). Must match the value used in fused_gn_qkv.cu's caller.
+_FUSE_SHIFT = 16.0
+# The fused conv's threadblock tile has kM=128, so it is only correct when a tile
+# stays within one sample, i.e. tokens T = H*W is a multiple of 128.
+_FUSE_TILE_M = 128
+
 
 class TokenMajorAttentionBlock(nn.Module):
     """Drop-in for AttentionBlock (QKVAttentionLegacy head order) that runs
@@ -68,12 +82,39 @@ class TokenMajorAttentionBlock(nn.Module):
         self._gn_w = None
         self._gn_b = None
 
+        # Fused GroupNorm->qkv via the custom CUTLASS per-sample mainloop-fusion conv.
+        # Default ON; kill-switch MODIFF_FUSE_GN_QKV=0. Folded conv weight + epilogue
+        # bias are built lazily on first forward. See csrc/kernels/fused_gn_qkv.cu.
+        self._fuse_gn_qkv = os.environ.get("MODIFF_FUSE_GN_QKV", "1") != "0"
+        self._fused_ready = False
+        self._fused_conv_w = None    # [3C,1,1,C] fp16 KRSC = qkv.weight * gn.weight
+        self._fused_epi_bias = None  # [3C] fp16 = qkv.bias + qkv.w@gn.b - SHIFT*colsum(Wf)
+
     def _gn_params(self, dtype):
         if self._gn_cast_dtype is not dtype:
             self._gn_w = self.norm.weight.detach().to(dtype) if self.norm.weight is not None else None
             self._gn_b = self.norm.bias.detach().to(dtype) if self.norm.bias is not None else None
             self._gn_cast_dtype = dtype
         return self._gn_w, self._gn_b
+
+    def _ensure_fused(self):
+        """Lazily fold GroupNorm's affine into the qkv conv weight + epilogue bias.
+        The +SHIFT that absorbs the mainloop ReLU is added to the activation bias in
+        the CUDA stats kernel; here we subtract its induced constant SHIFT*colsum(Wf)
+        from the per-output-channel bias so the net result is exact."""
+        if self._fused_ready:
+            return
+        C = self.channels
+        w = self.qkv.weight.detach().to(torch.float16)      # [3C, C]
+        b = self.qkv.bias.detach().to(torch.float16)        # [3C]
+        gw = (self.norm.weight.detach().to(torch.float16) if self.norm.weight is not None
+              else torch.ones(C, device=w.device, dtype=torch.float16))
+        gb = (self.norm.bias.detach().to(torch.float16) if self.norm.bias is not None
+              else torch.zeros(C, device=w.device, dtype=torch.float16))
+        Wf = (w * gw[None, :]).contiguous()                 # [3C, C]
+        self._fused_conv_w = Wf.view(3 * C, 1, 1, C).contiguous()
+        self._fused_epi_bias = (b + w @ gb - _FUSE_SHIFT * Wf.sum(dim=1)).contiguous().to(torch.float16)
+        self._fused_ready = True
 
     def forward(self, x):
         # x: [N, C, H, W] (channels_last in this pipeline). All the .permute/.reshape
@@ -82,12 +123,31 @@ class TokenMajorAttentionBlock(nn.Module):
         T = H * W
         nh, hd = self.num_heads, self.head_dim
 
+        # channels_last [N,C,H,W] (physical [N,H,W,C]) -> token-major [N,T,C] view
+        # (needed for the residual add regardless of the qkv path).
+        x_in_tok = x.permute(0, 2, 3, 1).reshape(b, T, c)
+
+        # Fused GroupNorm->qkv (custom CUTLASS per-sample mainloop fusion): computes
+        # the GroupNorm-normalized qkv directly from the raw channels_last activation,
+        # skipping the separate GroupNorm kernel + its intermediate write. Gated to
+        # fp16 and T a multiple of the conv's tile-M (else the per-sample scale offset
+        # would be wrong); otherwise fall back to GroupNorm + cuBLAS below.
+        if (self._fuse_gn_qkv and _HAS_FUSED_GN_QKV and x.dtype == torch.float16
+                and (T % _FUSE_TILE_M) == 0 and (c % 8) == 0):
+            self._ensure_fused()
+            qkv_img = _mc.fused_gn_qkv(x, self._fused_conv_w, self._fused_epi_bias,
+                                       self.norm.num_groups, self.norm.eps, _FUSE_SHIFT)
+            qkv = qkv_img.permute(0, 2, 3, 1).reshape(b, T, nh, 3, hd)
+            q, k, v = qkv.unbind(3)
+            q = q.transpose(1, 2); k = k.transpose(1, 2); v = v.transpose(1, 2)
+            a = F.scaled_dot_product_attention(q, k, v, scale=self.scale)
+            a = a.transpose(1, 2).reshape(b, T, c)
+            out_tok = x_in_tok + self.proj(a)
+            return out_tok.reshape(b, H, W, c).permute(0, 3, 1, 2)
+
         # GroupNorm over channels via the native NHWC kernel -> stays channels_last.
         w, bnorm = self._gn_params(x.dtype)
         xn = _group_norm_silu(x, self.norm.num_groups, w, bnorm, self.norm.eps, apply_silu=False)
-
-        # channels_last [N,C,H,W] (physical [N,H,W,C]) -> token-major [N,T,C] view.
-        x_in_tok = x.permute(0, 2, 3, 1).reshape(b, T, c)
         xn_tok = xn.permute(0, 2, 3, 1).reshape(b, T, c)
 
         # qkv: Linear [N,T,C] -> [N,T,3C]; channel order matches the Conv1d exactly:
