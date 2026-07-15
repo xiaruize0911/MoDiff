@@ -85,4 +85,14 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "GroupNorm (+ optional SiLU) that quantizes to INT4 and packs channel pairs inline "
           "([N,H,W,C/2] byte layout matching scale_quantize_and_pack); requires even CPG");
     m.def("fused_gn_qkv", &fused_gn_qkv, "Fused GroupNorm->qkv (per-sample scale/bias mainloop fusion)");
+
+    // Fused int8 flash attention (kernels/flash_attn_int8.cu)
+    m.def("flash_attn_int8", &flash_attn_int8,
+          "Fused int8 flash attention (QK^T/softmax/AV, no T x T materialization); "
+          "q/k/v [N,H,T,hd_pad] int8, sq/sk [N,H,T], sv [N,H,hd] f32 -> fp16 [N,H,T,hd]");
+    m.def("mma_smoke", &mma_smoke, "Debug: C[16,N]=A[16,K].B[N,K]^T via m16n8k32.s8 tensor cores");
+
+    // Fused qkv quantize for the flash score path (kernels/quantize_qkv.cu)
+    m.def("quantize_qkv_int8", &quantize_qkv_int8,
+          "q/k/v [B,H,T,hd] fp16 -> {qi,ki,vi [B,H,T,hd_pad] int8, sq,sk [B,H,T], sv [B,H,hd] f32}");
 }

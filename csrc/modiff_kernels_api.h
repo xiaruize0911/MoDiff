@@ -200,3 +200,14 @@ torch::Tensor group_norm_silu_quantize_pack_nhwc(
 torch::Tensor fused_gn_qkv(
     torch::Tensor x, torch::Tensor weight, torch::Tensor epi_bias,
     int groups, double eps, double shift);
+
+// ---- csrc/kernels/flash_attn_int8.cu ----
+torch::Tensor flash_attn_int8(
+    torch::Tensor q, torch::Tensor k, torch::Tensor v,
+    torch::Tensor sq, torch::Tensor sk, torch::Tensor sv,
+    double softmax_scale);
+torch::Tensor mma_smoke(torch::Tensor A, torch::Tensor B);
+
+// ---- csrc/kernels/quantize_qkv.cu ----
+std::vector<torch::Tensor> quantize_qkv_int8(
+    torch::Tensor q, torch::Tensor k, torch::Tensor v, int64_t hd_pad);

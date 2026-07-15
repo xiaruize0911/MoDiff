@@ -601,13 +601,22 @@ class BenchmarkRunner:
         # Token-major AttentionBlock: eliminate the channel-major<->flash layout
         # copies (numerically identical; skips MoDiff-wrapped attention and is
         # itself gated by MODIFF_DISABLE_TOKEN_MAJOR_ATTN). Shared across all modes.
+        # When MODIFF_QUANT_ATTN=1, use the quantized (int8 fused-flash score path)
+        # variant instead -- opt-in so existing modes are unchanged by default.
         try:
-            from integration.fused_ops.token_major_attention import convert_attention_to_token_major
-            n_tm = convert_attention_to_token_major(model.model.diffusion_model)
-            if n_tm > 0:
-                print(f"✓ Converted {n_tm} AttentionBlocks to token-major layout")
+            if os.environ.get("MODIFF_QUANT_ATTN") == "1":
+                from integration.fused_ops.quantized_attention import convert_attention_to_quantized
+                sb = int(os.environ.get("MODIFF_ATTN_SCORE_BITS", "8"))
+                n_tm = convert_attention_to_quantized(model.model.diffusion_model, score_bits=sb)
+                if n_tm > 0:
+                    print(f"✓ Converted {n_tm} AttentionBlocks to QUANTIZED token-major (score_bits={sb})")
+            else:
+                from integration.fused_ops.token_major_attention import convert_attention_to_token_major
+                n_tm = convert_attention_to_token_major(model.model.diffusion_model)
+                if n_tm > 0:
+                    print(f"✓ Converted {n_tm} AttentionBlocks to token-major layout")
         except Exception as e:
-            print(f"  (token-major attention conversion skipped: {e})")
+            print(f"  (attention conversion skipped: {e})")
 
         # Wire SiLU fusion between each FusedResBlock's GroupNorm and its
         # quantized conv (no-op for modes where in_conv/out_conv are still
