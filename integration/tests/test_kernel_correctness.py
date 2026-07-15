@@ -74,10 +74,28 @@ def check_golden(name: str, out: torch.Tensor) -> str:
 def _calib_conv(opt, x0):
     opt.set_calibrating(True)
     _ = opt(x0)
-    opt.set_calibrating(False)
-    if getattr(opt, "_scale_count", 0) > 0:
-        opt.static_input_scale.fill_(opt._scale_sum / opt._scale_count)
-    opt.is_calibrated = True
+    # Finalize calibration WITHOUT SmoothQuant so the module lands in a single,
+    # self-consistent per-tensor static scale: static_input_scale == the cached
+    # dequant alpha (1/static), and weights quantized against their own (unsmoothed)
+    # range. Nulling _act_channel_max makes end_calibration() take its no-SmoothQuant
+    # branch (static_scale = mean per-sample scale, smooth_inv = identity) and — the
+    # crucial part — set static_input_scale AND _cached_scale_float/_cached_alpha_tensor
+    # together, so quantize and dequant use the same scale.
+    #
+    # The old code did the opposite: it called set_calibrating(False), which folds
+    # SmoothQuant into the weights and derives static_input_scale from the *smoothed*
+    # activation range, and THEN overwrote only static_input_scale with the mean
+    # per-sample (unsmoothed) scale — leaving the cached dequant alpha and the smoothed
+    # weights keyed to a different scale. int8's 8-bit range absorbed that mismatch, so
+    # its tests passed; int4's 4-bit range did not: on the MoDiff first-step (which,
+    # unlike the raw-input standard path, quantizes the *smoothed* activation) the
+    # 15x-too-small scale rounded almost every value to 0, giving o_hat ≈ bias
+    # (rel ~1.0). That was the "int4 MoDiff scale bug" — a calibration-state
+    # inconsistency in this harness, not a kernel/convention bug in _int4_conv (which
+    # matches _conv_from_int4 and _int8_conv exactly).
+    opt.calibrating = False
+    opt._act_channel_max = None
+    opt.end_calibration()
     opt.set_standard_output_fp16(True)
     opt.enable_modiff(False)
     return opt
@@ -264,9 +282,13 @@ def test_int8_modiff_conv():
 
 
 def test_int4_modiff_conv():
-    """int4 MoDiff: gate on the STATE MACHINE only. The int4 MoDiff first-step numerics
-    are a KNOWN pre-existing bug (`_int4_conv` scale ~13x off vs the baseline
-    `_conv_from_int4`); tracked separately. Speed/memory benchmarking is still valid."""
+    """int4 MoDiff: state machine AND numerics (first-step is a valid quantized conv).
+
+    The int4 first-step o_hat used to be ~15x too small (rel ~1.0) under this harness —
+    but that was a calibration-state inconsistency in _calib_conv (a smoothquant-derived
+    static scale left desynced from the cached dequant alpha), not a kernel bug. With a
+    self-consistent calibration the first-step matches the fp32 conv to the int4
+    quantization floor, so we now gate on numerics like the int8 twin."""
     from integration.kernels.int4_optimized import OptimizedInt4Conv2d
     torch.manual_seed(0)
     conv = nn.Conv2d(256, 256, 3, padding=1).to(DEV)
@@ -274,12 +296,87 @@ def test_int4_modiff_conv():
                       torch.randn(16, 256, 32, 32, device=DEV)).to(memory_format=torch.channels_last)
     opt.enable_modiff(True)
     lifecycle_ok, acc, detail = _modiff_check(opt, conv, 256, 32, 16)
-    note = "" if acc < 0.40 else "  [KNOWN: int4 MoDiff numerics broken, speed/mem only]"
-    return "int4_modiff_conv", lifecycle_ok, detail + note
+    return "int4_modiff_conv", lifecycle_ok and acc < 0.40, detail
+
+
+class _OneConv(nn.Module):
+    def __init__(self, conv):
+        super().__init__()
+        self.c = conv
+
+    def forward(self, x):
+        return self.c(x)
+
+
+def _export_apply_check(kind):
+    """Round-trip export→apply of a static calibration onto a FRESH converted model and
+    compare the MoDiff first-step accuracy against live calibration. Guards that the
+    SmoothQuant state (smooth_scale + smoothed weights) survives the checkpoint: before
+    the fix, export saved only the per-tensor scale, so applying a SmoothQuant-derived
+    scale onto unsmoothed weights degraded int4 ~2x (rel ~0.40 vs ~0.20); int8 masked it.
+    Also asserts the legacy float-only path still loads (backward compat) and reproduces
+    the old degradation, so the gate provably bites."""
+    if kind == "int4":
+        from integration.kernels.int4_optimized import (
+            convert_model_to_optimized_int4 as convert, set_calibrating_int4 as set_calib,
+            export_int4_static_scales as export, apply_int4_static_scales as apply,
+            enable_modiff_mode as enable)
+    else:
+        from integration.kernels.int8_optimized import (
+            convert_model_to_optimized_int8 as convert, set_calibrating as set_calib,
+            export_int8_static_scales as export, apply_static_scales as apply,
+            enable_modiff_mode as enable)
+    torch.manual_seed(0)
+    ref_conv = nn.Conv2d(256, 256, 3, padding=1).to(DEV)
+    x = torch.randn(16, 256, 32, 32, device=DEV, dtype=torch.float16).contiguous(memory_format=torch.channels_last)
+    ref = ref_conv(x.float())
+
+    def fresh():
+        m = _OneConv(nn.Conv2d(256, 256, 3, padding=1)).to(DEV)
+        m.c.load_state_dict(ref_conv.state_dict())
+        convert(m)
+        return m
+
+    live = fresh()
+    set_calib(live, True); _ = live(torch.randn(16, 256, 32, 32, device=DEV)); set_calib(live, False)
+    enable(live, True)
+    live_acc = rel_err(live(x), ref)
+
+    scales = export(live)
+    has_smooth = any(isinstance(v, dict) and "smooth_scale" in v for v in scales.values())
+    # persist through torch.save/load so the embedded smooth_scale tensor is exercised
+    import io
+    buf = io.BytesIO(); torch.save(scales, buf); buf.seek(0)
+    scales = torch.load(buf, weights_only=True)
+
+    applied = fresh()
+    n = apply(applied, scales)
+    enable(applied, True)
+    apply_acc = rel_err(applied(x), ref)
+
+    legacy = {k: (v["static_scale"] if isinstance(v, dict) else v) for k, v in scales.items()}
+    old = fresh(); apply(old, legacy); enable(old, True)
+    legacy_acc = rel_err(old(x), ref)
+
+    # apply must match live (SmoothQuant restored) and clearly beat the legacy path.
+    ok = (n == 1 and has_smooth and apply_acc <= live_acc + 0.02
+          and apply_acc < 0.40 and apply_acc < legacy_acc - 0.05)
+    return f"{kind}_export_apply", ok, (
+        f"live={live_acc:.3f} apply={apply_acc:.3f} legacy(float-only)={legacy_acc:.3f} "
+        f"smooth_serialized={has_smooth}")
+
+
+def test_int4_export_apply():
+    return _export_apply_check("int4")
+
+
+def test_int8_export_apply():
+    return _export_apply_check("int8")
 
 
 TESTS = [test_int8_conv, test_int8_conv_channels_last, test_int8_dual_store,
          test_int4_conv, test_int4_dual_store, test_int8_modiff_conv, test_int4_modiff_conv,
+         test_int4_export_apply, test_int8_export_apply,
          test_int8_linear, test_group_norm_silu]
 
 

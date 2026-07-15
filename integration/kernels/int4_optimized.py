@@ -896,7 +896,8 @@ class OptimizedInt4Conv2d(nn.Module):
         self._orig_weight = None
 
     def _apply_smoothquant(self):
-        """SmoothQuant: fold per-channel activation scales into weights."""
+        """SmoothQuant: derive the per-in-channel smooth scale from the calibrated
+        activation range and fold it into the weights."""
         act_max = self._act_channel_max
         w = self._orig_weight
         K = self.out_channels
@@ -908,6 +909,18 @@ class OptimizedInt4Conv2d(nn.Module):
         ratio = act_max / torch.clamp(w_max, min=1e-8)
         s = ratio.sqrt().clamp(min=1e-4, max=1e4)
 
+        self._fold_weights_with_smooth(s)
+
+    def _fold_weights_with_smooth(self, s: torch.Tensor):
+        """Fold a given per-in-channel SmoothQuant scale `s` ([C_in]) into the weights:
+        set smooth_scale, then requantize+repack the *original* fp weights against their
+        smoothed per-output-channel range. Shared by _apply_smoothquant (live calibration,
+        where `s` is derived from the activation stats) and set_static_calibration (which
+        restores `s` from an exported checkpoint). Requires _orig_weight to still be present."""
+        w = self._orig_weight
+        K = self.out_channels
+
+        w_dev = w.to(s.device)
         self.smooth_scale.copy_(s.view(1, -1, 1, 1))
 
         w_smoothed = w_dev * s.view(1, -1, 1, 1)
@@ -923,7 +936,7 @@ class OptimizedInt4Conv2d(nn.Module):
         w_nhwc = w_quant.permute(0, 2, 3, 1).contiguous()
 
         if self.in_channels % 2 == 0:
-            self.weight_packed.data = pack_int4(w_nhwc).to(self.weight_packed.device)
+            self.weight_packed.data = pack_int4(w_nhwc).to(self.weight_packed.device).contiguous()
 
     def set_calibrating(self, calibrating: bool):
         if calibrating:
@@ -942,6 +955,36 @@ class OptimizedInt4Conv2d(nn.Module):
         self._cached_scale_tensor = torch.tensor(
             [float(scale)], device=self.static_input_scale.device, dtype=torch.float32
         )
+
+    def set_static_calibration(self, scale: float, smooth_scale: Optional[torch.Tensor] = None):
+        """Restore a full static calibration from an exported checkpoint: the per-tensor
+        activation `scale` AND, when the layer used SmoothQuant, the per-in-channel
+        `smooth_scale`. The smooth scale is re-folded into the (freshly converted, still
+        unsmoothed) weights via _fold_weights_with_smooth, so at inference the smoothed
+        activations meet smoothed weights and the static scale — which was derived from
+        the *smoothed* activation range — is correct.
+
+        Without restoring smooth_scale (the old apply path, i.e. plain set_static_scale),
+        a SmoothQuant-derived static scale gets applied to UNsmoothed weights with no
+        activation smoothing: int8 masks the mismatch (8-bit range) but int4's 4-bit
+        range degrades it ~2x (first-step rel ~0.40 vs ~0.20). If the weights can't be
+        re-folded (odd in_channels, or _orig_weight already released), we fall back to
+        that scale-only path rather than smoothing activations against unsmoothed weights,
+        which would be strictly worse."""
+        can_refold = (smooth_scale is not None and self._orig_weight is not None
+                      and self.in_channels % 2 == 0)
+        if can_refold:
+            s = torch.as_tensor(smooth_scale, dtype=torch.float32,
+                                device=self.smooth_scale.device).reshape(-1)
+            self._fold_weights_with_smooth(s)
+            self._smooth_inv.copy_(1.0 / self.smooth_scale)
+            self._smooth_is_identity = bool(torch.allclose(
+                self._smooth_inv, torch.ones_like(self._smooth_inv), atol=1e-6))
+            # Invalidate the lazily-cached flat smooth vector so the forward path
+            # rebuilds it from the restored smooth_scale.
+            if hasattr(self, '_smooth_inv_flat'):
+                del self._smooth_inv_flat
+        self.set_static_scale(scale)
 
 
 # ---------------------------------------------------------------------------
@@ -1023,19 +1066,40 @@ def set_calibrating_int4(model: nn.Module, calibrating: bool):
                 module.end_calibration()
 
 
-def export_int4_static_scales(model: nn.Module) -> Dict[str, float]:
+def export_int4_static_scales(model: nn.Module) -> Dict[str, object]:
+    """Export the static calibration per int4 conv for checkpoint reuse.
+
+    A layer with identity SmoothQuant is exported as a bare float (the legacy format,
+    still loadable by any old consumer). A layer that used SmoothQuant is exported as
+    ``{"static_scale": float, "smooth_scale": cpu fp32 tensor [C_in]}`` so the smoothing
+    can be restored on apply — without it, int4 checkpoint reuse silently loses ~2x
+    accuracy (see set_static_calibration). Serialize with torch.save (values may be
+    tensors)."""
     scales = {}
     for module in model.modules():
         if isinstance(module, OptimizedInt4Conv2d) and module.is_calibrated:
-            scales[module.layer_name] = float(module.static_input_scale.item())
+            if module._smooth_is_identity:
+                scales[module.layer_name] = float(module.static_input_scale.item())
+            else:
+                scales[module.layer_name] = {
+                    "static_scale": float(module.static_input_scale.item()),
+                    "smooth_scale": module.smooth_scale.detach().to("cpu", torch.float32).reshape(-1).clone(),
+                }
     return scales
 
 
-def apply_int4_static_scales(model: nn.Module, scales: Dict[str, float]) -> int:
+def apply_int4_static_scales(model: nn.Module, scales: Dict[str, object]) -> int:
+    """Load static calibration produced by export_int4_static_scales. Accepts both the
+    legacy flat ``{name: float}`` format and the richer ``{name: {"static_scale":...,
+    "smooth_scale":...}}`` format (mixed within one dict is fine)."""
     loaded = 0
     for module in model.modules():
         if isinstance(module, OptimizedInt4Conv2d):
             if module.layer_name in scales:
-                module.set_static_scale(scales[module.layer_name])
+                entry = scales[module.layer_name]
+                if isinstance(entry, dict):
+                    module.set_static_calibration(entry["static_scale"], entry.get("smooth_scale"))
+                else:
+                    module.set_static_scale(float(entry))
                 loaded += 1
     return loaded
