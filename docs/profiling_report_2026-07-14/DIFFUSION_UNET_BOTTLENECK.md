@@ -20,17 +20,20 @@ GPU time (capture region = one `sample()` = 12 steps). Kernels bucketed by opera
 | quantize (standalone) | 0 | 0.20 | 0.18 |
 | other | 0.34 | 0.33 | 0.34 |
 | **GPU-sum total** | **31.14** | **25.42** | **23.56** |
-| **wall-clock / step** | **38.5** | **31.8** | **38.1** |
+| **wall-clock / step** | **32.1** | **27.2** | **25.8** |
 
 int8_baseline is what our fusions target: int8 convs (11.7→7.8), quantize folded into GroupNorm
 (standalone ~0.2 ms), skip-add folded into the conv store epilogue (elementwise 5.9→2.8).
 
-**Watch the wall-clock row.** int4_baseline has the *lowest GPU-sum* (its int8/int4 convs are fast and it
-skips the 1×1s), yet its *wall-clock is 38.1 ms — no better than fp16 and worse than int8's 31.8*. The
-gap is **launch/scheduling overhead + gaps**: int4_baseline's GPU-sum (23.6) is only 62% of its wall
-(38.1), a 14.5 ms overhead tail, vs int8's 6.4 ms. So on this UNet **int8_baseline is the practical
-winner; int4 doesn't pay off** — its conv-time win is eaten by dispatch overhead and by the ~64%
-dtype-invariant tail (GroupNorm + attention + elementwise), which is identical across all three modes.
+> **Wall-clock corrected (2026-07-15).** An earlier version of this table reported wall-clock 38.5 / 31.8 /
+> **38.1** ms and concluded int4 "doesn't pay off" (a 14.5 ms overhead tail). Those wall numbers were an
+> **nsys/under-warmed measurement artifact** — the A40 idles at 210 MHz and clocks can't be locked here, so
+> without heavy warmup the int4 path was timed mid clock-ramp. Re-measured with ≥6 s sustained warmup + 12
+> low-variance runs (stdev <1%, see `../comprehensive_benchmark_2026-07-15/`), the **GPU-sum numbers were
+> already correct** (they agree to <1%), but the true wall-clock is **32.1 / 27.2 / 25.8 ms**: int4's overhead
+> tail is ~2.4 ms, not 14.5 ms. **int4_baseline is actually the fastest mode (1.25× vs fp16), int8_baseline
+> close behind (1.18×).** The dtype-invariant tail (GroupNorm + attention, ~half the step) still caps the
+> end-to-end speedup at ~1.2–1.3× — the central bottleneck argument below is unchanged.
 
 ## What each bucket contains (actual kernels measured)
 
@@ -224,8 +227,10 @@ correct win, bounded by the fact that no kernel beats cuBLAS on the smallest-K b
 - **Attention qkv/proj GEMMs — int8 does NOT help here (prototyped, 2–3× slower; small-K crossover).** The
   remaining attention cost is SDPA (flash) and GroupNorm, both hard to quantize; the O(T²) SDPA is
   concentrated in the single 32²/T=1024 block (a faster flash variant or lower-res attention would help).
-- **Convs are near their int8 ceiling** (see `KERNEL_BENCHMARK.md`); **int4 is not worth it on this UNet**
-  (1×1 convs lose, and dispatch overhead erases the GPU-time win — wall-clock ≈ fp16).
+- **Convs are near their int8 ceiling** (see `KERNEL_BENCHMARK.md`). **int4 base is actually the fastest mode**
+  (1.25× wall vs fp16, vs int8's 1.18×; corrected 2026-07-15 — the earlier "int4 not worth it / wall ≈ fp16"
+  claim was an under-warmed measurement artifact, see the note in the table above). int4 wins on the
+  large-channel 3×3 convs that dominate cost and loses only on ≤192-channel / 1×1 convs; net faster.
 
 *(MoDiff modes on this UNet trade the above speed for temporal-accuracy quality; see the diffusion results
 in the prior handoff. This profile is the baseline int8 path.)*
