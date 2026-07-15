@@ -26,6 +26,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+try:
+    from torch.nn.attention import sdpa_kernel, SDPBackend
+    _SDPA_MATH_CTX = lambda: sdpa_kernel(SDPBackend.MATH)   # non-flash math backend
+except Exception:  # pragma: no cover - older torch
+    from contextlib import contextmanager
+    @contextmanager
+    def _SDPA_MATH_CTX():
+        with torch.backends.cuda.sdp_kernel(enable_flash=False, enable_mem_efficient=False, enable_math=True):
+            yield
+
 from integration.fused_ops.fused_resblock import _group_norm_silu
 
 try:
@@ -140,7 +150,8 @@ class TokenMajorAttentionBlock(nn.Module):
             qkv = qkv_img.permute(0, 2, 3, 1).reshape(b, T, nh, 3, hd)
             q, k, v = qkv.unbind(3)
             q = q.transpose(1, 2); k = k.transpose(1, 2); v = v.transpose(1, 2)
-            a = F.scaled_dot_product_attention(q, k, v, scale=self.scale)
+            with _SDPA_MATH_CTX():                        # flash disabled -> regular (math) attention
+                a = F.scaled_dot_product_attention(q, k, v, scale=self.scale)
             a = a.transpose(1, 2).reshape(b, T, c)
             out_tok = x_in_tok + self.proj(a)
             return out_tok.reshape(b, H, W, c).permute(0, 3, 1, 2)
@@ -157,7 +168,8 @@ class TokenMajorAttentionBlock(nn.Module):
         q = q.transpose(1, 2)                          # [N,H,T,hd], last dim stride 1
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
-        a = F.scaled_dot_product_attention(q, k, v, scale=self.scale)  # [N,H,T,hd]
+        with _SDPA_MATH_CTX():                          # flash disabled -> regular (math) attention
+            a = F.scaled_dot_product_attention(q, k, v, scale=self.scale)  # [N,H,T,hd]
 
         # [N,H,T,hd] -> [N,T,C] (head-major C), proj, residual, back to channels_last.
         a = a.transpose(1, 2).reshape(b, T, c)         # only remaining copy

@@ -1,6 +1,6 @@
 mode,label,wall_ms_step,wall_min_ms_step,wall_stdev,gpu_busy_ms_step,overhead_ms_step
-fp16,fp16,32.141,32.029,0.088,31.053,1.087
-int8_baseline,int8 base,27.237,26.911,0.237,25.407,1.83
-int8,int8 modiff,35.997,35.679,0.255,33.272,2.724
-int4_baseline,int4 base,25.748,25.541,0.225,23.303,2.445
-int4,int4 modiff,33.414,33.067,0.214,28.563,4.851
+fp16,fp16,55.931,55.833,0.079,54.455,1.477
+int8_baseline,int8 base,49.994,49.755,0.099,48.748,1.246
+int8,int8 modiff,58.033,57.971,0.037,56.628,1.405
+int4_baseline,int4 base,47.642,47.582,0.032,46.652,0.991
+int4,int4 modiff,53.234,53.189,0.061,51.885,1.349

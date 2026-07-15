@@ -31,11 +31,14 @@ def cache_mib(model):
 
 def bucket(name):
     l = name.lower()
-    if "flash" in l or "fmha" in l or "scaled_dot" in l: return "attention (flash SDPA)"
+    # flash removed -> math SDPA. The uniquely-attention kernel is softmax; the QK^T/AV
+    # batched matmuls are cuBLAS GEMMs indistinguishable by name from qkv/proj, so they
+    # fall into the GEMM bucket below (which is why that bucket balloons in this config).
+    if "flash" in l or "fmha" in l or "scaled_dot" in l or "softmax" in l: return "attention (softmax + SDPA)"
     if "group_norm" in l or "groupnorm" in l or "rowwisemoments" in l or "computefused" in l: return "GroupNorm"
     if ("gn_accum" in l or "gn_finalize" in l or "fused_gn" in l): return "GroupNorm"          # our fused GN stats
     if "cudnn" in l or "implicit" in l or "fprop" in l or "scudnn" in l or "wgrad" in l or "conv2d" in l: return "conv (GEMM)"
-    if "gemm" in l or "cutlass" in l or "cublas" in l: return "linear/qkv/proj (GEMM)"
+    if "gemm" in l or "cutlass" in l or "cublas" in l or "bmm" in l: return "GEMM (qkv/proj + attn QK·AV)"
     if ("quantize" in l or "dequant" in l or "sub_absmax" in l or "delta" in l or "o_hat" in l
             or "step1" in l or "pack" in l or "absmax" in l): return "quantize / MoDiff delta"
     if "store" in l or "epilogue" in l or "requant" in l: return "conv store epilogue"

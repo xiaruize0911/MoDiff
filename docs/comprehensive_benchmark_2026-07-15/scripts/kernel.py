@@ -12,6 +12,7 @@ from integration.kernels.int8_optimized import OptimizedInt8Conv2d, reset_modiff
 from integration.kernels.int4_optimized import OptimizedInt4Conv2d, reset_modiff_state as reset_i4
 from integration.fused_ops.fused_resblock import _group_norm_silu
 import modiff_cutlass as mc
+from torch.nn.attention import sdpa_kernel, SDPBackend
 OUT = "/workspace/MoDiff/docs/comprehensive_benchmark_2026-07-15/data"
 torch.backends.cudnn.benchmark = True
 PEAK_BW = 696e9; N = 32
@@ -142,16 +143,18 @@ for (C, H, W) in [(192, 32, 32), (384, 16, 16), (384, 8, 8), (768, 4, 4)]:
     fuseable = (T % 128 == 0)
     tb = bench(base)
     tf = bench(lambda: mc.fused_gn_qkv(x, conv_w, epi, G, eps, SHIFT)) if fuseable else float("nan")
-    # SDPA (flash) on this shape
+    # SDPA on this shape: flash (removed from the model) vs math (now used).
     heads = 8; hd = C // heads
     q = torch.randn(N, heads, T, hd, device="cuda", dtype=torch.float16)
-    tsd = bench(lambda: F.scaled_dot_product_attention(q, q, q))
+    with sdpa_kernel(SDPBackend.FLASH_ATTENTION): tflash = bench(lambda: F.scaled_dot_product_attention(q, q, q))
+    with sdpa_kernel(SDPBackend.MATH): tmath = bench(lambda: F.scaled_dot_product_attention(q, q, q))
     attn_rows.append({"C": C, "HxW": f"{H}x{W}", "T": T,
                       "gn+qkv_base_us": round(tb*1e6, 2),
                       "gn+qkv_fused_us": round(tf*1e6, 2) if tf == tf else "n/a(T%128)",
                       "fused_speedup": round(tb/tf, 3) if tf == tf else "",
-                      "flash_sdpa_us": round(tsd*1e6, 2)})
-    print(f"  attn C{C} {H}x{W}: base {tb*1e6:.1f} fused {(tf*1e6 if tf==tf else 0):.1f} sdpa {tsd*1e6:.1f} us", flush=True)
+                      "sdpa_flash_us": round(tflash*1e6, 2), "sdpa_math_us": round(tmath*1e6, 2),
+                      "math/flash": round(tmath/tflash, 2)})
+    print(f"  attn C{C} {H}x{W}: base {tb*1e6:.1f} fused {(tf*1e6 if tf==tf else 0):.1f} flash {tflash*1e6:.1f} math {tmath*1e6:.1f} us", flush=True)
 
 def wcsv(path, rows):
     cols = []

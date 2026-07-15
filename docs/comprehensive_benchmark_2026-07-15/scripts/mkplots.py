@@ -40,7 +40,7 @@ ax.legend(); ax.grid(axis="y",alpha=0.3); fig.tight_layout(); fig.savefig(f"{D}/
 # 3. kernel profile stacked
 r=rd("kernel_profile.csv"); modes=["fp16","int8_baseline","int8","int4_baseline","int4"]
 mlab={"fp16":"fp16","int8_baseline":"int8 base","int8":"int8 modiff","int4_baseline":"int4 base","int4":"int4 modiff"}
-buckets=["conv (GEMM)","conv store epilogue","GroupNorm","attention (flash SDPA)","linear/qkv/proj (GEMM)","quantize / MoDiff delta","elementwise / copy","upsample / concat","other"]
+buckets=["conv (GEMM)","conv store epilogue","GroupNorm","attention (softmax + SDPA)","GEMM (qkv/proj + attn QK·AV)","quantize / MoDiff delta","elementwise / copy","upsample / concat","other"]
 data={m:{b:0.0 for b in buckets} for m in modes}
 for x in r:
     if x["bucket"] in data[x["mode"]]: data[x["mode"]][x["bucket"]]=fnum(x["ms_step"])
@@ -91,19 +91,22 @@ ax.set_xticks(x); ax.set_xticklabels(labels,rotation=35,ha="right",fontsize=7); 
 ax.set_title("Kernel IO — effective DRAM bandwidth (conv + linear)\nbelow the peak line = memory-bound with headroom")
 ax.legend(); ax.grid(axis="y",alpha=0.3); fig.tight_layout(); fig.savefig(f"{D}/06_kernel_io.png",dpi=120); plt.close()
 
-# 7. attention
+# 7. attention (GN+qkv base/fused; SDPA flash-removed vs math-now)
 r=rd("kernel_attn.csv"); labels=[f"C{x['C']} {x['HxW']} (T={x['T']})" for x in r]
 base=[fnum(x["gn+qkv_base_us"]) for x in r]
 fused=[fnum(x["gn+qkv_fused_us"]) if x["gn+qkv_fused_us"] not in ("","n/a(T%128)") else float("nan") for x in r]
-sdpa=[fnum(x["flash_sdpa_us"]) for x in r]
-x=np.arange(len(labels)); w=0.27
-fig,ax=plt.subplots(figsize=(10,5.5))
-ax.bar(x-w,base,w,label="GN+qkv baseline (GroupNorm+cuBLAS)",color=C_FP16)
-ax.bar(x,fused,w,label="GN+qkv fused (custom CUTLASS)",color=C_INT8)
-ax.bar(x+w,sdpa,w,label="flash SDPA",color=C_INT4)
+flash=[fnum(x["sdpa_flash_us"]) for x in r]; math=[fnum(x["sdpa_math_us"]) for x in r]
+x=np.arange(len(labels)); w=0.2
+fig,ax=plt.subplots(figsize=(11,5.5))
+ax.bar(x-1.5*w,base,w,label="GN+qkv baseline (GN+cuBLAS)",color=C_FP16)
+ax.bar(x-0.5*w,fused,w,label="GN+qkv fused (CUTLASS)",color=C_INT8)
+ax.bar(x+0.5*w,flash,w,label="SDPA flash (removed)",color="#AAAAAA")
+ax.bar(x+1.5*w,math,w,label="SDPA math (now used)",color=C_INT4)
+for i,(f_,m_) in enumerate(zip(flash,math)):
+    if m_==m_ and f_==f_ and f_>0: ax.text(i+1.5*w,m_+8,f"{m_/f_:.1f}×",ha="center",fontsize=7)
 ax.set_xticks(x); ax.set_xticklabels(labels,fontsize=8); ax.set_ylabel("µs")
-ax.set_title("Attention kernels — GN→qkv (baseline vs fused) and flash SDPA")
-ax.legend(); ax.grid(axis="y",alpha=0.3); fig.tight_layout(); fig.savefig(f"{D}/07_kernel_attn.png",dpi=120); plt.close()
+ax.set_title("Attention kernels — GN→qkv (baseline vs fused); SDPA flash (removed) vs math (now used)\nmath materializes the full T×T scores — 3.6–9.4× slower than flash")
+ax.legend(fontsize=8); ax.grid(axis="y",alpha=0.3); fig.tight_layout(); fig.savefig(f"{D}/07_kernel_attn.png",dpi=120); plt.close()
 print("wrote plots")
 for p in sorted(os.listdir(D)):
     if p.endswith(".png"): print(" ",p)
