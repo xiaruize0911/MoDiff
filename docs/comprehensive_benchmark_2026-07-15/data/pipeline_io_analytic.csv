@@ -1,0 +1,5 @@
+precision,conv_MiB_step,linear_MiB_step,attn_MiB_step,total_MiB_step
+fp32,2297.9,1296.6,11734.0,15328.5
+fp16,1330.5,648.3,5867.0,7845.8
+int8,846.8,648.3,5867.0,7362.1
+int4,604.9,648.3,5867.0,7120.2

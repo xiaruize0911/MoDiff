@@ -24,18 +24,23 @@ ax.set_xticks(x); ax.set_xticklabels(labels); ax.set_ylabel("ms / DDIM step")
 ax.set_title("Pipeline speed — churches LDM UNet (batch 32, A40)\nlower is better; gap = launch/scheduling overhead")
 ax.legend(); ax.grid(axis="y",alpha=0.3); fig.tight_layout(); fig.savefig(f"{D}/01_pipeline_speed.png",dpi=120); plt.close()
 
-# 2. pipeline IO/memory
-r=rd("pipeline_io.csv"); labels=[x["label"] for x in r]
-peak=[fnum(x["peak_mem_MiB"]) for x in r]; res=[fnum(x["reserved_MiB"]) for x in r]; cache=[fnum(x["modiff_cache_MiB"]) for x in r]
-x=np.arange(len(labels)); w=0.28
-fig,ax=plt.subplots(figsize=(9,5))
-ax.bar(x-w,peak,w,label="peak allocated",color=C_FP16); ax.bar(x,res,w,label="peak reserved",color=C_INT8)
-ax.bar(x+w,cache,w,label="MoDiff cache (a_hat+o_hat)",color=C_MOD8)
-for i,c in enumerate(cache):
-    if c>0: ax.text(i+w,c+20,f"{c:.0f}",ha="center",fontsize=8)
-ax.set_xticks(x); ax.set_xticklabels(labels); ax.set_ylabel("MiB")
-ax.set_title("Pipeline memory / IO footprint (batch 32)\nMoDiff modes carry +634 MiB temporal cache")
-ax.legend(); ax.grid(axis="y",alpha=0.3); fig.tight_layout(); fig.savefig(f"{D}/02_pipeline_io.png",dpi=120); plt.close()
+# 2. pipeline total IO usage (analytical DRAM bytes/step), stacked conv/linear/attn
+r=rd("pipeline_io_analytic.csv"); labels=[x["precision"] for x in r]
+conv=[fnum(x["conv_MiB_step"]) for x in r]; lin=[fnum(x["linear_MiB_step"]) for x in r]
+att=[fnum(x["attn_MiB_step"]) for x in r]; tot=[fnum(x["total_MiB_step"]) for x in r]
+x=np.arange(len(labels)); w=0.55
+fig,ax=plt.subplots(figsize=(9.5,5.5))
+ax.bar(x,conv,w,label="conv (in+weight quantized, fp16 out)",color=C_INT4)
+ax.bar(x,lin,w,bottom=conv,label="qkv/proj linear (fp16)",color=C_INT8)
+ax.bar(x,att,w,bottom=np.array(conv)+np.array(lin),label="attention SDPA scores (fp16, dtype-invariant)",color=C_FP16)
+fp16_conv=conv[labels.index("fp16")] if "fp16" in labels else conv[0]
+for i in range(len(labels)):
+    ax.text(i,tot[i]+120,f"{tot[i]:.0f}",ha="center",fontsize=9,weight="bold")
+    ax.text(i,conv[i]/2,f"{conv[i]:.0f}",ha="center",va="center",fontsize=7,color="white")
+ax.set_xticks(x); ax.set_xticklabels(labels); ax.set_ylabel("analytical DRAM MiB / DDIM step")
+ax.set_title("Pipeline total IO usage — analytical DRAM bytes per step (batch 32)\n"
+             "conv IO drops with quantization (int8 0.64×, int4 0.45×); fp16 attention scores dominate the total")
+ax.legend(fontsize=8); ax.grid(axis="y",alpha=0.3); fig.tight_layout(); fig.savefig(f"{D}/02_pipeline_io.png",dpi=120); plt.close()
 
 # 3. kernel profile stacked
 r=rd("kernel_profile.csv"); modes=["fp32","fp16","int8_baseline","int8","int4_baseline","int4"]

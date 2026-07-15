@@ -73,7 +73,10 @@ for mode, label in MODES:
         torch.cuda.synchronize(); walls.append((time.time() - t0) / args.steps * 1000)
     wall = statistics.median(walls); wmin = min(walls)
     wsd = statistics.pstdev(walls)
-    # ---- IO: peak memory ----
+    # ---- IO: peak memory footprint (measured). Total DRAM IO usage per step is
+    # computed analytically per precision in scripts/io_analytic.py (allocator
+    # traffic is a poor proxy: quantized convs keep fp16 outputs, so it barely
+    # moves with dtype -- see io_analytic.py / REPORT §5). ----
     torch.cuda.reset_peak_memory_stats()
     run(model, sampler, runner, mode); torch.cuda.synchronize()
     peak = torch.cuda.max_memory_allocated() / (1024**2)
