@@ -6,16 +6,21 @@ The original block runs channel-major ([N, C, T]) with 1x1 Conv1d qkv/proj, so
 with the channels_last activations this pipeline uses it pays three forced copies
 per block (measured ~2.5 ms/iter total at batch 32 on churches):
   1. `x.reshape(b, c, -1)` on a channels_last input  -> NCHW reorder copy
-  2. `qkv.reshape(...).permute(...).contiguous()`     -> channel-major -> flash layout
-  3. `a.permute(...).reshape(...)` + final reshape     -> flash -> channel-major, then NCHW
+  2. `qkv.reshape(...).permute(...).contiguous()`     -> channel-major -> attn layout
+  3. `a.permute(...).reshape(...)` + final reshape     -> attn -> channel-major, then NCHW
 
 A 1x1 Conv1d over the channel dim is exactly an nn.Linear, so running the block
 token-major ([N, T, C]) makes copies (1) and (3)'s reshapes free views of the
-channels_last memory, and feeds flash-attn strided views without `.contiguous()`.
+channels_last memory, and feeds SDPA strided views without `.contiguous()`.
 Only the post-attention transpose (SDPA output [N,H,T,hd] -> [N,T,C]) remains.
 
+Attention runs on the explicit **math (non-flash) SDPA backend** (see
+`_SDPA_MATH_CTX`): the QK^T / AV products are then plain cuBLAS batched GEMMs
+that can be intercepted/quantized, unlike the opaque fused-flash kernel. This is
+the permanent design of this block, not a toggle.
+
 Weights are copied bit-for-bit from the Conv1d layers, so the result is
-numerically identical up to GroupNorm-kernel / flash-stride rounding (~1e-3 e2e).
+numerically identical up to GroupNorm-kernel / SDPA rounding (~1e-3 e2e).
 This is shared attention code, so it speeds up every mode (fp16/int8/int4) equally.
 
 Kill-switch: MODIFF_DISABLE_TOKEN_MAJOR_ATTN=1 skips the conversion.
@@ -26,9 +31,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# Attention runs on the math (non-flash) SDPA backend permanently, so the
+# QK^T/AV products stay as regular cuBLAS GEMMs (interceptable/quantizable). The
+# try/except only picks the right API for the installed torch; both force math.
 try:
     from torch.nn.attention import sdpa_kernel, SDPBackend
-    _SDPA_MATH_CTX = lambda: sdpa_kernel(SDPBackend.MATH)   # non-flash math backend
+    _SDPA_MATH_CTX = lambda: sdpa_kernel(SDPBackend.MATH)
 except Exception:  # pragma: no cover - older torch
     from contextlib import contextmanager
     @contextmanager
@@ -150,7 +158,7 @@ class TokenMajorAttentionBlock(nn.Module):
             qkv = qkv_img.permute(0, 2, 3, 1).reshape(b, T, nh, 3, hd)
             q, k, v = qkv.unbind(3)
             q = q.transpose(1, 2); k = k.transpose(1, 2); v = v.transpose(1, 2)
-            with _SDPA_MATH_CTX():                        # flash disabled -> regular (math) attention
+            with _SDPA_MATH_CTX():                        # math SDPA backend (see module header)
                 a = F.scaled_dot_product_attention(q, k, v, scale=self.scale)
             a = a.transpose(1, 2).reshape(b, T, c)
             out_tok = x_in_tok + self.proj(a)
@@ -168,7 +176,7 @@ class TokenMajorAttentionBlock(nn.Module):
         q = q.transpose(1, 2)                          # [N,H,T,hd], last dim stride 1
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
-        with _SDPA_MATH_CTX():                          # flash disabled -> regular (math) attention
+        with _SDPA_MATH_CTX():                          # math SDPA backend (see module header)
             a = F.scaled_dot_product_attention(q, k, v, scale=self.scale)  # [N,H,T,hd]
 
         # [N,H,T,hd] -> [N,T,C] (head-major C), proj, residual, back to channels_last.

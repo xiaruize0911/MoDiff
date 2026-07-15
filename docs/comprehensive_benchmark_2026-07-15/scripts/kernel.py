@@ -1,6 +1,6 @@
 """Kernel-level speed + IO micro-benchmarks for the churches LDM UNet operators:
 conv (fp16 cuDNN / int8 / int4, base + MoDiff), linear (qkv/proj: fp16 / int8 / int4),
-attention (fused GN->qkv CUTLASS vs GroupNorm+cuBLAS, + flash SDPA).
+attention (fused GN->qkv CUTLASS vs GroupNorm+cuBLAS, + math SDPA).
 IO = analytical bytes moved (read in + read weight + write out) / measured time -> effective GB/s.
 Emits kernel_speed.csv and kernel_io.csv."""
 import os, sys, csv, importlib.util
@@ -143,18 +143,17 @@ for (C, H, W) in [(192, 32, 32), (384, 16, 16), (384, 8, 8), (768, 4, 4)]:
     fuseable = (T % 128 == 0)
     tb = bench(base)
     tf = bench(lambda: mc.fused_gn_qkv(x, conv_w, epi, G, eps, SHIFT)) if fuseable else float("nan")
-    # SDPA on this shape: flash (removed from the model) vs math (now used).
+    # SDPA on this shape: the model uses the math backend (QK^T/AV as plain cuBLAS
+    # GEMMs, interceptable/quantizable), so that is the only path measured here.
     heads = 8; hd = C // heads
     q = torch.randn(N, heads, T, hd, device="cuda", dtype=torch.float16)
-    with sdpa_kernel(SDPBackend.FLASH_ATTENTION): tflash = bench(lambda: F.scaled_dot_product_attention(q, q, q))
     with sdpa_kernel(SDPBackend.MATH): tmath = bench(lambda: F.scaled_dot_product_attention(q, q, q))
     attn_rows.append({"C": C, "HxW": f"{H}x{W}", "T": T,
                       "gn+qkv_base_us": round(tb*1e6, 2),
                       "gn+qkv_fused_us": round(tf*1e6, 2) if tf == tf else "n/a(T%128)",
                       "fused_speedup": round(tb/tf, 3) if tf == tf else "",
-                      "sdpa_flash_us": round(tflash*1e6, 2), "sdpa_math_us": round(tmath*1e6, 2),
-                      "math/flash": round(tmath/tflash, 2)})
-    print(f"  attn C{C} {H}x{W}: base {tb*1e6:.1f} fused {(tf*1e6 if tf==tf else 0):.1f} flash {tflash*1e6:.1f} math {tmath*1e6:.1f} us", flush=True)
+                      "sdpa_math_us": round(tmath*1e6, 2)})
+    print(f"  attn C{C} {H}x{W}: base {tb*1e6:.1f} fused {(tf*1e6 if tf==tf else 0):.1f} math {tmath*1e6:.1f} us", flush=True)
 
 def wcsv(path, rows):
     cols = []

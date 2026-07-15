@@ -16,7 +16,7 @@ args = A(); args.config = "configs/latent-diffusion/lsun_churches-ldm-kl-8.yaml"
 args.ckpt = "models/ldm/lsun_churches256/model.ckpt"; args.batch_size = 32; args.steps = 12
 args.linear_backend = "fp16"; args.calibration = None
 
-MODES = [("fp16", "fp16"), ("int8_baseline", "int8 base"), ("int8", "int8 modiff"),
+MODES = [("fp32", "fp32"), ("fp16", "fp16"), ("int8_baseline", "int8 base"), ("int8", "int8 modiff"),
          ("int4_baseline", "int4 base"), ("int4", "int4 modiff")]
 PEAK_BW = 696e9  # A40 DRAM GB/s
 
