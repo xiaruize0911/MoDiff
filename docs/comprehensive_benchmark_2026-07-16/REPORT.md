@@ -9,7 +9,7 @@ DRAM 696 GB/s), batch 32, DDIM, per-step. Data in [`data/`](data/), scripts in [
 > step. Switching the fp16 attention to **flash SDPA** (`MODIFF_SDPA_MATH=1` to revert) gives, quality-identical
 > (latent rel-err **0.0022**), applied to **every mode**:
 > - **fp16: 55.9 → 32.9 ms/step (1.70×)**, peak **4369 → 3407 MiB (−22%)**.
-> - **`int4 base`: 48.1 → 25.7 ms (1.87×)**; **1.35× vs fp16-flash, 2.34× vs the originally-shipped fp16-math**.
+> - **`int4 base`: 48.1 → 25.7 ms (1.87×)**; **1.34× vs fp16-flash, 2.34× vs the originally-shipped fp16-math**.
 > - It **obsoletes the whole attention-quantization direction** (§6 int8-flash, §3 qkv-fusion): flash SDPA is
 >   ~2× faster than our best int8 attention path *and* matches its −21% memory (see §3).
 >
@@ -31,8 +31,8 @@ Per-call microbench of the dominant attention block (C192, T=1024, nh=8, hd=24; 
 
 The math backend materializes the `[N,H,T,T]` score matrix (~512 MB on this block) — that was the "single
 biggest kernel." Flash SDPA tiles it. Our hand-written int8 flash is a naive kernel, **~10× slower than flash
-SDPA** and not competitive. e2e (fp16, batch 32, 2-run confirmed): math 55.7 ms / 4369 MiB → **flash 32.5 ms /
-3408 MiB**, latent rel-err **0.0022**. `token_major_attention.py` now defaults to flash (math via `MODIFF_SDPA_MATH=1`).
+SDPA** and not competitive. e2e (fp16, batch 32): math 55.9 ms / 4369 MiB → **flash 33.0 ms / 3407 MiB**,
+latent rel-err **0.0022**. `token_major_attention.py` now defaults to flash (math via `MODIFF_SDPA_MATH=1`).
 
 ## §2. Full pipeline — flash SDPA default (6 modes)
 
@@ -41,14 +41,17 @@ Speed ([`data/pipeline_speed.csv`](data/pipeline_speed.csv), GPU-busy throttle-r
 
 | mode | wall | GPU-busy | vs fp16 | vs fp32 | peak MiB |
 |---|--:|--:|--:|--:|--:|
-| fp32 | 88.06 | 87.24 | 0.36× | 1.00× | 2920 |
-| fp16 | 32.93 | 31.59 | 1.00× | 2.76× | 3407 |
-| int8 base | 27.05 | 25.59 | 1.23× | 3.41× | 3602 |
-| int8 modiff | 35.79 | 33.28 | 0.95× | 2.62× | 4060 |
-| **int4 base** | 25.72 | **23.44** | **1.35×** | **3.72×** | **3362** |
-| int4 modiff | 32.97 | 28.59 | 1.11× | 3.05× | 3797 |
+| fp32 | 88.25 | 87.34 | 0.36× | 1.00× | 2920 |
+| fp16 | 33.04 | 31.58 | 1.00× | 2.77× | 3407 |
+| int8 base | 27.05 | 25.62 | 1.23× | 3.41× | 3602 |
+| int8 modiff | 35.76 | 33.30 | 0.95× | 2.62× | 4060 |
+| **int4 base** | 25.70 | **23.48** | **1.34×** | **3.72×** | **3365** |
+| int4 modiff | 33.33† | 28.59 | 1.10× | 3.05× | 3800 |
 
-- **`int4 base` = 1.35× vs fp16 / 3.72× vs fp32** (and **2.34× vs the originally-shipped fp16-math 54.97**).
+†`int4 modiff` wall was clock-throttled this run (stdev 2.7 ms, median 35.18); min 33.33 and GPU-busy 28.59
+are the reliable values. Speedups use GPU-busy (throttle-robust).
+
+- **`int4 base` = 1.34× vs fp16 / 3.72× vs fp32** (and **2.34× vs the originally-shipped fp16-math 54.97**).
 - **Conv quantization's e2e win finally shows** (1.16×→1.34× for int4): with flash SDPA the attention bucket
   collapses, so the quantized-conv bucket is now the dominant lever instead of being drowned by attention.
 
@@ -96,10 +99,10 @@ default it was the best attention-quant config (−1.3/−1.7 ms vs §6, −21% 
 
 | attention path | wall ms | peak MiB |
 |---|--:|--:|
-| **fp16, flash SDPA** | **26.6** | 3604 |
-| §6 per-token int8 flash | 51.8 | 3603 |
-| fused int8 (W8A8→flash) | 50.5 | 3612 |
-| fused int4 (W4A4→flash) | 50.0 | 3612 |
+| **fp16, flash SDPA** | **26.6** | 3603 |
+| §6 per-token int8 flash | 52.1 | 3603 |
+| fused int8 (W8A8→flash) | 50.6 | 3612 |
+| fused int4 (W4A4→flash) | 50.2 | 3612 |
 
 Flash SDPA is **~2× faster** than our best int8 attention path (our int8 flash kernel is ~10× slower than
 flash SDPA, §1) **and matches its peak memory** (flash already avoids the T×T matrix). So the fused kernels are
@@ -108,7 +111,7 @@ attention lever is the backend, not quantization. ![obsoleted](08_qkv_flash_fusi
 
 ## §4. What still helps — the kernel-level wins
 
-**Conv quantization** is now the dominant e2e lever (int4 base 1.35×, int8 base 1.23× vs fp16). Per-conv kernel
+**Conv quantization** is now the dominant e2e lever (int4 base 1.34×, int8 base 1.23× vs fp16). Per-conv kernel
 speed, top shapes by cost ([`data/kernel_conv_speed.csv`](data/kernel_conv_speed.csv), µs, batch 32).
 ![conv speed](04_kernel_conv_speed.png) ![kernel IO](06_kernel_io.png)
 
@@ -143,7 +146,7 @@ CUTLASS conv epilogue (the `relu_requant` path writes fp16 scratch first). Proje
 ## Bottom line
 
 1. **Biggest win by far: flash SDPA.** Not forcing the math backend gives fp16 **1.71× + −22% peak**,
-   quality-identical, on every mode — dwarfing every quantization effort. `int4 base` is now **1.35× vs fp16 /
+   quality-identical, on every mode — dwarfing every quantization effort. `int4 base` is now **1.34× vs fp16 /
    3.72× vs fp32 / 2.34× vs the originally-shipped fp16-math**.
 2. **Attention-score quantization is obsolete.** Flash SDPA beats our int8 flash by ~2× on speed and ties on
    memory; the entire premise (force math SDPA so QKᵀ/AV are quantizable) was net-negative. Kept opt-in only.

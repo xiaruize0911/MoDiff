@@ -1,52 +1,52 @@
 mode,bucket,ms_step
-fp32,other,0.3475
-fp32,elementwise / copy,6.4994
-fp32,GEMM (qkv/proj + attn QK·AV),6.3998
-fp32,conv (GEMM),27.4229
-fp32,GroupNorm,7.5391
-fp32,attention (softmax + SDPA),37.2277
-fp32,upsample / concat,1.799
-fp16,other,0.2942
-fp16,elementwise / copy,4.0924
+fp32,other,0.3482
+fp32,elementwise / copy,6.4941
+fp32,GEMM (qkv/proj + attn QK·AV),6.4157
+fp32,conv (GEMM),27.4686
+fp32,GroupNorm,7.5607
+fp32,attention (softmax + SDPA),37.2494
+fp32,upsample / concat,1.8004
+fp16,other,0.2937
+fp16,elementwise / copy,4.0945
 fp16,conv store epilogue,1.8194
-fp16,GEMM (qkv/proj + attn QK·AV),1.5545
-fp16,conv (GEMM),13.5663
-fp16,GroupNorm,5.7627
-fp16,attention (softmax + SDPA),3.432
-fp16,upsample / concat,1.0678
-int8_baseline,other,0.2717
-int8_baseline,elementwise / copy,2.1959
-int8_baseline,conv store epilogue,1.5796
-int8_baseline,GEMM (qkv/proj + attn QK·AV),1.5461
-int8_baseline,conv (GEMM),9.5337
-int8_baseline,GroupNorm,5.5452
-int8_baseline,attention (softmax + SDPA),3.422
-int8_baseline,quantize / MoDiff delta,0.1996
-int8_baseline,upsample / concat,1.2984
-int8,other,2.5561
-int8,elementwise / copy,3.2942
-int8,quantize / MoDiff delta,2.9636
-int8,conv store epilogue,1.3314
-int8,GEMM (qkv/proj + attn QK·AV),1.5336
-int8,conv (GEMM),11.758
-int8,GroupNorm,5.4303
-int8,attention (softmax + SDPA),3.3821
-int8,upsample / concat,1.0345
-int4_baseline,other,0.2666
-int4_baseline,elementwise / copy,1.6628
-int4_baseline,conv store epilogue,2.4676
-int4_baseline,GEMM (qkv/proj + attn QK·AV),1.5321
-int4_baseline,conv (GEMM),7.367
-int4_baseline,GroupNorm,5.2644
-int4_baseline,attention (softmax + SDPA),3.4209
-int4_baseline,quantize / MoDiff delta,0.179
-int4_baseline,upsample / concat,1.2817
-int4,other,2.5502
-int4,elementwise / copy,3.2846
-int4,quantize / MoDiff delta,2.6101
-int4,conv store epilogue,1.3308
+fp16,GEMM (qkv/proj + attn QK·AV),1.555
+fp16,conv (GEMM),13.5519
+fp16,GroupNorm,5.7602
+fp16,attention (softmax + SDPA),3.4388
+fp16,upsample / concat,1.0661
+int8_baseline,other,0.2716
+int8_baseline,elementwise / copy,2.1992
+int8_baseline,conv store epilogue,1.5813
+int8_baseline,GEMM (qkv/proj + attn QK·AV),1.5473
+int8_baseline,conv (GEMM),9.5471
+int8_baseline,GroupNorm,5.551
+int8_baseline,attention (softmax + SDPA),3.4179
+int8_baseline,quantize / MoDiff delta,0.1995
+int8_baseline,upsample / concat,1.3001
+int8,other,2.5575
+int8,elementwise / copy,3.2936
+int8,quantize / MoDiff delta,2.964
+int8,conv store epilogue,1.3325
+int8,GEMM (qkv/proj + attn QK·AV),1.5352
+int8,conv (GEMM),11.7666
+int8,GroupNorm,5.4365
+int8,attention (softmax + SDPA),3.3807
+int8,upsample / concat,1.0356
+int4_baseline,other,0.2676
+int4_baseline,elementwise / copy,1.6647
+int4_baseline,conv store epilogue,2.4702
+int4_baseline,GEMM (qkv/proj + attn QK·AV),1.5333
+int4_baseline,conv (GEMM),7.3693
+int4_baseline,GroupNorm,5.2754
+int4_baseline,attention (softmax + SDPA),3.4349
+int4_baseline,quantize / MoDiff delta,0.1789
+int4_baseline,upsample / concat,1.2827
+int4,other,2.5499
+int4,elementwise / copy,3.2858
+int4,quantize / MoDiff delta,2.6113
+int4,conv store epilogue,1.3298
 int4,GEMM (qkv/proj + attn QK·AV),1.5361
-int4,conv (GEMM),7.4224
-int4,GroupNorm,5.4218
-int4,attention (softmax + SDPA),3.4014
-int4,upsample / concat,1.0341
+int4,conv (GEMM),7.4209
+int4,GroupNorm,5.4166
+int4,attention (softmax + SDPA),3.4056
+int4,upsample / concat,1.0324
