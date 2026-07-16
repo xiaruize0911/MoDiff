@@ -603,8 +603,14 @@ class BenchmarkRunner:
         # itself gated by MODIFF_DISABLE_TOKEN_MAJOR_ATTN). Shared across all modes.
         # When MODIFF_QUANT_ATTN=1, use the quantized (int8 fused-flash score path)
         # variant instead -- opt-in so existing modes are unchanged by default.
+        # MODIFF_QUANT_LINEAR=1: AWQ-style W8A8/W4A4 (weight+activation) quantization of the
+        # Linear-equivalent layers. qkv becomes a quantized Linear, so disable fused GN->qkv
+        # (attention stays fp16 math SDPA). Bit-width matches the mode.
+        quant_lin = os.environ.get("MODIFF_QUANT_LINEAR") == "1"
+        if quant_lin:
+            os.environ["MODIFF_FUSE_GN_QKV"] = "0"
         try:
-            if os.environ.get("MODIFF_QUANT_ATTN") == "1":
+            if os.environ.get("MODIFF_QUANT_ATTN") == "1" and not quant_lin:
                 from integration.fused_ops.quantized_attention import convert_attention_to_quantized
                 sb = int(os.environ.get("MODIFF_ATTN_SCORE_BITS", "8"))
                 n_tm = convert_attention_to_quantized(model.model.diffusion_model, score_bits=sb)
@@ -615,8 +621,23 @@ class BenchmarkRunner:
                 n_tm = convert_attention_to_token_major(model.model.diffusion_model)
                 if n_tm > 0:
                     print(f"✓ Converted {n_tm} AttentionBlocks to token-major layout")
+            if quant_lin:
+                from integration.kernels.wxax_linear import (
+                    convert_linears_to_wxax, set_wxax_calibrating, finalize_wxax_ascale)
+                lb = 4 if "int4" in mode else 8
+                n_lin = convert_linears_to_wxax(model.model.diffusion_model, bits=lb)
+                print(f"✓ Quantized {n_lin} Linear layers to W{lb}A{lb} (weight+activation)")
+                if n_lin > 0:   # static activation-scale calibration (short sample)
+                    set_wxax_calibrating(model, True)
+                    cb = min(self.batch_size, 4)
+                    cond = self._cond_kwargs(model, cb)
+                    with torch.inference_mode(), torch.amp.autocast('cuda', enabled=(mode != 'fp32'), dtype=torch.float16):
+                        DDIMSampler(model).sample(S=5, batch_size=cb, shape=self.shape,
+                                                  eta=0.0, verbose=False, **cond)
+                    n_cal = finalize_wxax_ascale(model)
+                    print(f"✓ Calibrated {n_cal} W{lb}A{lb} linear activation scales (static)")
         except Exception as e:
-            print(f"  (attention conversion skipped: {e})")
+            print(f"  (attention/linear conversion skipped: {e})")
 
         # Wire SiLU fusion between each FusedResBlock's GroupNorm and its
         # quantized conv (no-op for modes where in_conv/out_conv are still

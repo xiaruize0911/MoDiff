@@ -36,6 +36,7 @@ setup(
                 'csrc/kernels/fused_gn_qkv.cu',
                 'csrc/kernels/flash_attn_int8.cu',
                 'csrc/kernels/quantize_qkv.cu',
+                'csrc/kernels/gemm_wxax.cu',
             ],
             include_dirs=[
                 os.path.join(CUTLASS_PATH, 'include'),

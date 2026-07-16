@@ -91,6 +91,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "Fused int8 flash attention (QK^T/softmax/AV, no T x T materialization); "
           "q/k/v [N,H,T,hd_pad] int8, sq/sk [N,H,T], sv [N,H,hd] f32 -> fp16 [N,H,T,hd]");
     m.def("mma_smoke", &mma_smoke, "Debug: C[16,N]=A[16,K].B[N,K]^T via m16n8k32.s8 tensor cores");
+    m.def("gemm_w8a8", &gemm_w8a8,
+          "W8A8 linear: C[M,N] fp16 = (A[M,K] int8 . B[N,K]^T int8) * a_scale * w_scale[n]");
+    m.def("gemm_w4a4", &gemm_w4a4,
+          "W4A4 linear: C[M,N] fp16 = (A[M,K/2] . B[N,K/2]^T packed int4) * a_scale * w_scale[n]");
 
     // Fused qkv quantize for the flash score path (kernels/quantize_qkv.cu)
     m.def("quantize_qkv_int8", &quantize_qkv_int8,

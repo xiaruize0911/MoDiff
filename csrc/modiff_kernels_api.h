@@ -208,5 +208,9 @@ torch::Tensor flash_attn_int8(
     double softmax_scale);
 torch::Tensor mma_smoke(torch::Tensor A, torch::Tensor B);
 
+// ---- csrc/kernels/gemm_wxax.cu ----
+torch::Tensor gemm_w8a8(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale);
+torch::Tensor gemm_w4a4(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale, int64_t K);
+
 // ---- csrc/kernels/quantize_qkv.cu ----
 std::vector<torch::Tensor> quantize_qkv_int8(torch::Tensor qkv, int64_t nh, int64_t hd_pad);
