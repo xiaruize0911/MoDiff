@@ -45,7 +45,12 @@ except Exception:
     _HAS_ATTN = False
     AttentionBlock = QKVAttentionLegacy = None
 
-_FLASH_MIN_T = int(os.environ.get("MODIFF_FLASH_MIN_T", "64"))
+# int8 flash only where it pays: the memory win is ~entirely the largest-T block
+# (its T×T score matrix dwarfs the others), and that block is where the int8 kernel
+# already matches fp16 SDPA speed. Small-T blocks would cost speed for ~no memory
+# benefit, so default the threshold to 512 (T=1024 block only). Override to 64 to
+# quantize all attention blocks.
+_FLASH_MIN_T = int(os.environ.get("MODIFF_FLASH_MIN_T", "512"))
 
 
 def _pad_hd(x, hd_pad):
