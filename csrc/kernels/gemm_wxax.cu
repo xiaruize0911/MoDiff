@@ -80,20 +80,19 @@ __global__ void gemm_w8a8_kernel(const int8_t* __restrict__ A, const int8_t* __r
     __syncthreads();
   }
 #undef GW8_LOAD
+  // Vectorized epilogue: c0 is always even and c0+1 < N (N%64==0, c0 in [n0, n0+62] <= N-2),
+  // so each (c0,c1) pair is a 4B-aligned half2 store -- halves the store count vs scalar.
 #pragma unroll
   for (int mi = 0; mi < MT; ++mi) {
     int mwb = m0 + w * WM + mi * 16;
 #pragma unroll
     for (int nt = 0; nt < GW_BN / 8; ++nt) {
-      int c0 = n0 + nt * 8 + tig * 2, c1 = c0 + 1, r0 = mwb + gid, r1 = mwb + gid + 8;
-      if (r0 < M) {
-        if (c0 < N) C[(size_t)r0 * N + c0] = __float2half(acc[mi][nt][0] * a_scale * w_scale[c0]);
-        if (c1 < N) C[(size_t)r0 * N + c1] = __float2half(acc[mi][nt][1] * a_scale * w_scale[c1]);
-      }
-      if (r1 < M) {
-        if (c0 < N) C[(size_t)r1 * N + c0] = __float2half(acc[mi][nt][2] * a_scale * w_scale[c0]);
-        if (c1 < N) C[(size_t)r1 * N + c1] = __float2half(acc[mi][nt][3] * a_scale * w_scale[c1]);
-      }
+      int c0 = n0 + nt * 8 + tig * 2, r0 = mwb + gid, r1 = mwb + gid + 8;
+      float s0 = a_scale * w_scale[c0], s1 = a_scale * w_scale[c0 + 1];
+      if (r0 < M) *(__half2*)&C[(size_t)r0 * N + c0] =
+          __halves2half2(__float2half(acc[mi][nt][0] * s0), __float2half(acc[mi][nt][1] * s1));
+      if (r1 < M) *(__half2*)&C[(size_t)r1 * N + c0] =
+          __halves2half2(__float2half(acc[mi][nt][2] * s0), __float2half(acc[mi][nt][3] * s1));
     }
   }
 }
@@ -159,15 +158,12 @@ __global__ void gemm_w4a4_kernel(const int8_t* __restrict__ A, const int8_t* __r
     int mwb = m0 + w * WM + mi * 16;
 #pragma unroll
     for (int nt = 0; nt < GW_BN / 8; ++nt) {
-      int c0 = n0 + nt * 8 + tig * 2, c1 = c0 + 1, r0 = mwb + gid, r1 = mwb + gid + 8;
-      if (r0 < M) {
-        if (c0 < N) C[(size_t)r0 * N + c0] = __float2half(acc[mi][nt][0] * a_scale * w_scale[c0]);
-        if (c1 < N) C[(size_t)r0 * N + c1] = __float2half(acc[mi][nt][1] * a_scale * w_scale[c1]);
-      }
-      if (r1 < M) {
-        if (c0 < N) C[(size_t)r1 * N + c0] = __float2half(acc[mi][nt][2] * a_scale * w_scale[c0]);
-        if (c1 < N) C[(size_t)r1 * N + c1] = __float2half(acc[mi][nt][3] * a_scale * w_scale[c1]);
-      }
+      int c0 = n0 + nt * 8 + tig * 2, r0 = mwb + gid, r1 = mwb + gid + 8;
+      float s0 = a_scale * w_scale[c0], s1 = a_scale * w_scale[c0 + 1];
+      if (r0 < M) *(__half2*)&C[(size_t)r0 * N + c0] =
+          __halves2half2(__float2half(acc[mi][nt][0] * s0), __float2half(acc[mi][nt][1] * s1));
+      if (r1 < M) *(__half2*)&C[(size_t)r1 * N + c0] =
+          __halves2half2(__float2half(acc[mi][nt][2] * s0), __float2half(acc[mi][nt][3] * s1));
     }
   }
 }
@@ -215,7 +211,13 @@ torch::Tensor quantize_act_int4_pack(torch::Tensor x, double a_scale) {
 
 // Shape-adaptive tile: MT=2 (register-blocked) for large-M / small-N compute-bound
 // shapes; MT=1 (higher occupancy) otherwise. Matches the per-shape benchmark.
-static inline int gw_pick_mt(int M, int N) { return (M >= 2048 && N <= 768) ? 2 : 1; }
+static inline int gw_pick_mt(int M, int N, int K) {
+  const char* e = getenv("MODIFF_GW_MT");
+  if (e) return atoi(e);
+  // MT=2 (register-blocked) only pays when the K loop is long enough to be
+  // compute-bound; for short-K (e.g. qkv K=192) it just cuts occupancy, so MT=1.
+  return (M >= 2048 && N <= 768 && K >= 256) ? 2 : 1;
+}
 
 // A [M,K] int8, B [N,K] int8, w_scale [N] f32, a_scale scalar -> C [M,N] fp16
 torch::Tensor gemm_w8a8(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale) {
@@ -229,7 +231,7 @@ torch::Tensor gemm_w8a8(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale,
   auto* Ap = A.data_ptr<int8_t>(); auto* Bp = B.data_ptr<int8_t>();
   auto* Wp = w_scale.contiguous().data_ptr<float>();
   auto* Cp = reinterpret_cast<__half*>(C.data_ptr<at::Half>());
-  if (gw_pick_mt(M, N) == 2) {
+  if (gw_pick_mt(M, N, K) == 2) {
     const int BM = GW_WARPS * 32;
     dim3 grid((M + BM - 1) / BM, N / GW_BN);
     gemm_w8a8_kernel<2><<<grid, GW_WARPS * 32, 0, stream>>>(Ap, Bp, Wp, (float)a_scale, Cp, M, N, K);
@@ -253,7 +255,7 @@ torch::Tensor gemm_w4a4(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale,
   auto* Ap = A.data_ptr<int8_t>(); auto* Bp = B.data_ptr<int8_t>();
   auto* Wp = w_scale.contiguous().data_ptr<float>();
   auto* Cp = reinterpret_cast<__half*>(C.data_ptr<at::Half>());
-  if (gw_pick_mt(M, (int)N) == 2) {
+  if (gw_pick_mt(M, (int)N, (int)K) == 2) {
     const int BM = GW_WARPS * 32;
     dim3 grid((M + BM - 1) / BM, N / GW_BN);
     gemm_w4a4_kernel<2><<<grid, GW_WARPS * 32, 0, stream>>>(Ap, Bp, Wp, (float)a_scale, Cp, M, (int)N, (int)K);

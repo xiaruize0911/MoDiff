@@ -256,6 +256,10 @@ using I4Cfg2 = Int4ConvConfig<cutlass::gemm::GemmShape<128,256,128>, cutlass::ge
 using I4Cfg3 = Int4ConvConfig<cutlass::gemm::GemmShape<128, 64,128>, cutlass::gemm::GemmShape<64,32,128>, 4>;
 using I4Cfg4 = Int4ConvConfig<cutlass::gemm::GemmShape< 64,128,128>, cutlass::gemm::GemmShape<32,64,128>, 4>;
 using I4Cfg5 = Int4ConvConfig<cutlass::gemm::GemmShape< 64,256,128>, cutlass::gemm::GemmShape<32,64,128>, 3>;
+// NOTE: warp-K must be >=128 for int4 (CUTLASS mma_base requires kWarpGemmIterations =
+// warpK/instK = warpK/64 >= 2 and even -> warpK>=128). So the K=128 threadblock tile is
+// the MINIMUM; a K=64 tile does not compile. The 6 configs above span the full tunable
+// M/N space and cluster within ~1% on small-N/small-spatial 3x3 (tuning is exhausted there).
 
 int64_t conv2d_int4_num_tuned_configs() { return 6; }
 

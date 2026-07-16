@@ -62,9 +62,14 @@ def lin_io(e):                    # qkv (C->3C) + proj (C->C) per attn block
                for (C, T, nh, hd) in attns)
 def attn_io(e):                   # math SDPA: read Q,K,V + write&read scores[N,h,T,T] + write out
     return sum(3*N*nh*T*hd*e + 2*(N*nh*T*T*e) + N*nh*T*hd*e for (C, T, nh, hd) in attns)
+def lin_io_q(e_op):               # qkv/proj with weight+act quantized (e_op), OUTPUT stays fp16 (2B)
+    return sum((N*T*C*e_op + C*3*C*e_op + N*T*3*C*2.0) + (N*T*C*e_op + C*C*e_op + N*T*C*2.0)
+               for (C, T, nh, hd) in attns)
+def attn_io_flash8():             # fused int8 flash (§6): int8 Q/K/V, NO T×T score matrix, fp16 out
+    return sum(3*N*nh*T*hd*1.0 + N*nh*T*hd*2.0 for (C, T, nh, hd) in attns)
 
-# (precision, conv-operand bytes/elem, everything-else bytes/elem). Attention + the
-# qkv/proj linears run in fp16 for fp16/int8/int4 (int linear unused), fp32 for fp32.
+# Default pipeline: attention + qkv/proj linears are fp16 for fp16/int8/int4 (only the
+# CONVS are quantized by the mode), fp32 for fp32. (precision, conv B/elem, else B/elem)
 PREC = [("fp32", 4.0, 4.0), ("fp16", 2.0, 2.0), ("int8", 1.0, 2.0), ("int4", 0.5, 2.0)]
 rows = []
 for prec, e_conv, e_rest in PREC:
@@ -72,6 +77,17 @@ for prec, e_conv, e_rest in PREC:
     rows.append({"precision": prec, "conv_MiB_step": round(c, 1), "linear_MiB_step": round(l, 1),
                  "attn_MiB_step": round(a, 1), "total_MiB_step": round(c+l+a, 1)})
     print(f"{prec:5s} conv={c:7.0f} linear={l:7.0f} attn={a:8.0f} total={c+l+a:8.0f} MiB/step", flush=True)
+
+# Opt-in extensions applied on top of the int8-conv pipeline (§6 attn / §7 linear):
+c8 = conv_io(1.0)/MiB
+EXT = [("int8 (default: attn+lin fp16)", lin_io(2.0)/MiB, attn_io(2.0)/MiB),
+       ("int8 +W8A8 linear (§7)",        lin_io_q(1.0)/MiB, attn_io(2.0)/MiB),
+       ("int8 +int8 flash attn (§6)",    lin_io(2.0)/MiB,   attn_io_flash8()/MiB),
+       ("int8 +both (§6+§7)",            lin_io_q(1.0)/MiB, attn_io_flash8()/MiB)]
+for name, l, a in EXT:
+    rows.append({"precision": name, "conv_MiB_step": round(c8, 1), "linear_MiB_step": round(l, 1),
+                 "attn_MiB_step": round(a, 1), "total_MiB_step": round(c8+l+a, 1)})
+    print(f"{name:34s} conv={c8:7.0f} linear={l:7.0f} attn={a:8.0f} total={c8+l+a:8.0f} MiB/step", flush=True)
 
 with open(f"{OUT}/pipeline_io_analytic.csv", "w", newline="") as f:
     w = csv.DictWriter(f, fieldnames=["precision", "conv_MiB_step", "linear_MiB_step", "attn_MiB_step", "total_MiB_step"])

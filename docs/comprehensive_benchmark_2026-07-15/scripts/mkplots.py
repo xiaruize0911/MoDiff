@@ -25,7 +25,7 @@ ax.set_title("Pipeline speed — churches LDM UNet (batch 32, A40)\nlower is bet
 ax.legend(); ax.grid(axis="y",alpha=0.3); fig.tight_layout(); fig.savefig(f"{D}/01_pipeline_speed.png",dpi=120); plt.close()
 
 # 2. pipeline total IO usage (analytical DRAM bytes/step), stacked conv/linear/attn
-r=rd("pipeline_io_analytic.csv"); labels=[x["precision"] for x in r]
+r=[x for x in rd("pipeline_io_analytic.csv") if x["precision"] in ("fp32","fp16","int8","int4")]; labels=[x["precision"] for x in r]
 conv=[fnum(x["conv_MiB_step"]) for x in r]; lin=[fnum(x["linear_MiB_step"]) for x in r]
 att=[fnum(x["attn_MiB_step"]) for x in r]; tot=[fnum(x["total_MiB_step"]) for x in r]
 x=np.arange(len(labels)); w=0.55
@@ -82,18 +82,17 @@ ax.set_xticks(x); ax.set_xticklabels(labels,rotation=25,ha="right",fontsize=8); 
 ax.set_title("Conv kernel: base vs MoDiff temporal path\nMoDiff adds sub/accumulate + delta-quantize; skips no conv, so slower")
 ax.legend(); ax.grid(axis="y",alpha=0.3); fig.tight_layout(); fig.savefig(f"{D}/05_kernel_conv_modiff.png",dpi=120); plt.close()
 
-# 6. kernel IO GB/s
-rc=sorted(rd("kernel_conv_io.csv"),key=lambda x:-fnum(x["fp16_GBps"]))[:8]; rl=rd("kernel_linear_io.csv")
+# 6. kernel IO — total amount (bytes moved) per kernel
+rc=sorted(rd("kernel_conv_io.csv"),key=lambda x:-fnum(x["fp16_MiB"]))[:8]; rl=rd("kernel_linear_io.csv")
 labels=[f"c:{x['Cin']}→{x['Cout']} {x['k']}×{x['k']} {x['H']}²" for x in rc]+[f"L:{x['role']} {x['C']}→{x['Cout']}" for x in rl]
-fp16=[fnum(x["fp16_GBps"]) for x in rc]+[fnum(x["fp16_GBps"]) for x in rl]
-i8=[fnum(x["int8_GBps"]) for x in rc]+[fnum(x["int8_GBps"]) for x in rl]
-i4=[fnum(x["int4_GBps"]) for x in rc]+[float("nan")]*len(rl)
+fp16=[fnum(x["fp16_MiB"]) for x in rc]+[fnum(x["fp16_MiB"]) for x in rl]
+i8=[fnum(x["int8_MiB"]) for x in rc]+[fnum(x["int8_MiB"]) for x in rl]
+i4=[fnum(x["int4_MiB"]) for x in rc]+[float("nan")]*len(rl)
 x=np.arange(len(labels)); w=0.27
 fig,ax=plt.subplots(figsize=(13,5.5))
 ax.bar(x-w,fp16,w,label="fp16",color=C_FP16); ax.bar(x,i8,w,label="int8",color=C_INT8); ax.bar(x+w,i4,w,label="int4",color=C_INT4)
-ax.axhline(PEAK_BW,ls="--",color="black",lw=1); ax.text(0,PEAK_BW+8,f"A40 DRAM peak {PEAK_BW} GB/s",fontsize=8)
-ax.set_xticks(x); ax.set_xticklabels(labels,rotation=35,ha="right",fontsize=7); ax.set_ylabel("effective GB/s")
-ax.set_title("Kernel IO — effective DRAM bandwidth (conv + linear)\nbelow the peak line = memory-bound with headroom")
+ax.set_xticks(x); ax.set_xticklabels(labels,rotation=35,ha="right",fontsize=7); ax.set_ylabel("total IO / call (MiB)")
+ax.set_title("Kernel IO — total DRAM bytes moved per call (conv + linear)\nin+weight shrink with dtype; conv output stays fp16")
 ax.legend(); ax.grid(axis="y",alpha=0.3); fig.tight_layout(); fig.savefig(f"{D}/06_kernel_io.png",dpi=120); plt.close()
 
 # 7. attention (GN+qkv baseline vs fused; math SDPA)

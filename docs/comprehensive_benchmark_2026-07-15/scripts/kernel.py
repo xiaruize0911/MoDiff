@@ -83,7 +83,8 @@ for (Cin, Cout, k, st, H, W) in shapes:
     for nm, t, ein in [("fp16", t16, 2.0), ("int8", t8, 1.0), ("int4", t4, 0.5)]:
         if t != t: continue
         nb = N*Cin*H*W*ein + Cout*Cin*k*k*ein + N*Cout*Ho*Wo*2.0
-        io[f"{nm}_GBps"] = round(gbps(nb, t), 1)
+        io[f"{nm}_MiB"] = round(nb / (1024**2), 2)          # total IO amount (bytes moved)
+        io[f"{nm}_GBps"] = round(gbps(nb, t), 1)            # effective bandwidth (rate)
     # MoDiff conv (steady-state modulated step) for representative shapes
     if (Cin, Cout, k, st, H, W) in modiff_set:
         for tag, cls, reset in [("int8", OptimizedInt8Conv2d, reset_i8), ("int4", OptimizedInt4Conv2d, reset_i4)]:
@@ -122,7 +123,8 @@ for (C, Cout, tag, T) in [(192, 576, "qkv", 1024), (192, 192, "proj", 1024),
     io = {"role": tag, "C": C, "Cout": Cout, "M": M}
     for nm, t, ein in [("fp16", t16, 2.0), ("int8", t8, 1.0)]:
         nb = M*C*ein + C*Cout*ein + M*Cout*2.0
-        io[f"{nm}_GBps"] = round(gbps(nb, t), 1)
+        io[f"{nm}_MiB"] = round(nb / (1024**2), 2)          # total IO amount
+        io[f"{nm}_GBps"] = round(gbps(nb, t), 1)            # effective bandwidth
     lin_io.append(io)
     print(f"  linear {tag} C{C}->{Cout} M{M}: fp16 {t16*1e6:.1f} int8 {t8*1e6:.1f} us", flush=True)
 
