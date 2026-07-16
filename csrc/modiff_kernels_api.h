@@ -230,3 +230,6 @@ std::vector<torch::Tensor> transpose_qkv_int8(torch::Tensor qkv_i8, int64_t nh, 
 torch::Tensor attn_qk_int8(torch::Tensor Q, torch::Tensor K);
 std::vector<torch::Tensor> attn_softmax_requant(torch::Tensor S, torch::Tensor sq, torch::Tensor sk, double softmax_scale);
 torch::Tensor attn_av_int8(torch::Tensor P, torch::Tensor Vt, torch::Tensor sp, torch::Tensor sv);
+torch::Tensor attn_qk_int4(torch::Tensor Q, torch::Tensor K, int64_t hd_pad);
+std::vector<torch::Tensor> attn_softmax_requant4(torch::Tensor S, torch::Tensor sq, torch::Tensor sk, double softmax_scale);
+torch::Tensor attn_av_int4(torch::Tensor P, torch::Tensor Vt, torch::Tensor sp, torch::Tensor sv, int64_t T);
