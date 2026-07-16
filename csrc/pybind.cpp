@@ -84,6 +84,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("group_norm_silu_quantize_pack_nhwc", &group_norm_silu_quantize_pack_nhwc,
           "GroupNorm (+ optional SiLU) that quantizes to INT4 and packs channel pairs inline "
           "([N,H,W,C/2] byte layout matching scale_quantize_and_pack); requires even CPG");
+    m.def("group_norm_silu_dequant_quantize_nhwc", &group_norm_silu_dequant_quantize_nhwc,
+          "INT8-in GroupNorm(+SiLU): reads int8 activation + dequant scale (upstream conv's "
+          "int8 output), computes GN from dequantized values, requantizes to int8 output");
     m.def("fused_gn_qkv", &fused_gn_qkv, "Fused GroupNorm->qkv (per-sample scale/bias mainloop fusion)");
 
     // Fused int8 flash attention (kernels/flash_attn_int8.cu)

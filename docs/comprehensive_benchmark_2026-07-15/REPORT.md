@@ -278,6 +278,27 @@ Turning the opt-in paths ON in the real pipeline and profiling per-op GPU time
 - **§6:** the flash kernel (24.9 ms) is *slower* than fp16 softmax+SDPA (≈22 ms combined) but avoids the T×T
   matrix → **−21% peak memory**. A memory win, not speed, exactly as §6's standalone measurement shows.
 
+### 7d. int8-output fusion investigation (conv → GroupNorm)
+
+To break the **fp16-output wall** (memory-bound convs/GEMMs can't beat cuBLAS because the output must be fp16),
+the only structural lever in this UNet is the **in_conv → out-norm handoff**: `in_conv`'s output feeds *only*
+the out-GroupNorm (skip comes from `x`, temb is scale-shift *inside* GN), so in_conv could write int8 and the
+GN read int8. (conv→conv is blocked everywhere else — a fp16 GroupNorm+SiLU always sits between the two convs.)
+
+- **Quality: validated, essentially free.** Fake-quantizing the in_conv output to int8 before the GN adds only
+  **0.0033 rel-err (per-tensor) / 0.0023 (per-channel)** on top of int8_baseline — far below the 0.02 gate
+  (`MODIFF_CONV_INT8_OUT` probe in `fused_resblock.py`). Double-quantization is not a quality problem here.
+- **GN-int8-input kernel: built + correct.** `group_norm_silu_dequant_quantize_nhwc` (reads int8 + dequant
+  scale, GN stats from dequantized values → int8 out) matches the fp16-input path to **≤1 int8 code (100% of
+  elements)**, and is **~1.03–1.09× faster** (reads half the bytes).
+- **Blocker for the conv side:** the existing int8-output conv path (`forward_to_int8` → `relu_requant`)
+  **materializes an fp16 scratch tensor then int8**, so it moves *more* bytes, not fewer — the handoff came out
+  0.83–0.97× (slower). Realizing the write saving needs a **direct-int8-output CUTLASS conv epilogue** (int32
+  acc → dequant·w_scale·out_scale → round/clamp → int8, no fp16 scratch), whose mixed-type output (fp16
+  weight-scale source + int8 D) is non-trivial in CUTLASS. Projected e2e gain is modest (~2%: GN-read + conv-
+  write halving on the ~half of convs that are in_convs). **Concept validated; the direct-int8 epilogue is the
+  remaining work, deferred as a low effort/payoff item.**
+
 ---
 
 ## Bottom line

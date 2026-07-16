@@ -351,6 +351,123 @@ torch::Tensor group_norm_silu_quantize_nhwc(
     return yq;
 }
 
+// ============================================================================
+// INT8-INPUT variant of group_norm_silu_quantize_nhwc: reads an int8 activation
+// (the upstream conv's int8 output) + a scalar dequant scale, so the conv->GN
+// handoff never materializes an fp16 tensor (halves that write + this read). The
+// GN stats are computed from the dequantized values (v = X_i8 * in_dequant); the
+// rest (affine, scale-shift mod, SiLU, requantize->int8 for the next conv) is
+// identical to the fp16 path. `TAff` is the gamma/beta/mod dtype (fp16 or fp32).
+// ============================================================================
+template <typename TAff>
+__global__ void group_norm_silu_dequant_quantize_nhwc_kernel(
+    const int8_t* __restrict__ X,
+    int8_t* __restrict__ Yq,
+    const TAff* __restrict__ gamma,
+    const TAff* __restrict__ beta,
+    const TAff* __restrict__ mod_scale,
+    const TAff* __restrict__ mod_shift,
+    float in_dequant,                       // upstream conv's dequant scale (absmax/127)
+    const float* __restrict__ scale_ptr,    // 127/absmax for THIS output
+    const float* __restrict__ smooth_inv,
+    int C, long HW, int G, float eps, bool apply_silu
+) {
+    const int CPG = C / G;
+    const long group_size = (long)CPG * HW;
+    const int n = blockIdx.x / G;
+    const int g = blockIdx.x % G;
+    const int c_start = g * CPG;
+    const int8_t* x_base = X + (long)n * HW * C;
+    int8_t* yq_base = Yq + (long)n * HW * C;
+
+    extern __shared__ float sdata[];
+    float* s_sum = sdata;
+    float* s_sumsq = sdata + blockDim.x;
+
+    float local_sum = 0.0f, local_sumsq = 0.0f;
+    for (long idx = threadIdx.x; idx < group_size; idx += blockDim.x) {
+        int c_local = idx % CPG;
+        long hw = idx / CPG;
+        float v = (float)x_base[hw * C + c_start + c_local] * in_dequant;
+        local_sum += v; local_sumsq += v * v;
+    }
+    s_sum[threadIdx.x] = local_sum; s_sumsq[threadIdx.x] = local_sumsq;
+    __syncthreads();
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (threadIdx.x < s) { s_sum[threadIdx.x] += s_sum[threadIdx.x + s]; s_sumsq[threadIdx.x] += s_sumsq[threadIdx.x + s]; }
+        __syncthreads();
+    }
+    __shared__ float mean_s, inv_std_s;
+    if (threadIdx.x == 0) {
+        float mean = s_sum[0] / (float)group_size;
+        float var = fmaxf(s_sumsq[0] / (float)group_size - mean * mean, 0.0f);
+        mean_s = mean; inv_std_s = rsqrtf(var + eps);
+    }
+    __syncthreads();
+    const float mean = mean_s, inv_std = inv_std_s, scale = *scale_ptr;
+
+    for (long idx = threadIdx.x; idx < group_size; idx += blockDim.x) {
+        int c_local = idx % CPG;
+        long hw = idx / CPG;
+        int c_global = c_start + c_local;
+        long mem_idx = hw * C + c_global;
+        float v = (float)x_base[mem_idx] * in_dequant;
+        float normed = (v - mean) * inv_std * gn_load(gamma, c_global) + gn_load(beta, c_global);
+        if (mod_scale != nullptr) {
+            long midx = (long)n * C + c_global;
+            normed = normed * (1.0f + gn_load(mod_scale, midx)) + gn_load(mod_shift, midx);
+        }
+        float out = apply_silu ? (normed / (1.0f + expf(-normed))) : normed;
+        if (smooth_inv != nullptr) out *= smooth_inv[c_global];
+        yq_base[mem_idx] = (int8_t)fmaxf(-127.0f, fminf(127.0f, roundf(out * scale)));
+    }
+}
+
+// Host wrapper: int8-in (x_int8 NHWC + in_dequant scalar) -> int8-out GroupNorm+SiLU.
+torch::Tensor group_norm_silu_dequant_quantize_nhwc(
+    torch::Tensor x_int8, double in_dequant,
+    torch::Tensor weight, torch::Tensor bias,
+    int64_t num_groups, double eps, bool apply_silu,
+    torch::Tensor scale, torch::Tensor smooth_inv,
+    torch::Tensor mod_scale, torch::Tensor mod_shift
+) {
+    CHECK_CUDA(x_int8); CHECK_CONTIGUOUS(x_int8);
+    TORCH_CHECK(x_int8.dim() == 4 && x_int8.scalar_type() == torch::kInt8, "x_int8 must be 4D int8");
+    TORCH_CHECK(weight.scalar_type() == torch::kFloat16 || weight.scalar_type() == torch::kFloat32,
+                "weight/bias must be fp16 or fp32");
+    const bool has_mod = mod_scale.numel() > 0;
+    const int N = x_int8.size(0), C = x_int8.size(1), H = x_int8.size(2), W = x_int8.size(3);
+    TORCH_CHECK(C % num_groups == 0, "num_channels must be divisible by num_groups");
+    const long HW = (long)H * W;
+    const long group_size = (long)(C / (int)num_groups) * HW;
+    auto yq = torch::empty_like(x_int8);
+    int block_size = 32;
+    while (block_size < group_size && block_size < 1024) block_size <<= 1;
+    dim3 grid((unsigned int)(N * num_groups)), block((unsigned int)block_size);
+    size_t shmem_bytes = 2 * (size_t)block_size * sizeof(float);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    const float* smooth_ptr = (smooth_inv.numel() > 0) ? smooth_inv.data_ptr<float>() : nullptr;
+    const int8_t* xp = reinterpret_cast<const int8_t*>(x_int8.data_ptr<int8_t>());
+    int8_t* yp = reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>());
+    if (weight.scalar_type() == torch::kFloat32) {
+        group_norm_silu_dequant_quantize_nhwc_kernel<float><<<grid, block, shmem_bytes, stream>>>(
+            xp, yp, weight.data_ptr<float>(), bias.data_ptr<float>(),
+            has_mod ? mod_scale.data_ptr<float>() : nullptr,
+            has_mod ? mod_shift.data_ptr<float>() : nullptr,
+            (float)in_dequant, scale.data_ptr<float>(), smooth_ptr,
+            C, HW, (int)num_groups, (float)eps, apply_silu);
+    } else {
+        group_norm_silu_dequant_quantize_nhwc_kernel<__half><<<grid, block, shmem_bytes, stream>>>(
+            xp, yp, reinterpret_cast<const __half*>(weight.data_ptr<at::Half>()),
+            reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
+            has_mod ? reinterpret_cast<const __half*>(mod_scale.data_ptr<at::Half>()) : nullptr,
+            has_mod ? reinterpret_cast<const __half*>(mod_shift.data_ptr<at::Half>()) : nullptr,
+            (float)in_dequant, scale.data_ptr<float>(), smooth_ptr,
+            C, HW, (int)num_groups, (float)eps, apply_silu);
+    }
+    return yq;
+}
+
 // INT4-emitting variant: identical GroupNorm(+SiLU) math, but pass 2 quantizes to
 // int4 codes in [-7,7] and packs adjacent-channel pairs into one byte, producing
 // output byte-identical to scale_quantize_and_pack(SiLU(GN(x)), scale) so the

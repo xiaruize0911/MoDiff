@@ -49,6 +49,21 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# --- int8-conv-output quality probe (MODIFF_CONV_INT8_OUT = pt | pc) --------------
+# Fake-quant the in_conv fp16 output through int8 before the out-norm GN reads it,
+# to measure the quality ceiling of "conv writes int8 -> GN reads int8" BEFORE
+# building the CUDA kernel. pt = per-tensor scale, pc = per-output-channel scale.
+_CONV_INT8_OUT = os.environ.get("MODIFF_CONV_INT8_OUT", "")
+def _fake_quant_int8_out(h):
+    if _CONV_INT8_OUT == "pt":
+        s = h.abs().amax().clamp_min(1e-8) / 127.0
+        return (torch.round(h / s).clamp_(-127, 127)) * s
+    if _CONV_INT8_OUT == "pc":                       # per-channel over (N,H,W), dim=1=C
+        amax = h.abs().amax(dim=(0, 2, 3), keepdim=True).clamp_min(1e-8)
+        s = amax / 127.0
+        return (torch.round(h / s).clamp_(-127, 127)) * s
+    return h
+
 # Import TimestepBlock for proper integration with TimestepEmbedSequential
 try:
     from ldm.modules.diffusionmodules.openaimodel import TimestepBlock
@@ -449,6 +464,11 @@ class FusedResBlock(TimestepBlock):
             skip = self.skip_connection(x)
             residual_arg = skip
         residual_fused = False
+
+        # int8-conv-output quality probe: round-trip in_conv's output through int8
+        # before the out-norm GN consumes it (h feeds only the out GN; skip=x).
+        if _CONV_INT8_OUT:
+            h = _fake_quant_int8_out(h)
 
         # Output path: fused GroupNorm + SiLU (+ scale-shift modulation) + skip-add,
         # then Conv. out_dropout is nn.Dropout (no-op in eval), elided on the fused path.
