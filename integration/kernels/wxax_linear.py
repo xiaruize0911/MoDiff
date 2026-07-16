@@ -60,11 +60,21 @@ class QuantLinearWxAx(nn.Module):
         s = (W.abs().amax(1).clamp_min(1e-8) / self.Q)        # per-output-channel [N]
         Wq = torch.round(W / s.unsqueeze(1)).clamp(-self.Q, self.Q).to(torch.int8)
         self.register_buffer("w_scale", s.to(torch.float32).contiguous())
-        self.register_buffer("w_scale_half", s.to(torch.float16).contiguous())  # for AWQ w8a8
         self.register_buffer("qweight", _pack4(Wq) if bits == 4 else Wq.contiguous())
-        # AWQ w8a8 is the default W8A8 projection kernel when available + shape fits.
-        self._use_awq = (bits == 8 and _awq is not None
-                         and lin.out_features % 128 == 0 and lin.in_features % 64 == 0)
+        # AWQ w8a8 (large-M CTA_M=128 tiling) is the effective W8A8 backend when in%64==0.
+        # It needs N%128; for N not %128 we pad the weight rows to the next multiple of 128
+        # (offline) and slice the output — brings the large-M/short-K qkv (e.g. C192 N=576->640)
+        # from 0.41x cuBLAS on our kernel to ~0.97x (near-parity). N%128 shapes use AWQ directly.
+        self._awq_N = 0          # padded N for AWQ (0 = no AWQ / no pad)
+        if bits == 8 and _awq is not None and lin.in_features % 64 == 0 and lin.out_features >= 128:
+            self._awq_N = ((lin.out_features + 127) // 128) * 128
+            pad = self._awq_N - lin.out_features
+            if pad:
+                Wq = F.pad(Wq, (0, 0, 0, pad))              # [N_pad, K] zero rows
+                s = F.pad(s, (0, pad), value=1.0)           # padded wscale (sliced off; avoid 0)
+                self.qweight = Wq.contiguous()
+        self._use_awq = self._awq_N > 0
+        self.register_buffer("w_scale_half", s.to(torch.float16).contiguous())  # [N_pad] for AWQ w8a8
         self.register_buffer("bias", lin.bias.detach().half().contiguous() if lin.bias is not None else None)
         self.a_scale = None                                    # static activation scale (calibrated)
         self._calib = False
@@ -84,13 +94,13 @@ class QuantLinearWxAx(nn.Module):
         if self.bits == 8:
             xq = _mc.quantize_act_int8(xf, a_scale)
             if self._use_awq:
-                # AWQ w8a8: out = acc * ascale[m] * wscale[n]; static per-tensor a_scale ->
-                # constant per-token ascales. ~1.3-1.4x cuBLAS on qkv/proj shapes (beats ours).
+                # AWQ w8a8 (N padded to %128; output sliced back to out_features). Static
+                # per-tensor a_scale -> constant per-token ascales. Near-cuBLAS on large-M qkv/proj.
                 M = xq.shape[0]
                 asc = torch.full((M,), a_scale, device=xq.device, dtype=torch.float16)
-                out = torch.empty(M, self.out_features, device=xq.device, dtype=torch.float16)
+                out = torch.empty(M, self._awq_N, device=xq.device, dtype=torch.float16)
                 _awq.w8a8_gemm_forward_cuda(xq, self.qweight, self.w_scale_half, asc, out)
-                return out
+                return out[:, :self.out_features] if self._awq_N != self.out_features else out
             return _mc.gemm_w8a8(xq, self.qweight, self.w_scale, a_scale)
         xq = _mc.quantize_act_int4_pack(xf, a_scale)
         return _mc.gemm_w4a4(xq, self.qweight, self.w_scale, a_scale, self.in_features)
