@@ -103,9 +103,10 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
             qkv = self.qkv(xn.permute(0, 2, 3, 1).reshape(b, T, c)).view(b, T, nh, 3, hd)
         q, k, v = qkv.unbind(3)                                          # [b,T,nh,hd]
         q = q.transpose(1, 2); k = k.transpose(1, 2); v = v.transpose(1, 2)   # [b,nh,T,hd]
-        # The batched int GEMMs need T%64==0 (N tile); small-T blocks (e.g. 4x4, T=16)
-        # fall back to fp16 standard math attention (they are negligibly cheap).
-        if T % 64 != 0 or not _HAS:
+        # The batched int GEMMs need T%64==0 (N tile); small-T blocks (T<256, e.g. 4x4/8x8)
+        # fall back to fp16 standard math attention — quant loses there (measured 0.44x at
+        # T=64) and they are negligibly cheap anyway. int8/int4 win 2.2-2.4x on the big T=1024.
+        if T % 64 != 0 or T < 256 or not _HAS:
             from integration.fused_ops.token_major_attention import _SDPA_CTX
             with _SDPA_CTX():
                 a = F.scaled_dot_product_attention(q, k, v, scale=self.scale)  # [b,nh,T,hd]
