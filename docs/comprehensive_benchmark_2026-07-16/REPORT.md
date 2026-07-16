@@ -36,7 +36,8 @@ SDPA** and not competitive. e2e (fp16, batch 32, 2-run confirmed): math 55.7 ms 
 
 ## §2. Full pipeline — flash SDPA default (6 modes)
 
-Speed ([`data/pipeline_speed.csv`](data/pipeline_speed.csv), GPU-busy throttle-robust; wall clean, stdev ≤0.22):
+Speed ([`data/pipeline_speed.csv`](data/pipeline_speed.csv), GPU-busy throttle-robust; wall clean, stdev ≤0.22).
+![pipeline speed](01_pipeline_speed.png)
 
 | mode | wall | GPU-busy | vs fp16 | vs fp32 | peak MiB |
 |---|--:|--:|--:|--:|--:|
@@ -51,11 +52,39 @@ Speed ([`data/pipeline_speed.csv`](data/pipeline_speed.csv), GPU-busy throttle-r
 - **Conv quantization's e2e win finally shows** (1.16×→1.34× for int4): with flash SDPA the attention bucket
   collapses, so the quantized-conv bucket is now the dominant lever instead of being drowned by attention.
 
-Kernel profile shift ([`data/kernel_profile.csv`](data/kernel_profile.csv), fp16 ms/step): attention (softmax
-+SDPA) **11.4 → 3.43**, GEMM (qkv/proj + QKᵀ·AV) **13.4 → 1.56** — the **conv bucket (13.55) is now the top
-cost**. Total analytical IO ([`data/pipeline_io_analytic.csv`](data/pipeline_io_analytic.csv)): attention
-collapses 5867 → **406 MiB** (no T×T), so total drops fp16 2385 → int4 **1659 MiB (0.70×)** — quantization's
-IO benefit now shows (was 0.91× when the fp16 T×T dominated).
+**Per-operation GPU-busy profile** (ms/step, flash SDPA; [`data/kernel_profile.csv`](data/kernel_profile.csv)).
+![kernel profile](03_kernel_profile.png)
+
+| bucket | fp32 | fp16 | int8 base | int8 modiff | int4 base | int4 modiff |
+|---|--:|--:|--:|--:|--:|--:|
+| **conv (GEMM)** | 27.42 | 13.57 | 9.53 | 11.76 | **7.37** | **7.42** |
+| attention (softmax+SDPA) | 37.23† | 3.43 | 3.42 | 3.38 | 3.42 | 3.40 |
+| GEMM (qkv/proj + QKᵀ·AV) | 6.40 | 1.55 | 1.55 | 1.53 | 1.53 | 1.54 |
+| GroupNorm | 7.54 | 5.76 | 5.55 | 5.43 | 5.26 | 5.42 |
+| conv store epilogue | 0 | 1.82 | 1.58 | 1.33 | 2.47 | 1.33 |
+| quantize / MoDiff delta | 0 | 0 | 0.20 | 2.96 | 0.18 | 2.61 |
+| elementwise / copy | 6.50 | 4.09 | 2.20 | 3.29 | 1.66 | 3.28 |
+| upsample / concat | 1.80 | 1.07 | 1.30 | 1.03 | 1.28 | 1.03 |
+| other | 0.35 | 0.29 | 0.27 | 2.56 | 0.27 | 2.55 |
+| **GPU-busy total** | **87.24** | **31.59** | **25.59** | **33.28** | **23.44** | **28.59** |
+
+†fp32 keeps math SDPA (PyTorch flash is fp16-only) — that 37 ms T×T term is why fp32 is 87 ms; fp16/int8/int4
+all get flash (attention 3.4 ms). **With attention + QKᵀ·AV now ~5 ms (was ~22 ms under math), the conv bucket
+(13.6 fp16 / 7.4 int4) is the dominant cost** — so conv quantization drives the e2e win (int4 conv 7.4 vs fp16
+13.6 ms). MoDiff modes add ~2.6–3.0 ms quantize-delta + ~2.5 ms other (accuracy machinery, not speed).
+
+**Total IO usage** — analytical DRAM bytes/step, flash model (no T×T);
+[`data/pipeline_io_analytic.csv`](data/pipeline_io_analytic.csv). ![pipeline IO](02_pipeline_io.png)
+
+| precision | conv | qkv/proj lin | attention | **total** | vs fp16 |
+|---|--:|--:|--:|--:|--:|
+| fp32 | 2298 | 1297 | 812 | **4406** | 1.85× |
+| fp16 | 1330 | 648 | 406 | **2385** | 1.00× |
+| int8 | **847** | 648 | 406 | **1901** | 0.80× |
+| int4 | **605** | 648 | 406 | **1659** | **0.70×** |
+
+Flash collapses attention IO to 406 MiB (was 5867 under math's T×T), so the total is now **conv-dominated** and
+quantization's IO win shows: int8 0.80×, int4 **0.70×** of fp16 (was 0.94×/0.91× when the fp16 T×T dominated).
 
 ## §3. Obsoleted: attention-score quantization (§6 int8-flash, qkv→flash fusion)
 
@@ -77,12 +106,31 @@ flash SDPA, §1) **and matches its peak memory** (flash already avoids the T×T 
 kept in-tree, correct and opt-in (`MODIFF_QKV_FLASH_FUSED=8|4`), but are **not** on any recommended path — the
 attention lever is the backend, not quantization. ![obsoleted](08_qkv_flash_fusion.png)
 
-## §4. What still helps
+## §4. What still helps — the kernel-level wins
 
-- **Conv int8/int4 quantization** — the real e2e win now that attention is cheap: `int4 base` 1.34×, `int8 base`
-  1.23× vs fp16 (§2). int8 quality-safe; int4 base FID-acceptable, int4-conv rel ~0.22 (see the linear-quant doc).
-- **`gemm_wxax` `half2`-epilogue** (this session): the W8A8/W4A4 qkv/proj GEMM beats fp16 on 5/6 shapes (int4
-  ≤2.13×) — [`data/gemm_wxax_shapes.csv`](data/gemm_wxax_shapes.csv). Relevant for the (opt-in) §7 Linear quant.
+**Conv quantization** is now the dominant e2e lever (int4 base 1.35×, int8 base 1.23× vs fp16). Per-conv kernel
+speed, top shapes by cost ([`data/kernel_conv_speed.csv`](data/kernel_conv_speed.csv), µs, batch 32).
+![conv speed](04_kernel_conv_speed.png) ![kernel IO](06_kernel_io.png)
+
+| conv (3×3) | fp16 | int8 | int4 | int8 ×fp16 | int4 ×fp16 |
+|---|--:|--:|--:|--:|--:|
+| 384→384 32² | 759.7 | 447.8 | **396.5** | 1.70× | 1.92× |
+| 576→192 32² | 587.2 | 329.2 | 338.1 | 1.78× | 1.74× |
+| 384→192 32² | 395.2 | 227.7 | 244.3 | 1.74× | 1.62× |
+| 768→384 16² | 378.1 | 204.9 | **160.6** | 1.84× | 2.35× |
+| 192→192 32² | 210.4 | **116.8** | 189.2 | 1.80× | 1.11× |
+| 384→384 16² | 195.6 | 103.7 | 106.7 | 1.89× | 1.83× |
+
+int8 is ~1.7–1.9× fp16 on every compute-bound 3×3; int4 wins where channels are large (768→384: 2.35×) and
+loses to int8 on small-channel shapes (192→192; CUTLASS int4 needs warp-K≥128, and its config set is exhausted).
+The aggregate conv bucket (§2): int4 7.4 ms vs int8 9.5 vs fp16 13.6.
+
+**Attention GN→qkv fusion** ([`data/kernel_attn.csv`](data/kernel_attn.csv)): the fused GroupNorm→qkv CUTLASS
+kernel is **1.11×** (C192/T1024, 236→213 µs) / **1.26×** (C384/T256) vs GroupNorm+cuBLAS — on for all modes.
+
+**`gemm_wxax` `half2`-epilogue** (this session): the W8A8/W4A4 qkv/proj GEMM beats fp16 on 5/6 shapes (int4
+≤2.13×) — [`data/gemm_wxax_shapes.csv`](data/gemm_wxax_shapes.csv). Relevant to the opt-in §7 Linear quant
+(near-neutral e2e; [`data/linear_quant_speed.csv`](data/linear_quant_speed.csv)).
 
 ## §5. int8-conv-output → GroupNorm (validated, deferred)
 

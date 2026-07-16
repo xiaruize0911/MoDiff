@@ -21,7 +21,7 @@ ax.bar(x-w/2,wall,w,label="wall-clock",color=C_FP16); ax.bar(x+w/2,gpu,w,label="
 for i,(a,b) in enumerate(zip(wall,gpu)):
     ax.text(i-w/2,a+0.3,f"{a:.1f}",ha="center",fontsize=8); ax.text(i+w/2,b+0.3,f"{b:.1f}",ha="center",fontsize=8)
 ax.set_xticks(x); ax.set_xticklabels(labels); ax.set_ylabel("ms / DDIM step")
-ax.set_title("Pipeline speed — churches LDM UNet (batch 32, A40)\nlower is better; gap = launch/scheduling overhead")
+ax.set_title("Pipeline speed — churches LDM UNet (batch 32, A40, flash SDPA)\nint4 base fastest: 1.35x vs fp16 / 3.72x vs fp32; lower is better")
 ax.legend(); ax.grid(axis="y",alpha=0.3); fig.tight_layout(); fig.savefig(f"{D}/01_pipeline_speed.png",dpi=120); plt.close()
 
 # 2. pipeline total IO usage (analytical DRAM bytes/step), stacked conv/linear/attn
@@ -38,8 +38,8 @@ for i in range(len(labels)):
     ax.text(i,tot[i]+120,f"{tot[i]:.0f}",ha="center",fontsize=9,weight="bold")
     ax.text(i,conv[i]/2,f"{conv[i]:.0f}",ha="center",va="center",fontsize=7,color="white")
 ax.set_xticks(x); ax.set_xticklabels(labels); ax.set_ylabel("analytical DRAM MiB / DDIM step")
-ax.set_title("Pipeline total IO usage — analytical DRAM bytes per step (batch 32)\n"
-             "conv IO drops with quantization (int8 0.64×, int4 0.45×); fp16 attention scores dominate the total")
+ax.set_title("Pipeline total IO usage — analytical DRAM bytes per step (batch 32, flash SDPA)\n"
+             "flash attention avoids the T×T matrix -> conv-dominated; quant now cuts total (int4 0.70x fp16)")
 ax.legend(fontsize=8); ax.grid(axis="y",alpha=0.3); fig.tight_layout(); fig.savefig(f"{D}/02_pipeline_io.png",dpi=120); plt.close()
 
 # 3. kernel profile stacked
@@ -55,7 +55,7 @@ for bi,b in enumerate(buckets):
     vals=[data[m][b] for m in modes]; ax.bar(xs,vals,0.6,bottom=bottom,label=b,color=cols[bi]); bottom+=np.array(vals)
 for i in range(len(modes)): ax.text(i,bottom[i]+0.3,f"{bottom[i]:.1f}",ha="center",fontsize=9,weight="bold")
 ax.set_xticks(xs); ax.set_xticklabels([mlab[m] for m in modes]); ax.set_ylabel("GPU-busy ms / step")
-ax.set_title("Kernel profile — per-operation GPU time by mode")
+ax.set_title("Kernel profile — per-operation GPU time by mode (flash SDPA)\nattention collapses vs math; conv (GEMM) is now the top bucket")
 ax.legend(fontsize=8,ncol=2,loc="upper left"); ax.grid(axis="y",alpha=0.3); fig.tight_layout(); fig.savefig(f"{D}/03_kernel_profile.png",dpi=120); plt.close()
 
 # 4. conv speed top10
@@ -108,7 +108,7 @@ ax.bar(x+w,math,w,label="SDPA (math backend)",color=C_INT4)
 for i,(b_,f_) in enumerate(zip(base,fused)):
     if f_==f_ and f_>0: ax.text(i,f_+8,f"{b_/f_:.2f}×",ha="center",fontsize=7)
 ax.set_xticks(x); ax.set_xticklabels(labels,fontsize=8); ax.set_ylabel("µs")
-ax.set_title("Attention kernels — GN→qkv (baseline vs fused CUTLASS) and math SDPA\nSDPA runs on the math backend so QKᵀ/AV are interceptable cuBLAS GEMMs")
+ax.set_title("Attention kernels — GN→qkv (baseline vs fused CUTLASS) + SDPA micro\n(pipeline now uses flash SDPA; math µs shown for reference only)")
 ax.legend(fontsize=8); ax.grid(axis="y",alpha=0.3); fig.tight_layout(); fig.savefig(f"{D}/07_kernel_attn.png",dpi=120); plt.close()
 print("wrote plots")
 for p in sorted(os.listdir(D)):
