@@ -1,0 +1,12 @@
+mode,label,wall_ms_step,wall_min_ms_step,wall_stdev,gpu_busy_ms_step,overhead_ms_step
+fp32,fp32,102.564,102.463,0.114,101.843,0.721
+dynamic_fp16,fp16 dyn,67.998,67.944,0.059,67.207,0.791
+static_fp16,fp16 static,66.383,66.333,0.031,65.513,0.87
+dynamic_int8,int8 dyn,71.386,71.223,0.068,70.55,0.836
+static_int8,int8 static,50.855,50.771,0.075,49.996,0.859
+dynamic_int8_modiff,int8 dyn+MoDiff,76.212,76.077,0.072,75.074,1.138
+static_int8_modiff,int8 static+MoDiff,58.939,58.854,0.218,57.737,1.201
+dynamic_int4,int4 dyn,64.669,64.529,0.166,63.694,0.975
+static_int4,int4 static,46.793,44.996,1.592,44.0,2.793
+dynamic_int4_modiff,int4 dyn+MoDiff,69.4,69.307,0.055,68.273,1.127
+static_int4_modiff,int4 static+MoDiff,50.783,50.482,0.956,49.269,1.514

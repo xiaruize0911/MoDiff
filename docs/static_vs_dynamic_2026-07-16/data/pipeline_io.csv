@@ -1,0 +1,12 @@
+mode,label,peak_mem_MiB,reserved_MiB,modiff_cache_MiB
+fp32,fp32,4919.6,6084.0,0.0
+dynamic_fp16,fp16 dyn,4420.8,4994.0,0.0
+static_fp16,fp16 static,4422.2,5948.0,0.0
+dynamic_int8,int8 dyn,4191.5,4408.0,0.0
+static_int8,int8 static,4385.6,6170.0,0.0
+dynamic_int8_modiff,int8 dyn+MoDiff,6179.4,6568.0,1267.1
+static_int8_modiff,int8 static+MoDiff,4793.1,6324.0,633.6
+dynamic_int4,int4 dyn,3793.9,4324.0,0.0
+static_int4,int4 static,3996.9,5832.0,0.0
+dynamic_int4_modiff,int4 dyn+MoDiff,5793.0,6084.0,1267.1
+static_int4_modiff,int4 static+MoDiff,4405.8,6028.0,633.6

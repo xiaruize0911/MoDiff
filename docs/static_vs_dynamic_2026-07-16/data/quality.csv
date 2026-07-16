@@ -1,0 +1,11 @@
+mode,variant,rel_vs_fp32,note
+dynamic_fp16,dynamic,0.0098,reported
+static_fp16,static,0.4931,reported
+dynamic_int8,dynamic,0.0963,int8 gate
+static_int8,static,0.6412,reported
+dynamic_int8_modiff,dynamic,0.0722,reported
+static_int8_modiff,static,0.7397,reported
+dynamic_int4,dynamic,1.0442,reported
+static_int4,static,0.8017,reported
+dynamic_int4_modiff,dynamic,0.3611,reported
+static_int4_modiff,static,0.7739,reported

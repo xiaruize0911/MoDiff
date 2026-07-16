@@ -44,13 +44,23 @@ def _pack_last(t):  # int8 values in [-7,7], pack pairs on the last dim -> [...,
 class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
     """TokenMajorAttentionBlock with the score path (QKᵀ/softmax/AV) quantized to int8/int4."""
 
-    def __init__(self, orig, *, bits=8):
+    def __init__(self, orig, *, bits=8, static=False):
         super().__init__(orig)
         assert bits in (4, 8)
         self.bits = bits
         self.Q = 127 if bits == 8 else 7
         self.hp_qk = (self.head_dim + 31) // 32 * 32 if bits == 8 else (self.head_dim + 63) // 64 * 64
         self.hp_av = (self.head_dim + 63) // 64 * 64          # AV N tile needs %64
+        # STATIC path: calibrate per-tensor Q/K scale, per-channel V scale, and a single softmax
+        # constant c over the first _calib_steps forwards, then freeze (no runtime reductions). The
+        # softmax c only sets the int8/int4 P grid (softmax is shift-invariant), so a single c is
+        # lossy for quantized attention (row maxes vary) -- accepted here for MoDiff to compensate.
+        self.static = bool(static)
+        self._calib_steps = int(os.environ.get("MODIFF_ATTN_CALIB_STEPS", "8"))
+        self._frozen = not self.static           # dynamic mode needs no calibration
+        self._cn = 0
+        self._aq = 0.0; self._ak = 0.0; self._av = None; self._cacc = 0.0
+        self._sq_c = None; self._sk_c = None; self._sv_vec = None; self._c = None
 
     def _qtok(self, x, hd_pad):
         """per-token int8/int4 over the last dim; pad hd->hd_pad. x:[BH,T,hd] -> (xi, scale[BH,T])."""
@@ -61,12 +71,44 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
             xi = _pack_last(xi)
         return xi, sc.squeeze(-1).float().contiguous()
 
+    def _calib_update(self, q, k, v, S):
+        """Accumulate static-scale calibration stats; freeze after _calib_steps forwards."""
+        self._aq = max(self._aq, q.abs().max().item())
+        self._ak = max(self._ak, k.abs().max().item())
+        av = v.abs().amax(dim=(0, 1)).float()                 # per-channel over (BH,T) -> [hd]
+        self._av = av if self._av is None else torch.maximum(self._av, av)
+        self._cacc += S.float().amax(-1).mean().item()        # mean per-row max -> c
+        self._cn += 1
+        if self._cn >= self._calib_steps:
+            Qm = float(self.Q)
+            self._sq_c = (self._aq / Qm) or 1e-8
+            self._sk_c = (self._ak / Qm) or 1e-8
+            sv = torch.ones(self.hp_av, device=self._av.device, dtype=torch.float32)
+            sv[:self.head_dim] = (self._av / Qm).clamp_min(1e-8)
+            self._sv_vec = sv
+            self._c = self._cacc / max(self._cn, 1)
+            self._frozen = True
+
     def _qattn(self, q, k, v, T, BH):
-        """q,k,v: [BH,T,hd] fp16 -> attention output [BH,T,hd] fp16. Fully-fused quantized
-        standard attention: CUDA Q/K/V quantize -> QKᵀ (fp16 scaled scores) -> fused softmax
-        -> int8/int4 AV. No PyTorch quantize, no fp32 score dump."""
+        """q,k,v: [BH,T,hd] fp16 -> attention output [BH,T,hd] fp16. Fully-fused quantized standard
+        attention. Static (frozen) path uses calibrated scales + static-c softmax (no runtime
+        reductions); dynamic path (also used while calibrating) computes per-token/per-channel/
+        per-row stats at runtime."""
         hd = self.head_dim
         scale = 1.0 / math.sqrt(hd)
+        if self.static and self._frozen:
+            qi, ki, vt, sq, sk, sv = _mc.quantize_attn_qkv_static(
+                q, k, v, self.hp_qk, self.hp_av, self.bits, self._sq_c, self._sk_c, self._sv_vec)
+            if self.bits == 8:
+                S = _mc.attn_qk_int8(qi, ki, sq, sk, scale)
+                P, sp = _mc.attn_softmax_requant_static(S, self._c)
+                O = _mc.attn_av_int8(P, vt, sp, sv)
+            else:
+                S = _mc.attn_qk_int4(qi, ki, self.hp_qk, sq, sk, scale)
+                P, sp = _mc.attn_softmax_requant4_static(S, self._c)
+                O = _mc.attn_av_int4(P, vt, sp, sv, T)
+            return O[:, :, :hd]
+        # dynamic (and calibration) path
         qi, ki, vt, sq, sk, sv = _mc.quantize_attn_qkv(q, k, v, self.hp_qk, self.hp_av, self.bits)
         if self.bits == 8:
             S = _mc.attn_qk_int8(qi, ki, sq, sk, scale)       # fp16 pre-scaled logits [BH,T,T]
@@ -76,6 +118,8 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
             S = _mc.attn_qk_int4(qi, ki, self.hp_qk, sq, sk, scale)
             P, sp = _mc.attn_softmax_requant4(S)
             O = _mc.attn_av_int4(P, vt, sp, sv, T)
+        if self.static and not self._frozen:
+            self._calib_update(q, k, v, S)
         return O[:, :, :hd]                                   # drop hd_pad
 
     def forward(self, x):
@@ -115,7 +159,7 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         return out_tok.reshape(b, H, W, c).permute(0, 3, 1, 2)
 
 
-def convert_attention_to_quantized_std(module, *, bits=8, verbose=False):
+def convert_attention_to_quantized_std(module, *, bits=8, static=False, verbose=False):
     """Replace AttentionBlock instances with the quantized standard-attention block."""
     if not (_HAS and _HAS_ATTN):
         raise RuntimeError("quantized std-attention kernels unavailable")
@@ -123,9 +167,9 @@ def convert_attention_to_quantized_std(module, *, bits=8, verbose=False):
     for name, child in list(module.named_children()):
         if AttentionBlock is not None and isinstance(child, AttentionBlock) \
                 and isinstance(child.attention, QKVAttentionLegacy):
-            setattr(module, name, QuantizedStandardAttentionBlock(child, bits=bits).to(
+            setattr(module, name, QuantizedStandardAttentionBlock(child, bits=bits, static=static).to(
                 next(child.parameters()).device))
             n += 1
         else:
-            n += convert_attention_to_quantized_std(child, bits=bits, verbose=verbose)
+            n += convert_attention_to_quantized_std(child, bits=bits, static=static, verbose=verbose)
     return n

@@ -1,0 +1,49 @@
+mode,kernel,gpu_ms
+dynamic_fp16,"attn_softmax_fp16_dynamic_kernel(const __half *, __half *, float *, in",39.97
+dynamic_fp16,"void at::native::vectorized_elementwise_kernel<(int)4, at::native::AUn",32.875
+dynamic_fp16,void cutlass__5x_cudnn::Kernel<cutlass_tensorop_f16_s16816fprop_optimi,20.786
+dynamic_fp16,void cutlass::Kernel2<cutlass_80_wmma_tensorop_f16_s161616gemm_f16_32x,16.604
+dynamic_fp16,void cutlass::Kernel2<cutlass_80_wmma_tensorop_f16_s161616gemm_f16_32x,16.488
+dynamic_fp16,"void group_norm_silu_nhwc_kernel<__half>(const T1 *, T1 *, const T1 *,",15.961
+dynamic_fp16,void cutlass__5x_cudnn::Kernel<cutlass_tensorop_f16_s16816fprop_optimi,12.142
+dynamic_fp16,"void at::native::elementwise_kernel<(int)128, (int)4, void at::native:",10.329
+static_fp16,"attn_softmax_fp16_static_kernel(const __half *, __half *, float *, int",35.886
+static_fp16,"void at::native::vectorized_elementwise_kernel<(int)4, at::native::AUn",32.835
+static_fp16,void cutlass::Kernel2<cutlass_80_wmma_tensorop_f16_s161616gemm_f16_32x,16.615
+static_fp16,void cutlass::Kernel2<cutlass_80_wmma_tensorop_f16_s161616gemm_f16_32x,16.484
+static_fp16,"void group_norm_silu_nhwc_kernel<__half>(const T1 *, T1 *, const T1 *,",15.956
+static_fp16,void cutlass__5x_cudnn::Kernel<cutlass_tensorop_f16_s16816fprop_optimi,13.643
+static_fp16,void cutlass__5x_cudnn::Kernel<cutlass_tensorop_f16_s16816fprop_optimi,12.145
+static_fp16,"void at::native::elementwise_kernel<(int)128, (int)4, void at::native:",10.321
+dynamic_int8,void cutlass::Kernel<cutlass::conv::kernel::ImplicitGemmConvolution<cu,61.828
+dynamic_int8,"attn_softmax_requant_kernel(const __half *, signed char *, float *, in",36.597
+dynamic_int8,"void group_norm_silu_nhwc_kernel<float>(const T1 *, T1 *, const T1 *, ",24.442
+dynamic_int8,"bmm_qk_s8_kernel(const signed char *, const signed char *, __half *, i",23.79
+dynamic_int8,"bmm_av_s8_kernel(const signed char *, const signed char *, const float",14.743
+dynamic_int8,"void aq_qtok_kernel<(int)8>(const __half *, signed char *, float *, in",9.278
+dynamic_int8,"void at::native::elementwise_kernel<(int)128, (int)4, void at::native:",8.869
+dynamic_int8,"sub_absmax_scale_kernel(const float *, const float *, float *, float *",8.685
+static_int8,void cutlass::Kernel<cutlass::conv::kernel::ImplicitGemmConvolution<cu,33.403
+static_int8,"attn_softmax_requant_static_kernel(const __half *, signed char *, floa",26.448
+static_int8,"bmm_qk_s8_kernel(const signed char *, const signed char *, __half *, i",23.836
+static_int8,"void group_norm_silu_quantize_nhwc_kernel<__half>(const T1 *, signed c",15.46
+static_int8,"bmm_av_s8_kernel(const signed char *, const signed char *, const float",14.882
+static_int8,"void at::native::elementwise_kernel<(int)128, (int)4, void at::native:",10.928
+static_int8,"void aq_qtok_static_kernel<(int)8>(const __half *, signed char *, floa",8.197
+static_int8,void cutlass::Kernel<cutlass::conv::kernel::ImplicitGemmConvolution<cu,6.817
+dynamic_int4,"attn_softmax_requant4_kernel(const __half *, signed char *, float *, i",36.634
+dynamic_int4,void cutlass::Kernel<cutlass::conv::kernel::ImplicitGemmConvolution<cu,35.189
+dynamic_int4,"void group_norm_silu_nhwc_kernel<float>(const T1 *, T1 *, const T1 *, ",24.505
+dynamic_int4,"bmm_qk_s4_kernel(const signed char *, const signed char *, __half *, i",24.025
+dynamic_int4,"void aq_qtok_kernel<(int)4>(const __half *, signed char *, float *, in",9.191
+dynamic_int4,"void at::native::elementwise_kernel<(int)128, (int)4, void at::native:",8.785
+dynamic_int4,"sub_absmax_scale_kernel(const float *, const float *, float *, float *",8.672
+dynamic_int4,"bmm_av_s4_kernel(const signed char *, const signed char *, const float",8.3
+static_int4,void cutlass::Kernel<cutlass::conv::kernel::ImplicitGemmConvolution<cu,34.413
+static_int4,"bmm_qk_s4_kernel(const signed char *, const signed char *, __half *, i",24.155
+static_int4,"attn_softmax_requant4_static_kernel(const __half *, signed char *, flo",22.502
+static_int4,"void group_norm_silu_quantize_pack_nhwc_kernel<__half>(const T1 *, sig",14.949
+static_int4,"void at::native::elementwise_kernel<(int)128, (int)4, void at::native:",10.922
+static_int4,"bmm_av_s4_kernel(const signed char *, const signed char *, const float",8.338
+static_int4,"void aq_qtok_static_kernel<(int)4>(const __half *, signed char *, floa",7.78
+static_int4,void cutlass::Kernel<cutlass::conv::kernel::ImplicitGemmConvolutionFus,5.157

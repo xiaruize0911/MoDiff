@@ -316,6 +316,31 @@ class BenchmarkRunner:
     
     def _setup_model(self, mode: str):
         """Load and setup model for given mode."""
+        # ---- static_* / dynamic_* prefix (static-vs-dynamic quantization study) ----
+        # static  = calibrated constants everywhere (conv/linear static scales + static attention
+        #           incl. static-c softmax); dynamic = every activation statistic computed at
+        #           runtime (uncalibrated conv/linear absmax + dynamic per-token/per-row attention).
+        # Implementation: dynamic simply nulls calibration_path so every apply_*_static_scales block
+        # is skipped (-> uncalibrated dynamic kernels); attention static-ness is passed explicitly.
+        self._attn_static = False
+        _BASEMAP = {"int8": "int8_baseline", "int8_modiff": "int8", "int4": "int4_baseline",
+                    "int4_modiff": "int4", "fp16": "fp16"}
+        _sv = None
+        if mode.startswith("static_"):
+            _sv, base = True, mode[len("static_"):]
+        elif mode.startswith("dynamic_"):
+            _sv, base = False, mode[len("dynamic_"):]
+        for _k in ("MODIFF_FP16_MATERIALIZED", "MODIFF_STATIC_SOFTMAX"):
+            os.environ.pop(_k, None)                     # clear per-mode (one process runs all modes)
+        if _sv is not None:
+            self._attn_static = _sv
+            mode = _BASEMAP.get(base, base)
+            if not _sv:
+                self.calibration_path = None             # -> conv/linear stay uncalibrated (dynamic)
+            if mode == "fp16":                           # both fp16 modes share the materialized path
+                os.environ["MODIFF_FP16_MATERIALIZED"] = "1"
+                if _sv:
+                    os.environ["MODIFF_STATIC_SOFTMAX"] = "1"
         model, _ = load_model(self.config_path, self.ckpt_path)
         
         # Configure backends for maximum speed
@@ -618,8 +643,10 @@ class BenchmarkRunner:
             if std_attn_bits in (4, 8) and not quant_lin:
                 try:
                     from integration.fused_ops.quantized_std_attention import convert_attention_to_quantized_std
-                    n_tm = convert_attention_to_quantized_std(model.model.diffusion_model, bits=std_attn_bits)
-                    print(f"✓ Converted {n_tm} AttentionBlocks to QUANTIZED standard attention (W{std_attn_bits}A{std_attn_bits} QKᵀ/AV)")
+                    n_tm = convert_attention_to_quantized_std(model.model.diffusion_model, bits=std_attn_bits,
+                                                              static=getattr(self, "_attn_static", False))
+                    _sv_tag = "STATIC" if getattr(self, "_attn_static", False) else "dynamic"
+                    print(f"✓ Converted {n_tm} AttentionBlocks to QUANTIZED standard attention (W{std_attn_bits}A{std_attn_bits} QKᵀ/AV, {_sv_tag})")
                 except Exception as _e:      # module/kernels not ready yet -> standard math attention
                     print(f"  (quantized std-attention unavailable: {_e}); using standard math attention")
                     _to_token_major()

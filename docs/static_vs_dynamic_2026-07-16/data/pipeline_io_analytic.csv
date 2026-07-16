@@ -1,0 +1,7 @@
+precision,variant,conv_MiB,linear_MiB,attn_MiB,total_MiB
+fp16,dynamic,1330.5,648.3,14363.2,16342.0
+fp16,static,1330.5,648.3,11328.3,13307.0
+int8,dynamic,1096.4,425.6,11632.6,13154.5
+int8,static,846.8,324.1,8597.6,9768.6
+int4,dynamic,729.7,212.8,10267.3,11209.8
+int4,static,604.9,162.1,7232.3,7999.3

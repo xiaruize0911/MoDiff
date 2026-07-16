@@ -123,4 +123,13 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("attn_av_int4", &attn_av_int4, "batched int4 AV (packed P·Vt) -> O fp16 [BH,T,hd_pad]");
     m.def("quantize_attn_qkv", &quantize_attn_qkv,
           "fused Q/K/V quantize: fp16 [BH,T,hd] -> {qi,ki [BH,T,hp_qk], vt [BH,hp_av,T], sq,sk, sv}");
+    // static (calibrated) score path -- no runtime reductions
+    m.def("attn_softmax_requant_static", &attn_softmax_requant_static,
+          "static-max softmax(S, c) -> {P int8 [BH,T,T], sp}; single read of S (no max pass)");
+    m.def("attn_softmax_requant4_static", &attn_softmax_requant4_static,
+          "static-max softmax(S, c) -> {PACKED int4 P [BH,T,T/2], sp}");
+    m.def("attn_softmax_fp16", &attn_softmax_fp16,
+          "fp16 materialized softmax(S, static_c, c) -> {P fp16 unnormalized [BH,T,T], rowsum [BH,T]}");
+    m.def("quantize_attn_qkv_static", &quantize_attn_qkv_static,
+          "static Q/K/V quantize (calibrated sq_c,sk_c per-tensor + sv_vec per-channel; no absmax)");
 }

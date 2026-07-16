@@ -1,0 +1,96 @@
+mode,bucket,ms_step
+fp32,other,0.3417
+fp32,elementwise / copy,11.9794
+fp32,GEMM (qkv/proj + attn QK·AV),30.7894
+fp32,conv (GEMM),27.1801
+fp32,GroupNorm,7.4317
+fp32,attention (softmax),22.3389
+fp32,upsample / concat,1.7817
+dynamic_fp16,other,0.2979
+dynamic_fp16,elementwise / copy,17.6001
+dynamic_fp16,conv store epilogue,1.9092
+dynamic_fp16,GEMM (qkv/proj + attn QK·AV),13.5531
+dynamic_fp16,conv (GEMM),13.4875
+dynamic_fp16,GroupNorm,5.7246
+dynamic_fp16,attention (softmax),13.5778
+dynamic_fp16,upsample / concat,1.0565
+static_fp16,other,0.2979
+static_fp16,elementwise / copy,17.564
+static_fp16,conv store epilogue,1.9109
+static_fp16,GEMM (qkv/proj + attn QK·AV),13.5346
+static_fp16,conv (GEMM),13.5399
+static_fp16,GroupNorm,5.7322
+static_fp16,attention (softmax),11.8758
+static_fp16,upsample / concat,1.0573
+dynamic_int8,other,0.3072
+dynamic_int8,elementwise / copy,11.3965
+dynamic_int8,conv store epilogue,3.7266
+dynamic_int8,GEMM (qkv/proj + attn QK·AV),15.5128
+dynamic_int8,conv (GEMM),10.3469
+dynamic_int8,GroupNorm,7.2869
+dynamic_int8,quantize / absmax,7.9713
+dynamic_int8,attention (softmax),12.4191
+dynamic_int8,upsample / concat,1.5824
+static_int8,other,0.2745
+static_int8,elementwise / copy,4.6244
+static_int8,conv store epilogue,1.5896
+static_int8,GEMM (qkv/proj + attn QK·AV),14.5091
+static_int8,conv (GEMM),9.6291
+static_int8,GroupNorm,5.597
+static_int8,quantize / absmax,3.6715
+static_int8,attention (softmax),8.799
+static_int8,upsample / concat,1.3019
+dynamic_int8_modiff,other,3.6659
+dynamic_int8_modiff,elementwise / copy,6.7387
+dynamic_int8_modiff,quantize / absmax,13.7934
+dynamic_int8_modiff,conv store epilogue,3.846
+dynamic_int8_modiff,GEMM (qkv/proj + attn QK·AV),15.4951
+dynamic_int8_modiff,conv (GEMM),10.3393
+dynamic_int8_modiff,GroupNorm,7.2563
+dynamic_int8_modiff,attention (softmax),12.36
+dynamic_int8_modiff,upsample / concat,1.5789
+static_int8_modiff,other,2.5635
+static_int8_modiff,elementwise / copy,5.7214
+static_int8_modiff,quantize / absmax,6.3717
+static_int8_modiff,conv store epilogue,1.339
+static_int8_modiff,GEMM (qkv/proj + attn QK·AV),14.4901
+static_int8_modiff,conv (GEMM),11.9225
+static_int8_modiff,GroupNorm,5.4961
+static_int8_modiff,attention (softmax),8.7903
+static_int8_modiff,upsample / concat,1.0429
+dynamic_int4,other,0.3106
+dynamic_int4,elementwise / copy,11.3654
+dynamic_int4,conv store epilogue,3.7247
+dynamic_int4,GEMM (qkv/proj + attn QK·AV),13.4597
+dynamic_int4,conv (GEMM),5.9076
+dynamic_int4,GroupNorm,7.2486
+dynamic_int4,quantize / absmax,7.7325
+dynamic_int4,attention (softmax),12.3667
+dynamic_int4,upsample / concat,1.5782
+static_int4,other,0.2681
+static_int4,elementwise / copy,4.0785
+static_int4,conv store epilogue,2.4719
+static_int4,GEMM (qkv/proj + attn QK·AV),12.4251
+static_int4,conv (GEMM),7.3714
+static_int4,GroupNorm,5.2805
+static_int4,quantize / absmax,3.3674
+static_int4,attention (softmax),7.4533
+static_int4,upsample / concat,1.2839
+dynamic_int4_modiff,other,3.6661
+dynamic_int4_modiff,elementwise / copy,6.7398
+dynamic_int4_modiff,quantize / absmax,13.4719
+dynamic_int4_modiff,conv store epilogue,3.8436
+dynamic_int4_modiff,GEMM (qkv/proj + attn QK·AV),13.4486
+dynamic_int4_modiff,conv (GEMM),5.9774
+dynamic_int4_modiff,GroupNorm,7.2389
+dynamic_int4_modiff,attention (softmax),12.311
+dynamic_int4_modiff,upsample / concat,1.5756
+static_int4_modiff,other,2.5543
+static_int4_modiff,elementwise / copy,5.7057
+static_int4_modiff,quantize / absmax,5.8133
+static_int4_modiff,conv store epilogue,1.3378
+static_int4_modiff,GEMM (qkv/proj + attn QK·AV),12.4278
+static_int4_modiff,conv (GEMM),7.4648
+static_int4_modiff,GroupNorm,5.4615
+static_int4_modiff,attention (softmax),7.4652
+static_int4_modiff,upsample / concat,1.0386

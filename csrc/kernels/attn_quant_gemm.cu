@@ -574,3 +574,214 @@ std::vector<torch::Tensor> quantize_attn_qkv(torch::Tensor Q, torch::Tensor K, t
   }
   return {qi, ki, vt, sq, sk, sv};
 }
+
+// ==================== STATIC score path (calibrated, no runtime reduction) ====================
+// Static softmax: the per-row max is replaced by a calibrated per-layer constant c (a safe upper
+// bound on the logits). This drops pass 1 entirely -> single read of the T×T score matrix (vs 2
+// for the dynamic kernel). softmax is shift-invariant so exp(S−c) is exact for c ≥ row max; the
+// only int8 cost is that a row whose max < c maps its peak to exp(max−c)·127 < 127 (coarser
+// resolution). fp32 exp gives ~88 units of headroom, so a generous c never overflows. Σexp is
+// still data-dependent and folded into sp (applied in AV) exactly as the dynamic kernel does.
+__global__ void attn_softmax_requant_static_kernel(const __half* __restrict__ S, int8_t* __restrict__ P,
+                                                   float* __restrict__ sp, int T, float c) {
+  const int row = blockIdx.x;
+  const uint4* Srow = reinterpret_cast<const uint4*>(S + (size_t)row * T);
+  int2* Prow = reinterpret_cast<int2*>(P + (size_t)row * T);
+  const int tid = threadIdx.x, nt = blockDim.x, T8 = T >> 3;
+  __shared__ float red[AQ_SM_THREADS];
+  float f[8], sum = 0.f;
+  for (int cc = tid; cc < T8; cc += nt) { aq_ld8(Srow + cc, f);
+    int b0 = 0, b1 = 0;
+#pragma unroll
+    for (int k = 0; k < 8; ++k) {
+      float e = __expf(f[k] - c); sum += e;
+      int q = __float2int_rn(e * 127.f); q = q < 0 ? 0 : (q > 127 ? 127 : q);
+      if (k < 4) b0 |= q << (k * 8); else b1 |= q << ((k - 4) * 8);
+    }
+    Prow[cc] = make_int2(b0, b1);
+  }
+  red[tid] = sum; __syncthreads();
+  for (int s = nt >> 1; s > 0; s >>= 1) { if (tid < s) red[tid] += red[tid + s]; __syncthreads(); }
+  if (tid == 0) sp[row] = 1.f / (127.f * fmaxf(red[0], 1e-20f));
+}
+
+std::vector<torch::Tensor> attn_softmax_requant_static(torch::Tensor S, double c) {
+  TORCH_CHECK(S.is_cuda() && S.dtype() == torch::kHalf && S.dim() == 3, "S fp16 [BH,T,T]");
+  S = S.contiguous();
+  int BH = S.size(0), T = S.size(2);
+  TORCH_CHECK(S.size(1) == T, "S must be [BH,T,T]");
+  TORCH_CHECK(T % 8 == 0, "softmax needs T%8==0 (vectorized 128-bit rows)");
+  auto P = torch::empty({BH, T, T}, torch::TensorOptions().dtype(torch::kChar).device(S.device()));
+  auto sp = torch::empty({BH, T}, torch::TensorOptions().dtype(torch::kFloat32).device(S.device()));
+  attn_softmax_requant_static_kernel<<<BH * T, AQ_SM_THREADS, 0, at::cuda::getCurrentCUDAStream()>>>(
+      reinterpret_cast<const __half*>(S.data_ptr<at::Half>()), P.data_ptr<int8_t>(), sp.data_ptr<float>(), T, (float)c);
+  return {P, sp};
+}
+
+__global__ void attn_softmax_requant4_static_kernel(const __half* __restrict__ S, int8_t* __restrict__ P,
+                                                    float* __restrict__ sp, int T, float c) {
+  const int row = blockIdx.x;
+  const uint4* Srow = reinterpret_cast<const uint4*>(S + (size_t)row * T);
+  int* Prow = reinterpret_cast<int*>(P + (size_t)row * (T / 2));
+  const int tid = threadIdx.x, nt = blockDim.x, T8 = T >> 3;
+  __shared__ float red[AQ_SM_THREADS];
+  float f[8], sum = 0.f;
+  for (int cc = tid; cc < T8; cc += nt) { aq_ld8(Srow + cc, f);
+    int packed = 0;
+#pragma unroll
+    for (int k = 0; k < 8; ++k) {
+      float e = __expf(f[k] - c); sum += e;
+      int q = __float2int_rn(e * 7.f); q = q < 0 ? 0 : (q > 7 ? 7 : q);
+      packed |= (q & 0xF) << (k * 4);
+    }
+    Prow[cc] = packed;
+  }
+  red[tid] = sum; __syncthreads();
+  for (int s = nt >> 1; s > 0; s >>= 1) { if (tid < s) red[tid] += red[tid + s]; __syncthreads(); }
+  if (tid == 0) sp[row] = 1.f / (7.f * fmaxf(red[0], 1e-20f));
+}
+
+std::vector<torch::Tensor> attn_softmax_requant4_static(torch::Tensor S, double c) {
+  TORCH_CHECK(S.dtype() == torch::kHalf, "S fp16"); S = S.contiguous();
+  int BH = S.size(0), T = S.size(2);
+  TORCH_CHECK(T % 8 == 0, "softmax4 needs T%8==0 (vectorized 128-bit rows)");
+  auto P = torch::empty({BH, T, T / 2}, torch::TensorOptions().dtype(torch::kChar).device(S.device()));
+  auto sp = torch::empty({BH, T}, torch::TensorOptions().dtype(torch::kFloat32).device(S.device()));
+  attn_softmax_requant4_static_kernel<<<BH * T, AQ_SM_THREADS, 0, at::cuda::getCurrentCUDAStream()>>>(
+      reinterpret_cast<const __half*>(S.data_ptr<at::Half>()), P.data_ptr<int8_t>(), sp.data_ptr<float>(), T, (float)c);
+  return {P, sp};
+}
+
+// ---- fp16 materialized softmax (no quantization): emits UNNORMALIZED exp weights + per-row sum.
+// Caller computes O = bmm(P, V) then O /= rowsum (rowsum is per-row of P = per-row of O). This lets
+// the fp16 attention share ONE materialized path with a dynamic (2-pass, per-row max) vs static
+// (1-pass, calibrated c) softmax, so the static-vs-dynamic delta is measured with no other change. ----
+__global__ void attn_softmax_fp16_dynamic_kernel(const __half* __restrict__ S, __half* __restrict__ P,
+                                                 float* __restrict__ rowsum, int T) {
+  const int row = blockIdx.x;
+  const uint4* Srow = reinterpret_cast<const uint4*>(S + (size_t)row * T);
+  uint4* Prow = reinterpret_cast<uint4*>(P + (size_t)row * T);
+  const int tid = threadIdx.x, nt = blockDim.x, T8 = T >> 3;
+  __shared__ float red[AQ_SM_THREADS];
+  float f[8], m = -1e30f;
+  for (int cc = tid; cc < T8; cc += nt) { aq_ld8(Srow + cc, f);
+#pragma unroll
+    for (int k = 0; k < 8; ++k) m = fmaxf(m, f[k]); }
+  red[tid] = m; __syncthreads();
+  for (int s = nt >> 1; s > 0; s >>= 1) { if (tid < s) red[tid] = fmaxf(red[tid], red[tid + s]); __syncthreads(); }
+  m = red[0]; __syncthreads();
+  float sum = 0.f;
+  for (int cc = tid; cc < T8; cc += nt) { aq_ld8(Srow + cc, f);
+    __half2 h[4];
+#pragma unroll
+    for (int k = 0; k < 4; ++k) {
+      float e0 = __expf(f[2 * k] - m), e1 = __expf(f[2 * k + 1] - m);
+      sum += e0 + e1; h[k] = __floats2half2_rn(e0, e1);
+    }
+    Prow[cc] = *reinterpret_cast<uint4*>(h);
+  }
+  red[tid] = sum; __syncthreads();
+  for (int s = nt >> 1; s > 0; s >>= 1) { if (tid < s) red[tid] += red[tid + s]; __syncthreads(); }
+  if (tid == 0) rowsum[row] = fmaxf(red[0], 1e-20f);
+}
+
+__global__ void attn_softmax_fp16_static_kernel(const __half* __restrict__ S, __half* __restrict__ P,
+                                                float* __restrict__ rowsum, int T, float c) {
+  const int row = blockIdx.x;
+  const uint4* Srow = reinterpret_cast<const uint4*>(S + (size_t)row * T);
+  uint4* Prow = reinterpret_cast<uint4*>(P + (size_t)row * T);
+  const int tid = threadIdx.x, nt = blockDim.x, T8 = T >> 3;
+  __shared__ float red[AQ_SM_THREADS];
+  float f[8], sum = 0.f;
+  for (int cc = tid; cc < T8; cc += nt) { aq_ld8(Srow + cc, f);
+    __half2 h[4];
+#pragma unroll
+    for (int k = 0; k < 4; ++k) {
+      // clamp exp to 1.0: with c >= row max (well-calibrated) exp(S-c) <= 1 already, so this is a
+      // no-op and the softmax is exact. When a static c under-estimates the logits at some timestep
+      // (diffusion logit scale drifts ~2-3x over the trajectory), unnormalized P would exceed 1 and
+      // the fp16 P@V bmm (summing T terms) overflows to inf -> NaN. Clamping to 1 keeps P in [0,1]
+      // (sum <= T, bmm-safe); over-max elements tie at 1 (a bounded convex-combination fallback).
+      float e0 = fminf(__expf(f[2 * k] - c), 1.0f), e1 = fminf(__expf(f[2 * k + 1] - c), 1.0f);
+      sum += e0 + e1; h[k] = __floats2half2_rn(e0, e1);
+    }
+    Prow[cc] = *reinterpret_cast<uint4*>(h);
+  }
+  red[tid] = sum; __syncthreads();
+  for (int s = nt >> 1; s > 0; s >>= 1) { if (tid < s) red[tid] += red[tid + s]; __syncthreads(); }
+  if (tid == 0) rowsum[row] = fmaxf(red[0], 1e-20f);
+}
+
+std::vector<torch::Tensor> attn_softmax_fp16(torch::Tensor S, bool static_c, double c) {
+  TORCH_CHECK(S.is_cuda() && S.dtype() == torch::kHalf && S.dim() == 3, "S fp16 [BH,T,T]");
+  S = S.contiguous();
+  int BH = S.size(0), T = S.size(2);
+  TORCH_CHECK(S.size(1) == T && T % 8 == 0, "S [BH,T,T], T%8==0");
+  auto P = torch::empty({BH, T, T}, torch::TensorOptions().dtype(torch::kHalf).device(S.device()));
+  auto rs = torch::empty({BH, T}, torch::TensorOptions().dtype(torch::kFloat32).device(S.device()));
+  const __half* Sp = reinterpret_cast<const __half*>(S.data_ptr<at::Half>());
+  __half* Pp = reinterpret_cast<__half*>(P.data_ptr<at::Half>());
+  cudaStream_t st = at::cuda::getCurrentCUDAStream();
+  if (static_c)
+    attn_softmax_fp16_static_kernel<<<BH * T, AQ_SM_THREADS, 0, st>>>(Sp, Pp, rs.data_ptr<float>(), T, (float)c);
+  else
+    attn_softmax_fp16_dynamic_kernel<<<BH * T, AQ_SM_THREADS, 0, st>>>(Sp, Pp, rs.data_ptr<float>(), T);
+  return {P, rs};
+}
+
+// ---- static Q/K/V quantize: calibrated per-tensor sq_c/sk_c + per-channel sv_vec, no reduction ----
+template <int BITS>
+__global__ void aq_qtok_static_kernel(const __half* __restrict__ X, int8_t* __restrict__ out,
+                                      float* __restrict__ sc, int hd, int hp, float scale) {
+  const int r = blockIdx.x, lane = threadIdx.x;
+  const __half* xr = X + (size_t)r * hd;
+  const float inv = 1.f / scale;
+  if (lane == 0) sc[r] = scale;
+  if (BITS == 8) {
+    int8_t* o8 = out + (size_t)r * hp;
+    for (int d = lane; d < hp; d += 32) {
+      int q = __float2int_rn((d < hd ? __half2float(xr[d]) * inv : 0.f));
+      o8[d] = (int8_t)(q > 127 ? 127 : (q < -127 ? -127 : q));
+    }
+  } else {
+    int8_t* o4 = out + (size_t)r * (hp / 2);
+    for (int dp = lane; dp < hp / 2; dp += 32) {
+      int d0 = dp * 2;
+      int q0 = __float2int_rn((d0 < hd ? __half2float(xr[d0]) * inv : 0.f)); q0 = q0 > 7 ? 7 : (q0 < -7 ? -7 : q0);
+      int q1 = __float2int_rn((d0 + 1 < hd ? __half2float(xr[d0 + 1]) * inv : 0.f)); q1 = q1 > 7 ? 7 : (q1 < -7 ? -7 : q1);
+      o4[dp] = (int8_t)((q0 & 0xF) | ((q1 & 0xF) << 4));
+    }
+  }
+}
+
+// sv_vec: [hp_av] fp32 calibrated per-channel V scale (shared across BH). sq_c/sk_c: per-tensor scalars.
+std::vector<torch::Tensor> quantize_attn_qkv_static(torch::Tensor Q, torch::Tensor K, torch::Tensor V,
+                                                    int64_t hp_qk, int64_t hp_av, int64_t bits,
+                                                    double sq_c, double sk_c, torch::Tensor sv_vec) {
+  TORCH_CHECK(Q.is_cuda() && Q.dtype() == torch::kHalf, "Q/K/V fp16 CUDA");
+  Q = Q.contiguous(); K = K.contiguous(); V = V.contiguous();
+  int BH = Q.size(0), T = Q.size(1), hd = Q.size(2);
+  TORCH_CHECK(sv_vec.numel() == hp_av, "sv_vec must be [hp_av]");
+  auto oi = torch::TensorOptions().dtype(torch::kChar).device(Q.device());
+  auto of = torch::TensorOptions().dtype(torch::kFloat32).device(Q.device());
+  int qkw = (bits == 8) ? (int)hp_qk : (int)hp_qk / 2;
+  int vtw = (bits == 8) ? T : T / 2;
+  auto qi = torch::empty({BH, T, qkw}, oi), ki = torch::empty({BH, T, qkw}, oi);
+  auto vt = torch::empty({BH, (int)hp_av, vtw}, oi);
+  auto sq = torch::empty({BH, T}, of), sk = torch::empty({BH, T}, of);
+  auto sv = sv_vec.to(of).view({1, (int)hp_av}).expand({BH, (int)hp_av}).contiguous();
+  cudaStream_t s = at::cuda::getCurrentCUDAStream();
+  const __half* Qp = reinterpret_cast<const __half*>(Q.data_ptr<at::Half>());
+  const __half* Kp = reinterpret_cast<const __half*>(K.data_ptr<at::Half>());
+  const __half* Vp = reinterpret_cast<const __half*>(V.data_ptr<at::Half>());
+  if (bits == 8) {
+    aq_qtok_static_kernel<8><<<BH * T, 32, 0, s>>>(Qp, qi.data_ptr<int8_t>(), sq.data_ptr<float>(), hd, (int)hp_qk, (float)sq_c);
+    aq_qtok_static_kernel<8><<<BH * T, 32, 0, s>>>(Kp, ki.data_ptr<int8_t>(), sk.data_ptr<float>(), hd, (int)hp_qk, (float)sk_c);
+    aq_vquant_trans_kernel<8><<<BH * (int)hp_av, 256, 0, s>>>(Vp, sv.data_ptr<float>(), vt.data_ptr<int8_t>(), T, hd, (int)hp_av);
+  } else {
+    aq_qtok_static_kernel<4><<<BH * T, 32, 0, s>>>(Qp, qi.data_ptr<int8_t>(), sq.data_ptr<float>(), hd, (int)hp_qk, (float)sq_c);
+    aq_qtok_static_kernel<4><<<BH * T, 32, 0, s>>>(Kp, ki.data_ptr<int8_t>(), sk.data_ptr<float>(), hd, (int)hp_qk, (float)sk_c);
+    aq_vquant_trans_kernel<4><<<BH * (int)hp_av, 256, 0, s>>>(Vp, sv.data_ptr<float>(), vt.data_ptr<int8_t>(), T, hd, (int)hp_av);
+  }
+  return {qi, ki, vt, sq, sk, sv};
+}

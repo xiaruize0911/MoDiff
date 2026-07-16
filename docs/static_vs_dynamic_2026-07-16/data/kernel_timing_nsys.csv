@@ -1,0 +1,14 @@
+kernel,gpu_us
+attn_softmax_fp16_static_kernel,1872.7
+attn_softmax_fp16_dynamic_kernel,1855.9
+attn_softmax_requant_kernel,1797.9
+attn_softmax_requant4_kernel,1797.8
+bmm_qk_s4_kernel,1381.4
+attn_softmax_requant_static_kernel,1370.2
+bmm_qk_s8_kernel,1356.8
+attn_softmax_requant4_static_kernel,1119.7
+bmm_av_s8_kernel,829.9
+void aq_qtok_kernel<,206.9
+void aq_qtok_static_kernel<,182.8
+void aq_vquant_trans_kernel<,85.4
+aq_vscale_kernel,80.5

@@ -1,0 +1,39 @@
+mode,bucket,gpu_ms
+dynamic_fp16,conv/linear GEMM,113.208
+dynamic_fp16,elementwise/copy,64.691
+dynamic_fp16,attention softmax,39.99
+dynamic_fp16,GroupNorm,20.095
+dynamic_fp16,other,2.97
+static_fp16,conv/linear GEMM,113.061
+static_fp16,elementwise/copy,64.682
+static_fp16,attention softmax,35.907
+static_fp16,GroupNorm,20.093
+static_fp16,other,2.98
+dynamic_int8,conv/linear GEMM,78.427
+dynamic_int8,elementwise/copy,54.616
+dynamic_int8,attn QKᵀ/AV (int GEMM),38.532
+dynamic_int8,attention softmax,36.905
+dynamic_int8,quantize / absmax,26.895
+dynamic_int8,GroupNorm,25.406
+dynamic_int8,other,3.242
+static_int8,conv/linear GEMM,66.52
+static_int8,attn QKᵀ/AV (int GEMM),38.718
+static_int8,attention softmax,26.755
+static_int8,quantize / absmax,26.715
+static_int8,elementwise/copy,21.188
+static_int8,other,8.253
+static_int8,GroupNorm,4.375
+dynamic_int4,elementwise/copy,54.18
+dynamic_int4,conv/linear GEMM,52.047
+dynamic_int4,attention softmax,36.943
+dynamic_int4,attn QKᵀ/AV (int GEMM),32.325
+dynamic_int4,quantize / absmax,26.632
+dynamic_int4,GroupNorm,25.471
+dynamic_int4,other,3.236
+static_int4,conv/linear GEMM,52.458
+static_int4,attn QKᵀ/AV (int GEMM),32.494
+static_int4,quantize / absmax,25.568
+static_int4,attention softmax,22.809
+static_int4,elementwise/copy,20.745
+static_int4,other,9.041
+static_int4,GroupNorm,4.376

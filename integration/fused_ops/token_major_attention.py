@@ -112,6 +112,44 @@ class TokenMajorAttentionBlock(nn.Module):
         self._fused_conv_w = None    # [3C,1,1,C] fp16 KRSC = qkv.weight * gn.weight
         self._fused_epi_bias = None  # [3C] fp16 = qkv.bias + qkv.w@gn.b - SHIFT*colsum(Wf)
 
+        # fp16 MATERIALIZED attention (bmm QKᵀ -> our softmax kernel -> bmm AV), used by the
+        # static-vs-dynamic study so both fp16 modes share ONE code path and differ only in the
+        # softmax: dynamic = 2-pass per-row max; static = 1-pass calibrated c (lossless for c ≥ max,
+        # since fp16 has no quant grid). MODIFF_FP16_MATERIALIZED=1 enables it; MODIFF_STATIC_SOFTMAX
+        # =1 selects the static softmax. Default off -> the familiar SDPA-math path is used.
+        self._materialized = os.environ.get("MODIFF_FP16_MATERIALIZED") == "1"
+        self._static_softmax = os.environ.get("MODIFF_STATIC_SOFTMAX") == "1"
+        self._sm_calib_steps = int(os.environ.get("MODIFF_ATTN_CALIB_STEPS", "8"))
+        self._sm_frozen = not self._static_softmax
+        self._sm_cn = 0; self._sm_cacc = 0.0; self._sm_c = None
+
+    def _materialized_attn(self, q, k, v):
+        """fp16 materialized attention on [b,nh,T,hd]. Dynamic (2-pass max) or, once calibrated,
+        static (1-pass constant c). c is calibrated as a safe upper bound (max row-logit over the
+        first N forwards + margin) so exp(S-c) ≤ 1 -> fp16-lossless. Returns [b,nh,T,hd]."""
+        b, nh, T, hd = q.shape
+        BH = b * nh
+        qf = q.reshape(BH, T, hd).contiguous()
+        kf = k.reshape(BH, T, hd).contiguous()
+        vf = v.reshape(BH, T, hd).contiguous()
+        S = (torch.bmm(qf, kf.transpose(1, 2)) * self.scale).half()      # [BH,T,T] fp16 logits
+        if self._static_softmax and self._sm_frozen:
+            P, rs = _mc.attn_softmax_fp16(S, True, self._sm_c)
+        else:
+            P, rs = _mc.attn_softmax_fp16(S, False, 0.0)
+            if self._static_softmax and not self._sm_frozen:
+                # calibrate c to the TYPICAL (mean) per-row max, not the trajectory max: diffusion
+                # logit scale drifts ~30x across timesteps, so a max-based c underflows exp at low
+                # timesteps -> tiny rowsum -> O blows up. A mean-based c keeps exp(S-c) in range;
+                # the clamp-to-1 in the kernel handles the high-logit tail (peaks tie at 1).
+                self._sm_cacc += S.float().amax(-1).mean().item()
+                self._sm_cn += 1
+                if self._sm_cn >= self._sm_calib_steps:
+                    self._sm_c = self._sm_cacc / self._sm_cn
+                    self._sm_frozen = True
+        O = torch.bmm(P, vf) / rs.unsqueeze(-1).half()                   # normalize (rowsum per O-row)
+        return O.reshape(b, nh, T, hd)
+
     def _gn_params(self, dtype):
         if self._gn_cast_dtype is not dtype:
             self._gn_w = self.norm.weight.detach().to(dtype) if self.norm.weight is not None else None
@@ -162,8 +200,11 @@ class TokenMajorAttentionBlock(nn.Module):
             qkv = qkv_img.permute(0, 2, 3, 1).reshape(b, T, nh, 3, hd)
             q, k, v = qkv.unbind(3)
             q = q.transpose(1, 2); k = k.transpose(1, 2); v = v.transpose(1, 2)
-            with _SDPA_CTX():                             # explicit MATH SDPA (standard materialized attention)
-                a = F.scaled_dot_product_attention(q, k, v, scale=self.scale)
+            if self._materialized and (T % 8 == 0):
+                a = self._materialized_attn(q, k, v)
+            else:
+                with _SDPA_CTX():                         # explicit MATH SDPA (standard materialized attention)
+                    a = F.scaled_dot_product_attention(q, k, v, scale=self.scale)
             a = a.transpose(1, 2).reshape(b, T, c)
             out_tok = x_in_tok + self.proj(a)
             return out_tok.reshape(b, H, W, c).permute(0, 3, 1, 2)
@@ -180,8 +221,11 @@ class TokenMajorAttentionBlock(nn.Module):
         q = q.transpose(1, 2)                          # [N,H,T,hd], last dim stride 1
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
-        with _SDPA_CTX():                                  # explicit MATH SDPA (standard materialized attention)
-            a = F.scaled_dot_product_attention(q, k, v, scale=self.scale)  # [N,H,T,hd]
+        if self._materialized and (T % 8 == 0):
+            a = self._materialized_attn(q, k, v)          # [N,H,T,hd]
+        else:
+            with _SDPA_CTX():                             # explicit MATH SDPA (standard materialized attention)
+                a = F.scaled_dot_product_attention(q, k, v, scale=self.scale)  # [N,H,T,hd]
 
         # [N,H,T,hd] -> [N,T,C] (head-major C), proj, residual, back to channels_last.
         a = a.transpose(1, 2).reshape(b, T, c)         # only remaining copy
