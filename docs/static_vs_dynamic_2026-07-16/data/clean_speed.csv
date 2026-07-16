@@ -1,0 +1,9 @@
+config,precision,variant,wall_mean_ms,wall_median_ms,wall_min_ms,wall_stdev,gpu_busy_ms
+fp16 dyn,fp16,full-dynamic,67.454,67.463,67.282,0.117,66.881
+fp16 static,fp16,full-static,66.222,66.208,66.102,0.066,65.359
+int8 full-dyn,int8,full-dynamic,71.305,71.314,71.147,0.084,70.478
+int8 attn-dyn,int8,attn-dynamic,55.91,55.898,55.784,0.073,55.041
+int8 full-static,int8,full-static,51.064,51.04,50.882,0.142,50.325
+int4 full-dyn,int4,full-dynamic,65.112,64.787,64.559,0.813,63.832
+int4 attn-dyn,int4,attn-dynamic,51.174,51.155,51.067,0.088,50.559
+int4 full-static,int4,full-static,45.102,45.101,44.971,0.112,44.316

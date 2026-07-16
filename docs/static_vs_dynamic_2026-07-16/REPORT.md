@@ -15,17 +15,25 @@ softmax max — so `dynamic_*` is fully-dynamic and `static_*` is fully-static.
 ## TL;DR
 
 - **Static quantization is a large e2e win: int8 1.41×, int4 1.45×** (GPU-busy) over their dynamic
-  counterparts. The saving is *not* mainly the softmax — it is the removal of the runtime **absmax
-  passes** on conv/linear/attention activations (elementwise + quantize buckets collapse).
-- **Dynamic int8 (70.6 ms) is *slower than fp16* (67.2 ms).** Runtime-absmax overhead eats the
-  quantization win; **only static** quantization makes int8/int4 beat fp16. Fastest overall:
-  **int4 static 44.0 ms (2.3× vs fp32, 1.49× vs fp16)**.
-- **Static is precision-fair for the softmax** (the isolated softmax speedup is comparable across
-  fp16/int8/int4 — §7), so the win is a real algorithmic axis, not a quantization artifact.
-- **Static's cost is quality.** A single calibrated constant can't track the diffusion trajectory
-  (logit scale drifts ~30× across timesteps; activation ranges drift per step), so static is markedly
-  lossier — even static_fp16 softmax is lossy e2e (§8). This is the tradeoff MoDiff is meant to absorb;
-  it partially does (int4 dynamic 1.04→0.36 with MoDiff) but does not rescue static-c softmax.
+  counterparts. **The clean decomposition (§9) shows most of it is conv/linear, not attention:**
+  int8 full-dyn 70.5 → (conv/lin static **−15.4**) → 55.0 → (attn static **−4.7**) → 50.3. The
+  conv/linear share is largely the **fused fp16 GN→int8-quantize** that calibration enables (dynamic
+  can't fuse it — the scale must precede GroupNorm — and falls back to fp32 GN + separate quantize);
+  the pure attention-static effect is a modest ~1.09× (int8) / ~1.14× (int4).
+- **Dynamic int8 (70.5 ms) is *slower than* this report's materialized fp16 (66.9 ms).** Only static
+  quantization makes int8/int4 win. Fastest overall: **int4 static 44.3 ms**. NB the fp16 here is the
+  materialized path (~20% slower than optimal SDPA-fp16 ≈56 ms); vs SDPA-fp16 the static margins are
+  int8 ~1.12×, int4 ~1.27× (§1 caveat).
+- **Static is precision-fair for the softmax** (isolated softmax speedup comparable across
+  fp16/int8/int4 — §7), so it is a real algorithmic axis, not a quantization artifact.
+- **Static's cost is quality, and MoDiff does *not* rescue it.** A single calibrated constant can't
+  track the diffusion trajectory (logit scale drifts ~30× across timesteps), so static is markedly
+  lossier at all precisions (even static_fp16 0.49 e2e — §8). MoDiff compensates *dynamic* error well
+  (int4 1.04→0.36) but makes static int8 *worse* (0.64→0.74): its temporal-delta cache offsets
+  cross-step drift, not the intra-step error a static scale injects.
+- **Caveat on the caveats:** the full-dyn/full-static conv gap is partly an artifact (dynamic uses fp32
+  GN), and dynamic_int4 quality (1.04) diverges — the uncalibrated int4 conv/linear path is unstable.
+  Treat the full-static-vs-full-dynamic numbers as "as-deployed"; §9 is the clean single-variable read.
 
 ## Environment / method
 
@@ -60,6 +68,13 @@ Two facts stand out: (a) **dynamic int8 is slower than fp16** — the runtime ab
 than int8 saves; (b) **static flips it** — int8/int4 static are the fastest quantized modes and clearly
 beat fp16. See §6 for *why* (which buckets shrink).
 
+> **fp16-baseline caveat:** the fp16 here uses the *materialized* attention path (bmm→softmax→bmm) so
+> that dynamic_fp16 and static_fp16 share one code path (isolating the softmax). Materialized fp16 is
+> ~20% slower than the optimal fp16 **SDPA-math** attention (≈56 ms/step, prior report). So the "vs
+> fp16-dyn" ratios (e.g. int8-static 1.34×) are against this materialized fp16; against best-case
+> SDPA-fp16 (56 ms) the margins shrink to int8-static ~1.12×, int4-static ~1.27×. int4-static (44 ms)
+> still beats SDPA-fp16; int8-static (50 ms) beats it modestly.
+
 ![E2E speed dynamic vs static](01_e2e_speed.png)
 
 ## 2. Peak memory (`data/pipeline_io.csv`)
@@ -72,9 +87,13 @@ beat fp16. See §6 for *why* (which buckets shrink).
 | int8 + MoDiff | 6179 | 4793 | 1267 | 634 |
 | int4 + MoDiff | 5793 | 4406 | 1267 | 634 |
 
-Base peak is ~flat (dynamic slightly lower — it stores no static-scale buffers). The big effect is in
-**MoDiff**: the dynamic delta path caches ~2× the tensors of the static path (1267 vs 634 MiB), so
-dynamic+MoDiff peaks ~1.4 GB higher.
+Base peak is close; the dynamic base is ~195 MiB *lower* than static (int8 4192 vs 4386; int4 3794 vs
+3997) — the cause is not yet pinned down (static-scale buffers are only KB, so that is **not** the
+reason; likely the static fused-quantize path's transient int8/fp16 intermediates), so treat this small
+base delta as unexplained rather than a static cost. `reserved_MiB` is omitted from conclusions — it is
+allocator cache that accumulates across modes in one process (order-dependent, not per-mode meaningful).
+The one clear, large effect is in **MoDiff**: the dynamic delta path caches ~2× the tensors of the
+static path (1267 vs 634 MiB), so dynamic+MoDiff peaks ~1.4 GB higher.
 
 ![Peak memory dynamic vs static](02_peak_mem.png)
 
@@ -118,6 +137,16 @@ nsys corroborates from an independent trace (`data/nsys_kernels.csv`): for int8 
 falls 54.6→21.2 ms and GroupNorm 25.4→4.4 ms static-vs-dynamic (per captured sample):
 
 ![nsys per-kernel breakdown](08_nsys_buckets.png)
+
+> **Confound (important):** the int8 dynamic→static gap is **not** a clean single-variable measurement.
+> nsys top-kernels show the paths differ structurally: dynamic runs `group_norm_silu_nhwc_kernel<float>`
+> (**fp32** GN, 24.4 ms) + `sub_absmax_scale` + a separate quantize + a slower conv `ImplicitGemm`
+> (61.8 ms); static runs the **fused fp16** `group_norm_silu_quantize_nhwc_kernel<__half>` (15.5 ms) +
+> a faster conv (40.2 ms). Part of this is *intrinsic* to static — fusing the quantize into the
+> GroupNorm epilogue requires the scale to be known **before** GN runs, which only calibration provides,
+> so dynamic fundamentally cannot fuse it. Part is an *artifact* — the uncalibrated path uses fp32 GN.
+> Either way, the conv/linear portion of the static win is **not** just "absmax removal." §9 isolates
+> the effect that *is* a clean toggle (attention) and decomposes the full gap.
 
 ## 7. Kernel micro-benchmarks — static is precision-fair (`data/softmax_kernel.csv`, `attn_kernel_speed.csv`, `kernel_timing_nsys.csv`)
 
@@ -170,18 +199,51 @@ one c can't serve the whole trajectory. MoDiff's temporal-delta caching compensa
 well (int4 1.04→0.36) but does **not** rescue static-c softmax (the error is intra-step, not the
 cross-step drift MoDiff caches).
 
+## 9. Clean comparison — decomposing the gap (`data/clean_speed.csv`)
+
+§6 showed the full-dynamic vs full-static conv path isn't a single-variable change. To isolate what *is*
+a clean toggle (attention) from what is calibration-gated (conv/linear fusion), we add a middle config
+**attn-dyn** = conv/linear **static** (`MODIFF_CONVLIN_STATIC=1`) but attention **dynamic**. Robust
+noise control: 9 s warmup + **20 back-to-back timed runs averaged** + GPU-busy (all stdev ≤ 0.14 ms —
+the earlier static_int4 wall noise is gone). GPU-busy ms/step:
+
+| precision | full-dynamic | → conv/lin static | attn-dyn | → attn static | full-static |
+|---|--:|--:|--:|--:|--:|
+| **int8** | 70.5 | **−15.4** | 55.0 | **−4.7** | 50.3 |
+| **int4** | 63.8 | **−13.3** | 50.6 | **−6.2** | 44.3 |
+| fp16 | 66.9 (dyn) | — | — | −1.5 (softmax) | 65.4 (static) |
+
+**The static win is dominated by conv/linear (≈14–15 ms), not attention (≈5–6 ms).** The conv/linear
+share is mostly the fused fp16 GN→int8-quantize that calibration unlocks (an intrinsic static advantage)
+plus the fp32→fp16 GN artifact of the dynamic fallback. The **clean attention-only static effect** —
+static Q/K/V scales + static-c softmax, same GEMMs — is a modest **1.09× (int8) / 1.14× (int4)**, and it
+carries the §8 quality cost. fp16's attention-static effect is just the softmax (−1.5 ms, 1.02×).
+
+![Static-win decomposition: conv/linear vs attention](09_decomposition.png)
+
+Takeaway: "static is 1.4× faster" is real *as deployed*, but the portion attributable to the
+static-vs-dynamic *scale choice on attention* (the axis this study set out to test) is small; the large
+part is conv/linear epilogue fusion that only calibration enables.
+
 ## Verdict
 
-- **Static is the speed/IO winner** — int8 1.41×, int4 1.45× e2e, ~26–29% less analytical IO, and it is
-  the *only* way int8/int4 beat fp16 (dynamic int8 is slower than fp16). The win comes from deleting the
-  runtime absmax passes, confirmed in the profile (elementwise + quantize buckets collapse).
-- **Static is precision-fair** — the isolated softmax speedup is comparable across fp16/int8/int4, so it
-  is a legitimate algorithmic axis rather than a quantization artifact; fp16 benefits too (modestly).
-- **Static's price is accuracy** — a single calibrated constant cannot track the diffusion trajectory,
-  making static markedly lossier at all precisions; MoDiff only partially offsets it. **Recommendation:**
-  use static scales for the *layers* (conv/linear/Q-K-V) where calibration is stable and the speed win is
-  large, but keep the **softmax max dynamic** (per-row) for quality — it is cheap relative to its accuracy
-  impact. The fully-static modes here quantify the aggressive end of the tradeoff.
+- **Static is the speed/IO winner as deployed** — int8 1.41×, int4 1.45× e2e, ~26–29% less analytical IO,
+  and it is the *only* way int8/int4 beat fp16. **But the win is mostly conv/linear, not attention**
+  (§9): the −15 ms conv/linear share is chiefly the fused fp16 GN→int8-quantize that calibration unlocks
+  (dynamic can't fuse — the scale must precede GroupNorm — so it falls back to fp32 GN + separate
+  quantize); the clean attention-static effect is only ~1.09–1.14×.
+- **Static is precision-fair for the softmax** — the isolated softmax speedup is comparable across
+  fp16/int8/int4, so it is a legitimate algorithmic axis; fp16 benefits too (modestly, −1.5 ms).
+- **Static's price is accuracy, and MoDiff does not rescue it** — a single calibrated constant cannot
+  track the diffusion trajectory (30× logit drift), so static is markedly lossier at all precisions;
+  MoDiff helps *dynamic* (int4 1.04→0.36) but worsens static int8 (0.64→0.74).
+- **Recommendation:** the biggest, cleanest static payoff is **enabling epilogue fusion** (calibrated
+  conv/linear → fused GN-quantize) — worth it. Keep the **softmax max dynamic** (per-row): its static
+  form is both the smallest speed win (~1.02–1.14×) and a large quality hit. Static Q/K/V scales are a
+  reasonable middle ground. The fully-static modes here quantify the aggressive end of the tradeoff.
+- **Data caveats (see the review):** dynamic_int4 quality (1.04) diverges (unstable uncalibrated int4);
+  the fp16 baseline is the materialized path (~20% slower than SDPA-fp16); ncu DRAM-byte counters were
+  blocked so IO is analytical + nsys-time only. The clean, noise-controlled numbers are §9.
 
 ## Files
 `scripts/`: pipeline.py (11-mode speed/mem/profile), io_analytic.py, softmax_kernel.py, attn_kernel.py,

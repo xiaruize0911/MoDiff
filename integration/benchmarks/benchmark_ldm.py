@@ -335,7 +335,11 @@ class BenchmarkRunner:
         if _sv is not None:
             self._attn_static = _sv
             mode = _BASEMAP.get(base, base)
-            if not _sv:
+            # MODIFF_CONVLIN_STATIC=1 keeps conv/linear calibrated (static) even in dynamic_ modes,
+            # so ONLY the attention axis toggles -> a clean single-variable comparison. (conv/linear
+            # cannot be cleanly toggled otherwise: their fused fp16 GN->int8 quantize path is
+            # intrinsically calibration-gated, so full-dynamic pays fp32-GN + separate quantize.)
+            if not _sv and os.environ.get("MODIFF_CONVLIN_STATIC") != "1":
                 self.calibration_path = None             # -> conv/linear stay uncalibrated (dynamic)
             if mode == "fp16":                           # both fp16 modes share the materialized path
                 os.environ["MODIFF_FP16_MATERIALIZED"] = "1"

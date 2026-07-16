@@ -151,4 +151,24 @@ if ns:
     ax.set_ylabel("GPU ms (nsys, 1 sample)"); ax.legend(fontsize=8); ax.set_title("nsys per-kernel breakdown (representative modes)")
     save(fig, "08_nsys_buckets.png")
 
+# ---- 9. decomposition: conv/linear vs attention share of the static win ----
+cl = rd("clean_speed.csv")
+if cl:
+    g = {r["config"]: float(r["gpu_busy_ms"]) for r in cl}
+    precs = [("int8", "int8 full-dyn", "int8 attn-dyn", "int8 full-static"),
+             ("int4", "int4 full-dyn", "int4 attn-dyn", "int4 full-static")]
+    fig, ax = plt.subplots(figsize=(8.5, 4.7)); x = np.arange(len(precs)); w = 0.5
+    for i, (p, fd, ad, fs) in enumerate(precs):
+        base = g[fs]; conv = g[fd] - g[ad]; attn = g[ad] - g[fs]
+        ax.bar(i, base, w, color="#54A24B", label="full-static (floor)" if i == 0 else None)
+        ax.bar(i, attn, w, bottom=base, color=STA, label="attention-static saving" if i == 0 else None)
+        ax.bar(i, conv, w, bottom=base + attn, color=DYN, label="conv/linear-static saving" if i == 0 else None)
+        ax.text(i, g[fd], f"full-dyn {g[fd]:.0f}", ha="center", va="bottom", fontsize=8)
+        ax.text(i, base/2, f"{base:.0f}", ha="center", va="center", fontsize=8, color="white")
+        ax.text(i, base+attn/2, f"−{attn:.1f}", ha="center", va="center", fontsize=8)
+        ax.text(i, base+attn+conv/2, f"−{conv:.1f}", ha="center", va="center", fontsize=8, color="white")
+    ax.set_xticks(x); ax.set_xticklabels([p for p, *_ in precs]); ax.set_ylabel("GPU-busy ms/step")
+    ax.set_title("Decomposing the static win: conv/linear (fusion-gated) vs attention (clean toggle)")
+    ax.legend(fontsize=8); save(fig, "09_decomposition.png")
+
 print("plots done")
