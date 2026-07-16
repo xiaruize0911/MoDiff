@@ -22,6 +22,9 @@
 #define GW_BM (GW_WARPS * 16)   // 64 rows/CTA (one warp per 16-row sub-tile)
 #define GW_BN 64
 #define GW_STAGES 3             // cp.async pipeline depth
+#define GW_LDS 32               // smem row stride (bytes) = data width. NOTE: 48B padding removes a
+                                // 2-way bank conflict but the +50% smem cuts occupancy and is net-slower,
+                                // so conflicts aren't the bottleneck here; keep the dense 32B layout.
 
 // Multi-warp CTA with double-buffered cp.async: GW_WARPS warps share the B smem tile,
 // each warp owns a 16-row A sub-tile. Next k-tile is prefetched (cp.async) while the
@@ -33,8 +36,8 @@ __global__ void gemm_w8a8_kernel(const int8_t* __restrict__ A, const int8_t* __r
   const int m0 = blockIdx.x * GW_BM;
   const int n0 = blockIdx.y * GW_BN;
   const int mw = m0 + w * 16;
-  __shared__ int8_t As[GW_STAGES][GW_BM * 32];
-  __shared__ int8_t Bs[GW_STAGES][GW_BN * 32];
+  __shared__ int8_t As[GW_STAGES][GW_BM * GW_LDS];
+  __shared__ int8_t Bs[GW_STAGES][GW_BN * GW_LDS];
   int acc[GW_BN / 8][4];
 #pragma unroll
   for (int nt = 0; nt < GW_BN / 8; ++nt) { acc[nt][0] = acc[nt][1] = acc[nt][2] = acc[nt][3] = 0; }
@@ -44,12 +47,12 @@ __global__ void gemm_w8a8_kernel(const int8_t* __restrict__ A, const int8_t* __r
 #define GW8_LOAD(kt, buf)                                                                        \
   for (int c = t; c < GW_BM * 2; c += blockDim.x) {                                              \
     int r = c >> 1, off = (c & 1) * 16;                                                          \
-    modiff_cp_async_cg(modiff_smem_ptr(&As[buf][r * 32 + off]),                                  \
+    modiff_cp_async_cg(modiff_smem_ptr(&As[buf][r * GW_LDS + off]),                                  \
                        (const uint4*)(A + (size_t)(m0 + r) * K + (kt) + off), (m0 + r) < M);     \
   }                                                                                              \
   for (int c = t; c < GW_BN * 2; c += blockDim.x) {                                              \
     int r = c >> 1, off = (c & 1) * 16;                                                          \
-    modiff_cp_async_cg(modiff_smem_ptr(&Bs[buf][r * 32 + off]),                                  \
+    modiff_cp_async_cg(modiff_smem_ptr(&Bs[buf][r * GW_LDS + off]),                                  \
                        (const uint4*)(B + (size_t)(n0 + r) * K + (kt) + off), (n0 + r) < N);     \
   }
 
@@ -60,15 +63,15 @@ __global__ void gemm_w8a8_kernel(const int8_t* __restrict__ A, const int8_t* __r
   for (int i = 0; i < nkt; ++i) {
     const int buf = i % GW_STAGES;
     unsigned a[4];
-    a[0] = *(const int*)&As[buf][(w * 16 + gid) * 32 + tig * 4];
-    a[1] = *(const int*)&As[buf][(w * 16 + gid + 8) * 32 + tig * 4];
-    a[2] = *(const int*)&As[buf][(w * 16 + gid) * 32 + tig * 4 + 16];
-    a[3] = *(const int*)&As[buf][(w * 16 + gid + 8) * 32 + tig * 4 + 16];
+    a[0] = *(const int*)&As[buf][(w * 16 + gid) * GW_LDS + tig * 4];
+    a[1] = *(const int*)&As[buf][(w * 16 + gid + 8) * GW_LDS + tig * 4];
+    a[2] = *(const int*)&As[buf][(w * 16 + gid) * GW_LDS + tig * 4 + 16];
+    a[3] = *(const int*)&As[buf][(w * 16 + gid + 8) * GW_LDS + tig * 4 + 16];
 #pragma unroll
     for (int nt = 0; nt < GW_BN / 8; ++nt) {
       unsigned b[2];
-      b[0] = *(const int*)&Bs[buf][(nt * 8 + gid) * 32 + tig * 4];
-      b[1] = *(const int*)&Bs[buf][(nt * 8 + gid) * 32 + tig * 4 + 16];
+      b[0] = *(const int*)&Bs[buf][(nt * 8 + gid) * GW_LDS + tig * 4];
+      b[1] = *(const int*)&Bs[buf][(nt * 8 + gid) * GW_LDS + tig * 4 + 16];
       modiff_mma_m16n8k32(acc[nt], a, b);
     }
     int li = i + GW_STAGES - 1;
@@ -103,8 +106,8 @@ __global__ void gemm_w4a4_kernel(const int8_t* __restrict__ A, const int8_t* __r
   const int n0 = blockIdx.y * GW_BN;
   const int mw = m0 + w * 16;
   const int Kb = K >> 1;                 // packed bytes per row
-  __shared__ int8_t As[GW_STAGES][GW_BM * 32];   // one k-tile = 64 int4 = 32 bytes/row
-  __shared__ int8_t Bs[GW_STAGES][GW_BN * 32];
+  __shared__ int8_t As[GW_STAGES][GW_BM * GW_LDS];   // one k-tile = 64 int4 = 32 bytes/row
+  __shared__ int8_t Bs[GW_STAGES][GW_BN * GW_LDS];
   int acc[GW_BN / 8][4];
 #pragma unroll
   for (int nt = 0; nt < GW_BN / 8; ++nt) { acc[nt][0] = acc[nt][1] = acc[nt][2] = acc[nt][3] = 0; }
@@ -114,12 +117,12 @@ __global__ void gemm_w4a4_kernel(const int8_t* __restrict__ A, const int8_t* __r
 #define GW4_LOAD(ktb, buf)                                                                       \
   for (int c = t; c < GW_BM * 2; c += blockDim.x) {                                              \
     int r = c >> 1, off = (c & 1) * 16;                                                          \
-    modiff_cp_async_cg(modiff_smem_ptr(&As[buf][r * 32 + off]),                                  \
+    modiff_cp_async_cg(modiff_smem_ptr(&As[buf][r * GW_LDS + off]),                                  \
                        (const uint4*)(A + (size_t)(m0 + r) * Kb + (ktb) + off), (m0 + r) < M);   \
   }                                                                                              \
   for (int c = t; c < GW_BN * 2; c += blockDim.x) {                                              \
     int r = c >> 1, off = (c & 1) * 16;                                                          \
-    modiff_cp_async_cg(modiff_smem_ptr(&Bs[buf][r * 32 + off]),                                  \
+    modiff_cp_async_cg(modiff_smem_ptr(&Bs[buf][r * GW_LDS + off]),                                  \
                        (const uint4*)(B + (size_t)(n0 + r) * Kb + (ktb) + off), (n0 + r) < N);   \
   }
 
@@ -130,15 +133,15 @@ __global__ void gemm_w4a4_kernel(const int8_t* __restrict__ A, const int8_t* __r
   for (int i = 0; i < nkt; ++i) {
     const int buf = i % GW_STAGES;
     unsigned a[4];
-    a[0] = *(const int*)&As[buf][(w * 16 + gid) * 32 + tig * 4];
-    a[1] = *(const int*)&As[buf][(w * 16 + gid + 8) * 32 + tig * 4];
-    a[2] = *(const int*)&As[buf][(w * 16 + gid) * 32 + tig * 4 + 16];
-    a[3] = *(const int*)&As[buf][(w * 16 + gid + 8) * 32 + tig * 4 + 16];
+    a[0] = *(const int*)&As[buf][(w * 16 + gid) * GW_LDS + tig * 4];
+    a[1] = *(const int*)&As[buf][(w * 16 + gid + 8) * GW_LDS + tig * 4];
+    a[2] = *(const int*)&As[buf][(w * 16 + gid) * GW_LDS + tig * 4 + 16];
+    a[3] = *(const int*)&As[buf][(w * 16 + gid + 8) * GW_LDS + tig * 4 + 16];
 #pragma unroll
     for (int nt = 0; nt < GW_BN / 8; ++nt) {
       unsigned b[2];
-      b[0] = *(const int*)&Bs[buf][(nt * 8 + gid) * 32 + tig * 4];
-      b[1] = *(const int*)&Bs[buf][(nt * 8 + gid) * 32 + tig * 4 + 16];
+      b[0] = *(const int*)&Bs[buf][(nt * 8 + gid) * GW_LDS + tig * 4];
+      b[1] = *(const int*)&Bs[buf][(nt * 8 + gid) * GW_LDS + tig * 4 + 16];
       modiff_mma_m16n8k64_s4(acc[nt], a, b);
     }
     int li = i + GW_STAGES - 1;
