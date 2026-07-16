@@ -54,7 +54,47 @@ fully-quantized MoDiff method needs a quantizable score path. Net: the quantized
 fp16 *standard* baseline 2.2–2.4×, but standard attention (fp16 or int) is slower than fp16 flash — the method
 trades flash speed for full-pipeline quantization + MoDiff error compensation.
 
-## Status / remaining
-Built + validated: flash removed (A); int8+int4 QKᵀ/softmax/AV kernels (B0–B3); pipeline wiring (D); attention
-kernel-speed + e2e-quality verification. Remaining: **C** effective large-M linear (split-K / AWQ-N-pad for the
-C192 qkv), and the full 6-mode e2e speed/total-IO/profile redo (**E**, incl. MoDiff-mode int4 compensation).
+## C — effective large-M linear (AWQ N-pad)
+
+The dominant C192 qkv linear (M=32768,K=192,N=576) lost to cuBLAS on our `gemm_w8a8` (0.41×, short-K,
+memory-bound, no split-K). AWQ's w8a8 has a large-M tiling but needs N%128; padding N→640 (offline weight/
+wscale pad, slice output) gives near-parity: **C192 qkv 0.41×→0.97×, proj 0.62×→0.97×** vs fp16 cuBLAS.
+`QuantLinearWxAx` now routes int8 (in%64, out≥128) through AWQ (N-padded when needed). Memory-bound short-K
+still can't beat fp16 (0.97× ceiling), but the 2.4× loss is gone. (int4 keeps `gemm_w4a4`.)
+
+## E — full 6-mode pipeline (standard quantized attention, batch 32)
+
+Speed ([`data/pipeline_speed.csv`](data/pipeline_speed.csv), GPU-busy; wall stdev ≤0.1) + peak memory:
+
+| mode | wall | GPU-busy | vs fp16 | peak MiB |
+|---|--:|--:|--:|--:|
+| fp32 | 102.76 | 101.83 | 0.54× | 4920 |
+| fp16 (standard attn) | 56.11 | 55.05 | 1.00× | 4369 |
+| int8 base | 72.32 | 71.61 | **0.77×** | 4906 |
+| int8 modiff | 80.53 | 79.52 | 0.69× | 5311 |
+| int4 base | 71.08 | 70.18 | **0.78×** | 4514 |
+| int4 modiff | 76.51 | 75.30 | 0.73× | 4923 |
+
+**Honest result: the fully-quantized standard attention is slower e2e than fp16 standard (int8/int4 base
+0.77–0.78×), even though the attention kernels are 2.2–2.4× faster in isolation.** The profile
+([`data/kernel_profile.csv`](data/kernel_profile.csv), int8_baseline) shows why: attention (softmax) 19.0 ms +
+QKᵀ/AV+qkv/proj GEMM 20.1 ms + **elementwise 12.9 ms** (the PyTorch per-token Q/K/V quantize) vs fp16's
+attention 11.4 + GEMM 13.4 + elementwise 7.6. Three overheads eat the matmul win:
+1. **PyTorch Q/K/V quantize** (absmax/round/pad/transpose/pack) — ~+5 ms of elementwise, not fused into CUDA.
+2. **fp32 raw scores**: int8 QKᵀ emits fp32 `[BH,T,T]` (int32 overflows fp16) → **doubles** the T×T score
+   memory vs fp16's fp16 scores. Analytical IO ([`data/pipeline_io_analytic.csv`](data/pipeline_io_analytic.csv)):
+   attention IO **int8 13957 > fp16 11430 MiB** — quantizing the score path *increases* IO.
+3. **softmax_requant** (fp32 online softmax over the materialized scores) is memory-bound, ~19 ms.
+
+So the value of this milestone is the **fully-quantized method** (int8 quality-safe at rel 0.015; int4 for
+MoDiff temporal compensation), **not** an e2e speedup. Standard attention (fp16 or int) is also far slower than
+fp16 flash SDPA (33 ms; REPORT.md). Peak memory rises vs flash (materialized T×T; int8 modiff 5311 MiB).
+
+**To make it e2e-effective would need** (future): a fused CUDA Q/K/V quantize; fp16 (scaled) raw scores instead
+of fp32 to halve the T×T IO; and a faster fused softmax — i.e. converging toward a quantized *flash* kernel,
+which is the tension the flash-SDPA finding already exposed.
+
+## Status
+Complete: A (flash removed) · B0–B3 (int8+int4 QKᵀ/softmax/AV kernels) · C (AWQ-N-pad linear) · D (wiring) ·
+E (6-mode speed/IO/profile). Verdict: correct + int8 quality-safe fully-quantized standard attention; kernels
+2.2–2.4× vs fp16 standard in isolation but **e2e-negative** (0.77–0.78×) from quantize + fp32-score overhead.

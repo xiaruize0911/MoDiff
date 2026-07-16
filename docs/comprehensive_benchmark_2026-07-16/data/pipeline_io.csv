@@ -1,7 +1,7 @@
 mode,label,peak_mem_MiB,reserved_MiB,modiff_cache_MiB
-fp32,fp32,2919.6,3288.0,0.0
-fp16,fp16,3407.4,3696.0,0.0
-int8_baseline,int8 base,3602.4,3686.0,0.0
-int8,int8 modiff,4059.7,4790.0,633.6
-int4_baseline,int4 base,3365.2,3420.0,0.0
-int4,int4 modiff,3799.6,4538.0,633.6
+fp32,fp32,4919.6,6062.0,0.0
+fp16,fp16,4369.0,4964.0,0.0
+int8_baseline,int8 base,4905.6,4966.0,0.0
+int8,int8 modiff,5311.4,5812.0,633.6
+int4_baseline,int4 base,4513.5,5396.0,0.0
+int4,int4 modiff,4922.7,5644.0,633.6
