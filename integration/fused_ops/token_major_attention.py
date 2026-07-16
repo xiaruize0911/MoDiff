@@ -31,17 +31,28 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# Attention runs on the math (non-flash) SDPA backend permanently, so the
-# QK^T/AV products stay as regular cuBLAS GEMMs (interceptable/quantizable). The
-# try/except only picks the right API for the installed torch; both force math.
+# Attention runs on PyTorch's FLASH SDPA backend (mem-efficient / math fallback).
+# Measured on churches (A40, batch 32): flash SDPA is ~9x faster than the math backend
+# on the dominant C192/T1024 block (467us vs 4069us) -> 1.71x faster fp16 step + -22%
+# peak memory, quality-identical (latent rel-err 2e-3). The pipeline previously FORCED
+# math SDPA so QK^T/AV stayed interceptable cuBLAS GEMMs for score-path quantization;
+# that quantization (int8 flash / qkv fusion) never recouped the 9x math-SDPA penalty,
+# so flash SDPA is the default. Set MODIFF_SDPA_MATH=1 to force math (e.g. to A/B the
+# score-path quantization, which needs the interceptable GEMMs).
+_SDPA_FORCE_MATH = os.environ.get("MODIFF_SDPA_MATH") == "1"
 try:
     from torch.nn.attention import sdpa_kernel, SDPBackend
-    _SDPA_MATH_CTX = lambda: sdpa_kernel(SDPBackend.MATH)
+    if _SDPA_FORCE_MATH:
+        _SDPA_MATH_CTX = lambda: sdpa_kernel(SDPBackend.MATH)
+    else:
+        _SDPA_MATH_CTX = lambda: sdpa_kernel(
+            [SDPBackend.FLASH_ATTENTION, SDPBackend.EFFICIENT_ATTENTION, SDPBackend.MATH])
 except Exception:  # pragma: no cover - older torch
     from contextlib import contextmanager
     @contextmanager
     def _SDPA_MATH_CTX():
-        with torch.backends.cuda.sdp_kernel(enable_flash=False, enable_mem_efficient=False, enable_math=True):
+        with torch.backends.cuda.sdp_kernel(enable_flash=not _SDPA_FORCE_MATH,
+                                            enable_mem_efficient=not _SDPA_FORCE_MATH, enable_math=True):
             yield
 
 from integration.fused_ops.fused_resblock import _group_norm_silu

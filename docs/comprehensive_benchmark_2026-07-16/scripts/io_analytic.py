@@ -23,7 +23,7 @@ os.chdir("/workspace/MoDiff"); sys.path.insert(0, "/workspace/MoDiff"); sys.path
 spec = importlib.util.spec_from_file_location("abb", "/workspace/MoDiff/integration/benchmarks/ab_benchmark.py")
 abb = importlib.util.module_from_spec(spec); spec.loader.exec_module(abb)
 from integration.fused_ops.token_major_attention import TokenMajorAttentionBlock
-OUT = "/workspace/MoDiff/docs/comprehensive_benchmark_2026-07-15/data"
+OUT = "/workspace/MoDiff/docs/comprehensive_benchmark_2026-07-16/data"
 MiB = 1024**2
 
 class A: pass
@@ -60,7 +60,9 @@ def conv_io(e_operand):          # in + weight at e_operand bytes; output always
 def lin_io(e):                    # qkv (C->3C) + proj (C->C) per attn block
     return sum((N*T*C*e + C*3*C*e + N*T*3*C*e) + (N*T*C*e + C*C*e + N*T*C*e)
                for (C, T, nh, hd) in attns)
-def attn_io(e):                   # math SDPA: read Q,K,V + write&read scores[N,h,T,T] + write out
+def attn_io(e):                   # DEFAULT = flash SDPA: read Q,K,V + write out, NO T×T score matrix
+    return sum(3*N*nh*T*hd*e + N*nh*T*hd*e for (C, T, nh, hd) in attns)
+def attn_io_math(e):              # (reference) old math SDPA: + write&read scores[N,h,T,T]
     return sum(3*N*nh*T*hd*e + 2*(N*nh*T*T*e) + N*nh*T*hd*e for (C, T, nh, hd) in attns)
 def lin_io_q(e_op):               # qkv/proj with weight+act quantized (e_op), OUTPUT stays fp16 (2B)
     return sum((N*T*C*e_op + C*3*C*e_op + N*T*3*C*2.0) + (N*T*C*e_op + C*C*e_op + N*T*C*2.0)

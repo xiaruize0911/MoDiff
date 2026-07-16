@@ -9,7 +9,7 @@ spec = importlib.util.spec_from_file_location("abb", "/workspace/MoDiff/integrat
 abb = importlib.util.module_from_spec(spec); spec.loader.exec_module(abb)
 from integration.kernels.int8_optimized import OptimizedInt8Conv2d
 from integration.kernels.int4_optimized import OptimizedInt4Conv2d
-OUT = "/workspace/MoDiff/docs/comprehensive_benchmark_2026-07-15/data"
+OUT = "/workspace/MoDiff/docs/comprehensive_benchmark_2026-07-16/data"
 
 class A: pass
 args = A(); args.config = "configs/latent-diffusion/lsun_churches-ldm-kl-8.yaml"

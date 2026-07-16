@@ -2,7 +2,7 @@ import csv, os
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-D = "/workspace/MoDiff/docs/comprehensive_benchmark_2026-07-15"
+D = "/workspace/MoDiff/docs/comprehensive_benchmark_2026-07-16"
 DATA = D + "/data"
 def rd(f):
     with open(f"{DATA}/{f}") as fh: return list(csv.DictReader(fh))

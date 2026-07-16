@@ -13,7 +13,7 @@ from torch.profiler import profile, ProfilerActivity
 os.chdir("/workspace/MoDiff"); sys.path.insert(0, "/workspace/MoDiff"); sys.path.insert(0, "/workspace/MoDiff/src/taming-transformers")
 spec = importlib.util.spec_from_file_location("abb", "/workspace/MoDiff/integration/benchmarks/ab_benchmark.py")
 abb = importlib.util.module_from_spec(spec); spec.loader.exec_module(abb)
-OUT = "/workspace/MoDiff/docs/comprehensive_benchmark_2026-07-15/data"
+OUT = "/workspace/MoDiff/docs/comprehensive_benchmark_2026-07-16/data"
 
 class A: pass
 args = A(); args.config = "configs/latent-diffusion/lsun_churches-ldm-kl-8.yaml"

@@ -13,7 +13,7 @@ from integration.kernels.int4_optimized import OptimizedInt4Conv2d, reset_modiff
 from integration.fused_ops.fused_resblock import _group_norm_silu
 import modiff_cutlass as mc
 from torch.nn.attention import sdpa_kernel, SDPBackend
-OUT = "/workspace/MoDiff/docs/comprehensive_benchmark_2026-07-15/data"
+OUT = "/workspace/MoDiff/docs/comprehensive_benchmark_2026-07-16/data"
 torch.backends.cudnn.benchmark = True
 PEAK_BW = 696e9; N = 32
 

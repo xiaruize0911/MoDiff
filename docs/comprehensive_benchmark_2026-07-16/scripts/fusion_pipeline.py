@@ -70,6 +70,6 @@ CONFIGS = [
 ]
 rows = [measure(n, e) for n, e in CONFIGS]
 import csv
-with open("/tmp/claude-0/-workspace/1150c54c-9325-4a0c-8e13-9708345f7905/scratchpad/f4.csv", "w", newline="") as f:
+with open("/workspace/MoDiff/docs/comprehensive_benchmark_2026-07-16/data/fusion_pipeline.csv", "w", newline="") as f:
     w = csv.DictWriter(f, fieldnames=list(rows[0].keys())); w.writeheader(); w.writerows(rows)
 print("DONE", flush=True)
