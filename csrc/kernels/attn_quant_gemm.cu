@@ -119,30 +119,45 @@ torch::Tensor attn_qk_int8(torch::Tensor Q, torch::Tensor K, torch::Tensor sq, t
 // exp/sum in fp32; emit P_i8[j] = round(exp(logit_j - m)·127) ∈ [0,127] and per-row sp[i] =
 // 1/(127·Σexp) so that p[i,j] = P_i8[i,j]·sp[i] (dequantized softmax prob). AV then applies sp[i].
 #define AQ_SM_THREADS 256
-// Input S is fp16 pre-scaled logits (QKᵀ epilogue already applied sq·sk·scale). Fused row
-// max/exp/sum -> int8 P[0,127] + per-row sp=1/(127·Σexp). Reads fp16 (half the fp32 IO).
+// Load 8 fp16 logits (one 128-bit uint4) into float f[8].
+__device__ __forceinline__ void aq_ld8(const uint4* p, float f[8]) {
+  uint4 v = *p;
+  float2 a = __half22float2(*(const __half2*)&v.x), b = __half22float2(*(const __half2*)&v.y);
+  float2 c = __half22float2(*(const __half2*)&v.z), d = __half22float2(*(const __half2*)&v.w);
+  f[0] = a.x; f[1] = a.y; f[2] = b.x; f[3] = b.y; f[4] = c.x; f[5] = c.y; f[6] = d.x; f[7] = d.y;
+}
+// Input S is fp16 pre-scaled logits (QKᵀ epilogue already applied sq·sk·scale). Two passes over
+// the T×T row (down from three): (1) 128-bit-vectorized row max; (2) fused exp -> accumulate Σexp
+// AND write int8 P[0,127] in the same pass (P needs only the max, not the sum — the 1/(127·Σexp)
+// denominator is folded into per-row sp and applied later in AV). Requires T%8==0.
 __global__ void attn_softmax_requant_kernel(const __half* __restrict__ S, int8_t* __restrict__ P,
                                             float* __restrict__ sp, int T) {
   const int row = blockIdx.x;
-  const __half* Srow = S + (size_t)row * T;
-  int8_t* Prow = P + (size_t)row * T;
-  const int tid = threadIdx.x, nt = blockDim.x;
+  const uint4* Srow = reinterpret_cast<const uint4*>(S + (size_t)row * T);
+  int2* Prow = reinterpret_cast<int2*>(P + (size_t)row * T);      // 8 int8 per store
+  const int tid = threadIdx.x, nt = blockDim.x, T8 = T >> 3;
   __shared__ float red[AQ_SM_THREADS];
-  float m = -1e30f;
-  for (int j = tid; j < T; j += nt) m = fmaxf(m, __half2float(Srow[j]));
+  float f[8], m = -1e30f;
+  for (int c = tid; c < T8; c += nt) { aq_ld8(Srow + c, f);
+#pragma unroll
+    for (int k = 0; k < 8; ++k) m = fmaxf(m, f[k]); }
   red[tid] = m; __syncthreads();
   for (int s = nt >> 1; s > 0; s >>= 1) { if (tid < s) red[tid] = fmaxf(red[tid], red[tid + s]); __syncthreads(); }
   m = red[0]; __syncthreads();
   float sum = 0.f;
-  for (int j = tid; j < T; j += nt) sum += __expf(__half2float(Srow[j]) - m);
+  for (int c = tid; c < T8; c += nt) { aq_ld8(Srow + c, f);
+    int b0 = 0, b1 = 0;
+#pragma unroll
+    for (int k = 0; k < 8; ++k) {
+      float e = __expf(f[k] - m); sum += e;
+      int q = __float2int_rn(e * 127.f); q = q < 0 ? 0 : (q > 127 ? 127 : q);
+      if (k < 4) b0 |= q << (k * 8); else b1 |= q << ((k - 4) * 8);
+    }
+    Prow[c] = make_int2(b0, b1);
+  }
   red[tid] = sum; __syncthreads();
   for (int s = nt >> 1; s > 0; s >>= 1) { if (tid < s) red[tid] += red[tid + s]; __syncthreads(); }
-  const float l = red[0];
-  if (tid == 0) sp[row] = 1.f / (127.f * fmaxf(l, 1e-20f));
-  for (int j = tid; j < T; j += nt) {
-    int q = __float2int_rn(__expf(__half2float(Srow[j]) - m) * 127.f);
-    Prow[j] = (int8_t)(q < 0 ? 0 : (q > 127 ? 127 : q));
-  }
+  if (tid == 0) sp[row] = 1.f / (127.f * fmaxf(red[0], 1e-20f));
 }
 
 // ---- batched int8 AV: O[T,hd_pad] fp16 = P[T,T] · Vt[hd_pad,T]ᵀ, dequant sp[row]·sv[col] ----
@@ -238,6 +253,7 @@ std::vector<torch::Tensor> attn_softmax_requant(torch::Tensor S) {
   S = S.contiguous();
   int BH = S.size(0), T = S.size(2);
   TORCH_CHECK(S.size(1) == T, "S must be [BH,T,T]");
+  TORCH_CHECK(T % 8 == 0, "softmax needs T%8==0 (vectorized 128-bit rows)");
   auto P = torch::empty({BH, T, T}, torch::TensorOptions().dtype(torch::kChar).device(S.device()));
   auto sp = torch::empty({BH, T}, torch::TensorOptions().dtype(torch::kFloat32).device(S.device()));
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
@@ -333,35 +349,42 @@ torch::Tensor attn_qk_int4(torch::Tensor Q, torch::Tensor K, int64_t hd_pad,
 }
 
 // softmax + requant to PACKED int4 P (round(exp·7) in [0,7], pack pairs) + per-row sp=1/(7·Σexp)
+// int4 variant: two vectorized passes; pass 2 fuses exp/Σexp and packs 8 int4 P[0,7] into one
+// 32-bit store (byte b = q_2b | q_{2b+1}<<4, matching the AV unpack). Requires T%8==0.
 __global__ void attn_softmax_requant4_kernel(const __half* __restrict__ S, int8_t* __restrict__ P,
                                              float* __restrict__ sp, int T) {
   const int row = blockIdx.x;
-  const __half* Srow = S + (size_t)row * T;
-  int8_t* Prow = P + (size_t)row * (T / 2);            // packed
-  const int tid = threadIdx.x, nt = blockDim.x;
+  const uint4* Srow = reinterpret_cast<const uint4*>(S + (size_t)row * T);
+  int* Prow = reinterpret_cast<int*>(P + (size_t)row * (T / 2));  // 8 int4 (4 bytes) per store
+  const int tid = threadIdx.x, nt = blockDim.x, T8 = T >> 3;
   __shared__ float red[AQ_SM_THREADS];
-  float m = -1e30f;
-  for (int j = tid; j < T; j += nt) m = fmaxf(m, __half2float(Srow[j]));
+  float f[8], m = -1e30f;
+  for (int c = tid; c < T8; c += nt) { aq_ld8(Srow + c, f);
+#pragma unroll
+    for (int k = 0; k < 8; ++k) m = fmaxf(m, f[k]); }
   red[tid] = m; __syncthreads();
   for (int s = nt >> 1; s > 0; s >>= 1) { if (tid < s) red[tid] = fmaxf(red[tid], red[tid + s]); __syncthreads(); }
   m = red[0]; __syncthreads();
   float sum = 0.f;
-  for (int j = tid; j < T; j += nt) sum += __expf(__half2float(Srow[j]) - m);
+  for (int c = tid; c < T8; c += nt) { aq_ld8(Srow + c, f);
+    int packed = 0;
+#pragma unroll
+    for (int k = 0; k < 8; ++k) {
+      float e = __expf(f[k] - m); sum += e;
+      int q = __float2int_rn(e * 7.f); q = q < 0 ? 0 : (q > 7 ? 7 : q);
+      packed |= (q & 0xF) << (k * 4);
+    }
+    Prow[c] = packed;
+  }
   red[tid] = sum; __syncthreads();
   for (int s = nt >> 1; s > 0; s >>= 1) { if (tid < s) red[tid] += red[tid + s]; __syncthreads(); }
-  const float l = red[0];
-  if (tid == 0) sp[row] = 1.f / (7.f * fmaxf(l, 1e-20f));
-  for (int jp = tid; jp < T / 2; jp += nt) {
-    int j0 = jp * 2;
-    int q0 = __float2int_rn(__expf(__half2float(Srow[j0])     - m) * 7.f); q0 = q0 < 0 ? 0 : (q0 > 7 ? 7 : q0);
-    int q1 = __float2int_rn(__expf(__half2float(Srow[j0 + 1]) - m) * 7.f); q1 = q1 < 0 ? 0 : (q1 > 7 ? 7 : q1);
-    Prow[jp] = (int8_t)((q0 & 0xF) | ((q1 & 0xF) << 4));
-  }
+  if (tid == 0) sp[row] = 1.f / (7.f * fmaxf(red[0], 1e-20f));
 }
 
 std::vector<torch::Tensor> attn_softmax_requant4(torch::Tensor S) {
   TORCH_CHECK(S.dtype() == torch::kHalf, "S fp16"); S = S.contiguous();
   int BH = S.size(0), T = S.size(2);
+  TORCH_CHECK(T % 8 == 0, "softmax4 needs T%8==0 (vectorized 128-bit rows)");
   auto P = torch::empty({BH, T, T / 2}, torch::TensorOptions().dtype(torch::kChar).device(S.device()));
   auto sp = torch::empty({BH, T}, torch::TensorOptions().dtype(torch::kFloat32).device(S.device()));
   attn_softmax_requant4_kernel<<<BH * T, AQ_SM_THREADS, 0, at::cuda::getCurrentCUDAStream()>>>(

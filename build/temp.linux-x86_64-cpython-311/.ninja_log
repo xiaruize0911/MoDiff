@@ -40,3 +40,4 @@
 309	39458	1784230694000000000	/workspace/MoDiff/build/temp.linux-x86_64-cpython-311/csrc/pybind.o	d50eca11efdaf529
 301	69990	1784230694000000000	/workspace/MoDiff/build/temp.linux-x86_64-cpython-311/csrc/kernels/attn_quant_gemm.o	2b1396e210988270
 304	71195	1784230694000000000	/workspace/MoDiff/build/temp.linux-x86_64-cpython-311/csrc/kernels/modiff_delta_quantize.o	c17054414d26aab9
+385	66733	1784233422000000000	/workspace/MoDiff/build/temp.linux-x86_64-cpython-311/csrc/kernels/attn_quant_gemm.o	2b1396e210988270
