@@ -98,10 +98,16 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "W8A8 linear: C[M,N] fp16 = (A[M,K] int8 . B[N,K]^T int8) * a_scale * w_scale[n]");
     m.def("gemm_w4a4", &gemm_w4a4,
           "W4A4 linear: C[M,N] fp16 = (A[M,K/2] . B[N,K/2]^T packed int4) * a_scale * w_scale[n]");
+    m.def("gemm_w8a8_out_int8", &gemm_w8a8_out_int8,
+          "W8A8 linear, int8 output = round(acc*a_scale*w_scale[c]*oscale[c]) (fused qkv->flash path)");
+    m.def("gemm_w4a4_out_int8", &gemm_w4a4_out_int8,
+          "W4A4 linear, int8 output = round(acc*a_scale*w_scale[c]*oscale[c]) (fused qkv->flash path)");
     m.def("quantize_act_int8", &quantize_act_int8, "Fused fp16->int8 activation quantize (static scale)");
     m.def("quantize_act_int4_pack", &quantize_act_int4_pack, "Fused fp16->packed-int4 activation quantize (static scale)");
 
     // Fused qkv quantize for the flash score path (kernels/quantize_qkv.cu)
     m.def("quantize_qkv_int8", &quantize_qkv_int8,
           "packed qkv [B,T,nh,3,hd] fp16 -> {qi,ki,vi [B,nh,T,hd_pad] int8, sq,sk [B,nh,T], sv [B,nh,hd] f32}");
+    m.def("transpose_qkv_int8", &transpose_qkv_int8,
+          "int8 packed qkv [B,T,nh,3,hd] -> {qi,ki,vi [B,nh,T,hd_pad] int8} head-major, hd zero-padded");
 }

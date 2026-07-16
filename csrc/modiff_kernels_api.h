@@ -217,8 +217,11 @@ torch::Tensor mma_smoke(torch::Tensor A, torch::Tensor B);
 // ---- csrc/kernels/gemm_wxax.cu ----
 torch::Tensor gemm_w8a8(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale);
 torch::Tensor gemm_w4a4(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale, int64_t K);
+torch::Tensor gemm_w8a8_out_int8(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale, torch::Tensor oscale, torch::Tensor bias);
+torch::Tensor gemm_w4a4_out_int8(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale, int64_t K, torch::Tensor oscale, torch::Tensor bias);
 torch::Tensor quantize_act_int8(torch::Tensor x, double a_scale);
 torch::Tensor quantize_act_int4_pack(torch::Tensor x, double a_scale);
 
 // ---- csrc/kernels/quantize_qkv.cu ----
 std::vector<torch::Tensor> quantize_qkv_int8(torch::Tensor qkv, int64_t nh, int64_t hd_pad);
+std::vector<torch::Tensor> transpose_qkv_int8(torch::Tensor qkv_i8, int64_t nh, int64_t hd_pad);

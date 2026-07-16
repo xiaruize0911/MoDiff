@@ -97,3 +97,40 @@ std::vector<torch::Tensor> quantize_qkv_int8(torch::Tensor qkv, int64_t nh, int6
   faq_vquant_kernel<<<rows, (int)hd_pad, 0, stream>>>(p, sv.data_ptr<float>(), vi.data_ptr<int8_t>(), nh, T, hd, hd_pad);
   return {qi, ki, vi, sq, sk, sv};
 }
+
+// ---- int8-in transpose (for the fused qkv-int8 -> flash path) --------------------
+// Reorders an ALREADY-int8 packed qkv [B,T,nh,3,hd] (the int8 output of gemm_*_out_int8,
+// which shares the quantize_qkv packed layout) into head-major [B,nh,T,hd_pad] int8 for
+// q,k,v, zero-padding hd->hd_pad. This is quantize_qkv_int8 minus the fp16 read + absmax +
+// quantize -- the scales are calibrated statically upstream, not recomputed here.
+__global__ void transpose_qkv_i8_kernel(const int8_t* __restrict__ qkv,
+                                        int8_t* __restrict__ qi, int8_t* __restrict__ ki,
+                                        int8_t* __restrict__ vi, int nh, int T, int hd, int hd_pad) {
+  int r = blockIdx.x, d = threadIdx.x;               // r = head-major (b,h,t); block = hd_pad threads
+  if (d >= hd_pad) return;
+  size_t o = (size_t)r * hd_pad + d;
+  if (d < hd) {
+    qi[o] = qkv[qkv_row_base(r, nh, T, hd, 0) + d];
+    ki[o] = qkv[qkv_row_base(r, nh, T, hd, 1) + d];
+    vi[o] = qkv[qkv_row_base(r, nh, T, hd, 2) + d];
+  } else { qi[o] = 0; ki[o] = 0; vi[o] = 0; }
+}
+
+// qkv_i8: int8 packed [B,T,nh,3,hd] (view of the gemm_*_out_int8 output [B*T, nh*3*hd]).
+// Returns {qi,ki,vi} int8 [B,nh,T,hd_pad], head-major, hd zero-padded.
+std::vector<torch::Tensor> transpose_qkv_int8(torch::Tensor qkv_i8, int64_t nh, int64_t hd_pad) {
+  TORCH_CHECK(qkv_i8.is_cuda() && qkv_i8.dtype() == torch::kChar, "qkv_i8 int8 CUDA");
+  qkv_i8 = qkv_i8.contiguous();
+  int B = qkv_i8.size(0), T = qkv_i8.size(1), hd = qkv_i8.size(-1);
+  TORCH_CHECK(hd_pad >= hd && hd_pad % 4 == 0 && hd_pad <= 128, "bad hd_pad");
+  int rows = B * (int)nh * T;
+  auto oi = torch::TensorOptions().dtype(torch::kChar).device(qkv_i8.device());
+  auto qi = torch::empty({B, (int)nh, T, (int)hd_pad}, oi);
+  auto ki = torch::empty({B, (int)nh, T, (int)hd_pad}, oi);
+  auto vi = torch::empty({B, (int)nh, T, (int)hd_pad}, oi);
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  transpose_qkv_i8_kernel<<<rows, (int)hd_pad, 0, stream>>>(
+      qkv_i8.data_ptr<int8_t>(), qi.data_ptr<int8_t>(), ki.data_ptr<int8_t>(),
+      vi.data_ptr<int8_t>(), (int)nh, T, hd, (int)hd_pad);
+  return {qi, ki, vi};
+}

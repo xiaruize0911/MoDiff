@@ -33,10 +33,13 @@ try:
     import modiff_cutlass as _mc
     _HAS_FLASH_INT8 = hasattr(_mc, "flash_attn_int8")
     _HAS_QUANT_QKV = hasattr(_mc, "quantize_qkv_int8")
+    _HAS_FUSED_QKV = (hasattr(_mc, "gemm_w8a8_out_int8") and hasattr(_mc, "gemm_w4a4_out_int8")
+                      and hasattr(_mc, "transpose_qkv_int8"))
 except Exception:
     _mc = None
     _HAS_FLASH_INT8 = False
     _HAS_QUANT_QKV = False
+    _HAS_FUSED_QKV = False
 
 try:
     from ldm.modules.diffusionmodules.openaimodel import AttentionBlock, QKVAttentionLegacy
@@ -51,6 +54,19 @@ except Exception:
 # benefit, so default the threshold to 512 (T=1024 block only). Override to 64 to
 # quantize all attention blocks.
 _FLASH_MIN_T = int(os.environ.get("MODIFF_FLASH_MIN_T", "512"))
+
+# Fused qkv-int-output -> flash path (skips the fp16 round-trip): 0=off, 8=W8A8, 4=W4A4.
+# The qkv Linear emits int8 directly (gemm_w{8a8,4a4}_out_int8), a light int8 transpose
+# reorders to head-major, and the int8 flash consumes it. Scales are calibrated static
+# (Q/K per-tensor, V per-channel-over-T) over the first MODIFF_QKV_CALIB_STEPS forwards.
+_QKV_FUSED_BITS = int(os.environ.get("MODIFF_QKV_FLASH_FUSED", "0"))
+_QKV_CALIB_STEPS = int(os.environ.get("MODIFF_QKV_CALIB_STEPS", "8"))
+
+
+def _pack_int4_rows(wq):  # int8 values in [-7,7], [N,K] -> packed [N,K/2]
+    lo = wq[:, 0::2] & 0xF
+    hi = wq[:, 1::2] & 0xF
+    return (lo | (hi << 4)).to(torch.int8).contiguous()
 
 
 def _pad_hd(x, hd_pad):
@@ -83,12 +99,105 @@ class QuantizedTokenMajorAttentionBlock(TokenMajorAttentionBlock):
                     s = (w.abs().amax(dim=1, keepdim=True) / 7.0).clamp_min(1e-8)
                     lin.weight.copy_((torch.round(w / s).clamp_(-7, 7) * s).to(w.dtype))
 
+        # Fused qkv-int-output -> flash state (populated lazily on first eligible forward).
+        self._qkv_fused_bits = int(os.environ.get("MODIFF_QKV_FLASH_FUSED", "0"))
+        self._fused_ready = False      # qkv weight quantized
+        self._fused_frozen = False     # static scales calibrated
+        self._calib_n = 0
+        self._amax_in = 0.0
+        self._amax_q = 0.0
+        self._amax_k = 0.0
+        self._amax_v = None            # [nh,hd] running absmax over tokens
+        self._flash_scale_cache = {}
+
     def _quant_flash_packed(self, qkv, nh, hd):
         """qkv: [B,T,nh,3,hd] fp16 (packed) -> [B,nh,T,hd] fp16 via fused int8 flash.
         The fused quantize reads the packed qkv directly (no transpose/contiguous)."""
         hd_pad = (hd + 31) // 32 * 32
         qi, ki, vi, sq, sk, scv = _mc.quantize_qkv_int8(qkv, nh, hd_pad)
         return _mc.flash_attn_int8(qi, ki, vi, sq, sk, scv, 1.0 / math.sqrt(hd))
+
+    # ---- fused qkv-int-output -> flash path (skips the fp16 round-trip) ----
+    def _ensure_fused_qkv_weights(self, bits):
+        if self._fused_ready:
+            return
+        Q = 127 if bits == 8 else 7
+        with torch.no_grad():
+            W = self.qkv.weight.data.float()                    # [3C, C]
+            wamax = W.abs().amax(dim=1).clamp_min(1e-8)          # [3C]
+            self._qkv_wscale = (wamax / Q).float().contiguous()
+            wq = torch.round(W / (wamax / Q)[:, None]).clamp_(-Q, Q).to(torch.int8)
+            self._qkv_wint = wq.contiguous() if bits == 8 else _pack_int4_rows(wq)
+            self._qkv_bias = (self.qkv.bias.data.float().contiguous()
+                              if self.qkv.bias is not None
+                              else torch.empty(0, device=W.device, dtype=torch.float32))
+        self._fused_ready = True
+
+    def _calib_update(self, xn_tok, qkv_fp, nh, hd):
+        with torch.no_grad():
+            self._amax_in = max(self._amax_in, float(xn_tok.abs().max()))
+            qv = qkv_fp.reshape(-1, nh, 3, hd).float()
+            self._amax_q = max(self._amax_q, float(qv[:, :, 0, :].abs().max()))
+            self._amax_k = max(self._amax_k, float(qv[:, :, 1, :].abs().max()))
+            v_amax = qv[:, :, 2, :].abs().amax(dim=0)            # [nh,hd]
+            self._amax_v = v_amax if self._amax_v is None else torch.maximum(self._amax_v, v_amax)
+        self._calib_n += 1
+        if self._calib_n >= _QKV_CALIB_STEPS:
+            self._freeze_fused(nh, hd)
+
+    def _freeze_fused(self, nh, hd):
+        Q = 127 if self._qkv_fused_bits == 8 else 7
+        dev = self._qkv_wscale.device
+        self._qkv_ascale = max(self._amax_in / Q, 1e-8)
+        # oscale [3C] = 127/absmax per output column (Q/K per-tensor, V per-channel).
+        osc = torch.empty(nh, 3, hd, device=dev, dtype=torch.float32)
+        osc[:, 0, :] = 127.0 / max(self._amax_q, 1e-8)
+        osc[:, 1, :] = 127.0 / max(self._amax_k, 1e-8)
+        osc[:, 2, :] = 127.0 / self._amax_v.clamp_min(1e-8).to(dev)
+        self._oscale = osc.reshape(-1).contiguous()
+        # flash dequant scales (= absmax/127); broadcast to [B,nh,T]/[B,nh,hd] on demand.
+        self._sq_val = max(self._amax_q, 1e-8) / 127.0
+        self._sk_val = max(self._amax_k, 1e-8) / 127.0
+        self._sv_vec = (self._amax_v.clamp_min(1e-8) / 127.0).to(dev).float().contiguous()  # [nh,hd]
+        self._fused_frozen = True
+
+    def _flash_scales(self, B, nh, T, hd, dev):
+        c = self._flash_scale_cache.get((B, T))
+        if c is None:
+            sq = torch.full((B, nh, T), self._sq_val, device=dev, dtype=torch.float32)
+            sk = torch.full((B, nh, T), self._sk_val, device=dev, dtype=torch.float32)
+            sv = self._sv_vec.view(1, nh, hd).expand(B, nh, hd).contiguous()
+            c = (sq, sk, sv)
+            self._flash_scale_cache[(B, T)] = c
+        return c
+
+    def _fused_qkv_flash(self, x, nh, hd, bits):
+        """GN -> quantize -> gemm_*_out_int8 (packed int8 qkv) -> int8 transpose -> flash.
+        During calibration (first _QKV_CALIB_STEPS) runs the fp16 path and records absmax."""
+        b, cch, H, W = x.shape
+        T = H * W
+        w, bnorm = self._gn_params(x.dtype)
+        xn = _group_norm_silu(x, self.norm.num_groups, w, bnorm, self.norm.eps, apply_silu=False)
+        xn_tok = xn.permute(0, 2, 3, 1).reshape(b * T, cch)
+        self._ensure_fused_qkv_weights(bits)
+        if not self._fused_frozen:
+            qkv_fp = self.qkv(xn_tok.to(x.dtype)).view(b, T, nh, 3, hd)
+            self._calib_update(xn_tok, qkv_fp, nh, hd)
+            return self._quant_flash_packed(qkv_fp, nh, hd)     # correct fp16 output while calibrating
+        a_scale = self._qkv_ascale
+        xf = xn_tok.half().contiguous()
+        if bits == 8:
+            xq = _mc.quantize_act_int8(xf, a_scale)
+            qkv_i8 = _mc.gemm_w8a8_out_int8(xq, self._qkv_wint, self._qkv_wscale, a_scale,
+                                            self._oscale, self._qkv_bias)
+        else:
+            xq = _mc.quantize_act_int4_pack(xf, a_scale)
+            qkv_i8 = _mc.gemm_w4a4_out_int8(xq, self._qkv_wint, self._qkv_wscale, a_scale,
+                                            cch, self._oscale, self._qkv_bias)
+        hd_pad = (hd + 31) // 32 * 32
+        qi, ki, vi = _mc.transpose_qkv_int8(qkv_i8.view(b, T, nh, 3, hd), nh, hd_pad)
+        sq, sk, sv = self._flash_scales(b, nh, T, hd, qi.device)
+        return _mc.flash_attn_int8(qi, ki, vi, sq, sk, sv, 1.0 / math.sqrt(hd))
 
     def _quant_flash(self, q, k, v):
         """PyTorch-fallback quantize path (q,k,v: [B,H,T,hd] fp16)."""
@@ -115,6 +224,14 @@ class QuantizedTokenMajorAttentionBlock(TokenMajorAttentionBlock):
         T = H * W
         nh, hd = self.num_heads, self.head_dim
         x_in_tok = x.permute(0, 2, 3, 1).reshape(b, T, c)
+
+        # ---- fused qkv-int-output -> flash path (skips the fp16 qkv round-trip) ----
+        if (self._qkv_fused_bits in (4, 8) and self.score_bits == 8 and T >= _FLASH_MIN_T
+                and _HAS_FUSED_QKV and _HAS_FLASH_INT8 and x.dtype == torch.float16):
+            a = self._fused_qkv_flash(x, nh, hd, self._qkv_fused_bits)   # [b,nh,T,hd]
+            a = a.transpose(1, 2).reshape(b, T, c)
+            out_tok = x_in_tok + self.proj(a)
+            return out_tok.reshape(b, H, W, c).permute(0, 3, 1, 2)
 
         # ---- qkv (fp16), reusing the fused GN->qkv path or GN+cuBLAS fallback ----
         use_fused = (self._fuse_gn_qkv and _HAS_FUSED_GN_QKV and x.dtype == torch.float16

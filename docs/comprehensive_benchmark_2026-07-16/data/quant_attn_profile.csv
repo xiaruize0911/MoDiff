@@ -1,0 +1,6 @@
+mode,cfg,name,wall_ms,gpu_ms,peak_MiB,attn_flash_ms,gemm_ms,qlin_gemm_ms,quant_ms
+int8_baseline,default,A) default fp16 attn+lin,50.12,49.232,4549.7,11.387,13.374,0.0,0.2
+int8_baseline,lin,B) +QUANT_LINEAR §7,53.892,53.043,4461.2,11.376,12.157,3.005,0.974
+int8_baseline,attn,C) +QUANT_ATTN §6 flash,54.685,53.973,3601.6,25.081,2.602,0.0,0.2
+int4_baseline,default,A) default fp16 attn+lin,48.175,47.246,4296.3,11.376,13.383,0.0,0.18
+int4_baseline,lin,B) +QUANT_LINEAR §7,50.294,49.357,4194.2,11.38,12.149,1.757,0.787
