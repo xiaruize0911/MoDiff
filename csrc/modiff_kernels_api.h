@@ -225,3 +225,8 @@ torch::Tensor quantize_act_int4_pack(torch::Tensor x, double a_scale);
 // ---- csrc/kernels/quantize_qkv.cu ----
 std::vector<torch::Tensor> quantize_qkv_int8(torch::Tensor qkv, int64_t nh, int64_t hd_pad);
 std::vector<torch::Tensor> transpose_qkv_int8(torch::Tensor qkv_i8, int64_t nh, int64_t hd_pad);
+
+// ---- csrc/kernels/attn_quant_gemm.cu (standard quantized attention) ----
+torch::Tensor attn_qk_int8(torch::Tensor Q, torch::Tensor K);
+std::vector<torch::Tensor> attn_softmax_requant(torch::Tensor S, torch::Tensor sq, torch::Tensor sk, double softmax_scale);
+torch::Tensor attn_av_int8(torch::Tensor P, torch::Tensor Vt, torch::Tensor sp, torch::Tensor sv);

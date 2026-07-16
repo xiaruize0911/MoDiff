@@ -110,4 +110,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "packed qkv [B,T,nh,3,hd] fp16 -> {qi,ki,vi [B,nh,T,hd_pad] int8, sq,sk [B,nh,T], sv [B,nh,hd] f32}");
     m.def("transpose_qkv_int8", &transpose_qkv_int8,
           "int8 packed qkv [B,T,nh,3,hd] -> {qi,ki,vi [B,nh,T,hd_pad] int8} head-major, hd zero-padded");
+
+    // Standard quantized attention (attn_quant_gemm.cu)
+    m.def("attn_qk_int8", &attn_qk_int8,
+          "batched int8 QKᵀ: Q,K int8 [BH,T,hd_pad] -> S [BH,T,T] fp32 (raw accumulator)");
+    m.def("attn_softmax_requant", &attn_softmax_requant,
+          "softmax(dequant S · sq·sk·scale) -> {P int8 [BH,T,T] in [0,127], sp [BH,T]}");
+    m.def("attn_av_int8", &attn_av_int8,
+          "batched int8 AV: P[BH,T,T]·Vtᵀ[BH,hd_pad,T] -> O fp16 [BH,T,hd_pad], dequant sp[row]·sv[col]");
 }
