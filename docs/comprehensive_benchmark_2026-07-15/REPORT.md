@@ -209,6 +209,51 @@ smallest peak** (4295 MiB), and MoDiff adds a fixed **+634 MiB** `a_hat`/`o_hat`
 
 ---
 
+## 6. Quantized attention-score path (opt-in: `MODIFF_QUANT_ATTN=1`)
+
+A fused, tensor-core **int8 flash-attention** kernel (`csrc/kernels/flash_attn_int8.cu`, `mma.m16n8k32.s8`)
+replaces the math-SDPA score path (QKᵀ/softmax/AV) and **never materializes the `[N,H,T,T]` score matrix**.
+Measured in `int8_baseline` (batch 32):
+
+| config | speed vs fp16-attn | peak memory | latent rel-err |
+|---|--:|--:|--:|
+| fp16 attention (default) | 1.00× | 4549 MiB | — |
+| int8 flash, all attn blocks | 0.87× | **3600 MiB (−21%)** | 0.0038 |
+| int8 flash, large-T only (`MODIFF_FLASH_MIN_T=512`) | 0.92× | 3602 MiB (−21%) | 0.0033 |
+
+- **This is a memory win, not a speed win.** The −21% peak comes from avoiding the fp16 T×T score matrix
+  (~512 MB on the C192/T1024 block); ~94% of it is that one block, so the default gates int8 flash to the
+  large-T block only (keeps the full memory win at ~parity speed). Speed doesn't improve because attention is
+  dtype-invariant and cuBLAS-backed SDPA is already near-optimal. Design + details:
+  [`../attention_quantization_plan.md`](../attention_quantization_plan.md).
+
+## 7. Quantized Linear layers — W8A8 / W4A4 (opt-in: `MODIFF_QUANT_LINEAR=1`)
+
+AWQ-referenced custom int8/int4 tensor-core GEMM (`csrc/kernels/gemm_wxax.cu`, `cp.async` pipeline +
+shape-adaptive tiles) quantizes the Linear-equivalent layers (attention qkv/proj, ResBlock emb_layers,
+time_embed) — weight+activation, static scales. Numerically **exact vs AWQ**; **beats fp16 on memory-bound
+shapes**, 1.1–1.85× of AWQ (see [`../linear_quantization_results.md`](../linear_quantization_results.md)).
+
+End-to-end (batch 32, heavy-warmup; `data/linear_quant_speed.csv`):
+
+| mode | fp16-lin ms | quant-lin ms | speed | peak (off→on) | rel-err† |
+|---|--:|--:|--:|--:|--:|
+| int8 base | 49.90 | 54.74 | 0.912× | 4548 → 4464 | 0.007 |
+| int8 modiff | 58.65 | 63.05 | 0.930× | 4969 → 4869 | 0.057 |
+| int4 base | 48.35 | 51.64 | 0.936× | 4310 → 4193 | 0.228 |
+| int4 modiff | 53.90 | 57.22 | 0.942× | 4717 → 4604 | 0.456 |
+
+†rel-err vs same-mode fp16-linear (batch 16; batch-invariant).
+
+- **e2e-neutral (0.91–0.94×), not a speed win** — the profiler shows the quantized-Linear work is only
+  **~5 ms of the ~55 ms step (~9%)**: our int GEMM 4.3 ms + act-quant 0.8 ms, dwarfed by conv/attention GEMMs
+  (20.4 ms) and elementwise (10.5 ms). The Linears are a small fraction of this conv-dominated UNet.
+- **int8 Linear is quality-safe** (rel 0.007–0.057); **int4 is too lossy** (0.23–0.46). Memory win is small
+  (−84…−117 MiB); MoDiff temporal-delta on Linear activations was tried and reverted (diverges). Recommended:
+  int8 Linear quant where footprint matters, int4 not recommended.
+
+---
+
 ## Bottom line
 
 - **Speed:** `int4 base` is fastest (**1.17× wall vs fp16, 2.14× vs fp32**), `int8 base` next (1.11× / 2.04×).
@@ -224,7 +269,15 @@ smallest peak** (4295 MiB), and MoDiff adds a fixed **+634 MiB** `a_hat`/`o_hat`
 - **Total IO usage:** conv IO drops as expected under quantization (int8 0.64×, int4 0.45× of fp16), but the
   *total* only falls to 0.94×/0.91× because the fp16 attention-score traffic (~75% of DRAM IO) is
   dtype-invariant — the same Amdahl wall as the speedup. fp32 moves ~1.95× the fp16 total.
+- **Opt-in quantization extensions (§6, §7):** quantizing the **attention-score path** (`MODIFF_QUANT_ATTN=1`,
+  fused int8 flash) is a **−21% peak-memory** win, not speed; quantizing the **Linear layers**
+  (`MODIFF_QUANT_LINEAR=1`, W8A8/W4A4) is **e2e-neutral** (~0.91–0.94×, ~5 ms/9% of the step) — int8
+  quality-safe, int4 too lossy. Both confirm the recurring theme: **the compute lives in the convs**, so
+  quantizing the non-conv ops yields memory/footprint gains, not step-time speedups, for this UNet.
 
-*Scripts (in [`scripts/`](scripts/)): `pipeline.py`, `kernel.py`, `mkplots.py`. Re-run with
-`PYTHONPATH=src/taming-transformers CUTLASS_PATH=/workspace/cutlass`. Attention: math SDPA backend via
-`TokenMajorAttentionBlock`; fused GN→qkv on all modes.*
+*Scripts (in [`scripts/`](scripts/)): `pipeline.py`, `kernel.py`, `io_analytic.py`, `mkplots.py`,
+`linear_quant.py`. Re-run with `PYTHONPATH=src/taming-transformers CUTLASS_PATH=/workspace/cutlass`
+(`pip install ninja` first). Default pipeline: math SDPA via `TokenMajorAttentionBlock`, fused GN→qkv on all
+modes; §6/§7 quantization is opt-in via the env flags above. Detail reports:
+[`../attention_quantization_plan.md`](../attention_quantization_plan.md),
+[`../linear_quantization_results.md`](../linear_quantization_results.md).*
