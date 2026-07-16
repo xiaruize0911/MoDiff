@@ -17,15 +17,19 @@
 #include "../common.cuh"
 #include "mma_int8.cuh"
 
-#define GW_BM 16
+#define GW_WARPS 4
+#define GW_BM (GW_WARPS * 16)   // 64 rows/CTA (one warp per 16-row sub-tile)
 #define GW_BN 64
 
+// Multi-warp CTA: GW_WARPS warps share the B smem tile (loaded once per CTA),
+// each warp owns a 16-row A sub-tile. m16n8k32.s8 mma, int32 accumulate, dequant epilogue.
 __global__ void gemm_w8a8_kernel(const int8_t* __restrict__ A, const int8_t* __restrict__ B,
                                  const float* __restrict__ w_scale, float a_scale,
                                  __half* __restrict__ C, int M, int N, int K) {
+  const int w = threadIdx.x >> 5, lane = threadIdx.x & 31, gid = lane >> 2, tig = lane & 3;
   const int m0 = blockIdx.x * GW_BM;
   const int n0 = blockIdx.y * GW_BN;
-  const int lane = threadIdx.x, gid = lane >> 2, tig = lane & 3;
+  const int mw = m0 + w * 16;                       // this warp's row base
   __shared__ int8_t As[GW_BM * 32];
   __shared__ int8_t Bs[GW_BN * 32];
   int acc[GW_BN / 8][4];
@@ -33,20 +37,20 @@ __global__ void gemm_w8a8_kernel(const int8_t* __restrict__ A, const int8_t* __r
   for (int nt = 0; nt < GW_BN / 8; ++nt) { acc[nt][0] = acc[nt][1] = acc[nt][2] = acc[nt][3] = 0; }
 
   for (int kt = 0; kt < K; kt += 32) {
-    for (int idx = lane; idx < GW_BM * 32; idx += 32) {
+    for (int idx = threadIdx.x; idx < GW_BM * 32; idx += blockDim.x) {
       int r = idx >> 5, c = idx & 31;
       As[idx] = (m0 + r < M) ? A[(size_t)(m0 + r) * K + kt + c] : 0;
     }
-    for (int idx = lane; idx < GW_BN * 32; idx += 32) {
+    for (int idx = threadIdx.x; idx < GW_BN * 32; idx += blockDim.x) {
       int r = idx >> 5, c = idx & 31;
       Bs[idx] = (n0 + r < N) ? B[(size_t)(n0 + r) * K + kt + c] : 0;
     }
-    __syncwarp();
+    __syncthreads();
     unsigned a[4];
-    a[0] = *(const int*)&As[(gid) * 32 + tig * 4];
-    a[1] = *(const int*)&As[(gid + 8) * 32 + tig * 4];
-    a[2] = *(const int*)&As[(gid) * 32 + tig * 4 + 16];
-    a[3] = *(const int*)&As[(gid + 8) * 32 + tig * 4 + 16];
+    a[0] = *(const int*)&As[(w * 16 + gid) * 32 + tig * 4];
+    a[1] = *(const int*)&As[(w * 16 + gid + 8) * 32 + tig * 4];
+    a[2] = *(const int*)&As[(w * 16 + gid) * 32 + tig * 4 + 16];
+    a[3] = *(const int*)&As[(w * 16 + gid + 8) * 32 + tig * 4 + 16];
 #pragma unroll
     for (int nt = 0; nt < GW_BN / 8; ++nt) {
       unsigned b[2];
@@ -54,13 +58,13 @@ __global__ void gemm_w8a8_kernel(const int8_t* __restrict__ A, const int8_t* __r
       b[1] = *(const int*)&Bs[(nt * 8 + gid) * 32 + tig * 4 + 16];
       modiff_mma_m16n8k32(acc[nt], a, b);
     }
-    __syncwarp();
+    __syncthreads();
   }
 
 #pragma unroll
   for (int nt = 0; nt < GW_BN / 8; ++nt) {
     int c0 = n0 + nt * 8 + tig * 2, c1 = c0 + 1;
-    int r0 = m0 + gid, r1 = m0 + gid + 8;
+    int r0 = mw + gid, r1 = mw + gid + 8;
     if (r0 < M) {
       if (c0 < N) C[(size_t)r0 * N + c0] = __float2half(acc[nt][0] * a_scale * w_scale[c0]);
       if (c1 < N) C[(size_t)r0 * N + c1] = __float2half(acc[nt][1] * a_scale * w_scale[c1]);
@@ -76,9 +80,10 @@ __global__ void gemm_w8a8_kernel(const int8_t* __restrict__ A, const int8_t* __r
 __global__ void gemm_w4a4_kernel(const int8_t* __restrict__ A, const int8_t* __restrict__ B,
                                  const float* __restrict__ w_scale, float a_scale,
                                  __half* __restrict__ C, int M, int N, int K) {
+  const int w = threadIdx.x >> 5, lane = threadIdx.x & 31, gid = lane >> 2, tig = lane & 3;
   const int m0 = blockIdx.x * GW_BM;
   const int n0 = blockIdx.y * GW_BN;
-  const int lane = threadIdx.x, gid = lane >> 2, tig = lane & 3;
+  const int mw = m0 + w * 16;
   const int Kb = K >> 1;                 // packed bytes per row
   __shared__ int8_t As[GW_BM * 32];      // one k-tile = 64 int4 = 32 bytes/row
   __shared__ int8_t Bs[GW_BN * 32];
@@ -87,20 +92,20 @@ __global__ void gemm_w4a4_kernel(const int8_t* __restrict__ A, const int8_t* __r
   for (int nt = 0; nt < GW_BN / 8; ++nt) { acc[nt][0] = acc[nt][1] = acc[nt][2] = acc[nt][3] = 0; }
 
   for (int ktb = 0; ktb < Kb; ktb += 32) {          // 32 bytes = 64 int4 per step
-    for (int idx = lane; idx < GW_BM * 32; idx += 32) {
+    for (int idx = threadIdx.x; idx < GW_BM * 32; idx += blockDim.x) {
       int r = idx >> 5, c = idx & 31;
       As[idx] = (m0 + r < M) ? A[(size_t)(m0 + r) * Kb + ktb + c] : 0;
     }
-    for (int idx = lane; idx < GW_BN * 32; idx += 32) {
+    for (int idx = threadIdx.x; idx < GW_BN * 32; idx += blockDim.x) {
       int r = idx >> 5, c = idx & 31;
       Bs[idx] = (n0 + r < N) ? B[(size_t)(n0 + r) * Kb + ktb + c] : 0;
     }
-    __syncwarp();
+    __syncthreads();
     unsigned a[4];
-    a[0] = *(const int*)&As[(gid) * 32 + tig * 4];
-    a[1] = *(const int*)&As[(gid + 8) * 32 + tig * 4];
-    a[2] = *(const int*)&As[(gid) * 32 + tig * 4 + 16];
-    a[3] = *(const int*)&As[(gid + 8) * 32 + tig * 4 + 16];
+    a[0] = *(const int*)&As[(w * 16 + gid) * 32 + tig * 4];
+    a[1] = *(const int*)&As[(w * 16 + gid + 8) * 32 + tig * 4];
+    a[2] = *(const int*)&As[(w * 16 + gid) * 32 + tig * 4 + 16];
+    a[3] = *(const int*)&As[(w * 16 + gid + 8) * 32 + tig * 4 + 16];
 #pragma unroll
     for (int nt = 0; nt < GW_BN / 8; ++nt) {
       unsigned b[2];
@@ -108,13 +113,13 @@ __global__ void gemm_w4a4_kernel(const int8_t* __restrict__ A, const int8_t* __r
       b[1] = *(const int*)&Bs[(nt * 8 + gid) * 32 + tig * 4 + 16];
       modiff_mma_m16n8k64_s4(acc[nt], a, b);
     }
-    __syncwarp();
+    __syncthreads();
   }
 
 #pragma unroll
   for (int nt = 0; nt < GW_BN / 8; ++nt) {
     int c0 = n0 + nt * 8 + tig * 2, c1 = c0 + 1;
-    int r0 = m0 + gid, r1 = m0 + gid + 8;
+    int r0 = mw + gid, r1 = mw + gid + 8;
     if (r0 < M) {
       if (c0 < N) C[(size_t)r0 * N + c0] = __float2half(acc[nt][0] * a_scale * w_scale[c0]);
       if (c1 < N) C[(size_t)r0 * N + c1] = __float2half(acc[nt][1] * a_scale * w_scale[c1]);
@@ -177,7 +182,7 @@ torch::Tensor gemm_w8a8(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale,
   auto C = torch::empty({M, N}, torch::TensorOptions().dtype(torch::kFloat16).device(A.device()));
   dim3 grid((M + GW_BM - 1) / GW_BM, N / GW_BN);
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-  gemm_w8a8_kernel<<<grid, 32, 0, stream>>>(
+  gemm_w8a8_kernel<<<grid, GW_WARPS * 32, 0, stream>>>(
       A.data_ptr<int8_t>(), B.data_ptr<int8_t>(), w_scale.contiguous().data_ptr<float>(),
       (float)a_scale, reinterpret_cast<__half*>(C.data_ptr<at::Half>()), M, N, K);
   return C;
@@ -193,7 +198,7 @@ torch::Tensor gemm_w4a4(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale,
   auto C = torch::empty({M, (int)N}, torch::TensorOptions().dtype(torch::kFloat16).device(A.device()));
   dim3 grid((M + GW_BM - 1) / GW_BM, N / GW_BN);
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-  gemm_w4a4_kernel<<<grid, 32, 0, stream>>>(
+  gemm_w4a4_kernel<<<grid, GW_WARPS * 32, 0, stream>>>(
       A.data_ptr<int8_t>(), B.data_ptr<int8_t>(), w_scale.contiguous().data_ptr<float>(),
       (float)a_scale, reinterpret_cast<__half*>(C.data_ptr<at::Half>()), M, (int)N, (int)K);
   return C;
