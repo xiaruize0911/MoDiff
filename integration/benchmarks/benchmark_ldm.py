@@ -623,10 +623,15 @@ class BenchmarkRunner:
                     print(f"✓ Converted {n_tm} AttentionBlocks to token-major layout")
             if quant_lin:
                 from integration.kernels.wxax_linear import (
-                    convert_linears_to_wxax, set_wxax_calibrating, finalize_wxax_ascale)
+                    convert_linears_to_wxax, set_wxax_calibrating, finalize_wxax_ascale, reset_wxax_modiff)
                 lb = 4 if "int4" in mode else 8
-                n_lin = convert_linears_to_wxax(model.model.diffusion_model, bits=lb)
-                print(f"✓ Quantized {n_lin} Linear layers to W{lb}A{lb} (weight+activation)")
+                # MoDiff temporal-delta on the LINEAR activations was tried and is
+                # counterproductive (rel-err diverges 0.06->3.2 as quant error accumulates
+                # over DDIM steps, +memory, slower). So all modes use the static W/A linear
+                # quant; the baseline/modiff distinction stays in the conv path only.
+                is_modiff = False
+                n_lin = convert_linears_to_wxax(model.model.diffusion_model, bits=lb, modiff=is_modiff)
+                print(f"✓ Quantized {n_lin} Linear layers to W{lb}A{lb} (modiff={is_modiff})")
                 if n_lin > 0:   # static activation-scale calibration (short sample)
                     set_wxax_calibrating(model, True)
                     cb = min(self.batch_size, 4)
@@ -635,6 +640,7 @@ class BenchmarkRunner:
                         DDIMSampler(model).sample(S=5, batch_size=cb, shape=self.shape,
                                                   eta=0.0, verbose=False, **cond)
                     n_cal = finalize_wxax_ascale(model)
+                    reset_wxax_modiff(model)   # clear caches populated during calibration
                     print(f"✓ Calibrated {n_cal} W{lb}A{lb} linear activation scales (static)")
         except Exception as e:
             print(f"  (attention/linear conversion skipped: {e})")

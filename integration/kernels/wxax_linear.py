@@ -47,11 +47,12 @@ def _eligible(in_f, out_f, bits):
 
 
 class QuantLinearWxAx(nn.Module):
-    def __init__(self, lin: nn.Linear, bits: int):
+    def __init__(self, lin: nn.Linear, bits: int, modiff: bool = False):
         super().__init__()
         assert bits in (4, 8) and _eligible(lin.in_features, lin.out_features, bits)
         self.bits = bits
         self.Q = 127 if bits == 8 else 7
+        self.modiff = modiff
         self.in_features = lin.in_features
         self.out_features = lin.out_features
         W = lin.weight.detach().float()                       # [N,K]
@@ -63,32 +64,53 @@ class QuantLinearWxAx(nn.Module):
         self.a_scale = None                                    # static activation scale (calibrated)
         self._calib = False
         self._amax = 0.0
+        self.a_hat = None                                      # MoDiff temporal caches (modiff mode)
+        self.o_hat = None
 
     def set_a_scale(self, s):
         self.a_scale = float(s)
 
-    def forward(self, x):
-        orig = x.shape
-        xf = x.reshape(-1, self.in_features)
-        if self._calib:                                          # record activation absmax (static calib)
-            self._amax = max(self._amax, float(xf.abs().max()))
-        if self.a_scale is not None:
-            a_scale = self.a_scale
-        else:
-            a_scale = (xf.abs().max().item() / self.Q) or 1e-8   # dynamic fallback (host sync)
-        xf = xf.half().contiguous()
+    def reset_modiff(self):
+        self.a_hat = None
+        self.o_hat = None
+
+    def _gemm(self, xf, a_scale):
+        """xf: fp16 [M,K] -> fp16 [M,N] (quantize + int GEMM)."""
         if self.bits == 8:
-            xq = _mc.quantize_act_int8(xf, a_scale)                  # fused fp16->int8
+            xq = _mc.quantize_act_int8(xf, a_scale)
             if _awq is not None and self.out_features % 128 == 0:
                 M = xq.shape[0]
                 asc = torch.full((M,), a_scale, device=xq.device, dtype=torch.float16)
                 out = torch.empty(M, self.out_features, device=xq.device, dtype=torch.float16)
                 _awq.w8a8_gemm_forward_cuda(xq, self.qweight, self.w_scale.to(torch.float16), asc, out)
-            else:
-                out = _mc.gemm_w8a8(xq, self.qweight, self.w_scale, a_scale)
+                return out
+            return _mc.gemm_w8a8(xq, self.qweight, self.w_scale, a_scale)
+        xq = _mc.quantize_act_int4_pack(xf, a_scale)
+        return _mc.gemm_w4a4(xq, self.qweight, self.w_scale, a_scale, self.in_features)
+
+    def forward(self, x):
+        orig = x.shape
+        xf = x.reshape(-1, self.in_features).half().contiguous()
+        if self._calib:
+            self._amax = max(self._amax, float(xf.abs().max()))
+
+        if self.modiff and self.a_hat is not None:
+            # MoDiff: quantize only the temporal DELTA (small range -> less int error),
+            # accumulate the GEMM into o_hat. o_hat_t = o_hat_{t-1} + Linear(Q(x - a_hat)).
+            delta = xf - self.a_hat
+            d_scale = (delta.abs().max().item() / self.Q) or 1e-8
+            q = torch.round(delta / d_scale).clamp_(-self.Q, self.Q)
+            self.a_hat = self.a_hat + q * d_scale                       # dequantized-delta reconstruction
+            self.o_hat = self.o_hat + self._gemm(q.half().contiguous(), d_scale)
+            out = self.o_hat
         else:
-            xq = _mc.quantize_act_int4_pack(xf, a_scale)             # fused fp16->packed int4
-            out = _mc.gemm_w4a4(xq, self.qweight, self.w_scale, a_scale, self.in_features)
+            a_scale = self.a_scale if self.a_scale is not None else ((xf.abs().max().item() / self.Q) or 1e-8)
+            out = self._gemm(xf, a_scale)
+            if self.modiff:                                            # first step: seed the caches
+                q = torch.round(xf / a_scale).clamp_(-self.Q, self.Q)
+                self.a_hat = (q * a_scale).contiguous()
+                self.o_hat = out.clone()
+
         out = out.reshape(*orig[:-1], self.out_features)
         if self.bias is not None:
             out = out + self.bias
@@ -114,18 +136,25 @@ def finalize_wxax_ascale(model):
     return n
 
 
-def convert_linears_to_wxax(module, bits, verbose=False, _prefix=""):
-    """Recursively replace eligible nn.Linear with QuantLinearWxAx(bits). Returns count."""
+def convert_linears_to_wxax(module, bits, modiff=False, verbose=False, _prefix=""):
+    """Recursively replace eligible nn.Linear with QuantLinearWxAx(bits, modiff). Returns count."""
     n = 0
     for name, child in list(module.named_children()):
         if isinstance(child, nn.Linear):
             if _eligible(child.in_features, child.out_features, bits):
-                setattr(module, name, QuantLinearWxAx(child, bits).to(child.weight.device))
+                setattr(module, name, QuantLinearWxAx(child, bits, modiff).to(child.weight.device))
                 n += 1
                 if verbose:
-                    print(f"  wxax({bits}): {_prefix}{name} {child.in_features}->{child.out_features}")
+                    print(f"  wxax({bits},modiff={modiff}): {_prefix}{name} {child.in_features}->{child.out_features}")
             elif verbose:
                 print(f"  skip(fp16): {_prefix}{name} {child.in_features}->{child.out_features}")
         else:
-            n += convert_linears_to_wxax(child, bits, verbose, _prefix + name + ".")
+            n += convert_linears_to_wxax(child, bits, modiff, verbose, _prefix + name + ".")
     return n
+
+
+def reset_wxax_modiff(model):
+    """Clear the MoDiff temporal caches (call between DDIM samples)."""
+    for m in model.modules():
+        if isinstance(m, QuantLinearWxAx):
+            m.reset_modiff()
