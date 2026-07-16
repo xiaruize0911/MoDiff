@@ -21,6 +21,7 @@
 #define GW_WARPS 4
 #define GW_BM (GW_WARPS * 16)   // 64 rows/CTA (one warp per 16-row sub-tile)
 #define GW_BN 64
+#define GW_STAGES 3             // cp.async pipeline depth
 
 // Multi-warp CTA with double-buffered cp.async: GW_WARPS warps share the B smem tile,
 // each warp owns a 16-row A sub-tile. Next k-tile is prefetched (cp.async) while the
@@ -32,27 +33,32 @@ __global__ void gemm_w8a8_kernel(const int8_t* __restrict__ A, const int8_t* __r
   const int m0 = blockIdx.x * GW_BM;
   const int n0 = blockIdx.y * GW_BN;
   const int mw = m0 + w * 16;
-  __shared__ int8_t As[2][GW_BM * 32];
-  __shared__ int8_t Bs[2][GW_BN * 32];
+  __shared__ int8_t As[GW_STAGES][GW_BM * 32];
+  __shared__ int8_t Bs[GW_STAGES][GW_BN * 32];
   int acc[GW_BN / 8][4];
 #pragma unroll
   for (int nt = 0; nt < GW_BN / 8; ++nt) { acc[nt][0] = acc[nt][1] = acc[nt][2] = acc[nt][3] = 0; }
 
-  const int t = threadIdx.x, ar = t >> 1, ac = (t & 1) * 16;   // 128 threads: 16B chunks, 2/row
-  const bool amask = (m0 + ar) < M, bmask = (n0 + ar) < N;
+  const int t = threadIdx.x;
   const int nkt = K / 32;
 #define GW8_LOAD(kt, buf)                                                                        \
-  modiff_cp_async_cg(modiff_smem_ptr(&As[buf][ar * 32 + ac]),                                    \
-                     (const uint4*)(A + (size_t)(m0 + ar) * K + (kt) + ac), amask);              \
-  modiff_cp_async_cg(modiff_smem_ptr(&Bs[buf][ar * 32 + ac]),                                    \
-                     (const uint4*)(B + (size_t)(n0 + ar) * K + (kt) + ac), bmask)
+  for (int c = t; c < GW_BM * 2; c += blockDim.x) {                                              \
+    int r = c >> 1, off = (c & 1) * 16;                                                          \
+    modiff_cp_async_cg(modiff_smem_ptr(&As[buf][r * 32 + off]),                                  \
+                       (const uint4*)(A + (size_t)(m0 + r) * K + (kt) + off), (m0 + r) < M);     \
+  }                                                                                              \
+  for (int c = t; c < GW_BN * 2; c += blockDim.x) {                                              \
+    int r = c >> 1, off = (c & 1) * 16;                                                          \
+    modiff_cp_async_cg(modiff_smem_ptr(&Bs[buf][r * 32 + off]),                                  \
+                       (const uint4*)(B + (size_t)(n0 + r) * K + (kt) + off), (n0 + r) < N);     \
+  }
 
-  GW8_LOAD(0, 0); __pipeline_commit();
+#pragma unroll
+  for (int s = 0; s < GW_STAGES - 1; ++s) { if (s < nkt) { GW8_LOAD(s * 32, s); } __pipeline_commit(); }
+  __pipeline_wait_prior(GW_STAGES - 2);
+  __syncthreads();
   for (int i = 0; i < nkt; ++i) {
-    if (i + 1 < nkt) { GW8_LOAD((i + 1) * 32, (i + 1) & 1); __pipeline_commit(); }
-    __pipeline_wait_prior(i + 1 < nkt ? 1 : 0);
-    __syncthreads();
-    const int buf = i & 1;
+    const int buf = i % GW_STAGES;
     unsigned a[4];
     a[0] = *(const int*)&As[buf][(w * 16 + gid) * 32 + tig * 4];
     a[1] = *(const int*)&As[buf][(w * 16 + gid + 8) * 32 + tig * 4];
@@ -65,6 +71,10 @@ __global__ void gemm_w8a8_kernel(const int8_t* __restrict__ A, const int8_t* __r
       b[1] = *(const int*)&Bs[buf][(nt * 8 + gid) * 32 + tig * 4 + 16];
       modiff_mma_m16n8k32(acc[nt], a, b);
     }
+    int li = i + GW_STAGES - 1;
+    if (li < nkt) { GW8_LOAD(li * 32, li % GW_STAGES); }
+    __pipeline_commit();
+    __pipeline_wait_prior(GW_STAGES - 2);
     __syncthreads();
   }
 #undef GW8_LOAD
@@ -93,27 +103,32 @@ __global__ void gemm_w4a4_kernel(const int8_t* __restrict__ A, const int8_t* __r
   const int n0 = blockIdx.y * GW_BN;
   const int mw = m0 + w * 16;
   const int Kb = K >> 1;                 // packed bytes per row
-  __shared__ int8_t As[2][GW_BM * 32];   // one k-tile = 64 int4 = 32 bytes/row
-  __shared__ int8_t Bs[2][GW_BN * 32];
+  __shared__ int8_t As[GW_STAGES][GW_BM * 32];   // one k-tile = 64 int4 = 32 bytes/row
+  __shared__ int8_t Bs[GW_STAGES][GW_BN * 32];
   int acc[GW_BN / 8][4];
 #pragma unroll
   for (int nt = 0; nt < GW_BN / 8; ++nt) { acc[nt][0] = acc[nt][1] = acc[nt][2] = acc[nt][3] = 0; }
 
-  const int t = threadIdx.x, ar = t >> 1, ac = (t & 1) * 16;
-  const bool amask = (m0 + ar) < M, bmask = (n0 + ar) < N;
+  const int t = threadIdx.x;
   const int nkt = Kb / 32;
 #define GW4_LOAD(ktb, buf)                                                                       \
-  modiff_cp_async_cg(modiff_smem_ptr(&As[buf][ar * 32 + ac]),                                    \
-                     (const uint4*)(A + (size_t)(m0 + ar) * Kb + (ktb) + ac), amask);            \
-  modiff_cp_async_cg(modiff_smem_ptr(&Bs[buf][ar * 32 + ac]),                                    \
-                     (const uint4*)(B + (size_t)(n0 + ar) * Kb + (ktb) + ac), bmask)
+  for (int c = t; c < GW_BM * 2; c += blockDim.x) {                                              \
+    int r = c >> 1, off = (c & 1) * 16;                                                          \
+    modiff_cp_async_cg(modiff_smem_ptr(&As[buf][r * 32 + off]),                                  \
+                       (const uint4*)(A + (size_t)(m0 + r) * Kb + (ktb) + off), (m0 + r) < M);   \
+  }                                                                                              \
+  for (int c = t; c < GW_BN * 2; c += blockDim.x) {                                              \
+    int r = c >> 1, off = (c & 1) * 16;                                                          \
+    modiff_cp_async_cg(modiff_smem_ptr(&Bs[buf][r * 32 + off]),                                  \
+                       (const uint4*)(B + (size_t)(n0 + r) * Kb + (ktb) + off), (n0 + r) < N);   \
+  }
 
-  GW4_LOAD(0, 0); __pipeline_commit();
+#pragma unroll
+  for (int s = 0; s < GW_STAGES - 1; ++s) { if (s < nkt) { GW4_LOAD(s * 32, s); } __pipeline_commit(); }
+  __pipeline_wait_prior(GW_STAGES - 2);
+  __syncthreads();
   for (int i = 0; i < nkt; ++i) {
-    if (i + 1 < nkt) { GW4_LOAD((i + 1) * 32, (i + 1) & 1); __pipeline_commit(); }
-    __pipeline_wait_prior(i + 1 < nkt ? 1 : 0);
-    __syncthreads();
-    const int buf = i & 1;
+    const int buf = i % GW_STAGES;
     unsigned a[4];
     a[0] = *(const int*)&As[buf][(w * 16 + gid) * 32 + tig * 4];
     a[1] = *(const int*)&As[buf][(w * 16 + gid + 8) * 32 + tig * 4];
@@ -126,6 +141,10 @@ __global__ void gemm_w4a4_kernel(const int8_t* __restrict__ A, const int8_t* __r
       b[1] = *(const int*)&Bs[buf][(nt * 8 + gid) * 32 + tig * 4 + 16];
       modiff_mma_m16n8k64_s4(acc[nt], a, b);
     }
+    int li = i + GW_STAGES - 1;
+    if (li < nkt) { GW4_LOAD(li * 32, li % GW_STAGES); }
+    __pipeline_commit();
+    __pipeline_wait_prior(GW_STAGES - 2);
     __syncthreads();
   }
 #undef GW4_LOAD
