@@ -21,9 +21,9 @@ caching; "modiff" = MoDiff error-compensated temporal caching (`o_hat`/`a_hat` d
 The A40 idles at 210 MHz and boosts to 1740 MHz, and clock-locking is not permitted here, so **warmup
 dominates measurement quality**. Kernels: 30 warmup + 60 timed iters. Pipeline: **≥6 s sustained `sample()`
 warmup + 12 back-to-back timed runs** (median/min/stdev). **GPU-busy** = `torch.profiler` device self-time
-(clock-throttle-robust); it is the primary speed metric here because A40 wall-clock still shows occasional
-clock-ramp noise (this run, `int4 base` wall stdev was 1.9 ms — median 52.3 but min 48.6; its GPU-busy 47.0 is
-clean and used below). Speed is measured before the profiler runs, so profiling never inflates it.
+(clock-throttle-robust); it is the primary speed metric here because A40 wall-clock can show clock-ramp noise
+on some runs (this full re-run's wall was clean — every mode's stdev ≤ 0.22 ms — so wall and GPU-busy agree).
+Speed is measured before the profiler runs, so profiling never inflates it.
 **Total IO usage** (§5) is analytical DRAM bytes (`scripts/io_analytic.py`), same model as the §2 kernel-IO.
 
 ---
@@ -103,7 +103,7 @@ data: [`data/kernel_profile.csv`](data/kernel_profile.csv). GPU-busy ms/step.
 | elementwise / copy | 11.97 | 7.56 | 5.66 | 6.73 | 5.09 | 6.74 |
 | upsample / concat | 1.78 | 1.07 | 1.31 | 1.05 | 1.30 | 1.06 |
 | other | 0.34 | 0.30 | 0.28 | 2.57 | 0.27 | 2.57 |
-| **GPU-busy total** | **101.76** | **55.04** | **49.20** | **56.99** | **46.99** | **52.37** |
+| **GPU-busy total** | **101.77** | **54.97** | **49.19** | **57.12** | **47.25** | **52.34** |
 
 - **fp32 is ~1.85× the fp16 GPU-busy** — every compute bucket ~doubles (fp32 tensor-core throughput).
 - **Attention dominates the fp16/quant modes (~42% of the step)** — softmax 11.4 ms + the QKᵀ/AV matmuls
@@ -130,19 +130,19 @@ data: [`data/pipeline_speed.csv`](data/pipeline_speed.csv). Speedups from GPU-bu
 
 | mode | wall med | wall min | GPU-busy | speedup vs fp16 | vs fp32 |
 |---|--:|--:|--:|--:|--:|
-| fp32 | 102.69 | 102.51 | 101.76 | 0.54× | 1.00× |
-| fp16 | 55.97 | 55.86 | 55.04 | 1.00× | 1.85× |
-| int8 base | 50.51 | 50.28 | 49.20 | 1.12× | 2.07× |
-| int8 modiff | 58.69 | 58.55 | 56.99 | 0.97× | 1.79× |
-| **int4 base** | 52.27† | 48.61 | **46.99** | **1.17×** | **2.17×** |
-| int4 modiff | 53.58 | 53.50 | 52.37 | 1.05× | 1.94× |
+| fp32 | 102.67 | 102.52 | 101.77 | 0.54× | 1.00× |
+| fp16 | 55.93 | 55.89 | 54.97 | 1.00× | 1.85× |
+| int8 base | 50.08 | 50.06 | 49.19 | 1.12× | 2.07× |
+| int8 modiff | 58.32 | 58.22 | 57.12 | 0.96× | 1.79× |
+| **int4 base** | 48.13 | 48.09 | **47.25** | **1.16×** | **2.15×** |
+| int4 modiff | 53.55 | 53.51 | 52.34 | 1.05× | 1.94× |
 
-†`int4 base` wall median was clock-throttled this run (stdev 1.9 ms); min 48.61 and GPU-busy 46.99 are the
-reliable values (consistent with prior runs).
+(This run's wall clock was clean for every mode — `int4 base` stdev 0.22 ms, median 48.13 — so wall and
+GPU-busy agree; the earlier `int4 base` wall-throttle caveat no longer applies.)
 
-- **`int4 base` is the fastest mode (1.17× vs fp16, 2.17× vs fp32)**, `int8 base` next (1.12× / 2.07×). fp16
+- **`int4 base` is the fastest mode (1.16× vs fp16, 2.15× vs fp32)**, `int8 base` next (1.12× / 2.07×). fp16
   alone is **1.85× faster than fp32**.
-- The 1.1–1.17× quantization win over fp16 is **Amdahl-bounded**: quantization only speeds the ~25% conv
+- The 1.1–1.16× quantization win over fp16 is **Amdahl-bounded**: quantization only speeds the ~25% conv
   bucket — a free conv caps the step at a ~1.32× ceiling — and these convs are partly memory-bound.
 - **MoDiff modes:** int8 modiff 0.97×, int4 modiff 1.05× — the temporal delta machinery is real GPU work, an
   accuracy mechanism, not a speed one.
@@ -269,13 +269,13 @@ Turning the opt-in paths ON in the real pipeline and profiling per-op GPU time
 
 | config | wall ms | attn softmax/flash | qkv/proj+QKᵀ·AV GEMM | our qlin GEMM | peak MiB |
 |---|--:|--:|--:|--:|--:|
-| A) default (fp16 attn+lin) | 49.9 | 11.4 | 13.4 | — | 4549 |
-| B) +§7 W8A8 linear | 53.4 | 11.4 | 12.2 | **2.97** | 4461 |
-| C) +§6 int8 flash attn | 54.2 | **24.9** | 2.6 | — | **3602** |
+| A) default (fp16 attn+lin) | 50.1 | 11.4 | 13.4 | — | 4550 |
+| B) +§7 W8A8 linear | 53.9 | 11.4 | 12.2 | **3.0** | 4461 |
+| C) +§6 int8 flash attn | 54.7 | **25.1** | 2.6 | — | **3602** |
 
 - **§7:** moving qkv/proj out of cuBLAS drops the GEMM bucket by only ~1.2 ms (cuBLAS did it that fast); our
-  kernel adds 2.97 ms → net +3.6 ms wall. Confirms the microbench: cuBLAS fp16 is the wall on the large-M qkv.
-- **§6:** the flash kernel (24.9 ms) is *slower* than fp16 softmax+SDPA (≈22 ms combined) but avoids the T×T
+  kernel adds 3.0 ms → net +3.8 ms wall. Confirms the microbench: cuBLAS fp16 is the wall on the large-M qkv.
+- **§6:** the flash kernel (25.1 ms) is *slower* than fp16 softmax+SDPA (≈22 ms combined) but avoids the T×T
   matrix → **−21% peak memory**. A memory win, not speed, exactly as §6's standalone measurement shows.
 
 ### 7d. int8-output fusion investigation (conv → GroupNorm)
@@ -303,7 +303,7 @@ GN read int8. (conv→conv is blocked everywhere else — a fp16 GroupNorm+SiLU 
 
 ## Bottom line
 
-- **Speed:** `int4 base` fastest (**1.17× vs fp16, 2.17× vs fp32**), `int8 base` next (1.12× / 2.07×); fp16 is
+- **Speed:** `int4 base` fastest (**1.16× vs fp16, 2.15× vs fp32**), `int8 base` next (1.12× / 2.07×); fp16 is
   **1.85× faster than fp32**. Quantization's win over fp16 is Amdahl-bounded (only the ~25% conv bucket).
 - **Attention is the dominant cost (~23 ms/step)** — the math-SDPA T×T materialization (4059 µs) is the single
   biggest kernel.
