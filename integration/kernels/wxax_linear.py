@@ -21,14 +21,15 @@ except Exception:
     _mc = None
     _HAS = False
 
-# Optional: route eligible W8A8 through AWQ's tuned kernel (MODIFF_WXAX_USE_AWQ=1) to
-# measure the achievable e2e ceiling. AWQ needs N%128 (large-M CTA_N).
-import os as _os
-_USE_AWQ = _os.environ.get("MODIFF_WXAX_USE_AWQ") == "1"
+# W8A8 projection GEMM backend: AWQ's tuned w8a8 kernel is DEFAULT for eligible shapes
+# (measured 1.28-1.44x faster than cuBLAS fp16 on the qkv/proj shapes, beating our own
+# gemm_w8a8 there; numerically matches, rel 4e-4). Falls back to gemm_w8a8 for shapes AWQ
+# can't take (needs out_features%128==0 and in_features%64==0). MODIFF_WXAX_NO_AWQ=1 forces
+# our kernel.  See docs/comprehensive_benchmark_2026-07-16 (AWQ-attention check).
+import os as _os, sys as _sys
 _awq = None
-if _USE_AWQ:
+if _os.environ.get("MODIFF_WXAX_NO_AWQ") != "1":
     try:
-        import sys as _sys
         _sys.path.insert(0, "/workspace/llm-awq/awq/kernels")
         import awq_inference_engine as _awq
     except Exception:
@@ -59,7 +60,11 @@ class QuantLinearWxAx(nn.Module):
         s = (W.abs().amax(1).clamp_min(1e-8) / self.Q)        # per-output-channel [N]
         Wq = torch.round(W / s.unsqueeze(1)).clamp(-self.Q, self.Q).to(torch.int8)
         self.register_buffer("w_scale", s.to(torch.float32).contiguous())
+        self.register_buffer("w_scale_half", s.to(torch.float16).contiguous())  # for AWQ w8a8
         self.register_buffer("qweight", _pack4(Wq) if bits == 4 else Wq.contiguous())
+        # AWQ w8a8 is the default W8A8 projection kernel when available + shape fits.
+        self._use_awq = (bits == 8 and _awq is not None
+                         and lin.out_features % 128 == 0 and lin.in_features % 64 == 0)
         self.register_buffer("bias", lin.bias.detach().half().contiguous() if lin.bias is not None else None)
         self.a_scale = None                                    # static activation scale (calibrated)
         self._calib = False
@@ -78,11 +83,13 @@ class QuantLinearWxAx(nn.Module):
         """xf: fp16 [M,K] -> fp16 [M,N] (quantize + int GEMM)."""
         if self.bits == 8:
             xq = _mc.quantize_act_int8(xf, a_scale)
-            if _awq is not None and self.out_features % 128 == 0:
+            if self._use_awq:
+                # AWQ w8a8: out = acc * ascale[m] * wscale[n]; static per-tensor a_scale ->
+                # constant per-token ascales. ~1.3-1.4x cuBLAS on qkv/proj shapes (beats ours).
                 M = xq.shape[0]
                 asc = torch.full((M,), a_scale, device=xq.device, dtype=torch.float16)
                 out = torch.empty(M, self.out_features, device=xq.device, dtype=torch.float16)
-                _awq.w8a8_gemm_forward_cuda(xq, self.qweight, self.w_scale.to(torch.float16), asc, out)
+                _awq.w8a8_gemm_forward_cuda(xq, self.qweight, self.w_scale_half, asc, out)
                 return out
             return _mc.gemm_w8a8(xq, self.qweight, self.w_scale, a_scale)
         xq = _mc.quantize_act_int4_pack(xf, a_scale)

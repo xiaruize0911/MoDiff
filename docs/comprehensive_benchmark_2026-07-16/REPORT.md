@@ -131,9 +131,15 @@ The aggregate conv bucket (§2): int4 7.4 ms vs int8 9.5 vs fp16 13.6.
 **Attention GN→qkv fusion** ([`data/kernel_attn.csv`](data/kernel_attn.csv)): the fused GroupNorm→qkv CUTLASS
 kernel is **1.11×** (C192/T1024, 236→213 µs) / **1.26×** (C384/T256) vs GroupNorm+cuBLAS — on for all modes.
 
-**`gemm_wxax` `half2`-epilogue** (this session): the W8A8/W4A4 qkv/proj GEMM beats fp16 on 5/6 shapes (int4
-≤2.13×) — [`data/gemm_wxax_shapes.csv`](data/gemm_wxax_shapes.csv). Relevant to the opt-in §7 Linear quant
-(near-neutral e2e; [`data/linear_quant_speed.csv`](data/linear_quant_speed.csv)).
+**Projection-linear (qkv/proj) quantization — opt-in §7** (`MODIFF_QUANT_LINEAR=1`). Two W8A8 GEMM backends:
+our `gemm_wxax` (`half2`-epilogue, beats fp16 on 5/6 shapes, int4 ≤2.13× — [`data/gemm_wxax_shapes.csv`](data/gemm_wxax_shapes.csv))
+and **AWQ's `w8a8_gemm_forward_cuda`, now the default** where it fits (out%128 & in%64): AWQ is **1.28–1.44×
+faster than cuBLAS** on the eligible qkv/proj shapes — better than our kernel there — and numerically matches
+(rel 4e-4); shapes it can't take (e.g. the dominant C192 qkv, N=576) fall back to `gemm_wxax`.
+`MODIFF_WXAX_NO_AWQ=1` forces our kernel. **But §7 is still e2e near-neutral-to-slightly-negative under flash
+SDPA** ([`data/linear_quant_speed.csv`](data/linear_quant_speed.csv)): int8 base 0.90×, int4 base 0.95×, int8
+modiff 0.94×, int4 modiff 0.97× — the projections are only ~1.5 ms of the flash-cheap ~27 ms step, activation-
+quant adds fixed overhead, and the biggest qkv (N=576) can't use AWQ. Real benefit is peak memory (−~100 MiB).
 
 ## §5. int8-conv-output → GroupNorm (validated, deferred)
 
