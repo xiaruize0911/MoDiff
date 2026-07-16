@@ -14,11 +14,11 @@ token-major ([N, T, C]) makes copies (1) and (3)'s reshapes free views of the
 channels_last memory, and feeds SDPA strided views without `.contiguous()`.
 Only the post-attention transpose (SDPA output [N,H,T,hd] -> [N,T,C]) remains.
 
-Attention runs on PyTorch's **flash SDPA backend** by default (see `_SDPA_CTX`):
-~9x faster than math on the dominant block (1.71x faster fp16 step, -22% peak,
-quality-identical). The block previously forced the math backend so QK^T/AV stayed
-interceptable cuBLAS GEMMs for score-path quantization, but that quantization never
-recouped the math penalty, so flash is now the default. `MODIFF_SDPA_MATH=1` reverts.
+Attention runs on the explicit **math (standard, non-flash) SDPA backend** on every
+layer and mode (see `_SDPA_CTX`): QKᵀ / softmax / AV stay materialized cuBLAS GEMMs that
+the int8/int4 modes quantize (MoDiff is a fully-quantized method). PyTorch flash /
+mem-efficient SDPA is fp16-only/opaque and is not used anywhere. fp16 math attention is
+the standard-attention baseline the quantized attention is measured against.
 
 Weights are copied bit-for-bit from the Conv1d layers, so the result is
 numerically identical up to GroupNorm-kernel / SDPA rounding (~1e-3 e2e).
@@ -32,30 +32,21 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# Attention runs on PyTorch's FLASH SDPA backend (mem-efficient / math fallback).
-# Measured on churches (A40, batch 32): flash SDPA is ~9x faster than the math backend
-# on the dominant C192/T1024 block (467us vs 4069us) -> 1.71x faster fp16 step + -22%
-# peak memory, quality-identical (latent rel-err 2e-3). The pipeline previously FORCED
-# math SDPA so QK^T/AV stayed interceptable cuBLAS GEMMs for score-path quantization;
-# that quantization (int8 flash / qkv fusion) never recouped the 9x math-SDPA penalty,
-# so flash SDPA is the default. Set MODIFF_SDPA_MATH=1 to force math (e.g. to A/B the
-# score-path quantization, which needs the interceptable GEMMs).
-_SDPA_FORCE_MATH = os.environ.get("MODIFF_SDPA_MATH") == "1"
+# Attention runs on the explicit MATH SDPA backend on EVERY layer and mode: MoDiff is a
+# fully-quantized method, so QKᵀ/softmax/AV are kept as standard (materialized) ops that
+# the int8/int4 modes quantize (see quantized_std_attention.py). PyTorch's flash /
+# mem-efficient SDPA is fp16-only and opaque, so it is not used anywhere — this is the
+# permanent design, not a toggle. (fp16 math attention is the standard-attention baseline.)
 try:
     from torch.nn.attention import sdpa_kernel, SDPBackend
-    if _SDPA_FORCE_MATH:
-        _SDPA_CTX = lambda: sdpa_kernel(SDPBackend.MATH)
-    else:
-        _SDPA_CTX = lambda: sdpa_kernel(
-            [SDPBackend.FLASH_ATTENTION, SDPBackend.EFFICIENT_ATTENTION, SDPBackend.MATH])
+    _SDPA_CTX = lambda: sdpa_kernel(SDPBackend.MATH)
 except Exception:  # pragma: no cover - older torch
     from contextlib import contextmanager
     @contextmanager
     def _SDPA_CTX():
-        with torch.backends.cuda.sdp_kernel(enable_flash=not _SDPA_FORCE_MATH,
-                                            enable_mem_efficient=not _SDPA_FORCE_MATH, enable_math=True):
+        with torch.backends.cuda.sdp_kernel(enable_flash=False, enable_mem_efficient=False, enable_math=True):
             yield
-_SDPA_MATH_CTX = _SDPA_CTX  # backward-compat alias (name is historical; default is now flash)
+_SDPA_MATH_CTX = _SDPA_CTX  # backward-compat alias
 
 from integration.fused_ops.fused_resblock import _group_norm_silu
 
@@ -171,7 +162,7 @@ class TokenMajorAttentionBlock(nn.Module):
             qkv = qkv_img.permute(0, 2, 3, 1).reshape(b, T, nh, 3, hd)
             q, k, v = qkv.unbind(3)
             q = q.transpose(1, 2); k = k.transpose(1, 2); v = v.transpose(1, 2)
-            with _SDPA_CTX():                        # flash SDPA (mem-efficient/math fallback); MODIFF_SDPA_MATH=1 forces math
+            with _SDPA_CTX():                             # explicit MATH SDPA (standard materialized attention)
                 a = F.scaled_dot_product_attention(q, k, v, scale=self.scale)
             a = a.transpose(1, 2).reshape(b, T, c)
             out_tok = x_in_tok + self.proj(a)
@@ -189,7 +180,7 @@ class TokenMajorAttentionBlock(nn.Module):
         q = q.transpose(1, 2)                          # [N,H,T,hd], last dim stride 1
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
-        with _SDPA_CTX():                          # flash SDPA (mem-efficient/math fallback); MODIFF_SDPA_MATH=1 forces math
+        with _SDPA_CTX():                                  # explicit MATH SDPA (standard materialized attention)
             a = F.scaled_dot_product_attention(q, k, v, scale=self.scale)  # [N,H,T,hd]
 
         # [N,H,T,hd] -> [N,T,C] (head-major C), proj, residual, back to channels_last.

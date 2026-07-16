@@ -598,31 +598,33 @@ class BenchmarkRunner:
             n = convert_attention_to_modiff(model.model.diffusion_model, act_bits=8, verbose=True)
             print(f"  → MoDiff attention applied to {n} AttentionBlocks")
 
-        # Token-major AttentionBlock: eliminate the channel-major<->flash layout
-        # copies (numerically identical; skips MoDiff-wrapped attention and is
-        # itself gated by MODIFF_DISABLE_TOKEN_MAJOR_ATTN). Shared across all modes.
-        # When MODIFF_QUANT_ATTN=1, use the quantized (int8 fused-flash score path)
-        # variant instead -- opt-in so existing modes are unchanged by default.
-        # MODIFF_QUANT_LINEAR=1: AWQ-style W8A8/W4A4 (weight+activation) quantization of the
-        # Linear-equivalent layers. qkv becomes a quantized Linear, so disable fused GN->qkv
-        # (attention stays fp16). Bit-width matches the mode. NOTE: the default (non-opt-in)
-        # attention path is PyTorch FLASH SDPA (token_major_attention._SDPA_CTX; ~1.7x faster
-        # fp16 step + -22% peak vs the old forced-math backend). MODIFF_SDPA_MATH=1 reverts.
+        # Attention: token-major layout on the explicit MATH (standard, materialized) SDPA
+        # backend — no flash on any layer/mode (MoDiff is fully quantized; QKᵀ/softmax/AV
+        # are quantizable standard ops). For int8/int4 modes, MODIFF_STD_ATTN_BITS (8/4,
+        # default = mode) swaps in the materialized quantized-attention block (QKᵀ/AV int
+        # GEMMs). MODIFF_QUANT_LINEAR=1 additionally quantizes the qkv/proj Linears (W8A8/
+        # W4A4 via AWQ/gemm_wxax); disables fused GN->qkv since qkv becomes a quant Linear.
         quant_lin = os.environ.get("MODIFF_QUANT_LINEAR") == "1"
         if quant_lin:
             os.environ["MODIFF_FUSE_GN_QKV"] = "0"
+        _sab = os.environ.get("MODIFF_STD_ATTN_BITS")
+        std_attn_bits = int(_sab) if _sab is not None else (4 if "int4" in mode else (8 if "int8" in mode else 0))
+        def _to_token_major():
+            from integration.fused_ops.token_major_attention import convert_attention_to_token_major
+            n = convert_attention_to_token_major(model.model.diffusion_model)
+            if n > 0:
+                print(f"✓ Converted {n} AttentionBlocks to token-major (standard math attention)")
         try:
-            if os.environ.get("MODIFF_QUANT_ATTN") == "1" and not quant_lin:
-                from integration.fused_ops.quantized_attention import convert_attention_to_quantized
-                sb = int(os.environ.get("MODIFF_ATTN_SCORE_BITS", "8"))
-                n_tm = convert_attention_to_quantized(model.model.diffusion_model, score_bits=sb)
-                if n_tm > 0:
-                    print(f"✓ Converted {n_tm} AttentionBlocks to QUANTIZED token-major (score_bits={sb})")
+            if std_attn_bits in (4, 8) and not quant_lin:
+                try:
+                    from integration.fused_ops.quantized_std_attention import convert_attention_to_quantized_std
+                    n_tm = convert_attention_to_quantized_std(model.model.diffusion_model, bits=std_attn_bits)
+                    print(f"✓ Converted {n_tm} AttentionBlocks to QUANTIZED standard attention (W{std_attn_bits}A{std_attn_bits} QKᵀ/AV)")
+                except Exception as _e:      # module/kernels not ready yet -> standard math attention
+                    print(f"  (quantized std-attention unavailable: {_e}); using standard math attention")
+                    _to_token_major()
             else:
-                from integration.fused_ops.token_major_attention import convert_attention_to_token_major
-                n_tm = convert_attention_to_token_major(model.model.diffusion_model)
-                if n_tm > 0:
-                    print(f"✓ Converted {n_tm} AttentionBlocks to token-major layout")
+                _to_token_major()
             if quant_lin:
                 from integration.kernels.wxax_linear import (
                     convert_linears_to_wxax, set_wxax_calibrating, finalize_wxax_ascale, reset_wxax_modiff)
