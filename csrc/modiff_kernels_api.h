@@ -209,5 +209,4 @@ torch::Tensor flash_attn_int8(
 torch::Tensor mma_smoke(torch::Tensor A, torch::Tensor B);
 
 // ---- csrc/kernels/quantize_qkv.cu ----
-std::vector<torch::Tensor> quantize_qkv_int8(
-    torch::Tensor q, torch::Tensor k, torch::Tensor v, int64_t hd_pad);
+std::vector<torch::Tensor> quantize_qkv_int8(torch::Tensor qkv, int64_t nh, int64_t hd_pad);

@@ -67,16 +67,17 @@ class QuantizedTokenMajorAttentionBlock(TokenMajorAttentionBlock):
         if os.environ.get("MODIFF_DISABLE_FLASH_INT8") == "1" or not _HAS_FLASH_INT8:
             self.score_bits = 16
 
+    def _quant_flash_packed(self, qkv, nh, hd):
+        """qkv: [B,T,nh,3,hd] fp16 (packed) -> [B,nh,T,hd] fp16 via fused int8 flash.
+        The fused quantize reads the packed qkv directly (no transpose/contiguous)."""
+        hd_pad = (hd + 31) // 32 * 32
+        qi, ki, vi, sq, sk, scv = _mc.quantize_qkv_int8(qkv, nh, hd_pad)
+        return _mc.flash_attn_int8(qi, ki, vi, sq, sk, scv, 1.0 / math.sqrt(hd))
+
     def _quant_flash(self, q, k, v):
-        """q,k,v: [B,H,T,hd] fp16 -> [B,H,T,hd] fp16 via fused int8 flash.
-        Per-token dequant scales for Q/K, per-channel (head_dim) for V. The
-        quantize is a fused CUDA kernel (quantize_qkv_int8) when available, else
-        a PyTorch fallback."""
+        """PyTorch-fallback quantize path (q,k,v: [B,H,T,hd] fp16)."""
         B, Hh, T, hd = q.shape
         hd_pad = (hd + 31) // 32 * 32
-        if _HAS_QUANT_QKV:
-            qi, ki, vi, sq, sk, scv = _mc.quantize_qkv_int8(q, k, v, hd_pad)
-            return _mc.flash_attn_int8(qi, ki, vi, sq, sk, scv, 1.0 / math.sqrt(hd))
 
         def qtok(x):  # per-token: scale [B,H,T]
             amax = x.abs().amax(-1).clamp_min(1e-8)
@@ -113,15 +114,18 @@ class QuantizedTokenMajorAttentionBlock(TokenMajorAttentionBlock):
             xn_tok = xn.permute(0, 2, 3, 1).reshape(b, T, c)
             qkv = self.qkv(xn_tok).view(b, T, nh, 3, hd)
 
-        q, k, v = qkv.unbind(3)                            # each [b,T,nh,hd]
-        q = q.transpose(1, 2); k = k.transpose(1, 2); v = v.transpose(1, 2)  # [b,nh,T,hd]
-
         # ---- score path ----
-        if self.score_bits == 8 and T >= _FLASH_MIN_T:
-            a = self._quant_flash(q.contiguous(), k.contiguous(), v.contiguous())  # [b,nh,T,hd]
+        if self.score_bits == 8 and T >= _FLASH_MIN_T and _HAS_QUANT_QKV:
+            # fused quantize reads packed qkv directly (no transpose/contiguous)
+            a = self._quant_flash_packed(qkv, nh, hd)                      # [b,nh,T,hd]
         else:
-            with _SDPA_MATH_CTX():
-                a = F.scaled_dot_product_attention(q, k, v, scale=self.scale)
+            q, k, v = qkv.unbind(3)                                        # each [b,T,nh,hd]
+            q = q.transpose(1, 2); k = k.transpose(1, 2); v = v.transpose(1, 2)  # [b,nh,T,hd]
+            if self.score_bits == 8 and T >= _FLASH_MIN_T:
+                a = self._quant_flash(q.contiguous(), k.contiguous(), v.contiguous())
+            else:
+                with _SDPA_MATH_CTX():
+                    a = F.scaled_dot_product_attention(q, k, v, scale=self.scale)
 
         a = a.transpose(1, 2).reshape(b, T, c)
         out_tok = x_in_tok + self.proj(a)

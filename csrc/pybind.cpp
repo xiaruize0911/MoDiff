@@ -94,5 +94,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     // Fused qkv quantize for the flash score path (kernels/quantize_qkv.cu)
     m.def("quantize_qkv_int8", &quantize_qkv_int8,
-          "q/k/v [B,H,T,hd] fp16 -> {qi,ki,vi [B,H,T,hd_pad] int8, sq,sk [B,H,T], sv [B,H,hd] f32}");
+          "packed qkv [B,T,nh,3,hd] fp16 -> {qi,ki,vi [B,nh,T,hd_pad] int8, sq,sk [B,nh,T], sv [B,nh,hd] f32}");
 }

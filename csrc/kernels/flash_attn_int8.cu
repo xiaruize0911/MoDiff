@@ -205,7 +205,7 @@ __global__ void flash_attn_int8_tiled_kernel(
 // Fragment mapping matches mma_smoke (validated exact).
 // =========================================================================
 #define FA_MMA_BR 16
-#define FA_MMA_BC 32
+#define FA_MMA_BC 32             // key tile (multiple of 32); 32 gave best occupancy/softmax balance
 #define FA_MMA_MAXHD 64
 #define FA_MMA_WARPS 4            // warps per CTA; each handles its own 16-query tile
 #define FA_MMA_MAXNT 8           // max hd/8 N-tiles (hd<=64)
@@ -313,14 +313,17 @@ __global__ void flash_attn_int8_mma_kernel(
       Oreg[nt2 * 4 + 0] *= a_g;  Oreg[nt2 * 4 + 1] *= a_g;
       Oreg[nt2 * 4 + 2] *= a_g8; Oreg[nt2 * 4 + 3] *= a_g8;
       int acc[4] = {0, 0, 0, 0};
-      unsigned a[4], b[2];
-      a[0] = *(const int*)&Psw[(gid)     * FA_MMA_BC + tig * 4];
-      a[1] = *(const int*)&Psw[(gid + 8) * FA_MMA_BC + tig * 4];
-      a[2] = *(const int*)&Psw[(gid)     * FA_MMA_BC + tig * 4 + 16];
-      a[3] = *(const int*)&Psw[(gid + 8) * FA_MMA_BC + tig * 4 + 16];
-      b[0] = *(const int*)&Vs[(nt2 * 8 + gid) * FA_MMA_BC + tig * 4];
-      b[1] = *(const int*)&Vs[(nt2 * 8 + gid) * FA_MMA_BC + tig * 4 + 16];
-      modiff_mma_m16n8k32(acc, a, b);
+      for (int ks = 0; ks < FA_MMA_BC / 32; ++ks) {          // K = BC (one or more mma k-steps)
+        int koff = ks * 32;
+        unsigned a[4], b[2];
+        a[0] = *(const int*)&Psw[(gid)     * FA_MMA_BC + koff + tig * 4];
+        a[1] = *(const int*)&Psw[(gid + 8) * FA_MMA_BC + koff + tig * 4];
+        a[2] = *(const int*)&Psw[(gid)     * FA_MMA_BC + koff + tig * 4 + 16];
+        a[3] = *(const int*)&Psw[(gid + 8) * FA_MMA_BC + koff + tig * 4 + 16];
+        b[0] = *(const int*)&Vs[(nt2 * 8 + gid) * FA_MMA_BC + koff + tig * 4];
+        b[1] = *(const int*)&Vs[(nt2 * 8 + gid) * FA_MMA_BC + koff + tig * 4 + 16];
+        modiff_mma_m16n8k32(acc, a, b);
+      }
       int d0 = nt2 * 8 + tig * 2, d1 = d0 + 1;
       Oreg[nt2 * 4 + 0] += (1.f / 127.f) * svb[d0] * acc[0];
       Oreg[nt2 * 4 + 1] += (1.f / 127.f) * svb[d1] * acc[1];
