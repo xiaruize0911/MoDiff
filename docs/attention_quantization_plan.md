@@ -1,5 +1,42 @@
 # Plan: Quantize the attention path (int8 + int4, baseline + MoDiff)
 
+## RESULTS (2026-07-16) — implemented & validated
+
+**Shipped:** a fused, tensor-core **int8 flash-attention** score path (`mma.m16n8k32.s8`,
+no T×T materialization) — `csrc/kernels/{mma_int8.cuh,flash_attn_int8.cu,quantize_qkv.cu}`,
+`integration/fused_ops/quantized_attention.py`, opt-in via `MODIFF_QUANT_ATTN=1`.
+Correctness gate `integration/tests/test_flash_attn.py` ALL PASS.
+
+**Validated in the real `int8_baseline` mode (batch 32):**
+| metric | fp16 attn | int8 quant attn |
+|---|--:|--:|
+| peak memory | 4549 MiB | **3600 MiB (−21%)** |
+| speed | 45.9 ms/step | 52.7 ms/step (0.87×) |
+| latent rel-err | — | 0.0038 |
+
+- **The win is memory/IO (−21% peak), not speed.** The fused kernel avoids the
+  `[N,heads,T,T]` fp16 score matrix. Speed plateaus at ~0.87× because PyTorch math SDPA
+  is cuBLAS-backed and hard to beat at these small shapes even though it materializes T×T.
+  Perf trajectory: naive dp4a 0.11× → tensor-core mma 0.53× → multi-warp 0.82× → fused
+  packed quantize 0.89× (fp16-mode e2e). The T=1024 score kernel matches fp16 SDPA (2.2 vs
+  2.0 ms); smaller-T blocks stay ~2× (overhead-bound).
+
+**int4 findings (why not pursued further):**
+- **int4 scores:** ~0 additional peak-memory benefit — the −21% comes from T×T avoidance,
+  which is mode-independent (int8 already banks it). int4 only shrinks the small Q/K/V int8
+  buffers (~24→12 MB vs a 3600 MB peak). Not worth the separate `m16n8k64.s4` kernel + quality risk.
+- **int4 proj weights (naive per-channel):** **quality-breaking** — e2e latent rel-err jumps
+  0.008 → **0.155**. Viable only with AWQ group-wise + SmoothQuant, a large effort for a tiny
+  IO target (proj weights). Available default-off via `MODIFF_ATTN_PROJ_BITS=4` for experiments.
+
+**Bottom line:** int8 fused attention is the deliverable — a −21%-peak-memory, quality-neutral
+capability. int4 (scores or proj) is low-value at these diffusion-attention shapes.
+
+---
+
+## Original plan (below)
+
+
 Status: design proposal (2026-07-15). Target: churches LSUN LDM UNet, A40 sm_86.
 Goal: extend int8/int4 quantization into the attention block for **all four** compute modes —
 `int8_baseline`, `int4_baseline`, `int8` (MoDiff), `int4` (MoDiff) — so attention stops being the

@@ -62,10 +62,21 @@ class QuantizedTokenMajorAttentionBlock(TokenMajorAttentionBlock):
         super().__init__(orig)
         env_bits = os.environ.get("MODIFF_ATTN_SCORE_BITS")
         self.score_bits = int(env_bits) if env_bits is not None else score_bits
-        self.proj_bits = proj_bits
+        env_pb = os.environ.get("MODIFF_ATTN_PROJ_BITS")
+        self.proj_bits = int(env_pb) if env_pb is not None else proj_bits
         self.modiff = modiff
         if os.environ.get("MODIFF_DISABLE_FLASH_INT8") == "1" or not _HAS_FLASH_INT8:
             self.score_bits = 16
+        # int4 weight-only projections: snap qkv/proj weights onto the int4 grid
+        # (per-output-channel symmetric). Quality prerequisite for any int4-proj
+        # runtime path (which needs an AWQ-style dequant-in-GEMM kernel); here it
+        # measures the accuracy impact and yields 4x-smaller proj weights.
+        if self.proj_bits == 4:
+            with torch.no_grad():
+                for lin in (self.qkv, self.proj):
+                    w = lin.weight
+                    s = (w.abs().amax(dim=1, keepdim=True) / 7.0).clamp_min(1e-8)
+                    lin.weight.copy_((torch.round(w / s).clamp_(-7, 7) * s).to(w.dtype))
 
     def _quant_flash_packed(self, qkv, nh, hd):
         """qkv: [B,T,nh,3,hd] fp16 (packed) -> [B,nh,T,hd] fp16 via fused int8 flash.
