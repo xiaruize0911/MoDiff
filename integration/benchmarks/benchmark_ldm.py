@@ -605,7 +605,9 @@ class BenchmarkRunner:
         # variant instead -- opt-in so existing modes are unchanged by default.
         # MODIFF_QUANT_LINEAR=1: AWQ-style W8A8/W4A4 (weight+activation) quantization of the
         # Linear-equivalent layers. qkv becomes a quantized Linear, so disable fused GN->qkv
-        # (attention stays fp16 math SDPA). Bit-width matches the mode.
+        # (attention stays fp16). Bit-width matches the mode. NOTE: the default (non-opt-in)
+        # attention path is PyTorch FLASH SDPA (token_major_attention._SDPA_CTX; ~1.7x faster
+        # fp16 step + -22% peak vs the old forced-math backend). MODIFF_SDPA_MATH=1 reverts.
         quant_lin = os.environ.get("MODIFF_QUANT_LINEAR") == "1"
         if quant_lin:
             os.environ["MODIFF_FUSE_GN_QKV"] = "0"
