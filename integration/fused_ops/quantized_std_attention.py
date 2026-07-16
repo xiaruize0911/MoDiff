@@ -62,26 +62,21 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         return xi, sc.squeeze(-1).float().contiguous()
 
     def _qattn(self, q, k, v, T, BH):
-        """q,k,v: [BH,T,hd] fp16 -> attention output [BH,T,hd] fp16 (materialized int GEMMs)."""
+        """q,k,v: [BH,T,hd] fp16 -> attention output [BH,T,hd] fp16. Fully-fused quantized
+        standard attention: CUDA Q/K/V quantize -> QKᵀ (fp16 scaled scores) -> fused softmax
+        -> int8/int4 AV. No PyTorch quantize, no fp32 score dump."""
         hd = self.head_dim
         scale = 1.0 / math.sqrt(hd)
-        qi, sq = self._qtok(q, self.hp_qk)
-        ki, sk = self._qtok(k, self.hp_qk)
-        # V: per-channel-over-T scale; transpose to [BH,hd,T], pad to hp_av, (pack for int4)
-        svc = v.abs().amax(1, keepdim=True).clamp_min(1e-8) / self.Q     # [BH,1,hd]
-        vi = torch.round(v / svc).clamp_(-self.Q, self.Q).to(torch.int8) # [BH,T,hd]
-        vt = F.pad(vi.transpose(1, 2).contiguous(), (0, 0, 0, self.hp_av - hd)).contiguous()  # [BH,hp_av,T]
-        sv = F.pad(svc.squeeze(1), (0, self.hp_av - hd)).float().contiguous()                  # [BH,hp_av]
+        qi, ki, vt, sq, sk, sv = _mc.quantize_attn_qkv(q, k, v, self.hp_qk, self.hp_av, self.bits)
         if self.bits == 8:
-            S = _mc.attn_qk_int8(qi, ki)
-            P, sp = _mc.attn_softmax_requant(S, sq, sk, scale)
+            S = _mc.attn_qk_int8(qi, ki, sq, sk, scale)       # fp16 pre-scaled logits [BH,T,T]
+            P, sp = _mc.attn_softmax_requant(S)               # int8 P + per-row sp
             O = _mc.attn_av_int8(P, vt, sp, sv)
         else:
-            vt = _pack_last(vt)                                           # [BH,hp_av,T/2]
-            S = _mc.attn_qk_int4(qi, ki, self.hp_qk)
-            P, sp = _mc.attn_softmax_requant4(S, sq, sk, scale)
+            S = _mc.attn_qk_int4(qi, ki, self.hp_qk, sq, sk, scale)
+            P, sp = _mc.attn_softmax_requant4(S)
             O = _mc.attn_av_int4(P, vt, sp, sv, T)
-        return O[:, :, :hd]                                              # drop hd_pad
+        return O[:, :, :hd]                                   # drop hd_pad
 
     def forward(self, x):
         b, c, H, W = x.shape

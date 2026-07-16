@@ -1,0 +1,31 @@
+{
+  "int4": {
+    "total_time": 7.904895544052124,
+    "num_samples": 32,
+    "time_per_sample": 0.24702798575162888,
+    "time_per_step_ms": 1.2351399287581444,
+    "quant_memory_after_warmup": {
+      "total_tracked_mib": 935.968,
+      "cache_and_residual_mib": 641.555,
+      "weight_mib": 293.133,
+      "scale_and_bias_mib": 1.28,
+      "buckets_mib": {
+        "conv_a_hat_cache_mib": 350.812,
+        "conv_bias_mib": 0.275,
+        "conv_o_hat_cache_mib": 282.75,
+        "conv_quant_weights_mib": 225.281,
+        "conv_scale_state_mib": 0.933,
+        "linear_a_hat_cache_mib": 3.398,
+        "linear_bias_mib": 0.072,
+        "linear_fp16_weights_mib": 54.281,
+        "linear_o_hat_cache_mib": 4.594,
+        "linear_quant_weights_mib": 13.57,
+        "linear_scale_state_mib": 0.0
+      },
+      "module_counts": {
+        "OptimizedInt4Conv2d": 140,
+        "OptimizedInt4Linear": 37
+      }
+    }
+  }
+}

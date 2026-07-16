@@ -1,43 +1,31 @@
 {
-  "fp32": {
-    "total_time": 28.4392831325531,
-    "num_samples": 126,
-    "time_per_sample": 0.22570859629010398,
-    "time_per_step_ms": 4.514171925802079
-  },
-  "fp16": {
-    "total_time": 11.978845596313477,
-    "num_samples": 126,
-    "time_per_sample": 0.09507020314534505,
-    "time_per_step_ms": 1.9014040629069011,
-    "speedup": 2.3741255285321796
-  },
-  "int8": {
-    "total_time": 10.537453651428223,
-    "num_samples": 126,
-    "time_per_sample": 0.08363058453514463,
-    "time_per_step_ms": 1.6726116907028925,
-    "speedup": 2.6988762250639655
-  },
-  "int8_baseline": {
-    "total_time": 9.618292331695557,
-    "num_samples": 126,
-    "time_per_sample": 0.07633565342615521,
-    "time_per_step_ms": 1.526713068523104,
-    "speedup": 2.956791304713827
-  },
   "int4": {
-    "total_time": 9.659013986587524,
-    "num_samples": 126,
-    "time_per_sample": 0.07665884116339305,
-    "time_per_step_ms": 1.533176823267861,
-    "speedup": 2.944325701572003
-  },
-  "int4_baseline": {
-    "total_time": 9.002505779266357,
-    "num_samples": 126,
-    "time_per_sample": 0.07144845856560601,
-    "time_per_step_ms": 1.4289691713121202,
-    "speedup": 3.159040808177155
+    "total_time": 5.152812242507935,
+    "num_samples": 64,
+    "time_per_sample": 0.08051269128918648,
+    "time_per_step_ms": 1.6102538257837296,
+    "quant_memory_after_warmup": {
+      "total_tracked_mib": 935.968,
+      "cache_and_residual_mib": 641.555,
+      "weight_mib": 293.133,
+      "scale_and_bias_mib": 1.28,
+      "buckets_mib": {
+        "conv_a_hat_cache_mib": 350.812,
+        "conv_bias_mib": 0.275,
+        "conv_o_hat_cache_mib": 282.75,
+        "conv_quant_weights_mib": 225.281,
+        "conv_scale_state_mib": 0.933,
+        "linear_a_hat_cache_mib": 3.398,
+        "linear_bias_mib": 0.072,
+        "linear_fp16_weights_mib": 54.281,
+        "linear_o_hat_cache_mib": 4.594,
+        "linear_quant_weights_mib": 13.57,
+        "linear_scale_state_mib": 0.0
+      },
+      "module_counts": {
+        "OptimizedInt4Conv2d": 140,
+        "OptimizedInt4Linear": 37
+      }
+    }
   }
 }

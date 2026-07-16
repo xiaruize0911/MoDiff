@@ -31,30 +31,16 @@ for (BH, T, hd) in SHAPES:
         p = F.softmax(s.float(), -1).half()
         return torch.bmm(p, V)
     if T % 64 == 0:
-        # int8
-        hpq = (hd + 31) // 32 * 32; hpa = (hd + 63) // 64 * 64
-        def q8(x, hp):
-            sc = x.abs().amax(-1, keepdim=True).clamp_min(1e-8) / 127
-            return F.pad(torch.round(x / sc).clamp(-127, 127).to(torch.int8), (0, hp - hd)).contiguous(), sc.squeeze(-1).float().contiguous()
-        qi, sq = q8(Q, hpq); ki, sk = q8(K, hpq)
-        svc = V.abs().amax(1, keepdim=True).clamp_min(1e-8) / 127
-        vt = F.pad(torch.round(V / svc).clamp(-127, 127).to(torch.int8).transpose(1, 2).contiguous(), (0, 0, 0, hpa - hd)).contiguous()
-        sv = F.pad(svc.squeeze(1), (0, hpa - hd)).float().contiguous()
+        # Effective path: fused CUDA quantize + fp16 scores + fused softmax (matches the block).
+        hpq8 = (hd + 31) // 32 * 32; hpq4 = (hd + 63) // 64 * 64; hpa = (hd + 63) // 64 * 64
         def int8_attn():
-            S = mc.attn_qk_int8(qi, ki); P, sp = mc.attn_softmax_requant(S, sq, sk, scale)
+            qi, ki, vt, sq, sk, sv = mc.quantize_attn_qkv(Q, K, V, hpq8, hpa, 8)
+            S = mc.attn_qk_int8(qi, ki, sq, sk, scale); P, sp = mc.attn_softmax_requant(S)
             return mc.attn_av_int8(P, vt, sp, sv)
-        # int4
-        hp4 = (hd + 63) // 64 * 64
-        def q4(x, hp):
-            sc = x.abs().amax(-1, keepdim=True).clamp_min(1e-8) / 7
-            return pack(F.pad(torch.round(x / sc).clamp(-7, 7).to(torch.int8), (0, hp - hd))), sc.squeeze(-1).float().contiguous()
-        qi4, sq4 = q4(Q, hp4); ki4, sk4 = q4(K, hp4)
-        sv4c = V.abs().amax(1, keepdim=True).clamp_min(1e-8) / 7
-        vt4 = pack(F.pad(torch.round(V / sv4c).clamp(-7, 7).to(torch.int8).transpose(1, 2).contiguous(), (0, 0, 0, hp4 - hd)))
-        sv4 = F.pad(sv4c.squeeze(1), (0, hp4 - hd)).float().contiguous()
         def int4_attn():
-            S = mc.attn_qk_int4(qi4, ki4, hp4); P, sp = mc.attn_softmax_requant4(S, sq4, sk4, scale)
-            return mc.attn_av_int4(P, vt4, sp, sv4, T)
+            qi, ki, vt, sq, sk, sv = mc.quantize_attn_qkv(Q, K, V, hpq4, hpa, 4)
+            S = mc.attn_qk_int4(qi, ki, hpq4, sq, sk, scale); P, sp = mc.attn_softmax_requant4(S)
+            return mc.attn_av_int4(P, vt, sp, sv, T)
         t16 = bench(fp16_attn); t8 = bench(int8_attn); t4 = bench(int4_attn)
     else:
         t16 = bench(fp16_attn); t8 = t4 = float("nan")

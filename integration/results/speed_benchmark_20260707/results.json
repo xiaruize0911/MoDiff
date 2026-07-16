@@ -1,0 +1,143 @@
+{
+  "fp32": {
+    "total_time": 31.749677181243896,
+    "num_samples": 168,
+    "time_per_sample": 0.18898617369788034,
+    "time_per_step_ms": 3.7797234739576067,
+    "quant_memory_after_warmup": {
+      "total_tracked_mib": 0,
+      "cache_and_residual_mib": 0,
+      "weight_mib": 0,
+      "scale_and_bias_mib": 0,
+      "buckets_mib": {},
+      "module_counts": {}
+    }
+  },
+  "fp16": {
+    "total_time": 13.016095638275146,
+    "num_samples": 168,
+    "time_per_sample": 0.07747675975163777,
+    "time_per_step_ms": 1.5495351950327554,
+    "quant_memory_after_warmup": {
+      "total_tracked_mib": 0,
+      "cache_and_residual_mib": 0,
+      "weight_mib": 0,
+      "scale_and_bias_mib": 0,
+      "buckets_mib": {},
+      "module_counts": {}
+    },
+    "speedup": 2.439262745418124
+  },
+  "int8": {
+    "total_time": 12.8051016330719,
+    "num_samples": 168,
+    "time_per_sample": 0.0762208430539994,
+    "time_per_step_ms": 1.524416861079988,
+    "quant_memory_after_warmup": {
+      "total_tracked_mib": 3901.427,
+      "cache_and_residual_mib": 3368.162,
+      "weight_mib": 531.984,
+      "scale_and_bias_mib": 1.28,
+      "buckets_mib": {
+        "conv_a_hat_cache_mib": 1841.766,
+        "conv_bias_mib": 0.275,
+        "conv_o_hat_cache_mib": 1484.438,
+        "conv_quant_weights_mib": 450.562,
+        "conv_scale_state_mib": 0.933,
+        "linear_a_hat_cache_mib": 17.842,
+        "linear_bias_mib": 0.072,
+        "linear_fp16_weights_mib": 54.281,
+        "linear_o_hat_cache_mib": 24.117,
+        "linear_quant_weights_mib": 27.141,
+        "linear_scale_state_mib": 0.0
+      },
+      "module_counts": {
+        "OptimizedInt8Conv2d": 140,
+        "OptimizedInt8Linear": 37
+      }
+    },
+    "speedup": 2.479455305473219
+  },
+  "int8_baseline": {
+    "total_time": 11.085752725601196,
+    "num_samples": 168,
+    "time_per_sample": 0.06598662336667378,
+    "time_per_step_ms": 1.3197324673334758,
+    "quant_memory_after_warmup": {
+      "total_tracked_mib": 533.265,
+      "cache_and_residual_mib": 0.0,
+      "weight_mib": 531.984,
+      "scale_and_bias_mib": 1.28,
+      "buckets_mib": {
+        "conv_bias_mib": 0.275,
+        "conv_quant_weights_mib": 450.562,
+        "conv_scale_state_mib": 0.933,
+        "linear_bias_mib": 0.072,
+        "linear_fp16_weights_mib": 54.281,
+        "linear_quant_weights_mib": 27.141,
+        "linear_scale_state_mib": 0.0
+      },
+      "module_counts": {
+        "OptimizedInt8Conv2d": 140,
+        "OptimizedInt8Linear": 37
+      }
+    },
+    "speedup": 2.864007340513909
+  },
+  "int4": {
+    "total_time": 11.77482557296753,
+    "num_samples": 168,
+    "time_per_sample": 0.07008824745814006,
+    "time_per_step_ms": 1.401764949162801,
+    "quant_memory_after_warmup": {
+      "total_tracked_mib": 3662.575,
+      "cache_and_residual_mib": 3368.162,
+      "weight_mib": 293.133,
+      "scale_and_bias_mib": 1.28,
+      "buckets_mib": {
+        "conv_a_hat_cache_mib": 1841.766,
+        "conv_bias_mib": 0.275,
+        "conv_o_hat_cache_mib": 1484.438,
+        "conv_quant_weights_mib": 225.281,
+        "conv_scale_state_mib": 0.933,
+        "linear_a_hat_cache_mib": 17.842,
+        "linear_bias_mib": 0.072,
+        "linear_fp16_weights_mib": 54.281,
+        "linear_o_hat_cache_mib": 24.117,
+        "linear_quant_weights_mib": 13.57,
+        "linear_scale_state_mib": 0.0
+      },
+      "module_counts": {
+        "OptimizedInt4Conv2d": 140,
+        "OptimizedInt4Linear": 37
+      }
+    },
+    "speedup": 2.6964031852951043
+  },
+  "int4_baseline": {
+    "total_time": 10.79295825958252,
+    "num_samples": 168,
+    "time_per_sample": 0.06424379916418166,
+    "time_per_step_ms": 1.2848759832836334,
+    "quant_memory_after_warmup": {
+      "total_tracked_mib": 294.413,
+      "cache_and_residual_mib": 0.0,
+      "weight_mib": 293.133,
+      "scale_and_bias_mib": 1.28,
+      "buckets_mib": {
+        "conv_bias_mib": 0.275,
+        "conv_quant_weights_mib": 225.281,
+        "conv_scale_state_mib": 0.933,
+        "linear_bias_mib": 0.072,
+        "linear_fp16_weights_mib": 54.281,
+        "linear_quant_weights_mib": 13.57,
+        "linear_scale_state_mib": 0.0
+      },
+      "module_counts": {
+        "OptimizedInt4Conv2d": 140,
+        "OptimizedInt4Linear": 37
+      }
+    },
+    "speedup": 2.94170295276135
+  }
+}

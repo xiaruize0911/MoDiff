@@ -118,7 +118,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "softmax(dequant S · sq·sk·scale) -> {P int8 [BH,T,T] in [0,127], sp [BH,T]}");
     m.def("attn_av_int8", &attn_av_int8,
           "batched int8 AV: P[BH,T,T]·Vtᵀ[BH,hd_pad,T] -> O fp16 [BH,T,hd_pad], dequant sp[row]·sv[col]");
-    m.def("attn_qk_int4", &attn_qk_int4, "batched int4 QKᵀ (packed) -> S [BH,T,T] fp32 raw");
-    m.def("attn_softmax_requant4", &attn_softmax_requant4, "softmax -> PACKED int4 P [BH,T,T/2] + sp");
+    m.def("attn_qk_int4", &attn_qk_int4, "batched int4 QKᵀ (packed) -> S [BH,T,T] fp16 scaled logits");
+    m.def("attn_softmax_requant4", &attn_softmax_requant4, "softmax(fp16 S) -> PACKED int4 P [BH,T,T/2] + sp");
     m.def("attn_av_int4", &attn_av_int4, "batched int4 AV (packed P·Vt) -> O fp16 [BH,T,hd_pad]");
+    m.def("quantize_attn_qkv", &quantize_attn_qkv,
+          "fused Q/K/V quantize: fp16 [BH,T,hd] -> {qi,ki [BH,T,hp_qk], vt [BH,hp_av,T], sq,sk, sv}");
 }

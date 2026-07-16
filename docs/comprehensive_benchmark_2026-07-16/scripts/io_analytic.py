@@ -62,7 +62,8 @@ def lin_io(e):                    # qkv (C->3C) + proj (C->C) per attn block
                for (C, T, nh, hd) in attns)
 def attn_io_mat(e_qkv, eS, eP):   # MATERIALIZED standard attention (flash removed):
     # read Q,K,V (+V reread in AV) + QKᵀ write S + softmax read S + write P + AV read P + write O.
-    # int8/int4 modes quantize the score path (Q/K/V eP; raw scores S kept fp32 for softmax).
+    # int8/int4 modes quantize the score path (Q/K/V eP); the effective path writes fp16 pre-scaled
+    # scores S (eS=2), applying sq*sk*scale in the QKᵀ epilogue -> softmax reads fp16 (no fp32 dump).
     return sum(4*N*nh*T*hd*e_qkv + 2*N*nh*T*T*eS + 2*N*nh*T*T*eP + 2*N*nh*T*hd
                for (C, T, nh, hd) in attns)
 
@@ -70,8 +71,8 @@ def attn_io_mat(e_qkv, eS, eP):   # MATERIALIZED standard attention (flash remov
 # materialized attention all quantized by the mode. (name, e_conv, e_lin, (e_qkv,eS,eP)).
 PREC = [("fp32", 4.0, 4.0, (4.0, 4.0, 4.0)),
         ("fp16", 2.0, 2.0, (2.0, 2.0, 2.0)),
-        ("int8", 1.0, 2.0, (1.0, 4.0, 1.0)),
-        ("int4", 0.5, 2.0, (0.5, 4.0, 0.5))]
+        ("int8", 1.0, 2.0, (1.0, 2.0, 1.0)),
+        ("int4", 0.5, 2.0, (0.5, 2.0, 0.5))]
 rows = []
 for prec, e_conv, e_lin, (eq, eS, eP) in PREC:
     c = conv_io(e_conv)/MiB; l = lin_io(e_lin)/MiB; a = attn_io_mat(eq, eS, eP)/MiB

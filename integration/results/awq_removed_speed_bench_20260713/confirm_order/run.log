@@ -1,0 +1,401 @@
+========== RUN=1 MODE=int8 ==========
+GPU: NVIDIA A40
+Config: configs/latent-diffusion/lsun_churches-ldm-kl-8.yaml
+Steps: 200 | Batch: 32 | Samples: 32
+Linear backend: fp16 | int_gemm_min_m=64
+Static calibration: integration/calibration/int8_calibration.pt
+
+============================================================
+INT8
+============================================================
+Profiler reset.
+Loading model from models/ldm/lsun_churches256/model.ckpt
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+
+============================================================
+Applying ResBlock Fusion Optimization
+============================================================
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+
+============================================================
+ResBlock Fusion Summary
+============================================================
+Total fused blocks: 35
+  - OpenAI ResBlocks: 35
+  - ResNet Blocks: 0
+Fusion method: native channels_last GroupNorm(+SiLU) CUDA kernel, falling back to F.group_norm + F.silu with autocast locally disabled (HAS_NATIVE_GN_SILU=True)
+============================================================
+
+Converting UNet to INT8 (89 conv layers)...
+Converting UNet linear layers to INT8 (37 linear layers)...
+Loading static calibration from integration/calibration/int8_calibration.pt
+✓ Loaded 70 INT8 conv layer scales (static quantization enabled)
+✓ Loaded 37 INT8 linear layer scales
+✓ Wired SiLU fusion for 62 quantized conv layers
+Warming up cuDNN (full 200-step pass at batch_size=32)...
+Data shape for DDIM sampling is (32, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 200 timesteps
+DDIM Sampler:   0%|          | 0/200 [00:00<?, ?it/s]DDIM Sampler:   0%|          | 1/200 [00:01<03:50,  1.16s/it]DDIM Sampler:   2%|▏         | 3/200 [00:01<01:11,  2.76it/s]DDIM Sampler:   2%|▎         | 5/200 [00:01<00:42,  4.63it/s]DDIM Sampler:   4%|▎         | 7/200 [00:01<00:30,  6.36it/s]DDIM Sampler:   4%|▍         | 9/200 [00:01<00:24,  7.87it/s]DDIM Sampler:   6%|▌         | 11/200 [00:01<00:20,  9.10it/s]DDIM Sampler:   6%|▋         | 13/200 [00:02<00:18, 10.09it/s]DDIM Sampler:   8%|▊         | 15/200 [00:02<00:17, 10.85it/s]DDIM Sampler:   8%|▊         | 17/200 [00:02<00:16, 11.13it/s]DDIM Sampler:  10%|▉         | 19/200 [00:02<00:15, 11.62it/s]DDIM Sampler:  10%|█         | 21/200 [00:02<00:14, 11.98it/s]DDIM Sampler:  12%|█▏        | 23/200 [00:02<00:14, 12.26it/s]DDIM Sampler:  12%|█▎        | 25/200 [00:03<00:14, 12.45it/s]DDIM Sampler:  14%|█▎        | 27/200 [00:03<00:13, 12.48it/s]DDIM Sampler:  14%|█▍        | 29/200 [00:03<00:13, 12.60it/s]DDIM Sampler:  16%|█▌        | 31/200 [00:03<00:13, 12.44it/s]DDIM Sampler:  16%|█▋        | 33/200 [00:03<00:13, 12.57it/s]DDIM Sampler:  18%|█▊        | 35/200 [00:03<00:13, 12.66it/s]DDIM Sampler:  18%|█▊        | 37/200 [00:03<00:12, 12.70it/s]DDIM Sampler:  20%|█▉        | 39/200 [00:04<00:12, 12.76it/s]DDIM Sampler:  20%|██        | 41/200 [00:04<00:12, 12.79it/s]DDIM Sampler:  22%|██▏       | 43/200 [00:04<00:12, 12.82it/s]DDIM Sampler:  22%|██▎       | 45/200 [00:04<00:12, 12.56it/s]DDIM Sampler:  24%|██▎       | 47/200 [00:04<00:12, 12.66it/s]DDIM Sampler:  24%|██▍       | 49/200 [00:04<00:12, 12.20it/s]DDIM Sampler:  26%|██▌       | 51/200 [00:05<00:12, 12.13it/s]DDIM Sampler:  26%|██▋       | 53/200 [00:05<00:11, 12.35it/s]DDIM Sampler:  28%|██▊       | 55/200 [00:05<00:11, 12.50it/s]DDIM Sampler:  28%|██▊       | 57/200 [00:05<00:11, 12.62it/s]DDIM Sampler:  30%|██▉       | 59/200 [00:05<00:15,  9.21it/s]DDIM Sampler:  30%|███       | 61/200 [00:06<00:14,  9.74it/s]DDIM Sampler:  32%|███▏      | 63/200 [00:06<00:13, 10.50it/s]DDIM Sampler:  32%|███▎      | 65/200 [00:06<00:12, 11.12it/s]DDIM Sampler:  34%|███▎      | 67/200 [00:06<00:11, 11.60it/s]DDIM Sampler:  34%|███▍      | 69/200 [00:06<00:11, 11.51it/s]DDIM Sampler:  36%|███▌      | 71/200 [00:06<00:11, 11.48it/s]DDIM Sampler:  36%|███▋      | 73/200 [00:07<00:10, 11.87it/s]DDIM Sampler:  38%|███▊      | 75/200 [00:07<00:10, 12.15it/s]DDIM Sampler:  38%|███▊      | 77/200 [00:07<00:09, 12.36it/s]DDIM Sampler:  40%|███▉      | 79/200 [00:07<00:09, 12.34it/s]DDIM Sampler:  40%|████      | 81/200 [00:07<00:09, 12.50it/s]DDIM Sampler:  42%|████▏     | 83/200 [00:07<00:09, 12.62it/s]DDIM Sampler:  42%|████▎     | 85/200 [00:08<00:09, 12.71it/s]DDIM Sampler:  44%|████▎     | 87/200 [00:08<00:08, 12.77it/s]DDIM Sampler:  44%|████▍     | 89/200 [00:08<00:08, 12.81it/s]DDIM Sampler:  46%|████▌     | 91/200 [00:08<00:08, 12.85it/s]DDIM Sampler:  46%|████▋     | 93/200 [00:08<00:08, 12.86it/s]DDIM Sampler:  48%|████▊     | 95/200 [00:08<00:08, 12.48it/s]DDIM Sampler:  48%|████▊     | 97/200 [00:08<00:08, 12.59it/s]DDIM Sampler:  50%|████▉     | 99/200 [00:09<00:07, 12.68it/s]DDIM Sampler:  50%|█████     | 101/200 [00:09<00:07, 12.72it/s]DDIM Sampler:  52%|█████▏    | 103/200 [00:09<00:07, 12.22it/s]DDIM Sampler:  52%|█████▎    | 105/200 [00:09<00:07, 12.38it/s]DDIM Sampler:  54%|█████▎    | 107/200 [00:09<00:07, 12.52it/s]DDIM Sampler:  55%|█████▍    | 109/200 [00:09<00:07, 12.64it/s]DDIM Sampler:  56%|█████▌    | 111/200 [00:10<00:06, 12.72it/s]DDIM Sampler:  56%|█████▋    | 113/200 [00:10<00:06, 12.78it/s]DDIM Sampler:  57%|█████▊    | 115/200 [00:10<00:06, 12.82it/s]DDIM Sampler:  58%|█████▊    | 117/200 [00:10<00:06, 12.31it/s]DDIM Sampler:  60%|█████▉    | 119/200 [00:10<00:06, 12.25it/s]DDIM Sampler:  60%|██████    | 121/200 [00:10<00:06, 12.41it/s]DDIM Sampler:  62%|██████▏   | 123/200 [00:11<00:06, 12.55it/s]DDIM Sampler:  62%|██████▎   | 125/200 [00:11<00:06, 11.73it/s]DDIM Sampler:  64%|██████▎   | 127/200 [00:11<00:06, 11.68it/s]DDIM Sampler:  64%|██████▍   | 129/200 [00:11<00:05, 12.02it/s]DDIM Sampler:  66%|██████▌   | 131/200 [00:11<00:05, 12.19it/s]DDIM Sampler:  66%|██████▋   | 133/200 [00:11<00:05, 12.40it/s]DDIM Sampler:  68%|██████▊   | 135/200 [00:12<00:05, 12.56it/s]DDIM Sampler:  68%|██████▊   | 137/200 [00:12<00:04, 12.66it/s]DDIM Sampler:  70%|██████▉   | 139/200 [00:12<00:04, 12.73it/s]DDIM Sampler:  70%|███████   | 141/200 [00:12<00:04, 12.54it/s]DDIM Sampler:  72%|███████▏  | 143/200 [00:12<00:04, 12.63it/s]DDIM Sampler:  72%|███████▎  | 145/200 [00:12<00:04, 12.70it/s]DDIM Sampler:  74%|███████▎  | 147/200 [00:12<00:04, 12.76it/s]DDIM Sampler:  74%|███████▍  | 149/200 [00:13<00:03, 12.80it/s]DDIM Sampler:  76%|███████▌  | 151/200 [00:13<00:03, 12.84it/s]DDIM Sampler:  76%|███████▋  | 153/200 [00:13<00:03, 12.89it/s]DDIM Sampler:  78%|███████▊  | 155/200 [00:13<00:03, 12.57it/s]DDIM Sampler:  78%|███████▊  | 157/200 [00:13<00:03, 12.66it/s]DDIM Sampler:  80%|███████▉  | 159/200 [00:13<00:03, 12.73it/s]DDIM Sampler:  80%|████████  | 161/200 [00:14<00:03, 12.80it/s]DDIM Sampler:  82%|████████▏ | 163/200 [00:14<00:02, 12.85it/s]DDIM Sampler:  82%|████████▎ | 165/200 [00:14<00:02, 12.89it/s]DDIM Sampler:  84%|████████▎ | 167/200 [00:14<00:02, 12.91it/s]DDIM Sampler:  84%|████████▍ | 169/200 [00:14<00:02, 12.92it/s]DDIM Sampler:  86%|████████▌ | 171/200 [00:14<00:02, 12.92it/s]DDIM Sampler:  86%|████████▋ | 173/200 [00:15<00:02, 12.71it/s]DDIM Sampler:  88%|████████▊ | 175/200 [00:15<00:01, 12.76it/s]DDIM Sampler:  88%|████████▊ | 177/200 [00:15<00:01, 12.81it/s]DDIM Sampler:  90%|████████▉ | 179/200 [00:15<00:01, 12.84it/s]DDIM Sampler:  90%|█████████ | 181/200 [00:15<00:01, 12.86it/s]DDIM Sampler:  92%|█████████▏| 183/200 [00:15<00:01, 12.90it/s]DDIM Sampler:  92%|█████████▎| 185/200 [00:15<00:01, 12.92it/s]DDIM Sampler:  94%|█████████▎| 187/200 [00:16<00:01, 12.94it/s]DDIM Sampler:  94%|█████████▍| 189/200 [00:16<00:00, 12.94it/s]DDIM Sampler:  96%|█████████▌| 191/200 [00:16<00:00, 12.59it/s]DDIM Sampler:  96%|█████████▋| 193/200 [00:16<00:00, 12.69it/s]DDIM Sampler:  98%|█████████▊| 195/200 [00:16<00:00, 12.76it/s]DDIM Sampler:  98%|█████████▊| 197/200 [00:16<00:00, 12.80it/s]DDIM Sampler: 100%|█████████▉| 199/200 [00:17<00:00, 12.83it/s]DDIM Sampler: 100%|██████████| 200/200 [00:17<00:00, 11.68it/s]
+Quant memory after warmup: tracked=1174.8MiB | cache/residual=641.6MiB | weights=532.0MiB | top=[conv_quant_weights_mib:450.6, conv_a_hat_cache_mib:350.8, conv_o_hat_cache_mib:282.8, linear_fp16_weights_mib:54.3, linear_quant_weights_mib:27.1, linear_o_hat_cache_mib:4.6, linear_a_hat_cache_mib:3.4, conv_scale_state_mib:0.9]
+Warmup complete.
+Data shape for DDIM sampling is (32, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 200 timesteps
+DDIM Sampler:   0%|          | 0/200 [00:00<?, ?it/s]DDIM Sampler:   0%|          | 1/200 [00:00<01:20,  2.47it/s]DDIM Sampler:   2%|▏         | 4/200 [00:00<00:21,  9.14it/s]DDIM Sampler:   4%|▎         | 7/200 [00:00<00:14, 13.43it/s]DDIM Sampler:   5%|▌         | 10/200 [00:00<00:11, 16.83it/s]DDIM Sampler:   6%|▋         | 13/200 [00:00<00:09, 19.36it/s]DDIM Sampler:   8%|▊         | 16/200 [00:01<00:09, 19.90it/s]DDIM Sampler:  10%|▉         | 19/200 [00:01<00:08, 21.50it/s]DDIM Sampler:  11%|█         | 22/200 [00:01<00:07, 22.68it/s]DDIM Sampler:  12%|█▎        | 25/200 [00:01<00:07, 23.49it/s]DDIM Sampler:  14%|█▍        | 28/200 [00:01<00:07, 23.78it/s]DDIM Sampler:  16%|█▌        | 31/200 [00:01<00:07, 23.09it/s]DDIM Sampler:  17%|█▋        | 34/200 [00:01<00:06, 23.76it/s]DDIM Sampler:  18%|█▊        | 37/200 [00:01<00:06, 24.29it/s]DDIM Sampler:  20%|██        | 40/200 [00:02<00:06, 24.67it/s]DDIM Sampler:  22%|██▏       | 43/200 [00:02<00:06, 24.95it/s]DDIM Sampler:  23%|██▎       | 46/200 [00:02<00:06, 24.57it/s]DDIM Sampler:  24%|██▍       | 49/200 [00:02<00:06, 24.88it/s]DDIM Sampler:  26%|██▌       | 52/200 [00:02<00:05, 25.11it/s]DDIM Sampler:  28%|██▊       | 55/200 [00:02<00:05, 25.25it/s]DDIM Sampler:  29%|██▉       | 58/200 [00:02<00:05, 25.33it/s]DDIM Sampler:  30%|███       | 61/200 [00:02<00:05, 24.39it/s]DDIM Sampler:  32%|███▏      | 64/200 [00:02<00:05, 24.72it/s]DDIM Sampler:  34%|███▎      | 67/200 [00:03<00:05, 24.99it/s]DDIM Sampler:  35%|███▌      | 70/200 [00:03<00:05, 25.18it/s]DDIM Sampler:  36%|███▋      | 73/200 [00:03<00:05, 25.34it/s]DDIM Sampler:  38%|███▊      | 76/200 [00:03<00:05, 24.57it/s]DDIM Sampler:  40%|███▉      | 79/200 [00:03<00:04, 24.87it/s]DDIM Sampler:  41%|████      | 82/200 [00:03<00:04, 25.11it/s]DDIM Sampler:  42%|████▎     | 85/200 [00:03<00:04, 25.24it/s]DDIM Sampler:  44%|████▍     | 88/200 [00:03<00:04, 25.36it/s]DDIM Sampler:  46%|████▌     | 91/200 [00:04<00:04, 24.69it/s]DDIM Sampler:  47%|████▋     | 94/200 [00:04<00:04, 24.97it/s]DDIM Sampler:  48%|████▊     | 97/200 [00:04<00:04, 25.16it/s]DDIM Sampler:  50%|█████     | 100/200 [00:04<00:03, 25.30it/s]DDIM Sampler:  52%|█████▏    | 103/200 [00:04<00:03, 25.41it/s]DDIM Sampler:  53%|█████▎    | 106/200 [00:04<00:03, 24.36it/s]DDIM Sampler:  55%|█████▍    | 109/200 [00:04<00:03, 24.72it/s]DDIM Sampler:  56%|█████▌    | 112/200 [00:04<00:03, 24.63it/s]DDIM Sampler:  57%|█████▊    | 115/200 [00:05<00:03, 24.93it/s]DDIM Sampler:  59%|█████▉    | 118/200 [00:05<00:03, 24.76it/s]DDIM Sampler:  60%|██████    | 121/200 [00:05<00:03, 24.47it/s]DDIM Sampler:  62%|██████▏   | 124/200 [00:05<00:03, 24.38it/s]DDIM Sampler:  64%|██████▎   | 127/200 [00:05<00:02, 24.76it/s]DDIM Sampler:  65%|██████▌   | 130/200 [00:05<00:02, 24.99it/s]DDIM Sampler:  66%|██████▋   | 133/200 [00:05<00:02, 24.23it/s]DDIM Sampler:  68%|██████▊   | 136/200 [00:05<00:02, 24.62it/s]DDIM Sampler:  70%|██████▉   | 139/200 [00:05<00:02, 24.89it/s]DDIM Sampler:  71%|███████   | 142/200 [00:06<00:02, 25.11it/s]DDIM Sampler:  72%|███████▎  | 145/200 [00:06<00:02, 25.22it/s]DDIM Sampler:  74%|███████▍  | 148/200 [00:06<00:02, 24.48it/s]DDIM Sampler:  76%|███████▌  | 151/200 [00:06<00:01, 24.82it/s]DDIM Sampler:  77%|███████▋  | 154/200 [00:06<00:01, 25.02it/s]DDIM Sampler:  78%|███████▊  | 157/200 [00:06<00:01, 25.20it/s]DDIM Sampler:  80%|████████  | 160/200 [00:06<00:01, 25.30it/s]DDIM Sampler:  82%|████████▏ | 163/200 [00:06<00:01, 24.48it/s]DDIM Sampler:  83%|████████▎ | 166/200 [00:07<00:01, 24.80it/s]DDIM Sampler:  84%|████████▍ | 169/200 [00:07<00:01, 25.02it/s]DDIM Sampler:  86%|████████▌ | 172/200 [00:07<00:01, 25.18it/s]DDIM Sampler:  88%|████████▊ | 175/200 [00:07<00:00, 25.33it/s]DDIM Sampler:  89%|████████▉ | 178/200 [00:07<00:00, 24.40it/s]DDIM Sampler:  90%|█████████ | 181/200 [00:07<00:00, 24.75it/s]DDIM Sampler:  92%|█████████▏| 184/200 [00:07<00:00, 25.01it/s]DDIM Sampler:  94%|█████████▎| 187/200 [00:07<00:00, 25.15it/s]DDIM Sampler:  95%|█████████▌| 190/200 [00:08<00:00, 25.28it/s]DDIM Sampler:  96%|█████████▋| 193/200 [00:08<00:00, 24.56it/s]DDIM Sampler:  98%|█████████▊| 196/200 [00:08<00:00, 24.87it/s]DDIM Sampler: 100%|█████████▉| 199/200 [00:08<00:00, 24.87it/s]DDIM Sampler: 100%|██████████| 200/200 [00:08<00:00, 23.73it/s]
+
+INT8 Results:
+  Total: 8.44s for 32 samples
+  Per-sample: 0.264s
+  Per-step: 1.32ms
+
+Profiler Summary (INT8):
+
+============================================================
+PERFORMANCE PROFILE
+============================================================
+Component                      | Total (s)  | Calls    | Avg (ms)   | % Total 
+---------------------------------------------------------------------------
+No data collected.
+
+============================================================
+SUMMARY
+============================================================
+
+Mode            Time/Sample     Speedup      FID       
+-------------------------------------------------------
+int8            0.264s          3.79x        -         
+
+Results saved to: integration/results/awq_removed_speed_bench_20260713/confirm_order/int8_r1/
+---- exit=0 RUN=1 MODE=int8 ----
+========== RUN=1 MODE=int8_baseline ==========
+GPU: NVIDIA A40
+Config: configs/latent-diffusion/lsun_churches-ldm-kl-8.yaml
+Steps: 200 | Batch: 32 | Samples: 32
+Linear backend: fp16 | int_gemm_min_m=64
+Static calibration: integration/calibration/int8_calibration.pt
+
+============================================================
+INT8_BASELINE
+============================================================
+Loading model from models/ldm/lsun_churches256/model.ckpt
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+
+============================================================
+Applying ResBlock Fusion Optimization
+============================================================
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+
+============================================================
+ResBlock Fusion Summary
+============================================================
+Total fused blocks: 35
+  - OpenAI ResBlocks: 35
+  - ResNet Blocks: 0
+Fusion method: native channels_last GroupNorm(+SiLU) CUDA kernel, falling back to F.group_norm + F.silu with autocast locally disabled (HAS_NATIVE_GN_SILU=True)
+============================================================
+
+Converting UNet to INT8 Baseline (INT8 kernels without MoDiff temporal caching) (89 conv layers)...
+Converting UNet linear layers to INT8 using fp16 backend (37 linear layers)...
+Loading static calibration from integration/calibration/int8_calibration.pt
+✓ Loaded 70 INT8 conv layer scales for baseline (static quantization enabled)
+✓ Loaded 37 INT8 linear layer scales for baseline
+✓ Wired SiLU fusion for 62 quantized conv layers
+Warming up cuDNN (full 200-step pass at batch_size=32)...
+Data shape for DDIM sampling is (32, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 200 timesteps
+DDIM Sampler:   0%|          | 0/200 [00:00<?, ?it/s]DDIM Sampler:   0%|          | 1/200 [00:00<02:47,  1.19it/s]DDIM Sampler:   2%|▏         | 3/200 [00:00<00:54,  3.63it/s]DDIM Sampler:   2%|▎         | 5/200 [00:01<00:33,  5.79it/s]DDIM Sampler:   4%|▎         | 7/200 [00:01<00:25,  7.60it/s]DDIM Sampler:   4%|▍         | 9/200 [00:01<00:21,  9.05it/s]DDIM Sampler:   6%|▌         | 11/200 [00:01<00:18, 10.17it/s]DDIM Sampler:   6%|▋         | 13/200 [00:01<00:16, 11.02it/s]DDIM Sampler:   8%|▊         | 15/200 [00:01<00:15, 11.62it/s]DDIM Sampler:   8%|▊         | 17/200 [00:02<00:15, 12.09it/s]DDIM Sampler:  10%|▉         | 19/200 [00:02<00:14, 12.41it/s]DDIM Sampler:  10%|█         | 21/200 [00:02<00:14, 12.65it/s]DDIM Sampler:  12%|█▏        | 23/200 [00:02<00:14, 12.38it/s]DDIM Sampler:  12%|█▎        | 25/200 [00:02<00:13, 12.62it/s]DDIM Sampler:  14%|█▎        | 27/200 [00:02<00:13, 12.76it/s]DDIM Sampler:  14%|█▍        | 29/200 [00:02<00:13, 12.85it/s]DDIM Sampler:  16%|█▌        | 31/200 [00:03<00:13, 12.97it/s]DDIM Sampler:  16%|█▋        | 33/200 [00:03<00:12, 13.03it/s]DDIM Sampler:  18%|█▊        | 35/200 [00:03<00:12, 13.07it/s]DDIM Sampler:  18%|█▊        | 37/200 [00:03<00:12, 12.93it/s]DDIM Sampler:  20%|█▉        | 39/200 [00:03<00:12, 12.80it/s]DDIM Sampler:  20%|██        | 41/200 [00:03<00:13, 12.13it/s]DDIM Sampler:  22%|██▏       | 43/200 [00:04<00:12, 12.44it/s]DDIM Sampler:  22%|██▎       | 45/200 [00:04<00:12, 12.66it/s]DDIM Sampler:  24%|██▎       | 47/200 [00:04<00:11, 12.82it/s]DDIM Sampler:  24%|██▍       | 49/200 [00:04<00:11, 12.92it/s]DDIM Sampler:  26%|██▌       | 51/200 [00:04<00:11, 12.98it/s]DDIM Sampler:  26%|██▋       | 53/200 [00:04<00:11, 13.04it/s]DDIM Sampler:  28%|██▊       | 55/200 [00:05<00:11, 13.01it/s]DDIM Sampler:  28%|██▊       | 57/200 [00:05<00:10, 13.05it/s]DDIM Sampler:  30%|██▉       | 59/200 [00:05<00:11, 12.67it/s]DDIM Sampler:  30%|███       | 61/200 [00:05<00:10, 12.71it/s]DDIM Sampler:  32%|███▏      | 63/200 [00:05<00:10, 12.62it/s]DDIM Sampler:  32%|███▎      | 65/200 [00:05<00:10, 12.76it/s]DDIM Sampler:  34%|███▎      | 67/200 [00:05<00:10, 12.75it/s]DDIM Sampler:  34%|███▍      | 69/200 [00:06<00:10, 12.05it/s]DDIM Sampler:  36%|███▌      | 71/200 [00:06<00:10, 12.36it/s]DDIM Sampler:  36%|███▋      | 73/200 [00:06<00:10, 12.17it/s]DDIM Sampler:  38%|███▊      | 75/200 [00:06<00:10, 11.99it/s]DDIM Sampler:  38%|███▊      | 77/200 [00:06<00:09, 12.33it/s]DDIM Sampler:  40%|███▉      | 79/200 [00:06<00:09, 12.21it/s]DDIM Sampler:  40%|████      | 81/200 [00:07<00:10, 11.80it/s]DDIM Sampler:  42%|████▏     | 83/200 [00:07<00:09, 12.07it/s]DDIM Sampler:  42%|████▎     | 85/200 [00:07<00:09, 12.38it/s]DDIM Sampler:  44%|████▎     | 87/200 [00:07<00:08, 12.62it/s]DDIM Sampler:  44%|████▍     | 89/200 [00:07<00:08, 12.78it/s]DDIM Sampler:  46%|████▌     | 91/200 [00:07<00:08, 12.80it/s]DDIM Sampler:  46%|████▋     | 93/200 [00:08<00:08, 12.89it/s]DDIM Sampler:  48%|████▊     | 95/200 [00:08<00:08, 12.47it/s]DDIM Sampler:  48%|████▊     | 97/200 [00:08<00:08, 12.08it/s]DDIM Sampler:  50%|████▉     | 99/200 [00:08<00:08, 12.40it/s]DDIM Sampler:  50%|█████     | 101/200 [00:08<00:08, 12.02it/s]DDIM Sampler:  52%|█████▏    | 103/200 [00:08<00:07, 12.33it/s]DDIM Sampler:  52%|█████▎    | 105/200 [00:09<00:07, 12.57it/s]DDIM Sampler:  54%|█████▎    | 107/200 [00:09<00:07, 12.74it/s]DDIM Sampler:  55%|█████▍    | 109/200 [00:09<00:07, 12.86it/s]DDIM Sampler:  56%|█████▌    | 111/200 [00:09<00:06, 12.92it/s]DDIM Sampler:  56%|█████▋    | 113/200 [00:09<00:06, 12.99it/s]DDIM Sampler:  57%|█████▊    | 115/200 [00:09<00:06, 13.05it/s]DDIM Sampler:  58%|█████▊    | 117/200 [00:09<00:06, 13.10it/s]DDIM Sampler:  60%|█████▉    | 119/200 [00:10<00:06, 12.51it/s]DDIM Sampler:  60%|██████    | 121/200 [00:10<00:06, 12.71it/s]DDIM Sampler:  62%|██████▏   | 123/200 [00:10<00:05, 12.85it/s]DDIM Sampler:  62%|██████▎   | 125/200 [00:10<00:05, 12.94it/s]DDIM Sampler:  64%|██████▎   | 127/200 [00:10<00:05, 13.01it/s]DDIM Sampler:  64%|██████▍   | 129/200 [00:10<00:05, 13.04it/s]DDIM Sampler:  66%|██████▌   | 131/200 [00:11<00:05, 13.08it/s]DDIM Sampler:  66%|██████▋   | 133/200 [00:11<00:05, 13.11it/s]DDIM Sampler:  68%|██████▊   | 135/200 [00:11<00:04, 13.10it/s]DDIM Sampler:  68%|██████▊   | 137/200 [00:11<00:04, 13.13it/s]DDIM Sampler:  70%|██████▉   | 139/200 [00:11<00:04, 13.15it/s]DDIM Sampler:  70%|███████   | 141/200 [00:11<00:04, 13.16it/s]DDIM Sampler:  72%|███████▏  | 143/200 [00:11<00:04, 13.18it/s]DDIM Sampler:  72%|███████▎  | 145/200 [00:12<00:04, 13.19it/s]DDIM Sampler:  74%|███████▎  | 147/200 [00:12<00:04, 13.18it/s]DDIM Sampler:  74%|███████▍  | 149/200 [00:12<00:04, 12.61it/s]DDIM Sampler:  76%|███████▌  | 151/200 [00:12<00:03, 12.77it/s]DDIM Sampler:  76%|███████▋  | 153/200 [00:12<00:03, 12.89it/s]DDIM Sampler:  78%|███████▊  | 155/200 [00:12<00:03, 12.95it/s]DDIM Sampler:  78%|███████▊  | 157/200 [00:13<00:03, 13.03it/s]DDIM Sampler:  80%|███████▉  | 159/200 [00:13<00:03, 13.06it/s]DDIM Sampler:  80%|████████  | 161/200 [00:13<00:02, 13.08it/s]DDIM Sampler:  82%|████████▏ | 163/200 [00:13<00:02, 12.94it/s]DDIM Sampler:  82%|████████▎ | 165/200 [00:13<00:02, 13.00it/s]DDIM Sampler:  84%|████████▎ | 167/200 [00:13<00:02, 12.44it/s]DDIM Sampler:  84%|████████▍ | 169/200 [00:13<00:02, 12.52it/s]DDIM Sampler:  86%|████████▌ | 171/200 [00:14<00:02, 12.71it/s]DDIM Sampler:  86%|████████▋ | 173/200 [00:14<00:02, 12.65it/s]DDIM Sampler:  88%|████████▊ | 175/200 [00:14<00:01, 12.80it/s]DDIM Sampler:  88%|████████▊ | 177/200 [00:14<00:01, 12.91it/s]DDIM Sampler:  90%|████████▉ | 179/200 [00:14<00:01, 12.99it/s]DDIM Sampler:  90%|█████████ | 181/200 [00:14<00:01, 12.49it/s]DDIM Sampler:  92%|█████████▏| 183/200 [00:15<00:01, 12.67it/s]DDIM Sampler:  92%|█████████▎| 185/200 [00:15<00:01, 12.80it/s]DDIM Sampler:  94%|█████████▎| 187/200 [00:15<00:01, 12.89it/s]DDIM Sampler:  94%|█████████▍| 189/200 [00:15<00:00, 12.96it/s]DDIM Sampler:  96%|█████████▌| 191/200 [00:15<00:00, 12.97it/s]DDIM Sampler:  96%|█████████▋| 193/200 [00:15<00:00, 13.02it/s]DDIM Sampler:  98%|█████████▊| 195/200 [00:16<00:00, 13.07it/s]DDIM Sampler:  98%|█████████▊| 197/200 [00:16<00:00, 13.10it/s]DDIM Sampler: 100%|█████████▉| 199/200 [00:16<00:00, 13.10it/s]DDIM Sampler: 100%|██████████| 200/200 [00:16<00:00, 12.21it/s]
+Quant memory after warmup: tracked=533.3MiB | cache/residual=0.0MiB | weights=532.0MiB | top=[conv_quant_weights_mib:450.6, linear_fp16_weights_mib:54.3, linear_quant_weights_mib:27.1, conv_scale_state_mib:0.9, conv_bias_mib:0.3, linear_bias_mib:0.1, linear_scale_state_mib:0.0]
+Warmup complete.
+Data shape for DDIM sampling is (32, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 200 timesteps
+DDIM Sampler:   0%|          | 0/200 [00:00<?, ?it/s]DDIM Sampler:   0%|          | 1/200 [00:00<01:06,  2.98it/s]DDIM Sampler:   2%|▏         | 3/200 [00:00<00:24,  7.93it/s]DDIM Sampler:   3%|▎         | 6/200 [00:00<00:14, 13.57it/s]DDIM Sampler:   4%|▍         | 9/200 [00:00<00:11, 17.04it/s]DDIM Sampler:   6%|▌         | 12/200 [00:00<00:09, 19.32it/s]DDIM Sampler:   8%|▊         | 15/200 [00:00<00:09, 20.09it/s]DDIM Sampler:   9%|▉         | 18/200 [00:01<00:08, 21.40it/s]DDIM Sampler:  10%|█         | 21/200 [00:01<00:07, 22.38it/s]DDIM Sampler:  12%|█▏        | 24/200 [00:01<00:07, 23.03it/s]DDIM Sampler:  14%|█▎        | 27/200 [00:01<00:07, 23.01it/s]DDIM Sampler:  15%|█▌        | 30/200 [00:01<00:07, 23.19it/s]DDIM Sampler:  16%|█▋        | 33/200 [00:01<00:07, 23.62it/s]DDIM Sampler:  18%|█▊        | 36/200 [00:01<00:06, 23.89it/s]DDIM Sampler:  20%|█▉        | 39/200 [00:01<00:07, 22.94it/s]DDIM Sampler:  21%|██        | 42/200 [00:02<00:06, 23.40it/s]DDIM Sampler:  22%|██▎       | 45/200 [00:02<00:06, 23.87it/s]DDIM Sampler:  24%|██▍       | 48/200 [00:02<00:06, 23.98it/s]DDIM Sampler:  26%|██▌       | 51/200 [00:02<00:06, 24.23it/s]DDIM Sampler:  27%|██▋       | 54/200 [00:02<00:06, 22.76it/s]DDIM Sampler:  28%|██▊       | 57/200 [00:02<00:06, 22.82it/s]DDIM Sampler:  30%|███       | 60/200 [00:02<00:06, 23.10it/s]DDIM Sampler:  32%|███▏      | 63/200 [00:02<00:05, 23.39it/s]DDIM Sampler:  33%|███▎      | 66/200 [00:03<00:05, 23.79it/s]DDIM Sampler:  34%|███▍      | 69/200 [00:03<00:05, 23.67it/s]DDIM Sampler:  36%|███▌      | 72/200 [00:03<00:05, 23.39it/s]DDIM Sampler:  38%|███▊      | 75/200 [00:03<00:05, 21.62it/s]DDIM Sampler:  39%|███▉      | 78/200 [00:03<00:05, 21.40it/s]DDIM Sampler:  40%|████      | 81/200 [00:03<00:05, 22.03it/s]DDIM Sampler:  42%|████▏     | 84/200 [00:03<00:05, 22.80it/s]DDIM Sampler:  44%|████▎     | 87/200 [00:04<00:05, 22.11it/s]DDIM Sampler:  45%|████▌     | 90/200 [00:04<00:04, 22.64it/s]DDIM Sampler:  46%|████▋     | 93/200 [00:04<00:04, 23.31it/s]DDIM Sampler:  48%|████▊     | 96/200 [00:04<00:04, 23.90it/s]DDIM Sampler:  50%|████▉     | 99/200 [00:04<00:04, 23.88it/s]DDIM Sampler:  51%|█████     | 102/200 [00:04<00:04, 24.28it/s]DDIM Sampler:  52%|█████▎    | 105/200 [00:04<00:03, 24.54it/s]DDIM Sampler:  54%|█████▍    | 108/200 [00:04<00:03, 24.65it/s]DDIM Sampler:  56%|█████▌    | 111/200 [00:05<00:03, 23.66it/s]DDIM Sampler:  57%|█████▋    | 114/200 [00:05<00:03, 24.15it/s]DDIM Sampler:  58%|█████▊    | 117/200 [00:05<00:03, 24.55it/s]DDIM Sampler:  60%|██████    | 120/200 [00:05<00:03, 24.85it/s]DDIM Sampler:  62%|██████▏   | 123/200 [00:05<00:03, 24.98it/s]DDIM Sampler:  63%|██████▎   | 126/200 [00:05<00:03, 24.47it/s]DDIM Sampler:  64%|██████▍   | 129/200 [00:05<00:02, 24.80it/s]DDIM Sampler:  66%|██████▌   | 132/200 [00:05<00:02, 25.01it/s]DDIM Sampler:  68%|██████▊   | 135/200 [00:05<00:02, 25.13it/s]DDIM Sampler:  69%|██████▉   | 138/200 [00:06<00:02, 25.21it/s]DDIM Sampler:  70%|███████   | 141/200 [00:06<00:02, 24.42it/s]DDIM Sampler:  72%|███████▏  | 144/200 [00:06<00:02, 23.80it/s]DDIM Sampler:  74%|███████▎  | 147/200 [00:06<00:02, 24.31it/s]DDIM Sampler:  75%|███████▌  | 150/200 [00:06<00:02, 24.61it/s]DDIM Sampler:  76%|███████▋  | 153/200 [00:06<00:02, 22.77it/s]DDIM Sampler:  78%|███████▊  | 156/200 [00:06<00:01, 22.60it/s]DDIM Sampler:  80%|███████▉  | 159/200 [00:07<00:01, 21.35it/s]DDIM Sampler:  81%|████████  | 162/200 [00:07<00:01, 21.56it/s]DDIM Sampler:  82%|████████▎ | 165/200 [00:07<00:01, 21.66it/s]DDIM Sampler:  84%|████████▍ | 168/200 [00:07<00:01, 21.86it/s]DDIM Sampler:  86%|████████▌ | 171/200 [00:07<00:01, 21.30it/s]DDIM Sampler:  87%|████████▋ | 174/200 [00:07<00:01, 21.43it/s]DDIM Sampler:  88%|████████▊ | 177/200 [00:07<00:01, 21.75it/s]DDIM Sampler:  90%|█████████ | 180/200 [00:08<00:00, 21.89it/s]DDIM Sampler:  92%|█████████▏| 183/200 [00:08<00:00, 22.11it/s]DDIM Sampler:  93%|█████████▎| 186/200 [00:08<00:00, 21.90it/s]DDIM Sampler:  94%|█████████▍| 189/200 [00:08<00:00, 22.03it/s]DDIM Sampler:  96%|█████████▌| 192/200 [00:08<00:00, 21.62it/s]DDIM Sampler:  98%|█████████▊| 195/200 [00:08<00:00, 21.72it/s]DDIM Sampler:  99%|█████████▉| 198/200 [00:08<00:00, 21.30it/s]DDIM Sampler: 100%|██████████| 200/200 [00:08<00:00, 22.33it/s]
+
+INT8_BASELINE Results:
+  Total: 8.97s for 32 samples
+  Per-sample: 0.280s
+  Per-step: 1.40ms
+
+============================================================
+SUMMARY
+============================================================
+
+Mode            Time/Sample     Speedup      FID       
+-------------------------------------------------------
+int8_baseline   0.280s          3.57x        -         
+
+Results saved to: integration/results/awq_removed_speed_bench_20260713/confirm_order/int8_baseline_r1/
+---- exit=0 RUN=1 MODE=int8_baseline ----
+========== RUN=2 MODE=int8 ==========
+GPU: NVIDIA A40
+Config: configs/latent-diffusion/lsun_churches-ldm-kl-8.yaml
+Steps: 200 | Batch: 32 | Samples: 32
+Linear backend: fp16 | int_gemm_min_m=64
+Static calibration: integration/calibration/int8_calibration.pt
+
+============================================================
+INT8
+============================================================
+Profiler reset.
+Loading model from models/ldm/lsun_churches256/model.ckpt
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+
+============================================================
+Applying ResBlock Fusion Optimization
+============================================================
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+
+============================================================
+ResBlock Fusion Summary
+============================================================
+Total fused blocks: 35
+  - OpenAI ResBlocks: 35
+  - ResNet Blocks: 0
+Fusion method: native channels_last GroupNorm(+SiLU) CUDA kernel, falling back to F.group_norm + F.silu with autocast locally disabled (HAS_NATIVE_GN_SILU=True)
+============================================================
+
+Converting UNet to INT8 (89 conv layers)...
+Converting UNet linear layers to INT8 (37 linear layers)...
+Loading static calibration from integration/calibration/int8_calibration.pt
+✓ Loaded 70 INT8 conv layer scales (static quantization enabled)
+✓ Loaded 37 INT8 linear layer scales
+✓ Wired SiLU fusion for 62 quantized conv layers
+Warming up cuDNN (full 200-step pass at batch_size=32)...
+Data shape for DDIM sampling is (32, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 200 timesteps
+DDIM Sampler:   0%|          | 0/200 [00:00<?, ?it/s]DDIM Sampler:   0%|          | 1/200 [00:01<03:35,  1.08s/it]DDIM Sampler:   2%|▏         | 3/200 [00:01<01:07,  2.91it/s]DDIM Sampler:   2%|▎         | 5/200 [00:01<00:40,  4.84it/s]DDIM Sampler:   4%|▎         | 7/200 [00:01<00:29,  6.57it/s]DDIM Sampler:   4%|▍         | 9/200 [00:01<00:24,  7.73it/s]DDIM Sampler:   6%|▌         | 11/200 [00:01<00:21,  8.98it/s]DDIM Sampler:   6%|▋         | 13/200 [00:02<00:18,  9.97it/s]DDIM Sampler:   8%|▊         | 15/200 [00:02<00:17, 10.74it/s]DDIM Sampler:   8%|▊         | 17/200 [00:02<00:16, 11.34it/s]DDIM Sampler:  10%|▉         | 19/200 [00:02<00:15, 11.37it/s]DDIM Sampler:  10%|█         | 21/200 [00:02<00:15, 11.82it/s]DDIM Sampler:  12%|█▏        | 23/200 [00:02<00:14, 12.11it/s]DDIM Sampler:  12%|█▎        | 25/200 [00:03<00:14, 12.33it/s]DDIM Sampler:  14%|█▎        | 27/200 [00:03<00:13, 12.47it/s]DDIM Sampler:  14%|█▍        | 29/200 [00:03<00:14, 12.06it/s]DDIM Sampler:  16%|█▌        | 31/200 [00:03<00:13, 12.28it/s]DDIM Sampler:  16%|█▋        | 33/200 [00:03<00:13, 12.43it/s]DDIM Sampler:  18%|█▊        | 35/200 [00:04<00:20,  7.95it/s]DDIM Sampler:  18%|█▊        | 37/200 [00:04<00:18,  8.92it/s]DDIM Sampler:  20%|█▉        | 39/200 [00:04<00:16,  9.66it/s]DDIM Sampler:  20%|██        | 41/200 [00:04<00:15, 10.44it/s]DDIM Sampler:  22%|██▏       | 43/200 [00:04<00:14, 11.06it/s]DDIM Sampler:  22%|██▎       | 45/200 [00:04<00:13, 11.53it/s]DDIM Sampler:  24%|██▎       | 47/200 [00:05<00:12, 11.90it/s]DDIM Sampler:  24%|██▍       | 49/200 [00:05<00:13, 11.31it/s]DDIM Sampler:  26%|██▌       | 51/200 [00:05<00:13, 11.39it/s]DDIM Sampler:  26%|██▋       | 53/200 [00:05<00:12, 11.77it/s]DDIM Sampler:  28%|██▊       | 55/200 [00:05<00:11, 12.09it/s]DDIM Sampler:  28%|██▊       | 57/200 [00:05<00:11, 12.31it/s]DDIM Sampler:  30%|██▉       | 59/200 [00:06<00:11, 12.47it/s]DDIM Sampler:  30%|███       | 61/200 [00:06<00:11, 12.58it/s]DDIM Sampler:  32%|███▏      | 63/200 [00:06<00:10, 12.68it/s]DDIM Sampler:  32%|███▎      | 65/200 [00:06<00:10, 12.41it/s]DDIM Sampler:  34%|███▎      | 67/200 [00:06<00:10, 12.57it/s]DDIM Sampler:  34%|███▍      | 69/200 [00:06<00:10, 12.68it/s]DDIM Sampler:  36%|███▌      | 71/200 [00:07<00:10, 12.73it/s]DDIM Sampler:  36%|███▋      | 73/200 [00:07<00:09, 12.77it/s]DDIM Sampler:  38%|███▊      | 75/200 [00:07<00:09, 12.81it/s]DDIM Sampler:  38%|███▊      | 77/200 [00:07<00:09, 12.83it/s]DDIM Sampler:  40%|███▉      | 79/200 [00:07<00:09, 12.52it/s]DDIM Sampler:  40%|████      | 81/200 [00:07<00:10, 11.88it/s]DDIM Sampler:  42%|████▏     | 83/200 [00:07<00:09, 12.18it/s]DDIM Sampler:  42%|████▎     | 85/200 [00:08<00:09, 12.37it/s]DDIM Sampler:  44%|████▎     | 87/200 [00:08<00:09, 12.50it/s]DDIM Sampler:  44%|████▍     | 89/200 [00:08<00:08, 12.61it/s]DDIM Sampler:  46%|████▌     | 91/200 [00:08<00:08, 12.67it/s]DDIM Sampler:  46%|████▋     | 93/200 [00:08<00:08, 12.18it/s]DDIM Sampler:  48%|████▊     | 95/200 [00:08<00:08, 12.26it/s]DDIM Sampler:  48%|████▊     | 97/200 [00:09<00:08, 12.23it/s]DDIM Sampler:  50%|████▉     | 99/200 [00:09<00:08, 12.41it/s]DDIM Sampler:  50%|█████     | 101/200 [00:09<00:08, 12.09it/s]DDIM Sampler:  52%|█████▏    | 103/200 [00:09<00:07, 12.34it/s]DDIM Sampler:  52%|█████▎    | 105/200 [00:09<00:07, 12.47it/s]DDIM Sampler:  54%|█████▎    | 107/200 [00:09<00:07, 12.58it/s]DDIM Sampler:  55%|█████▍    | 109/200 [00:10<00:07, 12.62it/s]DDIM Sampler:  56%|█████▌    | 111/200 [00:10<00:07, 12.16it/s]DDIM Sampler:  56%|█████▋    | 113/200 [00:10<00:07, 12.35it/s]DDIM Sampler:  57%|█████▊    | 115/200 [00:10<00:06, 12.50it/s]DDIM Sampler:  58%|█████▊    | 117/200 [00:10<00:06, 12.63it/s]DDIM Sampler:  60%|█████▉    | 119/200 [00:10<00:06, 12.64it/s]DDIM Sampler:  60%|██████    | 121/200 [00:11<00:06, 12.19it/s]DDIM Sampler:  62%|██████▏   | 123/200 [00:11<00:06, 12.37it/s]DDIM Sampler:  62%|██████▎   | 125/200 [00:11<00:05, 12.52it/s]DDIM Sampler:  64%|██████▎   | 127/200 [00:11<00:05, 12.60it/s]DDIM Sampler:  64%|██████▍   | 129/200 [00:11<00:05, 12.55it/s]DDIM Sampler:  66%|██████▌   | 131/200 [00:11<00:05, 12.32it/s]DDIM Sampler:  66%|██████▋   | 133/200 [00:12<00:05, 12.45it/s]DDIM Sampler:  68%|██████▊   | 135/200 [00:12<00:05, 12.58it/s]DDIM Sampler:  68%|██████▊   | 137/200 [00:12<00:04, 12.69it/s]DDIM Sampler:  70%|██████▉   | 139/200 [00:12<00:04, 12.72it/s]DDIM Sampler:  70%|███████   | 141/200 [00:12<00:05, 11.70it/s]DDIM Sampler:  72%|███████▏  | 143/200 [00:12<00:04, 11.49it/s]DDIM Sampler:  72%|███████▎  | 145/200 [00:13<00:04, 11.86it/s]DDIM Sampler:  74%|███████▎  | 147/200 [00:13<00:04, 12.13it/s]DDIM Sampler:  74%|███████▍  | 149/200 [00:13<00:04, 12.36it/s]DDIM Sampler:  76%|███████▌  | 151/200 [00:13<00:03, 12.52it/s]DDIM Sampler:  76%|███████▋  | 153/200 [00:13<00:03, 12.26it/s]DDIM Sampler:  78%|███████▊  | 155/200 [00:13<00:03, 12.42it/s]DDIM Sampler:  78%|███████▊  | 157/200 [00:13<00:03, 12.52it/s]DDIM Sampler:  80%|███████▉  | 159/200 [00:14<00:04, 10.04it/s]DDIM Sampler:  80%|████████  | 161/200 [00:14<00:03, 10.72it/s]DDIM Sampler:  82%|████████▏ | 163/200 [00:14<00:03, 11.24it/s]DDIM Sampler:  82%|████████▎ | 165/200 [00:14<00:02, 11.68it/s]DDIM Sampler:  84%|████████▎ | 167/200 [00:14<00:02, 12.02it/s]DDIM Sampler:  84%|████████▍ | 169/200 [00:15<00:02, 11.81it/s]DDIM Sampler:  86%|████████▌ | 171/200 [00:15<00:02, 12.10it/s]DDIM Sampler:  86%|████████▋ | 173/200 [00:15<00:02, 12.29it/s]DDIM Sampler:  88%|████████▊ | 175/200 [00:15<00:02, 12.43it/s]DDIM Sampler:  88%|████████▊ | 177/200 [00:15<00:01, 12.56it/s]DDIM Sampler:  90%|████████▉ | 179/200 [00:15<00:01, 12.33it/s]DDIM Sampler:  90%|█████████ | 181/200 [00:16<00:01, 10.60it/s]DDIM Sampler:  92%|█████████▏| 183/200 [00:16<00:01, 11.14it/s]DDIM Sampler:  92%|█████████▎| 185/200 [00:16<00:01, 11.59it/s]DDIM Sampler:  94%|█████████▎| 187/200 [00:16<00:01, 11.91it/s]DDIM Sampler:  94%|█████████▍| 189/200 [00:16<00:00, 11.65it/s]DDIM Sampler:  96%|█████████▌| 191/200 [00:16<00:00, 11.94it/s]DDIM Sampler:  96%|█████████▋| 193/200 [00:17<00:00, 12.16it/s]DDIM Sampler:  98%|█████████▊| 195/200 [00:17<00:00, 12.34it/s]DDIM Sampler:  98%|█████████▊| 197/200 [00:17<00:00, 12.45it/s]DDIM Sampler: 100%|█████████▉| 199/200 [00:17<00:00, 12.11it/s]DDIM Sampler: 100%|██████████| 200/200 [00:17<00:00, 11.25it/s]
+Quant memory after warmup: tracked=1174.8MiB | cache/residual=641.6MiB | weights=532.0MiB | top=[conv_quant_weights_mib:450.6, conv_a_hat_cache_mib:350.8, conv_o_hat_cache_mib:282.8, linear_fp16_weights_mib:54.3, linear_quant_weights_mib:27.1, linear_o_hat_cache_mib:4.6, linear_a_hat_cache_mib:3.4, conv_scale_state_mib:0.9]
+Warmup complete.
+Data shape for DDIM sampling is (32, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 200 timesteps
+DDIM Sampler:   0%|          | 0/200 [00:00<?, ?it/s]DDIM Sampler:   0%|          | 1/200 [00:00<01:30,  2.21it/s]DDIM Sampler:   2%|▏         | 4/200 [00:00<00:23,  8.49it/s]DDIM Sampler:   4%|▎         | 7/200 [00:00<00:14, 13.20it/s]DDIM Sampler:   5%|▌         | 10/200 [00:00<00:11, 16.68it/s]DDIM Sampler:   6%|▋         | 13/200 [00:00<00:09, 18.77it/s]DDIM Sampler:   8%|▊         | 16/200 [00:01<00:10, 17.91it/s]DDIM Sampler:  10%|▉         | 19/200 [00:01<00:09, 18.88it/s]DDIM Sampler:  11%|█         | 22/200 [00:01<00:08, 20.11it/s]DDIM Sampler:  12%|█▎        | 25/200 [00:01<00:08, 21.48it/s]DDIM Sampler:  14%|█▍        | 28/200 [00:01<00:07, 22.06it/s]DDIM Sampler:  16%|█▌        | 31/200 [00:01<00:07, 22.78it/s]DDIM Sampler:  17%|█▋        | 34/200 [00:01<00:07, 23.47it/s]DDIM Sampler:  18%|█▊        | 37/200 [00:02<00:07, 21.42it/s]DDIM Sampler:  20%|██        | 40/200 [00:02<00:07, 22.29it/s]DDIM Sampler:  22%|██▏       | 43/200 [00:02<00:06, 22.49it/s]DDIM Sampler:  23%|██▎       | 46/200 [00:02<00:07, 21.92it/s]DDIM Sampler:  24%|██▍       | 49/200 [00:02<00:06, 22.68it/s]DDIM Sampler:  26%|██▌       | 52/200 [00:02<00:06, 22.69it/s]DDIM Sampler:  28%|██▊       | 55/200 [00:02<00:06, 23.43it/s]DDIM Sampler:  29%|██▉       | 58/200 [00:02<00:05, 23.85it/s]DDIM Sampler:  30%|███       | 61/200 [00:03<00:06, 22.66it/s]DDIM Sampler:  32%|███▏      | 64/200 [00:03<00:05, 23.30it/s]DDIM Sampler:  34%|███▎      | 67/200 [00:03<00:05, 22.22it/s]DDIM Sampler:  35%|███▌      | 70/200 [00:03<00:05, 22.87it/s]DDIM Sampler:  36%|███▋      | 73/200 [00:03<00:05, 23.52it/s]DDIM Sampler:  38%|███▊      | 76/200 [00:03<00:05, 23.88it/s]DDIM Sampler:  40%|███▉      | 79/200 [00:03<00:05, 24.10it/s]DDIM Sampler:  41%|████      | 82/200 [00:04<00:05, 21.88it/s]DDIM Sampler:  42%|████▎     | 85/200 [00:04<00:05, 22.65it/s]DDIM Sampler:  44%|████▍     | 88/200 [00:04<00:04, 22.52it/s]DDIM Sampler:  46%|████▌     | 91/200 [00:04<00:04, 23.08it/s]DDIM Sampler:  47%|████▋     | 94/200 [00:04<00:04, 23.52it/s]DDIM Sampler:  48%|████▊     | 97/200 [00:04<00:04, 23.81it/s]DDIM Sampler:  50%|█████     | 100/200 [00:04<00:04, 20.70it/s]DDIM Sampler:  52%|█████▏    | 103/200 [00:04<00:04, 20.75it/s]DDIM Sampler:  53%|█████▎    | 106/200 [00:05<00:04, 21.84it/s]DDIM Sampler:  55%|█████▍    | 109/200 [00:05<00:04, 22.61it/s]DDIM Sampler:  56%|█████▌    | 112/200 [00:05<00:03, 23.34it/s]DDIM Sampler:  57%|█████▊    | 115/200 [00:05<00:03, 22.39it/s]DDIM Sampler:  59%|█████▉    | 118/200 [00:05<00:03, 23.10it/s]DDIM Sampler:  60%|██████    | 121/200 [00:05<00:03, 22.74it/s]DDIM Sampler:  62%|██████▏   | 124/200 [00:05<00:03, 22.42it/s]DDIM Sampler:  64%|██████▎   | 127/200 [00:05<00:03, 23.20it/s]DDIM Sampler:  65%|██████▌   | 130/200 [00:06<00:02, 23.67it/s]DDIM Sampler:  66%|██████▋   | 133/200 [00:06<00:02, 23.96it/s]DDIM Sampler:  68%|██████▊   | 136/200 [00:06<00:02, 23.30it/s]DDIM Sampler:  70%|██████▉   | 139/200 [00:06<00:02, 20.74it/s]DDIM Sampler:  71%|███████   | 142/200 [00:06<00:02, 21.68it/s]DDIM Sampler:  72%|███████▎  | 145/200 [00:06<00:02, 22.46it/s]DDIM Sampler:  74%|███████▍  | 148/200 [00:06<00:02, 23.10it/s]DDIM Sampler:  76%|███████▌  | 151/200 [00:07<00:02, 23.49it/s]DDIM Sampler:  77%|███████▋  | 154/200 [00:07<00:01, 23.28it/s]DDIM Sampler:  78%|███████▊  | 157/200 [00:07<00:01, 23.37it/s]DDIM Sampler:  80%|████████  | 160/200 [00:07<00:01, 20.69it/s]DDIM Sampler:  82%|████████▏ | 163/200 [00:07<00:01, 21.69it/s]DDIM Sampler:  83%|████████▎ | 166/200 [00:07<00:01, 22.47it/s]DDIM Sampler:  84%|████████▍ | 169/200 [00:07<00:01, 22.14it/s]DDIM Sampler:  86%|████████▌ | 172/200 [00:08<00:01, 21.54it/s]DDIM Sampler:  88%|████████▊ | 175/200 [00:08<00:01, 22.41it/s]DDIM Sampler:  89%|████████▉ | 178/200 [00:08<00:00, 22.24it/s]DDIM Sampler:  90%|█████████ | 181/200 [00:08<00:00, 22.68it/s]DDIM Sampler:  92%|█████████▏| 184/200 [00:08<00:00, 23.43it/s]DDIM Sampler:  94%|█████████▎| 187/200 [00:08<00:00, 20.89it/s]DDIM Sampler:  95%|█████████▌| 190/200 [00:08<00:00, 22.00it/s]DDIM Sampler:  96%|█████████▋| 193/200 [00:08<00:00, 22.87it/s]DDIM Sampler:  98%|█████████▊| 196/200 [00:09<00:00, 23.09it/s]DDIM Sampler: 100%|█████████▉| 199/200 [00:09<00:00, 23.58it/s]DDIM Sampler: 100%|██████████| 200/200 [00:09<00:00, 21.70it/s]
+
+INT8 Results:
+  Total: 9.26s for 32 samples
+  Per-sample: 0.289s
+  Per-step: 1.45ms
+
+Profiler Summary (INT8):
+
+============================================================
+PERFORMANCE PROFILE
+============================================================
+Component                      | Total (s)  | Calls    | Avg (ms)   | % Total 
+---------------------------------------------------------------------------
+No data collected.
+
+============================================================
+SUMMARY
+============================================================
+
+Mode            Time/Sample     Speedup      FID       
+-------------------------------------------------------
+int8            0.289s          3.46x        -         
+
+Results saved to: integration/results/awq_removed_speed_bench_20260713/confirm_order/int8_r2/
+---- exit=0 RUN=2 MODE=int8 ----
+========== RUN=2 MODE=int8_baseline ==========
+GPU: NVIDIA A40
+Config: configs/latent-diffusion/lsun_churches-ldm-kl-8.yaml
+Steps: 200 | Batch: 32 | Samples: 32
+Linear backend: fp16 | int_gemm_min_m=64
+Static calibration: integration/calibration/int8_calibration.pt
+
+============================================================
+INT8_BASELINE
+============================================================
+Loading model from models/ldm/lsun_churches256/model.ckpt
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+
+============================================================
+Applying ResBlock Fusion Optimization
+============================================================
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+
+============================================================
+ResBlock Fusion Summary
+============================================================
+Total fused blocks: 35
+  - OpenAI ResBlocks: 35
+  - ResNet Blocks: 0
+Fusion method: native channels_last GroupNorm(+SiLU) CUDA kernel, falling back to F.group_norm + F.silu with autocast locally disabled (HAS_NATIVE_GN_SILU=True)
+============================================================
+
+Converting UNet to INT8 Baseline (INT8 kernels without MoDiff temporal caching) (89 conv layers)...
+Converting UNet linear layers to INT8 using fp16 backend (37 linear layers)...
+Loading static calibration from integration/calibration/int8_calibration.pt
+✓ Loaded 70 INT8 conv layer scales for baseline (static quantization enabled)
+✓ Loaded 37 INT8 linear layer scales for baseline
+✓ Wired SiLU fusion for 62 quantized conv layers
+Warming up cuDNN (full 200-step pass at batch_size=32)...
+Data shape for DDIM sampling is (32, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 200 timesteps
+DDIM Sampler:   0%|          | 0/200 [00:00<?, ?it/s]DDIM Sampler:   0%|          | 1/200 [00:00<02:43,  1.22it/s]DDIM Sampler:   2%|▏         | 3/200 [00:00<00:54,  3.60it/s]DDIM Sampler:   2%|▎         | 5/200 [00:01<00:33,  5.75it/s]DDIM Sampler:   4%|▎         | 7/200 [00:01<00:25,  7.53it/s]DDIM Sampler:   4%|▍         | 9/200 [00:01<00:21,  8.97it/s]DDIM Sampler:   6%|▌         | 11/200 [00:01<00:18, 10.08it/s]DDIM Sampler:   6%|▋         | 13/200 [00:01<00:17, 10.90it/s]DDIM Sampler:   8%|▊         | 15/200 [00:01<00:16, 11.52it/s]DDIM Sampler:   8%|▊         | 17/200 [00:02<00:15, 11.97it/s]DDIM Sampler:  10%|▉         | 19/200 [00:02<00:14, 12.29it/s]DDIM Sampler:  10%|█         | 21/200 [00:02<00:15, 11.73it/s]DDIM Sampler:  12%|█▏        | 23/200 [00:02<00:14, 12.13it/s]DDIM Sampler:  12%|█▎        | 25/200 [00:02<00:14, 12.30it/s]DDIM Sampler:  14%|█▎        | 27/200 [00:02<00:14, 12.25it/s]DDIM Sampler:  14%|█▍        | 29/200 [00:03<00:13, 12.52it/s]DDIM Sampler:  16%|█▌        | 31/200 [00:03<00:13, 12.63it/s]DDIM Sampler:  16%|█▋        | 33/200 [00:03<00:13, 12.72it/s]DDIM Sampler:  18%|█▊        | 35/200 [00:03<00:12, 12.84it/s]DDIM Sampler:  18%|█▊        | 37/200 [00:03<00:12, 12.91it/s]DDIM Sampler:  20%|█▉        | 39/200 [00:03<00:12, 12.90it/s]DDIM Sampler:  20%|██        | 41/200 [00:03<00:12, 12.95it/s]DDIM Sampler:  22%|██▏       | 43/200 [00:04<00:12, 12.98it/s]DDIM Sampler:  22%|██▎       | 45/200 [00:04<00:11, 13.02it/s]DDIM Sampler:  24%|██▎       | 47/200 [00:04<00:11, 13.04it/s]DDIM Sampler:  24%|██▍       | 49/200 [00:04<00:12, 12.41it/s]DDIM Sampler:  26%|██▌       | 51/200 [00:04<00:11, 12.63it/s]DDIM Sampler:  26%|██▋       | 53/200 [00:04<00:11, 12.75it/s]DDIM Sampler:  28%|██▊       | 55/200 [00:05<00:11, 12.74it/s]DDIM Sampler:  28%|██▊       | 57/200 [00:05<00:11, 12.42it/s]DDIM Sampler:  30%|██▉       | 59/200 [00:05<00:11, 11.96it/s]DDIM Sampler:  30%|███       | 61/200 [00:05<00:11, 12.27it/s]DDIM Sampler:  32%|███▏      | 63/200 [00:05<00:10, 12.50it/s]DDIM Sampler:  32%|███▎      | 65/200 [00:05<00:11, 12.19it/s]DDIM Sampler:  34%|███▎      | 67/200 [00:06<00:10, 12.44it/s]DDIM Sampler:  34%|███▍      | 69/200 [00:06<00:10, 12.63it/s]DDIM Sampler:  36%|███▌      | 71/200 [00:06<00:10, 12.76it/s]DDIM Sampler:  36%|███▋      | 73/200 [00:06<00:09, 12.84it/s]DDIM Sampler:  38%|███▊      | 75/200 [00:06<00:09, 12.91it/s]DDIM Sampler:  38%|███▊      | 77/200 [00:06<00:09, 12.97it/s]DDIM Sampler:  40%|███▉      | 79/200 [00:06<00:09, 12.99it/s]DDIM Sampler:  40%|████      | 81/200 [00:07<00:09, 13.05it/s]DDIM Sampler:  42%|████▏     | 83/200 [00:07<00:08, 13.06it/s]DDIM Sampler:  42%|████▎     | 85/200 [00:07<00:08, 13.05it/s]DDIM Sampler:  44%|████▎     | 87/200 [00:07<00:08, 12.61it/s]DDIM Sampler:  44%|████▍     | 89/200 [00:07<00:08, 12.78it/s]DDIM Sampler:  46%|████▌     | 91/200 [00:07<00:08, 12.82it/s]DDIM Sampler:  46%|████▋     | 93/200 [00:08<00:08, 12.87it/s]DDIM Sampler:  48%|████▊     | 95/200 [00:08<00:08, 12.94it/s]DDIM Sampler:  48%|████▊     | 97/200 [00:08<00:07, 12.97it/s]DDIM Sampler:  50%|████▉     | 99/200 [00:08<00:07, 13.00it/s]DDIM Sampler:  50%|█████     | 101/200 [00:08<00:07, 12.96it/s]DDIM Sampler:  52%|█████▏    | 103/200 [00:08<00:07, 13.01it/s]DDIM Sampler:  52%|█████▎    | 105/200 [00:08<00:07, 12.45it/s]DDIM Sampler:  54%|█████▎    | 107/200 [00:09<00:07, 12.62it/s]DDIM Sampler:  55%|█████▍    | 109/200 [00:09<00:07, 12.72it/s]DDIM Sampler:  56%|█████▌    | 111/200 [00:09<00:06, 12.86it/s]DDIM Sampler:  56%|█████▋    | 113/200 [00:09<00:07, 12.33it/s]DDIM Sampler:  57%|█████▊    | 115/200 [00:09<00:07, 11.68it/s]DDIM Sampler:  58%|█████▊    | 117/200 [00:10<00:07, 11.30it/s]DDIM Sampler:  60%|█████▉    | 119/200 [00:10<00:06, 11.77it/s]DDIM Sampler:  60%|██████    | 121/200 [00:10<00:06, 12.06it/s]DDIM Sampler:  62%|██████▏   | 123/200 [00:10<00:06, 11.95it/s]DDIM Sampler:  62%|██████▎   | 125/200 [00:10<00:06, 12.27it/s]DDIM Sampler:  64%|██████▎   | 127/200 [00:10<00:05, 12.26it/s]DDIM Sampler:  64%|██████▍   | 129/200 [00:10<00:05, 12.49it/s]DDIM Sampler:  66%|██████▌   | 131/200 [00:11<00:05, 12.60it/s]DDIM Sampler:  66%|██████▋   | 133/200 [00:11<00:05, 12.21it/s]DDIM Sampler:  68%|██████▊   | 135/200 [00:11<00:05, 12.45it/s]DDIM Sampler:  68%|██████▊   | 137/200 [00:11<00:04, 12.62it/s]DDIM Sampler:  70%|██████▉   | 139/200 [00:11<00:04, 12.75it/s]DDIM Sampler:  70%|███████   | 141/200 [00:11<00:04, 12.52it/s]DDIM Sampler:  72%|███████▏  | 143/200 [00:12<00:04, 11.49it/s]DDIM Sampler:  72%|███████▎  | 145/200 [00:12<00:04, 11.74it/s]DDIM Sampler:  74%|███████▎  | 147/200 [00:12<00:04, 12.13it/s]DDIM Sampler:  74%|███████▍  | 149/200 [00:12<00:04, 12.39it/s]DDIM Sampler:  76%|███████▌  | 151/200 [00:12<00:03, 12.60it/s]DDIM Sampler:  76%|███████▋  | 153/200 [00:12<00:03, 12.74it/s]DDIM Sampler:  78%|███████▊  | 155/200 [00:13<00:03, 12.84it/s]DDIM Sampler:  78%|███████▊  | 157/200 [00:13<00:03, 12.91it/s]DDIM Sampler:  80%|███████▉  | 159/200 [00:13<00:03, 12.97it/s]DDIM Sampler:  80%|████████  | 161/200 [00:13<00:03, 13.00it/s]DDIM Sampler:  82%|████████▏ | 163/200 [00:13<00:02, 13.02it/s]DDIM Sampler:  82%|████████▎ | 165/200 [00:13<00:02, 13.02it/s]DDIM Sampler:  84%|████████▎ | 167/200 [00:13<00:02, 12.98it/s]DDIM Sampler:  84%|████████▍ | 169/200 [00:14<00:02, 13.02it/s]DDIM Sampler:  86%|████████▌ | 171/200 [00:14<00:02, 12.70it/s]DDIM Sampler:  86%|████████▋ | 173/200 [00:14<00:02, 12.82it/s]DDIM Sampler:  88%|████████▊ | 175/200 [00:14<00:01, 12.89it/s]DDIM Sampler:  88%|████████▊ | 177/200 [00:14<00:01, 12.97it/s]DDIM Sampler:  90%|████████▉ | 179/200 [00:14<00:01, 13.01it/s]DDIM Sampler:  90%|█████████ | 181/200 [00:15<00:01, 13.03it/s]DDIM Sampler:  92%|█████████▏| 183/200 [00:15<00:01, 13.03it/s]DDIM Sampler:  92%|█████████▎| 185/200 [00:15<00:01, 13.06it/s]DDIM Sampler:  94%|█████████▎| 187/200 [00:15<00:00, 13.06it/s]DDIM Sampler:  94%|█████████▍| 189/200 [00:15<00:00, 13.08it/s]DDIM Sampler:  96%|█████████▌| 191/200 [00:15<00:00, 13.08it/s]DDIM Sampler:  96%|█████████▋| 193/200 [00:15<00:00, 12.67it/s]DDIM Sampler:  98%|█████████▊| 195/200 [00:16<00:00, 12.79it/s]DDIM Sampler:  98%|█████████▊| 197/200 [00:16<00:00, 12.89it/s]DDIM Sampler: 100%|█████████▉| 199/200 [00:16<00:00, 12.94it/s]DDIM Sampler: 100%|██████████| 200/200 [00:16<00:00, 12.10it/s]
+Quant memory after warmup: tracked=533.3MiB | cache/residual=0.0MiB | weights=532.0MiB | top=[conv_quant_weights_mib:450.6, linear_fp16_weights_mib:54.3, linear_quant_weights_mib:27.1, conv_scale_state_mib:0.9, conv_bias_mib:0.3, linear_bias_mib:0.1, linear_scale_state_mib:0.0]
+Warmup complete.
+Data shape for DDIM sampling is (32, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 200 timesteps
+DDIM Sampler:   0%|          | 0/200 [00:00<?, ?it/s]DDIM Sampler:   0%|          | 1/200 [00:00<00:50,  3.97it/s]DDIM Sampler:   2%|▏         | 3/200 [00:00<00:20,  9.44it/s]DDIM Sampler:   3%|▎         | 6/200 [00:00<00:13, 14.76it/s]DDIM Sampler:   4%|▍         | 9/200 [00:00<00:10, 18.29it/s]DDIM Sampler:   6%|▌         | 12/200 [00:00<00:09, 20.55it/s]DDIM Sampler:   8%|▊         | 15/200 [00:00<00:08, 22.07it/s]DDIM Sampler:   9%|▉         | 18/200 [00:00<00:07, 23.17it/s]DDIM Sampler:  10%|█         | 21/200 [00:01<00:07, 23.38it/s]DDIM Sampler:  12%|█▏        | 24/200 [00:01<00:07, 23.97it/s]DDIM Sampler:  14%|█▎        | 27/200 [00:01<00:07, 24.41it/s]DDIM Sampler:  15%|█▌        | 30/200 [00:01<00:07, 24.19it/s]DDIM Sampler:  16%|█▋        | 33/200 [00:01<00:07, 23.46it/s]DDIM Sampler:  18%|█▊        | 36/200 [00:01<00:07, 23.38it/s]DDIM Sampler:  20%|█▉        | 39/200 [00:01<00:06, 23.76it/s]DDIM Sampler:  21%|██        | 42/200 [00:01<00:06, 24.08it/s]DDIM Sampler:  22%|██▎       | 45/200 [00:02<00:06, 22.69it/s]DDIM Sampler:  24%|██▍       | 48/200 [00:02<00:06, 22.85it/s]DDIM Sampler:  26%|██▌       | 51/200 [00:02<00:06, 23.19it/s]DDIM Sampler:  27%|██▋       | 54/200 [00:02<00:06, 23.21it/s]DDIM Sampler:  28%|██▊       | 57/200 [00:02<00:06, 23.77it/s]DDIM Sampler:  30%|███       | 60/200 [00:02<00:05, 24.28it/s]DDIM Sampler:  32%|███▏      | 63/200 [00:02<00:05, 24.49it/s]DDIM Sampler:  33%|███▎      | 66/200 [00:02<00:05, 23.56it/s]DDIM Sampler:  34%|███▍      | 69/200 [00:03<00:05, 24.02it/s]DDIM Sampler:  36%|███▌      | 72/200 [00:03<00:05, 24.38it/s]DDIM Sampler:  38%|███▊      | 75/200 [00:03<00:05, 24.63it/s]DDIM Sampler:  39%|███▉      | 78/200 [00:03<00:04, 24.83it/s]DDIM Sampler:  40%|████      | 81/200 [00:03<00:04, 24.69it/s]DDIM Sampler:  42%|████▏     | 84/200 [00:03<00:04, 24.84it/s]DDIM Sampler:  44%|████▎     | 87/200 [00:03<00:04, 24.32it/s]DDIM Sampler:  45%|████▌     | 90/200 [00:03<00:04, 24.53it/s]DDIM Sampler:  46%|████▋     | 93/200 [00:04<00:04, 24.08it/s]DDIM Sampler:  48%|████▊     | 96/200 [00:04<00:04, 24.49it/s]DDIM Sampler:  50%|████▉     | 99/200 [00:04<00:04, 23.97it/s]DDIM Sampler:  51%|█████     | 102/200 [00:04<00:04, 24.19it/s]DDIM Sampler:  52%|█████▎    | 105/200 [00:04<00:04, 23.72it/s]DDIM Sampler:  54%|█████▍    | 108/200 [00:04<00:04, 22.81it/s]DDIM Sampler:  56%|█████▌    | 111/200 [00:04<00:03, 23.34it/s]DDIM Sampler:  57%|█████▋    | 114/200 [00:05<00:04, 21.43it/s]DDIM Sampler:  58%|█████▊    | 117/200 [00:05<00:03, 22.47it/s]DDIM Sampler:  60%|██████    | 120/200 [00:05<00:03, 23.36it/s]DDIM Sampler:  62%|██████▏   | 123/200 [00:05<00:03, 22.74it/s]DDIM Sampler:  63%|██████▎   | 126/200 [00:05<00:03, 22.85it/s]DDIM Sampler:  64%|██████▍   | 129/200 [00:05<00:03, 23.54it/s]DDIM Sampler:  66%|██████▌   | 132/200 [00:05<00:02, 24.07it/s]DDIM Sampler:  68%|██████▊   | 135/200 [00:05<00:02, 24.01it/s]DDIM Sampler:  69%|██████▉   | 138/200 [00:06<00:02, 23.01it/s]DDIM Sampler:  70%|███████   | 141/200 [00:06<00:02, 23.59it/s]DDIM Sampler:  72%|███████▏  | 144/200 [00:06<00:02, 23.07it/s]DDIM Sampler:  74%|███████▎  | 147/200 [00:06<00:02, 23.73it/s]DDIM Sampler:  75%|███████▌  | 150/200 [00:06<00:02, 24.32it/s]DDIM Sampler:  76%|███████▋  | 153/200 [00:06<00:01, 24.61it/s]DDIM Sampler:  78%|███████▊  | 156/200 [00:06<00:01, 24.81it/s]DDIM Sampler:  80%|███████▉  | 159/200 [00:06<00:01, 24.29it/s]DDIM Sampler:  81%|████████  | 162/200 [00:07<00:01, 24.53it/s]DDIM Sampler:  82%|████████▎ | 165/200 [00:07<00:01, 24.76it/s]DDIM Sampler:  84%|████████▍ | 168/200 [00:07<00:01, 24.94it/s]DDIM Sampler:  86%|████████▌ | 171/200 [00:07<00:01, 25.14it/s]DDIM Sampler:  87%|████████▋ | 174/200 [00:07<00:01, 23.75it/s]DDIM Sampler:  88%|████████▊ | 177/200 [00:07<00:00, 24.33it/s]DDIM Sampler:  90%|█████████ | 180/200 [00:07<00:00, 24.65it/s]DDIM Sampler:  92%|█████████▏| 183/200 [00:07<00:00, 24.51it/s]DDIM Sampler:  93%|█████████▎| 186/200 [00:07<00:00, 24.18it/s]DDIM Sampler:  94%|█████████▍| 189/200 [00:08<00:00, 23.21it/s]DDIM Sampler:  96%|█████████▌| 192/200 [00:08<00:00, 23.41it/s]DDIM Sampler:  98%|█████████▊| 195/200 [00:08<00:00, 23.20it/s]DDIM Sampler:  99%|█████████▉| 198/200 [00:08<00:00, 23.69it/s]DDIM Sampler: 100%|██████████| 200/200 [00:08<00:00, 23.28it/s]
+
+INT8_BASELINE Results:
+  Total: 8.60s for 32 samples
+  Per-sample: 0.269s
+  Per-step: 1.34ms
+
+============================================================
+SUMMARY
+============================================================
+
+Mode            Time/Sample     Speedup      FID       
+-------------------------------------------------------
+int8_baseline   0.269s          3.72x        -         
+
+Results saved to: integration/results/awq_removed_speed_bench_20260713/confirm_order/int8_baseline_r2/
+---- exit=0 RUN=2 MODE=int8_baseline ----
+ALL DONE

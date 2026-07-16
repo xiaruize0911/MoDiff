@@ -1,0 +1,147 @@
+############## int4 ##############
+Loading model from models/ldm/lsun_churches256/model.ckpt
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+
+============================================================
+Applying ResBlock Fusion Optimization
+============================================================
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+
+============================================================
+ResBlock Fusion Summary
+============================================================
+Total fused blocks: 35
+  - OpenAI ResBlocks: 35
+  - ResNet Blocks: 0
+Fusion method: native channels_last GroupNorm(+SiLU) CUDA kernel, falling back to F.group_norm + F.silu with autocast locally disabled (HAS_NATIVE_GN_SILU=True)
+============================================================
+
+Converting UNet to INT4 (89 conv layers)...
+Converting UNet linear layers to INT4 (37 linear layers)...
+Loading INT4 calibration from integration/calibration/int4_calibration.pt
+✓ Loaded static scales for 70 INT4 conv layers
+✓ Loaded 37 INT4 linear layer scales
+✓ Wired SiLU fusion for 62 quantized conv layers
+Data shape for DDIM sampling is (32, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 20 timesteps
+DDIM Sampler:   0%|          | 0/20 [00:00<?, ?it/s]DDIM Sampler:   5%|▌         | 1/20 [00:01<00:23,  1.21s/it]DDIM Sampler:  15%|█▌        | 3/20 [00:01<00:06,  2.83it/s]DDIM Sampler:  30%|███       | 6/20 [00:01<00:02,  5.98it/s]DDIM Sampler:  45%|████▌     | 9/20 [00:01<00:01,  8.99it/s]DDIM Sampler:  60%|██████    | 12/20 [00:01<00:00, 11.54it/s]DDIM Sampler:  70%|███████   | 14/20 [00:01<00:00, 12.69it/s]DDIM Sampler:  80%|████████  | 16/20 [00:01<00:00, 13.95it/s]DDIM Sampler:  90%|█████████ | 18/20 [00:02<00:00, 15.14it/s]DDIM Sampler: 100%|██████████| 20/20 [00:02<00:00,  9.16it/s]
+Data shape for DDIM sampling is (32, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 20 timesteps
+DDIM Sampler:   0%|          | 0/20 [00:00<?, ?it/s]DDIM Sampler:  10%|█         | 2/20 [00:00<00:01, 17.37it/s]DDIM Sampler:  20%|██        | 4/20 [00:00<00:00, 16.80it/s]DDIM Sampler:  30%|███       | 6/20 [00:00<00:00, 16.46it/s]DDIM Sampler:  40%|████      | 8/20 [00:00<00:00, 16.72it/s]DDIM Sampler:  50%|█████     | 10/20 [00:00<00:00, 16.30it/s]DDIM Sampler:  60%|██████    | 12/20 [00:00<00:00, 16.68it/s]DDIM Sampler:  70%|███████   | 14/20 [00:00<00:00, 16.89it/s]DDIM Sampler:  80%|████████  | 16/20 [00:00<00:00, 16.69it/s]DDIM Sampler:  90%|█████████ | 18/20 [00:01<00:00, 16.87it/s]DDIM Sampler: 100%|██████████| 20/20 [00:01<00:00, 16.85it/s]DDIM Sampler: 100%|██████████| 20/20 [00:01<00:00, 16.74it/s]
+Traceback (most recent call last):
+  File "/tmp/claude-0/-workspace/824bd7b7-a7d3-40d7-a419-0ac968688814/scratchpad/profile_components.py", line 63, in <module>
+    t = e.self_cuda_time_total  # us
+        ^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'FunctionEventAvg' object has no attribute 'self_cuda_time_total'. Did you mean: 'self_cpu_time_total'?
+---- exit=1 int4 ----
+############## int8 ##############
+Loading model from models/ldm/lsun_churches256/model.ckpt
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+
+============================================================
+Applying ResBlock Fusion Optimization
+============================================================
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+
+============================================================
+ResBlock Fusion Summary
+============================================================
+Total fused blocks: 35
+  - OpenAI ResBlocks: 35
+  - ResNet Blocks: 0
+Fusion method: native channels_last GroupNorm(+SiLU) CUDA kernel, falling back to F.group_norm + F.silu with autocast locally disabled (HAS_NATIVE_GN_SILU=True)
+============================================================
+
+Converting UNet to INT8 (89 conv layers)...
+Converting UNet linear layers to INT8 (37 linear layers)...
+Loading static calibration from integration/calibration/int8_calibration.pt
+✓ Loaded 70 INT8 conv layer scales (static quantization enabled)
+✓ Loaded 37 INT8 linear layer scales
+✓ Wired SiLU fusion for 62 quantized conv layers
+Data shape for DDIM sampling is (32, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 20 timesteps
+DDIM Sampler:   0%|          | 0/20 [00:00<?, ?it/s]DDIM Sampler:   5%|▌         | 1/20 [00:00<00:14,  1.32it/s]DDIM Sampler:  20%|██        | 4/20 [00:00<00:02,  5.64it/s]DDIM Sampler:  30%|███       | 6/20 [00:00<00:01,  8.03it/s]DDIM Sampler:  45%|████▌     | 9/20 [00:01<00:00, 11.94it/s]DDIM Sampler:  60%|██████    | 12/20 [00:01<00:00, 14.60it/s]DDIM Sampler:  75%|███████▌  | 15/20 [00:01<00:00, 17.03it/s]DDIM Sampler:  90%|█████████ | 18/20 [00:01<00:00, 18.71it/s]DDIM Sampler: 100%|██████████| 20/20 [00:01<00:00, 12.50it/s]
+Data shape for DDIM sampling is (32, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 20 timesteps
+DDIM Sampler:   0%|          | 0/20 [00:00<?, ?it/s]DDIM Sampler:  15%|█▌        | 3/20 [00:00<00:00, 21.76it/s]DDIM Sampler:  30%|███       | 6/20 [00:00<00:01, 13.61it/s]DDIM Sampler:  40%|████      | 8/20 [00:00<00:00, 14.84it/s]DDIM Sampler:  55%|█████▌    | 11/20 [00:00<00:00, 17.22it/s]DDIM Sampler:  70%|███████   | 14/20 [00:00<00:00, 18.47it/s]DDIM Sampler:  80%|████████  | 16/20 [00:00<00:00, 18.59it/s]DDIM Sampler:  95%|█████████▌| 19/20 [00:01<00:00, 19.48it/s]DDIM Sampler: 100%|██████████| 20/20 [00:01<00:00, 17.98it/s]
+Traceback (most recent call last):
+  File "/tmp/claude-0/-workspace/824bd7b7-a7d3-40d7-a419-0ac968688814/scratchpad/profile_components.py", line 63, in <module>
+    t = e.self_cuda_time_total  # us
+        ^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'FunctionEventAvg' object has no attribute 'self_cuda_time_total'. Did you mean: 'self_cpu_time_total'?
+---- exit=1 int8 ----
+ALL DONE

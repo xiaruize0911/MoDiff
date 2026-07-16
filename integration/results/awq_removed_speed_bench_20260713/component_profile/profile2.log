@@ -1,0 +1,196 @@
+############## int4 ##############
+Loading model from models/ldm/lsun_churches256/model.ckpt
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+
+============================================================
+Applying ResBlock Fusion Optimization
+============================================================
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+
+============================================================
+ResBlock Fusion Summary
+============================================================
+Total fused blocks: 35
+  - OpenAI ResBlocks: 35
+  - ResNet Blocks: 0
+Fusion method: native channels_last GroupNorm(+SiLU) CUDA kernel, falling back to F.group_norm + F.silu with autocast locally disabled (HAS_NATIVE_GN_SILU=True)
+============================================================
+
+Converting UNet to INT4 (89 conv layers)...
+Converting UNet linear layers to INT4 (37 linear layers)...
+Loading INT4 calibration from integration/calibration/int4_calibration.pt
+✓ Loaded static scales for 70 INT4 conv layers
+✓ Loaded 37 INT4 linear layer scales
+✓ Wired SiLU fusion for 62 quantized conv layers
+Data shape for DDIM sampling is (32, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 20 timesteps
+DDIM Sampler:   0%|          | 0/20 [00:00<?, ?it/s]DDIM Sampler:   5%|▌         | 1/20 [00:01<00:21,  1.12s/it]DDIM Sampler:  20%|██        | 4/20 [00:01<00:04,  3.97it/s]DDIM Sampler:  30%|███       | 6/20 [00:01<00:02,  6.05it/s]DDIM Sampler:  40%|████      | 8/20 [00:01<00:01,  8.21it/s]DDIM Sampler:  55%|█████▌    | 11/20 [00:01<00:00, 11.40it/s]DDIM Sampler:  70%|███████   | 14/20 [00:01<00:00, 13.99it/s]DDIM Sampler:  85%|████████▌ | 17/20 [00:01<00:00, 16.23it/s]DDIM Sampler: 100%|██████████| 20/20 [00:02<00:00, 17.76it/s]DDIM Sampler: 100%|██████████| 20/20 [00:02<00:00,  9.87it/s]
+Data shape for DDIM sampling is (32, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 20 timesteps
+DDIM Sampler:   0%|          | 0/20 [00:00<?, ?it/s]DDIM Sampler:  10%|█         | 2/20 [00:00<00:00, 18.45it/s]DDIM Sampler:  20%|██        | 4/20 [00:00<00:00, 18.46it/s]DDIM Sampler:  30%|███       | 6/20 [00:00<00:00, 18.18it/s]DDIM Sampler:  40%|████      | 8/20 [00:00<00:00, 18.70it/s]DDIM Sampler:  55%|█████▌    | 11/20 [00:00<00:00, 19.90it/s]DDIM Sampler:  65%|██████▌   | 13/20 [00:00<00:00, 19.62it/s]DDIM Sampler:  80%|████████  | 16/20 [00:00<00:00, 20.02it/s]DDIM Sampler:  95%|█████████▌| 19/20 [00:00<00:00, 20.52it/s]DDIM Sampler: 100%|██████████| 20/20 [00:01<00:00, 19.13it/s]
+
+===== MODE=int4  (20 steps, batch 32)  total CUDA self-time = 667.8 ms =====
+component                         ms       %     calls
+elementwise                   256.54   38.4%     12870
+quant_conv_INT4               143.48   21.5%      3540
+groupnorm                     102.01   15.3%      1841
+quant_conv_other               79.40   11.9%      1320
+fp16_matmul(attn/lin)          33.17    5.0%      1180
+other                          22.85    3.4%      1320
+upsample                       11.89    1.8%       160
+silu                           11.23    1.7%       820
+memory/copy                     7.20    1.1%       345
+
+--- top 15 individual kernels ---
+   95.17 ms  x1400   _ZN7cutlass6KernelINS_4conv6kernel23ImplicitGemmConvolutionINS1_11threadbl
+   70.20 ms  x1320   void group_norm_silu_nhwc_kernel<__half>(__half const*, __half*, __half co
+   66.96 ms  x2340   void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_no
+   44.90 ms  x100    void pytorch_flash::flash_fwd_kernel<pytorch_flash::Flash_fwd_kernel_trait
+   42.75 ms  x880    void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_no
+   42.10 ms  x1400   scale_accumulate_half_cache_kernel(float const*, float const*, __half*, in
+   32.26 ms  x1160   void static_quantize_pack_and_update_ahat_kernel_int4_half_cache_silu<__ha
+   27.88 ms  x400    ampere_fp16_s1688gemm_fp16_256x64_ldg8_f2f_stages_32x1_nn
+   24.41 ms  x520    void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl_no
+   23.96 ms  x2102   void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kerne
+   17.10 ms  x440    void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl_no
+   16.98 ms  x1340   void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kerne
+   14.71 ms  x80     void group_norm_silu_nhwc_kernel<float>(float const*, float*, float const*
+   14.03 ms  x440    void at::native::(anonymous namespace)::RowwiseMomentsCUDAKernel<float>(lo
+   14.00 ms  x160    void static_quantize_pack_and_update_ahat_kernel_int4_half_cache<float>(fl
+---- exit=0 int4 ----
+############## int8 ##############
+Loading model from models/ldm/lsun_churches256/model.ckpt
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+
+============================================================
+Applying ResBlock Fusion Optimization
+============================================================
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+
+============================================================
+ResBlock Fusion Summary
+============================================================
+Total fused blocks: 35
+  - OpenAI ResBlocks: 35
+  - ResNet Blocks: 0
+Fusion method: native channels_last GroupNorm(+SiLU) CUDA kernel, falling back to F.group_norm + F.silu with autocast locally disabled (HAS_NATIVE_GN_SILU=True)
+============================================================
+
+Converting UNet to INT8 (89 conv layers)...
+Converting UNet linear layers to INT8 (37 linear layers)...
+Loading static calibration from integration/calibration/int8_calibration.pt
+✓ Loaded 70 INT8 conv layer scales (static quantization enabled)
+✓ Loaded 37 INT8 linear layer scales
+✓ Wired SiLU fusion for 62 quantized conv layers
+Data shape for DDIM sampling is (32, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 20 timesteps
+DDIM Sampler:   0%|          | 0/20 [00:00<?, ?it/s]DDIM Sampler:   5%|▌         | 1/20 [00:01<00:19,  1.01s/it]DDIM Sampler:  15%|█▌        | 3/20 [00:01<00:05,  3.26it/s]DDIM Sampler:  30%|███       | 6/20 [00:01<00:02,  6.79it/s]DDIM Sampler:  40%|████      | 8/20 [00:01<00:01,  8.96it/s]DDIM Sampler:  50%|█████     | 10/20 [00:01<00:00, 10.96it/s]DDIM Sampler:  65%|██████▌   | 13/20 [00:01<00:00, 13.75it/s]DDIM Sampler:  80%|████████  | 16/20 [00:01<00:00, 15.82it/s]DDIM Sampler:  90%|█████████ | 18/20 [00:01<00:00, 16.43it/s]DDIM Sampler: 100%|██████████| 20/20 [00:01<00:00, 10.15it/s]
+Data shape for DDIM sampling is (32, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 20 timesteps
+DDIM Sampler:   0%|          | 0/20 [00:00<?, ?it/s]DDIM Sampler:  10%|█         | 2/20 [00:00<00:01, 17.69it/s]DDIM Sampler:  20%|██        | 4/20 [00:00<00:00, 17.97it/s]DDIM Sampler:  30%|███       | 6/20 [00:00<00:00, 17.69it/s]DDIM Sampler:  40%|████      | 8/20 [00:00<00:00, 17.80it/s]DDIM Sampler:  50%|█████     | 10/20 [00:00<00:00, 17.72it/s]DDIM Sampler:  60%|██████    | 12/20 [00:00<00:00, 17.80it/s]DDIM Sampler:  70%|███████   | 14/20 [00:00<00:00, 17.08it/s]DDIM Sampler:  80%|████████  | 16/20 [00:00<00:00, 17.24it/s]DDIM Sampler:  90%|█████████ | 18/20 [00:01<00:00, 17.50it/s]DDIM Sampler: 100%|██████████| 20/20 [00:01<00:00, 17.48it/s]DDIM Sampler: 100%|██████████| 20/20 [00:01<00:00, 17.51it/s]
+
+===== MODE=int8  (20 steps, batch 32)  total CUDA self-time = 753.0 ms =====
+component                         ms       %     calls
+elementwise                   256.54   34.1%     12870
+quant_conv_INT4               174.44   23.2%      1400
+groupnorm                     101.76   13.5%      1841
+quant_conv_other               79.20   10.5%      1320
+quant_conv_INT8                54.78    7.3%      2140
+fp16_matmul(attn/lin)          33.13    4.4%      1180
+other                          22.82    3.0%      1320
+upsample                       11.89    1.6%       160
+silu                           11.32    1.5%       820
+memory/copy                     7.17    1.0%       345
+
+--- top 15 individual kernels ---
+  174.44 ms  x1400   _ZN7cutlass6KernelINS_4conv6kernel23ImplicitGemmConvolutionINS1_11threadbl
+   70.11 ms  x1320   void group_norm_silu_nhwc_kernel<__half>(__half const*, __half*, __half co
+   66.93 ms  x2340   void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_no
+   44.99 ms  x100    void pytorch_flash::flash_fwd_kernel<pytorch_flash::Flash_fwd_kernel_trait
+   42.65 ms  x880    void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_no
+   42.25 ms  x1400   scale_accumulate_half_cache_kernel(float const*, float const*, __half*, in
+   37.60 ms  x1160   void static_quantize_and_update_ahat_kernel_int8_half_cache_silu<__half>(_
+   27.89 ms  x400    ampere_fp16_s1688gemm_fp16_256x64_ldg8_f2f_stages_32x1_nn
+   24.42 ms  x520    void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl_no
+   23.93 ms  x2102   void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kerne
+   17.02 ms  x440    void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl_no
+   16.91 ms  x1340   void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kerne
+   15.02 ms  x160    void static_quantize_and_update_ahat_kernel_int8_half_cache<float>(float c
+   14.62 ms  x80     void group_norm_silu_nhwc_kernel<float>(float const*, float*, float const*
+   14.01 ms  x440    void at::native::(anonymous namespace)::RowwiseMomentsCUDAKernel<float>(lo
+---- exit=0 int8 ----
+ALL DONE
