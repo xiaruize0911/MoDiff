@@ -21,6 +21,19 @@ except Exception:
     _mc = None
     _HAS = False
 
+# Optional: route eligible W8A8 through AWQ's tuned kernel (MODIFF_WXAX_USE_AWQ=1) to
+# measure the achievable e2e ceiling. AWQ needs N%128 (large-M CTA_N).
+import os as _os
+_USE_AWQ = _os.environ.get("MODIFF_WXAX_USE_AWQ") == "1"
+_awq = None
+if _USE_AWQ:
+    try:
+        import sys as _sys
+        _sys.path.insert(0, "/workspace/llm-awq/awq/kernels")
+        import awq_inference_engine as _awq
+    except Exception:
+        _awq = None
+
 
 def _pack4(q):  # q int8 [...,K] in [-7,7] -> [...,K/2] int8 (2 int4/byte, low nibble = even)
     q = q.to(torch.int32)
@@ -63,11 +76,19 @@ class QuantLinearWxAx(nn.Module):
             a_scale = self.a_scale
         else:
             a_scale = (xf.abs().max().item() / self.Q) or 1e-8   # dynamic fallback (host sync)
-        xq = torch.round(xf.float() / a_scale).clamp_(-self.Q, self.Q).to(torch.int8)
+        xf = xf.half().contiguous()
         if self.bits == 8:
-            out = _mc.gemm_w8a8(xq, self.qweight, self.w_scale, a_scale)
+            xq = _mc.quantize_act_int8(xf, a_scale)                  # fused fp16->int8
+            if _awq is not None and self.out_features % 128 == 0:
+                M = xq.shape[0]
+                asc = torch.full((M,), a_scale, device=xq.device, dtype=torch.float16)
+                out = torch.empty(M, self.out_features, device=xq.device, dtype=torch.float16)
+                _awq.w8a8_gemm_forward_cuda(xq, self.qweight, self.w_scale.to(torch.float16), asc, out)
+            else:
+                out = _mc.gemm_w8a8(xq, self.qweight, self.w_scale, a_scale)
         else:
-            out = _mc.gemm_w4a4(_pack4(xq), self.qweight, self.w_scale, a_scale, self.in_features)
+            xq = _mc.quantize_act_int4_pack(xf, a_scale)             # fused fp16->packed int4
+            out = _mc.gemm_w4a4(xq, self.qweight, self.w_scale, a_scale, self.in_features)
         out = out.reshape(*orig[:-1], self.out_features)
         if self.bias is not None:
             out = out + self.bias

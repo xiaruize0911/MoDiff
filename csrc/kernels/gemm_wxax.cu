@@ -126,6 +126,47 @@ __global__ void gemm_w4a4_kernel(const int8_t* __restrict__ A, const int8_t* __r
   }
 }
 
+// ---- fused fp16 -> int8 / packed-int4 activation quantize (static per-tensor scale) ----
+__global__ void quant_act_int8_kernel(const __half* __restrict__ x, int8_t* __restrict__ out,
+                                      float inv_scale, long n) {
+  long i = (long)blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) {
+    int q = __float2int_rn(__half2float(x[i]) * inv_scale);
+    out[i] = (int8_t)(q > 127 ? 127 : (q < -127 ? -127 : q));
+  }
+}
+
+__global__ void quant_act_int4_pack_kernel(const __half* __restrict__ x, int8_t* __restrict__ out,
+                                           float inv_scale, int K, long nout) {
+  long i = (long)blockIdx.x * blockDim.x + threadIdx.x;   // one output byte = 2 int4
+  if (i < nout) {
+    long base = (i / (K / 2)) * K + (i % (K / 2)) * 2;
+    int q0 = __float2int_rn(__half2float(x[base]) * inv_scale);     q0 = q0 > 7 ? 7 : (q0 < -7 ? -7 : q0);
+    int q1 = __float2int_rn(__half2float(x[base + 1]) * inv_scale); q1 = q1 > 7 ? 7 : (q1 < -7 ? -7 : q1);
+    out[i] = (int8_t)((q0 & 0xF) | ((q1 & 0xF) << 4));
+  }
+}
+
+torch::Tensor quantize_act_int8(torch::Tensor x, double a_scale) {
+  x = x.contiguous(); long n = x.numel();
+  auto out = torch::empty_like(x, torch::TensorOptions().dtype(torch::kChar).device(x.device()));
+  int T = 256; long blocks = (n + T - 1) / T;
+  cudaStream_t s = at::cuda::getCurrentCUDAStream();
+  quant_act_int8_kernel<<<blocks, T, 0, s>>>(reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
+                                             out.data_ptr<int8_t>(), 1.f / (float)a_scale, n);
+  return out;
+}
+
+torch::Tensor quantize_act_int4_pack(torch::Tensor x, double a_scale) {
+  x = x.contiguous(); int M = x.size(0), K = x.size(1); long nout = (long)M * (K / 2);
+  auto out = torch::empty({M, K / 2}, torch::TensorOptions().dtype(torch::kChar).device(x.device()));
+  int T = 256; long blocks = (nout + T - 1) / T;
+  cudaStream_t s = at::cuda::getCurrentCUDAStream();
+  quant_act_int4_pack_kernel<<<blocks, T, 0, s>>>(reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
+                                                  out.data_ptr<int8_t>(), 1.f / (float)a_scale, K, nout);
+  return out;
+}
+
 // A [M,K] int8, B [N,K] int8, w_scale [N] f32, a_scale scalar -> C [M,N] fp16
 torch::Tensor gemm_w8a8(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale) {
   TORCH_CHECK(A.is_cuda() && A.dtype() == torch::kChar && B.dtype() == torch::kChar, "A/B int8 CUDA");

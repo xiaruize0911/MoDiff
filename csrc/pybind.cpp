@@ -95,6 +95,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "W8A8 linear: C[M,N] fp16 = (A[M,K] int8 . B[N,K]^T int8) * a_scale * w_scale[n]");
     m.def("gemm_w4a4", &gemm_w4a4,
           "W4A4 linear: C[M,N] fp16 = (A[M,K/2] . B[N,K/2]^T packed int4) * a_scale * w_scale[n]");
+    m.def("quantize_act_int8", &quantize_act_int8, "Fused fp16->int8 activation quantize (static scale)");
+    m.def("quantize_act_int4_pack", &quantize_act_int4_pack, "Fused fp16->packed-int4 activation quantize (static scale)");
 
     // Fused qkv quantize for the flash score path (kernels/quantize_qkv.cu)
     m.def("quantize_qkv_int8", &quantize_qkv_int8,
