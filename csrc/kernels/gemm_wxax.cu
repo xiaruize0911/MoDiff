@@ -12,6 +12,7 @@
 // =========================================================================
 #include <ATen/cuda/CUDAContext.h>
 #include <cuda_fp16.h>
+#include <cuda_pipeline_primitives.h>
 #include <torch/extension.h>
 
 #include "../common.cuh"
@@ -21,45 +22,52 @@
 #define GW_BM (GW_WARPS * 16)   // 64 rows/CTA (one warp per 16-row sub-tile)
 #define GW_BN 64
 
-// Multi-warp CTA: GW_WARPS warps share the B smem tile (loaded once per CTA),
-// each warp owns a 16-row A sub-tile. m16n8k32.s8 mma, int32 accumulate, dequant epilogue.
+// Multi-warp CTA with double-buffered cp.async: GW_WARPS warps share the B smem tile,
+// each warp owns a 16-row A sub-tile. Next k-tile is prefetched (cp.async) while the
+// current is consumed by the mma -> hides global load latency (cuBLAS/AWQ-style).
 __global__ void gemm_w8a8_kernel(const int8_t* __restrict__ A, const int8_t* __restrict__ B,
                                  const float* __restrict__ w_scale, float a_scale,
                                  __half* __restrict__ C, int M, int N, int K) {
   const int w = threadIdx.x >> 5, lane = threadIdx.x & 31, gid = lane >> 2, tig = lane & 3;
   const int m0 = blockIdx.x * GW_BM;
   const int n0 = blockIdx.y * GW_BN;
-  const int mw = m0 + w * 16;                       // this warp's row base
-  __shared__ int8_t As[GW_BM * 32];
-  __shared__ int8_t Bs[GW_BN * 32];
+  const int mw = m0 + w * 16;
+  __shared__ int8_t As[2][GW_BM * 32];
+  __shared__ int8_t Bs[2][GW_BN * 32];
   int acc[GW_BN / 8][4];
 #pragma unroll
   for (int nt = 0; nt < GW_BN / 8; ++nt) { acc[nt][0] = acc[nt][1] = acc[nt][2] = acc[nt][3] = 0; }
 
-  for (int kt = 0; kt < K; kt += 32) {
-    for (int idx = threadIdx.x; idx < GW_BM * 32; idx += blockDim.x) {
-      int r = idx >> 5, c = idx & 31;
-      As[idx] = (m0 + r < M) ? A[(size_t)(m0 + r) * K + kt + c] : 0;
-    }
-    for (int idx = threadIdx.x; idx < GW_BN * 32; idx += blockDim.x) {
-      int r = idx >> 5, c = idx & 31;
-      Bs[idx] = (n0 + r < N) ? B[(size_t)(n0 + r) * K + kt + c] : 0;
-    }
+  const int t = threadIdx.x, ar = t >> 1, ac = (t & 1) * 16;   // 128 threads: 16B chunks, 2/row
+  const bool amask = (m0 + ar) < M, bmask = (n0 + ar) < N;
+  const int nkt = K / 32;
+#define GW8_LOAD(kt, buf)                                                                        \
+  modiff_cp_async_cg(modiff_smem_ptr(&As[buf][ar * 32 + ac]),                                    \
+                     (const uint4*)(A + (size_t)(m0 + ar) * K + (kt) + ac), amask);              \
+  modiff_cp_async_cg(modiff_smem_ptr(&Bs[buf][ar * 32 + ac]),                                    \
+                     (const uint4*)(B + (size_t)(n0 + ar) * K + (kt) + ac), bmask)
+
+  GW8_LOAD(0, 0); __pipeline_commit();
+  for (int i = 0; i < nkt; ++i) {
+    if (i + 1 < nkt) { GW8_LOAD((i + 1) * 32, (i + 1) & 1); __pipeline_commit(); }
+    __pipeline_wait_prior(i + 1 < nkt ? 1 : 0);
     __syncthreads();
+    const int buf = i & 1;
     unsigned a[4];
-    a[0] = *(const int*)&As[(w * 16 + gid) * 32 + tig * 4];
-    a[1] = *(const int*)&As[(w * 16 + gid + 8) * 32 + tig * 4];
-    a[2] = *(const int*)&As[(w * 16 + gid) * 32 + tig * 4 + 16];
-    a[3] = *(const int*)&As[(w * 16 + gid + 8) * 32 + tig * 4 + 16];
+    a[0] = *(const int*)&As[buf][(w * 16 + gid) * 32 + tig * 4];
+    a[1] = *(const int*)&As[buf][(w * 16 + gid + 8) * 32 + tig * 4];
+    a[2] = *(const int*)&As[buf][(w * 16 + gid) * 32 + tig * 4 + 16];
+    a[3] = *(const int*)&As[buf][(w * 16 + gid + 8) * 32 + tig * 4 + 16];
 #pragma unroll
     for (int nt = 0; nt < GW_BN / 8; ++nt) {
       unsigned b[2];
-      b[0] = *(const int*)&Bs[(nt * 8 + gid) * 32 + tig * 4];
-      b[1] = *(const int*)&Bs[(nt * 8 + gid) * 32 + tig * 4 + 16];
+      b[0] = *(const int*)&Bs[buf][(nt * 8 + gid) * 32 + tig * 4];
+      b[1] = *(const int*)&Bs[buf][(nt * 8 + gid) * 32 + tig * 4 + 16];
       modiff_mma_m16n8k32(acc[nt], a, b);
     }
     __syncthreads();
   }
+#undef GW8_LOAD
 
 #pragma unroll
   for (int nt = 0; nt < GW_BN / 8; ++nt) {
@@ -85,36 +93,42 @@ __global__ void gemm_w4a4_kernel(const int8_t* __restrict__ A, const int8_t* __r
   const int n0 = blockIdx.y * GW_BN;
   const int mw = m0 + w * 16;
   const int Kb = K >> 1;                 // packed bytes per row
-  __shared__ int8_t As[GW_BM * 32];      // one k-tile = 64 int4 = 32 bytes/row
-  __shared__ int8_t Bs[GW_BN * 32];
+  __shared__ int8_t As[2][GW_BM * 32];   // one k-tile = 64 int4 = 32 bytes/row
+  __shared__ int8_t Bs[2][GW_BN * 32];
   int acc[GW_BN / 8][4];
 #pragma unroll
   for (int nt = 0; nt < GW_BN / 8; ++nt) { acc[nt][0] = acc[nt][1] = acc[nt][2] = acc[nt][3] = 0; }
 
-  for (int ktb = 0; ktb < Kb; ktb += 32) {          // 32 bytes = 64 int4 per step
-    for (int idx = threadIdx.x; idx < GW_BM * 32; idx += blockDim.x) {
-      int r = idx >> 5, c = idx & 31;
-      As[idx] = (m0 + r < M) ? A[(size_t)(m0 + r) * Kb + ktb + c] : 0;
-    }
-    for (int idx = threadIdx.x; idx < GW_BN * 32; idx += blockDim.x) {
-      int r = idx >> 5, c = idx & 31;
-      Bs[idx] = (n0 + r < N) ? B[(size_t)(n0 + r) * Kb + ktb + c] : 0;
-    }
+  const int t = threadIdx.x, ar = t >> 1, ac = (t & 1) * 16;
+  const bool amask = (m0 + ar) < M, bmask = (n0 + ar) < N;
+  const int nkt = Kb / 32;
+#define GW4_LOAD(ktb, buf)                                                                       \
+  modiff_cp_async_cg(modiff_smem_ptr(&As[buf][ar * 32 + ac]),                                    \
+                     (const uint4*)(A + (size_t)(m0 + ar) * Kb + (ktb) + ac), amask);            \
+  modiff_cp_async_cg(modiff_smem_ptr(&Bs[buf][ar * 32 + ac]),                                    \
+                     (const uint4*)(B + (size_t)(n0 + ar) * Kb + (ktb) + ac), bmask)
+
+  GW4_LOAD(0, 0); __pipeline_commit();
+  for (int i = 0; i < nkt; ++i) {
+    if (i + 1 < nkt) { GW4_LOAD((i + 1) * 32, (i + 1) & 1); __pipeline_commit(); }
+    __pipeline_wait_prior(i + 1 < nkt ? 1 : 0);
     __syncthreads();
+    const int buf = i & 1;
     unsigned a[4];
-    a[0] = *(const int*)&As[(w * 16 + gid) * 32 + tig * 4];
-    a[1] = *(const int*)&As[(w * 16 + gid + 8) * 32 + tig * 4];
-    a[2] = *(const int*)&As[(w * 16 + gid) * 32 + tig * 4 + 16];
-    a[3] = *(const int*)&As[(w * 16 + gid + 8) * 32 + tig * 4 + 16];
+    a[0] = *(const int*)&As[buf][(w * 16 + gid) * 32 + tig * 4];
+    a[1] = *(const int*)&As[buf][(w * 16 + gid + 8) * 32 + tig * 4];
+    a[2] = *(const int*)&As[buf][(w * 16 + gid) * 32 + tig * 4 + 16];
+    a[3] = *(const int*)&As[buf][(w * 16 + gid + 8) * 32 + tig * 4 + 16];
 #pragma unroll
     for (int nt = 0; nt < GW_BN / 8; ++nt) {
       unsigned b[2];
-      b[0] = *(const int*)&Bs[(nt * 8 + gid) * 32 + tig * 4];
-      b[1] = *(const int*)&Bs[(nt * 8 + gid) * 32 + tig * 4 + 16];
+      b[0] = *(const int*)&Bs[buf][(nt * 8 + gid) * 32 + tig * 4];
+      b[1] = *(const int*)&Bs[buf][(nt * 8 + gid) * 32 + tig * 4 + 16];
       modiff_mma_m16n8k64_s4(acc[nt], a, b);
     }
     __syncthreads();
   }
+#undef GW4_LOAD
 
 #pragma unroll
   for (int nt = 0; nt < GW_BN / 8; ++nt) {
