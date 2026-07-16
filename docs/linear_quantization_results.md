@@ -22,13 +22,30 @@ Implementation: `csrc/kernels/gemm_wxax.cu` (custom int8/int4 tensor-core GEMM),
   tile dispatch (register-blocking `MT=2` for large-M/small-N, `MT=1` else). Tried and rejected: 48B smem
   padding (occupancy loss), BM=128 (not tile-bound).
 
-## End-to-end (batch 16, `MODIFF_QUANT_LINEAR` on vs off)
-| mode | speed vs same-mode fp16-linear | latent rel-err | peak Δ |
-|---|--:|--:|--:|
-| int8_baseline | 0.925× | **0.007** | −95 MiB |
-| int8 (modiff) | 0.941× | 0.057 | −96 MiB |
-| int4_baseline | 0.942× | **0.228** | −105 MiB |
-| int4 (modiff) | 0.980× | **0.456** | −106 MiB |
+## End-to-end (batch 32, heavy-warmup median, `MODIFF_QUANT_LINEAR` on vs off)
+`scripts/linear_quant.py` → `data/linear_quant_speed.csv`.
+| mode | fp16-lin ms/step | quant-lin ms/step | speed | peak MiB (off→on) | latent rel-err† |
+|---|--:|--:|--:|--:|--:|
+| int8_baseline | 49.90 | 54.74 | 0.912× | 4548 → 4464 (−84) | **0.007** |
+| int8 (modiff) | 58.65 | 63.05 | 0.930× | 4969 → 4869 (−100) | 0.057 |
+| int4_baseline | 48.35 | 51.64 | 0.936× | 4310 → 4193 (−117) | **0.228** |
+| int4 (modiff) | 53.90 | 57.22 | 0.942× | 4717 → 4604 (−113) | **0.456** |
+
+†rel-err measured at batch 16 (quantization quality is batch-invariant).
+
+### Profile — where the linear-quant time goes (int8_baseline, quant-lin, ms/step)
+| bucket | ms/step |
+|---|--:|
+| other GEMM (conv/attn/fp16 linear) | 20.40 |
+| elementwise / other | 10.50 |
+| groupnorm | 6.44 |
+| **linear int GEMM (ours)** | **4.29** |
+| **linear act-quantize** | **0.77** |
+| conv quant/modiff | 0.20 |
+
+The quantized-Linear work is only **~5 ms of the ~55 ms step (~9%)** — dominated by the conv/attention GEMMs
+and elementwise ops. This is the profiler's direct confirmation of the e2e-neutral result: even making the
+Linear GEMMs free couldn't move the step much.
 
 ## Findings
 1. **int8 linear quant is quality-safe** (rel-err 0.007–0.057); **int4 is too lossy** (0.23–0.46 — W4A4 on
