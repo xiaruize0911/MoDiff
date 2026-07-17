@@ -117,4 +117,20 @@ if fz:
         ax.set_ylabel("µs  (qkv-linear + quantize, C192 T1024)")
         ax.set_title(f"int8-output qkv→attn fusion: {float(r['fusion_speedup']):.2f}× (eliminates reshape copy)")
         save(fig, "06_fusion_qkv_attn.png")
+# ---- 7. softmax/score memory-traffic roofline (T=1024) ----
+mm = rd(D, "softmax_mem.csv")
+if mm:
+    r10 = [r for r in mm if int(r["T"]) == 1024]
+    names = [r["kernel"] for r in r10]; gbps = [float(r["GBps"]) for r in r10]; pct = [float(r["pct_peak"]) for r in r10]
+    x = np.arange(len(names))
+    fig, ax = plt.subplots(figsize=(9.5, 4.8))
+    cols = [INT8 if "int8" in n else (INT4 if "AV" in n or "QK" in n else FP16) for n in names]
+    ax.bar(x, gbps, 0.6, color=cols)
+    ax.axhline(696, ls="--", c="#333", lw=1.2, label="A40 peak 696 GB/s")
+    for i, (g, p) in enumerate(zip(gbps, pct)):
+        ax.text(i, g, f"{g:.0f}\n{p:.0f}%", ha="center", va="bottom", fontsize=7)
+    ax.set_xticks(x); ax.set_xticklabels([n.replace(" (", "\n(") for n in names], fontsize=7)
+    ax.set_ylabel("achieved DRAM GB/s"); ax.set_ylim(0, 760); ax.legend()
+    ax.set_title("Softmax / score-matrix kernels are DRAM-bandwidth-bound (T=1024, A40)")
+    save(fig, "07_softmax_mem_roofline.png")
 print("plots done")

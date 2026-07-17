@@ -178,6 +178,46 @@ confirms (again) that the pipeline is memory/Amdahl-bound, not qkv-quantize-boun
 default; the machinery stays in-tree. Further attention speedup needs the softmax/elementwise memory
 traffic or a quantized flash kernel, not more qkv-side fusion.
 
+## 7. Softmax / elementwise memory-traffic profile (`softmax_mem.csv`)
+
+The pipeline's memory-bound tail is dominated by **passes over the `[BH,T,T]` attention score matrix**
+(512 MiB at T=1024). Top pipeline kernels (torch.profiler, ms/step): static_int8 — softmax 8.7, QKᵀ 7.9,
+AV 5.0, GN-quantize 4.3, quantize 2.6, elementwise 3.4; fp16 — softmax 13.4 **+ a 10.8 ms elementwise
+`AUnaryFunctor`** which is the `S*scale` multiply over the whole T×T matrix (the int8 path folds that
+into the QKᵀ epilogue, so it is absent there). ncu counters are blocked, so achieved bandwidth is
+analytical bytes ÷ measured time vs A40 peak (696 GB/s), T=1024:
+
+| kernel | µs | DRAM MiB | GB/s | % peak |
+|---|--:|--:|--:|--:|
+| score `*scale` (fp16 elementwise) | 1881 | 1024 | 571 | **82%** |
+| softmax int8 **static** (1-pass) | 1373 | 768 | 586 | **84%** |
+| softmax int8 dynamic (2-pass) | 1775 | 768 | 454 | 65% |
+| softmax fp16 dynamic (2-pass) | 1857 | 1024 | 578 | 83% |
+| QKᵀ int8 (writes fp16 S) | 1352 | 528 | 409 | 59% |
+| AV int8 (reads P) | 823 | 304 | 387 | 56% |
+
+![Softmax/score memory roofline](07_softmax_mem_roofline.png)
+
+**Findings:**
+- The softmax and score-scale kernels run at **82–84% of peak DRAM bandwidth** → they are essentially at
+  the **bandwidth roofline**. There is no meaningful kernel-tuning headroom left; the only lever is
+  **moving fewer bytes** over the T×T matrix.
+- The **fp16 path pays an extra full T×T pass** (`S*scale`, 1024 MiB, 82% peak) that the int8 path avoids
+  by folding the scale into the QKᵀ epilogue — a real, already-captured int8 advantage.
+- **int8 static softmax (1-pass, 84% peak) beats the 2-pass dynamic** (65%): the 2nd score read + the
+  block reduction drop it off the roofline. This is the concrete payoff of the static single-pass softmax.
+- The QKᵀ/AV matmuls sit at **56–59% of peak** — bound by the fp16 score **write** (QKᵀ) and the int8 P
+  **read** (AV), i.e. also T×T-memory-bound, not compute-bound.
+- Small-T blocks (T=256/64) run softmax at only 8–30% of peak (launch/latency-bound) but are cheap in
+  absolute terms.
+
+**Implication:** the attention tail is DRAM-bandwidth-bound on the materialized T×T matrix, and the
+kernels are already near roofline. Further speedup requires **fewer T×T bytes**, not faster kernels:
+(a) a **quantized flash** kernel that never materializes S (out of scope — the reason we chose materialized
+standard attention), or (b) **lower-precision scores** (int8/fp8 S instead of fp16) to shrink every T×T
+pass — but softmax needs enough logit precision, so this trades quality. No amount of GEMM/quantize
+fusion helps here, consistent with §6a's neutral e2e result.
+
 ## Verdict
 
 - **int8/int4 do beat fp16** (1.33× / 1.51× e2e, precision-isolated) — the desired speedup is real.
