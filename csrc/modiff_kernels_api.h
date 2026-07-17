@@ -206,6 +206,9 @@ torch::Tensor group_norm_silu_dequant_quantize_nhwc(
 torch::Tensor fused_gn_qkv(
     torch::Tensor x, torch::Tensor weight, torch::Tensor epi_bias,
     int groups, double eps, double shift);
+torch::Tensor fused_gn_qkv_int8(
+    torch::Tensor x, torch::Tensor weight, torch::Tensor epi_bias,
+    int groups, double eps, double shift);
 
 // ---- csrc/kernels/flash_attn_int8.cu ----
 torch::Tensor flash_attn_int8(

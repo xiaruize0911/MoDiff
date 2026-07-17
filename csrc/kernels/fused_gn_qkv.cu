@@ -33,6 +33,7 @@
 #include "cutlass/numeric_types.h"
 #include "cutlass/conv/kernel/default_conv2d_fprop_fusion.h"
 #include "cutlass/conv/device/implicit_gemm_convolution_fusion.h"
+#include "cutlass/epilogue/thread/linear_combination_clamp.h"
 
 #include "../common.cuh"
 #include "implicit_gemm_fusion_persample.h"
@@ -111,6 +112,33 @@ using PerSampleKernel = cutlass::conv::kernel::ImplicitGemmConvolutionFusionPerS
 
 using FusedConvOp = cutlass::conv::device::ImplicitGemmConvolutionFusion<PerSampleKernel>;
 
+// ---- int8-OUTPUT variant: same fp16 GN+qkv mainloop, but the epilogue clamps to int8.
+// The per-output-column requant oscale[n]=127/absmax is folded into the conv weight and epilogue
+// bias offline (both scale by oscale[n]), so the GEMM emits (real qkv * oscale) and the epilogue
+// just rounds/clamps to int8 -- no per-column epilogue needed. Consumed by quantize_attn_qkv_from_i8. ----
+using EpilogueOpI8 = cutlass::epilogue::thread::LinearCombinationClamp<
+    int8_t, 128 / cutlass::sizeof_bits<int8_t>::value, float, float>;
+using DefaultFusionKernelI8 = typename cutlass::conv::kernel::DefaultConv2dFpropFusion<
+    cutlass::half_t, cutlass::layout::TensorNHWC,
+    cutlass::half_t, cutlass::layout::TensorNHWC,
+    cutlass::half_t, cutlass::layout::RowMajor,
+    int8_t, cutlass::layout::TensorNHWC,
+    float,
+    cutlass::arch::OpClassTensorOp, Arch,
+    cutlass::gemm::GemmShape<128, 256, 32>,
+    cutlass::gemm::GemmShape<64, 64, 32>,
+    cutlass::gemm::GemmShape<16, 8, 16>,
+    EpilogueOpI8,
+    cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>,
+    3,
+    cutlass::arch::OpMultiplyAdd,
+    cutlass::conv::IteratorAlgorithm::kOptimized>::Kernel;
+using PerSampleKernelI8 = cutlass::conv::kernel::ImplicitGemmConvolutionFusionPerSample<
+    typename DefaultFusionKernelI8::Mma, typename DefaultFusionKernelI8::Epilogue,
+    typename DefaultFusionKernelI8::ThreadblockSwizzle,
+    cutlass::conv::Operator::kFprop, cutlass::conv::Conv2dProblemSize>;
+using FusedConvOpI8 = cutlass::conv::device::ImplicitGemmConvolutionFusion<PerSampleKernelI8>;
+
 // -------- host entry --------
 // x        : [N, C, H, W] channels_last fp16
 // weight   : [K=3C, 1, 1, C] fp16 conv filter (qkv.weight * gn.weight), K/R/S/C order
@@ -183,6 +211,78 @@ torch::Tensor fused_gn_qkv(
               cutlass::cutlassGetStatusString(st));
   st = op(stream);
   TORCH_CHECK(st == cutlass::Status::kSuccess, "fused_gn_qkv: run failed: ",
+              cutlass::cutlassGetStatusString(st));
+  return output;
+}
+
+// int8-output variant. weight/epi_bias must already have oscale[n] folded in (both scaled by
+// oscale[n]=127/absmax_col). Returns int8 [N, K, H, W] channels_last (token-major [N,T,K] view).
+torch::Tensor fused_gn_qkv_int8(
+    torch::Tensor x, torch::Tensor weight, torch::Tensor epi_bias,
+    int groups, double eps, double shift) {
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  CHECK_CUDA(x); CHECK_CONTIGUOUS(x);
+  int N = x.size(0), C = x.size(1), H = x.size(2), W = x.size(3);
+  int K = weight.size(0);
+  int T = H * W, Cg = C / groups;
+
+  auto opt_h = torch::TensorOptions().dtype(torch::kFloat16).device(x.device());
+  auto opt_f = torch::TensorOptions().dtype(torch::kFloat32).device(x.device());
+  auto scale = torch::empty({N, C}, opt_h);
+  auto bias  = torch::empty({N, C}, opt_h);
+  auto sumC   = torch::zeros({N, C}, opt_f);
+  auto sumsqC = torch::zeros({N, C}, opt_f);
+
+  const int TILE = 128;
+  int ttiles = (T + TILE - 1) / TILE;
+  dim3 accum_grid(N, ttiles);
+  gn_accum_kernel<<<accum_grid, C, 0, stream>>>(
+      reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
+      sumC.data_ptr<float>(), sumsqC.data_ptr<float>(), N, C, T, TILE);
+  gn_finalize_kernel<<<N, C, 2 * C * (int)sizeof(float), stream>>>(
+      sumC.data_ptr<float>(), sumsqC.data_ptr<float>(),
+      reinterpret_cast<__half*>(scale.data_ptr<at::Half>()),
+      reinterpret_cast<__half*>(bias.data_ptr<at::Half>()),
+      N, C, T, Cg, (float)eps, (float)shift);
+
+  auto out_opt = torch::TensorOptions().dtype(torch::kChar).device(x.device())
+                     .memory_format(torch::MemoryFormat::ChannelsLast);
+  auto output = torch::empty({N, K, H, W}, out_opt);
+
+  cutlass::conv::Conv2dProblemSize problem(
+      {N, H, W, C}, {K, 1, 1, C}, {0, 0, 0, 0}, {1, 1}, {1, 1},
+      {N, H, W, K}, cutlass::conv::Mode::kCrossCorrelation, 1);
+
+  auto* xp  = reinterpret_cast<cutlass::half_t*>(x.data_ptr<at::Half>());
+  auto* wp  = reinterpret_cast<cutlass::half_t*>(weight.data_ptr<at::Half>());
+  auto* scp = reinterpret_cast<cutlass::half_t*>(scale.data_ptr<at::Half>());
+  auto* bip = reinterpret_cast<cutlass::half_t*>(bias.data_ptr<at::Half>());
+  auto* ebp = reinterpret_cast<int8_t*>(epi_bias.data_ptr<int8_t>());   // int8 bias source (oscale-folded, rounded)
+  auto* op_ = reinterpret_cast<int8_t*>(output.data_ptr<int8_t>());
+
+  using LSB = cutlass::layout::RowMajor;
+  using LN  = cutlass::layout::TensorNHWC;
+  typename FusedConvOpI8::Arguments args{
+      problem,
+      {xp, LN({C, W * C, H * W * C})},
+      {wp, LN({C, 1 * C, 1 * 1 * C})},
+      {scp, LSB(C)}, {bip, LSB(C)},
+      {ebp, LN::Stride(0)},
+      {op_, LN({K, W * K, H * W * K})},
+      {1.0f, 1.0f}};
+
+  FusedConvOpI8 op;
+  cutlass::Status st = op.can_implement(args);
+  TORCH_CHECK(st == cutlass::Status::kSuccess,
+              "fused_gn_qkv_int8: can_implement failed: ", cutlass::cutlassGetStatusString(st));
+  size_t ws = op.get_workspace_size(args);
+  auto workspace = torch::empty({(long)ws},
+      torch::TensorOptions().dtype(torch::kByte).device(x.device()));
+  st = op.initialize(args, workspace.data_ptr(), stream);
+  TORCH_CHECK(st == cutlass::Status::kSuccess, "fused_gn_qkv_int8: initialize failed: ",
+              cutlass::cutlassGetStatusString(st));
+  st = op(stream);
+  TORCH_CHECK(st == cutlass::Status::kSuccess, "fused_gn_qkv_int8: run failed: ",
               cutlass::cutlassGetStatusString(st));
   return output;
 }

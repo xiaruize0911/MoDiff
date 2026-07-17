@@ -147,30 +147,36 @@ and folds the quantize into one int8-reading kernel; correctness is preserved (i
 **Micro verdict:** correct, and ~1.1–1.14× on the qkv-linear+quantize sub-step — but that micro baseline
 used a plain `gemm_w8a8` (no GroupNorm fusion).
 
-### 6a. Wired into the live block — e2e result: net-NEGATIVE (honest)
+### 6a. Wired into the live block — two iterations, honest e2e
 
-Wired the fusion into `QuantizedStandardAttentionBlock` (flag `MODIFF_FUSE_QKV_I8=1`, static W8A8;
-`oscale`/int8 qkv-weight calibrated with the attention scales) and measured e2e (static_int8, batch 32,
-20-run averaged, GPU-busy):
+**Iteration 1 (naive): net-NEGATIVE.** First wiring used a *separate* GN + `gemm_w8a8_out_int8`, which
+gives up the block's `fused_gn_qkv` (GroupNorm fused into the qkv conv, **206 µs** on C192 T1024). The
+separate GN + int8 gemm is **443 µs (2.15×) on the qkv-production side** — the 237 µs loss outweighs the
+140 µs saved on the quantize side → static_int8 **49.3 → 51.7 ms (0.95×, slower)**. Lesson: a fusion
+that discards a stronger existing fusion loses, even if the micro (vs an unfused gemm) looked +1.14×.
 
-| static_int8 | GPU-busy ms/step |
+**Iteration 2: built `fused_gn_qkv_int8`.** New CUTLASS kernel = the fp16 GN→qkv mainloop with an
+**int8-clamp epilogue**; the per-column requant `oscale` is folded into the (fp16) conv weight + epilogue
+bias offline (bias stored int8, consistent with the output grid), so the GEMM emits int8 directly and
+**keeps the GN fusion**. Standalone: **1.07–1.10× vs fp16 `fused_gn_qkv`** and emits int8 (dequant
+rel-vs-fp16 **0.0038**). Re-wired the block to `fused_gn_qkv_int8` → `quantize_attn_qkv_from_i8`:
+
+| static_int8 (batch 32, GPU-busy) | ms/step |
 |---|--:|
-| fusion **off** (baseline) | **49.3** |
-| fusion **on** | 51.7 (**0.95× — slower**) |
+| fusion **off** (baseline) | 49.58 |
+| fusion **on** (fused_gn_qkv_int8) | **49.57** |
 
-**The fusion loses e2e.** Root cause: the block's baseline qkv is produced by the highly-optimized
-**`fused_gn_qkv`** kernel (GroupNorm fused into the qkv conv, **206 µs** on C192 T1024). The int8-output
-path can't use it — it must run a *separate* GN + activation-quantize + `gemm_w8a8_out_int8`, which is
-**443 µs (2.15×) on the qkv-production side**. That 237 µs loss outweighs the 140 µs saved on the
-quantize side, for a net ~+2.4 ms/step. The earlier 1.14× micro win did not include GroupNorm, so it
-compared against an unfused gemm; against the real GN-fused baseline the fusion is behind.
+**Result: e2e-neutral (within noise).** The regression is gone (the int8 path now keeps GN fusion and
+is 1.07–1.10× on the qkv side), and the qkv+quantize sub-step is ~1.2× faster in isolation — but that
+sub-step is a small fraction of the 50 ms pipeline, so the win is **Amdahl-diluted to ~0** e2e. The
+fused int8 path is confirmed active in the profile (`aq_*_from_i8` + `fused_gn_qkv_int8` kernels run;
+output finite, quality-safe). Kernels: `fused_gn_qkv_int8` (`fused_gn_qkv.cu`) + `quantize_attn_qkv_from_i8`
+(`attn_quant_gemm.cu`); flag `MODIFF_FUSE_QKV_I8`, default **off**.
 
-**Conclusion:** the int8-output qkv→attention fusion is **not worth deploying as-is** — it trades a
-strong existing fusion (`fused_gn_qkv`) for a weaker one. To make it a net win would require a
-**`fused_gn_qkv_int8`** kernel (fuse GroupNorm *and* the int8-output requant into one qkv GEMM), so the
-int8 path keeps the GN fusion; then `quantize_attn_qkv_from_i8` consumes it. That is a substantial new
-kernel and the expected payoff is still bounded by Amdahl (~1–2 ms/step), so it is left as future work.
-The flag defaults **off**; `quantize_attn_qkv_from_i8` + the wiring stay in-tree for that follow-up.
+**Conclusion:** the fusion is now correct and non-regressing, but delivers **no e2e speedup** — it
+confirms (again) that the pipeline is memory/Amdahl-bound, not qkv-quantize-bound. Not worth enabling by
+default; the machinery stays in-tree. Further attention speedup needs the softmax/elementwise memory
+traffic or a quantized flash kernel, not more qkv-side fusion.
 
 ## Verdict
 
@@ -181,12 +187,13 @@ The flag defaults **off**; `quantize_attn_qkv_from_i8` + the wiring stay in-tree
 - **The kernels aren't the bottleneck; the plumbing is (§5).** Kernel-only, AWQ w8a8 and w4a4 already
   beat fp16 for K≥384 (up to 1.4–1.6×); the deployed linears lose only to per-call quantize/fp16-dequant
   overhead. Switch W8A8 to AWQ (faster than our gemm_w8a8 on every shape). C192 (K=192) stays hard.
-- **But fusion has to preserve existing fusions to pay off (§6/§6a).** The int8-output qkv→attention
-  fusion was built, validated, and wired in — but it is **net-negative e2e** (static_int8 49.3→51.7 ms)
-  because it sacrifices the `fused_gn_qkv` (GroupNorm+qkv) kernel: a separate GN + int8 qkv GEMM is 2.15×
-  slower on the qkv side than the fused baseline, outweighing the quantize-side saving. The viable win
-  needs a `fused_gn_qkv_int8` kernel (GN + int8-output requant in one GEMM), left as future work; the
-  payoff is Amdahl-bounded regardless.
+- **Fusion must preserve existing fusions, and even then it's Amdahl-bound (§6/§6a).** The int8-output
+  qkv→attention fusion was built, validated, and wired in twice: (1) naive (separate GN + int8 gemm) was
+  net-negative (49.3→51.7 ms) because it discarded the `fused_gn_qkv` kernel; (2) building
+  **`fused_gn_qkv_int8`** (GN + int8-clamp epilogue, oscale folded into the weight — keeps GN fusion,
+  1.07–1.10× standalone, rel 0.0038) removed the regression → **e2e-neutral** (49.57 vs 49.58 ms). The
+  qkv+quantize sub-step is ~1.2× faster but too small a slice to move e2e. Net: no e2e win; the machinery
+  is in-tree, flag off. Real attention headroom is the memory-bound softmax/elementwise, not qkv fusion.
 
 ## Files
 `scripts/mkplots.py` (reads `../static_vs_dynamic_2026-07-16/data/` measured CSVs). Plots `01`…`05`.

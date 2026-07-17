@@ -67,27 +67,23 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         self.fuse_qkv_i8 = (self.static and self.bits == 8
                             and os.environ.get("MODIFF_FUSE_QKV_I8") == "1")
         self._fq_frozen = False
-        self._xn_amax = 0.0; self._qcol_amax = None
-        self._qkv_wq = None; self._qkv_ws = None; self._a_scale = None
-        self._oscale = None; self._qbias = None
+        self._qcol_amax = None
+        self._oscale = None; self._qkv_wi8 = None; self._epi_i8 = None
 
-    def _fq_accum(self, xn_flat, qkv_flat):
-        """Accumulate calibration for the int8-output qkv fusion: per-tensor activation absmax (xn)
-        and per-output-column absmax of the fp16 qkv (-> oscale)."""
-        self._xn_amax = max(self._xn_amax, float(xn_flat.abs().max()))
+    def _fq_accum(self, qkv_flat):
+        """Accumulate the per-output-column absmax of the fp16 qkv (-> oscale) during calibration."""
         col = qkv_flat.detach().float().abs().amax(0)                    # [3C]
         self._qcol_amax = col if self._qcol_amax is None else torch.maximum(self._qcol_amax, col)
 
     def _freeze_fq(self):
-        W = self.qkv.weight.detach().float()                            # [3C, c]
-        ws = (W.abs().amax(1).clamp_min(1e-8) / 127.0)
-        self._qkv_wq = torch.round(W / ws.unsqueeze(1)).clamp(-127, 127).to(torch.int8).contiguous()
-        self._qkv_ws = ws.float().contiguous()
-        self._a_scale = (self._xn_amax / 127.0) or 1e-8
-        self._oscale = (127.0 / self._qcol_amax.clamp_min(1e-6)).float().contiguous()
-        bb = self.qkv.bias
-        self._qbias = (bb.detach().float().contiguous() if bb is not None
-                       else torch.empty(0, device=W.device, dtype=torch.float32))
+        """Freeze the int8-output fused GN->qkv weights: fold the per-column requant oscale into the
+        (GN-folded) fused conv weight + epilogue bias so fused_gn_qkv_int8 emits int8 directly."""
+        self._ensure_fused()                                            # builds _fused_conv_w [3C,1,1,c], _fused_epi_bias [3C]
+        K = 3 * self.channels
+        osc = (127.0 / self._qcol_amax.clamp_min(1e-4)).float()         # [3C]
+        self._oscale = osc.contiguous()
+        self._qkv_wi8 = (self._fused_conv_w.float() * osc.view(K, 1, 1, 1)).half().contiguous()
+        self._epi_i8 = torch.round(self._fused_epi_bias.float() * osc).clamp(-127, 127).to(torch.int8).contiguous()
         self._fq_frozen = True
 
     def _qtok(self, x, hd_pad):
@@ -156,26 +152,26 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         nh, hd = self.num_heads, self.head_dim
         BH = b * nh
         x_in_tok = x.permute(0, 2, 3, 1).reshape(b, T, c)
-        fq_ok = (self.fuse_qkv_i8 and _HAS and x.dtype == torch.float16
-                 and T % 64 == 0 and T >= 256 and (c % 8) == 0)
-        # ---- FUSED int8-output qkv path (frozen): GN -> int8-out qkv GEMM -> attn quantize-from-int8
-        # (no fp16 qkv materialization, no reshape copy). ----
+        from integration.fused_ops.token_major_attention import _HAS_FUSED_GN_QKV, _FUSE_TILE_M, _FUSE_SHIFT
+        # fusion needs the per-sample fused GN->qkv (T a multiple of its M-tile) and fp16
+        fq_ok = (self.fuse_qkv_i8 and _HAS and _HAS_FUSED_GN_QKV and x.dtype == torch.float16
+                 and (T % _FUSE_TILE_M) == 0 and T >= 256 and (c % 8) == 0)
+        # ---- FUSED int8 path (frozen): fused GN->qkv with INT8 output -> attn quantize-from-int8.
+        # Keeps the GN+qkv fusion (fp16 mainloop, int8-clamp epilogue) AND drops the fp16 qkv
+        # materialization + reshape copy. ----
         if fq_ok and self._fq_frozen:
-            w, bnorm = self._gn_params(x.dtype)
-            xn = _group_norm_silu(x, self.norm.num_groups, w, bnorm, self.norm.eps, apply_silu=False)
-            xn_flat = xn.permute(0, 2, 3, 1).reshape(b * T, c).contiguous()
-            xq = _mc.quantize_act_int8(xn_flat, self._a_scale)
-            qkv_i8 = _mc.gemm_w8a8_out_int8(xq, self._qkv_wq, self._qkv_ws, self._a_scale, self._oscale, self._qbias)
-            qi, ki, vt, sq, sk, sv = _mc.quantize_attn_qkv_from_i8(qkv_i8, self._oscale, nh, T, self.hp_qk, self.hp_av)
+            qkv_i8 = _mc.fused_gn_qkv_int8(x, self._qkv_wi8, self._epi_i8,
+                                           self.norm.num_groups, self.norm.eps, _FUSE_SHIFT)  # [N,3C,H,W] i8 CL
+            qkv_i8_flat = qkv_i8.permute(0, 2, 3, 1).reshape(b * T, 3 * c).contiguous()
+            qi, ki, vt, sq, sk, sv = _mc.quantize_attn_qkv_from_i8(qkv_i8_flat, self._oscale, nh, T, self.hp_qk, self.hp_av)
             S = _mc.attn_qk_int8(qi, ki, sq, sk, self.scale)
             P, sp = _mc.attn_softmax_requant_static(S, self._c)
             O = _mc.attn_av_int8(P, vt, sp, sv)[:, :, :hd]
             a = O.reshape(b, nh, T, hd).transpose(1, 2).reshape(b, T, c)
             out_tok = x_in_tok + self.proj(a)
             return out_tok.reshape(b, H, W, c).permute(0, 3, 1, 2)
-        # ---- normal fp16-qkv path (also gathers the fusion calibration while not yet frozen) ----
-        from integration.fused_ops.token_major_attention import _HAS_FUSED_GN_QKV, _FUSE_TILE_M, _FUSE_SHIFT
-        need_fq_calib = fq_ok and not self._fq_frozen           # force GN+Linear to expose xn/qkv
+        # ---- normal fp16-qkv path (also gathers the fusion's oscale calibration while not frozen) ----
+        need_fq_calib = fq_ok and not self._fq_frozen           # force GN+Linear to expose the fp16 qkv
         if (not need_fq_calib and self._fuse_gn_qkv and _HAS_FUSED_GN_QKV and x.dtype == torch.float16
                 and (T % _FUSE_TILE_M) == 0 and (c % 8) == 0):
             self._ensure_fused()
@@ -188,7 +184,7 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
             xn_tok = xn.permute(0, 2, 3, 1).reshape(b, T, c)
             qkv_flat = self.qkv(xn_tok)
             if need_fq_calib:
-                self._fq_accum(xn_tok.reshape(b * T, c), qkv_flat.reshape(b * T, 3 * c))
+                self._fq_accum(qkv_flat.reshape(b * T, 3 * c))
             qkv = qkv_flat.view(b, T, nh, 3, hd)
         q, k, v = qkv.unbind(3)                                          # [b,T,nh,hd]
         q = q.transpose(1, 2); k = k.transpose(1, 2); v = v.transpose(1, 2)   # [b,nh,T,hd]

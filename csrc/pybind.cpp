@@ -88,6 +88,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "INT8-in GroupNorm(+SiLU): reads int8 activation + dequant scale (upstream conv's "
           "int8 output), computes GN from dequantized values, requantizes to int8 output");
     m.def("fused_gn_qkv", &fused_gn_qkv, "Fused GroupNorm->qkv (per-sample scale/bias mainloop fusion)");
+    m.def("fused_gn_qkv_int8", &fused_gn_qkv_int8, "Fused GroupNorm->qkv with int8-clamp output (oscale folded into weight/bias)");
 
     // Fused int8 flash attention (kernels/flash_attn_int8.cu)
     m.def("flash_attn_int8", &flash_attn_int8,

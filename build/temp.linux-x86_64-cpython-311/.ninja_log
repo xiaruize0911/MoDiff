@@ -60,3 +60,6 @@
 289	63066	1784249145000000000	/workspace/MoDiff/build/temp.linux-x86_64-cpython-311/csrc/kernels/modiff_delta_quantize.o	7c345125d8e5037
 286	63666	1784249145000000000	/workspace/MoDiff/build/temp.linux-x86_64-cpython-311/csrc/kernels/attn_quant_gemm.o	d05d8dd539dd162d
 340	63233	1784250014000000000	/workspace/MoDiff/build/temp.linux-x86_64-cpython-311/csrc/kernels/attn_quant_gemm.o	d05d8dd539dd162d
+397	40625	1784252119000000000	/workspace/MoDiff/build/temp.linux-x86_64-cpython-311/csrc/pybind.o	f6d84d26164da226
+374	65834	1784252119000000000	/workspace/MoDiff/build/temp.linux-x86_64-cpython-311/csrc/kernels/modiff_delta_quantize.o	7c345125d8e5037
+356	71986	1784252333000000000	/workspace/MoDiff/build/temp.linux-x86_64-cpython-311/csrc/kernels/fused_gn_qkv.o	db039fc2d1a25d3b
