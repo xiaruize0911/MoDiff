@@ -189,4 +189,19 @@ if aw:
     ax.set_xticks(x); ax.set_xticklabels(labels, fontsize=8); ax.set_ylabel("effective TFLOPS (2·M·K·N)")
     ax.set_title("Kernel throughput (TFLOPS): AWQ w8a8 up to 129 TFLOPS on large-K qkv")
     ax.legend(fontsize=8); save(fig, "10_awq_vs_ours_tflops.png")
+# ---- 11. projection stage INCLUDING GroupNorm (fair) ----
+sn = rd(D, "stage_with_norm.csv")
+if sn:
+    labels = [r["shape"] for r in sn]; x = np.arange(len(labels)); w = 0.26
+    i8 = [float(r["int8_vs_fp16"]) for r in sn]; aq = [float(r["awq_vs_fp16"]) for r in sn]; i4 = [float(r["int4_vs_fp16"]) for r in sn]
+    fig, ax = plt.subplots(figsize=(10, 4.7))
+    ax.bar(x - w, i8, w, label="ours w8a8", color=INT8); ax.bar(x, aq, w, label="AWQ w8a8", color="#72B7B2"); ax.bar(x + w, i4, w, label="ours w4a4", color=INT4)
+    ax.axhline(1.0, ls="--", c=FP16, lw=1.2, label="fp16 stage (=1.0)")
+    for i in range(len(labels)):
+        for off, v in [(-w, i8[i]), (0, aq[i]), (w, i4[i])]:
+            ax.text(i + off, v, f"{v:.2f}", ha="center", va="bottom", fontsize=7)
+        ax.text(i, 0.05, f"GN {float(sn[i]['GN_frac_fp16'])*100:.0f}%", ha="center", va="bottom", fontsize=7, color="#444")
+    ax.set_xticks(x); ax.set_xticklabels(labels); ax.set_ylabel("stage speedup vs fp16 (GN+quant+GEMM)")
+    ax.set_title("Projection stage INCLUDING GroupNorm: shared GN (38–54%) dilutes the quant win toward 1.0")
+    ax.legend(fontsize=8); save(fig, "11_stage_with_norm.png")
 print("plots done")

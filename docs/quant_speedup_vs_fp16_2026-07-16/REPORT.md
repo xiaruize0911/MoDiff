@@ -324,6 +324,33 @@ and effective TFLOPS (useful 2·M·K·N):
 (our cp.async CUTLASS-style mainloop); AWQ → the llm-awq w8a8 inference kernel. (ncu HW counters are
 blocked in this container, so per-kernel DRAM bytes aren't available — timings are CUDA-event measured.)
 
+## 10. Fairness: projection stage INCLUDING GroupNorm (`stage_with_norm.py`, `stage_with_norm.csv`)
+
+The §9 kernel benchmark is bare GEMM (no norm). Since GroupNorm costs IO in every mode, a fair
+"projection stage" should include it. Stage = **GroupNorm → [quantize] → qkv GEMM**, speedup vs the fp16
+stage:
+
+| shape | GN µs | fp16 stage µs | int8 | AWQ | int4 | GN % of fp16 stage |
+|---|--:|--:|--:|--:|--:|--:|
+| C192 qkv | 126 | 233 | 0.54× | 0.84× | 0.79× | **54%** |
+| C384 qkv | 74 | 159 | 0.88× | 0.97× | 1.03× | 47% |
+| C768 qkv | 52 | 135 | 0.98× | **1.15×** | **1.24×** | 38% |
+
+**Key point: GroupNorm is a *shared* cost** (same µs in every column), so including it inflates numerator
+and denominator equally → the speedup moves **toward 1.0**, it does not favour int8. Three views of the
+same AWQ C768 qkv: kernel-only 1.46× (§9) → **stage+GN 1.15×** → deployed-no-GN 0.75× (§5). Including GN
+is the honest middle view, but it *shrinks* the quantized advantage (GN is fixed overhead quantization
+can't touch).
+
+![Projection stage with GroupNorm](11_stage_with_norm.png)
+
+**Caveat — the block fuses GN, so it isn't this unfused stage:** this runs GroupNorm as a *separate*
+kernel (its own activation read+write). The real block **fuses GN into the qkv GEMM** (`fused_gn_qkv`
+fp16 / `fused_gn_qkv_int8` int8, §6a), which never materializes the normed tensor. Fused, GN is nearly
+free and the realistic stage is **fp16 206 µs vs int8 194 µs (1.07×, C192 T1024)** — both include GN.
+So with norm counted: unfused it's a 38–54% shared tax that dilutes the quant win; fused (the actual
+path) GN is ~free and fp16/int8 are close.
+
 ## Verdict
 
 - **int8/int4 beat the *materialized* fp16 baseline** (1.33× / 1.51× e2e) — but see the next point on
