@@ -123,6 +123,33 @@ Attention QKᵀ/AV is the same story: the int kernels are faster in isolation (1
 §2) but the materialization IO + surrounding quantize eat it; the fix is the same (int-output fusion),
 short of a quantized flash kernel (out of scope).
 
+## 6. Prototype: int8-output qkv→attention fusion (`fusion_qkv_attn.py`, `fusion_qkv_attn.csv`)
+
+Built and validated the fusion the §5 analysis pointed to. The qkv-linear emits **int8** directly
+(`gemm_w8a8_out_int8`, per-column `oscale`), and a new kernel **`quantize_attn_qkv_from_i8`** consumes
+that int8 straight into the attention's per-head int8 Q/K/V — dequant-on-the-fly (reciprocal-multiply),
+**no fp16 round-trip and no reshape copy**. Compared to the current path (int8 linear → fp16 → reshape →
+`quantize_attn_qkv`), on the qkv-linear + quantize step:
+
+| block | path A (fp16 round-trip) µs | path B (int8 fused) µs | speedup | rel-err A / B |
+|---|--:|--:|--:|--:|
+| C192 T1024 | 1027 | **903** | **1.14×** | 0.019 / 0.022 |
+| C384 T256 | 413 | **378** | 1.09× | 0.028 / 0.031 |
+| C768 T64 | 317 | **290** | 1.09× | 0.036 / 0.040 |
+
+Component breakdown (C192 T1024, µs): path A = gemm-fp16-out 270 + **reshape copy 187** + quantize 571
+= 1027; path B = gemm-int8-out 286 + `from_i8` 617 = 903. **The fusion eliminates the 187µs reshape copy**
+and folds the quantize into one int8-reading kernel; correctness is preserved (int8-output adds only
+~0.003 extra rel-err — quality-safe). `gemm_w8a8_out_int8` is ~neutral vs fp16-out (286 vs 270).
+
+![int8-output qkv→attn fusion](06_fusion_qkv_attn.png)
+
+**Verdict on the fusion:** it works and is correct, and recovers ~1.1–1.14× on the qkv-linear+quantize
+sub-step — a real but modest slice of the block (the QKᵀ/softmax/AV and proj are unchanged), so the e2e
+gain is small (~1–2 ms/step). Kernels/pybind: `quantize_attn_qkv_from_i8` in `attn_quant_gemm.cu`.
+Full wiring into the live block (the linear needs an int8-output mode + calibrated `oscale`) is the next
+step; `from_i8` itself has headroom (vectorize the strided int8 reads for better coalescing).
+
 ## Verdict
 
 - **int8/int4 do beat fp16** (1.33× / 1.51× e2e, precision-isolated) — the desired speedup is real.

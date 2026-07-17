@@ -97,4 +97,24 @@ if an and io:
     for i, v in enumerate(peak): axes[1].text(i, v, f"{v:.0f}", ha="center", va="bottom", fontsize=8)
     save(fig, "05_io_mem.png")
 
+# ---- 6. int8-output qkv->attn fusion prototype (component breakdown, C192 T1024) ----
+fz = rd(D, "fusion_qkv_attn.csv")
+if fz:
+    r = next((r for r in fz if r["block"] == "C192"), None)
+    if r:
+        # measured components (us): A = gemm(fp16) + reshape + quantize; B = gemm(int8) + from_i8
+        A = [("gemm (fp16 out)", 269.5), ("reshape copy", 186.6), ("quantize_attn_qkv", 570.5)]
+        B = [("gemm (int8 out)", 286.1), ("quantize_from_i8", 616.9)]
+        fig, ax = plt.subplots(figsize=(6.5, 4.8))
+        for i, parts in enumerate([A, B]):
+            bot = 0
+            for j, (lab, v) in enumerate(parts):
+                ax.bar(i, v, 0.55, bottom=bot, color=plt.get_cmap("tab20")(j * 2 + i))
+                ax.text(i, bot + v / 2, f"{lab}\n{v:.0f}", ha="center", va="center", fontsize=7)
+                bot += v
+            ax.text(i, bot, f"{bot:.0f}µs", ha="center", va="bottom", fontsize=9, weight="bold")
+        ax.set_xticks([0, 1]); ax.set_xticklabels(["A: fp16 round-trip", "B: int8 fused"])
+        ax.set_ylabel("µs  (qkv-linear + quantize, C192 T1024)")
+        ax.set_title(f"int8-output qkv→attn fusion: {float(r['fusion_speedup']):.2f}× (eliminates reshape copy)")
+        save(fig, "06_fusion_qkv_attn.png")
 print("plots done")

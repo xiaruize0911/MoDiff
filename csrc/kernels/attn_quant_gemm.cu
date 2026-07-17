@@ -785,3 +785,82 @@ std::vector<torch::Tensor> quantize_attn_qkv_static(torch::Tensor Q, torch::Tens
   }
   return {qi, ki, vt, sq, sk, sv};
 }
+
+// ==================== int8-OUTPUT qkv -> attention quantize fusion (prototype) ====================
+// Consume the int8 qkv-linear output directly (gemm_w8a8_out_int8), skipping the fp16 round-trip:
+// the qkv-linear emits int8 [M=b*T, 3C] with per-column oscale (true value = i8 / oscale[n]); this
+// kernel dequants on the fly and re-quantizes to attention granularity (per-token Q/K, per-channel V),
+// producing the same {qi,ki,vt,sq,sk,sv} as quantize_attn_qkv. 3C is ordered (nh,3,hd) so output
+// column n(h,which,d) = (h*3+which)*hd+d. int8 (W8A8) prototype only.
+__global__ void aq_qtok_from_i8_kernel(const int8_t* __restrict__ QKV, const float* __restrict__ iosc,
+                                       int8_t* __restrict__ out, float* __restrict__ sc,
+                                       int nh, int hd, int hp, int T, int C3, int which) {
+  const int r = blockIdx.x, lane = threadIdx.x;      // r = bh*T + t over BH*T
+  const int bh = r / T, t = r % T, b = bh / nh, h = bh % nh;
+  const size_t in_base = (size_t)(b * T + t) * C3 + (size_t)(h * 3 + which) * hd;
+  const int os_base = (h * 3 + which) * hd;
+  float amax = 0.f;
+  for (int d = lane; d < hd; d += 32)
+    amax = fmaxf(amax, fabsf((float)QKV[in_base + d] * iosc[os_base + d]));
+  for (int o = 16; o > 0; o >>= 1) amax = fmaxf(amax, __shfl_down_sync(0xffffffff, amax, o));
+  amax = __shfl_sync(0xffffffff, amax, 0);
+  const float scale = fmaxf(amax, 1e-8f) / 127.f, inv = 1.f / scale;
+  if (lane == 0) sc[r] = scale;
+  int8_t* o8 = out + (size_t)r * hp;
+  for (int d = lane; d < hp; d += 32) {
+    float v = (d < hd) ? (float)QKV[in_base + d] * iosc[os_base + d] * inv : 0.f;
+    int q = __float2int_rn(v);
+    o8[d] = (int8_t)(q > 127 ? 127 : (q < -127 ? -127 : q));
+  }
+}
+
+__global__ void aq_vscale_from_i8_kernel(const int8_t* __restrict__ QKV, const float* __restrict__ iosc,
+                                         float* __restrict__ sv, int nh, int hd, int hp_av, int T, int C3) {
+  const int bd = blockIdx.x, bh = bd / hd, d = bd % hd, b = bh / nh, h = bh % nh;   // grid = BH*hd
+  const int os = (h * 3 + 2) * hd + d;
+  const int tid = threadIdx.x, nt = blockDim.x;
+  float amax = 0.f;
+  for (int t = tid; t < T; t += nt)
+    amax = fmaxf(amax, fabsf((float)QKV[(size_t)(b * T + t) * C3 + (h * 3 + 2) * hd + d] * iosc[os]));
+  __shared__ float red[256]; red[tid] = amax; __syncthreads();
+  for (int s = nt >> 1; s > 0; s >>= 1) { if (tid < s) red[tid] = fmaxf(red[tid], red[tid + s]); __syncthreads(); }
+  if (tid == 0) sv[(size_t)bh * hp_av + d] = fmaxf(red[0], 1e-8f) / 127.f;
+}
+
+__global__ void aq_vquant_trans_from_i8_kernel(const int8_t* __restrict__ QKV, const float* __restrict__ iosc,
+                                               const float* __restrict__ sv, int8_t* __restrict__ vt,
+                                               int nh, int hd, int hp_av, int T, int C3) {
+  const int rd = blockIdx.x, bh = rd / hp_av, d = rd % hp_av, b = bh / nh, h = bh % nh;  // grid = BH*hp_av
+  const int tid = threadIdx.x, nt = blockDim.x;
+  const float inv = (d < hd) ? 1.f / sv[(size_t)bh * hp_av + d] : 0.f;
+  const int os = (h * 3 + 2) * hd + d;
+  int8_t* o = vt + (size_t)rd * T;
+  for (int t = tid; t < T; t += nt) {
+    float v = (d < hd) ? (float)QKV[(size_t)(b * T + t) * C3 + (h * 3 + 2) * hd + d] * iosc[os] * inv : 0.f;
+    int q = __float2int_rn(v);
+    o[t] = (int8_t)(q > 127 ? 127 : (q < -127 ? -127 : q));
+  }
+}
+
+// qkv_i8 [b*T, 3C] int8 (from gemm_w8a8_out_int8), oscale [3C] -> {qi,ki,vt,sq,sk,sv} (int8 attention)
+std::vector<torch::Tensor> quantize_attn_qkv_from_i8(torch::Tensor qkv_i8, torch::Tensor oscale,
+                                                     int64_t nh, int64_t T, int64_t hp_qk, int64_t hp_av) {
+  TORCH_CHECK(qkv_i8.is_cuda() && qkv_i8.dtype() == torch::kChar, "qkv_i8 int8 CUDA");
+  qkv_i8 = qkv_i8.contiguous(); oscale = oscale.contiguous();
+  int M = qkv_i8.size(0), C3 = qkv_i8.size(1);
+  int b = M / (int)T, hd = C3 / (3 * (int)nh), BH = b * (int)nh;
+  auto oi = torch::TensorOptions().dtype(torch::kChar).device(qkv_i8.device());
+  auto of = torch::TensorOptions().dtype(torch::kFloat32).device(qkv_i8.device());
+  auto qi = torch::empty({BH, (int)T, (int)hp_qk}, oi), ki = torch::empty({BH, (int)T, (int)hp_qk}, oi);
+  auto vt = torch::empty({BH, (int)hp_av, (int)T}, oi);
+  auto sq = torch::empty({BH, (int)T}, of), sk = torch::empty({BH, (int)T}, of);
+  auto sv = torch::zeros({BH, (int)hp_av}, of);
+  cudaStream_t s = at::cuda::getCurrentCUDAStream();
+  const int8_t* Qp = qkv_i8.data_ptr<int8_t>(); auto ioscale = oscale.reciprocal().contiguous();
+  const float* Ip = ioscale.data_ptr<float>();
+  aq_qtok_from_i8_kernel<<<BH * (int)T, 32, 0, s>>>(Qp, Ip, qi.data_ptr<int8_t>(), sq.data_ptr<float>(), (int)nh, hd, (int)hp_qk, (int)T, C3, 0);
+  aq_qtok_from_i8_kernel<<<BH * (int)T, 32, 0, s>>>(Qp, Ip, ki.data_ptr<int8_t>(), sk.data_ptr<float>(), (int)nh, hd, (int)hp_qk, (int)T, C3, 1);
+  aq_vscale_from_i8_kernel<<<BH * hd, 256, 0, s>>>(Qp, Ip, sv.data_ptr<float>(), (int)nh, hd, (int)hp_av, (int)T, C3);
+  aq_vquant_trans_from_i8_kernel<<<BH * (int)hp_av, 256, 0, s>>>(Qp, Ip, sv.data_ptr<float>(), vt.data_ptr<int8_t>(), (int)nh, hd, (int)hp_av, (int)T, C3);
+  return {qi, ki, vt, sq, sk, sv};
+}

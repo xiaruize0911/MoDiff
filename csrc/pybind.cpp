@@ -132,4 +132,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "fp16 materialized softmax(S, static_c, c) -> {P fp16 unnormalized [BH,T,T], rowsum [BH,T]}");
     m.def("quantize_attn_qkv_static", &quantize_attn_qkv_static,
           "static Q/K/V quantize (calibrated sq_c,sk_c per-tensor + sv_vec per-channel; no absmax)");
+    m.def("quantize_attn_qkv_from_i8", &quantize_attn_qkv_from_i8,
+          "consume int8 qkv-linear output (+oscale) directly -> attention int8 {qi,ki,vt,sq,sk,sv}");
 }

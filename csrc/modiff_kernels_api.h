@@ -239,3 +239,5 @@ std::vector<torch::Tensor> attn_softmax_requant_static(torch::Tensor S, double c
 std::vector<torch::Tensor> attn_softmax_requant4_static(torch::Tensor S, double c);
 std::vector<torch::Tensor> attn_softmax_fp16(torch::Tensor S, bool static_c, double c);
 std::vector<torch::Tensor> quantize_attn_qkv_static(torch::Tensor Q, torch::Tensor K, torch::Tensor V, int64_t hp_qk, int64_t hp_av, int64_t bits, double sq_c, double sk_c, torch::Tensor sv_vec);
+// int8-output qkv-linear -> attention quantize fusion (consume int8 qkv directly; no fp16 round-trip)
+std::vector<torch::Tensor> quantize_attn_qkv_from_i8(torch::Tensor qkv_i8, torch::Tensor oscale, int64_t nh, int64_t T, int64_t hp_qk, int64_t hp_av);
