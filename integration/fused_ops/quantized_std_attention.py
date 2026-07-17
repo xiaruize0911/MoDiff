@@ -61,6 +61,34 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         self._cn = 0
         self._aq = 0.0; self._ak = 0.0; self._av = None; self._cacc = 0.0
         self._sq_c = None; self._sk_c = None; self._sv_vec = None; self._c = None
+        # int8-output qkv->attention fusion (prototype, static W8A8 only): emit int8 qkv directly
+        # (gemm_w8a8_out_int8) and consume it in the attention quantize (quantize_attn_qkv_from_i8),
+        # skipping the fp16 qkv round-trip + reshape copy. Weights/scales frozen with the attn calib.
+        self.fuse_qkv_i8 = (self.static and self.bits == 8
+                            and os.environ.get("MODIFF_FUSE_QKV_I8") == "1")
+        self._fq_frozen = False
+        self._xn_amax = 0.0; self._qcol_amax = None
+        self._qkv_wq = None; self._qkv_ws = None; self._a_scale = None
+        self._oscale = None; self._qbias = None
+
+    def _fq_accum(self, xn_flat, qkv_flat):
+        """Accumulate calibration for the int8-output qkv fusion: per-tensor activation absmax (xn)
+        and per-output-column absmax of the fp16 qkv (-> oscale)."""
+        self._xn_amax = max(self._xn_amax, float(xn_flat.abs().max()))
+        col = qkv_flat.detach().float().abs().amax(0)                    # [3C]
+        self._qcol_amax = col if self._qcol_amax is None else torch.maximum(self._qcol_amax, col)
+
+    def _freeze_fq(self):
+        W = self.qkv.weight.detach().float()                            # [3C, c]
+        ws = (W.abs().amax(1).clamp_min(1e-8) / 127.0)
+        self._qkv_wq = torch.round(W / ws.unsqueeze(1)).clamp(-127, 127).to(torch.int8).contiguous()
+        self._qkv_ws = ws.float().contiguous()
+        self._a_scale = (self._xn_amax / 127.0) or 1e-8
+        self._oscale = (127.0 / self._qcol_amax.clamp_min(1e-6)).float().contiguous()
+        bb = self.qkv.bias
+        self._qbias = (bb.detach().float().contiguous() if bb is not None
+                       else torch.empty(0, device=W.device, dtype=torch.float32))
+        self._fq_frozen = True
 
     def _qtok(self, x, hd_pad):
         """per-token int8/int4 over the last dim; pad hd->hd_pad. x:[BH,T,hd] -> (xi, scale[BH,T])."""
@@ -128,9 +156,27 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         nh, hd = self.num_heads, self.head_dim
         BH = b * nh
         x_in_tok = x.permute(0, 2, 3, 1).reshape(b, T, c)
-        # GroupNorm + qkv (fp16). Reuse fused GN->qkv when eligible, else GN + Linear.
+        fq_ok = (self.fuse_qkv_i8 and _HAS and x.dtype == torch.float16
+                 and T % 64 == 0 and T >= 256 and (c % 8) == 0)
+        # ---- FUSED int8-output qkv path (frozen): GN -> int8-out qkv GEMM -> attn quantize-from-int8
+        # (no fp16 qkv materialization, no reshape copy). ----
+        if fq_ok and self._fq_frozen:
+            w, bnorm = self._gn_params(x.dtype)
+            xn = _group_norm_silu(x, self.norm.num_groups, w, bnorm, self.norm.eps, apply_silu=False)
+            xn_flat = xn.permute(0, 2, 3, 1).reshape(b * T, c).contiguous()
+            xq = _mc.quantize_act_int8(xn_flat, self._a_scale)
+            qkv_i8 = _mc.gemm_w8a8_out_int8(xq, self._qkv_wq, self._qkv_ws, self._a_scale, self._oscale, self._qbias)
+            qi, ki, vt, sq, sk, sv = _mc.quantize_attn_qkv_from_i8(qkv_i8, self._oscale, nh, T, self.hp_qk, self.hp_av)
+            S = _mc.attn_qk_int8(qi, ki, sq, sk, self.scale)
+            P, sp = _mc.attn_softmax_requant_static(S, self._c)
+            O = _mc.attn_av_int8(P, vt, sp, sv)[:, :, :hd]
+            a = O.reshape(b, nh, T, hd).transpose(1, 2).reshape(b, T, c)
+            out_tok = x_in_tok + self.proj(a)
+            return out_tok.reshape(b, H, W, c).permute(0, 3, 1, 2)
+        # ---- normal fp16-qkv path (also gathers the fusion calibration while not yet frozen) ----
         from integration.fused_ops.token_major_attention import _HAS_FUSED_GN_QKV, _FUSE_TILE_M, _FUSE_SHIFT
-        if (self._fuse_gn_qkv and _HAS_FUSED_GN_QKV and x.dtype == torch.float16
+        need_fq_calib = fq_ok and not self._fq_frozen           # force GN+Linear to expose xn/qkv
+        if (not need_fq_calib and self._fuse_gn_qkv and _HAS_FUSED_GN_QKV and x.dtype == torch.float16
                 and (T % _FUSE_TILE_M) == 0 and (c % 8) == 0):
             self._ensure_fused()
             qkv_img = _mc.fused_gn_qkv(x, self._fused_conv_w, self._fused_epi_bias,
@@ -139,7 +185,11 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         else:
             w, bnorm = self._gn_params(x.dtype)
             xn = _group_norm_silu(x, self.norm.num_groups, w, bnorm, self.norm.eps, apply_silu=False)
-            qkv = self.qkv(xn.permute(0, 2, 3, 1).reshape(b, T, c)).view(b, T, nh, 3, hd)
+            xn_tok = xn.permute(0, 2, 3, 1).reshape(b, T, c)
+            qkv_flat = self.qkv(xn_tok)
+            if need_fq_calib:
+                self._fq_accum(xn_tok.reshape(b * T, c), qkv_flat.reshape(b * T, 3 * c))
+            qkv = qkv_flat.view(b, T, nh, 3, hd)
         q, k, v = qkv.unbind(3)                                          # [b,T,nh,hd]
         q = q.transpose(1, 2); k = k.transpose(1, 2); v = v.transpose(1, 2)   # [b,nh,T,hd]
         # The batched int GEMMs need T%64==0 (N tile); small-T blocks (T<256, e.g. 4x4/8x8)
@@ -154,6 +204,9 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
             kf = k.reshape(BH, T, hd).contiguous()
             vf = v.reshape(BH, T, hd).contiguous()
             a = self._qattn(qf, kf, vf, T, BH).reshape(b, nh, T, hd)     # [b,nh,T,hd]
+        # freeze the fusion weights/scales once the attention calibration has frozen
+        if need_fq_calib and self._frozen and not self._fq_frozen:
+            self._freeze_fq()
         a = a.transpose(1, 2).reshape(b, T, c)
         out_tok = x_in_tok + self.proj(a)
         return out_tok.reshape(b, H, W, c).permute(0, 3, 1, 2)
