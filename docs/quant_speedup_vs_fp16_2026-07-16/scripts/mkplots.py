@@ -148,18 +148,21 @@ if ao:
     ax.set_xticks(x); ax.set_xticklabels(["QKᵀ", "softmax", "AV"]); ax.set_ylabel("speedup vs fp16")
     ax.set_title("Attention op-by-op: matmuls (QKᵀ, AV) DO speed up; softmax is memory-bound (T=1024)")
     ax.legend(); save(fig, "02b_attn_ops.png")
-# ---- 8. int8-score softmax prototype: fp16-S vs int8-S ----
+# ---- 8. full int8-score attention: QKᵀ / softmax / full, fp16-S vs int8-S (T=1024) ----
 i8s = rd(D, "int8_score.csv")
 if i8s:
-    labels = [f"T={r['T']}" for r in i8s]; x = np.arange(len(labels)); w = 0.38
-    fp = [float(r["softmax_fp16S_us"]) for r in i8s]; i8 = [float(r["softmax_int8S_us"]) for r in i8s]
-    fig, ax = plt.subplots(figsize=(8, 4.5))
+    r = next((x for x in i8s if int(x["T"]) == 1024), i8s[0])
+    ops = [("QKᵀ", "qkT_fp16_us", "qkT_int8_us"), ("softmax", "softmax_fp16_us", "softmax_int8_us"),
+           ("full attn", "full_fp16_us", "full_int8_us")]
+    x = np.arange(len(ops)); w = 0.38
+    fp = [float(r[a]) for _, a, _ in ops]; i8 = [float(r[b]) for _, _, b in ops]
+    fig, ax = plt.subplots(figsize=(8, 4.6))
     ax.bar(x - w/2, fp, w, label="fp16 scores", color=FP16); ax.bar(x + w/2, i8, w, label="int8 scores", color=INT8)
-    for r, xi in zip(i8s, x):
-        ax.text(xi, max(float(r["softmax_fp16S_us"]), float(r["softmax_int8S_us"])),
-                f"{float(r['softmax_speedup']):.2f}×\nrel {r['rel_int8S']}", ha="center", va="bottom", fontsize=7)
-    ax.set_xticks(x); ax.set_xticklabels(labels); ax.set_ylabel("softmax µs")
-    ax.set_title("int8 scores halve the T×T read: softmax 1.34× at T=1024, quality-free (rel≈fp16-S)")
+    for i, (a, b) in enumerate(zip(fp, i8)):
+        ax.text(i, max(a, b), f"{a/b:.2f}×", ha="center", va="bottom", fontsize=9)
+    ax.set_xticks(x); ax.set_xticklabels([o[0] for o in ops]); ax.set_ylabel("µs (T=1024)")
+    ax.set_title(f"Full int8-score attention (T=1024): QKᵀ write + softmax read both halved\n"
+                 f"full {fp[2]/i8[2]:.2f}×, quality-free (rel {r['rel_int8S']} vs fp16-S {r['rel_fp16S']})")
     ax.legend(); save(fig, "08_int8_score.png")
 # ---- 9/10. AWQ vs ours vs fp16 kernel benchmark ----
 aw = rd(D, "awq_vs_ours.csv")

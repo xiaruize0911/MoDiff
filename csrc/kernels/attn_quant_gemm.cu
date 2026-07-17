@@ -907,3 +907,93 @@ std::vector<torch::Tensor> attn_softmax_requant_s8(torch::Tensor S, double sS, d
       S.data_ptr<int8_t>(), P.data_ptr<int8_t>(), sp.data_ptr<float>(), T, (float)sS, (float)c);
   return {P, sp};
 }
+
+// ==================== int8-OUTPUT QKᵀ (writes int8 scores, halves the T*T write) ====================
+// Same int8 QKᵀ mainloop as bmm_qk_s8_kernel, but the epilogue emits int8 S = clamp(round(logit * invSs))
+// (logit = acc*sq[r]*sk[c]*scale), so the score matrix is written at 1 byte instead of fp16's 2. Paired
+// with attn_softmax_requant_s8 for a full int8-score attention path (both T*T passes halved).
+__global__ void bmm_qk_s8_i8out_kernel(const int8_t* __restrict__ Aall, const int8_t* __restrict__ Ball,
+                                       int8_t* __restrict__ Call, int M, int N, int K,
+                                       const float* __restrict__ sqall, const float* __restrict__ skall,
+                                       float scale, float invSs) {
+  const int bh = blockIdx.z;
+  const int8_t* A = Aall + (size_t)bh * M * K;
+  const int8_t* B = Ball + (size_t)bh * N * K;
+  int8_t* C = Call + (size_t)bh * M * N;
+  const float* sqb = sqall + (size_t)bh * M;
+  const float* skb = skall + (size_t)bh * N;
+  constexpr int WM = 16, BM = AQ_WARPS * WM;
+  const int w = threadIdx.x >> 5, lane = threadIdx.x & 31, gid = lane >> 2, tig = lane & 3;
+  const int m0 = blockIdx.x * BM, n0 = blockIdx.y * AQ_BN, t = threadIdx.x;
+  __shared__ int8_t As[AQ_STAGES][BM * AQ_LDS];
+  __shared__ int8_t Bs[AQ_STAGES][AQ_BN * AQ_LDS];
+  int acc[AQ_BN / 8][4];
+#pragma unroll
+  for (int nt = 0; nt < AQ_BN / 8; ++nt) { acc[nt][0] = acc[nt][1] = acc[nt][2] = acc[nt][3] = 0; }
+  const int nkt = K / 32;
+#define AQ_LOADI(kt, buf)                                                                        \
+  for (int c = t; c < BM * 2; c += blockDim.x) {                                                 \
+    int r = c >> 1, off = (c & 1) * 16;                                                          \
+    modiff_cp_async_cg(modiff_smem_ptr(&As[buf][r * AQ_LDS + off]),                              \
+                       (const uint4*)(A + (size_t)(m0 + r) * K + (kt) + off), (m0 + r) < M);     \
+  }                                                                                              \
+  for (int c = t; c < AQ_BN * 2; c += blockDim.x) {                                              \
+    int r = c >> 1, off = (c & 1) * 16;                                                          \
+    modiff_cp_async_cg(modiff_smem_ptr(&Bs[buf][r * AQ_LDS + off]),                              \
+                       (const uint4*)(B + (size_t)(n0 + r) * K + (kt) + off), (n0 + r) < N);     \
+  }
+#pragma unroll
+  for (int s = 0; s < AQ_STAGES - 1; ++s) { if (s < nkt) { AQ_LOADI(s * 32, s); } __pipeline_commit(); }
+  __pipeline_wait_prior(AQ_STAGES - 2);
+  __syncthreads();
+  for (int i = 0; i < nkt; ++i) {
+    const int buf = i % AQ_STAGES;
+    unsigned a[4]; int rb = w * WM;
+    a[0] = *(const int*)&As[buf][(rb + gid) * AQ_LDS + tig * 4];
+    a[1] = *(const int*)&As[buf][(rb + gid + 8) * AQ_LDS + tig * 4];
+    a[2] = *(const int*)&As[buf][(rb + gid) * AQ_LDS + tig * 4 + 16];
+    a[3] = *(const int*)&As[buf][(rb + gid + 8) * AQ_LDS + tig * 4 + 16];
+#pragma unroll
+    for (int nt = 0; nt < AQ_BN / 8; ++nt) {
+      unsigned b[2];
+      b[0] = *(const int*)&Bs[buf][(nt * 8 + gid) * AQ_LDS + tig * 4];
+      b[1] = *(const int*)&Bs[buf][(nt * 8 + gid) * AQ_LDS + tig * 4 + 16];
+      modiff_mma_m16n8k32(acc[nt], a, b);
+    }
+    int li = i + AQ_STAGES - 1;
+    if (li < nkt) { AQ_LOADI(li * 32, li % AQ_STAGES); }
+    __pipeline_commit(); __pipeline_wait_prior(AQ_STAGES - 2); __syncthreads();
+  }
+#undef AQ_LOADI
+  int mwb = m0 + w * WM;
+#define CLMP(v) ((v) < -127 ? -127 : ((v) > 127 ? 127 : (v)))
+#pragma unroll
+  for (int nt = 0; nt < AQ_BN / 8; ++nt) {
+    int c0 = n0 + nt * 8 + tig * 2, r0 = mwb + gid, r1 = mwb + gid + 8;
+    float k0 = skb[c0], k1 = skb[c0 + 1];
+    if (r0 < M) { float q = sqb[r0] * scale;
+      int a0 = CLMP(__float2int_rn(acc[nt][0] * q * k0 * invSs)), a1 = CLMP(__float2int_rn(acc[nt][1] * q * k1 * invSs));
+      *(short*)&C[(size_t)r0 * N + c0] = (short)((a0 & 0xFF) | ((a1 & 0xFF) << 8)); }
+    if (r1 < M) { float q = sqb[r1] * scale;
+      int a2 = CLMP(__float2int_rn(acc[nt][2] * q * k0 * invSs)), a3 = CLMP(__float2int_rn(acc[nt][3] * q * k1 * invSs));
+      *(short*)&C[(size_t)r1 * N + c0] = (short)((a2 & 0xFF) | ((a3 & 0xFF) << 8)); }
+  }
+#undef CLMP
+}
+
+// Q,K int8 [BH,T,hd_pad]; sS = score scale (S_i8 = round(logit/sS)). Returns int8 S [BH,T,T].
+torch::Tensor attn_qk_int8_s8out(torch::Tensor Q, torch::Tensor K, torch::Tensor sq, torch::Tensor sk,
+                                 double scale, double sS) {
+  TORCH_CHECK(Q.is_cuda() && Q.dtype() == torch::kChar && K.dtype() == torch::kChar, "Q/K int8 CUDA");
+  Q = Q.contiguous(); K = K.contiguous();
+  int BH = Q.size(0), T = Q.size(1), hd_pad = Q.size(2);
+  TORCH_CHECK(K.size(1) == T && K.size(2) == hd_pad, "K shape");
+  TORCH_CHECK(hd_pad % 32 == 0 && T % 64 == 0, "need hd_pad%32==0, T%64==0");
+  auto S = torch::empty({BH, T, T}, torch::TensorOptions().dtype(torch::kChar).device(Q.device()));
+  const int BM = AQ_WARPS * 16;
+  dim3 grid((T + BM - 1) / BM, T / AQ_BN, BH);
+  bmm_qk_s8_i8out_kernel<<<grid, AQ_WARPS * 32, 0, at::cuda::getCurrentCUDAStream()>>>(
+      Q.data_ptr<int8_t>(), K.data_ptr<int8_t>(), S.data_ptr<int8_t>(), T, T, hd_pad,
+      sq.contiguous().data_ptr<float>(), sk.contiguous().data_ptr<float>(), (float)scale, (float)(1.0 / sS));
+  return S;
+}

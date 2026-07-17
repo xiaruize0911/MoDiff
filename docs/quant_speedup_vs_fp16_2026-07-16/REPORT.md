@@ -263,35 +263,35 @@ fusion helps here, consistent with §6a's neutral e2e result.
 
 ## 8. Prototype: int8 attention scores (fewer T×T bytes) (`int8_score.py`, `int8_score.csv`)
 
-§7 said the only real attention lever left is **fewer T×T bytes**. Prototyped storing the score matrix S
-as **int8** (1 B) instead of fp16 (2 B) — a new softmax kernel `attn_softmax_requant_s8` reads int8 S,
-dequants `logit = S_i8 · sS` (per-tensor `sS = |S|max/127`), and does the 1-pass static-c softmax → int8 P.
+§7 said the only real attention lever left is **fewer T×T bytes**. Built the **full int8-score path**:
+`attn_qk_int8_s8out` (QKᵀ that writes int8 S = `round(logit/sS)` via a clamped int8 epilogue, halving the
+T×T *write*) → `attn_softmax_requant_s8` (reads int8 S, dequants `logit = S_i8·sS`, 1-pass static-c
+softmax, halving the T×T *read*) → AV. Per-tensor `sS = |S|max/127` (calibrated). Measured vs the fp16-S
+path (attn_qk_int8 → softmax_static → AV), full attention (QKᵀ+softmax+AV):
 
-| shape | softmax fp16-S µs | softmax int8-S µs | speedup | rel fp16-S | rel int8-S |
-|---|--:|--:|--:|--:|--:|
-| T=1024 | 1373 | **1028** | **1.34×** | 0.2193 | 0.2199 |
-| T=256 | 234 | 235 | 1.00× | 0.2242 | 0.2245 |
-| T=64 | 57 | 58 | 0.99× | 0.2583 | 0.2585 |
+| T | QKᵀ 16→i8 | softmax 16→i8 | **full attn** | rel fp16-S | rel int8-S | S-rel |
+|---|--:|--:|--:|--:|--:|--:|
+| **1024** | 1353→1078 (1.25×) | 1372→1037 (1.32×) | 3555→**2948 (1.21×)** | 0.2193 | 0.2199 | 0.018 |
+| 256 | 98→86 (1.15×) | 242→239 | 420→411 (1.02×) | 0.2242 | 0.2245 | 0.014 |
+| 64 | 8.5→8.2 | 57→58 | 96→95 (1.00×) | 0.2583 | 0.2585 | 0.012 |
 
 **Findings:**
-- **int8 scores are quality-free.** int8-S adds only **+0.0006 rel-err** over fp16-S (0.2199 vs 0.2193) —
-  the score-precision reduction is negligible. (The ~0.22 absolute is the *static-c softmax* loss from §7,
-  a separate axis; int8 S does not add to it. With a per-row softmax it would be ~0.03, and int8-S would
-  still track fp16-S.)
-- **Softmax is 1.34× faster at the dominant T=1024** — the read-bound block, where halving the S read
-  (512→256 MiB) shows directly. Small-T blocks are launch/latency-bound (softmax at 8–30% of peak, §7),
-  so halving their read doesn't help — but they are cheap in absolute terms.
-- **The other half is the QKᵀ write:** QKᵀ currently writes S in fp16 (512 MiB, §7 shows it at 59% of
-  peak, write-bound). An int8-output QKᵀ epilogue would halve that too (~272 MiB), for an estimated
-  ~1.4–1.9× on QKᵀ — a straightforward follow-up (same kernel, packed-int8 store) not built here.
+- **Full int8-score attention is 1.21× faster at the dominant T=1024**, from **both** T×T passes shrinking:
+  QKᵀ write 1.25× + softmax read 1.32× (AV is unchanged — it already reads int8 P). Small-T blocks are
+  launch/latency-bound (§7) so neutral, but cheap.
+- **Quality-free.** int8 scores add **+0.0006 rel-err** (0.2199 vs 0.2193); the int8-out QKᵀ reproduces
+  the fp16 scores at **S-rel 0.012–0.018**. (The ~0.22 absolute is the separate static-c softmax loss,
+  §7; int8 S adds ~nothing on top.)
+- QKᵀ's 1.25× (not the ~1.9× a pure write-halving roofline suggests) is because the int8 score store is a
+  half-coalesced 2-byte (`short`) store and QKᵀ isn't purely write-bound; still a real gain.
 
-![int8 scores prototype](08_int8_score.png)
+![full int8-score attention](08_int8_score.png)
 
-**Verdict on int8 scores:** this is the **first attention lever that actually pays and is ~free** — it
-attacks the memory-bound T×T traffic directly (not the compute the roofline showed was already saturated).
-Measured 1.34× on the dominant softmax at zero quality cost; with an int8-S QKᵀ epilogue the full int8-S
-path would ~halve both T×T passes. It's the right direction for further attention speedup (short of a
-quantized-flash kernel), and unlike deeper Q/K/V quantization it targets the actual bottleneck.
+**Verdict on int8 scores:** the **first attention lever that pays and is ~free** — it attacks the
+memory-bound T×T traffic directly (not the roofline-saturated compute). Full int8-S attention: **1.21× on
+the dominant block, +0.0006 rel-err.** Kernels `attn_qk_int8_s8out` + `attn_softmax_requant_s8` are
+in-tree (not yet wired into the block; that + a per-row `sS` for the coalesced-store/precision are the
+follow-ups). This is the right direction for further attention speedup, short of a quantized-flash kernel.
 
 ## 9. Kernel-level GEMM benchmark: AWQ vs ours vs fp16 (`awq_vs_ours.py`, `awq_vs_ours.csv`)
 
