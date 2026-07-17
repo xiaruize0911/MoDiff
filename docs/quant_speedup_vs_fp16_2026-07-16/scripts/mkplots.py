@@ -65,7 +65,7 @@ if pf:
         lab = b + (" ★matmul" if "GEMM" in b else "")
         ax.bar(x, vals, 0.6, bottom=bot, label=lab, color=cmap(i % 10)); bot += np.array(vals)
     ax.set_xticks(x); ax.set_xticklabels([n for _, n in modes]); ax.set_ylabel("GPU-busy ms/step")
-    ax.set_title("Where the time goes — matmul (★) is only ~40%, so quant e2e speedup is Amdahl-capped")
+    ax.set_title("Where the fp16->int8 time goes: elementwise (fp16 S*scale, folded by int8) + softmax\ndominate the saving; matmul (★) contributes little net")
     ax.legend(fontsize=7, ncol=2); save(fig, "03_amdahl.png")
 
 # ---- 4. attention kernel micro: int8/int4 vs fp16 (static path) ----

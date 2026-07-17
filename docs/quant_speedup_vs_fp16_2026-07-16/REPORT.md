@@ -16,9 +16,13 @@ differs. A40, LSUN-churches LDM UNet, batch 32, DDIM, GPU-busy = torch.profiler 
   int GEMM can't beat cuBLAS fp16, and the attention QKᵀ/AV is materialized (memory-bound). Attention
   *in isolation* is faster in int (1.45× int8 / 1.71× int4 at T=1024), but bundled with the slow int
   linears the bucket is flat.
-- **The e2e win is Amdahl-capped.** Matmul is only ~40% of GPU time; the rest is softmax, GroupNorm,
-  elementwise, quantize overhead — so even free matmul would cap at ~1.7×, and quantization only
-  accelerates the conv slice of that 40%. This is why we see ~1.3–1.5×, not the textbook 2× / 4×.
+- **Most of the headline win is NOT quantization compute — it's the fp16 baseline being inefficient.**
+  Decomposing the fp16→int8 saving (§3): of the 17 ms, **13 ms is the elementwise `S*scale` pass** that
+  materialized fp16 runs separately and int8 folds into its QKᵀ epilogue; only ~2.9 ms is matmul. A
+  properly scale-fused fp16 (SDPA/flash-math) would not pay that pass, so **against SDPA-fp16 (~56 ms)
+  the int8 win is only ~1.11× (int4 ~1.26×)**. The pure precision gains (quantized conv + int8 attn
+  matmuls + int8 softmax) net modest after the +3.7 ms quantize overhead — the pipeline is memory-bound
+  (§7), so quantization can't reach the textbook 2×/4×.
 
 (Quality is out of scope for this speed report — see the static-vs-dynamic report for rel-err numbers.)
 
@@ -28,9 +32,11 @@ In the nsys/profiler bucketing, int8/int4 attention uses named kernels (`bmm_qk_
 so it lands in a separate **attn QKᵀ/AV** bucket, while fp16 attention is `torch.bmm` (cuBLAS) and gets
 lumped into **conv/linear GEMM**. So fp16's attention matmul is *hidden* inside its conv/linear bar,
 making the fp16 GEMM bar look bigger and the int bars look smaller. **It is not that quantization made
-the GEMM shrink for free** — you must add the two matmul buckets. All tables below use the merged
-matmul view (torch.profiler's `GEMM (qkv/proj + attn QK·AV)` already merges attention with qkv/proj,
-and `conv (GEMM)` is separate), which *is* comparable across precisions.
+the GEMM shrink for free** — you must add the two matmul buckets. The e2e profiler tables here use the
+merged matmul view (torch.profiler's `GEMM (qkv/proj + attn QK·AV)` merges attention with qkv/proj,
+`conv (GEMM)` separate), which *is* comparable across precisions; **§2 additionally splits attention out
+via an isolated per-op micro-benchmark** (fp16's attn matmul can't be name-split inside the pipeline, so
+that split is measured standalone).
 
 ## 1. E2E speedup (GPU-busy ms/step, `clean_speed.csv`)
 
@@ -85,15 +91,36 @@ int qkv/proj linear.
 
 ![Attention op-by-op speedup](02b_attn_ops.png)
 
-## 3. Why not 2× / 4×? — Amdahl (`kernel_profile.csv`)
+## 3. Where the fp16→int8 e2e time actually goes (`kernel_profile.csv`)
 
-Matmul (conv + qkv/proj + attn) is only ~40% of fp16 GPU time (27 of 67 ms). The remaining ~60% —
-softmax, GroupNorm, elementwise, quantize/absmax — is memory/elementwise-bound and largely
-precision-invariant (quantization even *adds* a quantize/absmax bucket). So the e2e ceiling from
-matmul alone is ~1.7×, and since quantization only accelerates the **conv** part of the matmul, the
-realized 1.33× (int8) / 1.51× (int4) is consistent with the roofline, not a shortfall of the kernels.
+Decomposing the static_int8 e2e win over materialized fp16 by bucket (ms/step) shows it is **not**
+matmul-driven — the matmul saves only 2.9 of the 17.2 ms:
 
-![Amdahl breakdown](03_amdahl.png)
+| bucket | fp16 | int8 | Δ save |
+|---|--:|--:|--:|
+| elementwise / copy | 17.60 | 4.62 | **+12.98** |
+| attention (softmax) | 13.58 | 8.80 | +4.78 |
+| conv (GEMM) | 13.49 | 9.63 | +3.86 |
+| GEMM (qkv/proj + attn) | 13.55 | 14.51 | −0.96 |
+| quantize / absmax | 0.00 | 3.67 | −3.67 |
+| GroupNorm / store / other | ~7.7 | ~7.5 | ~0 |
+| **total** | **67.2** | **50.0** | **17.2** |
+
+The **dominant term is elementwise (−13 ms)** — and it is almost entirely the **fp16 materialized path's
+separate `S*scale` pass** over the T×T matrix (the 10.8 ms `AUnaryFunctor`, §7), which the int8 path
+**folds into its QKᵀ epilogue**. Next are softmax (−4.8, int8 static 1-pass + int8 P) and conv (−3.9,
+quantized conv), partly given back by the added quantize bucket (+3.7). Matmul contributes little net
+(conv −3.9, but the qkv/proj+attn bucket +1.0).
+
+**Important honesty caveat:** the elementwise `S*scale` fold is an advantage over *materialized* fp16,
+which is an inefficient baseline (a properly-fused fp16 like SDPA/flash-math applies the scale for free).
+So most of the headline 1.33× is the materialized-fp16 baseline paying a pass that neither int8 **nor a
+good fp16 impl** would. **Against scale-fused fp16 (SDPA, ~56 ms) the int8 win is only ~1.11×** (int4
+~1.26×; §1 caveat). The genuine, precision-only savings (quantized conv + int8 attention matmuls + int8
+softmax P) net to a modest amount after the +3.7 ms quantize overhead — consistent with the pipeline
+being memory-bound (§7), not a kernel shortfall.
+
+![e2e time decomposition](03_amdahl.png)
 
 ## 4. Memory & IO (static configs)
 
@@ -236,10 +263,14 @@ fusion helps here, consistent with §6a's neutral e2e result.
 
 ## Verdict
 
-- **int8/int4 do beat fp16** (1.33× / 1.51× e2e, precision-isolated) — the desired speedup is real.
-- **It's a conv win, capped by Amdahl.** Conv quantization gives 1.4×/1.8×; the qkv/proj-linear +
-  materialized-attention matmul doesn't improve *as deployed*, and matmul is only ~40% of the pipeline
-  — so e2e lands at ~1.3–1.5×, not 2×/4×.
+- **int8/int4 beat the *materialized* fp16 baseline** (1.33× / 1.51× e2e) — but see the next point on
+  what that number really is.
+- **Most of that headline is the fp16 baseline being inefficient, not quantization compute (§3).** The
+  fp16→int8 saving (17 ms) is **13 ms elementwise** (the materialized `S*scale` pass int8 folds into its
+  QKᵀ epilogue) + 4.8 ms softmax + 3.9 ms conv − 3.7 ms quantize overhead; matmul nets only ~2.9 ms.
+  **Against a scale-fused fp16 (SDPA, ~56 ms) the int8 win is only ~1.11× (int4 ~1.26×).** The
+  genuine precision gains (quantized conv 1.4–1.8×, int8 attn matmuls ~2×, int8 softmax) are real but
+  Amdahl/memory-bound-limited (§7).
 - **The kernels aren't the bottleneck; the plumbing is (§5).** Kernel-only, AWQ w8a8 and w4a4 already
   beat fp16 for K≥384 (up to 1.4–1.6×); the deployed linears lose only to per-call quantize/fp16-dequant
   overhead. Switch W8A8 to AWQ (faster than our gemm_w8a8 on every shape). C192 (K=192) stays hard.
