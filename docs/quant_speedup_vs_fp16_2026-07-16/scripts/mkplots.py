@@ -161,4 +161,29 @@ if i8s:
     ax.set_xticks(x); ax.set_xticklabels(labels); ax.set_ylabel("softmax µs")
     ax.set_title("int8 scores halve the T×T read: softmax 1.34× at T=1024, quality-free (rel≈fp16-S)")
     ax.legend(); save(fig, "08_int8_score.png")
+# ---- 9/10. AWQ vs ours vs fp16 kernel benchmark ----
+aw = rd(D, "awq_vs_ours.csv")
+if aw:
+    labels = [r["shape"] for r in aw]; x = np.arange(len(labels)); w = 0.26
+    o8 = [float(r["ours8_vs_fp16"]) for r in aw]; aq = [float(r["awq_vs_fp16"]) for r in aw]; o4 = [float(r["ours4_vs_fp16"]) for r in aw]
+    fig, ax = plt.subplots(figsize=(11, 4.8))
+    ax.bar(x - w, o8, w, label="ours w8a8", color=INT8)
+    ax.bar(x, aq, w, label="AWQ w8a8", color="#72B7B2")
+    ax.bar(x + w, o4, w, label="ours w4a4", color=INT4)
+    ax.axhline(1.0, ls="--", c=FP16, lw=1.2, label="fp16 cuBLAS (=1.0)")
+    for i in range(len(labels)):
+        for off, v in [(-w, o8[i]), (0, aq[i]), (w, o4[i])]:
+            ax.text(i + off, v, f"{v:.2f}", ha="center", va="bottom", fontsize=6.5)
+    ax.set_xticks(x); ax.set_xticklabels(labels, fontsize=8); ax.set_ylabel("kernel speedup vs fp16")
+    ax.set_title("Kernel-only GEMM: AWQ w8a8 ≥ ours on every shape; both beat fp16 for K≥384 (A40)")
+    ax.legend(fontsize=8); save(fig, "09_awq_vs_ours_speedup.png")
+
+    fig, ax = plt.subplots(figsize=(11, 4.8)); w2 = 0.2
+    fp = [float(r["fp16_TFLOPS"]) for r in aw]; t8 = [float(r["ours8_TFLOPS"]) for r in aw]
+    ta = [float(r["awq_TFLOPS"]) for r in aw]; t4 = [float(r["ours4_TFLOPS"]) for r in aw]
+    ax.bar(x - 1.5*w2, fp, w2, label="fp16", color=FP16); ax.bar(x - 0.5*w2, t8, w2, label="ours w8a8", color=INT8)
+    ax.bar(x + 0.5*w2, ta, w2, label="AWQ w8a8", color="#72B7B2"); ax.bar(x + 1.5*w2, t4, w2, label="ours w4a4", color=INT4)
+    ax.set_xticks(x); ax.set_xticklabels(labels, fontsize=8); ax.set_ylabel("effective TFLOPS (2·M·K·N)")
+    ax.set_title("Kernel throughput (TFLOPS): AWQ w8a8 up to 129 TFLOPS on large-K qkv")
+    ax.legend(fontsize=8); save(fig, "10_awq_vs_ours_tflops.png")
 print("plots done")
