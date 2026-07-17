@@ -91,13 +91,49 @@ Quantization cuts analytical IO 27–40% and peak memory (int4 −10%).
 
 ![IO and peak memory](05_io_mem.png)
 
+## 5. Can the linear kernels be optimized? Is AWQ faster? (`linear_backends.csv`, `linear_kernel_only.csv`)
+
+Two measurements on the real qkv shapes — the **deployed op** (quantize + GEMM + fp16-dequant) vs the
+**GEMM kernel alone** (pre-quantized inputs), each vs fp16 cuBLAS `F.linear`:
+
+| qkv shape (M,K,N) | our w8a8 dep / **kern** | AWQ w8a8 dep / **kern** | w4a4 dep / **kern** |
+|---|--:|--:|--:|
+| C192 (32768,192,576) | 0.24× / **0.41×** | 0.36× / **0.95×** | 0.35× / **0.76×** |
+| C384 (8192,384,1152) | 0.48× / **0.96×** | 0.54× / **1.22×** | 0.58× / **1.40×** |
+| C768 (2048,768,2304) | 0.64× / **1.03×** | 0.75× / **1.41×** | 0.84× / **1.62×** |
+
+**The kernels are not the bottleneck — the quantize/dequant plumbing is.** Kernel-only, **AWQ w8a8 and
+w4a4 beat fp16 cuBLAS for K≥384** (AWQ up to 1.41×, w4a4 up to 1.62×), and AWQ is ~parity even at the
+hard short-K C192 (0.95×). But the **deployed** op is 0.24–0.84× because each call pays: (1) an
+activation-quantize pass (fp16→int8), (2) an fp16-output dequant write, and (3) for AWQ, a per-call
+`asc` allocation + output-slice from the N-padded buffer. That overhead is larger than the kernel's win.
+
+**So yes, there is real optimization headroom, and it is fusion, not a faster GEMM:**
+- **Fuse the activation-quantize into the producer** (write int8 directly out of the preceding op's
+  epilogue — same trick that made conv fast via `group_norm_silu_quantize`). Removes pass (1).
+- **int8/int4 output** where the consumer re-quantizes anyway — the qkv-linear output feeds attention,
+  which *immediately re-quantizes Q/K/V*; emitting int8 and consuming it directly removes passes (2) and
+  the attention's own quantize. Biggest single lever.
+- **Use AWQ (not our gemm_w8a8) for W8A8** — it is faster on every shape (kernel 0.95–1.41× vs our
+  0.41–1.03×); precompute its `asc` and avoid the output slice (use N%128 or a fused slice).
+- **C192 (K=192) is fundamentally hard** — even the AWQ kernel is only ~parity (short-K, memory-bound);
+  don't expect a matmul win there regardless.
+
+Attention QKᵀ/AV is the same story: the int kernels are faster in isolation (1.45×/1.71× at T=1024,
+§2) but the materialization IO + surrounding quantize eat it; the fix is the same (int-output fusion),
+short of a quantized flash kernel (out of scope).
+
 ## Verdict
 
 - **int8/int4 do beat fp16** (1.33× / 1.51× e2e, precision-isolated) — the desired speedup is real.
 - **It's a conv win, capped by Amdahl.** Conv quantization gives 1.4×/1.8×; the qkv/proj-linear +
-  materialized-attention matmul doesn't improve (short-K / memory-bound), and matmul is only ~40% of
-  the pipeline — so e2e lands at ~1.3–1.5×, not 2×/4×. To go further, the leverage is the qkv/proj
-  short-K linear GEMM and the memory-bound softmax/elementwise, not more precision reduction.
+  materialized-attention matmul doesn't improve *as deployed*, and matmul is only ~40% of the pipeline
+  — so e2e lands at ~1.3–1.5×, not 2×/4×.
+- **The headroom is fusion, not faster kernels (§5).** Kernel-only, AWQ w8a8 and w4a4 already beat fp16
+  for K≥384 (up to 1.4–1.6×); the deployed linears lose only because of per-call quantize/fp16-dequant
+  overhead. Fusing the activation-quantize into producers + emitting int8 output (the qkv→attention
+  boundary re-quantizes anyway) should recover most of that. Switch W8A8 to AWQ (faster than our
+  gemm_w8a8 on every shape). C192 (K=192) stays hard (short-K, ~parity even kernel-only).
 
 ## Files
 `scripts/mkplots.py` (reads `../static_vs_dynamic_2026-07-16/data/` measured CSVs). Plots `01`…`05`.
