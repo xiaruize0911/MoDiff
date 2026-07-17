@@ -239,6 +239,7 @@ torch::Tensor attn_av_int4(torch::Tensor P, torch::Tensor Vt, torch::Tensor sp, 
 std::vector<torch::Tensor> quantize_attn_qkv(torch::Tensor Q, torch::Tensor K, torch::Tensor V, int64_t hp_qk, int64_t hp_av, int64_t bits);
 // static (calibrated) score path: no runtime max/absmax reductions
 std::vector<torch::Tensor> attn_softmax_requant_static(torch::Tensor S, double c);
+std::vector<torch::Tensor> attn_softmax_requant_s8(torch::Tensor S, double sS, double c);  // int8-score softmax
 std::vector<torch::Tensor> attn_softmax_requant4_static(torch::Tensor S, double c);
 std::vector<torch::Tensor> attn_softmax_fp16(torch::Tensor S, bool static_c, double c);
 std::vector<torch::Tensor> quantize_attn_qkv_static(torch::Tensor Q, torch::Tensor K, torch::Tensor V, int64_t hp_qk, int64_t hp_av, int64_t bits, double sq_c, double sk_c, torch::Tensor sv_vec);

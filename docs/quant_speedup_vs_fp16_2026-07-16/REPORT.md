@@ -261,6 +261,38 @@ standard attention), or (b) **lower-precision scores** (int8/fp8 S instead of fp
 pass — but softmax needs enough logit precision, so this trades quality. No amount of GEMM/quantize
 fusion helps here, consistent with §6a's neutral e2e result.
 
+## 8. Prototype: int8 attention scores (fewer T×T bytes) (`int8_score.py`, `int8_score.csv`)
+
+§7 said the only real attention lever left is **fewer T×T bytes**. Prototyped storing the score matrix S
+as **int8** (1 B) instead of fp16 (2 B) — a new softmax kernel `attn_softmax_requant_s8` reads int8 S,
+dequants `logit = S_i8 · sS` (per-tensor `sS = |S|max/127`), and does the 1-pass static-c softmax → int8 P.
+
+| shape | softmax fp16-S µs | softmax int8-S µs | speedup | rel fp16-S | rel int8-S |
+|---|--:|--:|--:|--:|--:|
+| T=1024 | 1373 | **1028** | **1.34×** | 0.2193 | 0.2199 |
+| T=256 | 234 | 235 | 1.00× | 0.2242 | 0.2245 |
+| T=64 | 57 | 58 | 0.99× | 0.2583 | 0.2585 |
+
+**Findings:**
+- **int8 scores are quality-free.** int8-S adds only **+0.0006 rel-err** over fp16-S (0.2199 vs 0.2193) —
+  the score-precision reduction is negligible. (The ~0.22 absolute is the *static-c softmax* loss from §7,
+  a separate axis; int8 S does not add to it. With a per-row softmax it would be ~0.03, and int8-S would
+  still track fp16-S.)
+- **Softmax is 1.34× faster at the dominant T=1024** — the read-bound block, where halving the S read
+  (512→256 MiB) shows directly. Small-T blocks are launch/latency-bound (softmax at 8–30% of peak, §7),
+  so halving their read doesn't help — but they are cheap in absolute terms.
+- **The other half is the QKᵀ write:** QKᵀ currently writes S in fp16 (512 MiB, §7 shows it at 59% of
+  peak, write-bound). An int8-output QKᵀ epilogue would halve that too (~272 MiB), for an estimated
+  ~1.4–1.9× on QKᵀ — a straightforward follow-up (same kernel, packed-int8 store) not built here.
+
+![int8 scores prototype](08_int8_score.png)
+
+**Verdict on int8 scores:** this is the **first attention lever that actually pays and is ~free** — it
+attacks the memory-bound T×T traffic directly (not the compute the roofline showed was already saturated).
+Measured 1.34× on the dominant softmax at zero quality cost; with an int8-S QKᵀ epilogue the full int8-S
+path would ~halve both T×T passes. It's the right direction for further attention speedup (short of a
+quantized-flash kernel), and unlike deeper Q/K/V quantization it targets the actual bottleneck.
+
 ## Verdict
 
 - **int8/int4 beat the *materialized* fp16 baseline** (1.33× / 1.51× e2e) — but see the next point on

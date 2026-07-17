@@ -127,6 +127,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // static (calibrated) score path -- no runtime reductions
     m.def("attn_softmax_requant_static", &attn_softmax_requant_static,
           "static-max softmax(S, c) -> {P int8 [BH,T,T], sp}; single read of S (no max pass)");
+    m.def("attn_softmax_requant_s8", &attn_softmax_requant_s8,
+          "int8-SCORE softmax(S_int8, sS, c) -> {P int8, sp}; halves the T*T score read");
     m.def("attn_softmax_requant4_static", &attn_softmax_requant4_static,
           "static-max softmax(S, c) -> {PACKED int4 P [BH,T,T/2], sp}");
     m.def("attn_softmax_fp16", &attn_softmax_fp16,

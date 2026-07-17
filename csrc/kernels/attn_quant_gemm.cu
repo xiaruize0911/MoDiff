@@ -864,3 +864,46 @@ std::vector<torch::Tensor> quantize_attn_qkv_from_i8(torch::Tensor qkv_i8, torch
   aq_vquant_trans_from_i8_kernel<<<BH * (int)hp_av, 256, 0, s>>>(Qp, Ip, sv.data_ptr<float>(), vt.data_ptr<int8_t>(), (int)nh, hd, (int)hp_av, (int)T, C3);
   return {qi, ki, vt, sq, sk, sv};
 }
+
+// ==================== int8-SCORE softmax (lower-precision S) ====================
+// Prototype for §7's "fewer T×T bytes" lever: store the attention score matrix S as int8 (1 byte)
+// instead of fp16 (2 bytes), halving the dominant softmax read (and, with an int8-S QKᵀ, the write).
+// Reads int8 S, dequants logit = S_i8 * sS (per-tensor scale sS = calib_absmax/127), 1-pass static-c
+// softmax -> int8 P + per-row sp. Same output as attn_softmax_requant_static, half the S read.
+__global__ void attn_softmax_requant_s8_kernel(const int8_t* __restrict__ S, int8_t* __restrict__ P,
+                                               float* __restrict__ sp, int T, float sS, float c) {
+  const int row = blockIdx.x;
+  const int2* Srow = reinterpret_cast<const int2*>(S + (size_t)row * T);   // 8 int8 scores / load
+  int2* Prow = reinterpret_cast<int2*>(P + (size_t)row * T);               // 8 int8 P / store
+  const int tid = threadIdx.x, nt = blockDim.x, T8 = T >> 3;
+  __shared__ float red[AQ_SM_THREADS];
+  float sum = 0.f;
+  for (int cc = tid; cc < T8; cc += nt) {
+    int2 v = Srow[cc]; int b0 = 0, b1 = 0;
+#pragma unroll
+    for (int k = 0; k < 8; ++k) {
+      int raw = (k < 4) ? (v.x >> (k * 8)) : (v.y >> ((k - 4) * 8));
+      float logit = (float)((signed char)(raw & 0xFF)) * sS;      // dequant int8 score
+      float e = __expf(logit - c); sum += e;
+      int q = __float2int_rn(e * 127.f); q = q < 0 ? 0 : (q > 127 ? 127 : q);
+      if (k < 4) b0 |= q << (k * 8); else b1 |= q << ((k - 4) * 8);
+    }
+    Prow[cc] = make_int2(b0, b1);
+  }
+  red[tid] = sum; __syncthreads();
+  for (int s = nt >> 1; s > 0; s >>= 1) { if (tid < s) red[tid] += red[tid + s]; __syncthreads(); }
+  if (tid == 0) sp[row] = 1.f / (127.f * fmaxf(red[0], 1e-20f));
+}
+
+// S int8 [BH,T,T] (dequant sS), static c -> {P int8 [BH,T,T], sp [BH,T]}
+std::vector<torch::Tensor> attn_softmax_requant_s8(torch::Tensor S, double sS, double c) {
+  TORCH_CHECK(S.is_cuda() && S.dtype() == torch::kChar && S.dim() == 3, "S int8 [BH,T,T]");
+  S = S.contiguous();
+  int BH = S.size(0), T = S.size(2);
+  TORCH_CHECK(S.size(1) == T && T % 8 == 0, "S [BH,T,T], T%8==0");
+  auto P = torch::empty({BH, T, T}, torch::TensorOptions().dtype(torch::kChar).device(S.device()));
+  auto sp = torch::empty({BH, T}, torch::TensorOptions().dtype(torch::kFloat32).device(S.device()));
+  attn_softmax_requant_s8_kernel<<<BH * T, AQ_SM_THREADS, 0, at::cuda::getCurrentCUDAStream()>>>(
+      S.data_ptr<int8_t>(), P.data_ptr<int8_t>(), sp.data_ptr<float>(), T, (float)sS, (float)c);
+  return {P, sp};
+}
