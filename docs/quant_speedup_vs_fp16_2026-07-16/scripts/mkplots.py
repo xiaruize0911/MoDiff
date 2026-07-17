@@ -48,7 +48,7 @@ if pf:
         ax.text(i - w/2, conv[i], f"{conv[i]:.1f}", ha="center", va="bottom", fontsize=8)
         ax.text(i + w/2, gemm[i], f"{gemm[i]:.1f}", ha="center", va="bottom", fontsize=8)
     ax.set_xticks(x); ax.set_xticklabels([n for _, n, _ in modes]); ax.set_ylabel("GPU-busy ms/step")
-    ax.set_title("Matmul by type: conv quantization delivers; qkv/proj+attn does NOT (short-K wall)")
+    ax.set_title("Matmul by type (e2e profiler): conv shrinks with int; qkv/proj+attn MERGED bucket flat\n(merged hides the attn gain behind the slow int linear — see 02b for the attention split)")
     ax.legend(); save(fig, "02_matmul_breakdown.png")
 
 # ---- 3. Amdahl: where the time goes (stacked), fp16 vs int8-static vs int4-static ----
@@ -133,4 +133,19 @@ if mm:
     ax.set_ylabel("achieved DRAM GB/s"); ax.set_ylim(0, 760); ax.legend()
     ax.set_title("Softmax / score-matrix kernels are DRAM-bandwidth-bound (T=1024, A40)")
     save(fig, "07_softmax_mem_roofline.png")
+# ---- 2b. attention op-by-op speedup vs fp16 (QKᵀ / softmax / AV), T=1024 ----
+ao = rd(D, "attn_ops.csv")
+if ao:
+    r10 = {r["op"]: r for r in ao if int(r["T"]) == 1024}
+    ops = ["QKT", "softmax", "AV"]; x = np.arange(len(ops)); w = 0.38
+    i8 = [float(r10[o]["int8_speedup"]) for o in ops]; i4 = [float(r10[o]["int4_speedup"]) for o in ops]
+    fig, ax = plt.subplots(figsize=(8, 4.6))
+    ax.bar(x - w/2, i8, w, label="int8", color=INT8); ax.bar(x + w/2, i4, w, label="int4", color=INT4)
+    ax.axhline(1.0, ls="--", c=FP16, lw=1, label="fp16 (=1.0)")
+    for i in range(len(ops)):
+        ax.text(i - w/2, i8[i], f"{i8[i]:.2f}×", ha="center", va="bottom", fontsize=8)
+        ax.text(i + w/2, i4[i], f"{i4[i]:.2f}×", ha="center", va="bottom", fontsize=8)
+    ax.set_xticks(x); ax.set_xticklabels(["QKᵀ", "softmax", "AV"]); ax.set_ylabel("speedup vs fp16")
+    ax.set_title("Attention op-by-op: matmuls (QKᵀ, AV) DO speed up; softmax is memory-bound (T=1024)")
+    ax.legend(); save(fig, "02b_attn_ops.png")
 print("plots done")

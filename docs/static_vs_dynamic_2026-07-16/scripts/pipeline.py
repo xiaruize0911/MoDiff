@@ -43,7 +43,8 @@ def bucket(name):
     if "group_norm" in l or "groupnorm" in l or "rowwisemoments" in l or "computefused" in l: return "GroupNorm"
     if ("gn_accum" in l or "gn_finalize" in l or "fused_gn" in l): return "GroupNorm"
     if "cudnn" in l or "implicit" in l or "fprop" in l or "scudnn" in l or "wgrad" in l or "conv2d" in l: return "conv (GEMM)"
-    if "gemm" in l or "cutlass" in l or "cublas" in l or "bmm" in l: return "GEMM (qkv/proj + attn QK·AV)"
+    if "bmm_qk" in l or "bmm_av" in l: return "attn QKᵀ/AV (int GEMM)"   # int8/int4 attn matmuls (named)
+    if "gemm" in l or "cutlass" in l or "cublas" in l or "bmm" in l: return "qkv/proj GEMM (+ fp16 attn bmm)"
     if ("quantize" in l or "dequant" in l or "sub_absmax" in l or "delta" in l or "o_hat" in l
             or "step1" in l or "pack" in l or "absmax" in l or "aq_" in l): return "quantize / absmax"
     if "store" in l or "epilogue" in l or "requant" in l: return "conv store epilogue"

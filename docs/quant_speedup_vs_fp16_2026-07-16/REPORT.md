@@ -56,18 +56,34 @@ and `conv (GEMM)` is separate), which *is* comparable across precisions.
 | **qkv/proj + attn QKᵀ/AV** | 13.6 | 14.5 (0.93×) | 12.4 (1.1×) |
 | combined matmul | 27.0 | 24.1 | 19.8 |
 
-**Conv quantization delivers; qkv/proj+attn does not.** The int qkv/proj linears are short-K,
-memory-bound, and don't beat cuBLAS fp16 (documented kernel wall); the materialized attention is
-memory-bound. So the matmul win is conv-only.
+**The merged `qkv/proj + attn QKᵀ/AV` bucket is misleading** — it lumps two ops that move in opposite
+directions. Split apart (profiler now separates `attn QKᵀ/AV (int GEMM)` via the `bmm_qk/av` kernels):
+
+- **conv (GEMM): quantization delivers** — int8 1.4×, int4 1.8×.
+- **qkv/proj linear: quantization *hurts*** — the linears are short-K (K=192–768), memory-bound, and
+  don't beat cuBLAS fp16 (§5 kernel wall, 0.4–1.0×).
+- **attention QKᵀ/AV: quantization *delivers*** — the gain was hidden by the slow int linear in the
+  merged bucket.
 
 ![Matmul breakdown](02_matmul_breakdown.png)
 
-Attention *in isolation* IS faster in int (from `attn_kernel_speed.csv`, T=1024): fp16 5807 µs →
-int8 4016 (1.45×) → int4 3398 (1.71×) — the tensor-core advantage is real, it just gets masked in the
-bucket by the slow int qkv/proj linears next to it (and disappears at small T where quant overhead
-dominates).
+**Attention op-by-op, isolated (fp16 vs int8 vs int4, T=1024, `attn_ops.csv`):**
 
-![Attention kernel micro](04_attn_micro.png)
+| attention op | fp16 µs | int8 | int4 |
+|---|--:|--:|--:|
+| QKᵀ (writes fp16 S) | 2906 | 1356 (**2.14×**) | 1386 (**2.10×**) |
+| softmax | 1867 | 1806 (1.03×) | 1792 (1.04×) |
+| AV (reads T×T P) | 976 | 824 (1.18×) | 463 (**2.11×**) |
+
+So the attention **matmuls do speed up 2–4×** (QKᵀ 2.1×; AV 1.2× int8 / 2.1× int4 — int4's packed P
+halves the T×T read again). Only **softmax is precision-neutral** (~1.0×): it is bandwidth-bound on the
+**fp16 score matrix S**, which stays fp16 for numerical range regardless of Q/K/V precision, so quantizing
+the operands doesn't shrink its dominant traffic (§7). QKᵀ's 2.1× is partly the scale-fold (fp16 pays a
+separate `S*scale` pass) and partly int8 operands; AV's win is the smaller int P read. Net: quantization
+**does** accelerate attention — the earlier "no benefit" was the merged bucket masking it behind the slow
+int qkv/proj linear.
+
+![Attention op-by-op speedup](02b_attn_ops.png)
 
 ## 3. Why not 2× / 4×? — Amdahl (`kernel_profile.csv`)
 
