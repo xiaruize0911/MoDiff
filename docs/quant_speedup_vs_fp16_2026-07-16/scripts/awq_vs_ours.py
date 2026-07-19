@@ -4,6 +4,7 @@ quantize/dequant plumbing. Reports time, speedup vs fp16, and effective TFLOPS (
 Emits awq_vs_ours.csv."""
 import os, sys, csv
 os.chdir("/workspace/MoDiff"); sys.path.insert(0, "/workspace/MoDiff")
+sys.path.insert(0, "/workspace/llm-awq/awq/kernels")
 import torch, torch.nn.functional as F, modiff_cutlass as mc
 try: import awq_inference_engine as _awq
 except Exception: _awq = None

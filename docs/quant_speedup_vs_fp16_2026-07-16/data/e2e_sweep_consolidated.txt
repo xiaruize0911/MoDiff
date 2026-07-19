@@ -1,0 +1,15 @@
+=== fp16 (baseline) ===
+  rep1: 1.83 ms/step
+  rep2: 1.93 ms/step
+  rep3: 1.84 ms/step
+  MIN: 1.83 ms/step
+=== int8 (AWQ-tiling port) ===
+  rep1: 2.27 ms/step
+  rep2: 2.33 ms/step
+  rep3: 2.22 ms/step
+  MIN: 2.22 ms/step
+=== int4 (AWQ-tiling port) ===
+  rep1: 2.12 ms/step
+  rep2: 2.26 ms/step
+  rep3: 2.10 ms/step
+  MIN: 2.10 ms/step

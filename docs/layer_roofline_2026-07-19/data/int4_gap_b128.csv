@@ -1,0 +1,5 @@
+config,mean_ms,rel_vs_fp16,qkv_fused,proj_fused
+fp16,187.662,0.0,0,0
+int8_baseline fuse-on,177.849,0.1351,21,21
+int4_baseline fuse-OFF,177.155,0.1535,0,0
+int4_baseline fuse-ON,176.997,0.1589,16,16

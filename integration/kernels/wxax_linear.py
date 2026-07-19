@@ -1,7 +1,7 @@
 """Weight+activation int quantized Linear (W8A8 / W4A4), static scales, for the
 UNet Linear-equivalent layers. One strategy parameterized by bit-width:
 per-output-channel symmetric weights + static per-tensor symmetric activations,
-running the custom int tensor-core GEMM (`gemm_w8a8` / `gemm_w4a4`).
+running the AWQ-tiling int tensor-core GEMM (`gemm_w8a8_awq` / `gemm_w4a4_awq`).
 
 Weights are quantized once at construction (static). The activation scale is
 static (set by calibration via `set_a_scale`); if unset, a dynamic per-tensor
@@ -10,30 +10,25 @@ absmax scale is used as a fallback (non-CUDA-graph).
 Eligibility (else keep fp16, handled by the converter): out%64==0 and
 in%32==0 (int8) / in%64==0 (int4).
 """
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# Sole Linear-GEMM backend: the AWQ-tiling ports gemm_w8a8_awq / gemm_w4a4_awq
+# (ldmatrix + XOR bank-swizzle + 128-wide-N tile). These replaced an older hand-written
+# family (gemm_w8a8/gemm_w4a4) and AWQ's external reference as the production path on
+# 2026-07-18 -- they beat every prior option at the kernel level (int8 vs fp16 1.1-1.4x
+# and vs AWQ-ref 4/6 shapes; int4 vs fp16 up to 2.29x, no AWQ int4 kernel exists). See
+# docs/quant_speedup_vs_fp16_2026-07-16/. Weights are padded once at construction to the
+# kernel tile requirement (N%128 for both; K%64 int8 / K%128 int4); activations get the
+# matching zero-pad at call time.
 try:
     import modiff_cutlass as _mc
-    _HAS = hasattr(_mc, "gemm_w8a8") and hasattr(_mc, "gemm_w4a4")
+    _HAS = hasattr(_mc, "gemm_w8a8_awq") and hasattr(_mc, "gemm_w4a4_awq")
 except Exception:
     _mc = None
     _HAS = False
-
-# W8A8 projection GEMM backend: AWQ's tuned w8a8 kernel is DEFAULT for eligible shapes
-# (measured 1.28-1.44x faster than cuBLAS fp16 on the qkv/proj shapes, beating our own
-# gemm_w8a8 there; numerically matches, rel 4e-4). Falls back to gemm_w8a8 for shapes AWQ
-# can't take (needs out_features%128==0 and in_features%64==0). MODIFF_WXAX_NO_AWQ=1 forces
-# our kernel.  See docs/comprehensive_benchmark_2026-07-16 (AWQ-attention check).
-import os as _os, sys as _sys
-_awq = None
-if _os.environ.get("MODIFF_WXAX_NO_AWQ") != "1":
-    try:
-        _sys.path.insert(0, "/workspace/llm-awq/awq/kernels")
-        import awq_inference_engine as _awq
-    except Exception:
-        _awq = None
 
 
 def _pack4(q):  # q int8 [...,K] in [-7,7] -> [...,K/2] int8 (2 int4/byte, low nibble = even)
@@ -59,28 +54,33 @@ class QuantLinearWxAx(nn.Module):
         W = lin.weight.detach().float()                       # [N,K]
         s = (W.abs().amax(1).clamp_min(1e-8) / self.Q)        # per-output-channel [N]
         Wq = torch.round(W / s.unsqueeze(1)).clamp(-self.Q, self.Q).to(torch.int8)
-        self.register_buffer("w_scale", s.to(torch.float32).contiguous())
-        self.register_buffer("qweight", _pack4(Wq) if bits == 4 else Wq.contiguous())
-        # AWQ w8a8 (large-M CTA_M=128 tiling) is the effective W8A8 backend when in%64==0.
-        # It needs N%128; for N not %128 we pad the weight rows to the next multiple of 128
-        # (offline) and slice the output — brings the large-M/short-K qkv (e.g. C192 N=576->640)
-        # from 0.41x cuBLAS on our kernel to ~0.97x (near-parity). N%128 shapes use AWQ directly.
-        self._awq_N = 0          # padded N for AWQ (0 = no AWQ / no pad)
-        if bits == 8 and _awq is not None and lin.in_features % 64 == 0 and lin.out_features >= 128:
-            self._awq_N = ((lin.out_features + 127) // 128) * 128
-            pad = self._awq_N - lin.out_features
-            if pad:
-                Wq = F.pad(Wq, (0, 0, 0, pad))              # [N_pad, K] zero rows
-                s = F.pad(s, (0, pad), value=1.0)           # padded wscale (sliced off; avoid 0)
-                self.qweight = Wq.contiguous()
-        self._use_awq = self._awq_N > 0
-        self.register_buffer("w_scale_half", s.to(torch.float16).contiguous())  # [N_pad] for AWQ w8a8
+        # The AWQ-tiling ports need N%128 and K%(64 int8 / 128 int4). Pad the logical weight to
+        # [N_pad, K_pad] with zeros (zero rows/cols contribute 0 to the dot product), pad the fp32
+        # wscale with 1.0 (padded output cols are sliced off after the GEMM), then (int4) pack two
+        # nibbles/byte. Activations get the matching K zero-pad at call time in _gemm.
+        Kmul = 64 if bits == 8 else 128
+        self._awqt_K = ((self.in_features + Kmul - 1) // Kmul) * Kmul
+        self._awqt_N = ((self.out_features + 127) // 128) * 128
+        Wq_p = F.pad(Wq, (0, self._awqt_K - self.in_features, 0, self._awqt_N - self.out_features))
+        s_p = F.pad(s, (0, self._awqt_N - self.out_features), value=1.0)
+        self.register_buffer("qweight", _pack4(Wq_p) if bits == 4 else Wq_p.contiguous())
+        self.register_buffer("w_scale", s_p.to(torch.float32).contiguous())
         self.register_buffer("bias", lin.bias.detach().half().contiguous() if lin.bias is not None else None)
         self.a_scale = None                                    # static activation scale (calibrated)
         self._calib = False
         self._amax = 0.0
         self.a_hat = None                                      # MoDiff temporal caches (modiff mode)
         self.o_hat = None
+        # int8-OUTPUT GEMM (output-fusion fix): the GEMM writes int8 (half the M*N output write) and the
+        # per-column dequant is fused into the bias add (out = int8·out_scale + bias, one epilogue op that
+        # replaces the plain +bias). Needs a calibrated per-column output scale. Engages only when bias is
+        # present (so dequant folds into it, not an extra pass) and not modiff. Gate MODIFF_LINEAR_OUT_I8=1.
+        self._out_i8 = (not modiff and lin.bias is not None
+                        and os.environ.get("MODIFF_LINEAR_OUT_I8") == "1"
+                        and hasattr(_mc, "gemm_w8a8_awq_out_i8"))
+        self._out_amax = None      # [out_features] calibrated per-column output absmax
+        self._inv_out_scale = None # [N_pad] f32 = 127/absmax (padded cols = 1)
+        self._out_scale = None     # [out_features] f16 = absmax/127 (dequant multiplier)
 
     def set_a_scale(self, s):
         self.a_scale = float(s)
@@ -90,20 +90,20 @@ class QuantLinearWxAx(nn.Module):
         self.o_hat = None
 
     def _gemm(self, xf, a_scale):
-        """xf: fp16 [M,K] -> fp16 [M,N] (quantize + int GEMM)."""
+        """xf: fp16 [M,K] -> fp16 [M,N] (quantize + AWQ-tiling int GEMM). Zero-pad the
+        activation K to the kernel tile width, quantize, GEMM, slice N back to out_features.
+        The kernel returns a fresh output tensor each call (no scratch aliasing)."""
+        if self._awqt_K != self.in_features:
+            xf = F.pad(xf, (0, self._awqt_K - self.in_features)).contiguous()
         if self.bits == 8:
             xq = _mc.quantize_act_int8(xf, a_scale)
-            if self._use_awq:
-                # AWQ w8a8 (N padded to %128; output sliced back to out_features). Static
-                # per-tensor a_scale -> constant per-token ascales. Near-cuBLAS on large-M qkv/proj.
-                M = xq.shape[0]
-                asc = torch.full((M,), a_scale, device=xq.device, dtype=torch.float16)
-                out = torch.empty(M, self._awq_N, device=xq.device, dtype=torch.float16)
-                _awq.w8a8_gemm_forward_cuda(xq, self.qweight, self.w_scale_half, asc, out)
-                return out[:, :self.out_features] if self._awq_N != self.out_features else out
-            return _mc.gemm_w8a8(xq, self.qweight, self.w_scale, a_scale)
+            if self._awqt_N != self.out_features:   # padded N -> write unpadded (no slice-copy)
+                return _mc.gemm_w8a8_awq_nout(xq, self.qweight, self.w_scale, a_scale, self.out_features)
+            return _mc.gemm_w8a8_awq(xq, self.qweight, self.w_scale, a_scale)
         xq = _mc.quantize_act_int4_pack(xf, a_scale)
-        return _mc.gemm_w4a4(xq, self.qweight, self.w_scale, a_scale, self.in_features)
+        if self._awqt_N != self.out_features:   # padded N -> write unpadded (no slice-copy)
+            return _mc.gemm_w4a4_awq_nout(xq, self.qweight, self.w_scale, a_scale, self._awqt_K, self.out_features)
+        return _mc.gemm_w4a4_awq(xq, self.qweight, self.w_scale, a_scale, self._awqt_K)
 
     def forward(self, x):
         orig = x.shape
@@ -120,9 +120,25 @@ class QuantLinearWxAx(nn.Module):
             self.a_hat = self.a_hat + q * d_scale                       # dequantized-delta reconstruction
             self.o_hat = self.o_hat + self._gemm(q.half().contiguous(), d_scale)
             out = self.o_hat
+        elif self._out_i8 and self._inv_out_scale is not None:
+            # int8-OUTPUT GEMM (output-fusion): GEMM writes int8 (half the M*N output write); the
+            # per-column dequant is fused into the bias add via dequant_bias_i8 (one epilogue op).
+            a_scale = self.a_scale if self.a_scale is not None else ((xf.abs().max().item() / self.Q) or 1e-8)
+            xfp = F.pad(xf, (0, self._awqt_K - self.in_features)).contiguous() if self._awqt_K != self.in_features else xf
+            if self.bits == 8:
+                oi8 = _mc.gemm_w8a8_awq_out_i8(_mc.quantize_act_int8(xfp, a_scale), self.qweight, self.w_scale, a_scale, self._inv_out_scale)
+            else:
+                oi8 = _mc.gemm_w4a4_awq_out_i8(_mc.quantize_act_int4_pack(xfp, a_scale), self.qweight, self.w_scale, a_scale, self._awqt_K, self._inv_out_scale)
+            if self._awqt_N != self.out_features:
+                oi8 = oi8[:, :self.out_features].contiguous()
+            out = _mc.dequant_bias_i8(oi8, self._out_scale, self.bias)   # fp16 [M,out], dequant + bias fused
+            return out.reshape(*orig[:-1], self.out_features)
         else:
             a_scale = self.a_scale if self.a_scale is not None else ((xf.abs().max().item() / self.Q) or 1e-8)
             out = self._gemm(xf, a_scale)
+            if self._out_i8 and self._calib:                           # calibrate per-column output absmax
+                cur = out.detach().abs().amax(0).float()               # [out_features]
+                self._out_amax = cur if self._out_amax is None else torch.maximum(self._out_amax, cur)
             if self.modiff:                                            # first step: seed the caches
                 q = torch.round(xf / a_scale).clamp_(-self.Q, self.Q)
                 self.a_hat = (q * a_scale).contiguous()
@@ -143,13 +159,20 @@ def set_wxax_calibrating(model, flag):
 
 
 def finalize_wxax_ascale(model):
-    """Set each layer's static activation scale from the calibrated absmax."""
+    """Set each layer's static activation scale from the calibrated absmax, and (for int8-output
+    layers) the per-column output scale from the calibrated output absmax."""
     n = 0
     for m in model.modules():
         if isinstance(m, QuantLinearWxAx) and m._amax > 0:
             m.set_a_scale(m._amax / m.Q)
             m._calib = False
             n += 1
+            if m._out_i8 and m._out_amax is not None:
+                amax = m._out_amax.clamp_min(1e-6).to(m.qweight.device)      # [out_features]
+                inv = torch.ones(m._awqt_N, device=amax.device, dtype=torch.float32)
+                inv[:m.out_features] = 127.0 / amax
+                m._inv_out_scale = inv.contiguous()                          # [N_pad], padded cols = 1
+                m._out_scale = (amax / 127.0).to(torch.float32).contiguous() # [out_features] dequant mult
     return n
 
 

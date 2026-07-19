@@ -1,0 +1,18 @@
+mode,bucket,ms_step
+fp16,other,0.1379
+fp16,elementwise / copy,3.7329
+fp16,conv store epilogue,0.8981
+fp16,qkv/proj GEMM (+ fp16 attn bmm),6.3804
+fp16,conv (GEMM),7.7579
+fp16,GroupNorm,2.7333
+fp16,attention (softmax),5.2765
+fp16,upsample / concat,0.486
+int8,other,1.5572
+int8,elementwise / copy,4.4474
+int8,quantize / absmax,1.4761
+int8,conv store epilogue,0.7697
+int8,qkv/proj GEMM (+ fp16 attn bmm),6.8927
+int8,conv (GEMM),6.7049
+int8,GroupNorm,3.1066
+int8,attention (softmax),5.2769
+int8,upsample / concat,0.4867

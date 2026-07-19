@@ -14,11 +14,11 @@ token-major ([N, T, C]) makes copies (1) and (3)'s reshapes free views of the
 channels_last memory, and feeds SDPA strided views without `.contiguous()`.
 Only the post-attention transpose (SDPA output [N,H,T,hd] -> [N,T,C]) remains.
 
-Attention runs on the explicit **math (standard, non-flash) SDPA backend** on every
-layer and mode (see `_SDPA_CTX`): QKᵀ / softmax / AV stay materialized cuBLAS GEMMs that
-the int8/int4 modes quantize (MoDiff is a fully-quantized method). PyTorch flash /
-mem-efficient SDPA is fp16-only/opaque and is not used anywhere. fp16 math attention is
-the standard-attention baseline the quantized attention is measured against.
+Attention defaults to the **flash-preferring SDPA backend** (see `_SDPA_CTX`):
+PyTorch FlashAttention-2 keeps the [BH,T,T] scores in SRAM and never materializes
+them to HBM — ~9x faster than the MATH backend at the churches shapes. The old
+materialized MATH backend (`_SDPA_MATH_CTX`, or MODIFF_SDPA_BACKEND=math) is the
+quantizable-attention baseline the int8/int4 quantized paths are measured against.
 
 Weights are copied bit-for-bit from the Conv1d layers, so the result is
 numerically identical up to GroupNorm-kernel / SDPA rounding (~1e-3 e2e).
@@ -32,21 +32,31 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# Attention runs on the explicit MATH SDPA backend on EVERY layer and mode: MoDiff is a
-# fully-quantized method, so QKᵀ/softmax/AV are kept as standard (materialized) ops that
-# the int8/int4 modes quantize (see quantized_std_attention.py). PyTorch's flash /
-# mem-efficient SDPA is fp16-only and opaque, so it is not used anywhere — this is the
-# permanent design, not a toggle. (fp16 math attention is the standard-attention baseline.)
+# The fp16 attention SDPA backend. DEFAULT = flash-preferring: enable
+# [flash, mem-efficient, math] and let PyTorch dispatch to the fastest that
+# supports the shape (flash first). FlashAttention-2 keeps the [BH,T,T] scores in
+# SRAM (never materialized to HBM) -> measured ~9x faster than MATH at the churches
+# shapes (hd=24: 16224us -> 1809us). `_SDPA_MATH_CTX` forces the old materialized
+# MATH backend (used as the quantizable-attention baseline and for A/B benchmarks;
+# set MODIFF_SDPA_BACKEND=math to make it the default again).
+_SDPA_PREFER = os.environ.get("MODIFF_SDPA_BACKEND", "flash").lower()
 try:
     from torch.nn.attention import sdpa_kernel, SDPBackend
-    _SDPA_CTX = lambda: sdpa_kernel(SDPBackend.MATH)
+    _FLASH_ORDER = [SDPBackend.FLASH_ATTENTION, SDPBackend.EFFICIENT_ATTENTION, SDPBackend.MATH]
+    _SDPA_MATH_CTX = lambda: sdpa_kernel(SDPBackend.MATH)
+    _SDPA_FLASH_CTX = lambda: sdpa_kernel(_FLASH_ORDER)
+    _SDPA_CTX = _SDPA_MATH_CTX if _SDPA_PREFER == "math" else _SDPA_FLASH_CTX
 except Exception:  # pragma: no cover - older torch
     from contextlib import contextmanager
     @contextmanager
-    def _SDPA_CTX():
+    def _SDPA_MATH_CTX():
         with torch.backends.cuda.sdp_kernel(enable_flash=False, enable_mem_efficient=False, enable_math=True):
             yield
-_SDPA_MATH_CTX = _SDPA_CTX  # backward-compat alias
+    @contextmanager
+    def _SDPA_FLASH_CTX():
+        with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_mem_efficient=True, enable_math=True):
+            yield
+    _SDPA_CTX = _SDPA_MATH_CTX if _SDPA_PREFER == "math" else _SDPA_FLASH_CTX
 
 from integration.fused_ops.fused_resblock import _group_norm_silu
 
@@ -60,8 +70,23 @@ except Exception:
 try:
     import modiff_cutlass as _mc
     _HAS_FUSED_GN_QKV = hasattr(_mc, "fused_gn_qkv")
+    _HAS_FUSED_ATTN_OUT = hasattr(_mc, "quantize_attn_out_int8")
+    _HAS_GN_QUANT = hasattr(_mc, "group_norm_silu_quantize_nhwc")
+    _HAS_GN_PACK = hasattr(_mc, "group_norm_silu_quantize_pack_nhwc")      # int4 GN->pack fusion (qkv)
+    _HAS_ATTN_OUT_I4 = hasattr(_mc, "quantize_attn_out_int4_pack")         # int4 proj transpose+quant+pack
+    _HAS_FLASH = hasattr(_mc, "flash_attn_int8")                            # fused int8/int4 flash attention
 except Exception:
     _HAS_FUSED_GN_QKV = False
+    _HAS_FUSED_ATTN_OUT = False
+    _HAS_GN_QUANT = False
+    _HAS_GN_PACK = False
+    _HAS_ATTN_OUT_I4 = False
+    _HAS_FLASH = False
+
+try:
+    from integration.kernels.wxax_linear import QuantLinearWxAx as _QuantLinearWxAx
+except Exception:
+    _QuantLinearWxAx = None
 
 # Constant that absorbs the CUTLASS fprop-fusion ReLU: bias carries +SHIFT so the
 # pre-ReLU value (x-mean)*rstd + SHIFT is always >= 0 (normalized activations are
@@ -108,6 +133,20 @@ class TokenMajorAttentionBlock(nn.Module):
         # Default ON; kill-switch MODIFF_FUSE_GN_QKV=0. Folded conv weight + epilogue
         # bias are built lazily on first forward. See csrc/kernels/fused_gn_qkv.cu.
         self._fuse_gn_qkv = os.environ.get("MODIFF_FUSE_GN_QKV", "1") != "0"
+        # Proj-side quantize fusion: fold the mandatory attn-output transpose+reshape copy
+        # AND the int8 proj Linear's separate quantize pass into ONE gather+quantize kernel
+        # (quantize_attn_out_int8), feeding gemm_w8a8_awq the int8 activation directly. Only
+        # engages once proj is a calibrated, non-modiff W8A8 QuantLinearWxAx; otherwise the
+        # standard transpose+reshape+proj path runs (also used during calibration so proj's
+        # a_scale is captured). Kill-switch MODIFF_FUSE_PROJ_QUANT=0.
+        self._fuse_proj_quant = os.environ.get("MODIFF_FUSE_PROJ_QUANT", "1") != "0"
+        # qkv-side quantize fusion: fold the int8 qkv Linear's separate quantize pass into the
+        # GroupNorm producer via group_norm_silu_quantize_nhwc (GN in fp32 -> int8 directly),
+        # feeding gemm_w8a8_awq without the standalone quantize kernel. Engages only for a
+        # calibrated non-modiff W8A8 qkv with affine GN; else the standard GN + qkv Linear runs
+        # (also during calibration). Kill-switch MODIFF_FUSE_QKV_QUANT=0.
+        self._fuse_qkv_quant = os.environ.get("MODIFF_FUSE_QKV_QUANT", "1") != "0"
+        self._qkv_inv_scale_t = None          # cached [1] fp32 device tensor = 1/qkv.a_scale
         self._fused_ready = False
         self._fused_conv_w = None    # [3C,1,1,C] fp16 KRSC = qkv.weight * gn.weight
         self._fused_epi_bias = None  # [3C] fp16 = qkv.bias + qkv.w@gn.b - SHIFT*colsum(Wf)
@@ -122,6 +161,12 @@ class TokenMajorAttentionBlock(nn.Module):
         self._sm_calib_steps = int(os.environ.get("MODIFF_ATTN_CALIB_STEPS", "8"))
         self._sm_frozen = not self._static_softmax
         self._sm_cn = 0; self._sm_cacc = 0.0; self._sm_c = None
+        # Fused quantized flash attention (revived 2026-07-19). MODIFF_FLASH_ATTN=8|4 routes eligible
+        # blocks through flash_attn_int8 / flash_attn_int4 (dynamic per-token Q/K, per-channel V quant).
+        # DEFAULT 0 = fp16 flash SDPA: the quantized flash kernels are correct but measured SLOWER than
+        # fp16 FlashAttention-2 at these small head dims (int8 0.24x, int4 0.14x of fp16 flash — the work
+        # is softmax-bound and hd=24 wastes the int MMA), so they are opt-in for benchmarking only.
+        self._flash_bits = int(os.environ.get("MODIFF_FLASH_ATTN", "0") or 0)
 
     def _materialized_attn(self, q, k, v):
         """fp16 materialized attention on [b,nh,T,hd]. Dynamic (2-pass max) or, once calibrated,
@@ -150,6 +195,43 @@ class TokenMajorAttentionBlock(nn.Module):
         O = torch.bmm(P, vf) / rs.unsqueeze(-1).half()                   # normalize (rowsum per O-row)
         return O.reshape(b, nh, T, hd)
 
+    def _attn(self, q, k, v, T):
+        """Attention on [b,nh,T,hd]: fp16 materialized (opt-in) else flash-preferring SDPA."""
+        if (self._flash_bits in (8, 4) and _HAS_FLASH and (T % (4 * 16) == 0)
+                and self.head_dim <= 48):     # hd_pad<=64 for the mma flash path
+            return self._flash_quant_attn(q, k, v)
+        if self._materialized and (T % 8 == 0):
+            return self._materialized_attn(q, k, v)
+        with _SDPA_CTX():
+            return F.scaled_dot_product_attention(q, k, v, scale=self.scale)
+
+    def _flash_quant_attn(self, q, k, v):
+        """int8/int4 fused flash attention (opt-in, MODIFF_FLASH_ATTN). Dynamic per-token Q/K and
+        per-channel V quantize, then flash_attn_int8 / flash_attn_int4. q,k,v: [b,nh,T,hd]."""
+        b, nh, T, hd = q.shape
+        if self._flash_bits == 8:
+            hd_pad = ((hd + 31) // 32) * 32
+            sq = (q.abs().amax(-1).clamp_min(1e-8) / 127.0).float()
+            sk = (k.abs().amax(-1).clamp_min(1e-8) / 127.0).float()
+            sv = (v.abs().amax(2).clamp_min(1e-8) / 127.0).float()
+            qi = F.pad(torch.round(q / sq.unsqueeze(-1)).clamp(-127, 127).to(torch.int8), (0, hd_pad - hd)).contiguous()
+            ki = F.pad(torch.round(k / sk.unsqueeze(-1)).clamp(-127, 127).to(torch.int8), (0, hd_pad - hd)).contiguous()
+            vi = F.pad(torch.round(v / sv.unsqueeze(2)).clamp(-127, 127).to(torch.int8), (0, hd_pad - hd)).contiguous()
+            return _mc.flash_attn_int8(qi, ki, vi, sq, sk, sv, self.scale)
+        # int4: QKᵀ int4 (packed), PV int8
+        hdp4, hdp_v = 64, ((hd + 31) // 32) * 32
+        sq = (q.abs().amax(-1).clamp_min(1e-8) / 7.0).float()
+        sk = (k.abs().amax(-1).clamp_min(1e-8) / 7.0).float()
+        sv = (v.abs().amax(2).clamp_min(1e-8) / 127.0).float()
+
+        def pack4(x, s):
+            xi = F.pad(torch.round(x / s.unsqueeze(-1)).clamp(-8, 7).to(torch.int8), (0, hdp4 - hd))
+            lo = (xi[..., 0::2].int() & 0xF); hi = (xi[..., 1::2].int() & 0xF)
+            return (lo | (hi << 4)).to(torch.uint8).view(torch.int8).contiguous()
+        q4, k4 = pack4(q, sq), pack4(k, sk)
+        vi = F.pad(torch.round(v / sv.unsqueeze(2)).clamp(-127, 127).to(torch.int8), (0, hdp_v - hd)).contiguous()
+        return _mc.flash_attn_int4(q4, k4, vi, sq, sk, sv, hdp4, self.scale)
+
     def _gn_params(self, dtype):
         if self._gn_cast_dtype is not dtype:
             self._gn_w = self.norm.weight.detach().to(dtype) if self.norm.weight is not None else None
@@ -176,6 +258,76 @@ class TokenMajorAttentionBlock(nn.Module):
         self._fused_epi_bias = (b + w @ gb - _FUSE_SHIFT * Wf.sum(dim=1)).contiguous().to(torch.float16)
         self._fused_ready = True
 
+    def _apply_proj(self, a, b, T, c):
+        """proj Linear on the head-major attention output a=[b,nh,T,hd].
+        Fused int8 path: fuse the transpose+reshape layout copy and proj's quantize pass
+        into one kernel (quantize_attn_out_int8) -> int GEMM, bypassing proj's own quantize.
+        Falls back to the standard transpose+reshape + proj(.) otherwise (and always during
+        calibration, so proj.a_scale gets captured). Returns h=[b,T,c]."""
+        proj = self.proj
+        if (self._fuse_proj_quant and _HAS_FUSED_ATTN_OUT and _QuantLinearWxAx is not None
+                and isinstance(proj, _QuantLinearWxAx) and proj.bits in (8, 4) and not proj.modiff
+                and proj.a_scale is not None and proj._awqt_K == proj.in_features   # int4: excludes C192
+                and (proj.bits == 8 or _HAS_ATTN_OUT_I4)):
+            if proj.bits == 8:   # fused transpose+int8-quantize -> W8A8 GEMM
+                xq = _mc.quantize_attn_out_int8(a, proj.a_scale)             # int8 [b*T, c]
+                if proj._awqt_N != proj.out_features:                        # padded N -> write unpadded (no slice-copy)
+                    out = _mc.gemm_w8a8_awq_nout(xq, proj.qweight, proj.w_scale, proj.a_scale, proj.out_features)
+                else:
+                    out = _mc.gemm_w8a8_awq(xq, proj.qweight, proj.w_scale, proj.a_scale)
+            else:                # fused transpose+int4-quantize+pack -> W4A4 GEMM
+                xq = _mc.quantize_attn_out_int4_pack(a, proj.a_scale)        # int4 packed [b*T, c/2]
+                out = _mc.gemm_w4a4_awq(xq, proj.qweight, proj.w_scale, proj.a_scale, proj._awqt_K)
+                if proj._awqt_N != proj.out_features:                        # int4 has no unpadded variant -> slice
+                    out = out[:, :proj.out_features].contiguous()
+            h = out.reshape(b, T, c)
+            if proj.bias is not None:
+                h = h + proj.bias
+            return h
+        a = a.transpose(1, 2).reshape(b, T, c)                            # standard layout copy
+        return proj(a)
+
+    def _qkv_from_gn(self, x, b, T, c, nh, hd):
+        """GroupNorm(no SiLU) -> qkv on the channels_last input x=[N,C,H,W]. Returns qkv=[b,T,nh,3,hd].
+        Fused int8 path: group_norm_silu_quantize_nhwc computes GN in fp32 and emits int8 [b*T,c]
+        directly (token-major, a free channels_last view), skipping the qkv Linear's own quantize
+        pass; then gemm_w8a8_awq. Numerically equal to GN(fp16) + quantize_act_int8 up to one fp16
+        rounding on the GN output. Falls back to the standard GN + qkv Linear otherwise (and during
+        calibration, so qkv.a_scale is captured)."""
+        qkv = self.qkv
+        if (self._fuse_qkv_quant and _QuantLinearWxAx is not None and isinstance(qkv, _QuantLinearWxAx)
+                and qkv.bits in (8, 4) and not qkv.modiff and qkv.a_scale is not None
+                and qkv._awqt_K == qkv.in_features   # int4: excludes C192 (needs K%128 pad) -> falls back
+                and x.dtype == torch.float16 and (c % self.norm.num_groups == 0)
+                and ((qkv.bits == 8 and _HAS_GN_QUANT) or (qkv.bits == 4 and _HAS_GN_PACK))):
+            gw, gb = self._gn_params(x.dtype)
+            if gw is not None and gb is not None:
+                if self._qkv_inv_scale_t is None:
+                    self._qkv_inv_scale_t = torch.tensor([1.0 / qkv.a_scale], device=x.device, dtype=torch.float32)
+                empty = x.new_empty(0); ng, eps = self.norm.num_groups, self.norm.eps
+                if qkv.bits == 8:   # GN -> int8 (one kernel) -> W8A8 GEMM
+                    xq_img = _mc.group_norm_silu_quantize_nhwc(x, gw, gb, ng, eps, False, self._qkv_inv_scale_t, empty, empty, empty)
+                    xq = xq_img.permute(0, 2, 3, 1).reshape(b * T, c)     # int8 [b*T, c] token-major (free view)
+                    if qkv._awqt_N != qkv.out_features:                   # padded N -> write unpadded (no slice-copy)
+                        out = _mc.gemm_w8a8_awq_nout(xq, qkv.qweight, qkv.w_scale, qkv.a_scale, qkv.out_features)
+                    else:
+                        out = _mc.gemm_w8a8_awq(xq, qkv.qweight, qkv.w_scale, qkv.a_scale)
+                else:               # GN -> int4-packed (one kernel, gemm_w4a4 layout) -> W4A4 GEMM
+                    xq_img = _mc.group_norm_silu_quantize_pack_nhwc(x, gw, gb, ng, eps, False, self._qkv_inv_scale_t, empty, empty, empty)
+                    xq = xq_img.reshape(b * T, c // 2)                    # int4 packed [b*T, c/2] token-major (free view)
+                    out = _mc.gemm_w4a4_awq(xq, qkv.qweight, qkv.w_scale, qkv.a_scale, qkv._awqt_K)
+                    if qkv._awqt_N != qkv.out_features:                   # int4 has no unpadded variant -> slice
+                        out = out[:, :qkv.out_features].contiguous()
+                out = out.reshape(b, T, qkv.out_features)
+                if qkv.bias is not None:
+                    out = out + qkv.bias
+                return out.view(b, T, nh, 3, hd)
+        # fallback: standard native GroupNorm + int8 qkv Linear
+        w, bnorm = self._gn_params(x.dtype)
+        xn = _group_norm_silu(x, self.norm.num_groups, w, bnorm, self.norm.eps, apply_silu=False)
+        xn_tok = xn.permute(0, 2, 3, 1).reshape(b, T, c)
+        return qkv(xn_tok).view(b, T, nh, 3, hd)
+
     def forward(self, x):
         # x: [N, C, H, W] (channels_last in this pipeline). All the .permute/.reshape
         # below are free views when x is channels_last-contiguous.
@@ -200,36 +352,20 @@ class TokenMajorAttentionBlock(nn.Module):
             qkv = qkv_img.permute(0, 2, 3, 1).reshape(b, T, nh, 3, hd)
             q, k, v = qkv.unbind(3)
             q = q.transpose(1, 2); k = k.transpose(1, 2); v = v.transpose(1, 2)
-            if self._materialized and (T % 8 == 0):
-                a = self._materialized_attn(q, k, v)
-            else:
-                with _SDPA_CTX():                         # explicit MATH SDPA (standard materialized attention)
-                    a = F.scaled_dot_product_attention(q, k, v, scale=self.scale)
-            a = a.transpose(1, 2).reshape(b, T, c)
-            out_tok = x_in_tok + self.proj(a)
+            a = self._attn(q, k, v, T)
+            out_tok = x_in_tok + self._apply_proj(a, b, T, c)
             return out_tok.reshape(b, H, W, c).permute(0, 3, 1, 2)
 
-        # GroupNorm over channels via the native NHWC kernel -> stays channels_last.
-        w, bnorm = self._gn_params(x.dtype)
-        xn = _group_norm_silu(x, self.norm.num_groups, w, bnorm, self.norm.eps, apply_silu=False)
-        xn_tok = xn.permute(0, 2, 3, 1).reshape(b, T, c)
+        # GroupNorm(no SiLU) -> qkv. Fused int8 path folds qkv's quantize into the GN kernel
+        # (group_norm_silu_quantize_nhwc); channel order matches the Conv1d exactly:
+        # (num_heads, {q,k,v}, head_dim). Split into [N,H,T,hd] via views.
+        qkv = self._qkv_from_gn(x, b, T, c, nh, hd)       # [b,T,nh,3,hd]
+        q, k, v = qkv.unbind(3)                            # each [N,T,H,hd] (views)
+        q = q.transpose(1, 2); k = k.transpose(1, 2); v = v.transpose(1, 2)  # [N,H,T,hd]
+        a = self._attn(q, k, v, T)                         # fp16 SDPA / materialized
 
-        # qkv: Linear [N,T,C] -> [N,T,3C]; channel order matches the Conv1d exactly:
-        # (num_heads, {q,k,v}, head_dim). Split into flash layout [N,H,T,hd] via views.
-        qkv = self.qkv(xn_tok).view(b, T, nh, 3, hd)
-        q, k, v = qkv.unbind(3)                       # each [N,T,H,hd] (views)
-        q = q.transpose(1, 2)                          # [N,H,T,hd], last dim stride 1
-        k = k.transpose(1, 2)
-        v = v.transpose(1, 2)
-        if self._materialized and (T % 8 == 0):
-            a = self._materialized_attn(q, k, v)          # [N,H,T,hd]
-        else:
-            with _SDPA_CTX():                             # explicit MATH SDPA (standard materialized attention)
-                a = F.scaled_dot_product_attention(q, k, v, scale=self.scale)  # [N,H,T,hd]
-
-        # [N,H,T,hd] -> [N,T,C] (head-major C), proj, residual, back to channels_last.
-        a = a.transpose(1, 2).reshape(b, T, c)         # only remaining copy
-        h = self.proj(a)
+        # [N,H,T,hd] -> proj (fused transpose+quantize when int8) -> residual, back to channels_last.
+        h = self._apply_proj(a, b, T, c)
         out_tok = x_in_tok + h                          # [N,T,C]
         # [N,T,C] -> [N,H,W,C] -> channels_last [N,C,H,W] (free views).
         return out_tok.reshape(b, H, W, c).permute(0, 3, 1, 2)

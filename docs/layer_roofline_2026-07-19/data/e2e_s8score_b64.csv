@@ -1,0 +1,4 @@
+config,wall_ms_step,rel_vs_fp16
+fp16,96.331,0.0
+int8_baseline dyn-attn (fp16 S),101.198,0.1769
+int8_baseline dyn-attn (int8 S fix),97.746,0.1778

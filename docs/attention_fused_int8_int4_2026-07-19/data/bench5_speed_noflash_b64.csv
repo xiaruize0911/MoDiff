@@ -1,0 +1,6 @@
+version,wall_ms_step,gpu_busy_ms_step,flash_blocks
+fp16,96.065,95.146,0
+int8_baseline,91.098,90.167,0
+int8_modiff,104.164,102.747,0
+int4_baseline,92.26,90.219,0
+int4_modiff,115.263,98.158,0

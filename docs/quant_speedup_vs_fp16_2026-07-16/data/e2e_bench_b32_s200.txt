@@ -1,0 +1,29 @@
+E2E per-step latency: 30 warm-up steps, 5 runs x 200 steps, batch_size=32
+GPU: NVIDIA A40
+
+=== fp16 ===
+  run1: 51.396 ms/step
+  run2: 50.907 ms/step
+  run3: 51.030 ms/step
+  run4: 51.375 ms/step
+  run5: 51.871 ms/step
+  min=50.907  median=51.375  mean=51.315 ms/step
+=== int8 ===
+  run1: 57.009 ms/step
+  run2: 56.836 ms/step
+  run3: 57.422 ms/step
+  run4: 57.712 ms/step
+  run5: 57.259 ms/step
+  min=56.836  median=57.259  mean=57.248 ms/step
+=== int4 ===
+  run1: 53.235 ms/step
+  run2: 54.556 ms/step
+  run3: 55.788 ms/step
+  run4: 55.889 ms/step
+  run5: 56.288 ms/step
+  min=53.235  median=55.788  mean=55.151 ms/step
+
+mode        min   median     mean  min vs fp16
+fp16     50.907   51.375   51.315            -
+int8     56.836   57.259   57.248       1.116x
+int4     53.235   55.788   55.151       1.046x

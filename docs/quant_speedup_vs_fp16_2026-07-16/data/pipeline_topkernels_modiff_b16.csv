@@ -1,0 +1,31 @@
+mode,kernel,ms_step,bucket
+fp16,"void (anonymous namespace)::softmax_warp_forward<c10::Half, c10::Half, float, 10, false, f",4.9293,attention (softmax)
+fp16,void cutlass::Kernel2<cutlass_80_wmma_tensorop_f16_s161616gemm_f16_32x32_32x1_nn_align8>(c,2.5368,qkv/proj GEMM (+ fp16 attn bmm)
+fp16,void cutlass::Kernel2<cutlass_80_wmma_tensorop_f16_s161616gemm_f16_32x32_128x2_nn_align8>(,2.4669,qkv/proj GEMM (+ fp16 attn bmm)
+fp16,"void group_norm_silu_nhwc_kernel<__half>(__half const*, __half*, __half const*, __half con",2.1568,GroupNorm
+fp16,"void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_nocast<at::native:",1.3643,elementwise / copy
+fp16,void cutlass__5x_cudnn::Kernel<cutlass_tensorop_f16_s16816fprop_optimized_f16_64x128_32x6_,1.3535,conv (GEMM)
+fp16,void cutlass__5x_cudnn::Kernel<cutlass_tensorop_f16_s16816fprop_optimized_f16_128x64_32x6_,1.3133,conv (GEMM)
+fp16,void cutlass__5x_cudnn::Kernel<cutlass_tensorop_f16_s16816fprop_optimized_f16_128x128_32x3,0.9912,conv (GEMM)
+fp16,void cutlass__5x_cudnn::Kernel<cutlass_tensorop_f16_s16816fprop_optimized_f16_128x64_64x3_,0.9379,conv (GEMM)
+fp16,void cutlass__5x_cudnn::Kernel<cutlass_tensorop_f16_s16816fprop_optimized_f16_256x64_32x4_,0.8695,conv (GEMM)
+fp16,"void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_nocast<at::native:",0.8328,elementwise / copy
+fp16,_ZN7cutlass6KernelINS_4conv6kernel38ImplicitGemmConvolutionFusionPerSampleINS1_11threadblo,0.736,conv (GEMM)
+fp16,void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::Tenso,0.6443,conv store epilogue
+fp16,sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_wa,0.6037,conv (GEMM)
+fp16,"void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_nocast<at::native:",0.5537,elementwise / copy
+int8,_ZN7cutlass6KernelINS_4conv6kernel23ImplicitGemmConvolutionINS1_11threadblock22ImplicitGem,6.3144,conv (GEMM)
+int8,"void (anonymous namespace)::softmax_warp_forward<c10::Half, c10::Half, float, 10, false, f",4.9295,attention (softmax)
+int8,void cutlass::Kernel2<cutlass_80_wmma_tensorop_f16_s161616gemm_f16_32x32_32x1_nn_align8>(c,2.5336,qkv/proj GEMM (+ fp16 attn bmm)
+int8,void cutlass::Kernel2<cutlass_80_wmma_tensorop_f16_s161616gemm_f16_32x32_128x2_nn_align8>(,2.4655,qkv/proj GEMM (+ fp16 attn bmm)
+int8,"void group_norm_silu_nhwc_kernel<__half>(__half const*, __half*, __half const*, __half con",1.9425,GroupNorm
+int8,"void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_nocast<at::native:",1.6357,elementwise / copy
+int8,"scale_accumulate_half_cache_kernel(float const*, float const*, __half*, int, int)",1.1144,other
+int8,"gemm_w8a8_kernel_awq(signed char const*, signed char const*, float const*, float, __half*,",1.0017,qkv/proj GEMM (+ fp16 attn bmm)
+int8,"void static_quantize_and_update_ahat_kernel_int8_half_cache_silu<__half>(__half const*, __",1.0001,quantize / absmax
+int8,"void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_nocast<at::native:",0.9884,elementwise / copy
+int8,"void group_norm_silu_quantize_nhwc_kernel<__half>(__half const*, signed char*, __half cons",0.692,GroupNorm
+int8,"void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_nocast<at::native:",0.5589,elementwise / copy
+int8,"void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctor_add<c10::Half>, ",0.54,elementwise / copy
+int8,void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::Tenso,0.4057,conv store epilogue
+int8,"void group_norm_silu_nhwc_kernel<float>(float const*, float*, float const*, float const*, ",0.3864,GroupNorm

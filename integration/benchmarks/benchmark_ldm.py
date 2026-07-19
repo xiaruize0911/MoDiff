@@ -627,11 +627,11 @@ class BenchmarkRunner:
             n = convert_attention_to_modiff(model.model.diffusion_model, act_bits=8, verbose=True)
             print(f"  → MoDiff attention applied to {n} AttentionBlocks")
 
-        # Attention: token-major layout on the explicit MATH (standard, materialized) SDPA
-        # backend — no flash on any layer/mode (MoDiff is fully quantized; QKᵀ/softmax/AV
-        # are quantizable standard ops). For int8/int4 modes, MODIFF_STD_ATTN_BITS (8/4,
-        # default = mode) swaps in the materialized quantized-attention block (QKᵀ/AV int
-        # GEMMs). MODIFF_QUANT_LINEAR=1 additionally quantizes the qkv/proj Linears (W8A8/
+        # Attention: token-major layout on the flash-preferring SDPA backend by default
+        # (PyTorch FlashAttention-2, ~9x faster than MATH; MODIFF_SDPA_BACKEND=math forces
+        # the old materialized MATH backend). For int8/int4 modes, MODIFF_STD_ATTN_BITS
+        # (8/4, default = mode) swaps in the materialized quantized-attention block (QKᵀ/AV
+        # int GEMMs). MODIFF_QUANT_LINEAR=1 additionally quantizes the qkv/proj Linears (W8A8/
         # W4A4 via AWQ/gemm_wxax); disables fused GN->qkv since qkv becomes a quant Linear.
         quant_lin = os.environ.get("MODIFF_QUANT_LINEAR") == "1"
         if quant_lin:
@@ -642,14 +642,23 @@ class BenchmarkRunner:
             from integration.fused_ops.token_major_attention import convert_attention_to_token_major
             n = convert_attention_to_token_major(model.model.diffusion_model)
             if n > 0:
-                print(f"✓ Converted {n} AttentionBlocks to token-major (standard math attention)")
+                _be = os.environ.get("MODIFF_SDPA_BACKEND", "flash").lower()
+                print(f"✓ Converted {n} AttentionBlocks to token-major ({'MATH' if _be=='math' else 'flash-preferring'} SDPA)")
+        # MODIFF_QUANT_ATTN=1 opt-in: run the quantized standard attention (W8A8/W4A4 QKᵀ/softmax/AV)
+        # EVEN WITH the AWQ int_gemm linears (quant_lin), i.e. quantized attention + AWQ w8a8/w4a4 Linear
+        # in one model. Default off -> quant_lin keeps fp16 SDPA attention (unchanged behavior).
+        _force_qattn = os.environ.get("MODIFF_QUANT_ATTN") == "1"
         try:
-            if std_attn_bits in (4, 8) and not quant_lin:
+            if std_attn_bits in (4, 8) and (not quant_lin or _force_qattn):
                 try:
                     from integration.fused_ops.quantized_std_attention import convert_attention_to_quantized_std
+                    # STATIC by default (calibrated Q/K/V scales + static-c softmax, no runtime reductions
+                    # — consistent with the static conv/linear quant); MODIFF_QUANT_ATTN_STATIC=0 -> dynamic.
+                    _qattn_static = (getattr(self, "_attn_static", False)
+                                     or (_force_qattn and os.environ.get("MODIFF_QUANT_ATTN_STATIC", "1") == "1"))
                     n_tm = convert_attention_to_quantized_std(model.model.diffusion_model, bits=std_attn_bits,
-                                                              static=getattr(self, "_attn_static", False))
-                    _sv_tag = "STATIC" if getattr(self, "_attn_static", False) else "dynamic"
+                                                              static=_qattn_static)
+                    _sv_tag = "STATIC" if _qattn_static else "dynamic"
                     print(f"✓ Converted {n_tm} AttentionBlocks to QUANTIZED standard attention (W{std_attn_bits}A{std_attn_bits} QKᵀ/AV, {_sv_tag})")
                 except Exception as _e:      # module/kernels not ready yet -> standard math attention
                     print(f"  (quantized std-attention unavailable: {_e}); using standard math attention")

@@ -1,0 +1,6 @@
+version,before_ms,after_ms,delta_pct,speedup_vs_fp16,note
+fp16,190.2,190.2,0.0,1.000,warm reference (5x200 rerun killed by SIGTERM; warm quick-measure used)
+int8_baseline,178.1,173.3,-2.7,1.098,int8 fix live in 5x200 run
+int8_modiff,201.1,196.6,-2.2,0.967,int8 fix live in 5x200 run
+int4_baseline,175.7,171.8,-2.2,1.107,int4 fix rerun (before = same-session no-fix)
+int4_modiff,202.5,197.1,-2.7,0.965,int4 fix rerun (before = same-session no-fix)

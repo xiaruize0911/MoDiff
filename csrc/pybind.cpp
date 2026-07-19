@@ -7,6 +7,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("quantize_and_pack", &quantize_and_pack, "Fast Quantization and Packing for INT4");
     m.def("scale_quantize_and_pack", &scale_quantize_and_pack, "Fused Scale + Quantize + Pack for INT4");
     m.def("scale_quantize_int8", &scale_quantize_int8, "Fused Scale + Quantize for INT8");
+    m.def("dequant_bias_i8", &dequant_bias_i8, "fused dequant + per-col bias for int8-output GEMM: in_i8*out_scale+bias -> fp16");
+    m.def("quantize_attn_out_int4_pack", &quantize_attn_out_int4_pack, "int4 variant of quantize_attn_out_int8: transpose + int4 quantize + pack -> int8 [b*T,C/2]");
+    m.def("quantize_attn_out_int8", &quantize_attn_out_int8,
+          "Fused attention-output transpose + int8 quantize (proj-side fusion): [b,nh,T,hd] fp16 -> int8 [b*T,nh*hd]");
     m.def("dequant_accumulate_int4", &dequant_accumulate_int4, "Fused Dequant + Accumulate for INT4 cache");
     m.def("dequant_accumulate_int8", &dequant_accumulate_int8, "Fused Dequant + Accumulate for INT8 cache");
     m.def("dequant_accumulate_and_return_int4", &dequant_accumulate_and_return_int4,
@@ -90,19 +94,35 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("fused_gn_qkv", &fused_gn_qkv, "Fused GroupNorm->qkv (per-sample scale/bias mainloop fusion)");
     m.def("fused_gn_qkv_int8", &fused_gn_qkv_int8, "Fused GroupNorm->qkv with int8-clamp output (oscale folded into weight/bias)");
 
-    // Fused int8 flash attention (kernels/flash_attn_int8.cu)
+    // Fused int8/int4 flash attention (revived 2026-07-19): tensor-core flash (mma.m16n8k32.s8),
+    // keeps [BH,T,T] scores in SRAM (never HBM), fp32 online softmax. Bar to beat = fp16 flash.
     m.def("flash_attn_int8", &flash_attn_int8,
-          "Fused int8 flash attention (QK^T/softmax/AV, no T x T materialization); "
-          "q/k/v [N,H,T,hd_pad] int8, sq/sk [N,H,T], sv [N,H,hd] f32 -> fp16 [N,H,T,hd]");
-    m.def("mma_smoke", &mma_smoke, "Debug: C[16,N]=A[16,K].B[N,K]^T via m16n8k32.s8 tensor cores");
-    m.def("gemm_w8a8", &gemm_w8a8,
-          "W8A8 linear: C[M,N] fp16 = (A[M,K] int8 . B[N,K]^T int8) * a_scale * w_scale[n]");
-    m.def("gemm_w4a4", &gemm_w4a4,
-          "W4A4 linear: C[M,N] fp16 = (A[M,K/2] . B[N,K/2]^T packed int4) * a_scale * w_scale[n]");
-    m.def("gemm_w8a8_out_int8", &gemm_w8a8_out_int8,
-          "W8A8 linear, int8 output = round(acc*a_scale*w_scale[c]*oscale[c]) (fused qkv->flash path)");
-    m.def("gemm_w4a4_out_int8", &gemm_w4a4_out_int8,
-          "W4A4 linear, int8 output = round(acc*a_scale*w_scale[c]*oscale[c]) (fused qkv->flash path)");
+          "Fused int8 flash attention: q,k,v int8 [N,H,T,hd_pad], sq,sk [N,H,T], sv [N,H,hd] -> out fp16 [N,H,T,hd]");
+    m.def("flash_attn_int4", &flash_attn_int4,
+          "Fused int4 flash attention (int4 QKᵀ, int8 PV): q4,k4 packed [N,H,T,hdp4/2], v int8 [N,H,T,hdp_v] -> fp16");
+    m.def("mma_smoke", &mma_smoke, "m16n8k32.s8 fragment-mapping smoke test: C[16,N]=A[16,K].B[N,K]^T");
+
+    // AWQ w8a8 GEMM, vendored verbatim from llm-awq (MIT, (c) 2023 MIT HAN Lab) -- faster than our
+    // gemm_w8a8_awq on the qkv/proj shapes. in[M,K] int8, weight[N,K] int8, wscales[N] half,
+    // ascales[M] half (per-token), out[M,N] fp16 PREALLOCATED. N%128==0, K%64==0.
+    m.def("awq_w8a8_gemm", &w8a8_gemm_forward_cuda,
+          "AWQ w8a8 GEMM (vendored from llm-awq, MIT): int8xint8 -> fp16, per-token ascale + per-channel wscale");
+    m.def("gemm_w8a8_awq", &gemm_w8a8_awq,
+          "W8A8 Linear (production): AWQ-tiling-scheme GEMM (CTA_M/N=128, ldmatrix+swizzle) -- "
+          "C[M,N] fp16 = (A[M,K] int8 . B[N,K]^T int8) * a_scale * w_scale[n]; requires N%128==0, K%64==0");
+    m.def("gemm_w8a8_awq_nout", &gemm_w8a8_awq_nout,
+          "W8A8 Linear, unpadded output: B/w_scale padded to N%128==0 but writes [M,n_out] directly "
+          "(n_out even), skipping padded cols -- removes the downstream slice+.contiguous() copy");
+    m.def("gemm_w4a4_awq_nout", &gemm_w4a4_awq_nout,
+          "W4A4 Linear, unpadded output: writes [M,n_out] directly (n_out even), skipping padded cols");
+    m.def("gemm_w8a8_awq_out_i8", &gemm_w8a8_awq_out_i8,
+          "W8A8 Linear, INT8 output (output-fusion): same mainloop, epilogue requantizes to int8 with "
+          "inv_out_scale[N]=127/absmax_col -> C[M,N] int8; halves the output write");
+    m.def("gemm_w4a4_awq", &gemm_w4a4_awq,
+          "W4A4 Linear (production): AWQ-tiling-scheme int4 port (CTA_M/N=128, ldmatrix+swizzle) -- "
+          "packed int4 A/B; requires N%128==0, K%128==0");
+    m.def("gemm_w4a4_awq_out_i8", &gemm_w4a4_awq_out_i8,
+          "W4A4 Linear, INT8 output (output-fusion): int4 GEMM, epilogue requantizes to int8; halves the output write");
     m.def("quantize_act_int8", &quantize_act_int8, "Fused fp16->int8 activation quantize (static scale)");
     m.def("quantize_act_int4_pack", &quantize_act_int4_pack, "Fused fp16->packed-int4 activation quantize (static scale)");
 
@@ -129,6 +149,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "static-max softmax(S, c) -> {P int8 [BH,T,T], sp}; single read of S (no max pass)");
     m.def("attn_softmax_requant_s8", &attn_softmax_requant_s8,
           "int8-SCORE softmax(S_int8, sS, c) -> {P int8, sp}; halves the T*T score read");
+    m.def("attn_softmax_requant_s8_dyn", &attn_softmax_requant_s8_dyn,
+          "int8-SCORE softmax(S_int8, sS) DYNAMIC per-row max -> {P int8, sp}; quality-safe, halves T*T read");
     m.def("attn_qk_int8_s8out", &attn_qk_int8_s8out,
           "batched int8 QKᵀ writing INT8 scores S=round(logit/sS) [BH,T,T]; halves the T*T write");
     m.def("attn_softmax_requant4_static", &attn_softmax_requant4_static,

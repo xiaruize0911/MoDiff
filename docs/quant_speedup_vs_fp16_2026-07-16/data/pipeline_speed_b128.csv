@@ -1,0 +1,3 @@
+mode,wall_ms_step,gpu_busy_ms_step
+fp16,187.293,186.55
+int8,177.693,176.906

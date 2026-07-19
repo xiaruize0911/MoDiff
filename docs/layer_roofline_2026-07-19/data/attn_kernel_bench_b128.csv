@@ -1,0 +1,5 @@
+path,attn_us,quantize_us,total_us,vs_fp16,rel_vs_fp32
+fp16 SDPA (used),16229.1,0.0,16229.1,1.0,
+int8 materialized (our kernel),15816.1,2309.5,18125.6,0.9,0.029
+int8-score (int8 QKᵀ+dyn softmax),14569.0,2309.5,16878.5,0.96,0.034
+int4 materialized,14508.9,2259.0,16767.8,0.97,0.43

@@ -15,6 +15,7 @@
 
 #include <ATen/cuda/CUDAContext.h>
 #include <cuda_runtime.h>
+#include <cuda_fp16.h>
 
 #include "../common.cuh"
 
@@ -381,3 +382,109 @@ void dequant_accumulate_and_return_int8(torch::Tensor residual, torch::Tensor a_
 // (the cache-free baseline dynamic-scale path) moved to modiff_delta_quantize.cu:
 // they're now implemented via sub_absmax_scale_kernel with a_hat_cache=nullptr,
 // residual=nullptr, instead of this file's own near-duplicate absmax_scale_kernel.
+
+// =========================================================================
+// Fused attention-output transpose + int8 quantize (proj-side quantize fusion).
+//
+// The token-major AttentionBlock produces the attention output head-major as
+// a = [b, nh, T, hd], then MUST run `a.transpose(1,2).reshape(b,T,C)` — a
+// physical strided copy — before the proj Linear, which then runs its OWN
+// elementwise quantize pass over [b*T, C]. That is two full O(b*T*C) memory
+// passes (layout copy + quantize). This kernel fuses them into ONE: it gathers
+// the head-major input into token-major order AND quantizes to int8 in a single
+// pass, emitting int8 [b*T, C] directly for gemm_w8a8_awq. Bit-identical to
+// quantize_act_int8(a.transpose(1,2).reshape(b,T,C).contiguous(), a_scale).
+//   out[b*T + t, h*hd + d] = clamp(round(a[b,h,t,d] / a_scale), -127, 127)
+// Requires C = nh*hd to be a multiple of 64 (the W8A8 GEMM K-tile), which holds
+// for every attention width here (192/384/768) so no K-pad is needed.
+// =========================================================================
+__global__ void quant_attn_out_int8_kernel(const __half* __restrict__ a, int8_t* __restrict__ out,
+                                           float inv_scale, int nh, int T, int hd, long n) {
+  long i = (long)blockIdx.x * blockDim.x + threadIdx.x;   // one output element in [b, T, C] order
+  if (i >= n) return;
+  int C = nh * hd;
+  int col = (int)(i % C);          // = h*hd + d  (token-major channel)
+  long row = i / C;                // = b*T + t
+  int t = (int)(row % T);
+  int bb = (int)(row / T);
+  int h = col / hd;
+  int d = col - h * hd;
+  long in_idx = (((long)bb * nh + h) * T + t) * hd + d;   // a[b, h, t, d], head-major
+  int q = __float2int_rn(__half2float(a[in_idx]) * inv_scale);
+  out[i] = (int8_t)(q > 127 ? 127 : (q < -127 ? -127 : q));
+}
+
+// Fused dequant + per-column bias for an int8-output GEMM (gemm_w8a8_awq_out_i8): one pass,
+//   out[m,n] = in_i8[m,n] * out_scale[n] + bias[n]  (fp16 out).
+// Lets the int8-output Linear fold its dequant into what was the standalone +bias add, so the epilogue
+// stays one op (read int8 M*N + write fp16 M*N) instead of an extra fp16 round-trip.
+__global__ void dequant_bias_i8_kernel(const int8_t* __restrict__ in, const float* __restrict__ out_scale,
+                                       const __half* __restrict__ bias, __half* __restrict__ out,
+                                       int N, long n) {
+  long i = (long)blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= n) return;
+  int col = (int)(i % N);
+  out[i] = __float2half((float)in[i] * out_scale[col] + __half2float(bias[col]));
+}
+
+torch::Tensor dequant_bias_i8(torch::Tensor in, torch::Tensor out_scale, torch::Tensor bias) {
+  in = in.contiguous();
+  int M = in.size(0), N = in.size(1); long n = (long)M * N;
+  auto out = torch::empty({M, N}, torch::TensorOptions().dtype(torch::kFloat16).device(in.device()));
+  int T = 256; long blocks = (n + T - 1) / T;
+  cudaStream_t s = at::cuda::getCurrentCUDAStream();
+  dequant_bias_i8_kernel<<<blocks, T, 0, s>>>(
+      in.data_ptr<int8_t>(), out_scale.contiguous().data_ptr<float>(),
+      reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
+      reinterpret_cast<__half*>(out.data_ptr<at::Half>()), N, n);
+  return out;
+}
+
+// a: [b, nh, T, hd] fp16 (attention output). Returns int8 [b*T, nh*hd] token-major.
+torch::Tensor quantize_attn_out_int8(torch::Tensor a, double a_scale) {
+  a = a.contiguous();
+  int b = a.size(0), nh = a.size(1), T = a.size(2), hd = a.size(3);
+  int C = nh * hd;
+  long n = (long)b * T * C;
+  auto out = torch::empty({(long)b * T, C}, torch::TensorOptions().dtype(torch::kChar).device(a.device()));
+  int TH = 256; long blocks = (n + TH - 1) / TH;
+  cudaStream_t s = at::cuda::getCurrentCUDAStream();
+  quant_attn_out_int8_kernel<<<blocks, TH, 0, s>>>(
+      reinterpret_cast<const __half*>(a.data_ptr<at::Half>()), out.data_ptr<int8_t>(),
+      1.f / (float)a_scale, nh, T, hd, n);
+  return out;
+}
+
+// int4 variant of quantize_attn_out_int8: fused transpose + int4 quantize + pack (2 channels/byte,
+// gemm_w4a4 layout) for the proj-side fusion. a[b,nh,T,hd] fp16 -> int8[b*T, C/2] packed int4
+// (low nibble = even channel, high = odd), matching quantize_act_int4_pack. hd is even, so a
+// (c, c+1) pair never crosses a head boundary. C = nh*hd must be even (always here).
+__global__ void quant_attn_out_int4_pack_kernel(const __half* __restrict__ a, int8_t* __restrict__ out,
+                                                float inv_scale, int nh, int T, int hd, long nout) {
+  long i = (long)blockIdx.x * blockDim.x + threadIdx.x;   // one output byte in [b, T, C/2] order
+  if (i >= nout) return;
+  int C = nh * hd, Ch = C / 2;
+  int bc = (int)(i % Ch);          // byte-col
+  long row = i / Ch;               // = b*T + t
+  int t = (int)(row % T), bb = (int)(row / T);
+  int c0 = 2 * bc, c1 = c0 + 1;
+  int h0 = c0 / hd, d0 = c0 - h0 * hd, h1 = c1 / hd, d1 = c1 - h1 * hd;
+  long i0 = (((long)bb * nh + h0) * T + t) * hd + d0;
+  long i1 = (((long)bb * nh + h1) * T + t) * hd + d1;
+  int q0 = __float2int_rn(__half2float(a[i0]) * inv_scale); q0 = q0 > 7 ? 7 : (q0 < -7 ? -7 : q0);
+  int q1 = __float2int_rn(__half2float(a[i1]) * inv_scale); q1 = q1 > 7 ? 7 : (q1 < -7 ? -7 : q1);
+  out[i] = (int8_t)((q0 & 0x0F) | ((q1 & 0x0F) << 4));
+}
+
+torch::Tensor quantize_attn_out_int4_pack(torch::Tensor a, double a_scale) {
+  a = a.contiguous();
+  int b = a.size(0), nh = a.size(1), T = a.size(2), hd = a.size(3);
+  int C = nh * hd; long nout = (long)b * T * (C / 2);
+  auto out = torch::empty({(long)b * T, C / 2}, torch::TensorOptions().dtype(torch::kChar).device(a.device()));
+  int TH = 256; long blocks = (nout + TH - 1) / TH;
+  cudaStream_t s = at::cuda::getCurrentCUDAStream();
+  quant_attn_out_int4_pack_kernel<<<blocks, TH, 0, s>>>(
+      reinterpret_cast<const __half*>(a.data_ptr<at::Half>()), out.data_ptr<int8_t>(),
+      1.f / (float)a_scale, nh, T, hd, nout);
+  return out;
+}

@@ -1,0 +1,29 @@
+int8 attention wiring (§8 kernels) — churches UNet, int8, A40, batch 64
+========================================================================
+Wired the §8 int8-attention kernels into TokenMajorAttentionBlock._int8_score_attn / _attn
+(opt-in MODIFF_INT8_SCORE_ATTN, gated T>=64). Baseline = fp16 SDPA math. NET LOSS — kept OFF.
+
+DECOMPOSITION (per attention block, real activations, rel-L2 vs fp16 SDPA)
+  T      int8-QKV + dynamic-softmax   int8-QKV + static-c   int8-QKV + int8-score + static-c
+  1024        0.0150                       0.5853                    0.5857
+  1024        0.0096                       0.3271                    0.3272
+   256        0.0080                       0.3215                    0.3215
+  -> the error is ENTIRELY the static-c softmax (one frozen c can't track diffusion's ~30x
+     per-timestep logit-scale drift, §7). int8 Q/K/V and int8 SCORES are ~free (~1% rel-L2).
+
+TWO WIRED VARIANTS (whole-UNet forward rel-L2; nondeterminism floor = 0.029)
+  variant                          quality rel-L2    e2e vs fp16 SDPA (min-of-5, b64)
+  static-c int8-SCORE (fast)          0.227           +1.44% (104.0 -> 102.5 ms/step)
+  dynamic-softmax int8 (quality-safe) 0.074           -10.65% (104.0 -> 116.3 ms/step, SLOWER)
+
+WHY NEITHER WINS
+  - The T×T softmax memory saving requires int8 scores, which only have a STATIC-c requant kernel
+    (attn_softmax_requant_s8) -> quality-broken for diffusion.
+  - The quality-safe DYNAMIC softmax (attn_softmax_requant) reads fp16 scores -> no T×T saving,
+    and the added int8 Q/K/V quantize + int8 bmm are slower than the well-tuned fp16 SDPA math.
+  - fp16 SDPA (MATH) is already a strong baseline for this materialized attention.
+
+REAL FIX (next kernel to build): a DYNAMIC per-row-max softmax that reads/writes INT8 scores
+(quality-safe AND halves the T×T read+write). §8 only built the static-c int8-score requant. That
+kernel would combine the ~1% quality of the dynamic path with the T×T traffic cut that makes the
+dominant T=1024 softmax (19.7 ms/step, the single biggest kernel) actually shrink.

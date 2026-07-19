@@ -1,0 +1,6 @@
+e2e sweep (steps=30, batch=16, 16 samples, 3 reps, min ms/step):
+int8_off   flag=OFF  reps=[ 1.801 1.792 1.798 ] min=1.792
+int8_on    flag=int8 reps=[ 1.882 1.805 1.826 ] min=1.805
+int4_off   flag=OFF  reps=[ 1.756 1.753 1.766 ] min=1.753
+int4_on    flag=int4 reps=[ 1.802 1.784 1.807 ] min=1.784
+E2E_SWEEP_DONE

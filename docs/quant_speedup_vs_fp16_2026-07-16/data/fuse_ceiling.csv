@@ -1,0 +1,4 @@
+shape,M,K,N,out_write_floor_us,fp16_fused_stage_us,int8_gemm_only_us,awq_gemm_only_us,int4_gemm_only_us,best_gemm_ceiling_vs_fp16
+C192 qkv,32768,192,576,136.3,208.2,269.2,112.9,146.0,1.844
+C384 qkv,8192,384,1152,69.6,127.8,88.8,69.9,64.1,1.995
+C768 qkv,2048,768,2304,35.8,101.4,77.3,56.5,48.3,2.097

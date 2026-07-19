@@ -787,7 +787,7 @@ std::vector<torch::Tensor> quantize_attn_qkv_static(torch::Tensor Q, torch::Tens
 }
 
 // ==================== int8-OUTPUT qkv -> attention quantize fusion (prototype) ====================
-// Consume the int8 qkv-linear output directly (gemm_w8a8_out_int8), skipping the fp16 round-trip:
+// Consume an int8 qkv-linear output directly (e.g. fused_gn_qkv_int8), skipping the fp16 round-trip:
 // the qkv-linear emits int8 [M=b*T, 3C] with per-column oscale (true value = i8 / oscale[n]); this
 // kernel dequants on the fly and re-quantizes to attention granularity (per-token Q/K, per-channel V),
 // producing the same {qi,ki,vt,sq,sk,sv} as quantize_attn_qkv. 3C is ordered (nh,3,hd) so output
@@ -842,7 +842,7 @@ __global__ void aq_vquant_trans_from_i8_kernel(const int8_t* __restrict__ QKV, c
   }
 }
 
-// qkv_i8 [b*T, 3C] int8 (from gemm_w8a8_out_int8), oscale [3C] -> {qi,ki,vt,sq,sk,sv} (int8 attention)
+// qkv_i8 [b*T, 3C] int8 (from a fused int8 qkv-linear, e.g. fused_gn_qkv_int8), oscale [3C] -> {qi,ki,vt,sq,sk,sv} (int8 attention)
 std::vector<torch::Tensor> quantize_attn_qkv_from_i8(torch::Tensor qkv_i8, torch::Tensor oscale,
                                                      int64_t nh, int64_t T, int64_t hp_qk, int64_t hp_av) {
   TORCH_CHECK(qkv_i8.is_cuda() && qkv_i8.dtype() == torch::kChar, "qkv_i8 int8 CUDA");
@@ -905,6 +905,61 @@ std::vector<torch::Tensor> attn_softmax_requant_s8(torch::Tensor S, double sS, d
   auto sp = torch::empty({BH, T}, torch::TensorOptions().dtype(torch::kFloat32).device(S.device()));
   attn_softmax_requant_s8_kernel<<<BH * T, AQ_SM_THREADS, 0, at::cuda::getCurrentCUDAStream()>>>(
       S.data_ptr<int8_t>(), P.data_ptr<int8_t>(), sp.data_ptr<float>(), T, (float)sS, (float)c);
+  return {P, sp};
+}
+
+// DYNAMIC int8-score softmax: reads int8 S (half the read of fp16), per-row-max softmax (quality-safe,
+// tracks each row's own scale — no static-c), writes int8 P. Combines the T×T-read saving of the s8 path
+// with the accuracy of the dynamic (attn_softmax_requant) path. Paired with attn_qk_int8_s8out (int8 S
+// write) this halves BOTH T×T passes without the static-c quality loss. sS = per-tensor score scale.
+__global__ void attn_softmax_requant_s8_dyn_kernel(const int8_t* __restrict__ S, int8_t* __restrict__ P,
+                                                   float* __restrict__ sp, int T, float sS) {
+  const int row = blockIdx.x;
+  const int2* Srow = reinterpret_cast<const int2*>(S + (size_t)row * T);   // 8 int8 scores / load
+  int2* Prow = reinterpret_cast<int2*>(P + (size_t)row * T);
+  const int tid = threadIdx.x, nt = blockDim.x, T8 = T >> 3;
+  __shared__ float red[AQ_SM_THREADS];
+  // pass 1: per-row max of the dequantized logits (dynamic)
+  float m = -1e30f;
+  for (int cc = tid; cc < T8; cc += nt) {
+    int2 v = Srow[cc];
+#pragma unroll
+    for (int k = 0; k < 8; ++k) {
+      int raw = (k < 4) ? (v.x >> (k * 8)) : (v.y >> ((k - 4) * 8));
+      m = fmaxf(m, (float)((signed char)(raw & 0xFF)) * sS);
+    }
+  }
+  red[tid] = m; __syncthreads();
+  for (int s = nt >> 1; s > 0; s >>= 1) { if (tid < s) red[tid] = fmaxf(red[tid], red[tid + s]); __syncthreads(); }
+  m = red[0]; __syncthreads();
+  // pass 2: exp(logit - m), sum, quantize to int8 P
+  float sum = 0.f;
+  for (int cc = tid; cc < T8; cc += nt) {
+    int2 v = Srow[cc]; int b0 = 0, b1 = 0;
+#pragma unroll
+    for (int k = 0; k < 8; ++k) {
+      int raw = (k < 4) ? (v.x >> (k * 8)) : (v.y >> ((k - 4) * 8));
+      float e = __expf((float)((signed char)(raw & 0xFF)) * sS - m); sum += e;
+      int q = __float2int_rn(e * 127.f); q = q < 0 ? 0 : (q > 127 ? 127 : q);
+      if (k < 4) b0 |= q << (k * 8); else b1 |= q << ((k - 4) * 8);
+    }
+    Prow[cc] = make_int2(b0, b1);
+  }
+  red[tid] = sum; __syncthreads();
+  for (int s = nt >> 1; s > 0; s >>= 1) { if (tid < s) red[tid] += red[tid + s]; __syncthreads(); }
+  if (tid == 0) sp[row] = 1.f / (127.f * fmaxf(red[0], 1e-20f));
+}
+
+// S int8 [BH,T,T] (dequant sS), DYNAMIC per-row max -> {P int8 [BH,T,T], sp [BH,T]}
+std::vector<torch::Tensor> attn_softmax_requant_s8_dyn(torch::Tensor S, double sS) {
+  TORCH_CHECK(S.is_cuda() && S.dtype() == torch::kChar && S.dim() == 3, "S int8 [BH,T,T]");
+  S = S.contiguous();
+  int BH = S.size(0), T = S.size(2);
+  TORCH_CHECK(S.size(1) == T && T % 8 == 0, "S [BH,T,T], T%8==0");
+  auto P = torch::empty({BH, T, T}, torch::TensorOptions().dtype(torch::kChar).device(S.device()));
+  auto sp = torch::empty({BH, T}, torch::TensorOptions().dtype(torch::kFloat32).device(S.device()));
+  attn_softmax_requant_s8_dyn_kernel<<<BH * T, AQ_SM_THREADS, 0, at::cuda::getCurrentCUDAStream()>>>(
+      S.data_ptr<int8_t>(), P.data_ptr<int8_t>(), sp.data_ptr<float>(), T, (float)sS);
   return {P, sp};
 }
 

@@ -1,0 +1,4 @@
+shape,M,fp16_split_us,int8_split_us,awq_split_us,fp16_fused_ref_us,int8_vs_fp16_split,awq_vs_fp16_split,int8_rel_err,awq_rel_err
+C192 qkv,32768,376.3,533.3,381.7,207.0,0.706,0.986,0.0123,0.0123
+C384 qkv,8192,246.7,235.6,214.0,128.2,1.047,1.153,0.0124,0.0124
+C768 qkv,2048,172.7,169.9,147.7,96.6,1.016,1.169,0.0123,0.0123

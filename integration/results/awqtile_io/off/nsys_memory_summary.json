@@ -1,0 +1,446 @@
+{
+  "modes": {
+    "int8_baseline": {
+      "benchmark": {
+        "total_time": 0.597724437713623,
+        "num_samples": 16,
+        "time_per_sample": 0.03735777735710144,
+        "time_per_step_ms": 2.490518490473429,
+        "quant_memory_after_warmup": {
+          "total_tracked_mib": 533.265,
+          "cache_and_residual_mib": 0.0,
+          "weight_mib": 531.984,
+          "scale_and_bias_mib": 1.28,
+          "buckets_mib": {
+            "conv_bias_mib": 0.275,
+            "conv_quant_weights_mib": 450.562,
+            "conv_scale_state_mib": 0.933,
+            "linear_bias_mib": 0.072,
+            "linear_fp16_weights_mib": 54.281,
+            "linear_quant_weights_mib": 27.141,
+            "linear_scale_state_mib": 0.0
+          },
+          "module_counts": {
+            "OptimizedInt8Conv2d": 140,
+            "OptimizedInt8Linear": 37
+          }
+        }
+      },
+      "nsys": {
+        "sqlite": "integration/results/awqtile_io/off/profiles/int8_baseline_s15_b16.sqlite",
+        "memcpy": {
+          "Host-to-Device": {
+            "count": 2188,
+            "total_mib": 2650.083038330078,
+            "total_ms": 317.5129999999957
+          },
+          "Device-to-Device": {
+            "count": 885,
+            "total_mib": 164.96292114257812,
+            "total_ms": 1.914384000000007
+          },
+          "Device-to-Host": {
+            "count": 588,
+            "total_mib": 12.0703125,
+            "total_ms": 8.539192000000002
+          }
+        },
+        "memcpy_total": {
+          "count": 3661,
+          "total_mib": 2827.1162719726562,
+          "total_ms": 327.9665759999957
+        },
+        "osrt_io": {
+          "read": {
+            "count": 7950,
+            "total_ms": 2429.5852659999987,
+            "avg_us": 305.6082095597487
+          },
+          "open64": {
+            "count": 3130,
+            "total_ms": 159.9500290000001,
+            "avg_us": 51.10224568690098
+          },
+          "write": {
+            "count": 100,
+            "total_ms": 32.78650699999999,
+            "avg_us": 327.86507
+          },
+          "fgets": {
+            "count": 3015,
+            "total_ms": 1.9374170000000253,
+            "avg_us": 0.6425927031509043
+          },
+          "fopen64": {
+            "count": 7,
+            "total_ms": 1.806543,
+            "avg_us": 258.0775714285714
+          },
+          "fopen": {
+            "count": 119,
+            "total_ms": 0.8686590000000002,
+            "avg_us": 7.299655462184877
+          },
+          "fread": {
+            "count": 1,
+            "total_ms": 0.755507,
+            "avg_us": 755.507
+          },
+          "open": {
+            "count": 15,
+            "total_ms": 0.201018,
+            "avg_us": 13.401200000000005
+          },
+          "fwrite": {
+            "count": 2,
+            "total_ms": 0.011297,
+            "avg_us": 5.6485
+          }
+        },
+        "top_kernels": [
+          {
+            "kernel": "void <unnamed>::softmax_warp_forward<c10::Half, c10::Half, float, (int)10, (bool)0, (bool)0>(T2 *, const T1 *, int, int, int, const bool *, int, bool)",
+            "count": 185,
+            "total_ms": 164.375207,
+            "avg_us": 888.5146324324319
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)2, void at::native::gpu_kernel_impl_nocast<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase &)::[lambda() (instance 3)]::operator ()() const::[lambda() (instance 7)]::operator ()() const::[lambda(float) (instance 1)]>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 439,
+            "total_ms": 116.29044600000003,
+            "avg_us": 264.8985102505695
+          },
+          {
+            "kernel": "void cutlass::Kernel<cutlass::conv::kernel::ImplicitGemmConvolution<cutlass::conv::threadblock::ImplicitGemmMultistage<cutlass::gemm::GemmShape<(int)128, (int)128, (int)128>, cutlass::conv::threadblock::Conv2dFpropActivationTileAccessIteratorOptimized<cutlass::MatrixShape<(int)128, (int)128>, signed char, cutlass::layout::TensorNHWC, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)128, (int)128>, (int)256, cutlass::PitchLinearShape<(int)8, (int)4>, (int)16>, cutlass::AlignedArray<signed char, (int)16, (int)16>>, cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<(int)128, (int)128>, signed char, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)8, (int)128>, (int)0, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)128, (int)128>, (int)256, cutlass::PitchLinearShape<(int)8, (int)4>, (int)16>, (int)16>, (cutlass::arch::CacheOperation::Kind)0, cutlass::conv::threadblock::Conv2dFpropFilterTileAccessIteratorOptimized<cutlass::MatrixShape<(int)128, (int)128>, signed char, cutlass::layout::TensorNHWC, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)128, (int)128>, (int)256, cutlass::PitchLinearShape<(int)8, (int)4>, (int)16>, cutlass::AlignedArray<signed char, (int)16, (int)16>, (bool)0>, cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<(int)128, (int)128>, signed char, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)8, (int)128>, (int)1, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)128, (int)128>, (int)256, cutlass::PitchLinearShape<(int)8, (int)4>, (int)16>, (int)16>, (cutlass::arch::CacheOperation::Kind)1, cutlass::gemm::threadblock::MmaPolicy<cutlass::gemm::warp::MmaTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)64>, signed char, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)8, (int)128>, signed char, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)8, (int)128>, int, cutlass::layout::RowMajor, cutlass::gemm::warp::MmaTensorOpPolicy<cutlass::arch::Mma<cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, (int)32, signed char, cutlass::layout::RowMajor, signed char, cutlass::layout::ColumnMajor, int, cutlass::layout::RowMajor, cutlass::arch::OpMultiplyAddSaturate>, cutlass::MatrixShape<(int)1, (int)1>>, (int)2, (bool)0, bool>, cutlass::MatrixShape<(int)0, (int)0>, cutlass::MatrixShape<(int)0, (int)0>, (int)2>, (int)3, bool>, cutlass::epilogue::threadblock::Epilogue<cutlass::gemm::GemmShape<(int)128, (int)128, (int)128>, cutlass::gemm::warp::MmaTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)64>, signed char, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)8, (int)128>, signed char, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)8, (int)128>, int, cutlass::layout::RowMajor, cutlass::gemm::warp::MmaTensorOpPolicy<cutlass::arch::Mma<cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, (int)32, signed char, cutlass::layout::RowMajor, signed char, cutlass::layout::ColumnMajor, int, cutlass::layout::RowMajor, cutlass::arch::OpMultiplyAddSaturate>, cutlass::MatrixShape<(int)1, (int)1>>, (int)2, (bool)0, bool>, (int)2, cutlass::epilogue::threadblock::PredicatedTileIteratorConv<cutlass::epilogue::threadblock::OutputTileOptimalThreadMap<cutlass::epilogue::threadblock::OutputTileShape<(int)128, (int)8, (int)2, (int)1, (int)1>, cutlass::epilogue::threadblock::OutputTileShape<(int)1, (int)8, (int)1, (int)1, (int)8>, (int)256, (int)1, (int)32>, float, (bool)0, cutlass::layout::NoPermute, (bool)0, (int)4>, cutlass::epilogue::warp::FragmentIteratorTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)64>, cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, int, cutlass::Array<int, (int)4, (bool)1>, cutlass::layout::RowMajor>, cutlass::epilogue::warp::TileIteratorTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)64>, cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, int, cutlass::layout::RowMajor>, cutlass::epilogue::threadblock::SharedLoadIterator<cutlass::epilogue::threadblock::OutputTileOptimalThreadMap<cutlass::epilogue::threadblock::OutputTileShape<(int)128, (int)8, (int)2, (int)1, (int)1>, cutlass::epilogue::threadblock::OutputTileShape<(int)1, (int)8, (int)1, (int)1, (int)8>, (int)256, (int)1, (int)32>::CompactedThreadMap, int, (int)4>, cutlass::epilogue::thread::LinearCombination<float, (int)1, int, float, (cutlass::epilogue::thread::ScaleType::Kind)0, (cutlass::FloatRoundStyle)2, float>, cutlass::MatrixShape<(int)0, (int)8>, (int)1, (int)1>, cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<(int)1>, (cutlass::conv::Operator)0, cutlass::conv::Conv2dProblemSize, (cutlass::conv::GroupMode)0>>(T1::Params)",
+            "count": 1103,
+            "total_ms": 92.02700600000006,
+            "avg_us": 83.43336899365364
+          },
+          {
+            "kernel": "void cutlass__5x_cudnn::Kernel<cutlass_tensorop_f16_s16816fprop_optimized_f16_128x128_32x3_nhwc_align8>(T1::Params)",
+            "count": 125,
+            "total_ms": 86.62293999999999,
+            "avg_us": 692.98352
+          },
+          {
+            "kernel": "void cutlass::Kernel2<cutlass_80_wmma_tensorop_f16_s161616gemm_f16_32x32_32x1_nn_align8>(T1::Params)",
+            "count": 185,
+            "total_ms": 84.32334000000002,
+            "avg_us": 455.80183783783815
+          },
+          {
+            "kernel": "void cutlass::Kernel2<cutlass_80_wmma_tensorop_f16_s161616gemm_f16_32x32_128x2_nn_align8>(T1::Params)",
+            "count": 185,
+            "total_ms": 82.31440700000006,
+            "avg_us": 444.94274054054034
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)4, void at::native::gpu_kernel_impl_nocast<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase &)::[lambda() (instance 3)]::operator ()() const::[lambda() (instance 10)]::operator ()() const::[lambda(c10::Half) (instance 1)]>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 6021,
+            "total_ms": 74.62090900000047,
+            "avg_us": 12.393441122737068
+          },
+          {
+            "kernel": "void group_norm_silu_quantize_nhwc_kernel<__half>(const T1 *, signed char *, const T1 *, const T1 *, const T1 *, const T1 *, const float *, const float *, int, long, int, float, bool)",
+            "count": 2294,
+            "total_ms": 70.79633899999996,
+            "avg_us": 30.861525283347923
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)4, void at::native::gpu_kernel_impl_nocast<at::native::CUDAFunctor_add<c10::Half>>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 2529,
+            "total_ms": 55.37417099999996,
+            "avg_us": 21.895678529062863
+          },
+          {
+            "kernel": "void cutlass::Kernel<cutlass::conv::kernel::ImplicitGemmConvolution<cutlass::conv::threadblock::ImplicitGemmMultistage<cutlass::gemm::GemmShape<(int)128, (int)256, (int)64>, cutlass::conv::threadblock::Conv2dFpropActivationTileAccessIteratorOptimized<cutlass::MatrixShape<(int)128, (int)64>, signed char, cutlass::layout::TensorNHWC, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)64, (int)128>, (int)256, cutlass::PitchLinearShape<(int)4, (int)8>, (int)16>, cutlass::AlignedArray<signed char, (int)16, (int)16>>, cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<(int)128, (int)64>, signed char, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, (int)0, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)64, (int)128>, (int)256, cutlass::PitchLinearShape<(int)4, (int)8>, (int)16>, (int)16>, (cutlass::arch::CacheOperation::Kind)0, cutlass::conv::threadblock::Conv2dFpropFilterTileAccessIteratorOptimized<cutlass::MatrixShape<(int)64, (int)256>, signed char, cutlass::layout::TensorNHWC, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)64, (int)256>, (int)256, cutlass::PitchLinearShape<(int)4, (int)8>, (int)16>, cutlass::AlignedArray<signed char, (int)16, (int)16>, (bool)0>, cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<(int)64, (int)256>, signed char, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, (int)1, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)64, (int)256>, (int)256, cutlass::PitchLinearShape<(int)4, (int)8>, (int)16>, (int)16>, (cutlass::arch::CacheOperation::Kind)1, cutlass::gemm::threadblock::MmaPolicy<cutlass::gemm::warp::MmaTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)64>, signed char, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, signed char, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, int, cutlass::layout::RowMajor, cutlass::gemm::warp::MmaTensorOpPolicy<cutlass::arch::Mma<cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, (int)32, signed char, cutlass::layout::RowMajor, signed char, cutlass::layout::ColumnMajor, int, cutlass::layout::RowMajor, cutlass::arch::OpMultiplyAddSaturate>, cutlass::MatrixShape<(int)1, (int)1>>, (int)1, (bool)0, bool>, cutlass::MatrixShape<(int)0, (int)0>, cutlass::MatrixShape<(int)0, (int)0>, (int)1>, (int)3, bool>, cutlass::epilogue::threadblock::Epilogue<cutlass::gemm::GemmShape<(int)128, (int)256, (int)64>, cutlass::gemm::warp::MmaTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)64>, signed char, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, signed char, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, int, cutlass::layout::RowMajor, cutlass::gemm::warp::MmaTensorOpPolicy<cutlass::arch::Mma<cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, (int)32, signed char, cutlass::layout::RowMajor, signed char, cutlass::layout::ColumnMajor, int, cutlass::layout::RowMajor, cutlass::arch::OpMultiplyAddSaturate>, cutlass::MatrixShape<(int)1, (int)1>>, (int)1, (bool)0, bool>, (int)1, cutlass::epilogue::threadblock::PredicatedTileIteratorConv<cutlass::epilogue::threadblock::OutputTileOptimalThreadMap<cutlass::epilogue::threadblock::OutputTileShape<(int)256, (int)8, (int)2, (int)1, (int)1>, cutlass::epilogue::threadblock::OutputTileShape<(int)1, (int)8, (int)1, (int)1, (int)8>, (int)256, (int)8, (int)16>, cutlass::half_t, (bool)0, cutlass::layout::NoPermute, (bool)0, (int)4>, cutlass::epilogue::warp::FragmentIteratorTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)64>, cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, int, cutlass::Array<int, (int)4, (bool)1>, cutlass::layout::RowMajor>, cutlass::epilogue::warp::TileIteratorTensorOpMixed<cutlass::gemm::GemmShape<(int)64, (int)64, (int)64>, cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, int, (int)32, (int)16, (int)8, (int)8, (bool)0>, cutlass::epilogue::threadblock::SharedLoadIteratorMixed<cutlass::epilogue::threadblock::OutputTileOptimalThreadMap<cutlass::epilogue::threadblock::OutputTileShape<(int)256, (int)8, (int)2, (int)1, (int)1>, cutlass::epilogue::threadblock::OutputTileShape<(int)1, (int)8, (int)1, (int)1, (int)8>, (int)256, (int)8, (int)16>::CompactedThreadMap, int, (int)32, (int)16, (int)8, (int)8, (bool)0>, Int8DequantScaleSource<(int)8>, cutlass::MatrixShape<(int)0, (int)8>, (int)2, (int)1>, cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<(int)1>, (cutlass::conv::Operator)0, cutlass::conv::Conv2dProblemSize, (cutlass::conv::GroupMode)0>>(T1::Params)",
+            "count": 533,
+            "total_ms": 54.624727999999976,
+            "avg_us": 102.48541838649176
+          },
+          {
+            "kernel": "void cutlass::Kernel<cutlass::conv::kernel::ImplicitGemmConvolution<cutlass::conv::threadblock::ImplicitGemmMultistage<cutlass::gemm::GemmShape<(int)256, (int)128, (int)64>, cutlass::conv::threadblock::Conv2dFpropActivationTileAccessIteratorOptimized<cutlass::MatrixShape<(int)256, (int)64>, signed char, cutlass::layout::TensorNHWC, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)64, (int)256>, (int)256, cutlass::PitchLinearShape<(int)4, (int)8>, (int)16>, cutlass::AlignedArray<signed char, (int)16, (int)16>>, cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<(int)256, (int)64>, signed char, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, (int)0, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)64, (int)256>, (int)256, cutlass::PitchLinearShape<(int)4, (int)8>, (int)16>, (int)16>, (cutlass::arch::CacheOperation::Kind)0, cutlass::conv::threadblock::Conv2dFpropFilterTileAccessIteratorOptimized<cutlass::MatrixShape<(int)64, (int)128>, signed char, cutlass::layout::TensorNHWC, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)64, (int)128>, (int)256, cutlass::PitchLinearShape<(int)4, (int)8>, (int)16>, cutlass::AlignedArray<signed char, (int)16, (int)16>, (bool)0>, cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<(int)64, (int)128>, signed char, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, (int)1, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)64, (int)128>, (int)256, cutlass::PitchLinearShape<(int)4, (int)8>, (int)16>, (int)16>, (cutlass::arch::CacheOperation::Kind)1, cutlass::gemm::threadblock::MmaPolicy<cutlass::gemm::warp::MmaTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)64>, signed char, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, signed char, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, int, cutlass::layout::RowMajor, cutlass::gemm::warp::MmaTensorOpPolicy<cutlass::arch::Mma<cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, (int)32, signed char, cutlass::layout::RowMajor, signed char, cutlass::layout::ColumnMajor, int, cutlass::layout::RowMajor, cutlass::arch::OpMultiplyAddSaturate>, cutlass::MatrixShape<(int)1, (int)1>>, (int)1, (bool)0, bool>, cutlass::MatrixShape<(int)0, (int)0>, cutlass::MatrixShape<(int)0, (int)0>, (int)1>, (int)3, bool>, cutlass::epilogue::threadblock::Epilogue<cutlass::gemm::GemmShape<(int)256, (int)128, (int)64>, cutlass::gemm::warp::MmaTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)64>, signed char, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, signed char, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, int, cutlass::layout::RowMajor, cutlass::gemm::warp::MmaTensorOpPolicy<cutlass::arch::Mma<cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, (int)32, signed char, cutlass::layout::RowMajor, signed char, cutlass::layout::ColumnMajor, int, cutlass::layout::RowMajor, cutlass::arch::OpMultiplyAddSaturate>, cutlass::MatrixShape<(int)1, (int)1>>, (int)1, (bool)0, bool>, (int)1, cutlass::epilogue::threadblock::PredicatedTileIteratorConv<cutlass::epilogue::threadblock::OutputTileOptimalThreadMap<cutlass::epilogue::threadblock::OutputTileShape<(int)128, (int)8, (int)4, (int)1, (int)1>, cutlass::epilogue::threadblock::OutputTileShape<(int)1, (int)8, (int)1, (int)1, (int)8>, (int)256, (int)8, (int)16>, cutlass::half_t, (bool)0, cutlass::layout::NoPermute, (bool)0, (int)4>, cutlass::epilogue::warp::FragmentIteratorTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)64>, cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, int, cutlass::Array<int, (int)4, (bool)1>, cutlass::layout::RowMajor>, cutlass::epilogue::warp::TileIteratorTensorOpMixed<cutlass::gemm::GemmShape<(int)64, (int)64, (int)64>, cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, int, (int)32, (int)16, (int)8, (int)8, (bool)0>, cutlass::epilogue::threadblock::SharedLoadIteratorMixed<cutlass::epilogue::threadblock::OutputTileOptimalThreadMap<cutlass::epilogue::threadblock::OutputTileShape<(int)128, (int)8, (int)4, (int)1, (int)1>, cutlass::epilogue::threadblock::OutputTileShape<(int)1, (int)8, (int)1, (int)1, (int)8>, (int)256, (int)8, (int)16>::CompactedThreadMap, int, (int)32, (int)16, (int)8, (int)8, (bool)0>, Int8DequantScaleSource<(int)8>, cutlass::MatrixShape<(int)0, (int)8>, (int)2, (int)1>, cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<(int)1>, (cutlass::conv::Operator)0, cutlass::conv::Conv2dProblemSize, (cutlass::conv::GroupMode)0>>(T1::Params)",
+            "count": 533,
+            "total_ms": 54.52236500000002,
+            "avg_us": 102.29336772983116
+          },
+          {
+            "kernel": "void cutlass::Kernel<cutlass::conv::kernel::ImplicitGemmConvolution<cutlass::conv::threadblock::ImplicitGemmMultistage<cutlass::gemm::GemmShape<(int)64, (int)64, (int)64>, cutlass::conv::threadblock::Conv2dFpropActivationTileAccessIteratorOptimized<cutlass::MatrixShape<(int)64, (int)64>, signed char, cutlass::layout::TensorNHWC, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)64, (int)64>, (int)128, cutlass::PitchLinearShape<(int)4, (int)8>, (int)16>, cutlass::AlignedArray<signed char, (int)16, (int)16>>, cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<(int)64, (int)64>, signed char, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, (int)0, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)64, (int)64>, (int)128, cutlass::PitchLinearShape<(int)4, (int)8>, (int)16>, (int)16>, (cutlass::arch::CacheOperation::Kind)0, cutlass::conv::threadblock::Conv2dFpropFilterTileAccessIteratorOptimized<cutlass::MatrixShape<(int)64, (int)64>, signed char, cutlass::layout::TensorNHWC, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)64, (int)64>, (int)128, cutlass::PitchLinearShape<(int)4, (int)8>, (int)16>, cutlass::AlignedArray<signed char, (int)16, (int)16>, (bool)0>, cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<(int)64, (int)64>, signed char, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, (int)1, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)64, (int)64>, (int)128, cutlass::PitchLinearShape<(int)4, (int)8>, (int)16>, (int)16>, (cutlass::arch::CacheOperation::Kind)1, cutlass::gemm::threadblock::MmaPolicy<cutlass::gemm::warp::MmaTensorOp<cutlass::gemm::GemmShape<(int)32, (int)32, (int)64>, signed char, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, signed char, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, int, cutlass::layout::RowMajor, cutlass::gemm::warp::MmaTensorOpPolicy<cutlass::arch::Mma<cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, (int)32, signed char, cutlass::layout::RowMajor, signed char, cutlass::layout::ColumnMajor, int, cutlass::layout::RowMajor, cutlass::arch::OpMultiplyAddSaturate>, cutlass::MatrixShape<(int)1, (int)1>>, (int)1, (bool)0, bool>, cutlass::MatrixShape<(int)0, (int)0>, cutlass::MatrixShape<(int)0, (int)0>, (int)1>, (int)6, bool>, cutlass::epilogue::threadblock::Epilogue<cutlass::gemm::GemmShape<(int)64, (int)64, (int)64>, cutlass::gemm::warp::MmaTensorOp<cutlass::gemm::GemmShape<(int)32, (int)32, (int)64>, signed char, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, signed char, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, int, cutlass::layout::RowMajor, cutlass::gemm::warp::MmaTensorOpPolicy<cutlass::arch::Mma<cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, (int)32, signed char, cutlass::layout::RowMajor, signed char, cutlass::layout::ColumnMajor, int, cutlass::layout::RowMajor, cutlass::arch::OpMultiplyAddSaturate>, cutlass::MatrixShape<(int)1, (int)1>>, (int)1, (bool)0, bool>, (int)1, cutlass::epilogue::threadblock::PredicatedTileIteratorConv<cutlass::epilogue::threadblock::OutputTileOptimalThreadMap<cutlass::epilogue::threadblock::OutputTileShape<(int)64, (int)8, (int)2, (int)1, (int)1>, cutlass::epilogue::threadblock::OutputTileShape<(int)1, (int)4, (int)1, (int)1, (int)4>, (int)128, (int)8, (int)16>, cutlass::half_t, (bool)0, cutlass::layout::NoPermute, (bool)0, (int)4>, cutlass::epilogue::warp::FragmentIteratorTensorOp<cutlass::gemm::GemmShape<(int)32, (int)32, (int)64>, cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, int, cutlass::Array<int, (int)4, (bool)1>, cutlass::layout::RowMajor>, cutlass::epilogue::warp::TileIteratorTensorOpMixed<cutlass::gemm::GemmShape<(int)32, (int)32, (int)64>, cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, int, (int)32, (int)16, (int)8, (int)8, (bool)0>, cutlass::epilogue::threadblock::SharedLoadIteratorMixed<cutlass::epilogue::threadblock::OutputTileOptimalThreadMap<cutlass::epilogue::threadblock::OutputTileShape<(int)64, (int)8, (int)2, (int)1, (int)1>, cutlass::epilogue::threadblock::OutputTileShape<(int)1, (int)4, (int)1, (int)1, (int)4>, (int)128, (int)8, (int)16>::CompactedThreadMap, int, (int)32, (int)16, (int)8, (int)8, (bool)0>, Int8DequantScaleSource<(int)8>, cutlass::MatrixShape<(int)0, (int)8>, (int)2, (int)1>, cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<(int)1>, (cutlass::conv::Operator)0, cutlass::conv::Conv2dProblemSize, (cutlass::conv::GroupMode)0>>(T1::Params)",
+            "count": 1458,
+            "total_ms": 50.87959899999996,
+            "avg_us": 34.89684430727018
+          },
+          {
+            "kernel": "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize256x128x64_stage2_warpsize4x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+            "count": 24,
+            "total_ms": 49.987356,
+            "avg_us": 2082.8065
+          },
+          {
+            "kernel": "void cutlass::Kernel<cutlass::conv::kernel::ImplicitGemmConvolution<cutlass::conv::threadblock::ImplicitGemmMultistage<cutlass::gemm::GemmShape<(int)128, (int)64, (int)64>, cutlass::conv::threadblock::Conv2dFpropActivationTileAccessIteratorOptimized<cutlass::MatrixShape<(int)128, (int)64>, signed char, cutlass::layout::TensorNHWC, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)64, (int)128>, (int)128, cutlass::PitchLinearShape<(int)4, (int)8>, (int)16>, cutlass::AlignedArray<signed char, (int)16, (int)16>>, cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<(int)128, (int)64>, signed char, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, (int)0, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)64, (int)128>, (int)128, cutlass::PitchLinearShape<(int)4, (int)8>, (int)16>, (int)16>, (cutlass::arch::CacheOperation::Kind)0, cutlass::conv::threadblock::Conv2dFpropFilterTileAccessIteratorOptimized<cutlass::MatrixShape<(int)64, (int)64>, signed char, cutlass::layout::TensorNHWC, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)64, (int)64>, (int)128, cutlass::PitchLinearShape<(int)4, (int)8>, (int)16>, cutlass::AlignedArray<signed char, (int)16, (int)16>, (bool)0>, cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<(int)64, (int)64>, signed char, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, (int)1, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)64, (int)64>, (int)128, cutlass::PitchLinearShape<(int)4, (int)8>, (int)16>, (int)16>, (cutlass::arch::CacheOperation::Kind)1, cutlass::gemm::threadblock::MmaPolicy<cutlass::gemm::warp::MmaTensorOp<cutlass::gemm::GemmShape<(int)64, (int)32, (int)64>, signed char, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, signed char, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, int, cutlass::layout::RowMajor, cutlass::gemm::warp::MmaTensorOpPolicy<cutlass::arch::Mma<cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, (int)32, signed char, cutlass::layout::RowMajor, signed char, cutlass::layout::ColumnMajor, int, cutlass::layout::RowMajor, cutlass::arch::OpMultiplyAddSaturate>, cutlass::MatrixShape<(int)1, (int)1>>, (int)1, (bool)0, bool>, cutlass::MatrixShape<(int)0, (int)0>, cutlass::MatrixShape<(int)0, (int)0>, (int)1>, (int)4, bool>, cutlass::epilogue::threadblock::Epilogue<cutlass::gemm::GemmShape<(int)128, (int)64, (int)64>, cutlass::gemm::warp::MmaTensorOp<cutlass::gemm::GemmShape<(int)64, (int)32, (int)64>, signed char, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, signed char, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, int, cutlass::layout::RowMajor, cutlass::gemm::warp::MmaTensorOpPolicy<cutlass::arch::Mma<cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, (int)32, signed char, cutlass::layout::RowMajor, signed char, cutlass::layout::ColumnMajor, int, cutlass::layout::RowMajor, cutlass::arch::OpMultiplyAddSaturate>, cutlass::MatrixShape<(int)1, (int)1>>, (int)1, (bool)0, bool>, (int)1, cutlass::epilogue::threadblock::PredicatedTileIteratorConv<cutlass::epilogue::threadblock::OutputTileOptimalThreadMap<cutlass::epilogue::threadblock::OutputTileShape<(int)64, (int)8, (int)2, (int)1, (int)1>, cutlass::epilogue::threadblock::OutputTileShape<(int)1, (int)8, (int)1, (int)1, (int)8>, (int)128, (int)8, (int)16>, cutlass::half_t, (bool)0, cutlass::layout::NoPermute, (bool)0, (int)4>, cutlass::epilogue::warp::FragmentIteratorTensorOp<cutlass::gemm::GemmShape<(int)64, (int)32, (int)64>, cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, int, cutlass::Array<int, (int)4, (bool)1>, cutlass::layout::RowMajor>, cutlass::epilogue::warp::TileIteratorTensorOpMixed<cutlass::gemm::GemmShape<(int)64, (int)32, (int)64>, cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, int, (int)32, (int)16, (int)8, (int)8, (bool)0>, cutlass::epilogue::threadblock::SharedLoadIteratorMixed<cutlass::epilogue::threadblock::OutputTileOptimalThreadMap<cutlass::epilogue::threadblock::OutputTileShape<(int)64, (int)8, (int)2, (int)1, (int)1>, cutlass::epilogue::threadblock::OutputTileShape<(int)1, (int)8, (int)1, (int)1, (int)8>, (int)128, (int)8, (int)16>::CompactedThreadMap, int, (int)32, (int)16, (int)8, (int)8, (bool)0>, Int8DequantScaleSource<(int)8>, cutlass::MatrixShape<(int)0, (int)8>, (int)2, (int)1>, cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<(int)1>, (cutlass::conv::Operator)0, cutlass::conv::Conv2dProblemSize, (cutlass::conv::GroupMode)0>>(T1::Params)",
+            "count": 767,
+            "total_ms": 47.20460200000004,
+            "avg_us": 61.544461538461526
+          },
+          {
+            "kernel": "void cutlass::Kernel<cutlass::conv::kernel::ImplicitGemmConvolution<cutlass::conv::threadblock::ImplicitGemmMultistage<cutlass::gemm::GemmShape<(int)128, (int)128, (int)64>, cutlass::conv::threadblock::Conv2dFpropActivationTileAccessIteratorOptimized<cutlass::MatrixShape<(int)128, (int)64>, signed char, cutlass::layout::TensorNHWC, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)64, (int)128>, (int)128, cutlass::PitchLinearShape<(int)4, (int)8>, (int)16>, cutlass::AlignedArray<signed char, (int)16, (int)16>>, cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<(int)128, (int)64>, signed char, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, (int)0, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)64, (int)128>, (int)128, cutlass::PitchLinearShape<(int)4, (int)8>, (int)16>, (int)16>, (cutlass::arch::CacheOperation::Kind)0, cutlass::conv::threadblock::Conv2dFpropFilterTileAccessIteratorOptimized<cutlass::MatrixShape<(int)64, (int)128>, signed char, cutlass::layout::TensorNHWC, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)64, (int)128>, (int)128, cutlass::PitchLinearShape<(int)4, (int)8>, (int)16>, cutlass::AlignedArray<signed char, (int)16, (int)16>, (bool)0>, cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<(int)64, (int)128>, signed char, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, (int)1, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)64, (int)128>, (int)128, cutlass::PitchLinearShape<(int)4, (int)8>, (int)16>, (int)16>, (cutlass::arch::CacheOperation::Kind)1, cutlass::gemm::threadblock::MmaPolicy<cutlass::gemm::warp::MmaTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)64>, signed char, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, signed char, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, int, cutlass::layout::RowMajor, cutlass::gemm::warp::MmaTensorOpPolicy<cutlass::arch::Mma<cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, (int)32, signed char, cutlass::layout::RowMajor, signed char, cutlass::layout::ColumnMajor, int, cutlass::layout::RowMajor, cutlass::arch::OpMultiplyAddSaturate>, cutlass::MatrixShape<(int)1, (int)1>>, (int)1, (bool)0, bool>, cutlass::MatrixShape<(int)0, (int)0>, cutlass::MatrixShape<(int)0, (int)0>, (int)1>, (int)4, bool>, cutlass::epilogue::threadblock::Epilogue<cutlass::gemm::GemmShape<(int)128, (int)128, (int)64>, cutlass::gemm::warp::MmaTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)64>, signed char, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, signed char, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, int, cutlass::layout::RowMajor, cutlass::gemm::warp::MmaTensorOpPolicy<cutlass::arch::Mma<cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, (int)32, signed char, cutlass::layout::RowMajor, signed char, cutlass::layout::ColumnMajor, int, cutlass::layout::RowMajor, cutlass::arch::OpMultiplyAddSaturate>, cutlass::MatrixShape<(int)1, (int)1>>, (int)1, (bool)0, bool>, (int)1, cutlass::epilogue::threadblock::PredicatedTileIteratorConv<cutlass::epilogue::threadblock::OutputTileOptimalThreadMap<cutlass::epilogue::threadblock::OutputTileShape<(int)128, (int)8, (int)2, (int)1, (int)1>, cutlass::epilogue::threadblock::OutputTileShape<(int)1, (int)8, (int)1, (int)1, (int)8>, (int)128, (int)8, (int)16>, cutlass::half_t, (bool)0, cutlass::layout::NoPermute, (bool)0, (int)4>, cutlass::epilogue::warp::FragmentIteratorTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)64>, cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, int, cutlass::Array<int, (int)4, (bool)1>, cutlass::layout::RowMajor>, cutlass::epilogue::warp::TileIteratorTensorOpMixed<cutlass::gemm::GemmShape<(int)64, (int)64, (int)64>, cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, int, (int)32, (int)16, (int)8, (int)8, (bool)0>, cutlass::epilogue::threadblock::SharedLoadIteratorMixed<cutlass::epilogue::threadblock::OutputTileOptimalThreadMap<cutlass::epilogue::threadblock::OutputTileShape<(int)128, (int)8, (int)2, (int)1, (int)1>, cutlass::epilogue::threadblock::OutputTileShape<(int)1, (int)8, (int)1, (int)1, (int)8>, (int)128, (int)8, (int)16>::CompactedThreadMap, int, (int)32, (int)16, (int)8, (int)8, (bool)0>, Int8DequantScaleSource<(int)8>, cutlass::MatrixShape<(int)0, (int)8>, (int)2, (int)1>, cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<(int)1>, (cutlass::conv::Operator)0, cutlass::conv::Conv2dProblemSize, (cutlass::conv::GroupMode)0>>(T1::Params)",
+            "count": 602,
+            "total_ms": 43.648104000000046,
+            "avg_us": 72.50515614617933
+          },
+          {
+            "kernel": "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+            "count": 40,
+            "total_ms": 42.454913999999995,
+            "avg_us": 1061.3728500000002
+          },
+          {
+            "kernel": "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage4_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+            "count": 28,
+            "total_ms": 39.16477,
+            "avg_us": 1398.7417857142857
+          },
+          {
+            "kernel": "void at::native::vectorized_elementwise_kernel<(int)4, at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float>>, at::detail::Array<char *, (int)3>>(int, T2, T3)",
+            "count": 61,
+            "total_ms": 39.045026,
+            "avg_us": 640.0823934426229
+          },
+          {
+            "kernel": "void cutlass::Kernel<cutlass::conv::kernel::ImplicitGemmConvolution<cutlass::conv::threadblock::ImplicitGemmMultistage<cutlass::gemm::GemmShape<(int)64, (int)256, (int)64>, cutlass::conv::threadblock::Conv2dFpropActivationTileAccessIteratorOptimized<cutlass::MatrixShape<(int)64, (int)64>, signed char, cutlass::layout::TensorNHWC, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)64, (int)64>, (int)256, cutlass::PitchLinearShape<(int)4, (int)8>, (int)16>, cutlass::AlignedArray<signed char, (int)16, (int)16>>, cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<(int)64, (int)64>, signed char, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, (int)0, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)64, (int)64>, (int)256, cutlass::PitchLinearShape<(int)4, (int)8>, (int)16>, (int)16>, (cutlass::arch::CacheOperation::Kind)0, cutlass::conv::threadblock::Conv2dFpropFilterTileAccessIteratorOptimized<cutlass::MatrixShape<(int)64, (int)256>, signed char, cutlass::layout::TensorNHWC, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)64, (int)256>, (int)256, cutlass::PitchLinearShape<(int)4, (int)8>, (int)16>, cutlass::AlignedArray<signed char, (int)16, (int)16>, (bool)0>, cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<(int)64, (int)256>, signed char, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, (int)1, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)64, (int)256>, (int)256, cutlass::PitchLinearShape<(int)4, (int)8>, (int)16>, (int)16>, (cutlass::arch::CacheOperation::Kind)1, cutlass::gemm::threadblock::MmaPolicy<cutlass::gemm::warp::MmaTensorOp<cutlass::gemm::GemmShape<(int)32, (int)64, (int)64>, signed char, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, signed char, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, int, cutlass::layout::RowMajor, cutlass::gemm::warp::MmaTensorOpPolicy<cutlass::arch::Mma<cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, (int)32, signed char, cutlass::layout::RowMajor, signed char, cutlass::layout::ColumnMajor, int, cutlass::layout::RowMajor, cutlass::arch::OpMultiplyAddSaturate>, cutlass::MatrixShape<(int)1, (int)1>>, (int)1, (bool)0, bool>, cutlass::MatrixShape<(int)0, (int)0>, cutlass::MatrixShape<(int)0, (int)0>, (int)1>, (int)4, bool>, cutlass::epilogue::threadblock::Epilogue<cutlass::gemm::GemmShape<(int)64, (int)256, (int)64>, cutlass::gemm::warp::MmaTensorOp<cutlass::gemm::GemmShape<(int)32, (int)64, (int)64>, signed char, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, signed char, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, int, cutlass::layout::RowMajor, cutlass::gemm::warp::MmaTensorOpPolicy<cutlass::arch::Mma<cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, (int)32, signed char, cutlass::layout::RowMajor, signed char, cutlass::layout::ColumnMajor, int, cutlass::layout::RowMajor, cutlass::arch::OpMultiplyAddSaturate>, cutlass::MatrixShape<(int)1, (int)1>>, (int)1, (bool)0, bool>, (int)1, cutlass::epilogue::threadblock::PredicatedTileIteratorConv<cutlass::epilogue::threadblock::OutputTileOptimalThreadMap<cutlass::epilogue::threadblock::OutputTileShape<(int)256, (int)8, (int)2, (int)1, (int)1>, cutlass::epilogue::threadblock::OutputTileShape<(int)1, (int)4, (int)1, (int)1, (int)4>, (int)256, (int)8, (int)16>, cutlass::half_t, (bool)0, cutlass::layout::NoPermute, (bool)0, (int)4>, cutlass::epilogue::warp::FragmentIteratorTensorOp<cutlass::gemm::GemmShape<(int)32, (int)64, (int)64>, cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, int, cutlass::Array<int, (int)4, (bool)1>, cutlass::layout::RowMajor>, cutlass::epilogue::warp::TileIteratorTensorOpMixed<cutlass::gemm::GemmShape<(int)32, (int)64, (int)64>, cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, int, (int)32, (int)16, (int)8, (int)8, (bool)0>, cutlass::epilogue::threadblock::SharedLoadIteratorMixed<cutlass::epilogue::threadblock::OutputTileOptimalThreadMap<cutlass::epilogue::threadblock::OutputTileShape<(int)256, (int)8, (int)2, (int)1, (int)1>, cutlass::epilogue::threadblock::OutputTileShape<(int)1, (int)4, (int)1, (int)1, (int)4>, (int)256, (int)8, (int)16>::CompactedThreadMap, int, (int)32, (int)16, (int)8, (int)8, (bool)0>, Int8DequantScaleSource<(int)8>, cutlass::MatrixShape<(int)0, (int)8>, (int)2, (int)1>, cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<(int)1>, (cutlass::conv::Operator)0, cutlass::conv::Conv2dProblemSize, (cutlass::conv::GroupMode)0>>(T1::Params)",
+            "count": 570,
+            "total_ms": 38.06541299999999,
+            "avg_us": 66.78142631578949
+          },
+          {
+            "kernel": "void cutlass::Kernel<cutlass::conv::kernel::ImplicitGemmConvolution<cutlass::conv::threadblock::ImplicitGemmMultistage<cutlass::gemm::GemmShape<(int)64, (int)128, (int)64>, cutlass::conv::threadblock::Conv2dFpropActivationTileAccessIteratorOptimized<cutlass::MatrixShape<(int)64, (int)64>, signed char, cutlass::layout::TensorNHWC, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)64, (int)64>, (int)128, cutlass::PitchLinearShape<(int)4, (int)8>, (int)16>, cutlass::AlignedArray<signed char, (int)16, (int)16>>, cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<(int)64, (int)64>, signed char, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, (int)0, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)64, (int)64>, (int)128, cutlass::PitchLinearShape<(int)4, (int)8>, (int)16>, (int)16>, (cutlass::arch::CacheOperation::Kind)0, cutlass::conv::threadblock::Conv2dFpropFilterTileAccessIteratorOptimized<cutlass::MatrixShape<(int)64, (int)128>, signed char, cutlass::layout::TensorNHWC, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)64, (int)128>, (int)128, cutlass::PitchLinearShape<(int)4, (int)8>, (int)16>, cutlass::AlignedArray<signed char, (int)16, (int)16>, (bool)0>, cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<(int)64, (int)128>, signed char, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, (int)1, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)64, (int)128>, (int)128, cutlass::PitchLinearShape<(int)4, (int)8>, (int)16>, (int)16>, (cutlass::arch::CacheOperation::Kind)1, cutlass::gemm::threadblock::MmaPolicy<cutlass::gemm::warp::MmaTensorOp<cutlass::gemm::GemmShape<(int)32, (int)64, (int)64>, signed char, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, signed char, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, int, cutlass::layout::RowMajor, cutlass::gemm::warp::MmaTensorOpPolicy<cutlass::arch::Mma<cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, (int)32, signed char, cutlass::layout::RowMajor, signed char, cutlass::layout::ColumnMajor, int, cutlass::layout::RowMajor, cutlass::arch::OpMultiplyAddSaturate>, cutlass::MatrixShape<(int)1, (int)1>>, (int)1, (bool)0, bool>, cutlass::MatrixShape<(int)0, (int)0>, cutlass::MatrixShape<(int)0, (int)0>, (int)1>, (int)5, bool>, cutlass::epilogue::threadblock::Epilogue<cutlass::gemm::GemmShape<(int)64, (int)128, (int)64>, cutlass::gemm::warp::MmaTensorOp<cutlass::gemm::GemmShape<(int)32, (int)64, (int)64>, signed char, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, signed char, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)8, (int)64>, int, cutlass::layout::RowMajor, cutlass::gemm::warp::MmaTensorOpPolicy<cutlass::arch::Mma<cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, (int)32, signed char, cutlass::layout::RowMajor, signed char, cutlass::layout::ColumnMajor, int, cutlass::layout::RowMajor, cutlass::arch::OpMultiplyAddSaturate>, cutlass::MatrixShape<(int)1, (int)1>>, (int)1, (bool)0, bool>, (int)1, cutlass::epilogue::threadblock::PredicatedTileIteratorConv<cutlass::epilogue::threadblock::OutputTileOptimalThreadMap<cutlass::epilogue::threadblock::OutputTileShape<(int)128, (int)8, (int)2, (int)1, (int)1>, cutlass::epilogue::threadblock::OutputTileShape<(int)1, (int)4, (int)1, (int)1, (int)4>, (int)128, (int)8, (int)16>, cutlass::half_t, (bool)0, cutlass::layout::NoPermute, (bool)0, (int)4>, cutlass::epilogue::warp::FragmentIteratorTensorOp<cutlass::gemm::GemmShape<(int)32, (int)64, (int)64>, cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, int, cutlass::Array<int, (int)4, (bool)1>, cutlass::layout::RowMajor>, cutlass::epilogue::warp::TileIteratorTensorOpMixed<cutlass::gemm::GemmShape<(int)32, (int)64, (int)64>, cutlass::gemm::GemmShape<(int)16, (int)8, (int)32>, int, (int)32, (int)16, (int)8, (int)8, (bool)0>, cutlass::epilogue::threadblock::SharedLoadIteratorMixed<cutlass::epilogue::threadblock::OutputTileOptimalThreadMap<cutlass::epilogue::threadblock::OutputTileShape<(int)128, (int)8, (int)2, (int)1, (int)1>, cutlass::epilogue::threadblock::OutputTileShape<(int)1, (int)4, (int)1, (int)1, (int)4>, (int)128, (int)8, (int)16>::CompactedThreadMap, int, (int)32, (int)16, (int)8, (int)8, (bool)0>, Int8DequantScaleSource<(int)8>, cutlass::MatrixShape<(int)0, (int)8>, (int)2, (int)1>, cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<(int)1>, (cutlass::conv::Operator)0, cutlass::conv::Conv2dProblemSize, (cutlass::conv::GroupMode)0>>(T1::Params)",
+            "count": 755,
+            "total_ms": 36.61437999999997,
+            "avg_us": 48.49586754966882
+          }
+        ]
+      }
+    },
+    "int4_baseline": {
+      "benchmark": {
+        "total_time": 0.5715820789337158,
+        "num_samples": 16,
+        "time_per_sample": 0.03572387993335724,
+        "time_per_step_ms": 2.381591995557149,
+        "quant_memory_after_warmup": {
+          "total_tracked_mib": 294.413,
+          "cache_and_residual_mib": 0.0,
+          "weight_mib": 293.133,
+          "scale_and_bias_mib": 1.28,
+          "buckets_mib": {
+            "conv_bias_mib": 0.275,
+            "conv_quant_weights_mib": 225.281,
+            "conv_scale_state_mib": 0.933,
+            "linear_bias_mib": 0.072,
+            "linear_fp16_weights_mib": 54.281,
+            "linear_quant_weights_mib": 13.57,
+            "linear_scale_state_mib": 0.0
+          },
+          "module_counts": {
+            "OptimizedInt4Conv2d": 140,
+            "OptimizedInt4Linear": 37
+          }
+        }
+      },
+      "nsys": {
+        "sqlite": "integration/results/awqtile_io/off/profiles/int4_baseline_s15_b16.sqlite",
+        "memcpy": {
+          "Host-to-Device": {
+            "count": 2188,
+            "total_mib": 2650.083038330078,
+            "total_ms": 276.43400499999444
+          },
+          "Device-to-Device": {
+            "count": 865,
+            "total_mib": 164.24514770507812,
+            "total_ms": 1.8323680000000082
+          },
+          "Device-to-Host": {
+            "count": 588,
+            "total_mib": 12.0703125,
+            "total_ms": 5.769454000000002
+          }
+        },
+        "memcpy_total": {
+          "count": 3641,
+          "total_mib": 2826.3984985351562,
+          "total_ms": 284.03582699999447
+        },
+        "osrt_io": {
+          "read": {
+            "count": 7990,
+            "total_ms": 2408.136948999996,
+            "avg_us": 301.3938609511887
+          },
+          "open64": {
+            "count": 3150,
+            "total_ms": 227.92627700000006,
+            "avg_us": 72.35754825396828
+          },
+          "write": {
+            "count": 94,
+            "total_ms": 24.946025,
+            "avg_us": 265.3832446808511
+          },
+          "fopen64": {
+            "count": 7,
+            "total_ms": 20.406442000000002,
+            "avg_us": 2915.2059999999997
+          },
+          "fgets": {
+            "count": 3015,
+            "total_ms": 1.6958860000000096,
+            "avg_us": 0.562482918739625
+          },
+          "fread": {
+            "count": 1,
+            "total_ms": 1.005835,
+            "avg_us": 1005.835
+          },
+          "fopen": {
+            "count": 119,
+            "total_ms": 0.6499049999999997,
+            "avg_us": 5.46138655462185
+          },
+          "open": {
+            "count": 15,
+            "total_ms": 0.136343,
+            "avg_us": 9.089533333333334
+          },
+          "fwrite": {
+            "count": 2,
+            "total_ms": 0.00954,
+            "avg_us": 4.77
+          }
+        },
+        "top_kernels": [
+          {
+            "kernel": "void <unnamed>::softmax_warp_forward<c10::Half, c10::Half, float, (int)10, (bool)0, (bool)0>(T2 *, const T1 *, int, int, int, const bool *, int, bool)",
+            "count": 185,
+            "total_ms": 163.802424,
+            "avg_us": 885.418508108108
+          },
+          {
+            "kernel": "void cutlass::Kernel<cutlass::conv::kernel::ImplicitGemmConvolution<cutlass::conv::threadblock::ImplicitGemmMultistage<cutlass::gemm::GemmShape<(int)128, (int)128, (int)128>, cutlass::conv::threadblock::Conv2dFpropActivationTileAccessIteratorOptimized<cutlass::MatrixShape<(int)128, (int)128>, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::TensorNHWC, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)128, (int)128>, (int)128, cutlass::PitchLinearShape<(int)4, (int)8>, (int)32>, cutlass::AlignedArray<cutlass::integer_subbyte<(int)4, (bool)1>, (int)32, (int)16>>, cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<(int)128, (int)128>, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)4, (int)128>, (int)0, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)128, (int)128>, (int)128, cutlass::PitchLinearShape<(int)4, (int)8>, (int)32>, (int)16>, (cutlass::arch::CacheOperation::Kind)0, cutlass::conv::threadblock::Conv2dFpropFilterTileAccessIteratorOptimized<cutlass::MatrixShape<(int)128, (int)128>, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::TensorNHWC, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)128, (int)128>, (int)128, cutlass::PitchLinearShape<(int)4, (int)8>, (int)32>, cutlass::AlignedArray<cutlass::integer_subbyte<(int)4, (bool)1>, (int)32, (int)16>, (bool)0>, cutlass::transform::threadblock::RegularTileAccessIterator<cutlass::MatrixShape<(int)128, (int)128>, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)4, (int)128>, (int)1, cutlass::transform::PitchLinearWarpRakedThreadMap<cutlass::PitchLinearShape<(int)128, (int)128>, (int)128, cutlass::PitchLinearShape<(int)4, (int)8>, (int)32>, (int)16>, (cutlass::arch::CacheOperation::Kind)1, cutlass::gemm::threadblock::MmaPolicy<cutlass::gemm::warp::MmaTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)128>, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)4, (int)128>, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)4, (int)128>, int, cutlass::layout::RowMajor, cutlass::gemm::warp::MmaTensorOpPolicy<cutlass::arch::Mma<cutlass::gemm::GemmShape<(int)16, (int)8, (int)64>, (int)32, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::RowMajor, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::ColumnMajor, int, cutlass::layout::RowMajor, cutlass::arch::OpMultiplyAddSaturate>, cutlass::MatrixShape<(int)1, (int)1>>, (int)1, (bool)0, bool>, cutlass::MatrixShape<(int)0, (int)0>, cutlass::MatrixShape<(int)0, (int)0>, (int)1>, (int)3, bool>, cutlass::epilogue::threadblock::Epilogue<cutlass::gemm::GemmShape<(int)128, (int)128, (int)128>, cutlass::gemm::warp::MmaTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)128>, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::RowMajorTensorOpMultiplicandCrosswise<(int)4, (int)128>, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::ColumnMajorTensorOpMultiplicandCrosswise<(int)4, (int)128>, int, cutlass::layout::RowMajor, cutlass::gemm::warp::MmaTensorOpPolicy<cutlass::arch::Mma<cutlass::gemm::GemmShape<(int)16, (int)8, (int)64>, (int)32, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::RowMajor, cutlass::integer_subbyte<(int)4, (bool)1>, cutlass::layout::ColumnMajor, int, cutlass::layout::RowMajor, cutlass::arch::OpMultiplyAddSaturate>, cutlass::MatrixShape<(int)1, (int)1>>, (int)1, (bool)0, bool>, (int)1, cutlass::epilogue::threadblock::PredicatedTileIteratorConv<cutlass::epilogue::threadblock::OutputTileOptimalThreadMap<cutlass::epilogue::threadblock::OutputTileShape<(int)128, (int)8, (int)2, (int)1, (int)1>, cutlass::epilogue::threadblock::OutputTileShape<(int)1, (int)8, (int)1, (int)1, (int)8>, (int)128, (int)1, (int)32>, float, (bool)0, cutlass::layout::NoPermute, (bool)0, (int)4>, cutlass::epilogue::warp::FragmentIteratorTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)128>, cutlass::gemm::GemmShape<(int)16, (int)8, (int)64>, int, cutlass::Array<int, (int)4, (bool)1>, cutlass::layout::RowMajor>, cutlass::epilogue::warp::TileIteratorTensorOp<cutlass::gemm::GemmShape<(int)64, (int)64, (int)128>, cutlass::gemm::GemmShape<(int)16, (int)8, (int)64>, int, cutlass::layout::RowMajor>, cutlass::epilogue::threadblock::SharedLoadIterator<cutlass::epilogue::threadblock::OutputTileOptimalThreadMap<cutlass::epilogue::threadblock::OutputTileShape<(int)128, (int)8, (int)2, (int)1, (int)1>, cutlass::epilogue::threadblock::OutputTileShape<(int)1, (int)8, (int)1, (int)1, (int)8>, (int)128, (int)1, (int)32>::CompactedThreadMap, int, (int)4>, cutlass::epilogue::thread::LinearCombination<float, (int)1, int, float, (cutlass::epilogue::thread::ScaleType::Kind)0, (cutlass::FloatRoundStyle)2, float>, cutlass::MatrixShape<(int)0, (int)8>, (int)1, (int)1>, cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<(int)1>, (cutlass::conv::Operator)0, cutlass::conv::Conv2dProblemSize, (cutlass::conv::GroupMode)0>>(T1::Params)",
+            "count": 2590,
+            "total_ms": 120.31377200000037,
+            "avg_us": 46.45319382239387
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)2, void at::native::gpu_kernel_impl_nocast<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase &)::[lambda() (instance 3)]::operator ()() const::[lambda() (instance 7)]::operator ()() const::[lambda(float) (instance 1)]>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 476,
+            "total_ms": 117.23566900000003,
+            "avg_us": 246.29342226890753
+          },
+          {
+            "kernel": "void cutlass__5x_cudnn::Kernel<cutlass_tensorop_f16_s16816fprop_optimized_f16_128x128_32x3_nhwc_align8>(T1::Params)",
+            "count": 157,
+            "total_ms": 84.867822,
+            "avg_us": 540.5593757961781
+          },
+          {
+            "kernel": "void cutlass::Kernel2<cutlass_80_wmma_tensorop_f16_s161616gemm_f16_32x32_32x1_nn_align8>(T1::Params)",
+            "count": 185,
+            "total_ms": 84.50248799999999,
+            "avg_us": 456.7702054054057
+          },
+          {
+            "kernel": "void cutlass::Kernel2<cutlass_80_wmma_tensorop_f16_s161616gemm_f16_32x32_128x2_nn_align8>(T1::Params)",
+            "count": 185,
+            "total_ms": 82.25480100000004,
+            "avg_us": 444.6205459459458
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)4, void at::native::gpu_kernel_impl_nocast<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase &)::[lambda() (instance 3)]::operator ()() const::[lambda() (instance 10)]::operator ()() const::[lambda(c10::Half) (instance 1)]>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 5980,
+            "total_ms": 74.13784400000037,
+            "avg_us": 12.397632775919764
+          },
+          {
+            "kernel": "void group_norm_silu_quantize_pack_nhwc_kernel<__half>(const T1 *, signed char *, const T1 *, const T1 *, const T1 *, const T1 *, const float *, const float *, int, long, int, float, bool)",
+            "count": 2294,
+            "total_ms": 68.11928500000008,
+            "avg_us": 29.69454446381866
+          },
+          {
+            "kernel": "void at::native::elementwise_kernel<(int)128, (int)4, void at::native::gpu_kernel_impl_nocast<at::native::CUDAFunctor_add<c10::Half>>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)",
+            "count": 2337,
+            "total_ms": 49.14986999999997,
+            "avg_us": 21.03118100128373
+          },
+          {
+            "kernel": "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+            "count": 42,
+            "total_ms": 47.45507199999998,
+            "avg_us": 1129.8826666666666
+          },
+          {
+            "kernel": "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x256x32_stage3_warpsize2x4x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+            "count": 18,
+            "total_ms": 40.493095999999994,
+            "avg_us": 2249.6164444444444
+          },
+          {
+            "kernel": "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize256x128x64_stage2_warpsize4x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+            "count": 22,
+            "total_ms": 40.406791,
+            "avg_us": 1836.6723181818177
+          },
+          {
+            "kernel": "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage4_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+            "count": 28,
+            "total_ms": 39.142053,
+            "avg_us": 1397.9304642857146
+          },
+          {
+            "kernel": "void at::native::vectorized_elementwise_kernel<(int)4, at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float>>, at::detail::Array<char *, (int)3>>(int, T2, T3)",
+            "count": 61,
+            "total_ms": 39.050247000000006,
+            "avg_us": 640.1679836065573
+          },
+          {
+            "kernel": "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize256x128x32_stage3_warpsize4x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+            "count": 22,
+            "total_ms": 34.627853,
+            "avg_us": 1573.9933181818183
+          },
+          {
+            "kernel": "void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase &)::[lambda() (instance 3)]::operator ()() const::[lambda() (instance 10)]::operator ()() const::[lambda(c10::Half) (instance 1)], at::detail::Array<char *, (int)2>, TrivialOffsetCalculator<(int)1, unsigned int>, TrivialOffsetCalculator<(int)1, unsigned int>, at::native::memory::LoadWithCast<(int)1>, at::native::memory::StoreWithCast<(int)1>>(int, T1, T2, T3, T4, T5, T6)",
+            "count": 1087,
+            "total_ms": 33.49351400000002,
+            "avg_us": 30.812800367985275
+          },
+          {
+            "kernel": "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x64_stage3_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+            "count": 22,
+            "total_ms": 33.097453,
+            "avg_us": 1504.429681818182
+          },
+          {
+            "kernel": "void group_norm_silu_nhwc_kernel<__half>(const T1 *, T1 *, const T1 *, const T1 *, const T1 *, const T1 *, int, long, int, float, bool)",
+            "count": 1073,
+            "total_ms": 31.15795299999996,
+            "avg_us": 29.038166821994334
+          },
+          {
+            "kernel": "void cutlass__5x_cudnn::Kernel<cutlass_tensorop_f16_s16816fprop_optimized_f16_128x256_32x3_nhwc_align8>(T1::Params)",
+            "count": 50,
+            "total_ms": 29.899915000000004,
+            "avg_us": 597.9983
+          },
+          {
+            "kernel": "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x256x64_stage2_warpsize2x4x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+            "count": 16,
+            "total_ms": 28.409036999999998,
+            "avg_us": 1775.5648125
+          }
+        ]
+      }
+    }
+  }
+}

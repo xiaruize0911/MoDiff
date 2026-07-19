@@ -34,10 +34,11 @@ setup(
                 'csrc/kernels/layout_transform.cu',
                 'csrc/kernels/group_norm_silu.cu',
                 'csrc/kernels/fused_gn_qkv.cu',
-                'csrc/kernels/flash_attn_int8.cu',
                 'csrc/kernels/quantize_qkv.cu',
                 'csrc/kernels/gemm_wxax.cu',
+                'csrc/kernels/awq_w8a8_gemm_cuda.cu',
                 'csrc/kernels/attn_quant_gemm.cu',
+    'csrc/kernels/flash_attn_int8.cu',
             ],
             include_dirs=[
                 os.path.join(CUTLASS_PATH, 'include'),

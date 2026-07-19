@@ -204,4 +204,73 @@ if sn:
     ax.set_xticks(x); ax.set_xticklabels(labels); ax.set_ylabel("stage speedup vs fp16 (GN+quant+GEMM)")
     ax.set_title("Projection stage INCLUDING GroupNorm: shared GN (38–54%) dilutes the quant win toward 1.0")
     ax.legend(fontsize=8); save(fig, "11_stage_with_norm.png")
+# ---- 12. FUSED projection stage (GN fused): fp16 wins ----
+fs = rd(D, "fused_stage.csv")
+if fs:
+    labels = [r["shape"] for r in fs]; x = np.arange(len(labels)); w = 0.26
+    i8 = [float(r["int8_vs_fp16"]) for r in fs]; aq = [float(r["awq_vs_fp16"]) for r in fs]; i4 = [float(r["int4_vs_fp16"]) for r in fs]
+    fig, ax = plt.subplots(figsize=(10, 4.7))
+    ax.bar(x - w, i8, w, label="ours w8a8", color=INT8); ax.bar(x, aq, w, label="AWQ w8a8", color="#72B7B2"); ax.bar(x + w, i4, w, label="ours w4a4", color=INT4)
+    ax.axhline(1.0, ls="--", c=FP16, lw=1.2, label="fp16 fused GN+qkv (=1.0)")
+    for i in range(len(labels)):
+        for off, v in [(-w, i8[i]), (0, aq[i]), (w, i4[i])]:
+            ax.text(i + off, v, f"{v:.2f}", ha="center", va="bottom", fontsize=7)
+    ax.set_xticks(x); ax.set_xticklabels(labels); ax.set_ylabel("fused-stage speedup vs fp16")
+    ax.set_title("FUSED projection stage: fp16 fuses GN into the matmul (1 kernel) -> beats quantized\n(which needs GN→int8 fused + a separate short-K int8 GEMM). All <1.0×.")
+    ax.legend(fontsize=8); save(fig, "12_fused_stage.png")
+# ---- 13. Fusion ceiling: bare GEMM (what a fused kernel converges to) vs fp16 fused stage ----
+fc = rd(D, "fuse_ceiling.csv")
+if fc:
+    labels = [r["shape"] for r in fc]; x = np.arange(len(labels)); w = 0.2
+    fp = [float(r["fp16_fused_stage_us"]) for r in fc]; i8 = [float(r["int8_gemm_only_us"]) for r in fc]
+    aq = [float(r["awq_gemm_only_us"]) for r in fc]; i4 = [float(r["int4_gemm_only_us"]) for r in fc]
+    ow = [float(r["out_write_floor_us"]) for r in fc]
+    fig, ax = plt.subplots(figsize=(11, 5))
+    ax.bar(x - 1.5 * w, fp, w, label="fp16 fused stage", color=FP16)
+    ax.bar(x - 0.5 * w, i8, w, label="int8 GEMM (ceiling)", color=INT8)
+    ax.bar(x + 0.5 * w, aq, w, label="AWQ GEMM (ceiling)", color="#72B7B2")
+    ax.bar(x + 1.5 * w, i4, w, label="int4 GEMM (ceiling)", color=INT4)
+    for i in range(len(labels)):
+        ax.plot([i - 2 * w, i + 2 * w], [ow[i], ow[i]], ls=":", c="#888", lw=1.4)
+    ax.text(len(labels) - 1 + 2 * w, ow[-1], " out-write floor", va="center", fontsize=7, c="#888")
+    for i in range(len(labels)):
+        for off, v in [(-1.5 * w, fp[i]), (-0.5 * w, i8[i]), (0.5 * w, aq[i]), (1.5 * w, i4[i])]:
+            ax.text(i + off, v, f"{v:.0f}", ha="center", va="bottom", fontsize=7)
+    ax.set_xticks(x); ax.set_xticklabels(labels); ax.set_ylabel("µs (lower = better)")
+    ax.set_title("Fusion CEILING: a fused GN-prologue int8/int4 GEMM converges to the bare-GEMM time.\n"
+                 "Best ceiling beats fp16 by 1.84×/2.00×/2.10× — §11's loss was the split, not a wall.")
+    ax.legend(fontsize=8); save(fig, "13_fuse_ceiling.png")
 print("plots done")
+# ---- 14. SPLIT stage, architecture-matched (identical 3-op chain: norm[+quant] -> GEMM -> bias-add) ----
+ss = rd(D, "split_stage.csv")
+if ss:
+    labels = [r["shape"] for r in ss]; x = np.arange(len(labels)); w = 0.26
+    i8 = [float(r["int8_vs_fp16_split"]) for r in ss]; aq = [float(r["awq_vs_fp16_split"]) for r in ss]
+    fig, ax = plt.subplots(figsize=(9, 4.7))
+    ax.bar(x - w / 2, i8, w, label="ours w8a8, split", color=INT8)
+    ax.bar(x + w / 2, aq, w, label="AWQ w8a8, split", color="#72B7B2")
+    ax.axhline(1.0, ls="--", c=FP16, lw=1.2, label="fp16, split (=1.0)")
+    for i in range(len(labels)):
+        for off, v in [(-w / 2, i8[i]), (w / 2, aq[i])]:
+            ax.text(i + off, v, f"{v:.2f}", ha="center", va="bottom", fontsize=8)
+    ax.set_xticks(x); ax.set_xticklabels(labels); ax.set_ylabel("split-stage speedup vs fp16-split")
+    ax.set_title("SPLIT projection stage, matched op-count on every path (norm[+quant] -> GEMM -> +bias):\n"
+                 "AWQ wins at C384/C768 (1.15-1.17x), ties at C192. Fusing further into the GEMM (§13) loses.")
+    ax.legend(fontsize=8); save(fig, "14_split_stage.png")
+# ---- 15. FULL shape sweep (real UNet shapes: qkv/proj x5 resolutions + 5 time-embed MLPs) ----
+sf = rd(D, "split_stage_full.csv")
+if sf:
+    labels = [r["shape"] for r in sf]; x = np.arange(len(labels)); w = 0.26
+    i8 = [float(r["int8_vs_fp16"]) for r in sf]; aq = [float(r["awq_vs_fp16"]) for r in sf]
+    fig, ax = plt.subplots(figsize=(13, 5.2))
+    ax.bar(x - w / 2, i8, w, label="ours w8a8, split", color=INT8)
+    ax.bar(x + w / 2, aq, w, label="AWQ w8a8, split (ascale/out cached)", color="#72B7B2")
+    ax.axhline(1.0, ls="--", c=FP16, lw=1.2, label="fp16, split (=1.0)")
+    for i in range(len(labels)):
+        for off, v in [(-w / 2, i8[i]), (w / 2, aq[i])]:
+            ax.text(i + off, v, f"{v:.2f}", ha="center", va="bottom", fontsize=7)
+    ax.set_xticks(x); ax.set_xticklabels(labels, rotation=35, ha="right", fontsize=8)
+    ax.set_ylabel("split-stage speedup vs fp16-split")
+    ax.set_title("FULL shape sweep, real UNet GEMMs (attn qkv/proj x5 resolutions + 5 time-embed MLPs):\n"
+                 "AWQ wins/ties at 14/15 shapes once ascale+out buffers are cached (not rebuilt per call).")
+    ax.legend(fontsize=8); save(fig, "15_split_stage_full.png")

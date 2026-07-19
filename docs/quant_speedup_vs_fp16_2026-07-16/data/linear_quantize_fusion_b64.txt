@@ -1,0 +1,61 @@
+Proj-side quantize fusion (quantize_attn_out_int8) — churches UNet, int8, A40, batch 64
+=========================================================================================
+Kernel: fuses the mandatory attn-output transpose(1,2)+reshape layout copy AND the int8
+proj Linear's separate quantize pass into ONE gather+quantize -> int8 [b*T,C], fed to
+gemm_w8a8_awq directly. Gated MODIFF_FUSE_PROJ_QUANT (default on); engages only for a
+calibrated non-modiff W8A8 proj (21/21 attention blocks eligible).
+
+CORRECTNESS
+  Isolated kernel: bit-exact vs quantize_act_int8(a.transpose(1,2).reshape(b,T,C)), maxdiff=0 (4 shapes).
+  Real proj layers: fused vs unfused proj output max|Δ|=0 (bit-exact) on captured activations.
+  Whole UNet forward: OFF-vs-ON rel-L2 ~4e-2, within the int8 kernels' OFF-vs-OFF nondeterminism floor (~2.8e-2).
+
+PROJ-STAGE SAVING (microbench_proj_fusion.py, per-step, summed over the 21 proj instances)
+  C     T   cnt   copy+quant(unfused)   fused_quant   save/inst
+  192  1024   5        174.4 us            124.0 us     50.4 us
+  384   256   5         89.7                63.3        26.4
+  384    64   5         23.1                15.8         7.3
+  768    16   5         27.1                 8.9        18.1
+  768     4   1         21.2                 5.9        15.3
+  per-step proj input-prep: 1592 us (unfused) -> 1066 us (fused) = saved 526 us/step (33%)
+
+E2E (verify_proj_fusion.py, 5x100 steps, min-of-5)
+  fusion OFF: 105.06 ms/step
+  fusion ON : 104.88 ms/step   (delta +0.18%, within run-to-run noise)
+
+READ: correct, in-tree, removes ~0.53 ms/step of real work at the proj stage, but e2e is within
+noise because proj input-prep is ~0.5% of this conv-bound step (Amdahl). The matching qkv-side
+quantize (~0.64 ms/step) is the other half; fusing both is ~1.2% e2e at most.
+
+
+=========================================================================================
+QKV-SIDE quantize fusion (group_norm_silu_quantize_nhwc) — the other half
+=========================================================================================
+Folds the int8 qkv Linear's quantize pass into the GroupNorm producer: the attention GN
+(no SiLU) is computed in fp32 and emitted as int8 [b*T,C] directly (a free channels_last
+token-major view), fed to gemm_w8a8_awq. Reuses the existing conv-path GN-quantize kernel
+(no new CUDA). Gated MODIFF_FUSE_QKV_QUANT (default on); 21/21 qkv blocks eligible.
+NOTE: in the real int8 model _fuse_gn_qkv is OFF, so all 21 qkv layers run int8 (verified).
+
+CORRECTNESS (fused vs native-GN-fp16 + quantize_act_int8 + gemm, real activations)
+  rel-L2 ~2e-3 per block (one fp16-rounding difference: fused quantizes off fp32 GN). Whole
+  UNet OFF-vs-ON rel-L2 4.5e-2, within the OFF-vs-OFF nondeterminism floor (2.9e-2).
+
+QKV-STAGE SAVING (microbench_qkv_fusion.py, per-step, GN+quant vs GN-quant-fused)
+  C     HxW   cnt   GN+quant(unfused)   GN-quant(fused)   save/inst
+  192  32x32   5        688.8 us            521.8 us        167.0 us
+  384  16x16   5        388.8               316.9            72.0
+  384    8x8   5        190.4               164.4            26.0
+  768    4x4   5         55.3                51.6             3.7
+  768    2x2   1         21.8                 7.9            13.9
+  per-step qkv GN+quant: 6638 us -> 5281 us = saved 1357 us/step (20%; folded quantize + avoided fp16 GN round-trip)
+
+COMBINED E2E (both fusions on, verify_proj_fusion.py, 5x100 steps, min-of-5)
+  fusion OFF: 105.28 ms/step
+  fusion ON : 104.38 ms/step   (delta +0.86%)
+  (proj-only was +0.34%; adding qkv brings it to +0.86% — above the run-to-run noise floor)
+
+READ: both halves of the Linear-quantize tax are now fused away, correctly, in-tree. Combined
+e2e win is +0.86%/step at b64 — real and repeatable but still small, exactly the Amdahl ceiling
+from §16 (Linears + their quantize are a thin slice of a conv-bound step). Bigger e2e headroom
+is in conv and the memory-bound softmax/elementwise, not the Linears.

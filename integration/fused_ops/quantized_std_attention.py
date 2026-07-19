@@ -56,6 +56,13 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         # softmax c only sets the int8/int4 P grid (softmax is shift-invariant), so a single c is
         # lossy for quantized attention (row maxes vary) -- accepted here for MoDiff to compensate.
         self.static = bool(static)
+        # int8-SCORE path (bits==8 only): QKᵀ writes int8 scores (attn_qk_int8_s8out) and the softmax
+        # reads them with a DYNAMIC per-row max (attn_softmax_requant_s8_dyn) -> halves the T×T score
+        # write+read (the memory-bound bottleneck) WITHOUT the static-c quality loss. Needs a per-tensor
+        # score scale sS, self-calibrated (score absmax) over the first _calib_steps forwards on the fp16-S
+        # path, then frozen. Gate MODIFF_ATTN_S8_SCORE=1. Quality-safe (dynamic softmax).
+        self.s8_score = (bits == 8 and os.environ.get("MODIFF_ATTN_S8_SCORE") == "1")
+        self._sS = None; self._sS_acc = 0.0; self._sS_n = 0
         self._calib_steps = int(os.environ.get("MODIFF_ATTN_CALIB_STEPS", "8"))
         self._frozen = not self.static           # dynamic mode needs no calibration
         self._cn = 0
@@ -135,9 +142,20 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         # dynamic (and calibration) path
         qi, ki, vt, sq, sk, sv = _mc.quantize_attn_qkv(q, k, v, self.hp_qk, self.hp_av, self.bits)
         if self.bits == 8:
-            S = _mc.attn_qk_int8(qi, ki, sq, sk, scale)       # fp16 pre-scaled logits [BH,T,T]
-            P, sp = _mc.attn_softmax_requant(S)               # int8 P + per-row sp
-            O = _mc.attn_av_int8(P, vt, sp, sv)
+            if self.s8_score and self._sS is not None:
+                # int8-score path: int8 S write + dynamic int8-score softmax (both T×T passes halved)
+                S = _mc.attn_qk_int8_s8out(qi, ki, sq, sk, scale, self._sS)
+                P, sp = _mc.attn_softmax_requant_s8_dyn(S, self._sS)
+                O = _mc.attn_av_int8(P, vt, sp, sv)
+            else:
+                S = _mc.attn_qk_int8(qi, ki, sq, sk, scale)   # fp16 pre-scaled logits [BH,T,T]
+                P, sp = _mc.attn_softmax_requant(S)           # int8 P + per-row sp
+                O = _mc.attn_av_int8(P, vt, sp, sv)
+                if self.s8_score and self._sS is None:        # calibrate the score scale, then freeze
+                    self._sS_acc += S.float().abs().max().item() / 127.0
+                    self._sS_n += 1
+                    if self._sS_n >= self._calib_steps:
+                        self._sS = self._sS_acc / self._sS_n
         else:
             S = _mc.attn_qk_int4(qi, ki, self.hp_qk, sq, sk, scale)
             P, sp = _mc.attn_softmax_requant4(S)

@@ -1,0 +1,88 @@
+kernel,ms_step,pct,category
+"void (anonymous namespace)::softmax_warp_forward<c10::Half, c10::Half, float, 10, false, f",39.2828,22.54,attention softmax
+void cutlass::Kernel2<cutlass_80_wmma_tensorop_f16_s161616gemm_f16_32x32_32x1_nn_align8>(c,20.2053,11.59,attention QKᵀ/AV bmm (fp16)
+void cutlass::Kernel2<cutlass_80_wmma_tensorop_f16_s161616gemm_f16_32x32_128x2_nn_align8>(,19.4624,11.17,attention QKᵀ/AV bmm (fp16)
+"void group_norm_silu_quantize_pack_nhwc_kernel<__half>(__half const*, signed char*, __half",16.7258,9.6,GroupNorm
+"void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_nocast<at::native:",13.4125,7.7,elementwise/copy
+_ZN7cutlass6KernelINS_4conv6kernel23ImplicitGemmConvolutionINS1_11threadblock22ImplicitGem,12.8586,7.38,conv (int GEMM)
+"void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_nocast<at::native:",7.5133,4.31,elementwise/copy
+"gemm_w4a4_kernel_awq(signed char const*, signed char const*, float const*, float, __half*,",4.2611,2.44,qkv/proj int GEMM
+"void group_norm_silu_nhwc_kernel<__half>(__half const*, __half*, __half const*, __half con",3.9259,2.25,GroupNorm
+"void scale_bias_residual_store_half_kernel<float>(float const*, float const*, float const*",3.9178,2.25,elementwise/copy
+"void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_nocast<at::native:",3.8087,2.19,elementwise/copy
+"void scale_bias_store_half_kernel<float>(float const*, float const*, float const*, __half*",3.1489,1.81,elementwise/copy
+"void (anonymous namespace)::softmax_warp_forward<c10::Half, c10::Half, float, 8, false, fa",2.4118,1.38,attention softmax
+"void at::native::(anonymous namespace)::upsample_nearest2d_nhwc_out_frame<float, &at::nati",2.3887,1.37,upsample/concat
+void at::native::(anonymous namespace)::CatArrayBatchedCopy_contig<at::native::(anonymous ,2.3079,1.32,upsample/concat
+"void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctor_add<c10::Half>, ",2.2294,1.28,elementwise/copy
+ampere_fp16_s1688gemm_fp16_256x64_ldg8_f2f_stages_32x1_nn,1.6576,0.95,other fp16 GEMM
+ampere_fp16_s1688gemm_fp16_64x128_sliced1x2_ldg8_f2f_nn,1.6545,0.95,other fp16 GEMM
+"quant_act_int4_pack_kernel(__half const*, signed char*, float, int, long)",1.4656,0.84,quantize/dequant
+"void at::native::vectorized_elementwise_kernel<4, at::native::FillFunctor<c10::Half>, at::",1.1948,0.69,elementwise/copy
+void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::Tenso,1.1634,0.67,elementwise/copy
+"void at::native::(anonymous namespace)::avg_pool2d_out_cuda_frame_nhwc<c10::Half, float>(i",0.8653,0.5,other
+void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::Tenso,0.6515,0.37,elementwise/copy
+"quant_attn_out_int4_pack_kernel(__half const*, signed char*, float, int, int, int, long)",0.5895,0.34,quantize/dequant
+_gemm_w4a4_kernel,0.5771,0.33,qkv/proj int GEMM
+sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x64x32_stage5_war,0.5685,0.33,conv (int GEMM)
+"scale_quantize_pack_kernel(float const*, signed char*, float const*, int)",0.5345,0.31,quantize/dequant
+"void at::native::reduce_kernel<512, 1, at::native::ReduceOp<c10::Half, at::native::func_wr",0.514,0.29,other
+"void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl_nocast<at::native:",0.4112,0.24,elementwise/copy
+void cutlass::Kernel2<cutlass_80_wmma_tensorop_f16_s161616gemm_f16_32x32_64x1_nn_align8>(c,0.3762,0.22,attention QKᵀ/AV bmm (fp16)
+sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x64x32_stage4_war,0.3756,0.22,conv (int GEMM)
+"void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl_nocast<at::native:",0.358,0.21,GroupNorm
+"void at::native::vectorized_elementwise_kernel<4, at::native::(anonymous namespace)::silu_",0.3554,0.2,elementwise/copy
+sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_wa,0.3534,0.2,conv (int GEMM)
+sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_wa,0.3367,0.19,conv (int GEMM)
+"void at::native::(anonymous namespace)::RowwiseMomentsCUDAKernel<float>(long, float, float",0.2325,0.13,other
+sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x32_stage4_war,0.2239,0.13,conv (int GEMM)
+"void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_nocast<at::native:",0.1789,0.1,elementwise/copy
+"void (anonymous namespace)::softmax_warp_forward<c10::Half, c10::Half, float, 6, false, fa",0.1557,0.09,attention softmax
+sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize96x128x32_stage4_warpsize2x2x1_tensor16x8x16,0.1547,0.09,other
+"void static_quantize_pack_and_update_ahat_kernel_int4_half_cache<__half>(__half const*, __",0.1229,0.07,quantize/dequant
+"void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_nocast<at::native:",0.1176,0.07,elementwise/copy
+"void at::native::vectorized_elementwise_kernel<4, at::native::(anonymous namespace)::launc",0.1167,0.07,elementwise/copy
+void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::Tenso,0.1162,0.07,elementwise/copy
+sm80_xmma_fprop_implicit_gemm_indexed_wo_smem_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x,0.0957,0.05,conv (int GEMM)
+"void at::native::vectorized_elementwise_kernel<4, at::native::(anonymous namespace)::silu_",0.0955,0.05,elementwise/copy
+void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::Tenso,0.0912,0.05,elementwise/copy
+sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize64x128x32_stage4_war,0.075,0.04,conv (int GEMM)
+"void at::native::vectorized_elementwise_kernel<4, at::native::AbsFunctor<c10::Half>, at::d",0.0641,0.04,elementwise/copy
+void cutlass::Kernel2<cutlass_80_wmma_tensorop_f16_s161616gemm_f16_16x16_32x1_nn_align8>(c,0.0639,0.04,attention QKᵀ/AV bmm (fp16)
+void cutlass::Kernel2<cutlass_80_wmma_tensorop_f16_s161616gemm_f16_16x16_64x1_nn_align8>(c,0.0623,0.04,attention QKᵀ/AV bmm (fp16)
+ampere_fp16_s16816gemm_fp16_128x64_ldg8_f2f_stages_32x6_tn,0.0595,0.03,other fp16 GEMM
+"void at::native::vectorized_elementwise_kernel<4, at::native::round_kernel_cuda(at::Tensor",0.0548,0.03,elementwise/copy
+"void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctorOnSelf_add<c10::H",0.0538,0.03,elementwise/copy
+"void at::native::vectorized_elementwise_kernel<4, at::native::BUnaryFunctor<c10::Half, c10",0.0534,0.03,elementwise/copy
+"void at::native::vectorized_elementwise_kernel<4, at::native::BinaryFunctor<unsigned char,",0.0525,0.03,elementwise/copy
+"void at::native::vectorized_elementwise_kernel<4, at::native::BUnaryFunctor<unsigned char,",0.0522,0.03,elementwise/copy
+ampere_fp16_s16816gemm_fp16_256x128_ldg8_f2f_stages_32x3_tn,0.0213,0.01,other fp16 GEMM
+"void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl<at::native::CUDAFu",0.0194,0.01,elementwise/copy
+"void (anonymous namespace)::softmax_warp_forward<c10::Half, c10::Half, float, 4, false, fa",0.0175,0.01,attention softmax
+void cutlass::Kernel2<cutlass_80_wmma_tensorop_f16_s161616gemm_f16_16x16_32x1_nn_align2>(c,0.012,0.01,attention QKᵀ/AV bmm (fp16)
+"void nhwcAddPaddingKernel<__half, __half, float, true, (cudnnKernelDataType_t)0>(int, int,",0.0096,0.01,conv (int GEMM)
+"void at::native::vectorized_elementwise_kernel<4, at::native::AUnaryFunctor<c10::Half, c10",0.0076,0.0,elementwise/copy
+"void at::native::vectorized_elementwise_kernel<4, at::native::AUnaryFunctor<float, float, ",0.0059,0.0,elementwise/copy
+"void at::native::reduce_kernel<512, 1, at::native::ReduceOp<float, at::native::func_wrappe",0.0059,0.0,other
+Memcpy DtoH (Device -> Pinned),0.0057,0.0,other
+void cutlass::Kernel2<cutlass_80_wmma_tensorop_f16_s161616gemm_f16_16x16_64x1_nn_align2>(c,0.0056,0.0,attention QKᵀ/AV bmm (fp16)
+"void at::native::reduce_kernel<512, 1, at::native::ReduceOp<long, at::native::func_wrapper",0.0035,0.0,other
+"void at::native::(anonymous namespace)::ComputeFusedParamsCUDAKernel<float>(long, long, lo",0.0034,0.0,other
+"void at::native::(anonymous namespace)::indexSelectLargeIndex<float, long, unsigned int, 2",0.0032,0.0,elementwise/copy
+"void at::native::vectorized_elementwise_kernel<4, at::native::(anonymous namespace)::launc",0.0031,0.0,elementwise/copy
+"void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl_nocast<at::native:",0.0023,0.0,elementwise/copy
+Memset (Device),0.0019,0.0,other
+Memcpy DtoD (Device -> Device),0.0019,0.0,other
+"void (anonymous namespace)::softmax_warp_forward<c10::Half, c10::Half, float, 2, false, fa",0.0016,0.0,attention softmax
+"void at::native::vectorized_elementwise_kernel<4, at::native::FillFunctor<long>, at::detai",0.0016,0.0,elementwise/copy
+"void at::native::vectorized_elementwise_kernel<4, at::native::AbsFunctor<float>, at::detai",0.0014,0.0,elementwise/copy
+"void at::native::vectorized_elementwise_kernel<4, at::native::round_kernel_cuda(at::Tensor",0.0014,0.0,elementwise/copy
+"void at::native::vectorized_elementwise_kernel<4, at::native::BUnaryFunctor<float, float, ",0.0014,0.0,elementwise/copy
+"void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctorOnSelf_add<float>",0.0014,0.0,elementwise/copy
+Memcpy DtoH (Device -> Pageable),0.0004,0.0,other
+"void at::native::(anonymous namespace)::distribution_elementwise_grid_stride_kernel<float,",0.0003,0.0,elementwise/copy
+Memcpy HtoD (Pageable -> Device),0.0003,0.0,other
+"void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctorOnOther_add<float",0.0002,0.0,elementwise/copy
+"void at::native::vectorized_elementwise_kernel<4, at::native::BinaryFunctor<float, float, ",0.0002,0.0,elementwise/copy
+"void at::native::vectorized_elementwise_kernel<4, at::native::sqrt_kernel_cuda(at::TensorI",0.0001,0.0,elementwise/copy
+"void at::native::vectorized_elementwise_kernel<4, at::native::BinaryFunctor<float, float, ",0.0001,0.0,elementwise/copy

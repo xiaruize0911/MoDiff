@@ -1,0 +1,6 @@
+version,mean_ms,min_ms,prior_ms,delta_pct
+fp16,349.403,348.881,188.0,85.85
+int8_baseline,173.296,173.088,178.1,-2.7
+int8_modiff,196.58,196.462,201.1,-2.25
+int4_baseline,175.664,175.589,177.7,-1.15
+int4_modiff,202.53,201.116,203.7,-0.57

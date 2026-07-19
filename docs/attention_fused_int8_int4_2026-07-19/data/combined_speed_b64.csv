@@ -1,0 +1,6 @@
+version,wall_ms_step,gpu_busy_ms_step,rel_vs_fp16,qattn_blocks
+fp16,96.333,95.201,0.0,0
+int8_baseline,93.254,92.464,0.2827,21
+int8_modiff,106.487,105.098,0.3464,21
+int4_baseline,86.452,85.112,0.3058,21
+int4_modiff,109.7,93.26,0.3349,21
