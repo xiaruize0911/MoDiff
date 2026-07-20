@@ -56,6 +56,12 @@ torch::Tensor step1_quantize_pack_int4_fprop(
 torch::Tensor step1_static_quantize_pack_int4_fprop(
     torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor scale_buf, torch::Tensor smooth_inv);
 
+// cache-free static quantize (baseline conv, NO a_hat read/write)
+torch::Tensor step1_static_quantize_noahat_fprop(
+    torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv);
+torch::Tensor step1_static_quantize_pack_int4_noahat_fprop(
+    torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv);
+
 torch::Tensor step1_static_quantize_pack_int4_fprop_silu(
     torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor scale_buf, torch::Tensor smooth_inv);
 

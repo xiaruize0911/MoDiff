@@ -486,28 +486,14 @@ class OptimizedInt8Conv2d(nn.Module):
             if not x.is_contiguous(memory_format=torch.channels_last):
                 x = x.contiguous(memory_format=torch.channels_last)
             if x.dtype == torch.float16:
-                # Cast-free quantize: scale_quantize_int8 reinterpret-casts its
-                # input as float4 and so requires fp32, forcing an fp16->fp32 cast
-                # here whose bandwidth (2x traffic + an extra launch) exceeds the
-                # quantize itself. step1_static_quantize_fprop consumes fp16
-                # directly; feeding it a zeroed a_hat makes it quantize x as-is,
-                # bit-identically to scale_quantize_int8(x.float(), scale). Any
-                # SmoothQuant scaling is already applied to x upstream, so smooth
-                # is empty (identity) here.
-                # NOTE: step1_static_quantize_fprop UPDATES a_hat in place
-                # (a_hat += dequant(Q(x-a_hat))), so the buffer must be re-zeroed
-                # every call -- otherwise the 2nd+ step quantizes x against a
-                # stale a_hat and silently corrupts the output.
-                if (self._zero_ahat_buf is None
-                        or self._zero_ahat_buf.shape != x.shape
-                        or self._zero_ahat_buf.device != x.device):
-                    self._zero_ahat_buf = torch.zeros_like(x)
-                else:
-                    self._zero_ahat_buf.zero_()
+                # Cache-free static quantize (baseline: no temporal cache). Reads fp16 x directly
+                # (no fp32 cast) and does NOT touch a_hat — dropping the per-call a_hat zero-fill +
+                # a_hat read+write that step1_static_quantize_fprop(x, a_hat=0) wasted. Output is
+                # bit-identical (residual=x-0=x). SmoothQuant already applied upstream -> smooth empty.
                 if self._empty_smooth is None or self._empty_smooth.device != x.device:
                     self._empty_smooth = torch.empty(0, device=x.device, dtype=torch.float32)
-                x_int8 = modiff_cutlass.step1_static_quantize_fprop(
-                    x, self._zero_ahat_buf, self.static_input_scale.view(1), self._empty_smooth
+                x_int8 = modiff_cutlass.step1_static_quantize_noahat_fprop(
+                    x, self.static_input_scale.view(1), self._empty_smooth
                 )
             else:
                 x_for_quant = x if x.dtype == torch.float32 else x.float()

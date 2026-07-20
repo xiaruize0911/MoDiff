@@ -463,6 +463,47 @@ __global__ void static_quantize_pack_and_update_ahat_kernel_int4_half_cache(
     }
 }
 
+// ---- TRUE cache-free static quantize (baseline, NO a_hat): same as the *_update_ahat kernels
+// above but without the a_hat read/subtract/write. Baseline conv doesn't do temporal caching, so
+// residual = x - a_hat collapses to x; dropping a_hat removes the a_hat read+write + the zero-fill.
+template <typename T_IN>
+__global__ void static_quantize_int8_noahat_kernel(
+    const T_IN* __restrict__ x, int8_t* __restrict__ output_int8,
+    const float* __restrict__ scale_ptr, const float* __restrict__ smooth_inv,
+    int num_channels, int num_elements) {
+    float scale = *scale_ptr;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    for (int i = idx; i < num_elements; i += blockDim.x * gridDim.x) {
+        float xval = load_as_float(x, i);
+        if (smooth_inv != nullptr) xval *= smooth_inv[i % num_channels];
+        float q = fmaxf(-127.0f, fminf(127.0f, roundf(xval * scale)));
+        output_int8[i] = static_cast<int8_t>(q);
+    }
+}
+
+template <typename T_IN>
+__global__ void static_quantize_pack_int4_noahat_kernel(
+    const T_IN* __restrict__ x, int8_t* __restrict__ output_packed,
+    const float* __restrict__ scale_ptr, const float* __restrict__ smooth_inv,
+    int num_channels, int num_elements) {
+    float scale = *scale_ptr;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    for (int base = idx * 2; base < num_elements; base += stride * 2) {
+        float x0 = load_as_float(x, base);
+        if (smooth_inv != nullptr) x0 *= smooth_inv[base % num_channels];
+        float q0 = fmaxf(-7.0f, fminf(7.0f, roundf(x0 * scale)));
+        float q1 = 0.0f;
+        if (base + 1 < num_elements) {
+            float x1 = load_as_float(x, base + 1);
+            if (smooth_inv != nullptr) x1 *= smooth_inv[(base + 1) % num_channels];
+            q1 = fmaxf(-7.0f, fminf(7.0f, roundf(x1 * scale)));
+        }
+        output_packed[base / 2] =
+            (static_cast<int8_t>(q0) & 0x0F) | ((static_cast<int8_t>(q1) & 0x0F) << 4);
+    }
+}
+
 // Same as static_quantize_pack_and_update_ahat_kernel_int4_half_cache above,
 // but applies SiLU inline to each element of `x` before forming the residual
 // -- see static_quantize_and_update_ahat_kernel_int8_half_cache_silu's
@@ -1120,6 +1161,57 @@ torch::Tensor step1_static_quantize_pack_int4_fprop(
     int H = x.size(2);
     int W = x.size(3);
 
+    return x_packed.view({N, H, W, C / 2});
+}
+
+// Cache-free static int8 quantize (baseline conv): fp16/fp32 x + static scale (+optional smooth),
+// NO a_hat. Bit-identical output to step1_static_quantize_fprop(x, a_hat=0, scale) but without the
+// a_hat read/write + the caller's per-call a_hat zero-fill. Output int8, same shape/layout as x.
+torch::Tensor step1_static_quantize_noahat_fprop(
+    torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    auto x_int8 = torch::empty_like(x, torch::TensorOptions().dtype(torch::kInt8));
+    int num_elements = x.numel();
+    int block_size = 256;
+    int num_work_items = (num_elements + 3) / 4;
+    int grid_size = (num_work_items + block_size - 1) / block_size;
+    const float* smooth_ptr = (smooth_inv.numel() > 0) ? smooth_inv.data_ptr<float>() : nullptr;
+    int num_channels = (smooth_inv.numel() > 0) ? (int)smooth_inv.numel() : (int)x.size(1);
+    if (x.scalar_type() == torch::kHalf) {
+        static_quantize_int8_noahat_kernel<__half><<<grid_size, block_size, 0, stream>>>(
+            reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), x_int8.data_ptr<int8_t>(),
+            scale_buf.data_ptr<float>(), smooth_ptr, num_channels, num_elements);
+    } else {
+        static_quantize_int8_noahat_kernel<float><<<grid_size, block_size, 0, stream>>>(
+            x.data_ptr<float>(), x_int8.data_ptr<int8_t>(),
+            scale_buf.data_ptr<float>(), smooth_ptr, num_channels, num_elements);
+    }
+    return x_int8;
+}
+
+// Cache-free static int4 quantize+pack (baseline conv): fp16/fp32 x + static scale (+optional
+// smooth), NO a_hat. Output packed int8 [N,H,W,C/2] (same layout as step1_static_quantize_pack_int4_fprop).
+torch::Tensor step1_static_quantize_pack_int4_noahat_fprop(
+    torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    int num_input = x.numel();
+    int num_output = num_input / 2;
+    auto x_packed = torch::empty({num_output}, torch::TensorOptions().dtype(torch::kInt8).device(x.device()));
+    int block_size = 256;
+    int num_work_items = (num_input + 3) / 4;
+    int grid_size = (num_work_items + block_size - 1) / block_size;
+    const float* smooth_ptr = (smooth_inv.numel() > 0) ? smooth_inv.data_ptr<float>() : nullptr;
+    int num_channels = (smooth_inv.numel() > 0) ? (int)smooth_inv.numel() : (int)x.size(1);
+    if (x.scalar_type() == torch::kHalf) {
+        static_quantize_pack_int4_noahat_kernel<__half><<<grid_size, block_size, 0, stream>>>(
+            reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), x_packed.data_ptr<int8_t>(),
+            scale_buf.data_ptr<float>(), smooth_ptr, num_channels, num_input);
+    } else {
+        static_quantize_pack_int4_noahat_kernel<float><<<grid_size, block_size, 0, stream>>>(
+            x.data_ptr<float>(), x_packed.data_ptr<int8_t>(),
+            scale_buf.data_ptr<float>(), smooth_ptr, num_channels, num_input);
+    }
+    int N = x.size(0), C = x.size(1), H = x.size(2), W = x.size(3);
     return x_packed.view({N, H, W, C / 2});
 }
 

@@ -41,16 +41,22 @@ Scripts: `scripts/{e2e_speed,e2e_timing_profile,nsys_driver,parse_nsys_mem,conv_
 
 | mode | ms/step | vs true fp16 |
 |---|--:|--:|
-| fp16 | 189.7 | 1.00× |
-| int8_baseline | 124.4 | 1.53× |
-| **int4_baseline** | **119.9** | **1.58×** |
-| int8_modiff | 146.2 | 1.30× |
-| int4_modiff | 143.7 | 1.32× |
+| fp16 | 190.1 | 1.00× |
+| int8_baseline | 125.0 | 1.52× |
+| **int4_baseline** | **119.5** | **1.59×** |
+| int8_modiff | 145.7 | 1.30× |
+| int4_modiff | 142.5 | 1.33× |
 
-**int4_baseline = 1.58× vs true fp16 — the fastest mode** — after the int4 conv **deep-fusion fix**
-(see below), int4 now edges out int8 (1.53×), the expected 4-bit ordering. int8_baseline = 1.53× holds
+**int4_baseline = 1.59× vs true fp16 — the fastest mode** — after the int4 conv **deep-fusion fix**
+(see below), int4 now edges out int8 (1.52×), the expected 4-bit ordering. int8_baseline = 1.52× holds
 the flash-only refactor headline. The modiff temporal-cache variants are **slower** than their baselines
-(int8 1.30× vs 1.53×): the a_hat/o_hat delta-quantize + accumulate costs more than it saves at b128.
+(int8 1.30× vs 1.52×): the a_hat/o_hat delta-quantize + accumulate costs more than it saves at b128.
+
+> **Re-measured 2026-07-20 after the a_hat-drop** (30 warm + 5×200 steps, synchronized): e2e is
+> **unchanged within noise** (int8_baseline 124.4→125.0, int4_baseline 119.9→119.5). Expected — the
+> baseline a_hat-drop is a *conv-kernel* IO/speed win (§conv), but the e2e ResBlock fuses the conv
+> quantize into its GroupNorm kernel (`_prequant_gn_conv`), a path that never used the a_hat cache. The
+> kernel fix and the e2e number are consistent, not contradictory.
 
 > **int4 conv deep-fusion (2026-07-20).** int4_baseline was originally 141.7 ms (1.34×) — *slower* than
 > int8 — because every int4 conv fell back to an eager path (SmoothQuant `x*smooth_inv` multiply →
@@ -59,7 +65,7 @@ the flash-only refactor headline. The modiff temporal-cache variants are **slowe
 > kernel already supports a per-channel `smooth_inv`, wiring int4's smooth into it (Python-only change in
 > `integration/fused_ops/fused_resblock.py`) routes int4 through the same deep-fused path as int8
 > (GN+SiLU+SmoothQuant+quantize+pack in one kernel → `conv2d_int4_fprop_no_ohat_prealloc_bias_residual`
-> with fused dequant+bias+residual store). Result: **141.7 → 119.9 ms (1.34× → 1.58×), −22 ms, output
+> with fused dequant+bias+residual store). Result: **141.7 → 119.5 ms (1.34× → 1.59×), −22 ms, output
 > bit-identical (rel-L2 = 0).**
 
 > **Why the same fix does NOT help int4_modiff (already fused).** The modiff (temporal-cache) path was
@@ -143,24 +149,34 @@ Churches ResBlock convs at b128 (µs, median 5×200):
 
 | shape (Cin→Cout, HW) | fp16 | int8_base | int4_base | int8_modiff | int4_modiff | **int8 vs fp16** | int4 vs fp16 |
 |---|--:|--:|--:|--:|--:|--:|--:|
-| res 128, 64² | 1861 | 2361 | 2270 | 2715 | 2244 | **0.79×** | 0.82× |
-| res 128, 32² | 493 | 610 | 588 | 706 | 582 | **0.81×** | 0.84× |
-| down 128→256, 32² | 944 | 932 | 911 | 1165 | 954 | **1.01×** | 1.04× |
-| res 256, 32² | 1626 | 1532 | 1283 | 1681 | 1265 | **1.06×** | 1.27× |
-| res 256, 16² | 444 | 406 | 357 | 455 | 351 | **1.09×** | 1.24× |
-| down 256→512, 16² | 813 | 654 | 546 | 759 | 564 | **1.24×** | 1.49× |
-| **mid 512, 8²** | 430 | 305 | **232** | 326 | 227 | **1.41×** | **1.85×** |
-| up 512→256, 16² | 787 | 714 | 556 | 709 | 516 | **1.10×** | 1.42× |
-| up 256→128, 32² | 883 | 1046 | 910 | 1065 | 845 | **0.84×** | 0.97× |
-| up 128, 64² | 1931 | 2379 | 2272 | 2674 | 2246 | **0.81×** | 0.85× |
+| res 128, 64² | 1874 | 1670 | 1540 | 2660 | 2246 | **1.12×** | 1.22× |
+| res 128, 32² | 490 | 436 | 402 | 704 | 582 | **1.12×** | 1.22× |
+| down 128→256, 32² | 939 | 762 | 725 | 1174 | 954 | **1.23×** | 1.29× |
+| res 256, 32² | 1627 | 1214 | 922 | 1681 | 1266 | **1.34×** | 1.77× |
+| res 256, 16² | 445 | 322 | 265 | 452 | 352 | **1.38×** | 1.68× |
+| down 256→512, 16² | 813 | 576 | 452 | 754 | 564 | **1.41×** | 1.80× |
+| **mid 512, 8²** | 430 | 265 | **185** | 325 | 227 | **1.62×** | **2.32×** |
+| up 512→256, 16² | 786 | 550 | 378 | 706 | 516 | **1.43×** | 2.08× |
+| up 256→128, 32² | 876 | 710 | 548 | 1060 | 844 | **1.24×** | 1.60× |
+| up 128, 64² | 1918 | 1694 | 1544 | 2657 | 2247 | **1.13×** | 1.24× |
 
-**int8_baseline vs fp16**: spans **0.79×–1.41×** — the same shape pattern as int4 but milder. Conv
-quantization **wins at high-channel / low-spatial** shapes (mid_512_8 int8 **1.41×** / int4 **1.85×**,
-down_256_512 1.24× / 1.49×) but **loses at low-channel / high-resolution** shapes (128-ch @ 64² ≈ 0.79×
-int8 / 0.82× int4), where cuDNN's fp16 conv is very strong and the int quantize/pack overhead dominates.
-int4 beats int8 at every shape (packed 4-bit GEMM). **modiff adds overhead** (int8_modiff consistently
-slower than int8_baseline: the step1-quantize + `o_hat` accumulate). Net across the UNet the conv win is
-modest and shape-dependent.
+> **a_hat-drop (2026-07-20): baseline conv now beats fp16 at *every* shape.** Baseline int8/int4 conv
+> used to feed its static quantize a zeroed a_hat purely to reuse the MoDiff kernel — paying a per-call
+> a_hat zero-fill + a_hat read + a_hat write (~384 MiB at res_128_64) for nothing. New cache-free kernels
+> `step1_static_quantize[_pack_int4]_noahat_fprop` drop it (output **bit-identical**, rel-L2=0). Effect:
+> int8_baseline conv **0.79×→1.12×** at res_128_64 (2361→1670 µs), and now int8 **1.12–1.62×** / int4
+> **1.22–2.32×** — the low-channel/high-res losses are gone. (modiff columns unchanged — modiff genuinely
+> needs a_hat.) **Note: this is a kernel-level (and IO) win; it does NOT move e2e** — in the e2e ResBlock
+> the conv's quantize is fused into the GroupNorm kernel (`_prequant_gn_conv`), which never used
+> `_forward_standard`'s a_hat path, so e2e int8_baseline is unchanged (~125 ms).
+
+**int8_baseline vs fp16** now spans **1.12×–1.62×** (int4 1.22×–2.32×): after the a_hat-drop, conv
+quantization **wins at every shape**, biggest at high-channel/low-spatial (mid_512_8 int8 **1.62×** /
+int4 **2.32×**), smallest at low-channel/high-resolution (128-ch @ 64² int8 1.12×, where cuDNN fp16 is
+strong). int4 beats int8 at every shape (packed 4-bit GEMM). **modiff still adds overhead** (int8_modiff
+0.70–1.32×, slower than int8_baseline: the delta-quantize + `o_hat` accumulate + a_hat cache it still
+needs). Net across the UNet the conv win is real but e2e-neutral (the e2e conv quantize is GN-fused, per
+the note above).
 
 ![conv kernel](figs/fig_conv_kernel.png)
 
@@ -249,8 +265,8 @@ kernels are identical for baseline & modiff). rd / wr (total):
 |---|--:|--:|--:|
 | **attn hd24/T1024** | 8800 / 4240 (**13040**) | 2864 / 48 (**2912**) | 2864 / 48 (2912) |
 | attn hd48/T256 | 736 / 328 (1064) | 244 / 24 (268) | 236 / 24 (260) |
-| conv res_128_64 (128ch,64²) | 256 / 256 (512) | 708 / 576 (**1284**) | 1090 / 672 (1762) |
-| conv mid_512_8 (512ch,8²) | 16 / 16 (32) | 44 / 36 (80) | 68 / 42 (110) |
+| conv res_128_64 (128ch,64²) | 256 / 256 (512) | 580 / 320 (**900**) | 962 / 416 (1378) |
+| conv mid_512_8 (512ch,8²) | 16 / 16 (32) | 36 / 20 (56) | 60 / 26 (86) |
 | linear qkv 192→576 M131072 | 644 / 144 (788) | 20 / 144 (164) | 20 / 144 (164) |
 | linear qkv 384→1152 M8192 | 127 / 18 (145) | 2 / 18 (20) | 2 / 18 (20) |
 
@@ -258,11 +274,16 @@ kernels are identical for baseline & modiff). rd / wr (total):
 
 | conv shape | fp16 | int8_base | int8_modiff | int4_base | int4_modiff |
 |---|--:|--:|--:|--:|--:|
-| res_128_64 | 512 | 1284 | **1540** | 1762 | **1506** |
-| res_256_32 | 256 | 641 | **770** | 881 | **753** |
-| down_256_512_16 | 128 | 241 | **321** | 364 | **316** |
-| mid_512_8 | 32 | 80 | **96** | 110 | **94** |
-| up_512_256_16 | 64 | 240 | **256** | 296 | **248** |
+| res_128_64 | 512 | 900 | **1540** | 1378 | **1506** |
+| res_256_32 | 256 | 450 | **770** | 689 | **753** |
+| down_256_512_16 | 128 | 193 | **321** | 316 | **316** |
+| mid_512_8 | 32 | 56 | **96** | 86 | **94** |
+| up_512_256_16 | 64 | 145 | **256** | 200 | **248** |
+
+> **a_hat-drop applied to baseline (2026-07-20):** baseline int8/int4 no longer touch a zeroed a_hat
+> cache, cutting ~384 MiB/conv at res_128_64 (int8_base **1284→900**, int4_base **1762→1378**) with
+> bit-identical output. The `int8_modiff`/`int4_modiff` columns are unchanged — modiff genuinely reads
+> and writes a_hat/o_hat, so the baseline↔modiff gap here is now the *true* cost of the temporal cache.
 
 Three measured findings:
 
@@ -270,13 +291,15 @@ Three measured findings:
    `[BH,T,T]` softmax round-trips HBM at **2048 rd + 2048 wr MiB** and the QKᵀ/AV bmm reads 6656 MiB;
    int8/int4 flash is **one kernel, 2864 rd / 48 wr** — scores never leave SRAM, so no T×T round-trip and
    only the fp16 output is written. This is the measured memory-traffic proof of the fused-flash win.
-2. **Conv int8/int4 move MORE DRAM than fp16** (res_128_64: 512 → 1284/1762 MiB) — the extra
-   quantize/pack + a_hat-zero + dequant-store + residual traffic outweighs the int-operand shrink at
-   these low-channel/high-res shapes, which is exactly why int8/int4 conv *loses* there (0.79×/0.82×).
-   At high-channel/low-spatial (mid_512_8) the overhead is proportionally smaller. **modiff vs baseline
-   (conv only):** int8_modiff reads ~256 MiB more than int8_baseline (res_128_64: 964 vs 708 rd) — the
-   **a_hat temporal-cache read** for the delta; int4_modiff is slightly *lower* (its delta-quantize moves
-   less than int4's full re-quantize+pack). Linear/attention are byte-identical for baseline vs modiff.
+2. **Conv int8/int4 still move more DRAM than fp16, but far less after the a_hat-drop** (res_128_64:
+   512 → **900/1378** MiB, was 1284/1762). fp16 is one fused cuDNN conv (256 rd / 256 wr); baseline int8
+   pays quantize + dequant-store + residual (580 rd / 320 wr) but no longer the a_hat zero-fill/round-trip
+   it used to. That is exactly why baseline conv now *wins on speed at every shape* (§conv) despite moving
+   more bytes — the extra passes are cheap relative to the int-GEMM math saved, and the a_hat waste is
+   gone. **modiff vs baseline (conv only):** int8_modiff reads **384 MiB more** than int8_baseline
+   (res_128_64: 964 vs 580 rd) — the genuine **a_hat/o_hat temporal-cache** round-trip for the delta;
+   int4_modiff's delta-quantize moves less than int4's full re-quantize+pack. Linear/attention are
+   byte-identical for baseline vs modiff.
 3. **Linear (GEMM-only): int8/int4 read far less** (qkv 192→576: 644 → 20 MiB read) — the int GEMM reads
    packed int8/int4 operands with far less tile-reload traffic than the fp16 GEMM. (Write ≈ equal: the
    fp16 output dominates and is the same size.) This is the IO basis of the GEMM-only linear win.
@@ -290,9 +313,9 @@ provided in `scripts/{ncu_io_driver,run_ncu_io,parse_ncu_io}.py`.)
 
 ## Takeaways
 
-1. **int4_baseline = 1.58× vs true fp16 (fastest), int8_baseline = 1.53×.** The flash-only refactor holds
+1. **int4_baseline = 1.59× vs true fp16 (fastest), int8_baseline = 1.52×.** The flash-only refactor holds
    the int8 headline; the int4 conv deep-fusion fix (SmoothQuant folded into the fused GN→conv kernel)
-   lifted int4 from 1.34× → 1.58×, so 4-bit is now correctly the fastest mode (bit-identical output).
+   lifted int4 from 1.34× → 1.59×, so 4-bit is now correctly the fastest mode (bit-identical output).
 2. **The e2e win is attention + conv, not memory movement.** The timing profile shows fp16 attention
    (~86 ms, softmax + fp16 bmm) collapsing to ~35 ms fused-flash int8, plus conv 46→25 ms; the quantize
    prologue (~19 ms) and modiff cache (~9 ms) are the costs paid back.
@@ -306,6 +329,7 @@ provided in `scripts/{ncu_io_driver,run_ncu_io,parse_ncu_io}.py`.)
 5. **Per-kernel memory read/write IS measured — via NVBit**, despite locked HW counters. The headline:
    **attention flash moves 4.5× less DRAM than fp16** (13040 → 2912 MiB at hd24/T1024), because the
    `[BH,T,T]` softmax round-trip (2048 rd + 2048 wr MiB) is eliminated (scores stay in SRAM). Conv
-   int8/int4 move *more* DRAM than fp16 (quantize/pack/store overhead) — matching their conv-speed losses;
-   linear int8/int4 GEMM read far less. e2e memcpy is negligible (~0.4 MiB/step). An `ncu dram__bytes.sum`
+   int8/int4 still move *more* DRAM than fp16 (quantize/pack/store overhead) but far less after the
+   baseline a_hat-drop (res_128_64 int8 1284→900 MiB), which flips baseline conv to *winning* at every
+   shape; linear int8/int4 GEMM read far less. e2e memcpy is negligible (~0.4 MiB/step). An `ncu dram__bytes.sum`
    cross-check would need a counter unlock, but NVBit (validated byte-exact) already gives the numbers.
