@@ -1,0 +1,7 @@
+policy,us_per_forward,speedup_vs_real
+fp16 MATH (old),89028.5,0.123
+fp16 flash (real),10964.6,1.0
+int8 flash where eligible,94843.6,0.116
+int4 flash where eligible,166988.2,0.066
+int8 flash kernel-only (quant fused),48893.3,0.224
+int4 flash kernel-only (quant fused),78661.8,0.139

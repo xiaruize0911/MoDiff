@@ -23,9 +23,14 @@ try:
     _HAS = all(hasattr(_mc, k) for k in
                ("attn_qk_int8", "attn_softmax_requant", "attn_av_int8",
                 "attn_qk_int4", "attn_softmax_requant4", "attn_av_int4"))
+    _HAS_FLASH = hasattr(_mc, "flash_attn_int8") and hasattr(_mc, "flash_attn_int4")
+    # packed-qkv quantize (reads interleaved [b,T,nh,3,hd] -> no fp16 transpose copy at line 175)
+    _HAS_PACKED = hasattr(_mc, "quantize_attn_qkv_packed") and hasattr(_mc, "quantize_attn_qkv_packed_static")
 except Exception:
     _mc = None
     _HAS = False
+    _HAS_FLASH = False
+    _HAS_PACKED = False
 
 try:
     from ldm.modules.diffusionmodules.openaimodel import AttentionBlock, QKVAttentionLegacy
@@ -164,6 +169,108 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
             self._calib_update(q, k, v, S)
         return O[:, :, :hd]                                   # drop hd_pad
 
+    def _flash_quant_attn(self, q, k, v):
+        """FUSED int8/int4 flash attention. q,k,v: [b,nh,T,hd] fp16 -> [b,nh,T,hd] fp16.
+        Dynamic per-token Q/K + per-channel V quantize, then the fused flash_attn kernel
+        (QKᵀ + online softmax + AV in one kernel, scores in SRAM). self.bits selects int8/int4."""
+        b, nh, T, hd = q.shape
+        BH = b * nh
+        qm = q.reshape(BH, T, hd).contiguous(); km = k.reshape(BH, T, hd).contiguous(); vm = v.reshape(BH, T, hd).contiguous()
+        if self.bits == 8:
+            hd_pad = ((hd + 31) // 32) * 32
+            # Task 1: after a short self-calibration, use the STATIC single-pass quantize (no runtime
+            # amax reduction -> ~1.3x faster than dynamic; rel-L2 ~0.03). Falls back to dynamic while
+            # calibrating. (Full fuse into the qkv-GEMM epilogue is not possible: the per-token amax
+            # can't be computed in a GEMM epilogue, so this static single-pass is the floor.)
+            if getattr(self, "_fq_frozen2", False):
+                qi, ki, vt, sq, sk, sv = _mc.quantize_attn_qkv_static(qm, km, vm, hd_pad, hd_pad, 8,
+                                                                      self._fq_sqc, self._fq_skc, self._fq_svv)
+            else:
+                qi, ki, vt, sq, sk, sv = _mc.quantize_attn_qkv(qm, km, vm, hd_pad, hd_pad, 8)
+                self._fq_aq = max(getattr(self, "_fq_aq", 0.0), q.abs().max().item())
+                self._fq_ak = max(getattr(self, "_fq_ak", 0.0), k.abs().max().item())
+                avc = v.abs().amax(dim=(0, 1, 2)).float()
+                self._fq_av = avc if getattr(self, "_fq_av", None) is None else torch.maximum(self._fq_av, avc)
+                self._fq_n = getattr(self, "_fq_n", 0) + 1
+                if self._fq_n >= self._calib_steps:
+                    self._fq_sqc = self._fq_aq / 127.0; self._fq_skc = self._fq_ak / 127.0
+                    svv = torch.ones(hd_pad, device=v.device); svv[:hd] = (self._fq_av / 127.0).clamp_min(1e-8)
+                    self._fq_svv = svv.contiguous(); self._fq_frozen2 = True
+            qi = qi.view(b, nh, T, hd_pad); ki = ki.view(b, nh, T, hd_pad)
+            vt = vt.view(b, nh, hd_pad, T)                    # already transposed -> pass directly (no copy)
+            sq = sq.view(b, nh, T).contiguous(); sk = sk.view(b, nh, T).contiguous()
+            sv = sv[..., :hd].contiguous().view(b, nh, hd)
+            return _mc.flash_attn_int8_vt(qi, ki, vt, sq, sk, sv, self.scale)   # [b,nh,T,hd], V pre-transposed
+        # Task 2: int4 fused. ONE-PASS mixed quantize (quantize_attn_qkv_i4qk_i8v): int4-packed Q/K
+        # (matches the flash kernel) + int8 transposed V (flash uses int8 PV) in a single sweep of q/k/v
+        # -> no eager nibble-pack, no wasted int4-V, no double V quantize. Feeds flash_attn_int4_vt directly.
+        hdp4, hdp_v = 64, ((hd + 31) // 32) * 32
+        if getattr(self, "_fq4_frozen", False):   # static single-pass (calibrated) — no runtime amax
+            q4, k4, vt, sq4, sk4, sv = _mc.quantize_attn_qkv_i4qk_i8v_static(
+                qm, km, vm, hdp4, hdp_v, self._fq4_sqc, self._fq4_skc, self._fq4_svv)
+        else:
+            q4, k4, vt, sq4, sk4, sv = _mc.quantize_attn_qkv_i4qk_i8v(qm, km, vm, hdp4, hdp_v)
+            self._fq4_aq = max(getattr(self, "_fq4_aq", 0.0), q.abs().max().item())
+            self._fq4_ak = max(getattr(self, "_fq4_ak", 0.0), k.abs().max().item())
+            avc = v.abs().amax(dim=(0, 1, 2)).float()
+            self._fq4_av = avc if getattr(self, "_fq4_av", None) is None else torch.maximum(self._fq4_av, avc)
+            self._fq4_n = getattr(self, "_fq4_n", 0) + 1
+            if self._fq4_n >= self._calib_steps:
+                self._fq4_sqc = self._fq4_aq / 7.0; self._fq4_skc = self._fq4_ak / 7.0   # int4 Q/K
+                svv = torch.ones(hdp_v, device=v.device); svv[:hd] = (self._fq4_av / 127.0).clamp_min(1e-8)  # int8 V
+                self._fq4_svv = svv.contiguous(); self._fq4_frozen = True
+        q4 = q4.view(b, nh, T, -1); k4 = k4.view(b, nh, T, -1)
+        vt = vt.view(b, nh, hdp_v, T)                          # int8 V, already transposed
+        sq4 = sq4.view(b, nh, T).contiguous(); sk4 = sk4.view(b, nh, T).contiguous()
+        sv = sv[..., :hd].contiguous().view(b, nh, hd)
+        return _mc.flash_attn_int4_vt(q4, k4, vt, sq4, sk4, sv, hdp4, self.scale)  # [b,nh,T,hd]
+
+    def _flash_quant_attn_packed(self, qkv):
+        """Same as _flash_quant_attn but reads the interleaved qkv [b,T,nh,3,hd] DIRECTLY via the
+        packed quantize kernels -> drops the ~1.2 GB/step fp16 q/k/v.transpose().contiguous() copy
+        (the largest 'glue' cost). Output identical: [b,nh,T,hd] fp16."""
+        b, T, nh, _, hd = qkv.shape
+        qkv = qkv.contiguous()
+        qv, kv, vv = qkv[:, :, :, 0, :], qkv[:, :, :, 1, :], qkv[:, :, :, 2, :]  # strided views (no copy)
+        if self.bits == 8:
+            hd_pad = ((hd + 31) // 32) * 32
+            if getattr(self, "_fq_frozen2", False):
+                qi, ki, vt, sq, sk, sv = _mc.quantize_attn_qkv_packed_static(
+                    qkv, nh, T, hd, hd_pad, hd_pad, 8, self._fq_sqc, self._fq_skc, self._fq_svv)
+            else:
+                qi, ki, vt, sq, sk, sv = _mc.quantize_attn_qkv_packed(qkv, nh, T, hd, hd_pad, hd_pad, 8)
+                self._fq_aq = max(getattr(self, "_fq_aq", 0.0), qv.abs().max().item())
+                self._fq_ak = max(getattr(self, "_fq_ak", 0.0), kv.abs().max().item())
+                avc = vv.abs().amax(dim=(0, 1, 2)).float()
+                self._fq_av = avc if getattr(self, "_fq_av", None) is None else torch.maximum(self._fq_av, avc)
+                self._fq_n = getattr(self, "_fq_n", 0) + 1
+                if self._fq_n >= self._calib_steps:
+                    self._fq_sqc = self._fq_aq / 127.0; self._fq_skc = self._fq_ak / 127.0
+                    svv = torch.ones(hd_pad, device=qkv.device); svv[:hd] = (self._fq_av / 127.0).clamp_min(1e-8)
+                    self._fq_svv = svv.contiguous(); self._fq_frozen2 = True
+            qi = qi.view(b, nh, T, hd_pad); ki = ki.view(b, nh, T, hd_pad); vt = vt.view(b, nh, hd_pad, T)
+            sq = sq.view(b, nh, T); sk = sk.view(b, nh, T); sv = sv[..., :hd].contiguous().view(b, nh, hd)
+            return _mc.flash_attn_int8_vt(qi, ki, vt, sq, sk, sv, self.scale)
+        # int4 (int4 Q/K + int8 V), packed
+        hdp4, hdp_v = 64, ((hd + 31) // 32) * 32
+        if getattr(self, "_fq4_frozen", False):
+            q4, k4, vt, sq4, sk4, sv = _mc.quantize_attn_qkv_packed_static(
+                qkv, nh, T, hd, hdp4, hdp_v, 4, self._fq4_sqc, self._fq4_skc, self._fq4_svv)
+        else:
+            q4, k4, vt, sq4, sk4, sv = _mc.quantize_attn_qkv_packed(qkv, nh, T, hd, hdp4, hdp_v, 4)
+            self._fq4_aq = max(getattr(self, "_fq4_aq", 0.0), qv.abs().max().item())
+            self._fq4_ak = max(getattr(self, "_fq4_ak", 0.0), kv.abs().max().item())
+            avc = vv.abs().amax(dim=(0, 1, 2)).float()
+            self._fq4_av = avc if getattr(self, "_fq4_av", None) is None else torch.maximum(self._fq4_av, avc)
+            self._fq4_n = getattr(self, "_fq4_n", 0) + 1
+            if self._fq4_n >= self._calib_steps:
+                self._fq4_sqc = self._fq4_aq / 7.0; self._fq4_skc = self._fq4_ak / 7.0
+                svv = torch.ones(hdp_v, device=qkv.device); svv[:hd] = (self._fq4_av / 127.0).clamp_min(1e-8)
+                self._fq4_svv = svv.contiguous(); self._fq4_frozen = True
+        q4 = q4.view(b, nh, T, -1); k4 = k4.view(b, nh, T, -1); vt = vt.view(b, nh, hdp_v, T)
+        sq4 = sq4.view(b, nh, T); sk4 = sk4.view(b, nh, T); sv = sv[..., :hd].contiguous().view(b, nh, hd)
+        return _mc.flash_attn_int4_vt(q4, k4, vt, sq4, sk4, sv, hdp4, self.scale)
+
     def forward(self, x):
         b, c, H, W = x.shape
         T = H * W
@@ -186,7 +293,8 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
             P, sp = _mc.attn_softmax_requant_static(S, self._c)
             O = _mc.attn_av_int8(P, vt, sp, sv)[:, :, :hd]
             a = O.reshape(b, nh, T, hd).transpose(1, 2).reshape(b, T, c)
-            out_tok = x_in_tok + self.proj(a)
+            out_tok = (self.proj(a, residual=x_in_tok) if getattr(self.proj, "_use_bias_res", False)
+                       else x_in_tok + self.proj(a))                 # fused residual in proj epilogue
             return out_tok.reshape(b, H, W, c).permute(0, 3, 1, 2)
         # ---- normal fp16-qkv path (also gathers the fusion's oscale calibration while not frozen) ----
         need_fq_calib = fq_ok and not self._fq_frozen           # force GN+Linear to expose the fp16 qkv
@@ -206,10 +314,24 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
             qkv = qkv_flat.view(b, T, nh, 3, hd)
         q, k, v = qkv.unbind(3)                                          # [b,T,nh,hd]
         q = q.transpose(1, 2); k = k.transpose(1, 2); v = v.transpose(1, 2)   # [b,nh,T,hd]
-        # The batched int GEMMs need T%64==0 (N tile); small-T blocks (T<256, e.g. 4x4/8x8)
-        # fall back to fp16 standard math attention — quant loses there (measured 0.44x at
-        # T=64) and they are negligibly cheap anyway. int8/int4 win 2.2-2.4x on the big T=1024.
-        if T % 64 != 0 or T < 256 or not _HAS:
+        # The batched int GEMMs need T%64==0 (N tile); by default small-T blocks (T<256, e.g. 4x4/8x8)
+        # fall back to fp16 standard math attention — quant loses there (measured 0.44x at T=64) and
+        # they are negligibly cheap anyway. int8/int4 win 2.2-2.4x on the big T=1024.
+        # MODIFF_QUANT_ATTN_ALLT=1 (experiment): drop the T>=256 floor to force int8 on the T=64 blocks
+        # too (T%64==0 is a HARD kernel constraint, so hd=96 T=16/T=4 blocks still fall back to fp16).
+        _min_t = 0 if os.environ.get("MODIFF_QUANT_ATTN_ALLT") == "1" else 256
+        # FUSED path (DEFAULT): eligible blocks go through the fused flash kernel (QKᵀ + online softmax
+        # + AV in one kernel, scores kept in SRAM -> no [BH,T,T] HBM round-trip, no separate
+        # softmax_requant). It's faster AND quality-transparent (int8 fused adds only ~0.004 rel-L2
+        # over fp16-attn), so it's on by default; MODIFF_QATTN_FLASH=0 reverts to the materialized path.
+        _use_flash = (os.environ.get("MODIFF_QATTN_FLASH", "1") != "0" and _HAS_FLASH
+                      and self.head_dim <= 48 and (T % 64) == 0)
+        if _use_flash and _HAS_PACKED:
+            # packed: read interleaved qkv directly (skips the fp16 transpose+contiguous copy)
+            a = self._flash_quant_attn_packed(qkv)                       # [b,nh,T,hd], fused
+        elif _use_flash:
+            a = self._flash_quant_attn(q, k, v)                          # [b,nh,T,hd], fused
+        elif T % 64 != 0 or T < _min_t or not _HAS:
             from integration.fused_ops.token_major_attention import _SDPA_CTX
             with _SDPA_CTX():
                 a = F.scaled_dot_product_attention(q, k, v, scale=self.scale)  # [b,nh,T,hd]
@@ -222,7 +344,8 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         if need_fq_calib and self._frozen and not self._fq_frozen:
             self._freeze_fq()
         a = a.transpose(1, 2).reshape(b, T, c)
-        out_tok = x_in_tok + self.proj(a)
+        out_tok = (self.proj(a, residual=x_in_tok) if getattr(self.proj, "_use_bias_res", False)
+                   else x_in_tok + self.proj(a))                     # fused residual in proj epilogue
         return out_tok.reshape(b, H, W, c).permute(0, 3, 1, 2)
 
 

@@ -28,7 +28,11 @@ def run(mode):
     model, sampler = r._setup_model(mode); cond = r._cond_kwargs(model, BATCH)
 
     def smp(S):
-        with torch.inference_mode(), torch.amp.autocast('cuda', enabled=quant, dtype=torch.float16):
+        # autocast fp16 ON for ALL modes. FIXED 2026-07-20: was enabled=quant, which ran the fp16
+        # baseline in fp32/tf32 -> the reported "int8 ~2x" was ~1.85x precision (fp32->fp16) x ~1.08x
+        # quantization. With this fix the fp16 baseline is true fp16 and int8 is ~1.08x. See
+        # docs/flash_attention_2026-07-19/scripts/true_fp16_vs_int8.py.
+        with torch.inference_mode(), torch.amp.autocast('cuda', enabled=True, dtype=torch.float16):
             sampler.sample(S=S, batch_size=BATCH, shape=r.shape, eta=0.0, verbose=False, **cond)
     smp(WARMUP); torch.cuda.synchronize()
     ms = []

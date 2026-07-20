@@ -14,11 +14,10 @@ token-major ([N, T, C]) makes copies (1) and (3)'s reshapes free views of the
 channels_last memory, and feeds SDPA strided views without `.contiguous()`.
 Only the post-attention transpose (SDPA output [N,H,T,hd] -> [N,T,C]) remains.
 
-Attention defaults to the **flash-preferring SDPA backend** (see `_SDPA_CTX`):
-PyTorch FlashAttention-2 keeps the [BH,T,T] scores in SRAM and never materializes
-them to HBM — ~9x faster than the MATH backend at the churches shapes. The old
-materialized MATH backend (`_SDPA_MATH_CTX`, or MODIFF_SDPA_BACKEND=math) is the
-quantizable-attention baseline the int8/int4 quantized paths are measured against.
+Attention uses the **materialized MATH SDPA backend** (see `_SDPA_CTX`): the
+[BH,T,T] scores are computed in fp16 and are the quantizable-attention baseline
+the int8/int4 quantized paths are measured against. (Fused int8/int4 flash kernels
+exist in csrc but are intentionally NOT wired into this pipeline.)
 
 Weights are copied bit-for-bit from the Conv1d layers, so the result is
 numerically identical up to GroupNorm-kernel / SDPA rounding (~1e-3 e2e).
@@ -32,31 +31,17 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# The fp16 attention SDPA backend. DEFAULT = flash-preferring: enable
-# [flash, mem-efficient, math] and let PyTorch dispatch to the fastest that
-# supports the shape (flash first). FlashAttention-2 keeps the [BH,T,T] scores in
-# SRAM (never materialized to HBM) -> measured ~9x faster than MATH at the churches
-# shapes (hd=24: 16224us -> 1809us). `_SDPA_MATH_CTX` forces the old materialized
-# MATH backend (used as the quantizable-attention baseline and for A/B benchmarks;
-# set MODIFF_SDPA_BACKEND=math to make it the default again).
-_SDPA_PREFER = os.environ.get("MODIFF_SDPA_BACKEND", "flash").lower()
+# The fp16 attention SDPA backend: the materialized MATH backend (scores computed
+# in fp16), which is the quantizable-attention baseline.
 try:
     from torch.nn.attention import sdpa_kernel, SDPBackend
-    _FLASH_ORDER = [SDPBackend.FLASH_ATTENTION, SDPBackend.EFFICIENT_ATTENTION, SDPBackend.MATH]
-    _SDPA_MATH_CTX = lambda: sdpa_kernel(SDPBackend.MATH)
-    _SDPA_FLASH_CTX = lambda: sdpa_kernel(_FLASH_ORDER)
-    _SDPA_CTX = _SDPA_MATH_CTX if _SDPA_PREFER == "math" else _SDPA_FLASH_CTX
+    _SDPA_CTX = lambda: sdpa_kernel(SDPBackend.MATH)
 except Exception:  # pragma: no cover - older torch
     from contextlib import contextmanager
     @contextmanager
-    def _SDPA_MATH_CTX():
+    def _SDPA_CTX():
         with torch.backends.cuda.sdp_kernel(enable_flash=False, enable_mem_efficient=False, enable_math=True):
             yield
-    @contextmanager
-    def _SDPA_FLASH_CTX():
-        with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_mem_efficient=True, enable_math=True):
-            yield
-    _SDPA_CTX = _SDPA_MATH_CTX if _SDPA_PREFER == "math" else _SDPA_FLASH_CTX
 
 from integration.fused_ops.fused_resblock import _group_norm_silu
 
@@ -74,14 +59,12 @@ try:
     _HAS_GN_QUANT = hasattr(_mc, "group_norm_silu_quantize_nhwc")
     _HAS_GN_PACK = hasattr(_mc, "group_norm_silu_quantize_pack_nhwc")      # int4 GN->pack fusion (qkv)
     _HAS_ATTN_OUT_I4 = hasattr(_mc, "quantize_attn_out_int4_pack")         # int4 proj transpose+quant+pack
-    _HAS_FLASH = hasattr(_mc, "flash_attn_int8")                            # fused int8/int4 flash attention
 except Exception:
     _HAS_FUSED_GN_QKV = False
     _HAS_FUSED_ATTN_OUT = False
     _HAS_GN_QUANT = False
     _HAS_GN_PACK = False
     _HAS_ATTN_OUT_I4 = False
-    _HAS_FLASH = False
 
 try:
     from integration.kernels.wxax_linear import QuantLinearWxAx as _QuantLinearWxAx
@@ -161,12 +144,6 @@ class TokenMajorAttentionBlock(nn.Module):
         self._sm_calib_steps = int(os.environ.get("MODIFF_ATTN_CALIB_STEPS", "8"))
         self._sm_frozen = not self._static_softmax
         self._sm_cn = 0; self._sm_cacc = 0.0; self._sm_c = None
-        # Fused quantized flash attention (revived 2026-07-19). MODIFF_FLASH_ATTN=8|4 routes eligible
-        # blocks through flash_attn_int8 / flash_attn_int4 (dynamic per-token Q/K, per-channel V quant).
-        # DEFAULT 0 = fp16 flash SDPA: the quantized flash kernels are correct but measured SLOWER than
-        # fp16 FlashAttention-2 at these small head dims (int8 0.24x, int4 0.14x of fp16 flash — the work
-        # is softmax-bound and hd=24 wastes the int MMA), so they are opt-in for benchmarking only.
-        self._flash_bits = int(os.environ.get("MODIFF_FLASH_ATTN", "0") or 0)
 
     def _materialized_attn(self, q, k, v):
         """fp16 materialized attention on [b,nh,T,hd]. Dynamic (2-pass max) or, once calibrated,
@@ -196,41 +173,13 @@ class TokenMajorAttentionBlock(nn.Module):
         return O.reshape(b, nh, T, hd)
 
     def _attn(self, q, k, v, T):
-        """Attention on [b,nh,T,hd]: fp16 materialized (opt-in) else flash-preferring SDPA."""
-        if (self._flash_bits in (8, 4) and _HAS_FLASH and (T % (4 * 16) == 0)
-                and self.head_dim <= 48):     # hd_pad<=64 for the mma flash path
-            return self._flash_quant_attn(q, k, v)
+        """Attention on [b,nh,T,hd]: fp16 materialized (opt-in) else MATH SDPA (default).
+        (The fused int8/int4 flash kernels exist in csrc but are intentionally NOT wired into
+        this pipeline; attention runs fp16 MATH.)"""
         if self._materialized and (T % 8 == 0):
             return self._materialized_attn(q, k, v)
         with _SDPA_CTX():
             return F.scaled_dot_product_attention(q, k, v, scale=self.scale)
-
-    def _flash_quant_attn(self, q, k, v):
-        """int8/int4 fused flash attention (opt-in, MODIFF_FLASH_ATTN). Dynamic per-token Q/K and
-        per-channel V quantize, then flash_attn_int8 / flash_attn_int4. q,k,v: [b,nh,T,hd]."""
-        b, nh, T, hd = q.shape
-        if self._flash_bits == 8:
-            hd_pad = ((hd + 31) // 32) * 32
-            sq = (q.abs().amax(-1).clamp_min(1e-8) / 127.0).float()
-            sk = (k.abs().amax(-1).clamp_min(1e-8) / 127.0).float()
-            sv = (v.abs().amax(2).clamp_min(1e-8) / 127.0).float()
-            qi = F.pad(torch.round(q / sq.unsqueeze(-1)).clamp(-127, 127).to(torch.int8), (0, hd_pad - hd)).contiguous()
-            ki = F.pad(torch.round(k / sk.unsqueeze(-1)).clamp(-127, 127).to(torch.int8), (0, hd_pad - hd)).contiguous()
-            vi = F.pad(torch.round(v / sv.unsqueeze(2)).clamp(-127, 127).to(torch.int8), (0, hd_pad - hd)).contiguous()
-            return _mc.flash_attn_int8(qi, ki, vi, sq, sk, sv, self.scale)
-        # int4: QKᵀ int4 (packed), PV int8
-        hdp4, hdp_v = 64, ((hd + 31) // 32) * 32
-        sq = (q.abs().amax(-1).clamp_min(1e-8) / 7.0).float()
-        sk = (k.abs().amax(-1).clamp_min(1e-8) / 7.0).float()
-        sv = (v.abs().amax(2).clamp_min(1e-8) / 127.0).float()
-
-        def pack4(x, s):
-            xi = F.pad(torch.round(x / s.unsqueeze(-1)).clamp(-8, 7).to(torch.int8), (0, hdp4 - hd))
-            lo = (xi[..., 0::2].int() & 0xF); hi = (xi[..., 1::2].int() & 0xF)
-            return (lo | (hi << 4)).to(torch.uint8).view(torch.int8).contiguous()
-        q4, k4 = pack4(q, sq), pack4(k, sk)
-        vi = F.pad(torch.round(v / sv.unsqueeze(2)).clamp(-127, 127).to(torch.int8), (0, hdp_v - hd)).contiguous()
-        return _mc.flash_attn_int4(q4, k4, vi, sq, sk, sv, hdp4, self.scale)
 
     def _gn_params(self, dtype):
         if self._gn_cast_dtype is not dtype:

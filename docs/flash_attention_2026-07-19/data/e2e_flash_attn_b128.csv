@@ -1,0 +1,4 @@
+version,mean_ms,min_ms,speedup_vs_fp16,vs_int8_math
+fp16,352.05,351.56,1.0,nan
+int8 (attn=MATH),175.7,175.67,2.004,1.0
+int8 + flash_attn=8,164.54,164.34,2.14,1.068

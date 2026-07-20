@@ -627,11 +627,10 @@ class BenchmarkRunner:
             n = convert_attention_to_modiff(model.model.diffusion_model, act_bits=8, verbose=True)
             print(f"  → MoDiff attention applied to {n} AttentionBlocks")
 
-        # Attention: token-major layout on the flash-preferring SDPA backend by default
-        # (PyTorch FlashAttention-2, ~9x faster than MATH; MODIFF_SDPA_BACKEND=math forces
-        # the old materialized MATH backend). For int8/int4 modes, MODIFF_STD_ATTN_BITS
-        # (8/4, default = mode) swaps in the materialized quantized-attention block (QKᵀ/AV
-        # int GEMMs). MODIFF_QUANT_LINEAR=1 additionally quantizes the qkv/proj Linears (W8A8/
+        # Attention: token-major layout on the MATH SDPA backend. For int8/int4 modes,
+        # MODIFF_STD_ATTN_BITS (8/4, default = mode) swaps in the materialized quantized-attention
+        # block (QKᵀ/AV int GEMMs). MODIFF_QUANT_LINEAR=1 additionally
+        # quantizes the qkv/proj Linears (W8A8/
         # W4A4 via AWQ/gemm_wxax); disables fused GN->qkv since qkv becomes a quant Linear.
         quant_lin = os.environ.get("MODIFF_QUANT_LINEAR") == "1"
         if quant_lin:
@@ -642,12 +641,13 @@ class BenchmarkRunner:
             from integration.fused_ops.token_major_attention import convert_attention_to_token_major
             n = convert_attention_to_token_major(model.model.diffusion_model)
             if n > 0:
-                _be = os.environ.get("MODIFF_SDPA_BACKEND", "flash").lower()
-                print(f"✓ Converted {n} AttentionBlocks to token-major ({'MATH' if _be=='math' else 'flash-preferring'} SDPA)")
-        # MODIFF_QUANT_ATTN=1 opt-in: run the quantized standard attention (W8A8/W4A4 QKᵀ/softmax/AV)
-        # EVEN WITH the AWQ int_gemm linears (quant_lin), i.e. quantized attention + AWQ w8a8/w4a4 Linear
-        # in one model. Default off -> quant_lin keeps fp16 SDPA attention (unchanged behavior).
-        _force_qattn = os.environ.get("MODIFF_QUANT_ATTN") == "1"
+                print(f"✓ Converted {n} AttentionBlocks to token-major (MATH SDPA)")
+        # Quantized attention (W8A8/W4A4, fused FLASH by default) is now ON by default for int8/int4
+        # modes: eligible blocks use the fused flash kernel (attention QKᵀ+softmax+AV in one kernel,
+        # scores in SRAM) — faster (int8 fused ~1.42x vs fp16 e2e) and quality-transparent (+~0.004
+        # rel-L2 over fp16 attention). MODIFF_QUANT_ATTN=0 reverts to fp16 SDPA attention;
+        # MODIFF_QATTN_FLASH=0 uses the materialized 3-kernel int path instead of flash.
+        _force_qattn = os.environ.get("MODIFF_QUANT_ATTN", "1") != "0"
         try:
             if std_attn_bits in (4, 8) and (not quant_lin or _force_qattn):
                 try:

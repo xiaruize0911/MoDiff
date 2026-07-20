@@ -8,6 +8,38 @@
 
 ---
 
+## 🔄 更新 2026-07-20：修正后的端到端结果（真实 fp16 基线）
+
+**要点：** 在 churches LDM-8（**b128**, A40, DDIM）上重测并修正一个基准公平性问题后，**int8 端到端相对真实 fp16 仅约 `1.08×`（int4 约 `1.10×`），modiff 时序缓存变体比 fp16 更慢。** 此前 `docs/` 下脚本（`bench5`、`e2e_*`）报告的 "int8 ≈ 2×" 是基线不公平导致的假象。（注意：本报告下文 b42 的表格用的是真实 fp16 行，所以下文 "int8 ≈ fp16" 的结论与此一致。）
+
+### 基准问题（已修复）
+`docs/` 下的 e2e 对比脚本用 `autocast(enabled=quant)` 包裹采样——只对 int8/int4 开启 fp16 autocast，**fp16 基线实际以 fp32/tf32 运行**（kernel 名可证：`softmax_warp_forward<float>`、`tensorop_s1688gemm`、`s1688fprop_optimized_tf32`），吞吐约为真实 fp16 的一半。已改为对所有模式 `enabled=True`。（`benchmark_ldm.py` 自带的 `benchmark()` 路径用 `enabled = mode != 'fp32'`，本来就正确。）
+
+### 修正后的端到端（b128，autocast 对所有模式开启）
+| 配置 | ms/step | vs 真实 fp16 |
+|---|---|---|
+| **fp16（真实）** | 189.6 | 1.00× |
+| int8_baseline（attention fp16） | 175.2 | 1.08× |
+| int4_baseline（attention fp16） | 173.1 | 1.10× |
+| **int8 + 融合flash量化attention（新默认）** | **133.3** | **1.42×** |
+| int4 + 融合flash量化attention | 152.1 | 1.25× |
+| int8_modiff / int4_modiff | ~199 | 0.95–0.96×（更慢） |
+
+> **2026-07-20 更新：融合flash量化attention现在是 int8/int4 的默认路径。** 之前"量化attention更慢"是针对*物化*(materialized)3-kernel路径；*融合flash*路径（QKᵀ+softmax+AV 单kernel、分数留SRAM、kernel量化、静态单遍scale、V预转置）使 int8 attention 比 fp16 更快，把 int8 端到端从 1.08× 提到 **1.42×**，且质量透明（attention量化仅+~0.004 采样latent rel-L2；int8 的 ~0.35 rel-L2 来自线性/卷积量化，且这是50步DDIM的轨迹发散指标、非必然FID变差——FID未测）。回退：`MODIFF_QUANT_ATTN=0`（fp16 attention）、`MODIFF_QATTN_FLASH=0`（物化int路径）。
+
+旧 "2×" = **~1.85×（fp32/tf32→fp16 精度）× ~1.08×（int8 量化）**。真实量化端到端收益约 **8%**。
+
+### 为什么只有 ~8%
+attention 约占每步一半且保持 fp16（未量化）；量化的 conv+linear 仅约占每步 16%，融合后收益有限；int8 不改善访存受限的 attention/elementwise 部分。（kernel 级比值——linear W8A8 1.46×、GroupNorm 1.58–2.11×、flash-attn int8 2.73× vs fp16 MATH——均用显式 fp16 张量测量，不受此基准问题影响，依然成立。）
+
+### 相关新增分析（2026-07）
+- `csrc/README.md`：kernel 按操作族重新分类（`linear/ conv/ attention/ norm/ quantize/`），每个 kernel 增加了输入输出 / 融合 / vs-fp16 注释。
+- `docs/flash_attention_2026-07-19/E2E_CORRECTION_2026-07-20.md`：本修正的权威说明（含 kernel 名证据）。
+- 融合 int8/int4 flash attention kernel（`csrc/kernels/attention/flash_attn_int8.cu`，BC=64 优化，2.73×/2.78× vs fp16 MATH）已构建，但打不过 fp16-flash，**未接入模型默认路径**（attention 默认 fp16 MATH）。
+- 权威脚本：`docs/flash_attention_2026-07-19/scripts/{true_fp16_vs_int8,e2e_true_fp16_table,kernel_name_diff}.py`。
+
+---
+
 ## 目录
 
 1. [环境配置](#1-环境配置)

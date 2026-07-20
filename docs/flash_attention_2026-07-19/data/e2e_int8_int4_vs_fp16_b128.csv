@@ -1,0 +1,6 @@
+version,mean_ms,min_ms,speedup_vs_fp16
+fp16,352.26,351.79,1.0
+int8_baseline,175.75,175.66,2.004
+int8_modiff,198.97,198.85,1.77
+int4_baseline,173.27,173.16,2.033
+int4_modiff,198.97,198.47,1.77

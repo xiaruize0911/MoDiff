@@ -18,6 +18,8 @@ integration/results_ldm_benchmark
 *.so
 *.nsys-rep
 *.sqlite
+build/
+*.log
 PHASE2_PLAN.md
 *.png
 /integration/lsun_val

@@ -1,0 +1,9 @@
+family,policy,us_per_fwd,vs_real
+attention,fp16 MATH (real),89017.7,1.0
+attention,int8 materialized,95378.9,0.933
+attention,int4 materialized,87878.9,1.013
+linear,fp16 (real),7256.6,1.0
+linear,int8 AWQ,7406.4,0.98
+linear,int4 AWQ,9276.0,0.782
+attn+linear,int8 linear+fp16 attn,96424.1,0.998
+attn+linear,int4 linear+fp16 attn,98293.7,0.979

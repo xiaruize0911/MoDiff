@@ -1,3 +1,7 @@
+> ⚠️ **2026-07-20:** any "int8 ~2× e2e" figure here is inflated by a fp32/tf32 fp16-baseline (autocast
+> bug). Real int8 e2e ≈ **1.08× vs true fp16**. See
+> [../flash_attention_2026-07-19/E2E_CORRECTION_2026-07-20.md](../flash_attention_2026-07-19/E2E_CORRECTION_2026-07-20.md).
+
 # Layer-level roofline profile → anomaly → fix (no fallback)
 
 **Churches LDM UNet, A40, batch 64.** Measured each production kernel (qkv/proj GEMM; attention

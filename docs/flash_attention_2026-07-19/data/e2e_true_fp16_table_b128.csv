@@ -1,0 +1,6 @@
+version,mean_ms,min_ms,speedup_vs_true_fp16
+"fp16 (true, autocast)",189.6,189.6,1.0
+int8_baseline,175.2,175.0,1.083
+int8_modiff,198.6,198.4,0.955
+int4_baseline,173.1,173.1,1.095
+int4_modiff,198.4,198.3,0.956

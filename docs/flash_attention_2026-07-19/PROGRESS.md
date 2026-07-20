@@ -1,4 +1,27 @@
+> ⚠️ **HISTORICAL / scrubbed 2026-07-20.** Two problems with this doc's headline claims:
+> (1) the "1.82× e2e" / "int8 ~2×" figures are **inflated** — the fp16 baseline ran fp32/tf32
+> (autocast bug); real int8 e2e is **~1.08× vs true fp16**.
+> (2) it uses **fp16-flash as the yardstick**, which is **not fair for fp16-vs-int8**: flash is an
+> *algorithmic* optimization both precisions can use, so it's an algorithm effect, not a precision
+> one. Flash was subsequently **removed from the pipeline** (attention = fp16 MATH).
+> Fair, current numbers: [E2E_CORRECTION_2026-07-20.md](E2E_CORRECTION_2026-07-20.md). This file is
+> kept as a historical record of the flash-kernel experiment, not as fp16-vs-int8 evidence.
+
 # Flash attention (fp16 + int8 + int4) — progress / handoff
+
+> **2026-07-19 (later): REVERTED & REMOVED — attention is now MATH-only.**
+> Per decision, all flash-attention code was deleted and attention reverted to the
+> materialized MATH SDPA backend. Rationale: (1) quantized flash attention loses to
+> fp16 at every churches shape and even the kernel-only ceiling is 0.22× (see
+> `ATTN_ALLSHAPES_REPORT.md`); (2) the quantization e2e win (~2×) comes from the
+> Linear/GEMM layers, which is measured against a MATH-attention baseline — keeping
+> attention on MATH keeps that comparison clean and matches prior-work baselines.
+> Deleted: `csrc/kernels/flash_attn_int8.cu`, `csrc/kernels/quantize_qkv.cu`, and all
+> `flash_attn_int8/int4`, `mma_smoke`, `quantize_qkv_int8`, `transpose_qkv_int8`
+> pybind/api/setup registrations; the `_flash_quant_attn` path, `MODIFF_FLASH_ATTN`,
+> `MODIFF_SDPA_BACKEND`, and flash-preferring `_SDPA_CTX` in token_major_attention.py.
+> `mma_int8.cuh` was KEPT (shared by gemm_wxax.cu / attn_quant_gemm.cu). The sections
+> below are the pre-removal historical record.
 
 Date: 2026-07-19. Status: **fp16 flash shipped (big win); int8/int4 flash kernels built +
 correct but not yet fast enough (need more optimization). Continue tomorrow.**

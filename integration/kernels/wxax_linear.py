@@ -26,9 +26,12 @@ import torch.nn.functional as F
 try:
     import modiff_cutlass as _mc
     _HAS = hasattr(_mc, "gemm_w8a8_awq") and hasattr(_mc, "gemm_w4a4_awq")
+    # fused bias(+residual) epilogue -> removes the separate `out + bias` / `x + proj(out)` add kernels
+    _HAS_BIAS_RES = hasattr(_mc, "gemm_w8a8_awq_bias_res") and hasattr(_mc, "gemm_w4a4_awq_bias_res")
 except Exception:
     _mc = None
     _HAS = False
+    _HAS_BIAS_RES = False
 
 
 def _pack4(q):  # q int8 [...,K] in [-7,7] -> [...,K/2] int8 (2 int4/byte, low nibble = even)
@@ -81,6 +84,10 @@ class QuantLinearWxAx(nn.Module):
         self._out_amax = None      # [out_features] calibrated per-column output absmax
         self._inv_out_scale = None # [N_pad] f32 = 127/absmax (padded cols = 1)
         self._out_scale = None     # [out_features] f16 = absmax/127 (dequant multiplier)
+        # fused bias(+residual) epilogue: the GEMM adds bias[n] (and an optional residual[m,n]) in its
+        # store, replacing the separate `out + bias` elementwise add (and, for attention proj, the
+        # `x + proj(out)` residual add). Not for modiff (o_hat accumulation) or the int8-output path.
+        self._use_bias_res = _HAS_BIAS_RES and not modiff and not self._out_i8
 
     def set_a_scale(self, s):
         self.a_scale = float(s)
@@ -105,11 +112,32 @@ class QuantLinearWxAx(nn.Module):
             return _mc.gemm_w4a4_awq_nout(xq, self.qweight, self.w_scale, a_scale, self._awqt_K, self.out_features)
         return _mc.gemm_w4a4_awq(xq, self.qweight, self.w_scale, a_scale, self._awqt_K)
 
-    def forward(self, x):
+    def _gemm_bias_res(self, xf, a_scale, rflat):
+        """xf: fp16 [M,K] -> fp16 [M,out_features] with bias (and optional residual rflat [M,out])
+        added in the GEMM epilogue. Uses the unpadded-store form (n_out=out_features)."""
+        empty = xf.new_empty(0)
+        bias = self.bias if self.bias is not None else empty
+        res = rflat if rflat is not None else empty
+        if self._awqt_K != self.in_features:
+            xf = F.pad(xf, (0, self._awqt_K - self.in_features)).contiguous()
+        if self.bits == 8:
+            xq = _mc.quantize_act_int8(xf, a_scale)
+            return _mc.gemm_w8a8_awq_bias_res(xq, self.qweight, self.w_scale, a_scale, self.out_features, bias, res)
+        xq = _mc.quantize_act_int4_pack(xf, a_scale)
+        return _mc.gemm_w4a4_awq_bias_res(xq, self.qweight, self.w_scale, a_scale, self._awqt_K, self.out_features, bias, res)
+
+    def forward(self, x, residual=None):
         orig = x.shape
         xf = x.reshape(-1, self.in_features).half().contiguous()
         if self._calib:
             self._amax = max(self._amax, float(xf.abs().max()))
+        rflat = residual.reshape(-1, self.out_features).half().contiguous() if residual is not None else None
+
+        if self._use_bias_res:
+            # FUSED bias(+residual) epilogue -- the default int8/int4 Linear path
+            a_scale = self.a_scale if self.a_scale is not None else ((xf.abs().max().item() / self.Q) or 1e-8)
+            out = self._gemm_bias_res(xf, a_scale, rflat)
+            return out.reshape(*orig[:-1], self.out_features)
 
         if self.modiff and self.a_hat is not None:
             # MoDiff: quantize only the temporal DELTA (small range -> less int error),
@@ -132,6 +160,7 @@ class QuantLinearWxAx(nn.Module):
             if self._awqt_N != self.out_features:
                 oi8 = oi8[:, :self.out_features].contiguous()
             out = _mc.dequant_bias_i8(oi8, self._out_scale, self.bias)   # fp16 [M,out], dequant + bias fused
+            if rflat is not None: out = out + rflat
             return out.reshape(*orig[:-1], self.out_features)
         else:
             a_scale = self.a_scale if self.a_scale is not None else ((xf.abs().max().item() / self.Q) or 1e-8)
@@ -147,6 +176,8 @@ class QuantLinearWxAx(nn.Module):
         out = out.reshape(*orig[:-1], self.out_features)
         if self.bias is not None:
             out = out + self.bias
+        if rflat is not None:
+            out = out + rflat.reshape(*orig[:-1], self.out_features)
         return out
 
 

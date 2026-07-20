@@ -94,13 +94,20 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("fused_gn_qkv", &fused_gn_qkv, "Fused GroupNorm->qkv (per-sample scale/bias mainloop fusion)");
     m.def("fused_gn_qkv_int8", &fused_gn_qkv_int8, "Fused GroupNorm->qkv with int8-clamp output (oscale folded into weight/bias)");
 
-    // Fused int8/int4 flash attention (revived 2026-07-19): tensor-core flash (mma.m16n8k32.s8),
-    // keeps [BH,T,T] scores in SRAM (never HBM), fp32 online softmax. Bar to beat = fp16 flash.
+    // Fused int8/int4 flash attention (tensor-core, scores kept in SRAM, fp32 online softmax).
     m.def("flash_attn_int8", &flash_attn_int8,
           "Fused int8 flash attention: q,k,v int8 [N,H,T,hd_pad], sq,sk [N,H,T], sv [N,H,hd] -> out fp16 [N,H,T,hd]");
+    m.def("flash_attn_int8_vt", &flash_attn_int8_vt,
+          "Fused int8 flash attention, V PRE-TRANSPOSED [N,H,hd_pad,T] (skips internal transpose; mma path only)");
     m.def("flash_attn_int4", &flash_attn_int4,
           "Fused int4 flash attention (int4 QKᵀ, int8 PV): q4,k4 packed [N,H,T,hdp4/2], v int8 [N,H,T,hdp_v] -> fp16");
-    m.def("mma_smoke", &mma_smoke, "m16n8k32.s8 fragment-mapping smoke test: C[16,N]=A[16,K].B[N,K]^T");
+    m.def("flash_attn_int4_vt", &flash_attn_int4_vt,
+          "Fused int4 flash attention, V PRE-TRANSPOSED int8 [N,H,hdp_v,T] (skips internal transpose)");
+    m.def("quantize_attn_qkv_i4qk_i8v", &quantize_attn_qkv_i4qk_i8v,
+          "One-pass quantize for int4 flash: Q/K packed int4 + V int8-transposed -> {q4,k4,vt,sq,sk,sv}");
+    m.def("quantize_attn_qkv_i4qk_i8v_static", &quantize_attn_qkv_i4qk_i8v_static,
+          "Static (calibrated, single-pass) int4 Q/K + int8 V quantize for int4 flash");
+    m.def("mma_smoke", &mma_smoke, "m16n8k32.s8 fragment-mapping smoke test");
 
     // AWQ w8a8 GEMM, vendored verbatim from llm-awq (MIT, (c) 2023 MIT HAN Lab) -- faster than our
     // gemm_w8a8_awq on the qkv/proj shapes. in[M,K] int8, weight[N,K] int8, wscales[N] half,
@@ -115,6 +122,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "(n_out even), skipping padded cols -- removes the downstream slice+.contiguous() copy");
     m.def("gemm_w4a4_awq_nout", &gemm_w4a4_awq_nout,
           "W4A4 Linear, unpadded output: writes [M,n_out] directly (n_out even), skipping padded cols");
+    m.def("gemm_w8a8_awq_bias_res", &gemm_w8a8_awq_bias_res,
+          "W8A8 Linear + fused bias + optional residual in the epilogue (empty tensor = skip); removes the separate bias/residual add");
+    m.def("gemm_w4a4_awq_bias_res", &gemm_w4a4_awq_bias_res,
+          "W4A4 Linear + fused bias + optional residual in the epilogue (empty tensor = skip)");
     m.def("gemm_w8a8_awq_out_i8", &gemm_w8a8_awq_out_i8,
           "W8A8 Linear, INT8 output (output-fusion): same mainloop, epilogue requantizes to int8 with "
           "inv_out_scale[N]=127/absmax_col -> C[M,N] int8; halves the output write");
@@ -125,12 +136,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "W4A4 Linear, INT8 output (output-fusion): int4 GEMM, epilogue requantizes to int8; halves the output write");
     m.def("quantize_act_int8", &quantize_act_int8, "Fused fp16->int8 activation quantize (static scale)");
     m.def("quantize_act_int4_pack", &quantize_act_int4_pack, "Fused fp16->packed-int4 activation quantize (static scale)");
-
-    // Fused qkv quantize for the flash score path (kernels/quantize_qkv.cu)
-    m.def("quantize_qkv_int8", &quantize_qkv_int8,
-          "packed qkv [B,T,nh,3,hd] fp16 -> {qi,ki,vi [B,nh,T,hd_pad] int8, sq,sk [B,nh,T], sv [B,nh,hd] f32}");
-    m.def("transpose_qkv_int8", &transpose_qkv_int8,
-          "int8 packed qkv [B,T,nh,3,hd] -> {qi,ki,vi [B,nh,T,hd_pad] int8} head-major, hd zero-padded");
 
     // Standard quantized attention (attn_quant_gemm.cu)
     m.def("attn_qk_int8", &attn_qk_int8,
@@ -159,6 +164,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "fp16 materialized softmax(S, static_c, c) -> {P fp16 unnormalized [BH,T,T], rowsum [BH,T]}");
     m.def("quantize_attn_qkv_static", &quantize_attn_qkv_static,
           "static Q/K/V quantize (calibrated sq_c,sk_c per-tensor + sv_vec per-channel; no absmax)");
+    m.def("quantize_attn_qkv_packed", &quantize_attn_qkv_packed,
+          "packed-qkv dynamic quantize (reads interleaved [b,T,nh,3,hd], no transpose copy; QK int8/int4, V int8)");
+    m.def("quantize_attn_qkv_packed_static", &quantize_attn_qkv_packed_static,
+          "packed-qkv static quantize (calibrated; reads interleaved qkv, no transpose copy)");
     m.def("quantize_attn_qkv_from_i8", &quantize_attn_qkv_from_i8,
           "consume int8 qkv-linear output (+oscale) directly -> attention int8 {qi,ki,vt,sq,sk,sv}");
 }

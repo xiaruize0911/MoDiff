@@ -1,0 +1,12 @@
+hd_or_K,count,path,us,vs_real,relL2
+24/1024,5,fp16 MATH (real),16211.2,1.0,
+24/1024,5,int8 materialized attn,16043.0,1.01,0.0293
+24/1024,5,int4 materialized attn,14678.9,1.104,0.4305
+48/256,5,fp16 MATH (real),1358.3,1.0,
+48/256,5,int8 materialized attn,2431.7,0.559,0.0203
+48/256,5,int4 materialized attn,2314.2,0.587,0.3457
+48/64,5,fp16 MATH (real),156.2,1.0,
+48/64,5,int8 materialized attn,523.2,0.298,0.0146
+48/64,5,int4 materialized attn,504.8,0.309,0.2633
+96/16,5,fp16 MATH (real),64.5,1.0,
+96/4,1,fp16 MATH (real),66.9,1.0,

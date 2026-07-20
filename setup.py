@@ -26,23 +26,30 @@ setup(
             name='modiff_cutlass',
             sources=[
                 'csrc/pybind.cpp',
-                'csrc/kernels/quantize.cu',
-                'csrc/kernels/modiff_delta_quantize.cu',
-                'csrc/kernels/conv_epilogue.cu',
-                'csrc/kernels/conv2d_int8.cu',
-                'csrc/kernels/conv2d_int4.cu',
-                'csrc/kernels/layout_transform.cu',
-                'csrc/kernels/group_norm_silu.cu',
-                'csrc/kernels/fused_gn_qkv.cu',
-                'csrc/kernels/quantize_qkv.cu',
-                'csrc/kernels/gemm_wxax.cu',
-                'csrc/kernels/awq_w8a8_gemm_cuda.cu',
-                'csrc/kernels/attn_quant_gemm.cu',
-    'csrc/kernels/flash_attn_int8.cu',
+                # quantize: activation quantize + MoDiff temporal-delta quantize
+                'csrc/kernels/quantize/quantize.cu',
+                'csrc/kernels/quantize/modiff_delta_quantize.cu',
+                # conv: W8A8/W4A4 int conv (CUTLASS implicit GEMM) + shared epilogue
+                'csrc/kernels/conv/conv_epilogue.cu',
+                'csrc/kernels/conv/conv2d_int8.cu',
+                'csrc/kernels/conv/conv2d_int4.cu',
+                # norm: GroupNorm(+SiLU)(+quantize) and fused GroupNorm->qkv
+                'csrc/kernels/norm/group_norm_silu.cu',
+                'csrc/kernels/norm/fused_gn_qkv.cu',
+                # linear: W8A8/W4A4 Linear GEMM (own AWQ-tiling port + vendored AWQ)
+                'csrc/kernels/linear/gemm_wxax.cu',
+                'csrc/kernels/linear/awq_w8a8_gemm_cuda.cu',
+                # attention: W8A8/W4A4 materialized attention + fused int8/int4 flash
+                'csrc/kernels/attention/attn_quant_gemm.cu',
+                'csrc/kernels/attention/flash_attn_int8.cu',
+                # util: NCHW<->NHWC / packing layout transforms
+                'csrc/kernels/util/layout_transform.cu',
             ],
             include_dirs=[
                 os.path.join(CUTLASS_PATH, 'include'),
                 os.path.join(CUTLASS_PATH, 'tools/util/include'),
+                'csrc',                      # common.cuh, modiff_kernels_api.h
+                'csrc/kernels/common',       # mma_int8.cuh (shared by linear + attention)
             ],
             extra_compile_args={
                 'cxx': ['-O3', '-std=c++17'],
