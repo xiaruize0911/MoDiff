@@ -137,37 +137,20 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("quantize_act_int8", &quantize_act_int8, "Fused fp16->int8 activation quantize (static scale)");
     m.def("quantize_act_int4_pack", &quantize_act_int4_pack, "Fused fp16->packed-int4 activation quantize (static scale)");
 
-    // Standard quantized attention (attn_quant_gemm.cu)
-    m.def("attn_qk_int8", &attn_qk_int8,
-          "batched int8 QKᵀ: Q,K int8 [BH,T,hd_pad] -> S [BH,T,T] fp32 (raw accumulator)");
-    m.def("attn_softmax_requant", &attn_softmax_requant,
-          "softmax(dequant S · sq·sk·scale) -> {P int8 [BH,T,T] in [0,127], sp [BH,T]}");
-    m.def("attn_av_int8", &attn_av_int8,
-          "batched int8 AV: P[BH,T,T]·Vtᵀ[BH,hd_pad,T] -> O fp16 [BH,T,hd_pad], dequant sp[row]·sv[col]");
-    m.def("attn_qk_int4", &attn_qk_int4, "batched int4 QKᵀ (packed) -> S [BH,T,T] fp16 scaled logits");
-    m.def("attn_softmax_requant4", &attn_softmax_requant4, "softmax(fp16 S) -> PACKED int4 P [BH,T,T/2] + sp");
-    m.def("attn_av_int4", &attn_av_int4, "batched int4 AV (packed P·Vt) -> O fp16 [BH,T,hd_pad]");
+    // Quantize prologue for the FUSED (flash) quantized attention path (attn_quant_gemm.cu).
+    // Produce per-token int8/int4 Q/K + per-channel int8 (transposed) V + scales for
+    // flash_attn_int8_vt / flash_attn_int4_vt. (The materialized QKᵀ/softmax/AV int GEMM
+    // attention path was removed; flash is the sole quantized-attention path.)
     m.def("quantize_attn_qkv", &quantize_attn_qkv,
           "fused Q/K/V quantize: fp16 [BH,T,hd] -> {qi,ki [BH,T,hp_qk], vt [BH,hp_av,T], sq,sk, sv}");
-    // static (calibrated) score path -- no runtime reductions
-    m.def("attn_softmax_requant_static", &attn_softmax_requant_static,
-          "static-max softmax(S, c) -> {P int8 [BH,T,T], sp}; single read of S (no max pass)");
-    m.def("attn_softmax_requant_s8", &attn_softmax_requant_s8,
-          "int8-SCORE softmax(S_int8, sS, c) -> {P int8, sp}; halves the T*T score read");
-    m.def("attn_softmax_requant_s8_dyn", &attn_softmax_requant_s8_dyn,
-          "int8-SCORE softmax(S_int8, sS) DYNAMIC per-row max -> {P int8, sp}; quality-safe, halves T*T read");
-    m.def("attn_qk_int8_s8out", &attn_qk_int8_s8out,
-          "batched int8 QKᵀ writing INT8 scores S=round(logit/sS) [BH,T,T]; halves the T*T write");
-    m.def("attn_softmax_requant4_static", &attn_softmax_requant4_static,
-          "static-max softmax(S, c) -> {PACKED int4 P [BH,T,T/2], sp}");
-    m.def("attn_softmax_fp16", &attn_softmax_fp16,
-          "fp16 materialized softmax(S, static_c, c) -> {P fp16 unnormalized [BH,T,T], rowsum [BH,T]}");
     m.def("quantize_attn_qkv_static", &quantize_attn_qkv_static,
           "static Q/K/V quantize (calibrated sq_c,sk_c per-tensor + sv_vec per-channel; no absmax)");
     m.def("quantize_attn_qkv_packed", &quantize_attn_qkv_packed,
           "packed-qkv dynamic quantize (reads interleaved [b,T,nh,3,hd], no transpose copy; QK int8/int4, V int8)");
     m.def("quantize_attn_qkv_packed_static", &quantize_attn_qkv_packed_static,
           "packed-qkv static quantize (calibrated; reads interleaved qkv, no transpose copy)");
-    m.def("quantize_attn_qkv_from_i8", &quantize_attn_qkv_from_i8,
-          "consume int8 qkv-linear output (+oscale) directly -> attention int8 {qi,ki,vt,sq,sk,sv}");
+    // fp16 (reference) materialized softmax — used by the fp16-materialized attention path
+    // (token_major_attention, MODIFF_FP16_MATERIALIZED; the static-vs-dynamic study). Not int8/int4.
+    m.def("attn_softmax_fp16", &attn_softmax_fp16,
+          "fp16 materialized softmax(S, static_c, c) -> {P fp16 unnormalized [BH,T,T], rowsum [BH,T]}");
 }

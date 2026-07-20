@@ -642,11 +642,12 @@ class BenchmarkRunner:
             n = convert_attention_to_token_major(model.model.diffusion_model)
             if n > 0:
                 print(f"✓ Converted {n} AttentionBlocks to token-major (MATH SDPA)")
-        # Quantized attention (W8A8/W4A4, fused FLASH by default) is now ON by default for int8/int4
-        # modes: eligible blocks use the fused flash kernel (attention QKᵀ+softmax+AV in one kernel,
-        # scores in SRAM) — faster (int8 fused ~1.42x vs fp16 e2e) and quality-transparent (+~0.004
-        # rel-L2 over fp16 attention). MODIFF_QUANT_ATTN=0 reverts to fp16 SDPA attention;
-        # MODIFF_QATTN_FLASH=0 uses the materialized 3-kernel int path instead of flash.
+        # Quantized attention (W8A8/W4A4, fused FLASH) is ON by default for int8/int4 modes:
+        # eligible blocks (head_dim<=48, T%64==0) use the fused flash kernel (attention QKᵀ+softmax+AV
+        # in one kernel, scores in SRAM) — faster (int8 fused ~1.5x vs fp16 e2e) and quality-transparent
+        # (+~0.004 rel-L2 over fp16 attention); ineligible blocks fall back to fp16 SDPA. Flash is the
+        # sole quantized-attention path (the materialized int-GEMM path was removed). MODIFF_QUANT_ATTN=0
+        # reverts attention to fp16 SDPA.
         _force_qattn = os.environ.get("MODIFF_QUANT_ATTN", "1") != "0"
         try:
             if std_attn_bits in (4, 8) and (not quant_lin or _force_qattn):

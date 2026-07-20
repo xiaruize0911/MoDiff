@@ -48,8 +48,11 @@ setup(
             include_dirs=[
                 os.path.join(CUTLASS_PATH, 'include'),
                 os.path.join(CUTLASS_PATH, 'tools/util/include'),
-                'csrc',                      # common.cuh, modiff_kernels_api.h
-                'csrc/kernels/common',       # mma_int8.cuh (shared by linear + attention)
+                # Absolute paths: ninja runs compile commands from the build-temp dir, so
+                # relative include dirs (e.g. 'csrc') fail to resolve after the csrc/ reorg
+                # moved the .cu sources into subdirectories.
+                os.path.abspath('csrc'),                 # common.cuh, modiff_kernels_api.h
+                os.path.abspath('csrc/kernels/common'),  # mma_int8.cuh (shared by linear + attention)
             ],
             extra_compile_args={
                 'cxx': ['-O3', '-std=c++17'],

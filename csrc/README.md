@@ -20,9 +20,9 @@ csrc/
     │   ├── conv2d_int8.cu       #   W8A8 CUTLASS implicit-GEMM conv (+fused variants)
     │   ├── conv2d_int4.cu       #   W4A4 CUTLASS implicit-GEMM conv (+fused variants)
     │   └── conv_epilogue.cu     #   shared conv epilogue helpers
-    ├── attention/              # Attention score path (QKᵀ / softmax / AV)
-    │   ├── attn_quant_gemm.cu   #   W8A8/W4A4 MATERIALIZED attention (3 kernels)
-    │   └── flash_attn_int8.cu   #   FUSED int8/int4 flash attention (scores in SRAM)
+    ├── attention/              # Quantized attention (fused flash) + its quantize prologue
+    │   ├── attn_quant_gemm.cu   #   quantize prologue: fp16 Q/K/V -> int8/int4 Q/K + int8 V (feeds flash)
+    │   └── flash_attn_int8.cu   #   FUSED int8/int4 flash attention (QKᵀ+softmax+AV, scores in SRAM)
     ├── norm/                   # GroupNorm + fusions
     │   ├── group_norm_silu.cu   #   GroupNorm(+SiLU)(+quantize/pack) NHWC
     │   └── fused_gn_qkv.cu      #   fused GroupNorm -> qkv projection
@@ -40,8 +40,7 @@ csrc/
 | Op family | kernel(s) | vs fp16 | what fp16 it's compared to | notes |
 |---|---|---|---|---|
 | **Linear GEMM** | `gemm_w8a8_awq` / `gemm_w4a4_awq` | **W8A8 1.46× / W4A4 1.83×** | `F.linear` | *fused-quant* (activation quantize folded into upstream GroupNorm). With a **standalone** quantize the win is erased (int8 0.99×, int4 0.78×). Per-shape: wins at K≥384 (int4 up to 2.66×), weakest at K=192. |
-| **Attention — materialized** (the fp16↔int8 comparison) | `attn_qk_int8`+`attn_softmax_requant`+`attn_av_int8` | int8 **0.79× total** / core (excl. quantize) ~0.93×; int4 core ~1.01× | `F.scaled_dot_product_attention` **MATH** | Fair same-algorithm precision comparison. int8 attention ≈ a regression → **attention stays fp16 MATH** in the pipeline. The [BH,T,T] scores round-trip HBM 3× (`attn_softmax_requant` is 3.6× fp16 softmax). |
-| **Attention — flash (fused, off by default)** | `flash_attn_int8` / `flash_attn_int4` | int8/int4 flash ≈ fp16 flash class (2-stage cp.async, BC=64, scores in SRAM) | *(same-algorithm: fp16 flash)* | ⚠️ **Flash is an orthogonal *algorithmic* optimization, not a precision one — it is NOT used to judge fp16-vs-int8** (that would be unfair; both precisions can use flash). Built but **not wired into the pipeline**; kept for reference. |
+| **Attention — fused flash (int8/int4)** | `flash_attn_int8_vt` / `flash_attn_int4_vt` (+ `quantize_attn_qkv*` prologue) | int8 flash **2.75× vs fp16 MATH** at the dominant hd24/T1024 block (~2.5× weighted over eligible blocks) | `F.scaled_dot_product_attention` **MATH** (what the fp16 baseline runs) | **Sole quantized-attention path** — the materialized QKᵀ/softmax/AV int-GEMM path (`attn_qk_int8`/`attn_softmax_requant`/`attn_av_int8` …) was **removed**. Eligible blocks (hd≤48, T%64==0) run flash; ineligible fall back to fp16 SDPA. Lifts int8 e2e to ~1.5× vs true fp16. int4 uses int4 Q/K + int8 V/P (no native int4 flash). |
 | **GroupNorm(+SiLU)** | `group_norm_silu_nhwc` | **1.58–2.11×** | `F.group_norm(+F.silu)` | fp16-vs-fp16 win from reading/writing channels_last directly (avoids `F.group_norm`'s forced NCHW copy). `+quantize`/`+pack` variants fold the activation quantize in for free. |
 | **GN→qkv fusion** | `fused_gn_qkv` / `_int8` | (fusion) | GroupNorm + Linear (2 kernels) | Collapses GroupNorm + qkv projection (+int8 output requant) into one CUTLASS kernel; removes the fp16 qkv materialization + reshape copy. |
 | **Conv2d** | `conv2d_int8_*` / `conv2d_int4_*` | 0.48–1.16× **standalone** | cuDNN fp16 conv | cuDNN fp16 conv is highly optimized; standalone int8 (per-call quantize + fp16 dequant) loses on large-spatial, wins only high-channel/low-spatial. In the **fused int8→int8 chain** (deepfuse relu+requant, quantize once, no fp16 round-trip) conv is faster than standalone, but the whole-model e2e gain is only **~1.08× vs true fp16** (see the corrected e2e note below). |
@@ -76,10 +75,10 @@ csrc/
 > was a loss when *materialized* (0.79× — softmax-requant + `[BH,T,T]` HBM round-trip), but the **fused
 > flash** path (QKᵀ+softmax+AV in one kernel, scores in SRAM; kernel quantize; static single-pass scales;
 > `flash_attn_int8_vt` V-pre-transposed) makes int8 attention *faster than fp16* — lifting int8 e2e from
-> 1.08× → **1.42×**. It's quality-transparent (+~0.004 sampled-latent rel-L2 over fp16 attention; the
-> ~0.35 rel-L2 of int8 is from the linear/conv quant, not attention). Env: `MODIFF_QUANT_ATTN=0` reverts
-> to fp16 attention; `MODIFF_QATTN_FLASH=0` uses the materialized int path. int4-fused (1.25×) beats
-> int4-materialized (1.16×) via the kernel int4 Q/K pack. Scripts: `docs/flash_attention_2026-07-19/`.
+> 1.08× → **1.54×** (int4 **1.62×**). It's quality-transparent (+~0.004 sampled-latent rel-L2 over fp16
+> attention; the ~0.35 rel-L2 of int8 is from the linear/conv quant, not attention). The materialized
+> int path was **removed** — flash is the sole quantized-attention path; `MODIFF_QUANT_ATTN=0` reverts
+> to fp16 SDPA attention. Scripts: `docs/flash_attention_2026-07-19/`.
 
 > ⚠️ **Correction (2026-07-20).** Earlier reports here (and `bench5`) claimed **int8 ≈ 2.00×**.
 > That was a benchmark-harness artifact: the sampling loop used `autocast(enabled=quant)`, so the
@@ -89,8 +88,8 @@ csrc/
 > *slower* than fp16. Authoritative scripts: `docs/flash_attention_2026-07-19/scripts/true_fp16_vs_int8.py`,
 > `e2e_true_fp16_table.py`. The per-kernel ratios below used explicit fp16 tensors and are unaffected.
 
-The modest e2e win comes from the **conv + linear** int-GEMM chain; attention runs **fp16 MATH**
-(~half the step, unquantized). The optimized `flash_attn_int8/int4` kernels are built and beat fp16
-MATH (2.7×) but are **not** wired into the default model path.
+The e2e win comes from the **conv + linear** int-GEMM chain **plus fused-flash quantized attention**,
+which is now the default int8/int4 path: `flash_attn_int8_vt/int4_vt` beat fp16 MATH (2.75× at the
+dominant block), lifting int8 e2e to ~1.5× vs true fp16. Ineligible (hd=96 / tiny-T) blocks stay fp16 SDPA.
 
 > Measurement scripts: `docs/flash_attention_2026-07-19/scripts/` (flash_opt_bench, kernel_bench_all_shapes, linear_gemm_only, e2e_int8_int4_vs_fp16, …). Per-kernel I/O and fusion details are in each kernel file's header comment.

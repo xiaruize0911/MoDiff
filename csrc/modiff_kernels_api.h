@@ -245,26 +245,16 @@ torch::Tensor flash_attn_int4_vt(torch::Tensor q4, torch::Tensor k4, torch::Tens
                                  torch::Tensor sq, torch::Tensor sk, torch::Tensor sv, int64_t hdp4, double softmax_scale);
 torch::Tensor mma_smoke(torch::Tensor A, torch::Tensor B);
 
-// ---- csrc/kernels/attention/attn_quant_gemm.cu (standard quantized attention; fp16 scores) ----
-torch::Tensor attn_qk_int8(torch::Tensor Q, torch::Tensor K, torch::Tensor sq, torch::Tensor sk, double scale);
-std::vector<torch::Tensor> attn_softmax_requant(torch::Tensor S);
-torch::Tensor attn_av_int8(torch::Tensor P, torch::Tensor Vt, torch::Tensor sp, torch::Tensor sv);
-torch::Tensor attn_qk_int4(torch::Tensor Q, torch::Tensor K, int64_t hd_pad, torch::Tensor sq, torch::Tensor sk, double scale);
-std::vector<torch::Tensor> attn_softmax_requant4(torch::Tensor S);
-torch::Tensor attn_av_int4(torch::Tensor P, torch::Tensor Vt, torch::Tensor sp, torch::Tensor sv, int64_t T);
+// ---- csrc/kernels/attention/attn_quant_gemm.cu (quantize prologue for FUSED flash attention) ----
+// Per-token int8/int4 Q/K + per-channel int8 (transposed) V + scales, feeding
+// flash_attn_int8_vt / flash_attn_int4_vt. (The materialized QKᵀ/softmax/AV int GEMM
+// attention path was removed; flash is the sole quantized-attention path.)
 std::vector<torch::Tensor> quantize_attn_qkv(torch::Tensor Q, torch::Tensor K, torch::Tensor V, int64_t hp_qk, int64_t hp_av, int64_t bits);
 std::vector<torch::Tensor> quantize_attn_qkv_i4qk_i8v(torch::Tensor Q, torch::Tensor K, torch::Tensor V, int64_t hp_qk, int64_t hp_av);
 std::vector<torch::Tensor> quantize_attn_qkv_i4qk_i8v_static(torch::Tensor Q, torch::Tensor K, torch::Tensor V, int64_t hp_qk, int64_t hp_av, double sq_c, double sk_c, torch::Tensor sv_vec);
-// static (calibrated) score path: no runtime max/absmax reductions
-std::vector<torch::Tensor> attn_softmax_requant_static(torch::Tensor S, double c);
-std::vector<torch::Tensor> attn_softmax_requant_s8(torch::Tensor S, double sS, double c);  // int8-score softmax
-std::vector<torch::Tensor> attn_softmax_requant_s8_dyn(torch::Tensor S, double sS);  // int8-score softmax, DYNAMIC per-row max
-torch::Tensor attn_qk_int8_s8out(torch::Tensor Q, torch::Tensor K, torch::Tensor sq, torch::Tensor sk, double scale, double sS);  // QKᵀ -> int8 S
-std::vector<torch::Tensor> attn_softmax_requant4_static(torch::Tensor S, double c);
-std::vector<torch::Tensor> attn_softmax_fp16(torch::Tensor S, bool static_c, double c);
 std::vector<torch::Tensor> quantize_attn_qkv_static(torch::Tensor Q, torch::Tensor K, torch::Tensor V, int64_t hp_qk, int64_t hp_av, int64_t bits, double sq_c, double sk_c, torch::Tensor sv_vec);
 // PACKED-qkv quantize (reads interleaved [b,T,nh,3,hd], no transpose copy). QK int8/int4, V int8.
 std::vector<torch::Tensor> quantize_attn_qkv_packed(torch::Tensor qkv, int64_t nh, int64_t T, int64_t hd, int64_t hp_qk, int64_t hp_av, int64_t qk_bits);
 std::vector<torch::Tensor> quantize_attn_qkv_packed_static(torch::Tensor qkv, int64_t nh, int64_t T, int64_t hd, int64_t hp_qk, int64_t hp_av, int64_t qk_bits, double sq_c, double sk_c, torch::Tensor sv_vec);
-// int8-output qkv-linear -> attention quantize fusion (consume int8 qkv directly; no fp16 round-trip)
-std::vector<torch::Tensor> quantize_attn_qkv_from_i8(torch::Tensor qkv_i8, torch::Tensor oscale, int64_t nh, int64_t T, int64_t hp_qk, int64_t hp_av);
+// fp16 (reference) materialized softmax — used by the fp16-materialized attention path (not int8/int4)
+std::vector<torch::Tensor> attn_softmax_fp16(torch::Tensor S, bool static_c, double c);
