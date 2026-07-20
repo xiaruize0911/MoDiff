@@ -16,12 +16,14 @@ fused-flash quantized attention by default; `_modiff` adds the temporal-delta co
 - **Speed:** GPU clock burn-in → warmup → N timed × R rounds with `torch.cuda.synchronize()` around each
   timed region. e2e = 30 warm + **5 × 200 DDIM steps** (mean+min). Kernels = 50 warm + **200 iters × 5
   reps** (CUDA-event median). autocast fp16 ON for **all** modes (fair true-fp16 baseline).
-- **Memory read/write = nsys memcpy only.** HW DRAM-byte counters (ncu / CUPTI metrics / DCGM) are
-  permission-locked on this box (`RmProfilingAdminOnly=1`, no `CAP_SYS_ADMIN`; `ncu` →
-  `ERR_NVGPUCTRPERM`, verified). nsys tracing (no counters needed) measures **memcpy** traffic
-  (H2D/D2H/D2D) but **cannot** see the DRAM reads/writes *inside* conv/linear/attention compute kernels.
-  **Consequence (measured):** steady-state memcpy is **~0.4 MiB/step, identical across all 5 modes** — the
-  pipeline moves data through in-kernel DRAM I/O, not memcpys. So the memory tables below are near-null;
+- **Memory read/write — two measured signals.** HW DRAM-byte counters (ncu / CUPTI metrics / DCGM /
+  `nsys --gpu-metrics`) are all permission-locked here (`RmProfilingAdminOnly=1`, no `CAP_SYS_ADMIN`;
+  `ERR_NVGPUCTRPERM`, verified). So memory IO is measured two counter-free ways: (a) **e2e nsys memcpy**
+  (copy traffic only — negligible here), and (b) **per-kernel via NVBit SASS instrumentation**
+  (§Kernel-level read/write) — real per-kernel GLOBAL read/write bytes incl. CUTLASS conv, no counters.
+  nsys memcpy alone **cannot** see the DRAM reads/writes *inside* compute kernels, which is why the e2e
+  memcpy is near-null (~0.4 MiB/step, identical across modes — the pipeline moves data via in-kernel
+  DRAM I/O, not memcpys); the NVBit table captures that in-kernel traffic. So the e2e memory table is near-null;
   a true per-component/per-kernel read/write breakdown would require unlocking the counters.
 - **Checkpoint is a random-weight stub** (no public churches ckpt on this box): kernel dispatch and tensor
   shapes are identical to the real model, so **speed is faithful**; any generation-quality number would not be.
@@ -92,8 +94,9 @@ does not observe and this box's locked counters cannot measure.
 > `nsys_driver.py` → `parse_nsys_mem.py`, parsing `CUPTI_ACTIVITY_KIND_MEMCPY`) → `data/e2e_memcpy_total.csv`
 > + `data/e2e_memcpy_sites.csv` + `figs/fig_e2e_memcpy.png`. There is **no per-kernel / per-component DRAM
 > IO** (conv/linear/attention read+write bytes) — those need `ncu dram__bytes.sum`, and GPU perf counters
-> are permission-locked here (`ERR_NVGPUCTRPERM`; see §Method caveats and §Kernel-level read/write). So:
-> total IO = e2e memcpy (≈0.4 MiB/step, negligible); compute-kernel DRAM IO = unmeasurable on this box.
+> are permission-locked here (`ERR_NVGPUCTRPERM`; see §Method caveats and §Kernel-level read/write). So
+> at the **e2e** level total IO = memcpy (≈0.4 MiB/step, negligible). The **per-kernel** compute DRAM IO
+> is instead measured via **NVBit** (SASS instrumentation, no counters) — see §Kernel-level read/write.
 
 ### 3. Per-component timing profile  ·  `data/e2e_timing_profile.csv` · `figs/fig_e2e_timing_profile.png`
 
@@ -126,8 +129,9 @@ an additive wall.
 ### 4. Per-component read/write profile
 
 Not separable from memcpy: the only steady-state memcpy is the latent D2D copy (§2, `data/e2e_memcpy_sites.csv`).
-Per-component (conv/linear/attention) DRAM read/write is compute-kernel-internal → **unmeasurable on this
-box** (counters locked). The §3 timing profile is the per-component signal that *is* measurable.
+Per-component (conv/linear/attention) DRAM read/write is compute-kernel-internal, so it's not visible to
+memcpy tracing — but it **is measured per kernel** via NVBit SASS instrumentation (no counters); see
+**§Kernel-level read/write**. The §3 timing profile is the complementary per-component time signal.
 
 ---
 
@@ -228,21 +232,43 @@ the weighted result is a solid win. int8 rel-L2 ≈ 0.02 (quality-safe); int4 �
 
 ![attention with norm](figs/fig_attn_fair.png)
 
-### Kernel-level read/write
+### Kernel-level read/write — MEASURED via NVBit (no perf counters)  ·  `data/nvbit_io_{total,perkernel}.csv`
 
-Isolated kernel microbenchmarks emit **no per-iteration memcpy** (operands are staged once), and in-kernel
-DRAM read/write is unmeasurable here (counters locked). So there is no measured kernel-level byte table; the
-memory story is the e2e memcpy (§E2E-2, negligible) plus the qualitative note that the real per-kernel DRAM
-traffic scales with precision (int8 ≈ ½, int4 ≈ ¼ the fp16 operand bytes) — which would need ncu to confirm.
+HW DRAM counters (ncu/CUPTI/DCGM/`nsys --gpu-metrics`) are all locked here (`ERR_NVGPUCTRPERM`), but
+**NVBit binary instrumentation** measures per-kernel GLOBAL read/write bytes by instrumenting SASS at
+runtime — no counter permission, and it covers **every** kernel incl. CUTLASS conv & cuDNN. Custom tool
+`scripts/nvbit_mem_bytes/` (counts `active_threads × access_size` per global ld/st, opcode-split
+read/write), driven by `scripts/{nvbit_io_driver.py, run_nvbit_io.sh, parse_nvbit_io.py}`, one config per
+`cuProfilerStart/Stop` range. **Validated byte-exact** (fp16 `add_` on 8192² → read=write=134217728 =
+8192²×2). Measured DRAM read/write (MiB) per op at the dominant shapes, b128:
 
-> **ncu harness (built + ready; needs unlocked counters).** `scripts/ncu_io_driver.py` + `run_ncu_io.sh`
-> + `parse_ncu_io.py` (see `scripts/NCU_IO_README.md`) measure real per-kernel, per-shape
-> `dram__bytes_read/write.sum` for conv/linear/attention across the modes, mapping each kernel to its
-> shape via NVTX tags. The driver is validated standalone (49 configs launch finite); ncu itself is
-> **counter-locked on this box** (`ERR_NVGPUCTRPERM`; `RmProfilingAdminOnly=1`, no `CAP_SYS_ADMIN` — a
-> **host-side** unlock: `NVreg_RestrictProfilingToAdminUsers=0` + driver reload, or relaunch the
-> container with `--cap-add SYS_ADMIN`). Once unlocked, `bash run_ncu_io.sh all` produces the measured
-> per-kernel × per-shape × {read, write} table that replaces this "unmeasurable" note.
+| family / shape | fp16 rd / wr | int8 rd / wr | int4 rd / wr |
+|---|--:|--:|--:|
+| **attn hd24/T1024** | 8800 / 4240 (**13040**) | 2864 / 48 (**2912**) | 2864 / 48 (2912) |
+| attn hd48/T256 | 736 / 328 (1064) | 244 / 24 (268) | 236 / 24 (260) |
+| conv res_128_64 (128ch,64²) | 256 / 256 (512) | 708 / 576 (**1284**) | 1090 / 672 (1762) |
+| conv mid_512_8 (512ch,8²) | 16 / 16 (32) | 44 / 36 (80) | 68 / 42 (110) |
+| linear qkv 192→576 M131072 | 644 / 144 (788) | 20 / 144 (164) | 20 / 144 (164) |
+| linear qkv 384→1152 M8192 | 127 / 18 (145) | 2 / 18 (20) | 2 / 18 (20) |
+
+Three measured findings:
+
+1. **Attention: flash moves 4.5× less DRAM (13040 → 2912 MiB).** Per-kernel breakdown (fp16): the
+   `[BH,T,T]` softmax round-trips HBM at **2048 rd + 2048 wr MiB** and the QKᵀ/AV bmm reads 6656 MiB;
+   int8/int4 flash is **one kernel, 2864 rd / 48 wr** — scores never leave SRAM, so no T×T round-trip and
+   only the fp16 output is written. This is the measured memory-traffic proof of the fused-flash win.
+2. **Conv int8/int4 move MORE DRAM than fp16** (res_128_64: 512 → 1284/1762 MiB) — the extra
+   quantize/pack + a_hat-zero + dequant-store + residual traffic outweighs the int-operand shrink at
+   these low-channel/high-res shapes, which is exactly why int8/int4 conv *loses* there (0.79×/0.82×).
+   At high-channel/low-spatial (mid_512_8) the overhead is proportionally smaller.
+3. **Linear (GEMM-only): int8/int4 read far less** (qkv 192→576: 644 → 20 MiB read) — the int GEMM reads
+   packed int8/int4 operands with far less tile-reload traffic than the fp16 GEMM. (Write ≈ equal: the
+   fp16 output dominates and is the same size.) This is the IO basis of the GEMM-only linear win.
+
+(NVBit counts *requested* global bytes — an upper bound on post-L2 DRAM, but for these large-footprint
+kernels L2 reuse is small; the byte-exact `add_` check bounds the method error. Full 49-config × 93-kernel
+data in the CSVs. An `ncu dram__bytes.sum` cross-check would need the counter unlock — harness also
+provided in `scripts/{ncu_io_driver,run_ncu_io,parse_ncu_io}.py`.)
 
 ---
 
@@ -261,6 +287,9 @@ traffic scales with precision (int8 ≈ ½, int4 ≈ ¼ the fp16 operand bytes) 
    costs of temporal caching that fusion cannot remove.
 4. **Kernel wins are shape-gated:** attention flash wins big only at T=1024 (2.0×); linear int GEMM wins
    only with fused quantize (int8 1.23× / int4 1.56×); conv wins only at high-channel/low-spatial shapes.
-5. **Memory read/write could not be measured** beyond negligible memcpy — GPU perf counters are locked on
-   this box. A counter-enabled host + `ncu dram__bytes_{read,write}.sum` is required for true per-kernel
-   DRAM traffic; everything else here is fully measured.
+5. **Per-kernel memory read/write IS measured — via NVBit**, despite locked HW counters. The headline:
+   **attention flash moves 4.5× less DRAM than fp16** (13040 → 2912 MiB at hd24/T1024), because the
+   `[BH,T,T]` softmax round-trip (2048 rd + 2048 wr MiB) is eliminated (scores stay in SRAM). Conv
+   int8/int4 move *more* DRAM than fp16 (quantize/pack/store overhead) — matching their conv-speed losses;
+   linear int8/int4 GEMM read far less. e2e memcpy is negligible (~0.4 MiB/step). An `ncu dram__bytes.sum`
+   cross-check would need a counter unlock, but NVBit (validated byte-exact) already gives the numbers.
