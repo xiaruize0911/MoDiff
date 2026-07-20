@@ -242,7 +242,10 @@ read/write), driven by `scripts/{nvbit_io_driver.py, run_nvbit_io.sh, parse_nvbi
 `cuProfilerStart/Stop` range. **Validated byte-exact** (fp16 `add_` on 8192² → read=write=134217728 =
 8192²×2). Measured DRAM read/write (MiB) per op at the dominant shapes, b128:
 
-| family / shape | fp16 rd / wr | int8 rd / wr | int4 rd / wr |
+int8/int4 columns = **baseline** (modiff differs only for conv — separate table below; linear/attention
+kernels are identical for baseline & modiff). rd / wr (total):
+
+| family / shape | fp16 rd / wr | int8_base rd / wr | int4_base rd / wr |
 |---|--:|--:|--:|
 | **attn hd24/T1024** | 8800 / 4240 (**13040**) | 2864 / 48 (**2912**) | 2864 / 48 (2912) |
 | attn hd48/T256 | 736 / 328 (1064) | 244 / 24 (268) | 236 / 24 (260) |
@@ -250,6 +253,16 @@ read/write), driven by `scripts/{nvbit_io_driver.py, run_nvbit_io.sh, parse_nvbi
 | conv mid_512_8 (512ch,8²) | 16 / 16 (32) | 44 / 36 (80) | 68 / 42 (110) |
 | linear qkv 192→576 M131072 | 644 / 144 (788) | 20 / 144 (164) | 20 / 144 (164) |
 | linear qkv 384→1152 M8192 | 127 / 18 (145) | 2 / 18 (20) | 2 / 18 (20) |
+
+**Conv baseline vs modiff** (total DRAM MiB) — modiff adds the a_hat/o_hat temporal-cache traffic:
+
+| conv shape | fp16 | int8_base | int8_modiff | int4_base | int4_modiff |
+|---|--:|--:|--:|--:|--:|
+| res_128_64 | 512 | 1284 | **1540** | 1762 | **1506** |
+| res_256_32 | 256 | 641 | **770** | 881 | **753** |
+| down_256_512_16 | 128 | 241 | **321** | 364 | **316** |
+| mid_512_8 | 32 | 80 | **96** | 110 | **94** |
+| up_512_256_16 | 64 | 240 | **256** | 296 | **248** |
 
 Three measured findings:
 
@@ -260,7 +273,10 @@ Three measured findings:
 2. **Conv int8/int4 move MORE DRAM than fp16** (res_128_64: 512 → 1284/1762 MiB) — the extra
    quantize/pack + a_hat-zero + dequant-store + residual traffic outweighs the int-operand shrink at
    these low-channel/high-res shapes, which is exactly why int8/int4 conv *loses* there (0.79×/0.82×).
-   At high-channel/low-spatial (mid_512_8) the overhead is proportionally smaller.
+   At high-channel/low-spatial (mid_512_8) the overhead is proportionally smaller. **modiff vs baseline
+   (conv only):** int8_modiff reads ~256 MiB more than int8_baseline (res_128_64: 964 vs 708 rd) — the
+   **a_hat temporal-cache read** for the delta; int4_modiff is slightly *lower* (its delta-quantize moves
+   less than int4's full re-quantize+pack). Linear/attention are byte-identical for baseline vs modiff.
 3. **Linear (GEMM-only): int8/int4 read far less** (qkv 192→576: 644 → 20 MiB read) — the int GEMM reads
    packed int8/int4 operands with far less tile-reload traffic than the fp16 GEMM. (Write ≈ equal: the
    fp16 output dominates and is the same size.) This is the IO basis of the GEMM-only linear win.
