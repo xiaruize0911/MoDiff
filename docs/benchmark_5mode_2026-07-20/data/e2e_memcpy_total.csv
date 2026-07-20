@@ -1,0 +1,6 @@
+mode,H2D_MiB,D2H_MiB,D2D_MiB,total_MiB
+fp16,0.0,0.0,0.4,0.4
+int8_baseline,0.0,0.0,0.4,0.4
+int4_baseline,0.0,0.0,0.4,0.4
+int8_modiff,0.0,0.0,0.4,0.4
+int4_modiff,0.0,0.0,0.4,0.4

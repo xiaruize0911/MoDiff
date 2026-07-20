@@ -1,0 +1,16 @@
+mode,size_bytes,size_MiB,count_per_step,total_MiB_per_step
+fp16,2097152,2.0,0.2,0.4
+fp16,4000,0.004,0.1,0.0
+fp16,1024,0.001,0.07,0.0
+int8_baseline,2097152,2.0,0.2,0.4
+int8_baseline,4000,0.004,0.1,0.0
+int8_baseline,1024,0.001,0.07,0.0
+int4_baseline,2097152,2.0,0.2,0.4
+int4_baseline,4000,0.004,0.1,0.0
+int4_baseline,1024,0.001,0.07,0.0
+int8_modiff,2097152,2.0,0.2,0.4
+int8_modiff,4000,0.004,0.1,0.0
+int8_modiff,1024,0.001,0.07,0.0
+int4_modiff,2097152,2.0,0.2,0.4
+int4_modiff,4000,0.004,0.1,0.0
+int4_modiff,1024,0.001,0.07,0.0
