@@ -136,9 +136,13 @@ def _prequant_common_ok(conv):
 
     Baseline-only: the MoDiff modulated path (modiff_enabled=True) does an in-place
     a_hat cache update inside its quantize that a fused GN-emit would bypass and
-    corrupt, so we require modiff_enabled=False. SmoothQuant / grouped convs /
-    non-fp16 output all fall back to the exact path -- pure optimization, never a
-    correctness change.
+    corrupt, so we require modiff_enabled=False. Grouped convs / non-fp16 output fall
+    back to the exact path -- pure optimization, never a correctness change.
+
+    SmoothQuant (non-identity _smooth_inv, used by int4) is NOT excluded: the fused
+    group_norm_silu_quantize[_pack]_nhwc kernel applies a per-channel smooth_inv before
+    the quantize (see _prequant_gn_conv), so it is folded into the fused path rather
+    than paying an eager `x * smooth_inv` multiply + separate quantize.
     """
     return (
         getattr(conv, 'is_calibrated', False)
@@ -146,7 +150,6 @@ def _prequant_common_ok(conv):
         and getattr(conv, 'standard_output_fp16', False)
         and getattr(conv, 'use_cutlass', False)
         and getattr(conv, 'groups', 1) == 1
-        and getattr(conv, '_smooth_is_identity', False)
     )
 
 
@@ -179,7 +182,13 @@ def _prequant_gn_conv(x, gn, conv, mod_scale=None, mod_shift=None, residual=None
     w, b = gn._cast_params(x.dtype)
     conv._ensure_conv_caches(x.device)
     scale = conv._cached_scale_tensor          # fp32 [1], =static_input_scale
-    smooth_inv = conv._empty_smooth            # empty -> identity
+    # SmoothQuant: fold the per-channel smooth_inv into the fused GN->quantize kernel
+    # (it applies `out *= smooth_inv[c]` before the quantize), matching the eager
+    # `x * smooth_inv` the standard path would otherwise pay. int8 is identity -> empty.
+    if getattr(conv, '_smooth_is_identity', True):
+        smooth_inv = conv._empty_smooth        # empty -> identity
+    else:
+        smooth_inv = conv._smooth_inv.view(-1).to(torch.float32).contiguous()
     N, C = x.size(0), x.size(1)
     native_ok = (
         x.is_cuda

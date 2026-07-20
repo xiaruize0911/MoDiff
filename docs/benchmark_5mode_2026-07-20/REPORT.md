@@ -39,16 +39,26 @@ Scripts: `scripts/{e2e_speed,e2e_timing_profile,nsys_driver,parse_nsys_mem,conv_
 
 | mode | ms/step | vs true fp16 |
 |---|--:|--:|
-| fp16 | 190.4 | 1.00× |
-| **int8_baseline** | **124.7** | **1.53×** |
-| int4_baseline | 141.7 | 1.34× |
-| int8_modiff | 145.9 | 1.31× |
-| int4_modiff | 143.0 | 1.33× |
+| fp16 | 189.7 | 1.00× |
+| int8_baseline | 124.4 | 1.53× |
+| **int4_baseline** | **119.9** | **1.58×** |
+| int8_modiff | 146.2 | 1.30× |
+| int4_modiff | 143.7 | 1.32× |
 
-**int8_baseline = 1.53× vs true fp16** — the flash-only refactor exactly holds the pre-removal headline.
-int4_baseline is 1.34× (its conv/linear are cheaper but attention uses the same int8 flash + a heavier
-quantize). The modiff temporal-cache variants are **slower** than their baselines (int8 1.31× vs 1.53×):
-the a_hat/o_hat delta-quantize + accumulate costs more than it saves at b128.
+**int4_baseline = 1.58× vs true fp16 — the fastest mode** — after the int4 conv **deep-fusion fix**
+(see below), int4 now edges out int8 (1.53×), the expected 4-bit ordering. int8_baseline = 1.53× holds
+the flash-only refactor headline. The modiff temporal-cache variants are **slower** than their baselines
+(int8 1.30× vs 1.53×): the a_hat/o_hat delta-quantize + accumulate costs more than it saves at b128.
+
+> **int4 conv deep-fusion (2026-07-20).** int4_baseline was originally 141.7 ms (1.34×) — *slower* than
+> int8 — because every int4 conv fell back to an eager path (SmoothQuant `x*smooth_inv` multiply →
+> separate quantize+pack → bias-only store → eager residual add): `_prequant_common_ok` excluded
+> SmoothQuant convs from the fused GN→conv path. Since the fused `group_norm_silu_quantize_pack_nhwc`
+> kernel already supports a per-channel `smooth_inv`, wiring int4's smooth into it (Python-only change in
+> `integration/fused_ops/fused_resblock.py`) routes int4 through the same deep-fused path as int8
+> (GN+SiLU+SmoothQuant+quantize+pack in one kernel → `conv2d_int4_fprop_no_ohat_prealloc_bias_residual`
+> with fused dequant+bias+residual store). Result: **141.7 → 119.9 ms (1.34× → 1.58×), −22 ms, output
+> bit-identical (rel-L2 = 0).**
 
 ![e2e speed](figs/fig_e2e_speed.png)
 
@@ -70,23 +80,25 @@ Measured GPU self-time (ms/step), key buckets:
 
 | bucket | fp16 | int8_baseline | int4_baseline | int8_modiff | int4_modiff |
 |---|--:|--:|--:|--:|--:|
-| attention (flash / softmax) | 44.2 | 35.2 | 33.8 | 34.4 | 33.7 |
-| attn bmm fp16 (QKᵀ/AV) | 42.5 | 0.2 | 0.2 | 0.2 | 0.2 |
-| conv | 46.3 | 24.6 | 16.0 | 28.8 | 15.8 |
+| attention (flash / softmax) | 44.0 | 35.1 | 33.8 | 34.4 | 33.7 |
+| attn bmm fp16 (QKᵀ/AV) | 42.2 | 0.2 | 0.2 | 0.2 | 0.2 |
+| conv | 45.5 | 24.5 | **16.0** | 28.8 | 15.8 |
 | qkv/proj int GEMM | 0.0 | 7.7 | 7.0 | 7.6 | 7.0 |
-| GroupNorm | 21.6 | 24.0 | 23.4 | 23.4 | 23.1 |
-| quantize/dequant | 0.0 | 19.1 | 22.4 | 28.7 | 26.1 |
+| GroupNorm | 21.4 | 23.9 | 22.8 | 23.3 | 23.1 |
+| quantize/dequant | 0.0 | 19.1 | **17.3** | 28.7 | 26.1 |
 | modiff cache | 0.0 | 0.0 | 0.0 | 8.7 | 8.7 |
-| elementwise/copy | 32.6 | 12.8 | 38.7 | 15.2 | 19.0 |
-| upsample/concat + other fp16 GEMM + other | 12.6 | 7.1 | 6.1 | 6.9 | 5.5 |
-| **gpu_busy** | 199.8 | 130.4 | 147.6 | 152.6 | 138.9 |
-| **wall** | 190.0 | 123.3 | 141.0 | 145.0 | 144.9 |
+| elementwise/copy | 32.6 | 12.8 | **20.0** | 15.2 | 18.9 |
+| upsample/concat + other fp16 GEMM + other | 12.5 | 6.9 | 7.0 | 5.8 | 5.5 |
+| **gpu_busy** | 198.2 | 130.0 | **124.1** | 152.6 | 138.9 |
+| **wall** | 188.5 | 123.0 | **119.2** | 145.3 | 146.0 |
 
-Where the int8 win comes from: **attention ≈ 86.6 ms in fp16** (44.2 softmax + 42.5 fp16 QKᵀ/AV bmm)
+Where the int8 win comes from: **attention ≈ 86.2 ms in fp16** (44.0 softmax + 42.2 fp16 QKᵀ/AV bmm)
 collapses to **≈ 35 ms** with fused-flash int8 (one bucket, bmm ≈ 0); **conv 46 → 25 ms**. The cost added
-back is the **quantize/dequant** prologue (~19 ms int8) and, for modiff, the **~8.7 ms cache**. gpu_busy
-slightly exceeds wall because profiled per-kernel time double-counts nothing but omits overlap — treat it
-as the device-time composition, not an additive wall.
+back is the **quantize/dequant** prologue (~19 ms int8) and, for modiff, the **~8.7 ms cache**.
+**int4 after the deep-fusion fix** is now cheaper than int8 in every compute bucket (conv 16.0, quantize
+17.3, elementwise collapsed 38.7→20.0), giving the fastest gpu_busy (124.1 ms). gpu_busy slightly exceeds
+wall because profiled per-kernel time omits kernel overlap — treat it as the device-time composition, not
+an additive wall.
 
 ![e2e timing profile](figs/fig_e2e_timing_profile.png)
 
@@ -179,8 +191,9 @@ traffic scales with precision (int8 ≈ ½, int4 ≈ ¼ the fp16 operand bytes) 
 
 ## Takeaways
 
-1. **The flash-only refactor holds the headline: int8 e2e = 1.53× vs true fp16** (int4 1.34×), reproducing
-   the pre-removal number exactly. The materialized attention path was dead weight; flash is sufficient.
+1. **int4_baseline = 1.58× vs true fp16 (fastest), int8_baseline = 1.53×.** The flash-only refactor holds
+   the int8 headline; the int4 conv deep-fusion fix (SmoothQuant folded into the fused GN→conv kernel)
+   lifted int4 from 1.34× → 1.58×, so 4-bit is now correctly the fastest mode (bit-identical output).
 2. **The e2e win is attention + conv, not memory movement.** The timing profile shows fp16 attention
    (~86 ms, softmax + fp16 bmm) collapsing to ~35 ms fused-flash int8, plus conv 46→25 ms; the quantize
    prologue (~19 ms) and modiff cache (~9 ms) are the costs paid back.
