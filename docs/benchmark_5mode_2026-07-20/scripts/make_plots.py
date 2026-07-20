@@ -131,4 +131,39 @@ if r:
     ax.set_xticks(x); ax.set_xticklabels(groups, rotation=20, fontsize=8); ax.legend(fontsize=8, ncol=2)
     fig.tight_layout(); fig.savefig(f"{Fg}/fig_attn_fair.png", dpi=150); plt.close(fig); print("wrote fig_attn_fair.png")
 
+# ---------- conv DRAM IO (5 modes) + a_hat-drop before/after ----------
+r = load("nvbit_io_total.csv")
+drop = load("conv_io_ahat_drop.csv")
+if r:
+    conv = [row for row in r if row["family"] == "conv"]
+    shapes = []
+    for row in conv:
+        if row["shape"] not in shapes:
+            shapes.append(row["shape"])
+    io = {(row["mode"], row["shape"]): fnum(row["total_MiB"]) for row in conv}
+    x = np.arange(len(shapes)); w = 0.16
+    fig, ax = plt.subplots(1, 2, figsize=(15, 5.2))
+    # panel 0: total conv DRAM IO across 5 modes
+    for i, m in enumerate(MODES):
+        vals = [io.get((m, s), float("nan")) for s in shapes]
+        ax[0].bar(x + (i - 2) * w, vals, w, label=m, color=COL[m], hatch=HATCH.get(m, ""), edgecolor="white", lw=0.3)
+    ax[0].set_yscale("log"); ax[0].set_ylabel("DRAM read+write MiB (log)")
+    ax[0].set_title("Conv per-kernel DRAM IO across 5 modes (NVBit, b128)")
+    ax[0].set_xticks(x); ax[0].set_xticklabels(shapes, rotation=30, ha="right", fontsize=8); ax[0].legend(fontsize=8)
+    # panel 1: a_hat-drop before/after for the two baseline modes
+    if drop:
+        dby = {(row["mode"], row["shape"]): row for row in drop}
+        xb = np.arange(len(shapes)); bw = 0.2
+        series = [("int8_baseline", "int8_base before", "int8_base after", "#fcd34d", "#f59e0b"),
+                  ("int4_baseline", "int4_base before", "int4_base after", "#fca5a5", "#dc2626")]
+        for i, (m, lb, la, cb, ca) in enumerate(series):
+            before = [fnum(dby[(m, s)]["before_MiB"]) if (m, s) in dby else float("nan") for s in shapes]
+            after = [fnum(dby[(m, s)]["after_MiB"]) if (m, s) in dby else float("nan") for s in shapes]
+            ax[1].bar(xb + (2 * i - 1.5) * bw, before, bw, label=lb, color=cb, edgecolor="white", lw=0.3, hatch="xx")
+            ax[1].bar(xb + (2 * i - 0.5) * bw, after, bw, label=la, color=ca, edgecolor="white", lw=0.3)
+        ax[1].set_ylabel("conv DRAM read+write MiB")
+        ax[1].set_title("a_hat-drop: baseline conv IO before vs after (bit-identical)")
+        ax[1].set_xticks(xb); ax[1].set_xticklabels(shapes, rotation=30, ha="right", fontsize=8); ax[1].legend(fontsize=8)
+    fig.tight_layout(); fig.savefig(f"{Fg}/fig_conv_io.png", dpi=150); plt.close(fig); print("wrote fig_conv_io.png")
+
 print("plots done")

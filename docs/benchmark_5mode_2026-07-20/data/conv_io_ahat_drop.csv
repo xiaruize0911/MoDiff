@@ -1,0 +1,11 @@
+shape,mode,before_MiB,after_MiB
+res_128_64,int8_baseline,1284,900
+res_128_64,int4_baseline,1762,1378
+res_256_32,int8_baseline,641,450
+res_256_32,int4_baseline,881,689
+down_256_512_16,int8_baseline,241,193
+down_256_512_16,int4_baseline,364,316
+mid_512_8,int8_baseline,80,56
+mid_512_8,int4_baseline,110,86
+up_512_256_16,int8_baseline,240,145
+up_512_256_16,int4_baseline,296,200

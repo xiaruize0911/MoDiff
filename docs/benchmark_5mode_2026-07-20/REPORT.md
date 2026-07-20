@@ -285,6 +285,13 @@ kernels are identical for baseline & modiff). rd / wr (total):
 > bit-identical output. The `int8_modiff`/`int4_modiff` columns are unchanged — modiff genuinely reads
 > and writes a_hat/o_hat, so the baseline↔modiff gap here is now the *true* cost of the temporal cache.
 
+![conv DRAM IO across 5 modes + a_hat-drop before/after](figs/fig_conv_io.png)
+
+*Left: measured conv DRAM read+write across all 5 modes (log-y) — modiff sits above baseline at every
+shape (the temporal cache), and all int modes sit above fp16's single fused cuDNN conv. Right: the
+a_hat-drop, baseline conv IO before vs after (hatched = before), −384 MiB/conv at res_128_64 with
+bit-identical output. Source: `data/conv_io_ahat_drop.csv`.*
+
 Three measured findings:
 
 1. **Attention: flash moves 4.5× less DRAM (13040 → 2912 MiB).** Per-kernel breakdown (fp16): the
