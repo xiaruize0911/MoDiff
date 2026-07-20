@@ -60,6 +60,19 @@ the flash-only refactor headline. The modiff temporal-cache variants are **slowe
 > with fused dequant+bias+residual store). Result: **141.7 → 119.9 ms (1.34× → 1.58×), −22 ms, output
 > bit-identical (rel-L2 = 0).**
 
+> **Why the same fix does NOT help int4_modiff (already fused).** The modiff (temporal-cache) path was
+> checked but *not* changed — it is already fused for everything the baseline fix addressed: its
+> delta-quantize kernel `step1_static_quantize_pack_int4_fprop_silu` folds SmoothQuant + SiLU +
+> delta-quantize + pack into one launch, and bias is baked into the o_hat cache. Profiling its eager
+> elementwise shows the only un-fused op is the block residual add at **~1.3 ms/step**; the rest (~18 ms)
+> is generic fp16 glue (`cat`/`copy`/scale-shift) shared identically with fp16 and all modes. The reason
+> int4_modiff (143.7 ms) is slower than int4_baseline (119.9 ms) is **intrinsic MoDiff overhead, not
+> fusable glue**: delta-quantize 26.1 vs 17.3 ms (+8.8, computing `a−a_hat` + updating the cache) and the
+> o_hat accumulate (+8.7 ms). Fusion cannot remove those. The only fusions left (residual → a new
+> `conv2d_int4_fprop_o_hat_bias_residual`, or GroupNorm → the delta-quantize) need new correctness-risky
+> CUDA for ≤~4 ms and int4_modiff would still trail int4_baseline — so **int4_baseline (1.58×) is the mode
+> to use when temporal caching isn't required.**
+
 ![e2e speed](figs/fig_e2e_speed.png)
 
 ### 2. Total read/write (measured memcpy)  ·  `data/e2e_memcpy_total.csv` · `figs/fig_e2e_memcpy.png`
@@ -197,7 +210,11 @@ traffic scales with precision (int8 ≈ ½, int4 ≈ ¼ the fp16 operand bytes) 
 2. **The e2e win is attention + conv, not memory movement.** The timing profile shows fp16 attention
    (~86 ms, softmax + fp16 bmm) collapsing to ~35 ms fused-flash int8, plus conv 46→25 ms; the quantize
    prologue (~19 ms) and modiff cache (~9 ms) are the costs paid back.
-3. **modiff (temporal cache) is a net loss at b128** — every modiff mode is slower than its baseline.
+3. **modiff (temporal cache) is a net loss at b128** — every modiff mode is slower than its baseline, and
+   this is **intrinsic, not a fusion gap**: the int4_modiff path is already fully fused (delta-quantize +
+   SmoothQuant + SiLU + pack in one kernel, bias in the o_hat cache; only a ~1.3 ms residual add is
+   eager). Its overhead is the delta-quantize (+8.8 ms) and o_hat accumulate (+8.7 ms) — algorithmic
+   costs of temporal caching that fusion cannot remove.
 4. **Kernel wins are shape-gated:** attention flash wins big only at T=1024 (2.0×); linear int GEMM wins
    only with fused quantize (int8 1.23× / int4 1.56×); conv wins only at high-channel/low-spatial shapes.
 5. **Memory read/write could not be measured** beyond negligible memcpy — GPU perf counters are locked on
