@@ -87,6 +87,14 @@ honest limit of memcpy-only measurement: the memory traffic that *differs* betwe
 (conv/linear/attention DRAM reads/writes) lives **inside the compute kernels**, which nsys memcpy tracing
 does not observe and this box's locked counters cannot measure.
 
+> **Where "total IO" is (and isn't) measured — one-stop answer.** The *only* total-IO number in this
+> report is this table: **e2e memcpy traffic**, measured via nsys (`scripts/run_nsys_mem.sh` →
+> `nsys_driver.py` → `parse_nsys_mem.py`, parsing `CUPTI_ACTIVITY_KIND_MEMCPY`) → `data/e2e_memcpy_total.csv`
+> + `data/e2e_memcpy_sites.csv` + `figs/fig_e2e_memcpy.png`. There is **no per-kernel / per-component DRAM
+> IO** (conv/linear/attention read+write bytes) — those need `ncu dram__bytes.sum`, and GPU perf counters
+> are permission-locked here (`ERR_NVGPUCTRPERM`; see §Method caveats and §Kernel-level read/write). So:
+> total IO = e2e memcpy (≈0.4 MiB/step, negligible); compute-kernel DRAM IO = unmeasurable on this box.
+
 ### 3. Per-component timing profile  ·  `data/e2e_timing_profile.csv` · `figs/fig_e2e_timing_profile.png`
 
 Measured GPU self-time (ms/step), key buckets:
@@ -129,24 +137,26 @@ box** (counters locked). The §3 timing profile is the per-component signal that
 
 Churches ResBlock convs at b128 (µs, median 5×200):
 
-| shape (Cin→Cout, HW) | fp16 | int8_base | int4_base | int8_modiff | int4_modiff | int4_base vs fp16 |
-|---|--:|--:|--:|--:|--:|--:|
-| res 128, 64² | 1861 | 2361 | 2270 | 2715 | 2244 | 0.82× |
-| res 128, 32² | 493 | 610 | 588 | 706 | 582 | 0.84× |
-| down 128→256, 32² | 944 | 932 | 911 | 1165 | 954 | 1.04× |
-| res 256, 32² | 1626 | 1532 | 1283 | 1681 | 1265 | 1.27× |
-| res 256, 16² | 444 | 406 | 357 | 455 | 351 | 1.24× |
-| down 256→512, 16² | 813 | 654 | 546 | 759 | 564 | 1.49× |
-| **mid 512, 8²** | 430 | 305 | **232** | 326 | 227 | **1.85×** |
-| up 512→256, 16² | 787 | 714 | 556 | 709 | 516 | 1.42× |
-| up 256→128, 32² | 883 | 1046 | 910 | 1065 | 845 | 0.97× |
-| up 128, 64² | 1931 | 2379 | 2272 | 2674 | 2246 | 0.85× |
+| shape (Cin→Cout, HW) | fp16 | int8_base | int4_base | int8_modiff | int4_modiff | **int8 vs fp16** | int4 vs fp16 |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| res 128, 64² | 1861 | 2361 | 2270 | 2715 | 2244 | **0.79×** | 0.82× |
+| res 128, 32² | 493 | 610 | 588 | 706 | 582 | **0.81×** | 0.84× |
+| down 128→256, 32² | 944 | 932 | 911 | 1165 | 954 | **1.01×** | 1.04× |
+| res 256, 32² | 1626 | 1532 | 1283 | 1681 | 1265 | **1.06×** | 1.27× |
+| res 256, 16² | 444 | 406 | 357 | 455 | 351 | **1.09×** | 1.24× |
+| down 256→512, 16² | 813 | 654 | 546 | 759 | 564 | **1.24×** | 1.49× |
+| **mid 512, 8²** | 430 | 305 | **232** | 326 | 227 | **1.41×** | **1.85×** |
+| up 512→256, 16² | 787 | 714 | 556 | 709 | 516 | **1.10×** | 1.42× |
+| up 256→128, 32² | 883 | 1046 | 910 | 1065 | 845 | **0.84×** | 0.97× |
+| up 128, 64² | 1931 | 2379 | 2272 | 2674 | 2246 | **0.81×** | 0.85× |
 
-Conv quantization **wins at high-channel / low-spatial** shapes (mid_512_8 int4 **1.85×**, down_256_512
-1.49×) but **loses at low-channel / high-resolution** shapes (128-ch @ 64² ≈ 0.82×), where cuDNN's fp16
-conv is very strong and the int quantize/pack overhead dominates. int4 beats int8 everywhere (packed 4-bit
-GEMM). **modiff adds overhead** (int8_modiff consistently slower than int8_baseline: the step1-quantize +
-`o_hat` accumulate). Net across the UNet the conv win is modest and shape-dependent.
+**int8_baseline vs fp16**: spans **0.79×–1.41×** — the same shape pattern as int4 but milder. Conv
+quantization **wins at high-channel / low-spatial** shapes (mid_512_8 int8 **1.41×** / int4 **1.85×**,
+down_256_512 1.24× / 1.49×) but **loses at low-channel / high-resolution** shapes (128-ch @ 64² ≈ 0.79×
+int8 / 0.82× int4), where cuDNN's fp16 conv is very strong and the int quantize/pack overhead dominates.
+int4 beats int8 at every shape (packed 4-bit GEMM). **modiff adds overhead** (int8_modiff consistently
+slower than int8_baseline: the step1-quantize + `o_hat` accumulate). Net across the UNet the conv win is
+modest and shape-dependent.
 
 ![conv kernel](figs/fig_conv_kernel.png)
 
@@ -167,6 +177,31 @@ The int GEMM wins **only when the activation quantize is fused away** (as produc
 `group_norm_silu_quantize`): int8 **1.23×**, int4 **1.56×**. A standalone quantize erases the win
 (memory-bound pass over the [M,K] activation). Biggest wins at K≥384 (int4 up to 2.15× at 384→1152);
 weakest at the small-K=192 level-0 shapes.
+
+**5 most-frequently-called qkv/proj shapes** (by per-forward `count`; M = b·T). The four `count=5`
+T-shapes dominate call volume — the two `768→…, M=512` shapes (`count=1`) are the least frequent:
+
+| shape (K→N) | M | count/fwd | int8 GEMM × | int4 GEMM × |
+|---|--:|--:|--:|--:|
+| qkv 192→576 | 131072 | 5 | 1.04× | 1.20× |
+| proj 192→192 | 131072 | 5 | 1.18× | 1.36× |
+| qkv 384→1152 | 32768 | 5 | 1.57× | 2.16× |
+| proj 384→384 | 32768 | 5 | 1.23× | 1.64× |
+| qkv 384→1152 | 8192 | 5 | 1.13× | 1.55× |
+
+**5 shapes with the most speedup** (GEMM-only vs fp16, ranked by int4):
+
+| shape (K→N, M) | int4 GEMM × | int8 GEMM × |
+|---|--:|--:|
+| qkv 384→1152, M=32768 | **2.16×** | 1.57× |
+| proj 384→384, M=8192 | 1.99× | 1.56× |
+| qkv 768→2304, M=2048 | 1.90× | 1.25× |
+| proj 384→384, M=32768 | 1.64× | 1.23× |
+| qkv 768→2304, M=512 | 1.60× | 1.01× |
+
+**Inverse relationship:** the *most-frequent* shapes (K=192, M=131072) have the *weakest* speedup
+(int8 1.04–1.18×), while the biggest speedups are the less-frequent K≥384 shapes — so the weighted
+total (int8 1.23×, int4 1.56×) is pulled down by the high-frequency small-K level-0 blocks.
 
 ![linear kernel](figs/fig_linear_kernel.png)
 
