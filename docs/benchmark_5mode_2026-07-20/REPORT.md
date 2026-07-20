@@ -235,6 +235,15 @@ DRAM read/write is unmeasurable here (counters locked). So there is no measured 
 memory story is the e2e memcpy (§E2E-2, negligible) plus the qualitative note that the real per-kernel DRAM
 traffic scales with precision (int8 ≈ ½, int4 ≈ ¼ the fp16 operand bytes) — which would need ncu to confirm.
 
+> **ncu harness (built + ready; needs unlocked counters).** `scripts/ncu_io_driver.py` + `run_ncu_io.sh`
+> + `parse_ncu_io.py` (see `scripts/NCU_IO_README.md`) measure real per-kernel, per-shape
+> `dram__bytes_read/write.sum` for conv/linear/attention across the modes, mapping each kernel to its
+> shape via NVTX tags. The driver is validated standalone (49 configs launch finite); ncu itself is
+> **counter-locked on this box** (`ERR_NVGPUCTRPERM`; `RmProfilingAdminOnly=1`, no `CAP_SYS_ADMIN` — a
+> **host-side** unlock: `NVreg_RestrictProfilingToAdminUsers=0` + driver reload, or relaunch the
+> container with `--cap-add SYS_ADMIN`). Once unlocked, `bash run_ncu_io.sh all` produces the measured
+> per-kernel × per-shape × {read, write} table that replaces this "unmeasurable" note.
+
 ---
 
 ## Takeaways
