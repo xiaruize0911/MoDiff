@@ -2,7 +2,7 @@
 
 **GPU:** NVIDIA A40 (48 GB, SM 8.6) · **PyTorch:** 2.4.1+cu124 · **CUDA:** 12.4 · nsys 2024.1.1
 **Model:** LSUN-Churches LDM-8 UNet (unconditional, 256×256) · **Batch:** 128 · **Sampler:** DDIM
-**Date:** 2026-07-20 · **all timing/kernel/IO data re-measured 2026-07-21** at the current code state
+**Date:** 2026-07-21 · **all timing/kernel/IO data measured at the current code state**
 (fused-flash attention; a_hat-drop; residual→o_hat fusion ON; int8 & int4 conv use the deep-fuse store —
 weight_scale in the CUTLASS epilogue, bias/residual folded into the from_half store; GN→delta-quantize
 fusion OFF).
