@@ -43,14 +43,16 @@ Scripts: `scripts/{e2e_speed,e2e_timing_profile,nsys_driver,parse_nsys_mem,conv_
 |---|--:|--:|
 | fp16 | 190.1 | 1.00× |
 | int8_baseline | 125.0 | 1.52× |
-| **int4_baseline** | **119.5** | **1.59×** |
-| int8_modiff | 145.7 | 1.30× |
-| int4_modiff | 142.5 | 1.33× |
+| **int4_baseline** | **119.7** | **1.59×** |
+| int8_modiff | 140.8 | 1.35× |
+| int4_modiff | 141.3 | 1.35× |
 
 **int4_baseline = 1.59× vs true fp16 — the fastest mode** — after the int4 conv **deep-fusion fix**
 (see below), int4 now edges out int8 (1.52×), the expected 4-bit ordering. int8_baseline = 1.52× holds
-the flash-only refactor headline. The modiff temporal-cache variants are **slower** than their baselines
-(int8 1.30× vs 1.52×): the a_hat/o_hat delta-quantize + accumulate costs more than it saves at b128.
+the flash-only refactor headline. The modiff temporal-cache variants are still **slower** than their
+baselines (int8 1.35× vs 1.52×): the a_hat/o_hat delta-quantize + accumulate costs more than it saves at
+b128 — but the **residual→o_hat fusion** (Follow-up #2 below) lifted both modiff modes ~1.30→1.35× (int8
+145.7→140.8, int4 142.5→141.3) by folding the ResBlock skip-add into the conv epilogue.
 
 > **Re-measured 2026-07-20 after the a_hat-drop** (30 warm + 5×200 steps, synchronized): e2e is
 > **unchanged within noise** (int8_baseline 124.4→125.0, int4_baseline 119.9→119.5). Expected — the
@@ -74,12 +76,13 @@ the flash-only refactor headline. The modiff temporal-cache variants are **slowe
 > delta-quantize + pack into one launch, and bias is baked into the o_hat cache. Profiling its eager
 > elementwise shows the only un-fused op is the block residual add at **~1.3 ms/step**; the rest (~18 ms)
 > is generic fp16 glue (`cat`/`copy`/scale-shift) shared identically with fp16 and all modes. The reason
-> int4_modiff (142.5 ms) is slower than int4_baseline (119.5 ms) is **intrinsic MoDiff overhead, not
+> int4_modiff (141.3 ms) is slower than int4_baseline (119.7 ms) is **intrinsic MoDiff overhead, not
 > fusable glue**: delta-quantize 26.1 vs 17.3 ms (+8.8, computing `a−a_hat` + updating the cache) and the
-> o_hat accumulate (+8.7 ms). Fusion cannot remove those. The only fusions left (residual → a new
-> `conv2d_int4_fprop_o_hat_bias_residual`, or GroupNorm → the delta-quantize) need new correctness-risky
-> CUDA for ≤~4 ms and int4_modiff would still trail int4_baseline — so **int4_baseline (1.59×) is the mode
-> to use when temporal caching isn't required.**
+> o_hat accumulate (+8.7 ms). Fusion cannot remove those. Of the two fusions that were left — GroupNorm →
+> the delta-quantize, and residual → the o_hat conv — **both were since built (Follow-ups #1/#2 below):**
+> GN→delta-quantize is a regression (kept off), residual→o_hat is the ~4–5 ms win now applied (it lifted
+> int4_modiff from 142.5→141.3). As predicted, int4_modiff still trails, so **int4_baseline (1.59×) is the
+> mode to use when temporal caching isn't required.**
 
 > **Follow-up (2026-07-20): the GroupNorm→delta-quantize fusion was built, verified, and measured — it
 > does NOT help e2e.** New kernels `group_norm_silu_delta_quantize[_pack]_nhwc` fuse GroupNorm(+scale-shift
@@ -97,6 +100,18 @@ the flash-only refactor headline. The modiff temporal-cache variants are **slowe
 > the reduction kernel's cache-hostile access pattern, and that costs more than the saved fp16 `normed`
 > round-trip. So the a_hat win does **not** reach e2e via this fusion; it is kept **opt-in, default off**
 > (`MODIFF_ENABLE_GN_MODIFF_FUSION=1`) so production keeps the faster two-kernel path.
+
+> **Follow-up #2 (2026-07-20): residual→o_hat fusion — the OTHER modiff lever — DOES help e2e, kept ON.**
+> The modiff ResBlock added its skip connection as a trailing `torch.add(skip, o_hat)`. New kernels
+> `conv2d_int8/int4_fprop_o_hat_residual` fold that skip-add into the o_hat conv's accumulate epilogue
+> (`scale_accumulate_residual_half_cache_kernel`): the o_hat *cache* write is byte-identical (so temporal
+> evolution is unchanged and never polluted by the residual), and a separate `output = o_hat + residual`
+> is written in the same pass. Wired via `forward_modiff_fused_silu_residual` / `_modiff_out_conv`.
+> **Correctness:** bit-identical — 0 o_hat diff, 0 a_hat diff, **0 output diff** vs the eager-add path over
+> 30 real e2e calls (int8+int4). **Speed:** a real e2e win — int8_modiff **−4.2 ms**, int4_modiff
+> **−5.3 ms/step** (`data/o_hat_residual_fusion_e2e.csv`). Unlike the GN fusion, this kernel is a coalesced
+> grid-stride elementwise pass (not reduction-bound), so folding the add in is a clean win. **Kept ON by
+> default** (disable with `MODIFF_DISABLE_O_HAT_RESIDUAL_FUSION=1`); the 5-mode table above reflects it.
 
 ![e2e speed](figs/fig_e2e_speed.png)
 
@@ -344,10 +359,11 @@ provided in `scripts/{ncu_io_driver,run_ncu_io,parse_ncu_io}.py`.)
    (~86 ms, softmax + fp16 bmm) collapsing to ~35 ms fused-flash int8, plus conv 46→25 ms; the quantize
    prologue (~19 ms) and modiff cache (~9 ms) are the costs paid back.
 3. **modiff (temporal cache) is a net loss at b128** — every modiff mode is slower than its baseline, and
-   this is **intrinsic, not a fusion gap**: the int4_modiff path is already fully fused (delta-quantize +
-   SmoothQuant + SiLU + pack in one kernel, bias in the o_hat cache; only a ~1.3 ms residual add is
-   eager). Its overhead is the delta-quantize (+8.8 ms) and o_hat accumulate (+8.7 ms) — algorithmic
-   costs of temporal caching that fusion cannot remove.
+   this is **intrinsic, not a fusion gap**: the int4_modiff path is now fully fused (delta-quantize +
+   SmoothQuant + SiLU + pack in one kernel, bias in the o_hat cache, and the residual add folded into the
+   o_hat conv — Follow-up #2, ~4–5 ms/step, int8_modiff 1.30→1.35×). Its remaining overhead is the
+   delta-quantize (+8.8 ms) and o_hat accumulate (+8.7 ms) — algorithmic costs of temporal caching that
+   fusion cannot remove (the GroupNorm→delta-quantize fusion was tried and is a regression, Follow-up #1).
 4. **Kernel wins are shape-gated:** attention flash wins big only at T=1024 (2.0×); linear int GEMM wins
    only with fused quantize (int8 1.23× / int4 1.56×); conv wins only at high-channel/low-spatial shapes.
 5. **Per-kernel memory read/write IS measured — via NVBit**, despite locked HW counters. The headline:

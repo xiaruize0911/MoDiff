@@ -89,6 +89,11 @@ try:
     _GN_MODIFF_FUSION_ON = os.environ.get("MODIFF_ENABLE_GN_MODIFF_FUSION") == "1"
     HAS_GN_SILU_DELTA_QUANTIZE = _GN_MODIFF_FUSION_ON and hasattr(modiff_cutlass, "group_norm_silu_delta_quantize_nhwc")
     HAS_GN_SILU_DELTA_QUANTIZE_PACK = _GN_MODIFF_FUSION_ON and hasattr(modiff_cutlass, "group_norm_silu_delta_quantize_pack_nhwc")
+    # MoDiff o_hat + residual fusion (default ON): fold the ResBlock skip-add into
+    # the o_hat conv's accumulate epilogue (conv2d_intX_fprop_o_hat_residual),
+    # removing the trailing aten::add. Low-risk (elementwise, coalesced; the o_hat
+    # cache write is byte-identical). Disable with MODIFF_DISABLE_O_HAT_RESIDUAL_FUSION=1.
+    HAS_O_HAT_RESIDUAL = hasattr(modiff_cutlass, "conv2d_int8_fprop_o_hat_residual")
 except ImportError:
     modiff_cutlass = None
     HAS_NATIVE_GN_SILU = False
@@ -96,6 +101,7 @@ except ImportError:
     HAS_GN_SILU_QUANTIZE_PACK = False
     HAS_GN_SILU_DELTA_QUANTIZE = False
     HAS_GN_SILU_DELTA_QUANTIZE_PACK = False
+    HAS_O_HAT_RESIDUAL = False
 
 # Kill-switch for the GN->intX K1-fusion (baseline int8/int4). Set
 # MODIFF_DISABLE_GN_INT8_FUSION=1 to fall back to the exact two-kernel
@@ -104,6 +110,9 @@ except ImportError:
 if os.environ.get("MODIFF_DISABLE_GN_INT8_FUSION") == "1":
     HAS_GN_SILU_QUANTIZE = False
     HAS_GN_SILU_QUANTIZE_PACK = False
+
+if os.environ.get("MODIFF_DISABLE_O_HAT_RESIDUAL_FUSION") == "1":
+    HAS_O_HAT_RESIDUAL = False
 
 
 def _group_norm_silu(x, num_groups, weight, bias, eps, apply_silu, mod_scale=None, mod_shift=None):
@@ -203,6 +212,22 @@ def _prequant_gn_conv_modiff(x, gn, conv, mod_scale=None, mod_shift=None, residu
     if residual is not None:
         residual = residual.to(torch.float16).contiguous(memory_format=torch.channels_last)
     return conv.forward_gn_fused_modiff(x, weight, bias, ng, gn.eps, ms2d, sh2d, residual)
+
+
+def _modiff_out_conv(conv, h, residual_arg):
+    """Run a modiff out-conv, folding the ResBlock skip-add into the o_hat conv's
+    accumulate epilogue when eligible (conv2d_intX_fprop_o_hat_residual via
+    forward_modiff_fused_silu_residual). `h` is the pre-SiLU GroupNorm output.
+    Returns (output, residual_fused): residual_fused=True means the skip is already
+    added (caller must NOT add it again). Falls back to the plain conv (skip added
+    by the caller) when not eligible (first step / uncalibrated / no residual /
+    kernel unavailable)."""
+    if (residual_arg is not None and HAS_O_HAT_RESIDUAL
+            and getattr(conv, 'modiff_enabled', False)
+            and hasattr(conv, 'forward_modiff_fused_silu_residual')
+            and hasattr(conv, '_can_fuse_input_silu') and conv._can_fuse_input_silu(h)):
+        return conv.forward_modiff_fused_silu_residual(h, residual_arg), True
+    return conv(h), False
 
 
 def _prequant_gn_conv(x, gn, conv, mod_scale=None, mod_shift=None, residual=None):
@@ -562,7 +587,9 @@ class FusedResBlock(TimestepBlock):
                 # If out_conv applies SiLU itself (fuse_input_silu, e.g. MoDiff's
                 # step1_silu kernel), apply_silu_here is False and SiLU is deferred.
                 h = self.out_dropout(h)
-                h = self.out_conv(h)
+                # MoDiff: fold the skip-add into the o_hat conv's accumulate epilogue
+                # (no trailing aten::add) when eligible; else plain conv + skip later.
+                h, residual_fused = _modiff_out_conv(self.out_conv, h, residual_arg)
         else:
             h = h + emb_out
             fused = _prequant_gn_conv(h, self.fused_out_norm_silu, self.out_conv,
@@ -573,7 +600,7 @@ class FusedResBlock(TimestepBlock):
             else:
                 h = self.fused_out_norm_silu(h)
                 h = self.out_dropout(h)
-                h = self.out_conv(h)
+                h, residual_fused = _modiff_out_conv(self.out_conv, h, residual_arg)
 
         # Residual addition (skipped when already fused into the out-conv epilogue)
         if residual_fused:

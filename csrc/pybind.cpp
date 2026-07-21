@@ -50,6 +50,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("conv2d_int8_num_tuned_configs", &conv2d_int8_num_tuned_configs, "Number of autotunable tile configs for the deep-fuse INT8 conv");
     m.def("conv2d_int8_dequant_fp16_tuned", &conv2d_int8_dequant_fp16_tuned, "Deep-fuse INT8 conv (FP16 out) using tile config `config_id` (for per-shape autotuning)");
     m.def("conv2d_int8_fprop_o_hat", &conv2d_int8_fprop_o_hat, "Fused INT8 Conv + o_hat accumulate");
+    m.def("conv2d_int8_fprop_o_hat_residual", &conv2d_int8_fprop_o_hat_residual,
+          "INT8 Conv + o_hat accumulate + fused ResBlock skip-add into a separate output");
     m.def("conv2d_int8_fprop_no_ohat_prealloc", &conv2d_int8_fprop_no_ohat_prealloc, "Fused INT8 conv + dequant into a preallocated output buffer");
     m.def("conv2d_int8_fprop_no_ohat_prealloc_bias", &conv2d_int8_fprop_no_ohat_prealloc_bias, "Fused INT8 conv + dequant + bias into a preallocated output buffer");
     m.def("conv2d_int8_fprop_no_ohat_prealloc_bias_residual", &conv2d_int8_fprop_no_ohat_prealloc_bias_residual, "Fused INT8 conv + dequant + bias + residual (skip-add) into a preallocated output buffer");
@@ -71,6 +73,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("conv2d_int4_fprop_bias_residual_dual", &conv2d_int4_fprop_bias_residual_dual, "INT4 conv3 + bias + residual + ReLU, DUAL output: FP16 (x_{N+1}) + requantized packed INT4 (next block conv1) -- fuses the block-entry quantize");
     m.def("conv2d_int4_fprop_no_ohat", &conv2d_int4_fprop_no_ohat, "Fused INT4 conv + dequant without o_hat update");
     m.def("conv2d_int4_fprop_o_hat", &conv2d_int4_fprop_o_hat, "Fused INT4 Conv + o_hat accumulate");
+    m.def("conv2d_int4_fprop_o_hat_residual", &conv2d_int4_fprop_o_hat_residual,
+          "INT4 Conv + o_hat accumulate + fused ResBlock skip-add into a separate output");
 
     // Attention Conv1d layout-transform fusions (kernels/layout_transform.cu)
     m.def("fp16_ncw_to_fp32_cl", &fp16_ncw_to_fp32_cl,

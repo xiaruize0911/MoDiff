@@ -572,6 +572,57 @@ torch::Tensor conv2d_int8_fprop_o_hat(
     return o_hat_cache;
 }
 
+// Same as conv2d_int8_fprop_o_hat (o_hat_cache += conv*weight_scale[ch]), but ALSO
+// writes `output` = (updated o_hat_cache) + residual, fusing the ResBlock skip-add
+// into the accumulate pass (removes the trailing aten::add on the modiff path).
+// o_hat_cache must be fp16; residual/output fp16 channels_last matching the conv
+// output. The cache write is byte-identical to conv2d_int8_fprop_o_hat, so temporal
+// evolution is unchanged; only `output` carries the residual. Returns `output`.
+//   Constraints: o_hat_cache/residual/output fp16; residual & output shape == conv out.
+torch::Tensor conv2d_int8_fprop_o_hat_residual(
+    torch::Tensor input,
+    torch::Tensor weight,
+    torch::Tensor inv_scale,
+    torch::Tensor weight_scales,
+    torch::Tensor o_hat_cache,    // in-place accumulate target (fp16)
+    torch::Tensor residual,       // fp16 channels_last, per-element skip
+    torch::Tensor output,         // fp16 channels_last, preallocated
+    int stride_h, int stride_w,
+    int padding_h, int padding_w,
+    int dilation_h, int dilation_w
+) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    auto empty_bias = torch::empty({0}, torch::TensorOptions().device(input.device()));
+    auto conv_out = conv2d_int8_fprop(
+        input, weight, inv_scale, empty_bias,
+        stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w
+    );
+
+    TORCH_CHECK(o_hat_cache.scalar_type() == torch::kFloat16,
+                "conv2d_int8_fprop_o_hat_residual: o_hat_cache must be float16");
+    CHECK_CUDA(residual); CHECK_CUDA(output);
+    TORCH_CHECK(residual.scalar_type() == torch::kFloat16 && output.scalar_type() == torch::kFloat16,
+                "conv2d_int8_fprop_o_hat_residual: residual/output must be float16");
+    TORCH_CHECK(residual.numel() == conv_out.numel() && output.numel() == conv_out.numel(),
+                "conv2d_int8_fprop_o_hat_residual: residual/output size must match conv output");
+
+    int num_elements = conv_out.numel();
+    int num_channels = weight_scales.numel();
+    int block_size = 256;
+    int grid_size = (num_elements + block_size - 1) / block_size;
+
+    scale_accumulate_residual_half_cache_kernel<<<grid_size, block_size, 0, stream>>>(
+        conv_out.data_ptr<float>(),
+        weight_scales.data_ptr<float>(),
+        reinterpret_cast<__half*>(o_hat_cache.data_ptr<at::Half>()),
+        reinterpret_cast<const __half*>(residual.data_ptr<at::Half>()),
+        reinterpret_cast<__half*>(output.data_ptr<at::Half>()),
+        num_elements,
+        num_channels
+    );
+    return output;
+}
+
 // conv2d_int8_fprop, then output = raw_output * weight_scales[channel], written
 // into a caller-provided buffer (still allocates its own intermediate raw
 // conv output + CUTLASS workspace internally — "prealloc" only avoids

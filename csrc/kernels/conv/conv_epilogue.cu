@@ -76,6 +76,34 @@ __global__ void scale_accumulate_half_cache_kernel(
     }
 }
 
+// Same o_hat accumulate as scale_accumulate_half_cache_kernel, but ALSO writes a
+// separate `output` = (updated o_hat) + residual -- fusing the ResBlock skip-add
+// into the accumulate pass so the modiff conv doesn't pay a trailing aten::add.
+// The o_hat_cache write is byte-identical to the plain accumulate kernel (the
+// temporal cache must NOT include the residual, or the next step's accumulate
+// corrupts), so the cache evolution is unchanged; only the returned `output`
+// carries the skip. Following scale_bias_residual_store_half_kernel's precedent,
+// the residual add is done in fp32 and rounded once (slightly more accurate than
+// the fp16-accumulated aten::add it replaces). residual/output are fp16
+// channels_last, same layout/shape as o_hat_cache.
+__global__ void scale_accumulate_residual_half_cache_kernel(
+    const float* __restrict__ conv_output,
+    const float* __restrict__ weight_scale,
+    __half* __restrict__ o_hat_cache,      // in-place accumulate (NO residual)
+    const __half* __restrict__ residual,   // per-element skip
+    __half* __restrict__ output,           // = o_hat_new + residual (separate buffer)
+    int num_elements,
+    int num_channels
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    for (int i = idx; i < num_elements; i += blockDim.x * gridDim.x) {
+        int ch = i % num_channels;
+        float new_val = __half2float(o_hat_cache[i]) + conv_output[i] * weight_scale[ch];
+        o_hat_cache[i] = __float2half_rn(new_val);
+        output[i] = __float2half_rn(new_val + __half2float(residual[i]));
+    }
+}
+
 __global__ void scale_store_kernel(
     const float* __restrict__ conv_output,
     const float* __restrict__ weight_scale,

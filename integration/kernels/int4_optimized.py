@@ -442,6 +442,41 @@ class OptimizedInt4Conv2d(nn.Module):
             out = out + residual.to(out.dtype)
         return out
 
+    def forward_modiff_fused_silu_residual(self, x: torch.Tensor, residual: torch.Tensor) -> torch.Tensor:
+        """int4 counterpart of OptimizedInt8Conv2d.forward_modiff_fused_silu_residual:
+        step1 delta-quantize+pack + o_hat conv with the ResBlock skip-add fused into
+        the accumulate epilogue (conv2d_int4_fprop_o_hat_residual). Returns o_hat +
+        residual; o_hat cache write is byte-identical to the non-residual path.
+        Caller must have verified _can_fuse_input_silu(x)."""
+        self.step_count += 1
+        if not x.is_contiguous(memory_format=torch.channels_last):
+            x = x.contiguous(memory_format=torch.channels_last)
+        if self._cached_alpha_tensor is None or self._cached_alpha_tensor.device != x.device:
+            scale = float(self.static_input_scale.item())
+            self._cached_scale_float = scale
+            self._cached_alpha_tensor = torch.tensor([1.0 / scale], device=x.device, dtype=torch.float32)
+        if not hasattr(self, '_smooth_inv_flat') or self._smooth_inv_flat.device != x.device:
+            if not self._smooth_is_identity:
+                self._smooth_inv_flat = self._smooth_inv.view(-1).contiguous()
+            else:
+                self._smooth_inv_flat = torch.empty(0, device=x.device, dtype=torch.float32)
+
+        p_step1 = profiler.start("MoDiff INT4 Static Step1 (fused SiLU)")
+        x_packed = modiff_cutlass.step1_static_quantize_pack_int4_fprop_silu(
+            x, self.a_hat_cache, self.static_input_scale.view(1), self._smooth_inv_flat)
+        profiler.stop("MoDiff INT4 Static Step1 (fused SiLU)", p_step1)
+
+        residual = residual.to(torch.float16).contiguous(memory_format=torch.channels_last)
+        out = torch.empty_like(self.o_hat_cache)
+        p_conv = profiler.start("MoDiff INT4 Static Conv2d (o_hat+residual)")
+        modiff_cutlass.conv2d_int4_fprop_o_hat_residual(
+            x_packed, self.weight_packed, self._cached_alpha_tensor.view(1),
+            self.weight_scale_channel.view(-1), self.o_hat_cache, residual, out,
+            self.stride[0], self.stride[1], self.padding[0], self.padding[1],
+            self.dilation[0], self.dilation[1])
+        profiler.stop("MoDiff INT4 Static Conv2d (o_hat+residual)", p_conv)
+        return out
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         fwd_start = profiler.start("Layer: OptimizedInt4Conv2d.forward")
 
