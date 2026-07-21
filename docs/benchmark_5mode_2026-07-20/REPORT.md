@@ -176,6 +176,18 @@ Conv total DRAM IO, baseline vs modiff (MiB):
 | int4_baseline conv elementwise ms | 20.0 | 18.2 | −1.8 |
 | int4_base conv IO res_128_64 (MiB) | 1378 | 994 | −384 |
 
+int4_baseline **conv kernel** speedup vs fp16, per shape · `data/int4_deepfuse_conv_speed.csv`:
+
+| conv shape | off (fp32 store) | on (deep-fuse) | conv shape | off | on |
+|---|--:|--:|---|--:|--:|
+| res 128, 64² | 1.21× | 1.64× | down 256→512, 16² | 1.78× | 2.25× |
+| res 128, 32² | 1.21× | 1.61× | mid 512, 8² | 2.31× | 2.71× |
+| down 128→256, 32² | 1.28× | 1.80× | up 512→256, 16² | 2.05× | 2.30× |
+| res 256, 32² | 1.75× | 2.15× | up 256→128, 32² | 1.59× | 1.90× |
+| res 256, 16² | 1.68× | 2.11× | up 128, 64² | 1.23× | 1.65× |
+
+int4_baseline conv range: **1.21–2.31× → 1.61–2.71×** vs fp16.
+
 **GN→delta-quantize fusion** — modiff, GroupNorm folded into the delta-quantize (bit-identical). e2e
 regression; kept OFF (opt-in `MODIFF_ENABLE_GN_MODIFF_FUSION=1`) · `data/gn_modiff_fusion_{e2e,kernel}.csv`:
 
