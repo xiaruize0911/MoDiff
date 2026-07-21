@@ -174,7 +174,16 @@ Conv total DRAM IO, baseline vs modiff (MiB):
 |---|--:|--:|--:|
 | int4_baseline e2e ms/step | 131.9 | 129.7 | −2.1 |
 | int4_baseline conv elementwise ms | 20.0 | 18.2 | −1.8 |
-| int4_base conv IO res_128_64 (MiB) | 1378 | 994 | −384 |
+
+int4_baseline **conv DRAM IO** (NVBit, MiB total), per shape · `data/int4_deepfuse_conv_io.csv`:
+
+| conv shape | off (fp32 store) | on (deep-fuse) | Δ |
+|---|--:|--:|--:|
+| res_128_64 | 1378 | 994 | −384 |
+| res_256_32 | 689 | 497 | −192 |
+| down_256_512_16 | 317 | 221 | −96 |
+| mid_512_8 | 86 | 62 | −24 |
+| up_512_256_16 | 200 | 152 | −48 |
 
 int4_baseline **conv kernel** speedup vs fp16, per shape · `data/int4_deepfuse_conv_speed.csv`:
 
