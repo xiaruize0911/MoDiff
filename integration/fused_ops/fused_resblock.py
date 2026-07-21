@@ -79,11 +79,23 @@ try:
     HAS_NATIVE_GN_SILU = hasattr(modiff_cutlass, "group_norm_silu_nhwc")
     HAS_GN_SILU_QUANTIZE = hasattr(modiff_cutlass, "group_norm_silu_quantize_nhwc")
     HAS_GN_SILU_QUANTIZE_PACK = hasattr(modiff_cutlass, "group_norm_silu_quantize_pack_nhwc")
+    # MoDiff GN->delta-quantize fusion is OPT-IN (default OFF): it is verified
+    # bit-identical to the two-kernel path but measured a small e2e REGRESSION
+    # (~2-3 ms/step) -- the fused kernel iterates group-major, so in NHWC a
+    # group's a_hat/x access is strided by C (poorly coalesced) at the dominant
+    # low-channels-per-group / high-spatial conv shapes, whereas the separate
+    # step1 kernel iterates the tensor flat (coalesced). Enable for experiments
+    # with MODIFF_ENABLE_GN_MODIFF_FUSION=1. See docs/benchmark_5mode_2026-07-20.
+    _GN_MODIFF_FUSION_ON = os.environ.get("MODIFF_ENABLE_GN_MODIFF_FUSION") == "1"
+    HAS_GN_SILU_DELTA_QUANTIZE = _GN_MODIFF_FUSION_ON and hasattr(modiff_cutlass, "group_norm_silu_delta_quantize_nhwc")
+    HAS_GN_SILU_DELTA_QUANTIZE_PACK = _GN_MODIFF_FUSION_ON and hasattr(modiff_cutlass, "group_norm_silu_delta_quantize_pack_nhwc")
 except ImportError:
     modiff_cutlass = None
     HAS_NATIVE_GN_SILU = False
     HAS_GN_SILU_QUANTIZE = False
     HAS_GN_SILU_QUANTIZE_PACK = False
+    HAS_GN_SILU_DELTA_QUANTIZE = False
+    HAS_GN_SILU_DELTA_QUANTIZE_PACK = False
 
 # Kill-switch for the GN->intX K1-fusion (baseline int8/int4). Set
 # MODIFF_DISABLE_GN_INT8_FUSION=1 to fall back to the exact two-kernel
@@ -153,6 +165,46 @@ def _prequant_common_ok(conv):
     )
 
 
+def _prequant_gn_conv_modiff(x, gn, conv, mod_scale=None, mod_shift=None, residual=None):
+    """MoDiff (temporal-cache) counterpart of the baseline GN->intX fusion:
+    fuse GroupNorm(+scale-shift mod)+SiLU into the conv's delta-quantize + a_hat
+    update kernel (group_norm_silu_delta_quantize[_pack]_nhwc), then run the o_hat
+    conv, in place of the standalone GroupNorm kernel + step1_static_quantize_fprop_silu
+    two-kernel pass. Bit-identical to that path (the kernel replicates the fp16
+    `normed` rounding before SiLU). Returns the conv output (with residual added
+    when given), or None to fall through to the existing modiff two-kernel path
+    (first step / uncalibrated / kernel unavailable / not native-GN eligible).
+    """
+    if conv is None or not getattr(conv, 'modiff_enabled', False):
+        return None
+    if not hasattr(conv, 'can_gn_fuse_modiff') or not conv.can_gn_fuse_modiff(x):
+        return None
+    is_int4 = hasattr(conv, 'forward_from_int4')
+    if is_int4 and not HAS_GN_SILU_DELTA_QUANTIZE_PACK:
+        return None
+    if not is_int4 and not HAS_GN_SILU_DELTA_QUANTIZE:
+        return None
+
+    ng = gn.num_groups
+    N, C = x.size(0), x.size(1)
+    # GN-native eligibility (same conditions as _group_norm_silu's can_use_native).
+    if not (x.is_cuda and x.dtype in (torch.float32, torch.float16)
+            and x.is_contiguous(memory_format=torch.channels_last) and C % ng == 0):
+        return None
+    if is_int4 and (C % 2 != 0 or (C // ng) % 2 != 0):
+        return None
+
+    weight, bias = gn._cast_params(x.dtype)
+    if mod_scale is not None:
+        ms2d = mod_scale.reshape(N, C).contiguous()
+        sh2d = mod_shift.reshape(N, C).contiguous()
+    else:
+        ms2d = sh2d = x.new_empty(0)
+    if residual is not None:
+        residual = residual.to(torch.float16).contiguous(memory_format=torch.channels_last)
+    return conv.forward_gn_fused_modiff(x, weight, bias, ng, gn.eps, ms2d, sh2d, residual)
+
+
 def _prequant_gn_conv(x, gn, conv, mod_scale=None, mod_shift=None, residual=None):
     """If (GroupNorm+SiLU `gn` -> quantized conv `conv`) is eligible for the
     GN->intX K1-fusion, run GroupNorm(+optional scale-shift modulation)+SiLU
@@ -167,6 +219,14 @@ def _prequant_gn_conv(x, gn, conv, mod_scale=None, mod_shift=None, residual=None
     epilogue as a skip-add, removing the trailing aten::add. The quantize multiplier
     is conv.static_input_scale (=127/absmax); smooth_inv is identity (gated above).
     """
+    # MoDiff temporal-cache path: fuse GroupNorm(+mod)+SiLU into the delta-quantize
+    # (+ a_hat update) kernel, replacing the standalone GN kernel + step1 two-kernel
+    # pass. Bit-identical to that path; only kicks in once the layer is calibrated
+    # with an fp16 a_hat cache (step >= 2). See _prequant_gn_conv_modiff.
+    modiff_fused = _prequant_gn_conv_modiff(x, gn, conv, mod_scale, mod_shift, residual)
+    if modiff_fused is not None:
+        return modiff_fused
+
     if not _prequant_common_ok(conv):
         return None
     # Residual must be fp16 channels_last matching the conv output's flat layout.

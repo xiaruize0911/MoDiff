@@ -81,6 +81,23 @@ the flash-only refactor headline. The modiff temporal-cache variants are **slowe
 > CUDA for ≤~4 ms and int4_modiff would still trail int4_baseline — so **int4_baseline (1.59×) is the mode
 > to use when temporal caching isn't required.**
 
+> **Follow-up (2026-07-20): the GroupNorm→delta-quantize fusion was built, verified, and measured — it
+> does NOT help e2e.** New kernels `group_norm_silu_delta_quantize[_pack]_nhwc` fuse GroupNorm(+scale-shift
+> mod)+SiLU + the MoDiff temporal-delta quantize + in-place a_hat update into one launch, replacing the
+> modiff ResBlock's standalone GroupNorm kernel + `step1_static_quantize_fprop_silu` two-kernel pass
+> (wired via `_prequant_gn_conv`). **Correctness:** bit-identical to the two-kernel path — 0 int-code diff
+> and 0 a_hat diff on both synthetic inputs (8 configs × 5 evolving iters) and 40 real captured e2e calls
+> (int8+int4). **Speed:** a small e2e *regression* — int8_modiff 161.1→164.3, int4_modiff 158.7→160.7
+> ms/step (`data/gn_modiff_fusion_e2e.csv`). Kernel microbench (`data/gn_modiff_fusion_kernel.csv`) shows
+> the fused kernel is **slower at the dominant large-spatial shapes** (res_128_64 **0.72×**, res_256_32
+> 0.83×) and only wins at high-channel/low-spatial (mid_512_8 1.08×). **Root cause:** the fused kernel
+> inherits the GroupNorm reduction's *group-major* iteration, so in NHWC a group's a_hat/x elements are
+> strided by C (a jump every channels-per-group=4 elements) — poorly coalesced — whereas the separate
+> `step1` kernel iterates the tensor *flat* (coalesced). Fusing forces the memory-bound delta-quantize into
+> the reduction kernel's cache-hostile access pattern, and that costs more than the saved fp16 `normed`
+> round-trip. So the a_hat win does **not** reach e2e via this fusion; it is kept **opt-in, default off**
+> (`MODIFF_ENABLE_GN_MODIFF_FUSION=1`) so production keeps the faster two-kernel path.
+
 ![e2e speed](figs/fig_e2e_speed.png)
 
 ### 2. Total read/write (measured memcpy)  ·  `data/e2e_memcpy_total.csv` · `figs/fig_e2e_memcpy.png`

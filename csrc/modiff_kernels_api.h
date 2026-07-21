@@ -211,6 +211,18 @@ torch::Tensor group_norm_silu_dequant_quantize_nhwc(
     torch::Tensor scale, torch::Tensor smooth_inv,
     torch::Tensor mod_scale, torch::Tensor mod_shift);
 
+// MoDiff-fused GN(+mod)+SiLU + temporal-delta quantize + in-place a_hat update.
+torch::Tensor group_norm_silu_delta_quantize_nhwc(
+    torch::Tensor x, torch::Tensor weight, torch::Tensor bias, torch::Tensor a_hat_cache,
+    int64_t num_groups, double eps, bool apply_silu,
+    torch::Tensor scale, torch::Tensor smooth_inv,
+    torch::Tensor mod_scale, torch::Tensor mod_shift);
+torch::Tensor group_norm_silu_delta_quantize_pack_nhwc(
+    torch::Tensor x, torch::Tensor weight, torch::Tensor bias, torch::Tensor a_hat_cache,
+    int64_t num_groups, double eps, bool apply_silu,
+    torch::Tensor scale, torch::Tensor smooth_inv,
+    torch::Tensor mod_scale, torch::Tensor mod_shift);
+
 // ---- csrc/kernels/norm/fused_gn_qkv.cu ----
 torch::Tensor fused_gn_qkv(
     torch::Tensor x, torch::Tensor weight, torch::Tensor epi_bias,

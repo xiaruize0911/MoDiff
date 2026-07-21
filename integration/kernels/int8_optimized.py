@@ -428,6 +428,56 @@ class OptimizedInt8Conv2d(nn.Module):
         profiler.stop("MoDiff INT8 Static Conv2d", p_conv)
         return self._module_output()
 
+    def can_gn_fuse_modiff(self, x: torch.Tensor) -> bool:
+        """Eligibility for the fused GroupNorm+SiLU+delta-quantize modiff path
+        (group_norm_silu_delta_quantize_nhwc). Same gate as _can_fuse_input_silu
+        (fuse_input_silu + calibrated + fp16 cache present + shape/dtype match +
+        not first step) plus groups==1 and cuda. The caller (_prequant_gn_conv)
+        additionally checks the GN-native conditions (channels_last, C%ng==0)
+        and that the kernel is available."""
+        return (self._can_fuse_input_silu(x)
+                and getattr(self, 'groups', 1) == 1
+                and x.is_cuda)
+
+    def forward_gn_fused_modiff(self, x, gn_weight, gn_bias, num_groups, eps,
+                                mod_scale2d, mod_shift2d, residual=None):
+        """Fused GroupNorm(+scale-shift mod)+SiLU + INT8 temporal-delta quantize
+        + o_hat conv, in one GN-quantize kernel + one conv. Replaces the
+        standalone GroupNorm kernel + step1_static_quantize_fprop_silu that
+        _forward_modulated_static_fused_silu runs back-to-back, removing the fp16
+        `normed` round-trip between them. Bit-identical to that two-kernel path
+        (the kernel replicates the fp16 rounding of `normed` before SiLU, and the
+        a_hat update `cache += q/scale` is unchanged). Caller must have verified
+        can_gn_fuse_modiff(x). `mod_scale2d`/`mod_shift2d` are [N,C] (or empty)
+        matching x.dtype; `residual` (fp16, or None) is added to the output."""
+        self.step_count += 1
+        if not x.is_contiguous(memory_format=torch.channels_last):
+            x = x.contiguous(memory_format=torch.channels_last)
+        self._ensure_state_buffers(x)
+        if self._cached_alpha_tensor is None or self._cached_alpha_tensor.device != x.device:
+            scale = float(self.static_input_scale.item())
+            self._cached_scale_float = scale
+            self._cached_alpha_tensor = torch.tensor([1.0 / scale], device=x.device, dtype=torch.float32)
+
+        p_step1 = profiler.start("MoDiff INT8 GN-fused Step1 (GN+SiLU+delta)")
+        x_int8 = modiff_cutlass.group_norm_silu_delta_quantize_nhwc(
+            x, gn_weight, gn_bias, self.a_hat_cache, num_groups, eps, True,
+            self.static_input_scale.view(1), self._smooth_inv_flat,
+            mod_scale2d, mod_shift2d)
+        profiler.stop("MoDiff INT8 GN-fused Step1 (GN+SiLU+delta)", p_step1)
+
+        p_conv = profiler.start("MoDiff INT8 Static Conv2d")
+        modiff_cutlass.conv2d_int8_fprop_o_hat(
+            x_int8, self.weight_int8, self._cached_alpha_tensor.view(1),
+            self.weight_scale_channel.view(-1), self.o_hat_cache,
+            self.stride[0], self.stride[1], self.padding[0], self.padding[1],
+            self.dilation[0], self.dilation[1])
+        profiler.stop("MoDiff INT8 Static Conv2d", p_conv)
+        out = self._module_output()
+        if residual is not None:
+            out = out + residual.to(out.dtype)
+        return out
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         fwd_start = profiler.start("Layer: OptimizedInt8Conv2d.forward")
 

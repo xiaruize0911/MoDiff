@@ -394,6 +394,54 @@ class OptimizedInt4Conv2d(nn.Module):
         profiler.stop("MoDiff INT4 Static Conv2d", p_conv)
         return self._module_output()
 
+    def can_gn_fuse_modiff(self, x: torch.Tensor) -> bool:
+        """Eligibility for the fused GroupNorm+SiLU+delta-quantize+pack modiff
+        path (group_norm_silu_delta_quantize_pack_nhwc). See
+        OptimizedInt8Conv2d.can_gn_fuse_modiff. int4 also needs even
+        channels-per-group (checked by the caller alongside the GN conditions)."""
+        return (self._can_fuse_input_silu(x)
+                and getattr(self, 'groups', 1) == 1
+                and x.is_cuda)
+
+    def forward_gn_fused_modiff(self, x, gn_weight, gn_bias, num_groups, eps,
+                                mod_scale2d, mod_shift2d, residual=None):
+        """int4 counterpart of OptimizedInt8Conv2d.forward_gn_fused_modiff:
+        fused GroupNorm(+mod)+SiLU + INT4 delta-quantize+pack + o_hat conv,
+        replacing the standalone GN kernel + step1_static_quantize_pack_int4_fprop_silu.
+        Bit-identical to that two-kernel path. Caller must have verified
+        can_gn_fuse_modiff(x) and the even-CPG / GN-native conditions."""
+        self.step_count += 1
+        if not x.is_contiguous(memory_format=torch.channels_last):
+            x = x.contiguous(memory_format=torch.channels_last)
+        if self._cached_alpha_tensor is None or self._cached_alpha_tensor.device != x.device:
+            scale = float(self.static_input_scale.item())
+            self._cached_scale_float = scale
+            self._cached_alpha_tensor = torch.tensor([1.0 / scale], device=x.device, dtype=torch.float32)
+        if not hasattr(self, '_smooth_inv_flat') or self._smooth_inv_flat.device != x.device:
+            if not self._smooth_is_identity:
+                self._smooth_inv_flat = self._smooth_inv.view(-1).contiguous()
+            else:
+                self._smooth_inv_flat = torch.empty(0, device=x.device, dtype=torch.float32)
+
+        p_step1 = profiler.start("MoDiff INT4 GN-fused Step1 (GN+SiLU+delta+pack)")
+        x_packed = modiff_cutlass.group_norm_silu_delta_quantize_pack_nhwc(
+            x, gn_weight, gn_bias, self.a_hat_cache, num_groups, eps, True,
+            self.static_input_scale.view(1), self._smooth_inv_flat,
+            mod_scale2d, mod_shift2d)
+        profiler.stop("MoDiff INT4 GN-fused Step1 (GN+SiLU+delta+pack)", p_step1)
+
+        p_conv = profiler.start("MoDiff INT4 Static Conv2d")
+        modiff_cutlass.conv2d_int4_fprop_o_hat(
+            x_packed, self.weight_packed, self._cached_alpha_tensor.view(1),
+            self.weight_scale_channel.view(-1), self.o_hat_cache,
+            self.stride[0], self.stride[1], self.padding[0], self.padding[1],
+            self.dilation[0], self.dilation[1])
+        profiler.stop("MoDiff INT4 Static Conv2d", p_conv)
+        out = self._module_output()
+        if residual is not None:
+            out = out + residual.to(out.dtype)
+        return out
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         fwd_start = profiler.start("Layer: OptimizedInt4Conv2d.forward")
 

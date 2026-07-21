@@ -738,3 +738,354 @@ torch::Tensor group_norm_silu_quantize_pack_nhwc(
 
     return yqp;
 }
+
+// =========================================================================
+// MoDiff-fused GroupNorm(+mod)+SiLU + temporal-DELTA quantize (int8 / int4).
+//
+// These are the modiff-path counterparts of group_norm_silu_quantize[_pack]_nhwc
+// above: same GroupNorm(+scale-shift mod)+SiLU(+SmoothQuant) math, but instead of a
+// static quantize they perform the MoDiff temporal-delta quantize + in-place a_hat
+// cache update -- exactly the epilogue of
+// static_quantize_and_update_ahat_kernel_int8_half_cache_silu in
+// kernels/quantize/modiff_delta_quantize.cu. This fuses away the standalone
+// GroupNorm kernel + the separate step1_static_quantize_fprop_silu pass that the
+// modiff ResBlock path (_forward_modulated_static_fused_silu, fuse_input_silu=True)
+// otherwise runs back-to-back, removing the fp16 `normed` round-trip between them.
+//
+// Bit-exactness vs that two-kernel path: the reference materializes `normed` as an
+// fp16 tensor (group_norm_silu_nhwc output, apply_silu=False) which step1 then reads
+// and SiLU's. We replicate that fp16 rounding of `normed` BEFORE SiLU
+// (__float2half then back) so the SiLU input -- hence the int8/int4 code and the
+// a_hat update (cache += q/scale, stored fp16) -- matches element-for-element. The
+// a_hat_cache is fp16 (the only dtype the calibrated production path uses; enforced
+// by the step1_silu reference and TORCH_CHECK'd here).
+// =========================================================================
+__device__ __forceinline__ float gns_silu(float v) { return v / (1.0f + expf(-v)); }
+
+template <typename TIn>
+__global__ void group_norm_silu_delta_quantize_nhwc_kernel(
+    const TIn* __restrict__ X,
+    __half* __restrict__ a_hat_cache,   // [N,H,W,C] fp16 channels_last, updated in place
+    int8_t* __restrict__ Yq,            // [N,H,W,C] int8, quantized delta
+    const TIn* __restrict__ gamma,
+    const TIn* __restrict__ beta,
+    const TIn* __restrict__ mod_scale,  // [N, C] scale-shift modulation, or nullptr
+    const TIn* __restrict__ mod_shift,
+    const float* __restrict__ scale_ptr,   // scalar quant multiplier = 127/absmax
+    const float* __restrict__ smooth_inv,  // [C] SmoothQuant, or nullptr
+    int C, long HW, int G, float eps, bool apply_silu
+) {
+    const int CPG = C / G;
+    const long group_size = (long)CPG * HW;
+    const int n = blockIdx.x / G;
+    const int g = blockIdx.x % G;
+    const int c_start = g * CPG;
+
+    const TIn* x_base = X + (long)n * HW * C;
+    __half* cache_base = a_hat_cache + (long)n * HW * C;
+    int8_t* yq_base = Yq + (long)n * HW * C;
+
+    extern __shared__ float sdata[];
+    float* s_sum = sdata;
+    float* s_sumsq = sdata + blockDim.x;
+
+    // Pass 1: sum + sum-of-squares over this (sample, group).
+    float local_sum = 0.0f, local_sumsq = 0.0f;
+    for (long idx = threadIdx.x; idx < group_size; idx += blockDim.x) {
+        int c_local = idx % CPG;
+        long hw = idx / CPG;
+        long mem_idx = hw * C + c_start + c_local;
+        float v = gn_load(x_base, mem_idx);
+        local_sum += v;
+        local_sumsq += v * v;
+    }
+    s_sum[threadIdx.x] = local_sum;
+    s_sumsq[threadIdx.x] = local_sumsq;
+    __syncthreads();
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (threadIdx.x < s) {
+            s_sum[threadIdx.x] += s_sum[threadIdx.x + s];
+            s_sumsq[threadIdx.x] += s_sumsq[threadIdx.x + s];
+        }
+        __syncthreads();
+    }
+    __shared__ float mean_s, inv_std_s;
+    if (threadIdx.x == 0) {
+        float mean = s_sum[0] / (float)group_size;
+        float var = fmaxf(s_sumsq[0] / (float)group_size - mean * mean, 0.0f);
+        mean_s = mean;
+        inv_std_s = rsqrtf(var + eps);
+    }
+    __syncthreads();
+    const float mean = mean_s;
+    const float inv_std = inv_std_s;
+    const float scale = *scale_ptr;
+    const float inv_scale = 1.0f / scale;
+
+    // Pass 2: normalize, affine, optional mod, (fp16-round) SiLU, SmoothQuant,
+    // delta-quantize against a_hat, update a_hat in place.
+    for (long idx = threadIdx.x; idx < group_size; idx += blockDim.x) {
+        int c_local = idx % CPG;
+        long hw = idx / CPG;
+        int c_global = c_start + c_local;
+        long mem_idx = hw * C + c_global;
+
+        float v = gn_load(x_base, mem_idx);
+        float w = gn_load(gamma, c_global);
+        float b = gn_load(beta, c_global);
+        float normed = (v - mean) * inv_std * w + b;
+        if (mod_scale != nullptr) {
+            long midx = (long)n * C + c_global;
+            normed = normed * (1.0f + gn_load(mod_scale, midx)) + gn_load(mod_shift, midx);
+        }
+        // Mirror the reference's fp16 `normed` intermediate before SiLU.
+        float normed_h = __half2float(__float2half(normed));
+        float out = apply_silu ? gns_silu(normed_h) : normed_h;
+        if (smooth_inv != nullptr) out *= smooth_inv[c_global];
+        float cache = __half2float(cache_base[mem_idx]);
+        float q = fmaxf(-127.0f, fminf(127.0f, roundf((out - cache) * scale)));
+        cache_base[mem_idx] = __float2half_rn(cache + q * inv_scale);
+        yq_base[mem_idx] = (int8_t)q;
+    }
+}
+
+// Host wrapper: MoDiff GN(+mod)+SiLU + int8 delta-quantize + a_hat update.
+// a_hat_cache is fp16 [N,C,H,W] channels_last, modified in place. Returns int8
+// [N,C,H,W] channels_last (the quantized delta the o_hat conv consumes).
+torch::Tensor group_norm_silu_delta_quantize_nhwc(
+    torch::Tensor x,
+    torch::Tensor weight,
+    torch::Tensor bias,
+    torch::Tensor a_hat_cache,
+    int64_t num_groups,
+    double eps,
+    bool apply_silu,
+    torch::Tensor scale,
+    torch::Tensor smooth_inv,
+    torch::Tensor mod_scale,
+    torch::Tensor mod_shift
+) {
+    CHECK_CUDA(x);
+    CHECK_CONTIGUOUS(x);
+    TORCH_CHECK(x.dim() == 4, "group_norm_silu_delta_quantize_nhwc expects a 4D [N, C, H, W] tensor");
+    TORCH_CHECK(x.scalar_type() == weight.scalar_type() && x.scalar_type() == bias.scalar_type(),
+                "group_norm_silu_delta_quantize_nhwc: weight/bias dtype must match input dtype");
+    TORCH_CHECK(x.scalar_type() == torch::kFloat32 || x.scalar_type() == torch::kFloat16,
+                "group_norm_silu_delta_quantize_nhwc: only float32 and float16 are supported");
+    TORCH_CHECK(a_hat_cache.scalar_type() == torch::kFloat16,
+                "group_norm_silu_delta_quantize_nhwc: a_hat_cache must be fp16 (calibrated modiff path)");
+    TORCH_CHECK(a_hat_cache.sizes() == x.sizes(),
+                "group_norm_silu_delta_quantize_nhwc: a_hat_cache must match x shape");
+    const bool has_mod = mod_scale.numel() > 0;
+    TORCH_CHECK(!has_mod || (mod_scale.scalar_type() == x.scalar_type() && mod_shift.scalar_type() == x.scalar_type()),
+                "group_norm_silu_delta_quantize_nhwc: mod_scale/mod_shift dtype must match input dtype");
+
+    const int N = x.size(0), C = x.size(1), H = x.size(2), W = x.size(3);
+    TORCH_CHECK(C % num_groups == 0, "group_norm_silu_delta_quantize_nhwc: num_channels must be divisible by num_groups");
+    const long HW = (long)H * W;
+    const long group_size = (long)(C / (int)num_groups) * HW;
+
+    auto yq = torch::empty_like(x, x.options().dtype(torch::kInt8));
+
+    int block_size = 32;
+    while (block_size < group_size && block_size < 1024) block_size <<= 1;
+    dim3 grid((unsigned int)(N * num_groups));
+    dim3 block((unsigned int)block_size);
+    size_t shmem_bytes = 2 * (size_t)block_size * sizeof(float);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    const float* smooth_ptr = (smooth_inv.numel() > 0) ? smooth_inv.data_ptr<float>() : nullptr;
+    __half* cache_ptr = reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>());
+
+    if (x.scalar_type() == torch::kFloat32) {
+        group_norm_silu_delta_quantize_nhwc_kernel<float><<<grid, block, shmem_bytes, stream>>>(
+            x.data_ptr<float>(), cache_ptr, reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
+            weight.data_ptr<float>(), bias.data_ptr<float>(),
+            has_mod ? mod_scale.data_ptr<float>() : nullptr,
+            has_mod ? mod_shift.data_ptr<float>() : nullptr,
+            scale.data_ptr<float>(), smooth_ptr,
+            C, HW, (int)num_groups, (float)eps, apply_silu);
+    } else {
+        group_norm_silu_delta_quantize_nhwc_kernel<__half><<<grid, block, shmem_bytes, stream>>>(
+            reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), cache_ptr,
+            reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
+            reinterpret_cast<const __half*>(weight.data_ptr<at::Half>()),
+            reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
+            has_mod ? reinterpret_cast<const __half*>(mod_scale.data_ptr<at::Half>()) : nullptr,
+            has_mod ? reinterpret_cast<const __half*>(mod_shift.data_ptr<at::Half>()) : nullptr,
+            scale.data_ptr<float>(), smooth_ptr,
+            C, HW, (int)num_groups, (float)eps, apply_silu);
+    }
+    return yq;
+}
+
+// INT4-packed MoDiff-fused GN+SiLU+delta-quantize: as above but quantizes the
+// delta to [-7,7] and packs adjacent-channel pairs into one byte (low nibble =
+// even channel, high nibble = odd), matching group_norm_silu_quantize_pack_nhwc's
+// layout and step1_static_quantize_pack_int4_fprop_silu's semantics. Requires
+// channels-per-group even so a pair never straddles a group boundary.
+template <typename TIn>
+__global__ void group_norm_silu_delta_quantize_pack_nhwc_kernel(
+    const TIn* __restrict__ X,
+    __half* __restrict__ a_hat_cache,   // [N,H,W,C] fp16 channels_last, in place
+    int8_t* __restrict__ Yqp,           // [N,H,W,C/2] packed int4
+    const TIn* __restrict__ gamma,
+    const TIn* __restrict__ beta,
+    const TIn* __restrict__ mod_scale,
+    const TIn* __restrict__ mod_shift,
+    const float* __restrict__ scale_ptr,
+    const float* __restrict__ smooth_inv,
+    int C, long HW, int G, float eps, bool apply_silu
+) {
+    const int CPG = C / G;
+    const long group_size = (long)CPG * HW;
+    const int n = blockIdx.x / G;
+    const int g = blockIdx.x % G;
+    const int c_start = g * CPG;
+
+    const TIn* x_base = X + (long)n * HW * C;
+    __half* cache_base = a_hat_cache + (long)n * HW * C;
+    int8_t* yqp_base = Yqp + (long)n * ((HW * (long)C) / 2);
+
+    extern __shared__ float sdata[];
+    float* s_sum = sdata;
+    float* s_sumsq = sdata + blockDim.x;
+
+    float local_sum = 0.0f, local_sumsq = 0.0f;
+    for (long idx = threadIdx.x; idx < group_size; idx += blockDim.x) {
+        int c_local = idx % CPG;
+        long hw = idx / CPG;
+        long mem_idx = hw * C + c_start + c_local;
+        float v = gn_load(x_base, mem_idx);
+        local_sum += v;
+        local_sumsq += v * v;
+    }
+    s_sum[threadIdx.x] = local_sum;
+    s_sumsq[threadIdx.x] = local_sumsq;
+    __syncthreads();
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (threadIdx.x < s) {
+            s_sum[threadIdx.x] += s_sum[threadIdx.x + s];
+            s_sumsq[threadIdx.x] += s_sumsq[threadIdx.x + s];
+        }
+        __syncthreads();
+    }
+    __shared__ float mean_s, inv_std_s;
+    if (threadIdx.x == 0) {
+        float mean = s_sum[0] / (float)group_size;
+        float var = fmaxf(s_sumsq[0] / (float)group_size - mean * mean, 0.0f);
+        mean_s = mean;
+        inv_std_s = rsqrtf(var + eps);
+    }
+    __syncthreads();
+    const float mean = mean_s;
+    const float inv_std = inv_std_s;
+    const float scale = *scale_ptr;
+    const float inv_scale = 1.0f / scale;
+
+    const int HALF_CPG = CPG / 2;
+    const long pairs = group_size / 2;
+    for (long pidx = threadIdx.x; pidx < pairs; pidx += blockDim.x) {
+        int cpair = pidx % HALF_CPG;
+        long hw = pidx / HALF_CPG;
+        int c_global0 = c_start + 2 * cpair;
+        long mem_idx0 = hw * (long)C + c_global0;
+
+        float v0 = gn_load(x_base, mem_idx0);
+        float v1 = gn_load(x_base, mem_idx0 + 1);
+        float w0 = gn_load(gamma, c_global0),     b0 = gn_load(beta, c_global0);
+        float w1 = gn_load(gamma, c_global0 + 1), b1 = gn_load(beta, c_global0 + 1);
+        float n0 = (v0 - mean) * inv_std * w0 + b0;
+        float n1 = (v1 - mean) * inv_std * w1 + b1;
+        if (mod_scale != nullptr) {
+            long midx0 = (long)n * C + c_global0;
+            n0 = n0 * (1.0f + gn_load(mod_scale, midx0))     + gn_load(mod_shift, midx0);
+            n1 = n1 * (1.0f + gn_load(mod_scale, midx0 + 1)) + gn_load(mod_shift, midx0 + 1);
+        }
+        float o0 = apply_silu ? gns_silu(__half2float(__float2half(n0))) : __half2float(__float2half(n0));
+        float o1 = apply_silu ? gns_silu(__half2float(__float2half(n1))) : __half2float(__float2half(n1));
+        if (smooth_inv != nullptr) {
+            o0 *= smooth_inv[c_global0];
+            o1 *= smooth_inv[c_global0 + 1];
+        }
+        float c0 = __half2float(cache_base[mem_idx0]);
+        float c1 = __half2float(cache_base[mem_idx0 + 1]);
+        float q0 = fmaxf(-7.0f, fminf(7.0f, roundf((o0 - c0) * scale)));
+        float q1 = fmaxf(-7.0f, fminf(7.0f, roundf((o1 - c1) * scale)));
+        cache_base[mem_idx0]     = __float2half_rn(c0 + q0 * inv_scale);
+        cache_base[mem_idx0 + 1] = __float2half_rn(c1 + q1 * inv_scale);
+        int8_t i0 = (int8_t)q0;
+        int8_t i1 = (int8_t)q1;
+        yqp_base[mem_idx0 / 2] = (int8_t)((i0 & 0x0F) | ((i1 & 0x0F) << 4));
+    }
+}
+
+// Host wrapper: MoDiff GN(+mod)+SiLU + int4 delta-quantize+pack + a_hat update.
+torch::Tensor group_norm_silu_delta_quantize_pack_nhwc(
+    torch::Tensor x,
+    torch::Tensor weight,
+    torch::Tensor bias,
+    torch::Tensor a_hat_cache,
+    int64_t num_groups,
+    double eps,
+    bool apply_silu,
+    torch::Tensor scale,
+    torch::Tensor smooth_inv,
+    torch::Tensor mod_scale,
+    torch::Tensor mod_shift
+) {
+    CHECK_CUDA(x);
+    CHECK_CONTIGUOUS(x);
+    TORCH_CHECK(x.dim() == 4, "group_norm_silu_delta_quantize_pack_nhwc expects a 4D [N, C, H, W] tensor");
+    TORCH_CHECK(x.scalar_type() == weight.scalar_type() && x.scalar_type() == bias.scalar_type(),
+                "group_norm_silu_delta_quantize_pack_nhwc: weight/bias dtype must match input dtype");
+    TORCH_CHECK(x.scalar_type() == torch::kFloat32 || x.scalar_type() == torch::kFloat16,
+                "group_norm_silu_delta_quantize_pack_nhwc: only float32 and float16 are supported");
+    TORCH_CHECK(a_hat_cache.scalar_type() == torch::kFloat16,
+                "group_norm_silu_delta_quantize_pack_nhwc: a_hat_cache must be fp16 (calibrated modiff path)");
+    TORCH_CHECK(a_hat_cache.sizes() == x.sizes(),
+                "group_norm_silu_delta_quantize_pack_nhwc: a_hat_cache must match x shape");
+    const bool has_mod = mod_scale.numel() > 0;
+    TORCH_CHECK(!has_mod || (mod_scale.scalar_type() == x.scalar_type() && mod_shift.scalar_type() == x.scalar_type()),
+                "group_norm_silu_delta_quantize_pack_nhwc: mod_scale/mod_shift dtype must match input dtype");
+
+    const int N = x.size(0), C = x.size(1), H = x.size(2), W = x.size(3);
+    TORCH_CHECK(C % num_groups == 0, "group_norm_silu_delta_quantize_pack_nhwc: num_channels must be divisible by num_groups");
+    const int CPG = C / (int)num_groups;
+    TORCH_CHECK(C % 2 == 0 && CPG % 2 == 0,
+                "group_norm_silu_delta_quantize_pack_nhwc: channels and channels-per-group must be even");
+    const long HW = (long)H * W;
+    const long group_size = (long)CPG * HW;
+
+    auto yqp = torch::empty({N, H, W, C / 2},
+                            torch::TensorOptions().dtype(torch::kInt8).device(x.device()));
+
+    int block_size = 32;
+    while (block_size < group_size && block_size < 1024) block_size <<= 1;
+    dim3 grid((unsigned int)(N * num_groups));
+    dim3 block((unsigned int)block_size);
+    size_t shmem_bytes = 2 * (size_t)block_size * sizeof(float);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    const float* smooth_ptr = (smooth_inv.numel() > 0) ? smooth_inv.data_ptr<float>() : nullptr;
+    __half* cache_ptr = reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>());
+
+    if (x.scalar_type() == torch::kFloat32) {
+        group_norm_silu_delta_quantize_pack_nhwc_kernel<float><<<grid, block, shmem_bytes, stream>>>(
+            x.data_ptr<float>(), cache_ptr, reinterpret_cast<int8_t*>(yqp.data_ptr<int8_t>()),
+            weight.data_ptr<float>(), bias.data_ptr<float>(),
+            has_mod ? mod_scale.data_ptr<float>() : nullptr,
+            has_mod ? mod_shift.data_ptr<float>() : nullptr,
+            scale.data_ptr<float>(), smooth_ptr,
+            C, HW, (int)num_groups, (float)eps, apply_silu);
+    } else {
+        group_norm_silu_delta_quantize_pack_nhwc_kernel<__half><<<grid, block, shmem_bytes, stream>>>(
+            reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), cache_ptr,
+            reinterpret_cast<int8_t*>(yqp.data_ptr<int8_t>()),
+            reinterpret_cast<const __half*>(weight.data_ptr<at::Half>()),
+            reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
+            has_mod ? reinterpret_cast<const __half*>(mod_scale.data_ptr<at::Half>()) : nullptr,
+            has_mod ? reinterpret_cast<const __half*>(mod_shift.data_ptr<at::Half>()) : nullptr,
+            scale.data_ptr<float>(), smooth_ptr,
+            C, HW, (int)num_groups, (float)eps, apply_silu);
+    }
+    return yqp;
+}

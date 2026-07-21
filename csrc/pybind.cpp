@@ -93,6 +93,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("group_norm_silu_dequant_quantize_nhwc", &group_norm_silu_dequant_quantize_nhwc,
           "INT8-in GroupNorm(+SiLU): reads int8 activation + dequant scale (upstream conv's "
           "int8 output), computes GN from dequantized values, requantizes to int8 output");
+    m.def("group_norm_silu_delta_quantize_nhwc", &group_norm_silu_delta_quantize_nhwc,
+          "MoDiff-fused GroupNorm(+mod)+SiLU + INT8 temporal-delta quantize + in-place a_hat "
+          "update (fuses the modiff GN+step1_static_quantize_fprop_silu two-kernel pass)");
+    m.def("group_norm_silu_delta_quantize_pack_nhwc", &group_norm_silu_delta_quantize_pack_nhwc,
+          "MoDiff-fused GroupNorm(+mod)+SiLU + INT4 delta-quantize+pack + in-place a_hat update "
+          "(int4 counterpart; requires even channels-per-group)");
     m.def("fused_gn_qkv", &fused_gn_qkv, "Fused GroupNorm->qkv (per-sample scale/bias mainloop fusion)");
     m.def("fused_gn_qkv_int8", &fused_gn_qkv_int8, "Fused GroupNorm->qkv with int8-clamp output (oscale folded into weight/bias)");
 
