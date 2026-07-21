@@ -681,46 +681,48 @@ class OptimizedInt8Conv2d(nn.Module):
                 self._standard_output_buf = torch.empty(
                     output_shape, device=x_int8.device, dtype=torch.float16
                 ).contiguous(memory_format=torch.channels_last)
+            deep_ok = (self.out_channels % 8 == 0
+                       and hasattr(modiff_cutlass, "conv2d_int8_fprop_deepfuse_bias_residual_fp16"))
+            if deep_ok:
+                cid = self._ensure_tuned_config(x_int8, output_shape)
+                cid = cid if cid is not None else -1
+                if self.bias is None and residual is None:
+                    # No bias/residual -> deep-fuse writes final fp16 directly (no store pass).
+                    if cid >= 0:
+                        return modiff_cutlass.conv2d_int8_dequant_fp16_tuned(
+                            x_int8, self.weight_int8, self._cached_alpha_tensor,
+                            self.weight_scale_channel_half.view(-1), self._standard_output_buf, cid,
+                            self.stride[0], self.stride[1], self.padding[0], self.padding[1],
+                            self.dilation[0], self.dilation[1])
+                    return modiff_cutlass.conv2d_int8_fprop_dequant_fp16_prealloc(
+                        x_int8, self.weight_int8, self._cached_alpha_tensor,
+                        self.weight_scale_channel_half.view(-1), self._standard_output_buf,
+                        self.stride[0], self.stride[1], self.padding[0], self.padding[1],
+                        self.dilation[0], self.dilation[1])
+                # Best fused store: deep-fuse dequant (weight_scale in the CUTLASS epilogue,
+                # fp16, no fp32 temp) + bias (+ optional residual) folded into the from_half
+                # store -- no eager bias add, no fp32-input scale store.
+                bias_arg = (self.bias.view(-1).contiguous()
+                            if self.bias is not None else self._empty_bias)
+                res_arg = (residual if residual is not None
+                           else torch.empty(0, device=x_int8.device, dtype=torch.float16))
+                return modiff_cutlass.conv2d_int8_fprop_deepfuse_bias_residual_fp16(
+                    x_int8, self.weight_int8, self._cached_alpha_tensor,
+                    self.weight_scale_channel_half.view(-1), bias_arg, res_arg,
+                    self._standard_output_buf, cid,
+                    self.stride[0], self.stride[1], self.padding[0], self.padding[1],
+                    self.dilation[0], self.dilation[1])
+            # Fallback (out_channels % 8 != 0 or kernel unavailable): fp32-temp store paths.
             if residual is not None:
                 bias_arg = (self.bias.view(-1).contiguous()
                             if self.bias is not None else self._empty_bias)
-                # Deep-fuse + tuned tile (no fp32 temp) when eligible; else the
-                # fp32-temp residual path.
-                if (self.out_channels % 8 == 0
-                        and hasattr(modiff_cutlass, "conv2d_int8_fprop_deepfuse_bias_residual_fp16")):
-                    cid = self._ensure_tuned_config(x_int8, output_shape)
-                    return modiff_cutlass.conv2d_int8_fprop_deepfuse_bias_residual_fp16(
-                        x_int8, self.weight_int8, self._cached_alpha_tensor,
-                        self.weight_scale_channel_half.view(-1), bias_arg, residual,
-                        self._standard_output_buf, cid if cid is not None else -1,
-                        self.stride[0], self.stride[1], self.padding[0], self.padding[1],
-                        self.dilation[0], self.dilation[1])
                 return modiff_cutlass.conv2d_int8_fprop_no_ohat_prealloc_bias_residual(
                     x_int8, self.weight_int8, self._cached_alpha_tensor,
                     self.weight_scale_channel.view(-1), bias_arg, residual,
                     self._standard_output_buf,
                     self.stride[0], self.stride[1], self.padding[0], self.padding[1],
                     self.dilation[0], self.dilation[1])
-            use_deep_fuse = (
-                hasattr(modiff_cutlass, "conv2d_int8_fprop_dequant_fp16_prealloc")
-                and self.out_channels % 8 == 0
-                and (self.bias is None or self._standard_output_buf.numel() >= 2_000_000)
-            )
-            if use_deep_fuse:
-                cid = self._ensure_tuned_config(x_int8, output_shape)
-                if cid is not None and cid >= 0:
-                    out = modiff_cutlass.conv2d_int8_dequant_fp16_tuned(
-                        x_int8, self.weight_int8, self._cached_alpha_tensor,
-                        self.weight_scale_channel_half.view(-1), self._standard_output_buf, cid,
-                        self.stride[0], self.stride[1], self.padding[0], self.padding[1],
-                        self.dilation[0], self.dilation[1])
-                else:
-                    out = modiff_cutlass.conv2d_int8_fprop_dequant_fp16_prealloc(
-                        x_int8, self.weight_int8, self._cached_alpha_tensor,
-                        self.weight_scale_channel_half.view(-1), self._standard_output_buf,
-                        self.stride[0], self.stride[1], self.padding[0], self.padding[1],
-                        self.dilation[0], self.dilation[1])
-            elif self.bias is not None and hasattr(modiff_cutlass, "conv2d_int8_fprop_no_ohat_prealloc_bias"):
+            if self.bias is not None and hasattr(modiff_cutlass, "conv2d_int8_fprop_no_ohat_prealloc_bias"):
                 out = modiff_cutlass.conv2d_int8_fprop_no_ohat_prealloc_bias(
                     x_int8, self.weight_int8, self._cached_alpha_tensor,
                     self.weight_scale_channel.view(-1), self.bias.view(-1).contiguous(),
