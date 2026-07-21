@@ -174,6 +174,23 @@ accumulate now shows in the modiff-cache bucket) — cutting modiff wall ~5.8 ms
 wall because profiled per-kernel time omits kernel overlap — treat it as the device-time composition, not
 an additive wall.
 
+Two profile details worth calling out (per-kernel breakdown, `scripts/` bucket dump):
+
+- **Attention is ~equal for int8 vs int4 (34.8 vs 33.7).** Each mode's attention bucket is a *single*
+  fused-flash kernel — `flash_attn_int8_mma_kernel` (33.1 ms) vs `flash_attn_int4_mma_kernel` (32.1 ms).
+  int4 is only ~1 ms (~3%) faster because the int4 flash path is **i4qk_i8v** — it narrows only Q/K to
+  4-bit, **V stays int8** — and the kernel is dominated by softmax + P·V + the Q/K/V/output memory
+  movement, not the QKᵀ GEMM arithmetic, so halving just the Q/K width barely moves it. (The hd=96 blocks
+  stay fp16 in both modes, further equalizing them.)
+- **int4 `elementwise/copy` is larger than int8 (20.0 vs 12.7)** — this is the **conv dequant-store**, not
+  int4 packing (packing lands in `quantize/dequant`). int8's CUTLASS conv folds the per-channel
+  `weight_scale` into its epilogue and emits fp16, so its store is the cheap `bias_residual_store_half_
+  **from_half**` (~3 ms, reads fp16). int4's conv has no fused-dequant epilogue: it emits the **fp32** raw
+  accumulator, so a separate `scale_bias[_residual]_store_half<**float**>` applies `weight_scale` while
+  reading 2× the bytes (~7 ms), + a bit more generic pointwise glue. int4 *wins* the conv-GEMM bucket
+  (15.9 vs 24.0) but hands ~7 ms back here — still net-faster overall (gpu_busy 123.6 vs 128.4). A future
+  int4 deep-fuse dequant epilogue (as int8 has) would reclaim most of it.
+
 ![e2e timing profile](figs/fig_e2e_timing_profile.png)
 
 ### 4. Per-component read/write profile
