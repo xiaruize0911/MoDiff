@@ -74,11 +74,11 @@ the flash-only refactor headline. The modiff temporal-cache variants are **slowe
 > delta-quantize + pack into one launch, and bias is baked into the o_hat cache. Profiling its eager
 > elementwise shows the only un-fused op is the block residual add at **~1.3 ms/step**; the rest (~18 ms)
 > is generic fp16 glue (`cat`/`copy`/scale-shift) shared identically with fp16 and all modes. The reason
-> int4_modiff (143.7 ms) is slower than int4_baseline (119.9 ms) is **intrinsic MoDiff overhead, not
+> int4_modiff (142.5 ms) is slower than int4_baseline (119.5 ms) is **intrinsic MoDiff overhead, not
 > fusable glue**: delta-quantize 26.1 vs 17.3 ms (+8.8, computing `a−a_hat` + updating the cache) and the
 > o_hat accumulate (+8.7 ms). Fusion cannot remove those. The only fusions left (residual → a new
 > `conv2d_int4_fprop_o_hat_bias_residual`, or GroupNorm → the delta-quantize) need new correctness-risky
-> CUDA for ≤~4 ms and int4_modiff would still trail int4_baseline — so **int4_baseline (1.58×) is the mode
+> CUDA for ≤~4 ms and int4_modiff would still trail int4_baseline — so **int4_baseline (1.59×) is the mode
 > to use when temporal caching isn't required.**
 
 ![e2e speed](figs/fig_e2e_speed.png)
