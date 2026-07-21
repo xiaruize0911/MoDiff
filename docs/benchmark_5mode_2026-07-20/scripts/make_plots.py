@@ -65,23 +65,6 @@ if r:
     ax.tick_params(axis="x", rotation=20); ax.legend(bbox_to_anchor=(1.01, 1), loc="upper left", fontsize=8)
     fig.tight_layout(); fig.savefig(f"{Fg}/fig_e2e_timing_profile.png", dpi=150); plt.close(fig); print("wrote fig_e2e_timing_profile.png")
 
-# ---------- e2e memcpy (stacked H2D/D2H/D2D) ----------
-r = load("e2e_memcpy_total.csv")
-if r:
-    by = {row["mode"]: row for row in r}
-    modes = [m for m in MODES if m in by]
-    kinds = [("H2D_MiB", "#60a5fa"), ("D2H_MiB", "#34d399"), ("D2D_MiB", "#f59e0b")]
-    fig, ax = plt.subplots(figsize=(9, 5))
-    bottom = np.zeros(len(modes))
-    for key, c in kinds:
-        vals = np.array([fnum(by[m][key]) for m in modes])
-        ax.bar(modes, vals, bottom=bottom, label=key.replace("_MiB", ""), color=c, edgecolor="white")
-        bottom += np.nan_to_num(vals)
-    for i, m in enumerate(modes):
-        ax.text(i, bottom[i], f"{fnum(by[m]['total_MiB']):.0f}", ha="center", va="bottom", fontsize=9)
-    ax.set_ylabel("MiB / step (measured memcpy)"); ax.set_title("E2E memcpy traffic (nsys, copy-only; excludes in-kernel DRAM)")
-    ax.tick_params(axis="x", rotation=20); ax.legend()
-    fig.tight_layout(); fig.savefig(f"{Fg}/fig_e2e_memcpy.png", dpi=150); plt.close(fig); print("wrote fig_e2e_memcpy.png")
 
 # ---------- conv kernel (grouped, log-y) ----------
 r = load("conv_kernel_speed.csv")

@@ -14,9 +14,8 @@ fused-flash quantized attention; `_modiff` adds the temporal-delta conv cache.
 `torch.cuda.synchronize()` (e2e 30 warm + 5×200 steps; kernels 50 warm + 200×5). Timing profile =
 `torch.profiler` CUDA self-time, bucketed by kernel name, ms/step. Per-kernel DRAM read/write = NVBit
 SASS instrumentation (`scripts/nvbit_mem_bytes`, validated byte-exact; HW counters are locked here —
-`ERR_NVGPUCTRPERM`). e2e memcpy = nsys `CUPTI_ACTIVITY_KIND_MEMCPY`. Checkpoint is a random-weight stub
-(dispatch/shapes faithful → **speed faithful, generation quality meaningless**). autocast fp16 on for all
-modes. Data: `data/*.csv` · figures: `figs/*.png`.
+`ERR_NVGPUCTRPERM`). Checkpoint is a random-weight stub (dispatch/shapes faithful → **speed faithful,
+generation quality meaningless**). autocast fp16 on for all modes. Data: `data/*.csv` · figures: `figs/*.png`.
 
 ---
 
@@ -34,17 +33,7 @@ modes. Data: `data/*.csv` · figures: `figs/*.png`.
 
 ![e2e speed](figs/fig_e2e_speed.png)
 
-### 2. Total memcpy (nsys) · `data/e2e_memcpy_total.csv` · `figs/fig_e2e_memcpy.png`
-
-| mode | H2D | D2H | D2D | total MiB/step |
-|---|--:|--:|--:|--:|
-| fp16 / int8_baseline / int4_baseline / int8_modiff / int4_modiff | 0.0 | 0.0 | 0.4 | 0.4 |
-
-Copy-traffic only; per-kernel compute DRAM IO is in §Kernel/IO (NVBit).
-
-![e2e memcpy](figs/fig_e2e_memcpy.png)
-
-### 3. Per-component timing profile (GPU self-time, ms/step) · `data/e2e_timing_profile.csv` · `figs/fig_e2e_timing_profile.png`
+### 2. Per-component timing profile (GPU self-time, ms/step) · `data/e2e_timing_profile.csv` · `figs/fig_e2e_timing_profile.png`
 
 | bucket | fp16 | int8_baseline | int4_baseline | int8_modiff | int4_modiff |
 |---|--:|--:|--:|--:|--:|
