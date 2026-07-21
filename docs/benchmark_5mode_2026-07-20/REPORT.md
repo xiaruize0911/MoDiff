@@ -3,8 +3,9 @@
 **GPU:** NVIDIA A40 (48 GB, SM 8.6) · **PyTorch:** 2.4.1+cu124 · **CUDA:** 12.4 · nsys 2024.1.1
 **Model:** LSUN-Churches LDM-8 UNet (unconditional, 256×256) · **Batch:** 128 · **Sampler:** DDIM
 **Date:** 2026-07-20 · **all timing/kernel/IO data re-measured 2026-07-21** at the current code state
-(fused-flash attention; a_hat-drop; residual→o_hat fusion ON; int4 conv deep-fuse dequant ON;
-GN→delta-quantize fusion OFF).
+(fused-flash attention; a_hat-drop; residual→o_hat fusion ON; int8 & int4 conv use the deep-fuse store —
+weight_scale in the CUTLASS epilogue, bias/residual folded into the from_half store; GN→delta-quantize
+fusion OFF).
 
 **5 modes:** `fp16`, `int8_baseline`, `int4_baseline`, `int8_modiff`, `int4_modiff`. int8/int4 use
 fused-flash quantized attention; `_modiff` adds the temporal-delta conv cache.
@@ -25,11 +26,11 @@ modes. Data: `data/*.csv` · figures: `figs/*.png`.
 
 | mode | ms/step | min ms | vs fp16 |
 |---|--:|--:|--:|
-| fp16 | 190.0 | 188.8 | 1.00× |
-| int8_baseline | 124.3 | 124.1 | 1.53× |
-| **int4_baseline** | **117.3** | **117.2** | **1.62×** |
-| int8_modiff | 140.9 | 140.9 | 1.35× |
-| int4_modiff | 140.7 | 140.1 | 1.35× |
+| fp16 | 189.6 | 188.2 | 1.00× |
+| int8_baseline | 125.1 | 125.0 | 1.52× |
+| **int4_baseline** | **116.9** | **116.7** | **1.62×** |
+| int8_modiff | 141.0 | 140.8 | 1.35× |
+| int4_modiff | 139.1 | 138.8 | 1.36× |
 
 ![e2e speed](figs/fig_e2e_speed.png)
 
@@ -47,17 +48,17 @@ Copy-traffic only; per-kernel compute DRAM IO is in §Kernel/IO (NVBit).
 
 | bucket | fp16 | int8_baseline | int4_baseline | int8_modiff | int4_modiff |
 |---|--:|--:|--:|--:|--:|
-| attention (flash / softmax) | 44.0 | 35.1 | 33.9 | 34.5 | 33.7 |
+| attention (flash / softmax) | 44.2 | 35.1 | 33.9 | 34.5 | 33.7 |
 | attn bmm fp16 (QKᵀ/AV) | 42.4 | 0.2 | 0.2 | 0.2 | 0.2 |
-| conv (int GEMM) | 46.3 | 24.5 | 14.3 | 28.8 | 15.8 |
-| qkv/proj int GEMM | 0.0 | 7.7 | 7.1 | 7.5 | 7.0 |
-| GroupNorm | 21.6 | 23.9 | 22.9 | 22.4 | 22.2 |
-| quantize/dequant | 0.0 | 19.0 | 17.3 | 28.3 | 25.6 |
+| conv (int GEMM) | 46.0 | 25.4 | 14.5 | 28.8 | 15.9 |
+| qkv/proj int GEMM | 0.0 | 7.7 | 7.1 | 7.6 | 7.0 |
+| GroupNorm | 21.6 | 23.9 | 22.9 | 22.5 | 22.2 |
+| quantize/dequant | 0.0 | 19.0 | 17.3 | 28.4 | 25.6 |
 | modiff cache (o_hat) | 0.0 | 0.0 | 0.0 | 11.0 | 11.0 |
-| elementwise/copy | 32.6 | 12.7 | 18.2 | 7.6 | 11.4 |
-| upsample/concat + other | 12.6 | 6.9 | 7.0 | 6.8 | 6.4 |
-| **gpu_busy** | 199.5 | 130.0 | 120.9 | 147.1 | 133.1 |
-| **wall** | 190.0 | 123.4 | 115.8 | 140.1 | 142.4 |
+| elementwise/copy | 32.6 | 12.7 | 18.3 | 7.6 | 11.4 |
+| upsample/concat + other | 12.6 | 6.9 | 7.1 | 6.8 | 6.4 |
+| **gpu_busy** | 199.4 | 131.0 | 121.2 | 147.3 | 133.4 |
+| **wall** | 190.1 | 124.4 | 116.2 | 139.8 | 139.5 |
 
 ![e2e timing profile](figs/fig_e2e_timing_profile.png)
 
@@ -69,16 +70,16 @@ Copy-traffic only; per-kernel compute DRAM IO is in §Kernel/IO (NVBit).
 
 | shape (Cin→Cout, HW) | fp16 | int8_base | int4_base | int8_modiff | int4_modiff | int8 vs fp16 | int4 vs fp16 |
 |---|--:|--:|--:|--:|--:|--:|--:|
-| res 128, 64² | 1876 | 1668 | 1146 | 2676 | 2246 | 1.13× | 1.64× |
-| res 128, 32² | 488 | 435 | 303 | 704 | 582 | 1.12× | 1.61× |
-| down 128→256, 32² | 938 | 763 | 521 | 1175 | 954 | 1.23× | 1.80× |
-| res 256, 32² | 1623 | 1210 | 755 | 1677 | 1265 | 1.34× | 2.15× |
-| res 256, 16² | 440 | 321 | 209 | 453 | 351 | 1.37× | 2.11× |
-| down 256→512, 16² | 805 | 571 | 358 | 753 | 562 | 1.41× | 2.25× |
-| mid 512, 8² | 427 | 264 | 157 | 326 | 227 | 1.62× | 2.71× |
-| up 512→256, 16² | 779 | 547 | 338 | 703 | 515 | 1.42× | 2.30× |
-| up 256→128, 32² | 874 | 707 | 459 | 1059 | 844 | 1.24× | 1.90× |
-| up 128, 64² | 1916 | 1691 | 1162 | 2688 | 2247 | 1.13× | 1.65× |
+| res 128, 64² | 1904 | 1697 | 1159 | 2640 | 2246 | 1.12× | 1.64× |
+| res 128, 32² | 500 | 440 | 307 | 705 | 582 | 1.14× | 1.63× |
+| down 128→256, 32² | 959 | 776 | 527 | 1167 | 954 | 1.24× | 1.82× |
+| res 256, 32² | 1650 | 1234 | 763 | 1688 | 1267 | 1.34× | 2.16× |
+| res 256, 16² | 449 | 323 | 211 | 454 | 352 | 1.39× | 2.12× |
+| down 256→512, 16² | 825 | 583 | 361 | 758 | 564 | 1.42× | 2.29× |
+| mid 512, 8² | 435 | 264 | 159 | 329 | 227 | 1.65× | 2.74× |
+| up 512→256, 16² | 794 | 556 | 341 | 712 | 518 | 1.43× | 2.33× |
+| up 256→128, 32² | 883 | 714 | 463 | 1063 | 845 | 1.24× | 1.91× |
+| up 128, 64² | 1933 | 1717 | 1170 | 2662 | 2247 | 1.13× | 1.65× |
 
 ![conv kernel](figs/fig_conv_kernel.png)
 
@@ -196,6 +197,12 @@ int4_baseline **conv kernel** speedup vs fp16, per shape · `data/int4_deepfuse_
 | res 256, 16² | 1.68× | 2.11× | up 128, 64² | 1.23× | 1.65× |
 
 int4_baseline conv range: **1.21–2.31× → 1.61–2.71×** vs fp16.
+
+**int8 conv store unification** — `_conv_from_int8` routed through the same deep-fuse store as int4 (bias
+folded into the `from_half` store; removes the ≥2M-element heuristic + the trailing eager bias add). Output
+rel-L2 **5.4e-4** vs the prior path over 40 real conv calls. **e2e-neutral** (int8_baseline 124.3→125.1
+ms, within noise; the old ≥2M deep-fuse+eager-bias path was already traffic-equivalent) — kept for
+consistency with int4 and the correctly-fused bias-only small-conv case.
 
 **GN→delta-quantize fusion** — modiff, GroupNorm folded into the delta-quantize (bit-identical). e2e
 regression; kept OFF (opt-in `MODIFF_ENABLE_GN_MODIFF_FUSION=1`) · `data/gn_modiff_fusion_{e2e,kernel}.csv`:
