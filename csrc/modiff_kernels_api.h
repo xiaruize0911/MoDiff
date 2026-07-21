@@ -168,6 +168,12 @@ torch::Tensor conv2d_int4_dequant_fp16_tuned(
     torch::Tensor weight_scales_half, torch::Tensor output, int64_t config_id,
     int stride_h, int stride_w, int padding_h, int padding_w, int dilation_h, int dilation_w);
 
+torch::Tensor conv2d_int4_fprop_deepfuse_bias_residual_fp16(
+    torch::Tensor input, torch::Tensor weight_packed, torch::Tensor inv_scale,
+    torch::Tensor weight_scales_half, torch::Tensor bias, torch::Tensor residual,
+    torch::Tensor output, int64_t config_id,
+    int stride_h, int stride_w, int padding_h, int padding_w, int dilation_h, int dilation_w);
+
 torch::Tensor conv2d_int4_fprop_relu_requant_int4(
     torch::Tensor input, torch::Tensor weight_packed, torch::Tensor inv_scale,
     torch::Tensor weight_scales, torch::Tensor bias, torch::Tensor requant_scale, torch::Tensor output,

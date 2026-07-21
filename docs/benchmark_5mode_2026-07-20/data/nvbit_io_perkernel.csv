@@ -4,8 +4,8 @@ conv,fp16,res_128_64,sm86_xmma_fprop_implicit_gemm_f16f16_f16,0.0,128.0
 conv,int8_baseline,res_128_64,elementwise_kernel,256.0,128.0
 conv,int8_baseline,res_128_64,cutlass_conv,132.0,128.0
 conv,int8_baseline,res_128_64,static_quantize_int8_noahat_kernel,192.0,64.0
-conv,int4_baseline,res_128_64,scale_bias_store_half_kernel,768.0,128.0
-conv,int4_baseline,res_128_64,cutlass_conv,2.0,256.0
+conv,int4_baseline,res_128_64,void bias_store_half_from_half_kernel<fl,384.0,128.0
+conv,int4_baseline,res_128_64,cutlass_conv,130.0,128.0
 conv,int4_baseline,res_128_64,static_quantize_pack_int4_noahat_kernel,192.0,32.0
 conv,int8_modiff,res_128_64,scale_accumulate_half_cache_kernel,640.0,128.0
 conv,int8_modiff,res_128_64,static_quantize_and_update_ahat_kernel_int8_half_cache,320.0,192.0
@@ -16,10 +16,10 @@ conv,int4_modiff,res_128_64,cutlass_conv,2.0,256.0
 conv,fp16,res_256_32,elementwise_kernel,128.0,64.0
 conv,fp16,res_256_32,cutlass_conv,0.0,64.0
 conv,int8_baseline,res_256_32,elementwise_kernel,128.001,64.0
-conv,int8_baseline,res_256_32,cutlass_conv,66.0,64.0
+conv,int8_baseline,res_256_32,cutlass_conv,65.0,64.0
 conv,int8_baseline,res_256_32,static_quantize_int8_noahat_kernel,96.0,32.0
-conv,int4_baseline,res_256_32,scale_bias_store_half_kernel,384.0,64.0
-conv,int4_baseline,res_256_32,cutlass_conv,1.0,128.0
+conv,int4_baseline,res_256_32,void bias_store_half_from_half_kernel<fl,192.0,64.0
+conv,int4_baseline,res_256_32,cutlass_conv,65.0,64.0
 conv,int4_baseline,res_256_32,static_quantize_pack_int4_noahat_kernel,96.0,16.0
 conv,int8_modiff,res_256_32,scale_accumulate_half_cache_kernel,320.0,64.0
 conv,int8_modiff,res_256_32,static_quantize_and_update_ahat_kernel_int8_half_cache,160.0,96.0
@@ -32,8 +32,8 @@ conv,fp16,down_256_512_16,cutlass_conv,0.0,32.0
 conv,int8_baseline,down_256_512_16,elementwise_kernel,64.002,32.001
 conv,int8_baseline,down_256_512_16,cutlass_conv,33.0,32.0
 conv,int8_baseline,down_256_512_16,static_quantize_int8_noahat_kernel,24.0,8.0
-conv,int4_baseline,down_256_512_16,scale_bias_store_half_kernel,192.0,32.0
-conv,int4_baseline,down_256_512_16,cutlass_conv,0.5,64.0
+conv,int4_baseline,down_256_512_16,void bias_store_half_from_half_kernel<fl,96.0,32.0
+conv,int4_baseline,down_256_512_16,cutlass_conv,32.5,32.0
 conv,int4_baseline,down_256_512_16,static_quantize_pack_int4_noahat_kernel,24.0,4.0
 conv,int8_modiff,down_256_512_16,scale_accumulate_half_cache_kernel,160.0,32.0
 conv,int8_modiff,down_256_512_16,cutlass_conv,1.0,64.0
@@ -44,10 +44,10 @@ conv,int4_modiff,down_256_512_16,static_quantize_pack_and_update_ahat_kernel_int
 conv,fp16,mid_512_8,elementwise_kernel,16.0,8.0
 conv,fp16,mid_512_8,cutlass_conv,0.0,8.0
 conv,int8_baseline,mid_512_8,elementwise_kernel,16.002,8.001
-conv,int8_baseline,mid_512_8,cutlass_conv,8.125,8.0
+conv,int8_baseline,mid_512_8,cutlass_conv,8.25,8.0
 conv,int8_baseline,mid_512_8,static_quantize_int8_noahat_kernel,12.0,4.0
-conv,int4_baseline,mid_512_8,scale_bias_store_half_kernel,48.0,8.0
-conv,int4_baseline,mid_512_8,cutlass_conv,0.125,16.0
+conv,int4_baseline,mid_512_8,void bias_store_half_from_half_kernel<fl,24.0,8.0
+conv,int4_baseline,mid_512_8,cutlass_conv,8.25,8.0
 conv,int4_baseline,mid_512_8,static_quantize_pack_int4_noahat_kernel,12.0,2.0
 conv,int8_modiff,mid_512_8,scale_accumulate_half_cache_kernel,40.0,8.0
 conv,int8_modiff,mid_512_8,static_quantize_and_update_ahat_kernel_int8_half_cache,20.0,12.0
@@ -59,10 +59,10 @@ conv,fp16,up_512_256_16,elementwise_kernel,32.0,16.0
 conv,fp16,up_512_256_16,cutlass_conv,0.0,16.0
 conv,int8_baseline,up_512_256_16,static_quantize_int8_noahat_kernel,48.0,16.0
 conv,int8_baseline,up_512_256_16,elementwise_kernel,32.001,16.0
-conv,int8_baseline,up_512_256_16,cutlass_conv,16.5,16.0
-conv,int4_baseline,up_512_256_16,scale_bias_store_half_kernel,96.0,16.0
+conv,int8_baseline,up_512_256_16,cutlass_conv,16.25,16.0
+conv,int4_baseline,up_512_256_16,void bias_store_half_from_half_kernel<fl,48.0,16.0
 conv,int4_baseline,up_512_256_16,static_quantize_pack_int4_noahat_kernel,48.0,8.0
-conv,int4_baseline,up_512_256_16,cutlass_conv,0.25,32.0
+conv,int4_baseline,up_512_256_16,cutlass_conv,16.25,16.0
 conv,int8_modiff,up_512_256_16,static_quantize_and_update_ahat_kernel_int8_half_cache,80.0,48.0
 conv,int8_modiff,up_512_256_16,scale_accumulate_half_cache_kernel,80.0,16.0
 conv,int8_modiff,up_512_256_16,cutlass_conv,0.5,32.0

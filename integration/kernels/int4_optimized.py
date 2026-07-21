@@ -20,6 +20,12 @@ except ImportError:
 _INT4_CONV_AUTOTUNE = (os.environ.get("MODIFF_DISABLE_CONV_AUTOTUNE") != "1"
                        and HAS_CUTLASS and hasattr(modiff_cutlass, "conv2d_int4_fprop_tuned"))
 
+# Deep-fuse int4 dequant store (default ON): fold the per-channel weight_scale into
+# the CUTLASS int4 epilogue (fp16 out, no fp32 temp) + a from_half bias/residual
+# store, instead of the fp32 conv_out + scale_bias[_residual]_store<float> path.
+# Halves the dequant-store bandwidth. Disable with MODIFF_DISABLE_INT4_DEEPFUSE=1.
+_INT4_DEEPFUSE_STORE = os.environ.get("MODIFF_DISABLE_INT4_DEEPFUSE") != "1"
+
 def pack_int4(tensor: torch.Tensor) -> torch.Tensor:
     """
     Pack int8 tensor to packed int4 (2 elements per byte).
@@ -606,6 +612,26 @@ class OptimizedInt4Conv2d(nn.Module):
                 self._standard_output_buf = torch.empty(
                     output_shape, device=x_packed.device, dtype=torch.float16
                 ).contiguous(memory_format=torch.channels_last)
+            # Deep-fuse: fold the per-channel weight_scale into the CUTLASS int4
+            # epilogue (writes fully-scaled fp16, NO fp32 temp), then a from_half
+            # bias/residual store -- half the store bandwidth of the fp32-input
+            # scale_bias[_residual]_store<float> fallback below (the int4 analogue of
+            # int8's conv2d_int8_fprop_deepfuse_bias_residual_fp16). Gated on a tile
+            # config known to implement this shape (cid>=0, verified during timing);
+            # shapes with no implementable deep-fuse tile fall through to fp32.
+            if _INT4_DEEPFUSE_STORE and hasattr(modiff_cutlass, "conv2d_int4_fprop_deepfuse_bias_residual_fp16"):
+                cid = self._ensure_tuned_config(x_packed)
+                if cid is not None and cid >= 0:
+                    bias_arg = (self.bias.view(-1).contiguous()
+                                if self.bias is not None else self._empty_bias)
+                    res_arg = (residual if residual is not None
+                               else torch.empty(0, device=x_packed.device, dtype=torch.float16))
+                    return modiff_cutlass.conv2d_int4_fprop_deepfuse_bias_residual_fp16(
+                        x_packed, self.weight_packed, self._cached_alpha_tensor,
+                        self.weight_scale_channel_half.view(-1), bias_arg, res_arg,
+                        self._standard_output_buf, cid,
+                        self.stride[0], self.stride[1], self.padding[0], self.padding[1],
+                        self.dilation[0], self.dilation[1])
             if residual is not None and hasattr(modiff_cutlass, "conv2d_int4_fprop_no_ohat_prealloc_bias_residual"):
                 bias_arg = (self.bias.view(-1).contiguous()
                             if self.bias is not None else self._empty_bias)

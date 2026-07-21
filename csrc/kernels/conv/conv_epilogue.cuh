@@ -176,6 +176,26 @@ __global__ void bias_relu_requant_store_int8_from_half_kernel(
 }
 
 // FP16-output store from an already-dequantized fp16 conv output (deep-fuse GEMM,
+// no fp32 temp): adds per-channel bias only (no residual). `bias` may be nullptr
+// (pure fp16 copy). The no-residual sibling of bias_residual_store_half_from_half_kernel,
+// used by the int4 deep-fuse dequant path (conv2d_int4_fprop_deepfuse_bias_residual_fp16).
+template <typename BiasT>
+__global__ void bias_store_half_from_half_kernel(
+    const __half* __restrict__ deq,
+    const BiasT* __restrict__ bias,
+    __half* __restrict__ output,
+    int num_elements,
+    int num_channels
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    for (int i = idx; i < num_elements; i += blockDim.x * gridDim.x) {
+        int ch = i % num_channels;
+        float value = __half2float(deq[i]) + (bias != nullptr ? bias_value(bias, ch) : 0.0f);
+        output[i] = __float2half_rn(value);
+    }
+}
+
+// FP16-output store from an already-dequantized fp16 conv output (deep-fuse GEMM,
 // no fp32 temp): adds per-channel bias + a per-element fp16 residual (the ResBlock
 // skip). The FP16-out counterpart of bias_relu_requant_store_int8_from_half_kernel,
 // used to deep-fuse + tune the ResNet conv3 residual path (was fp32-temp).

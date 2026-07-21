@@ -454,6 +454,71 @@ torch::Tensor conv2d_int4_dequant_fp16_tuned(
   return output;
 }
 
+// Deep-fuse int4 conv (weight_scale folded into the CUTLASS epilogue -> fp16, no
+// fp32 temp) + per-channel bias + optional per-element skip residual, in a single
+// fp16 `output`. The int4 analogue of conv2d_int8_fprop_deepfuse_bias_residual_fp16:
+// replaces conv2d_int4_fprop_no_ohat_prealloc_bias[_residual]'s fp32 conv_out +
+// scale_bias[_residual]_store_half<float> (reads fp32) with a deep-fuse conv into an
+// fp16 scratch + a cheap from_half store (reads fp16, half the store bandwidth).
+//   Inputs:   input packed-int4 [N,H,W,C/2]; weight_packed [K,R,S,C/2]; inv_scale fp32 (1-elem alpha);
+//             weight_scales_half fp16 [K]; bias fp32/fp16 [K] or empty; residual fp16
+//             [N,K,H_out,W_out] cl or empty; output fp16 (same shape) PREallocated; config_id int64
+//             (<0 -> default tile); stride/pad/dilation.
+//   Outputs:  output (fp16, in place) = fp16(int32_accum * alpha * weight_scale[ch]) + bias[ch] + residual.
+//   Fuses:    deep-fuse dequant (per-channel weight scale in epilogue, NO fp32 temp) + bias + skip residual.
+//   Constraints: output & weight_scales_half (& residual if given) fp16; K % 8 == 0; bias numel()==K or 0.
+torch::Tensor conv2d_int4_fprop_deepfuse_bias_residual_fp16(
+    torch::Tensor input, torch::Tensor weight_packed, torch::Tensor inv_scale,
+    torch::Tensor weight_scales_half, torch::Tensor bias, torch::Tensor residual,
+    torch::Tensor output, int64_t config_id,
+    int stride_h, int stride_w, int padding_h, int padding_w, int dilation_h, int dilation_w) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    CHECK_CUDA(output); CHECK_CONTIGUOUS(output);
+    TORCH_CHECK(output.scalar_type() == torch::kFloat16, "output must be float16");
+
+    // Deep-fuse conv writes fully weight-scaled fp16 into scratch (no fp32 temp).
+    auto scratch = torch::empty_like(output);
+    conv2d_int4_dequant_fp16_tuned(
+        input, weight_packed, inv_scale, weight_scales_half, scratch, config_id,
+        stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w);
+
+    const bool has_bias = bias.numel() > 0;
+    const bool has_res = residual.numel() > 0;
+    if (has_bias) TORCH_CHECK(bias.numel() == weight_scales_half.numel(), "bias size mismatch");
+    if (has_res) TORCH_CHECK(residual.scalar_type() == torch::kFloat16 && residual.numel() == output.numel(),
+                             "residual must be fp16 and match output shape");
+    int num_elements = scratch.numel();
+    int num_channels = weight_scales_half.numel();
+    int block_size = 256, grid_size = (num_elements + block_size - 1) / block_size;
+    const __half* deq = reinterpret_cast<const __half*>(scratch.data_ptr<at::Half>());
+    __half* out_ptr = reinterpret_cast<__half*>(output.data_ptr<at::Half>());
+    const bool bias_half = has_bias && bias.scalar_type() == torch::kFloat16;
+
+    if (has_res) {
+        const __half* res = reinterpret_cast<const __half*>(residual.data_ptr<at::Half>());
+        if (bias_half)
+            bias_residual_store_half_from_half_kernel<__half><<<grid_size, block_size, 0, stream>>>(
+                deq, reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()), res, out_ptr, num_elements, num_channels);
+        else if (has_bias)
+            bias_residual_store_half_from_half_kernel<float><<<grid_size, block_size, 0, stream>>>(
+                deq, bias.data_ptr<float>(), res, out_ptr, num_elements, num_channels);
+        else
+            bias_residual_store_half_from_half_kernel<__half><<<grid_size, block_size, 0, stream>>>(
+                deq, (const __half*)nullptr, res, out_ptr, num_elements, num_channels);
+    } else {
+        if (bias_half)
+            bias_store_half_from_half_kernel<__half><<<grid_size, block_size, 0, stream>>>(
+                deq, reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()), out_ptr, num_elements, num_channels);
+        else if (has_bias)
+            bias_store_half_from_half_kernel<float><<<grid_size, block_size, 0, stream>>>(
+                deq, bias.data_ptr<float>(), out_ptr, num_elements, num_channels);
+        else
+            bias_store_half_from_half_kernel<__half><<<grid_size, block_size, 0, stream>>>(
+                deq, (const __half*)nullptr, out_ptr, num_elements, num_channels);
+    }
+    return output;
+}
+
 // conv2d_int4_fprop, then output = raw_output * weight_scales[channel], written
 // into a caller-provided buffer (see conv2d_int8_fprop_no_ohat_prealloc for the
 // same "prealloc only covers the final buffer" caveat).

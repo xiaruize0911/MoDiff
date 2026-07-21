@@ -1,0 +1,5 @@
+metric,fusion_off,fusion_on,delta
+int4_baseline_ms_step,131.87,129.74,-2.13
+int4_baseline_min_ms,131.12,129.19,-1.93
+int4_baseline_conv_elementwise_ms,20.0,18.2,-1.8
+deepfuse_vs_fp32_output_relL2,,4.34e-04,

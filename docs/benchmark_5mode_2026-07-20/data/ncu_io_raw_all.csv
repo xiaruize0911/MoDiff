@@ -1,0 +1,54 @@
+==PROF== Connected to process 16113 (/usr/bin/python3.11)
+==ERROR== ERR_NVGPUCTRPERM - The user does not have permission to access NVIDIA GPU Performance Counters on the target device 0. For instructions on enabling permissions and to get more information see https://developer.nvidia.com/ERR_NVGPUCTRPERM
+NCU_DRIVER_DONE family=all launched 49 tagged configs:
+  [0] conv|fp16|res_128_64
+  [1] conv|int8|res_128_64
+  [2] conv|int4|res_128_64
+  [3] conv|fp16|res_256_32
+  [4] conv|int8|res_256_32
+  [5] conv|int4|res_256_32
+  [6] conv|fp16|down_256_512_16
+  [7] conv|int8|down_256_512_16
+  [8] conv|int4|down_256_512_16
+  [9] conv|fp16|mid_512_8
+  [10] conv|int8|mid_512_8
+  [11] conv|int4|mid_512_8
+  [12] conv|fp16|up_512_256_16
+  [13] conv|int8|up_512_256_16
+  [14] conv|int4|up_512_256_16
+  [15] linear|fp16|qkv_192-576_M131072
+  [16] linear|int8|qkv_192-576_M131072
+  [17] linear|int4|qkv_192-576_M131072
+  [18] linear|fp16|proj_192-192_M131072
+  [19] linear|int8|proj_192-192_M131072
+  [20] linear|int4|proj_192-192_M131072
+  [21] linear|fp16|qkv_384-1152_M32768
+  [22] linear|int8|qkv_384-1152_M32768
+  [23] linear|int4|qkv_384-1152_M32768
+  [24] linear|fp16|proj_384-384_M32768
+  [25] linear|int8|proj_384-384_M32768
+  [26] linear|int4|proj_384-384_M32768
+  [27] linear|fp16|qkv_384-1152_M8192
+  [28] linear|int8|qkv_384-1152_M8192
+  [29] linear|int4|qkv_384-1152_M8192
+  [30] linear|fp16|proj_384-384_M8192
+  [31] linear|int8|proj_384-384_M8192
+  [32] linear|int4|proj_384-384_M8192
+  [33] linear|fp16|qkv_768-2304_M2048
+  [34] linear|int8|qkv_768-2304_M2048
+  [35] linear|int4|qkv_768-2304_M2048
+  [36] linear|fp16|proj_768-768_M2048
+  [37] linear|int8|proj_768-768_M2048
+  [38] linear|int4|proj_768-768_M2048
+  [39] attn|fp16|hd24_T1024
+  [40] attn|int8|hd24_T1024
+  [41] attn|int4|hd24_T1024
+  [42] attn|fp16|hd48_T256
+  [43] attn|int8|hd48_T256
+  [44] attn|int4|hd48_T256
+  [45] attn|fp16|hd48_T64
+  [46] attn|int8|hd48_T64
+  [47] attn|int4|hd48_T64
+  [48] attn|fp16|hd96_T16
+==PROF== Disconnected from process 16113
+==WARNING== No kernels were profiled.
