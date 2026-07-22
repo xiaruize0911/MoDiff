@@ -20,7 +20,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from integration.fused_ops.token_major_attention import (
-    TokenMajorAttentionBlock, _group_norm_silu)
+    TokenMajorAttentionBlock, _group_norm_silu,
+    _HAS_FUSED_ATTN_OUT, _HAS_ATTN_OUT_I4, _QuantLinearWxAx)
 
 try:
     import modiff_cutlass as _mc
@@ -52,6 +53,19 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         # _calib_steps forwards then freezes to a static single-pass quantize.
         self.static = bool(static)
         self._calib_steps = int(os.environ.get("MODIFF_ATTN_CALIB_STEPS", "8"))
+        # Flash-vs-fp16 gate. The int flash kernel only pays off on large-enough blocks. Measured
+        # on the production packed path (A40, b128, quantize_attn_qkv_packed -> flash_attn_int8_vt
+        # vs fp16 MATH SDPA): hd24/T1024 2.34x, hd24/T256 1.37x, hd48/T512 1.13x, hd48/T256 1.01x
+        # (break-even), hd48/T128 0.86x, hd48/T64 0.64x. So the old head_dim<=48 & T%64==0 gate
+        # dragged the small-T blocks (esp. T=64) into a net LOSS. The crossover is 2D in
+        # (head_dim, T) and GPU-dependent -- fp16 SDPA's own efficiency also rises with head_dim,
+        # so no static T threshold separates winners from losers (hd24/T256 wins 1.37x while
+        # hd48/T256 is only break-even). "auto" (default) therefore MEASURES flash vs fp16 SDPA
+        # once per block, right after the quantize scales freeze, and caches the winner.
+        # MODIFF_FLASH_GATE=on forces flash on every eligible block (old behaviour); =off keeps
+        # eligible blocks on fp16 SDPA.
+        self._flash_gate = os.environ.get("MODIFF_FLASH_GATE", "auto")
+        self._flash_choice = None    # None = undecided; True/False = frozen decision
 
     def _flash_quant_attn(self, q, k, v):
         """FUSED int8/int4 flash attention. q,k,v: [b,nh,T,hd] fp16 -> [b,nh,T,hd] fp16.
@@ -155,6 +169,57 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         sq4 = sq4.view(b, nh, T); sk4 = sk4.view(b, nh, T); sv = sv[..., :hd].contiguous().view(b, nh, hd)
         return _mc.flash_attn_int4_vt(q4, k4, vt, sq4, sk4, sv, hdp4, self.scale)
 
+    def _scores_scales_frozen(self):
+        """True once the per-block Q/K/V quantize scales have self-calibrated and frozen to
+        the static single-pass path (so a flash timing reflects steady state, not calibration)."""
+        return getattr(self, "_fq_frozen2" if self.bits == 8 else "_fq4_frozen", False)
+
+    def _score_path(self, qkv, use_flash):
+        """Attention score path -> a=[b,nh,T,hd]. Flash (fused int8/int4) when use_flash, else
+        fp16 MATH SDPA. Uses the packed quantize (reads interleaved qkv, no transpose copy) when
+        available; otherwise unbinds to strided q/k/v views."""
+        if use_flash and _HAS_PACKED:
+            return self._flash_quant_attn_packed(qkv)                    # [b,nh,T,hd]
+        q, k, v = qkv.unbind(3)                                          # [b,T,nh,hd]
+        q = q.transpose(1, 2); k = k.transpose(1, 2); v = v.transpose(1, 2)   # [b,nh,T,hd]
+        if use_flash:
+            return self._flash_quant_attn(q, k, v)
+        from integration.fused_ops.token_major_attention import _SDPA_CTX
+        with _SDPA_CTX():
+            return F.scaled_dot_product_attention(q, k, v, scale=self.scale)
+
+    def _autotune_flash(self, qkv):
+        """One-shot: time the fused flash score path vs fp16 SDPA on this block's actual qkv and
+        return True iff flash is faster. Called once, after the quantize scales freeze, so the
+        flash timing uses the static single-pass path. The choice is then cached (see _resolve_flash).
+        Measuring (vs a hardcoded T threshold) is necessary because the crossover is 2D in
+        (head_dim, T) and GPU-dependent."""
+        def _t(use_flash, warm=3, iters=10):
+            for _ in range(warm): self._score_path(qkv, use_flash)
+            torch.cuda.synchronize()
+            s = torch.cuda.Event(True); e = torch.cuda.Event(True); s.record()
+            for _ in range(iters): self._score_path(qkv, use_flash)
+            e.record(); torch.cuda.synchronize()
+            return s.elapsed_time(e)
+        return _t(True) < _t(False)
+
+    def _resolve_flash(self, qkv, T):
+        """Decide whether this block runs the fused flash score path. Base eligibility is the
+        flash kernel's constraint (head_dim<=48, T%64==0). Then per MODIFF_FLASH_GATE:
+        on -> always flash when eligible (old behaviour); off -> never; auto (default) -> flash
+        during scale calibration to capture the scales, then autotune-and-freeze once frozen."""
+        eligible = (_HAS_FLASH and self.head_dim <= 48 and (T % 64) == 0)
+        if not eligible or self._flash_gate == "off":
+            return False
+        if self._flash_gate == "on":
+            return True
+        if self._flash_choice is not None:
+            return self._flash_choice
+        if not self._scores_scales_frozen():
+            return True                     # still calibrating -> run flash to freeze the scales
+        self._flash_choice = self._autotune_flash(qkv)
+        return self._flash_choice
+
     def forward(self, x):
         b, c, H, W = x.shape
         T = H * W
@@ -173,26 +238,44 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
             xn = _group_norm_silu(x, self.norm.num_groups, w, bnorm, self.norm.eps, apply_silu=False)
             xn_tok = xn.permute(0, 2, 3, 1).reshape(b, T, c)
             qkv = self.qkv(xn_tok).view(b, T, nh, 3, hd)
-        # ---- FUSED flash attention (QKᵀ + online softmax + AV in one kernel, scores in SRAM). The
-        # flash kernel needs head_dim<=48 and T%64==0; ineligible blocks (the hd=96 / tiny-T blocks)
-        # fall back to fp16 SDPA math attention (quant loses there and they are negligibly cheap). ----
-        _use_flash = (_HAS_FLASH and self.head_dim <= 48 and (T % 64) == 0)
-        if _use_flash and _HAS_PACKED:
-            # packed: read interleaved qkv directly (skips the fp16 transpose+contiguous copy)
-            a = self._flash_quant_attn_packed(qkv)                       # [b,nh,T,hd], fused
-        else:
-            q, k, v = qkv.unbind(3)                                       # [b,T,nh,hd]
-            q = q.transpose(1, 2); k = k.transpose(1, 2); v = v.transpose(1, 2)   # [b,nh,T,hd]
-            if _use_flash:
-                a = self._flash_quant_attn(q, k, v)                      # [b,nh,T,hd], fused
-            else:
-                from integration.fused_ops.token_major_attention import _SDPA_CTX
-                with _SDPA_CTX():
-                    a = F.scaled_dot_product_attention(q, k, v, scale=self.scale)  # [b,nh,T,hd]
-        a = a.transpose(1, 2).reshape(b, T, c)
-        out_tok = (self.proj(a, residual=x_in_tok) if getattr(self.proj, "_use_bias_res", False)
-                   else x_in_tok + self.proj(a))                     # fused residual in proj epilogue
+        # ---- Score path (QKᵀ + softmax + AV): fused int8/int4 flash (scores in SRAM) when the
+        # gate says it's a win for this block; else fp16 MATH SDPA. The flash kernel needs
+        # head_dim<=48 and T%64==0; among eligible blocks the small-T ones lose to fp16, so the
+        # gate autotunes per block (see _resolve_flash). ----
+        a = self._score_path(qkv, self._resolve_flash(qkv, T))           # [b,nh,T,hd] head-major
+        out_tok = self._proj_with_residual(a, x_in_tok, b, T, c)         # proj (+bias +residual), fused
         return out_tok.reshape(b, H, W, c).permute(0, 3, 1, 2)
+
+    def _proj_with_residual(self, a, x_in_tok, b, T, c):
+        """proj on the head-major attention output a=[b,nh,T,hd], adding the ResBlock residual
+        x_in_tok=[b,T,c]. Fully-fused path (calibrated static int8/int4 proj): fold the head-major
+        -> token-major transpose AND proj's activation quantize into quantize_attn_out_int{8,4}
+        (so the fp16 attention output is never materialized and proj skips its own quantize pass),
+        then run the W8A8/W4A4 GEMM with bias + the skip residual folded into its store epilogue
+        (gemm_wXaX_awq_bias_res). Numerically identical to the transpose+reshape -> proj(., residual)
+        fallback below, which is used during calibration and for ineligible proj (uncalibrated /
+        modiff / int8-output / int4 needing K-pad, e.g. C=192). Kill-switch MODIFF_FUSE_PROJ_QUANT=0
+        (inherited from TokenMajorAttentionBlock)."""
+        proj = self.proj
+        if (self._fuse_proj_quant and _QuantLinearWxAx is not None and isinstance(proj, _QuantLinearWxAx)
+                and getattr(proj, "_use_bias_res", False) and proj.a_scale is not None
+                and not getattr(proj, "_calib", False) and proj.bits in (8, 4)
+                and proj._awqt_K == proj.in_features                       # no K-pad (excludes int4 C=192)
+                and ((proj.bits == 8 and _HAS_FUSED_ATTN_OUT) or (proj.bits == 4 and _HAS_ATTN_OUT_I4))):
+            res = x_in_tok.reshape(b * T, c).contiguous()
+            bias = proj.bias if proj.bias is not None else a.new_empty(0)
+            if proj.bits == 8:
+                xq = _mc.quantize_attn_out_int8(a, proj.a_scale)           # int8 [b*T,c]: transpose+quantize
+                out = _mc.gemm_w8a8_awq_bias_res(xq, proj.qweight, proj.w_scale, proj.a_scale,
+                                                 proj.out_features, bias, res)
+            else:
+                xq = _mc.quantize_attn_out_int4_pack(a, proj.a_scale)      # packed int4 [b*T,c/2]
+                out = _mc.gemm_w4a4_awq_bias_res(xq, proj.qweight, proj.w_scale, proj.a_scale,
+                                                 proj._awqt_K, proj.out_features, bias, res)
+            return out.reshape(b, T, c)
+        # fallback: materialize the transpose, then proj (own quantize; bias+residual epilogue if available)
+        a = a.transpose(1, 2).reshape(b, T, c)
+        return proj(a, residual=x_in_tok) if getattr(proj, "_use_bias_res", False) else x_in_tok + proj(a)
 
 
 def convert_attention_to_quantized_std(module, *, bits=8, static=False, verbose=False):
