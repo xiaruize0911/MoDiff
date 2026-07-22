@@ -117,6 +117,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "Fused int4 flash attention (int4 QKᵀ, int8 PV): q4,k4 packed [N,H,T,hdp4/2], v int8 [N,H,T,hdp_v] -> fp16");
     m.def("flash_attn_int4_vt", &flash_attn_int4_vt,
           "Fused int4 flash attention, V PRE-TRANSPOSED int8 [N,H,hdp_v,T] (skips internal transpose)");
+    m.def("flash_attn_int8_vt_qout", &flash_attn_int8_vt_qout,
+          "int8 flash attention emitting proj-quantized int8 token-major [b*T,C] (fuses quantize_attn_out_int8)");
+    m.def("flash_attn_int4_vt_qout", &flash_attn_int4_vt_qout,
+          "int4 flash attention emitting proj-quantized packed-int4 token-major [b*T,k_pad/2] (fuses quantize_attn_out_int4_pack)");
     m.def("quantize_attn_qkv_i4qk_i8v", &quantize_attn_qkv_i4qk_i8v,
           "One-pass quantize for int4 flash: Q/K packed int4 + V int8-transposed -> {q4,k4,vt,sq,sk,sv}");
     m.def("quantize_attn_qkv_i4qk_i8v_static", &quantize_attn_qkv_i4qk_i8v_static,

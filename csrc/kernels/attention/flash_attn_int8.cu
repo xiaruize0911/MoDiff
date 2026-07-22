@@ -217,7 +217,10 @@ __global__ void flash_attn_int8_tiled_kernel(
 __global__ void flash_attn_int8_mma_kernel(
     const int8_t* __restrict__ q, const int8_t* __restrict__ k, const int8_t* __restrict__ v,
     const float* __restrict__ sq, const float* __restrict__ sk, const float* __restrict__ sv,
-    __half* __restrict__ out, int N, int H, int T, int hd, int hd_pad, float softmax_scale) {
+    __half* __restrict__ out, int N, int H, int T, int hd, int hd_pad, float softmax_scale,
+    int8_t* __restrict__ out_q, float proj_inv_scale, int qout_stride) {
+  // out_q != nullptr => fused proj-quantize store: emit int8 token-major [b*T, qout_stride]
+  // (qout_stride = C = H*hd), quantized by proj_inv_scale, instead of the fp16 head-major `out`.
   const int nh = blockIdx.x;
   const int w = threadIdx.x >> 5;              // warp id in CTA
   const int lane = threadIdx.x & 31, gid = lane >> 2, tig = lane & 3;
@@ -372,13 +375,30 @@ __global__ void flash_attn_int8_mma_kernel(
 
   float invl_g  = (l_run0 > 0.f) ? 1.f / l_run0 : 0.f;
   float invl_g8 = (l_run1 > 0.f) ? 1.f / l_run1 : 0.f;
+  const int h = nh % H, n = nh / H;           // (n,h) for the token-major fused-quant store
   for (int nt2 = 0; nt2 < n_nt2; ++nt2) {
     int d0 = nt2 * 8 + tig * 2, d1 = d0 + 1;
     int gi0 = q0 + gid, gi8 = q0 + gid + 8;
-    out[(size_t)(nh * T + gi0) * hd + d0] = __float2half(Oreg[nt2 * 4 + 0] * invl_g);
-    out[(size_t)(nh * T + gi0) * hd + d1] = __float2half(Oreg[nt2 * 4 + 1] * invl_g);
-    out[(size_t)(nh * T + gi8) * hd + d0] = __float2half(Oreg[nt2 * 4 + 2] * invl_g8);
-    out[(size_t)(nh * T + gi8) * hd + d1] = __float2half(Oreg[nt2 * 4 + 3] * invl_g8);
+    float o00 = Oreg[nt2*4+0]*invl_g,  o01 = Oreg[nt2*4+1]*invl_g;
+    float o10 = Oreg[nt2*4+2]*invl_g8, o11 = Oreg[nt2*4+3]*invl_g8;
+    if (out_q == nullptr) {                    // default: fp16 head-major [N,H,T,hd]
+      out[(size_t)(nh * T + gi0) * hd + d0] = __float2half(o00);
+      out[(size_t)(nh * T + gi0) * hd + d1] = __float2half(o01);
+      out[(size_t)(nh * T + gi8) * hd + d0] = __float2half(o10);
+      out[(size_t)(nh * T + gi8) * hd + d1] = __float2half(o11);
+    } else {                                   // fused: int8 token-major, quantized by proj scale
+      int c0 = h * hd + d0, c1 = h * hd + d1;  // round through fp16 first -> bit-matches
+      int q00 = __float2int_rn(__half2float(__float2half(o00)) * proj_inv_scale);  // quantize_attn_out_int8
+      int q01 = __float2int_rn(__half2float(__float2half(o01)) * proj_inv_scale);
+      int q10 = __float2int_rn(__half2float(__float2half(o10)) * proj_inv_scale);
+      int q11 = __float2int_rn(__half2float(__float2half(o11)) * proj_inv_scale);
+      q00 = q00>127?127:(q00<-127?-127:q00); q01 = q01>127?127:(q01<-127?-127:q01);
+      q10 = q10>127?127:(q10<-127?-127:q10); q11 = q11>127?127:(q11<-127?-127:q11);
+      out_q[(size_t)(n * T + gi0) * qout_stride + c0] = (int8_t)q00;
+      out_q[(size_t)(n * T + gi0) * qout_stride + c1] = (int8_t)q01;
+      out_q[(size_t)(n * T + gi8) * qout_stride + c0] = (int8_t)q10;
+      out_q[(size_t)(n * T + gi8) * qout_stride + c1] = (int8_t)q11;
+    }
   }
 }
 
@@ -392,7 +412,11 @@ __global__ void flash_attn_int8_mma_kernel(
 __global__ void flash_attn_int4_mma_kernel(
     const int8_t* __restrict__ q4, const int8_t* __restrict__ k4, const int8_t* __restrict__ v,
     const float* __restrict__ sq, const float* __restrict__ sk, const float* __restrict__ sv,
-    __half* __restrict__ out, int N, int H, int T, int hd, int hdp4, int hdp_v, float softmax_scale) {
+    __half* __restrict__ out, int N, int H, int T, int hd, int hdp4, int hdp_v, float softmax_scale,
+    int8_t* __restrict__ out_q, float proj_inv_scale, int qout_bstride) {
+  // out_q != nullptr => fused proj-quantize store: emit packed int4 token-major [b*T, qout_bstride]
+  // (qout_bstride = K_pad/2 bytes/row), quantized by proj_inv_scale. K-pad tail bytes are pre-zeroed
+  // by the caller (torch::zeros), so this only writes the real channel-pair bytes.
   const int nh = blockIdx.x;
   const int w = threadIdx.x >> 5;
   const int lane = threadIdx.x & 31, gid = lane >> 2, tig = lane & 3;
@@ -533,13 +557,27 @@ __global__ void flash_attn_int4_mma_kernel(
 
   float invl_g  = (l_run0 > 0.f) ? 1.f / l_run0 : 0.f;
   float invl_g8 = (l_run1 > 0.f) ? 1.f / l_run1 : 0.f;
+  const int h = nh % H, n = nh / H;           // (n,h) for the token-major fused-quant store
   for (int nt2 = 0; nt2 < n_nt2; ++nt2) {
     int d0 = nt2 * 8 + tig * 2, d1 = d0 + 1;
     int gi0 = q0 + gid, gi8 = q0 + gid + 8;
-    out[(size_t)(nh * T + gi0) * hd + d0] = __float2half(Oreg[nt2 * 4 + 0] * invl_g);
-    out[(size_t)(nh * T + gi0) * hd + d1] = __float2half(Oreg[nt2 * 4 + 1] * invl_g);
-    out[(size_t)(nh * T + gi8) * hd + d0] = __float2half(Oreg[nt2 * 4 + 2] * invl_g8);
-    out[(size_t)(nh * T + gi8) * hd + d1] = __float2half(Oreg[nt2 * 4 + 3] * invl_g8);
+    float o00 = Oreg[nt2*4+0]*invl_g,  o01 = Oreg[nt2*4+1]*invl_g;
+    float o10 = Oreg[nt2*4+2]*invl_g8, o11 = Oreg[nt2*4+3]*invl_g8;
+    if (out_q == nullptr) {                    // default: fp16 head-major [N,H,T,hd]
+      out[(size_t)(nh * T + gi0) * hd + d0] = __float2half(o00);
+      out[(size_t)(nh * T + gi0) * hd + d1] = __float2half(o01);
+      out[(size_t)(nh * T + gi8) * hd + d0] = __float2half(o10);
+      out[(size_t)(nh * T + gi8) * hd + d1] = __float2half(o11);
+    } else {                                   // fused: packed int4 token-major, quantized by proj scale
+      int c0 = h * hd + d0;                    // even (hd, d0 even) -> packed byte index = c0/2
+      // round through fp16 first -> bit-matches quantize_attn_out_int4_pack (low nibble=even ch)
+      int q00 = __float2int_rn(__half2float(__float2half(o00)) * proj_inv_scale); q00 = q00>7?7:(q00<-7?-7:q00);
+      int q01 = __float2int_rn(__half2float(__float2half(o01)) * proj_inv_scale); q01 = q01>7?7:(q01<-7?-7:q01);
+      int q10 = __float2int_rn(__half2float(__float2half(o10)) * proj_inv_scale); q10 = q10>7?7:(q10<-7?-7:q10);
+      int q11 = __float2int_rn(__half2float(__float2half(o11)) * proj_inv_scale); q11 = q11>7?7:(q11<-7?-7:q11);
+      out_q[(size_t)(n * T + gi0) * qout_bstride + c0/2] = (int8_t)((q00 & 0x0F) | ((q01 & 0x0F) << 4));
+      out_q[(size_t)(n * T + gi8) * qout_bstride + c0/2] = (int8_t)((q10 & 0x0F) | ((q11 & 0x0F) << 4));
+    }
   }
 }
 
@@ -640,8 +678,36 @@ torch::Tensor flash_attn_int8_vt(torch::Tensor q, torch::Tensor k, torch::Tensor
       q.data_ptr<int8_t>(), k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
       sq.data_ptr<float>(), sk.data_ptr<float>(), sv.data_ptr<float>(),
       reinterpret_cast<__half*>(out.data_ptr<at::Half>()),
-      N, H, T, hd, hd_pad, (float)softmax_scale);
+      N, H, T, hd, hd_pad, (float)softmax_scale, (int8_t*)nullptr, 0.f, 0);
   return out;
+}
+
+// Fused proj-quantize variant: same mma flash attention, but the final store emits the attention
+// output as INT8 token-major [b*T, C] (C = H*hd) quantized by the calibrated proj scale, instead of
+// the fp16 head-major tensor + a separate quantize_attn_out_int8 pass. Bit-identical to
+// quantize_attn_out_int8(flash_attn_int8_vt(...), proj_a_scale) (rounds through fp16 first).
+torch::Tensor flash_attn_int8_vt_qout(torch::Tensor q, torch::Tensor k, torch::Tensor vt,
+                                      torch::Tensor sq, torch::Tensor sk, torch::Tensor sv,
+                                      double softmax_scale, double proj_a_scale) {
+  TORCH_CHECK(q.is_cuda() && k.is_cuda() && vt.is_cuda(), "flash_attn_int8_vt_qout: q/k/vt must be CUDA");
+  TORCH_CHECK(q.dim() == 4 && vt.dim() == 4, "q [N,H,T,hd_pad], vt [N,H,hd_pad,T]");
+  TORCH_CHECK(q.is_contiguous() && k.is_contiguous() && vt.is_contiguous(), "q/k/vt must be contiguous");
+  const int N = q.size(0), H = q.size(1), T = q.size(2), hd_pad = q.size(3);
+  const int hd = sv.size(-1);
+  TORCH_CHECK(hd_pad <= FA_MMA_MAXHD && (T % (FA_MMA_WARPS * FA_MMA_BR)) == 0 && (hd % 8) == 0
+              && (FA_MMA_BC * hd_pad) % 16 == 0, "flash_attn_int8_vt_qout: mma-eligible shapes only");
+  TORCH_CHECK(vt.size(2) == hd_pad && vt.size(3) == T, "vt must be [N,H,hd_pad,T]");
+  const int C = H * hd;   // int8 proj K == C (C % 64 == 0), no K-pad needed
+  auto out_q = torch::empty({(long)N * T, C}, torch::TensorOptions().dtype(torch::kChar).device(q.device()));
+  const float proj_inv_scale = 1.f / (float)proj_a_scale;
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  dim3 grid(N * H, T / (FA_MMA_WARPS * FA_MMA_BR));
+  flash_attn_int8_mma_kernel<<<grid, FA_MMA_WARPS * 32, 0, stream>>>(
+      q.data_ptr<int8_t>(), k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
+      sq.data_ptr<float>(), sk.data_ptr<float>(), sv.data_ptr<float>(),
+      (__half*)nullptr, N, H, T, hd, hd_pad, (float)softmax_scale,
+      out_q.data_ptr<int8_t>(), proj_inv_scale, C);
+  return out_q;   // int8 [b*T, C] token-major (ready for gemm_w8a8_awq_bias_res)
 }
 
 torch::Tensor flash_attn_int8(torch::Tensor q, torch::Tensor k, torch::Tensor v,
@@ -670,7 +736,7 @@ torch::Tensor flash_attn_int8(torch::Tensor q, torch::Tensor k, torch::Tensor v,
         q.data_ptr<int8_t>(), k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
         sq.data_ptr<float>(), sk.data_ptr<float>(), sv.data_ptr<float>(),
         reinterpret_cast<__half*>(out.data_ptr<at::Half>()),
-        N, H, T, hd, hd_pad, (float)softmax_scale);
+        N, H, T, hd, hd_pad, (float)softmax_scale, (int8_t*)nullptr, 0.f, 0);
   } else if (hd_pad <= FA_TILE_HD) {
     // dp4a tiled fallback (e.g. T not a multiple of 16)
     dim3 grid(N * H, (T + FA_BR - 1) / FA_BR);
@@ -732,8 +798,40 @@ torch::Tensor flash_attn_int4_vt(torch::Tensor q4, torch::Tensor k4, torch::Tens
       q4.data_ptr<int8_t>(), k4.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
       sq.data_ptr<float>(), sk.data_ptr<float>(), sv.data_ptr<float>(),
       reinterpret_cast<__half*>(out.data_ptr<at::Half>()),
-      N, H, T, hd, (int)hdp4, hdp_v, (float)softmax_scale);
+      N, H, T, hd, (int)hdp4, hdp_v, (float)softmax_scale, (int8_t*)nullptr, 0.f, 0);
   return out;
+}
+
+// Fused proj-quantize variant of flash_attn_int4_vt: the store emits the attention output as
+// packed int4 token-major [b*T, k_pad/2] (real channels 0..C-1 packed, C..k_pad-1 pre-zeroed by the
+// torch::zeros alloc) quantized by the calibrated proj scale — bit-identical to
+// quantize_attn_out_int4_pack(flash_attn_int4_vt(...), proj_a_scale, k_pad).
+torch::Tensor flash_attn_int4_vt_qout(torch::Tensor q4, torch::Tensor k4, torch::Tensor vt,
+                                      torch::Tensor sq, torch::Tensor sk, torch::Tensor sv,
+                                      int64_t hdp4, double softmax_scale, double proj_a_scale, int64_t k_pad) {
+  TORCH_CHECK(q4.is_cuda() && k4.is_cuda() && vt.is_cuda(), "flash_attn_int4_vt_qout: q4/k4/vt CUDA");
+  TORCH_CHECK(q4.dim() == 4 && vt.dim() == 4 && q4.is_contiguous() && k4.is_contiguous() && vt.is_contiguous(),
+              "q4/k4 [N,H,T,hdp4/2], vt [N,H,hdp_v,T] contiguous");
+  const int N = q4.size(0), H = q4.size(1), T = q4.size(2);
+  const int hd = sv.size(-1);
+  const int hdp_v = ((hd + 31) / 32) * 32;
+  TORCH_CHECK(hdp4 % 64 == 0 && hdp4 <= FA_MMA_MAXHD, "hdp4 mult of 64 and <= 64");
+  TORCH_CHECK((T % (FA_MMA_WARPS * FA_MMA_BR)) == 0 && (hd % 8) == 0, "int4 flash: T%64==0, hd%8==0");
+  TORCH_CHECK(vt.size(2) == hdp_v && vt.size(3) == T, "vt must be [N,H,hdp_v,T]");
+  const int C = H * hd;
+  int Kpad = (k_pad > 0) ? (int)k_pad : C;
+  TORCH_CHECK(Kpad % 2 == 0 && Kpad >= C, "flash_attn_int4_vt_qout: k_pad must be even and >= C=H*hd");
+  const int bstride = Kpad / 2;   // packed bytes per token row
+  auto out_q = torch::zeros({(long)N * T, bstride}, torch::TensorOptions().dtype(torch::kChar).device(q4.device()));
+  const float proj_inv_scale = 1.f / (float)proj_a_scale;
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  dim3 grid(N * H, T / (FA_MMA_WARPS * FA_MMA_BR));
+  flash_attn_int4_mma_kernel<<<grid, FA_MMA_WARPS * 32, 0, stream>>>(
+      q4.data_ptr<int8_t>(), k4.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
+      sq.data_ptr<float>(), sk.data_ptr<float>(), sv.data_ptr<float>(),
+      (__half*)nullptr, N, H, T, hd, (int)hdp4, hdp_v, (float)softmax_scale,
+      out_q.data_ptr<int8_t>(), proj_inv_scale, bstride);
+  return out_q;   // packed int4 [b*T, k_pad/2] token-major (ready for gemm_w4a4_awq_bias_res)
 }
 
 torch::Tensor flash_attn_int4(torch::Tensor q4, torch::Tensor k4, torch::Tensor v,
@@ -754,6 +852,6 @@ torch::Tensor flash_attn_int4(torch::Tensor q4, torch::Tensor k4, torch::Tensor 
       q4.data_ptr<int8_t>(), k4.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
       sq.data_ptr<float>(), sk.data_ptr<float>(), sv.data_ptr<float>(),
       reinterpret_cast<__half*>(out.data_ptr<at::Half>()),
-      N, H, T, hd, (int)hdp4, hdp_v, (float)softmax_scale);
+      N, H, T, hd, (int)hdp4, hdp_v, (float)softmax_scale, (int8_t*)nullptr, 0.f, 0);
   return out;
 }

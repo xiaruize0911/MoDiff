@@ -28,10 +28,13 @@ try:
     _HAS_FLASH = hasattr(_mc, "flash_attn_int8_vt") and hasattr(_mc, "flash_attn_int4_vt")
     # packed-qkv quantize (reads interleaved [b,T,nh,3,hd] -> no fp16 transpose copy)
     _HAS_PACKED = hasattr(_mc, "quantize_attn_qkv_packed") and hasattr(_mc, "quantize_attn_qkv_packed_static")
+    # flash variants that emit the proj-quantized token-major output directly (fuse quantize_attn_out)
+    _HAS_FLASH_QOUT = hasattr(_mc, "flash_attn_int8_vt_qout") and hasattr(_mc, "flash_attn_int4_vt_qout")
 except Exception:
     _mc = None
     _HAS_FLASH = False
     _HAS_PACKED = False
+    _HAS_FLASH_QOUT = False
 
 try:
     from ldm.modules.diffusionmodules.openaimodel import AttentionBlock, QKVAttentionLegacy
@@ -242,9 +245,62 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         # gate says it's a win for this block; else fp16 MATH SDPA. The flash kernel needs
         # head_dim<=48 and T%64==0; among eligible blocks the small-T ones lose to fp16, so the
         # gate autotunes per block (see _resolve_flash). ----
-        a = self._score_path(qkv, self._resolve_flash(qkv, T))           # [b,nh,T,hd] head-major
-        out_tok = self._proj_with_residual(a, x_in_tok, b, T, c)         # proj (+bias +residual), fused
+        use_flash = self._resolve_flash(qkv, T)
+        if use_flash and self._qout_eligible():
+            # Fused flash+proj: flash emits the proj-quantized token-major output directly (no fp16
+            # attn-output materialize, no separate quantize_attn_out pass) -> gemm_wXaX_awq_bias_res.
+            out_tok = self._flash_proj_qout(qkv, x_in_tok, b, T, c)
+        else:
+            a = self._score_path(qkv, use_flash)                         # [b,nh,T,hd] head-major
+            out_tok = self._proj_with_residual(a, x_in_tok, b, T, c)     # proj (+bias +residual), fused
         return out_tok.reshape(b, H, W, c).permute(0, 3, 1, 2)
+
+    def _qout_eligible(self):
+        """True when the frozen flash path can emit the proj-quantized output directly (item B):
+        packed quantize + the qout kernels available, and proj is a calibrated-static, _use_bias_res
+        _QuantLinearWxAx whose bits match the block, with the flash Q/K/V scales already frozen."""
+        if not (_HAS_PACKED and _HAS_FLASH_QOUT and self._fuse_proj_quant):
+            return False
+        proj = self.proj
+        if not (_QuantLinearWxAx is not None and isinstance(proj, _QuantLinearWxAx)
+                and getattr(proj, "_use_bias_res", False) and proj.a_scale is not None
+                and not getattr(proj, "_calib", False) and proj.bits == self.bits):
+            return False
+        return getattr(self, "_fq_frozen2" if self.bits == 8 else "_fq4_frozen", False)
+
+    def _flash_proj_qout(self, qkv, x_in_tok, b, T, c):
+        """Steady-state fused flash+proj (frozen scales): the flash kernel writes the attention
+        output already proj-quantized token-major (flash_attn_intX_vt_qout), fed straight to
+        gemm_wXaX_awq_bias_res (+bias +residual). Bit-identical to
+        _score_path(flash) -> _proj_with_residual, but skips the fp16 attn-output round-trip and the
+        quantize_attn_out kernel. Only valid under _qout_eligible()."""
+        nh, hd = self.num_heads, self.head_dim
+        proj = self.proj
+        qkv = qkv.contiguous()
+        res = x_in_tok.reshape(b * T, c).contiguous()
+        bias = proj.bias if proj.bias is not None else qkv.new_empty(0)
+        if self.bits == 8:
+            hd_pad = ((hd + 31) // 32) * 32
+            qi, ki, vt, sq, sk, sv = _mc.quantize_attn_qkv_packed_static(
+                qkv, nh, T, hd, hd_pad, hd_pad, 8, self._fq_sqc, self._fq_skc, self._fq_svv)
+            qi = qi.view(b, nh, T, hd_pad); ki = ki.view(b, nh, T, hd_pad); vt = vt.view(b, nh, hd_pad, T)
+            sq = sq.view(b, nh, T).contiguous(); sk = sk.view(b, nh, T).contiguous()
+            sv = sv[..., :hd].contiguous().view(b, nh, hd)
+            xq = _mc.flash_attn_int8_vt_qout(qi, ki, vt, sq, sk, sv, self.scale, proj.a_scale)  # int8 [b*T,c]
+            out = _mc.gemm_w8a8_awq_bias_res(xq, proj.qweight, proj.w_scale, proj.a_scale,
+                                             proj.out_features, bias, res)
+        else:
+            hdp4, hdp_v = 64, ((hd + 31) // 32) * 32
+            q4, k4, vt, sq4, sk4, sv = _mc.quantize_attn_qkv_packed_static(
+                qkv, nh, T, hd, hdp4, hdp_v, 4, self._fq4_sqc, self._fq4_skc, self._fq4_svv)
+            q4 = q4.view(b, nh, T, -1); k4 = k4.view(b, nh, T, -1); vt = vt.view(b, nh, hdp_v, T)
+            sq4 = sq4.view(b, nh, T).contiguous(); sk4 = sk4.view(b, nh, T).contiguous()
+            sv = sv[..., :hd].contiguous().view(b, nh, hd)
+            xq = _mc.flash_attn_int4_vt_qout(q4, k4, vt, sq4, sk4, sv, hdp4, self.scale,
+                                             proj.a_scale, proj._awqt_K)   # packed int4 [b*T,K_pad/2]
+            out = _mc.gemm_w4a4_awq_bias_res(xq, proj.qweight, proj.w_scale, proj.a_scale,
+                                             proj._awqt_K, proj.out_features, bias, res)
+        return out.reshape(b, T, c)
 
     def _proj_with_residual(self, a, x_in_tok, b, T, c):
         """proj on the head-major attention output a=[b,nh,T,hd], adding the ResBlock residual

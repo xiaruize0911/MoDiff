@@ -279,6 +279,15 @@ torch::Tensor flash_attn_int4(torch::Tensor q4, torch::Tensor k4, torch::Tensor 
                               torch::Tensor sq, torch::Tensor sk, torch::Tensor sv, int64_t hdp4, double softmax_scale);
 torch::Tensor flash_attn_int4_vt(torch::Tensor q4, torch::Tensor k4, torch::Tensor vt,
                                  torch::Tensor sq, torch::Tensor sk, torch::Tensor sv, int64_t hdp4, double softmax_scale);
+// Fused proj-quantize flash variants: emit the attention output already quantized token-major
+// (int8 [b*T,C] / packed-int4 [b*T,k_pad/2]) by the calibrated proj scale, so the separate
+// quantize_attn_out_int{8,4} pass + fp16 attn-output round-trip are eliminated.
+torch::Tensor flash_attn_int8_vt_qout(torch::Tensor q, torch::Tensor k, torch::Tensor vt,
+                                      torch::Tensor sq, torch::Tensor sk, torch::Tensor sv,
+                                      double softmax_scale, double proj_a_scale);
+torch::Tensor flash_attn_int4_vt_qout(torch::Tensor q4, torch::Tensor k4, torch::Tensor vt,
+                                      torch::Tensor sq, torch::Tensor sk, torch::Tensor sv,
+                                      int64_t hdp4, double softmax_scale, double proj_a_scale, int64_t k_pad);
 torch::Tensor mma_smoke(torch::Tensor A, torch::Tensor B);
 
 // ---- csrc/kernels/attention/attn_quant_gemm.cu (quantize prologue for FUSED flash attention) ----
