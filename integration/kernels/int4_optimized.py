@@ -475,7 +475,9 @@ class OptimizedInt4Conv2d(nn.Module):
         residual = residual.to(torch.float16).contiguous(memory_format=torch.channels_last)
         out = torch.empty_like(self.o_hat_cache)
         p_conv = profiler.start("MoDiff INT4 Static Conv2d (o_hat+residual)")
-        modiff_cutlass.conv2d_int4_fprop_o_hat_residual(
+        # EVT dual-store (see int8 counterpart): o_hat RMW + residual in one conv pass,
+        # no fp32 round-trip. Bit-exact o_hat + out vs conv2d_int4_fprop_o_hat_residual.
+        modiff_cutlass.conv2d_int4_evt_o_hat_residual(
             x_packed, self.weight_packed, self._cached_alpha_tensor.view(1),
             self.weight_scale_channel.view(-1), self.o_hat_cache, residual, out,
             self.stride[0], self.stride[1], self.padding[0], self.padding[1],
@@ -612,6 +614,31 @@ class OptimizedInt4Conv2d(nn.Module):
                 self._standard_output_buf = torch.empty(
                     output_shape, device=x_packed.device, dtype=torch.float16
                 ).contiguous(memory_format=torch.channels_last)
+            # EVT single-pass (acc*alpha*weight_scale[k] + bias[k] + residual[elem] -> fp16, no
+            # scratch): replaces the deep-fuse scratch + from_half bias/residual store, and beats
+            # even the best autotuned deep-fuse tile at b128. int4 is tile-picky and the EVT tile
+            # is fixed, so on a can_implement miss we cache it and fall through to the autotuned
+            # deep-fuse path below. weight_scale/bias are read FP32 in the visitor tree.
+            if (_INT4_DEEPFUSE_STORE and getattr(self, '_evt_d1_ok', True)
+                    and hasattr(modiff_cutlass, "conv2d_int4_evt_bias_residual_fp16")):
+                if self.bias is not None:
+                    if getattr(self, '_evt_bias_f32', None) is None or self._evt_bias_f32.numel() != self.bias.numel():
+                        self._evt_bias_f32 = self.bias.view(-1).float().contiguous()
+                    bias_arg = self._evt_bias_f32
+                else:
+                    bias_arg = self._empty_bias
+                res_arg = (residual if residual is not None
+                           else torch.empty(0, device=x_packed.device, dtype=torch.float16))
+                try:
+                    return modiff_cutlass.conv2d_int4_evt_bias_residual_fp16(
+                        x_packed, self.weight_packed, self._cached_alpha_tensor,
+                        self.weight_scale_channel.view(-1), bias_arg, res_arg,
+                        self._standard_output_buf,
+                        self.stride[0], self.stride[1], self.padding[0], self.padding[1],
+                        self.dilation[0], self.dilation[1])
+                except RuntimeError:
+                    self._evt_d1_ok = False  # fixed EVT tile can't implement this shape; use deep-fuse below
+
             # Deep-fuse: fold the per-channel weight_scale into the CUTLASS int4
             # epilogue (writes fully-scaled fp16, NO fp32 temp), then a from_half
             # bias/residual store -- half the store bandwidth of the fp32-input

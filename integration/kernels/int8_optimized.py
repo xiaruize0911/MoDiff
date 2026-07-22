@@ -503,7 +503,10 @@ class OptimizedInt8Conv2d(nn.Module):
         residual = residual.to(torch.float16).contiguous(memory_format=torch.channels_last)
         out = torch.empty_like(self.o_hat_cache)
         p_conv = profiler.start("MoDiff INT8 Static Conv2d (o_hat+residual)")
-        modiff_cutlass.conv2d_int8_fprop_o_hat_residual(
+        # EVT dual-store: o_hat += acc*alpha*weight_scale (in place) and out = o_hat_new +
+        # residual, in ONE conv pass -- removes the fp32 conv_out round-trip of the old
+        # conv2d_int8_fprop_o_hat_residual (verified bit-exact o_hat + out; ~1.4-1.8x faster b128).
+        modiff_cutlass.conv2d_int8_evt_o_hat_residual(
             x_int8, self.weight_int8, self._cached_alpha_tensor.view(1),
             self.weight_scale_channel.view(-1), self.o_hat_cache, residual, out,
             self.stride[0], self.stride[1], self.padding[0], self.padding[1],
@@ -699,17 +702,23 @@ class OptimizedInt8Conv2d(nn.Module):
                         self.weight_scale_channel_half.view(-1), self._standard_output_buf,
                         self.stride[0], self.stride[1], self.padding[0], self.padding[1],
                         self.dilation[0], self.dilation[1])
-                # Best fused store: deep-fuse dequant (weight_scale in the CUTLASS epilogue,
-                # fp16, no fp32 temp) + bias (+ optional residual) folded into the from_half
-                # store -- no eager bias add, no fp32-input scale store.
-                bias_arg = (self.bias.view(-1).contiguous()
-                            if self.bias is not None else self._empty_bias)
+                # EVT single-pass: acc*alpha*weight_scale[k] + bias[k] + residual[elem] -> fp16,
+                # no fp32/fp16 scratch (replaces the deep-fuse scratch + bias_residual_store pass).
+                # Beats even the best autotuned deep-fuse cid at b128 (scratch IO dominates the
+                # fixed-tile cost); ~fp16-ulp vs the old 2x-rounded path (single-round -> more
+                # accurate). weight_scale/bias are read FP32 in the visitor tree.
+                if self.bias is not None:
+                    if getattr(self, '_evt_bias_f32', None) is None or self._evt_bias_f32.numel() != self.bias.numel():
+                        self._evt_bias_f32 = self.bias.view(-1).float().contiguous()
+                    bias_arg = self._evt_bias_f32
+                else:
+                    bias_arg = self._empty_bias
                 res_arg = (residual if residual is not None
                            else torch.empty(0, device=x_int8.device, dtype=torch.float16))
-                return modiff_cutlass.conv2d_int8_fprop_deepfuse_bias_residual_fp16(
+                return modiff_cutlass.conv2d_int8_evt_bias_residual_fp16(
                     x_int8, self.weight_int8, self._cached_alpha_tensor,
-                    self.weight_scale_channel_half.view(-1), bias_arg, res_arg,
-                    self._standard_output_buf, cid,
+                    self.weight_scale_channel.view(-1), bias_arg, res_arg,
+                    self._standard_output_buf,
                     self.stride[0], self.stride[1], self.padding[0], self.padding[1],
                     self.dilation[0], self.dilation[1])
             # Fallback (out_channels % 8 != 0 or kernel unavailable): fp32-temp store paths.
