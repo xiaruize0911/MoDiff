@@ -10,7 +10,7 @@ torch::Tensor quantize_and_pack(torch::Tensor input);
 torch::Tensor scale_quantize_and_pack(torch::Tensor input, torch::Tensor scale);
 torch::Tensor scale_quantize_int8(torch::Tensor input, torch::Tensor scale);
 torch::Tensor quantize_attn_out_int8(torch::Tensor a, double a_scale);
-torch::Tensor quantize_attn_out_int4_pack(torch::Tensor a, double a_scale);
+torch::Tensor quantize_attn_out_int4_pack(torch::Tensor a, double a_scale, int64_t k_pad);
 torch::Tensor dequant_bias_i8(torch::Tensor in, torch::Tensor out_scale, torch::Tensor bias);
 void dequant_accumulate_int4(torch::Tensor residual, torch::Tensor a_hat_cache, torch::Tensor scale);
 void dequant_accumulate_int8(torch::Tensor residual, torch::Tensor a_hat_cache, torch::Tensor scale);

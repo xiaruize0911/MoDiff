@@ -540,14 +540,16 @@ torch::Tensor quantize_attn_out_int8(torch::Tensor a, double a_scale) {
 // (low nibble = even channel, high = odd), matching quantize_act_int4_pack. hd is even, so a
 // (c, c+1) pair never crosses a head boundary. C = nh*hd must be even (always here).
 __global__ void quant_attn_out_int4_pack_kernel(const __half* __restrict__ a, int8_t* __restrict__ out,
-                                                float inv_scale, int nh, int T, int hd, long nout) {
-  long i = (long)blockIdx.x * blockDim.x + threadIdx.x;   // one output byte in [b, T, C/2] order
+                                                float inv_scale, int nh, int T, int hd, int Kpad, long nout) {
+  long i = (long)blockIdx.x * blockDim.x + threadIdx.x;   // one output byte in [b, T, Kpad/2] order
   if (i >= nout) return;
-  int C = nh * hd, Ch = C / 2;
-  int bc = (int)(i % Ch);          // byte-col
-  long row = i / Ch;               // = b*T + t
-  int t = (int)(row % T), bb = (int)(row / T);
+  int C = nh * hd, Kh = Kpad / 2;  // byte-cols/row = Kpad/2 (padded); real channels = C
+  int bc = (int)(i % Kh);          // byte-col
   int c0 = 2 * bc, c1 = c0 + 1;
+  if (c0 >= C) { out[i] = 0; return; }   // K-pad byte (both channels >= C): zero-fill. c0 even & C
+                                         // even -> c0>=C implies c1>=C, so never a half-real byte.
+  long row = i / Kh;               // = b*T + t
+  int t = (int)(row % T), bb = (int)(row / T);
   int h0 = c0 / hd, d0 = c0 - h0 * hd, h1 = c1 / hd, d1 = c1 - h1 * hd;
   long i0 = (((long)bb * nh + h0) * T + t) * hd + d0;
   long i1 = (((long)bb * nh + h1) * T + t) * hd + d1;
@@ -563,18 +565,25 @@ __global__ void quant_attn_out_int4_pack_kernel(const __half* __restrict__ a, in
 //             matching quantize_act_int4_pack / the gemm_w4a4 layout
 //   Computes: q = clamp(round(a[b,h,t,d] / a_scale), -7, 7); pack channel pairs per byte
 //   Fuses:    head-major->token-major transpose + int4 quantize + nibble-pack in one pass
+//   k_pad:    padded output channel count K (>= C, even); output is [b*T, k_pad/2] with real channels
+//             0..C-1 packed and C..k_pad-1 zero-filled — lets the fused int4 proj GEMM
+//             (gemm_w4a4_awq_bias_res, which takes an explicit padded K) read this directly with no
+//             fp16 F.pad copy (enables the dominant int4 C=192 -> K=256 attention block). k_pad<=0 -> C.
 //   Constraints: hd even (a (c,c+1) pair never crosses a head boundary); C = nh*hd even
-//                (always here). `a` made contiguous internally
+//                (always here); k_pad even and >= C. `a` made contiguous internally
 //   vs fp16:  n/a (quantization / layout / MoDiff-caching support op — no fp16 equivalent; these are the overhead ops that fusion tries to hide)
-torch::Tensor quantize_attn_out_int4_pack(torch::Tensor a, double a_scale) {
+torch::Tensor quantize_attn_out_int4_pack(torch::Tensor a, double a_scale, int64_t k_pad) {
   a = a.contiguous();
   int b = a.size(0), nh = a.size(1), T = a.size(2), hd = a.size(3);
-  int C = nh * hd; long nout = (long)b * T * (C / 2);
-  auto out = torch::empty({(long)b * T, C / 2}, torch::TensorOptions().dtype(torch::kChar).device(a.device()));
+  int C = nh * hd;
+  int Kpad = (k_pad > 0) ? (int)k_pad : C;
+  TORCH_CHECK(Kpad % 2 == 0 && Kpad >= C, "quantize_attn_out_int4_pack: k_pad must be even and >= C=nh*hd");
+  long nout = (long)b * T * (Kpad / 2);
+  auto out = torch::empty({(long)b * T, Kpad / 2}, torch::TensorOptions().dtype(torch::kChar).device(a.device()));
   int TH = 256; long blocks = (nout + TH - 1) / TH;
   cudaStream_t s = at::cuda::getCurrentCUDAStream();
   quant_attn_out_int4_pack_kernel<<<blocks, TH, 0, s>>>(
       reinterpret_cast<const __half*>(a.data_ptr<at::Half>()), out.data_ptr<int8_t>(),
-      1.f / (float)a_scale, nh, T, hd, nout);
+      1.f / (float)a_scale, nh, T, hd, Kpad, nout);
   return out;
 }

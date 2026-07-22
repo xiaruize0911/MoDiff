@@ -8,7 +8,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("scale_quantize_and_pack", &scale_quantize_and_pack, "Fused Scale + Quantize + Pack for INT4");
     m.def("scale_quantize_int8", &scale_quantize_int8, "Fused Scale + Quantize for INT8");
     m.def("dequant_bias_i8", &dequant_bias_i8, "fused dequant + per-col bias for int8-output GEMM: in_i8*out_scale+bias -> fp16");
-    m.def("quantize_attn_out_int4_pack", &quantize_attn_out_int4_pack, "int4 variant of quantize_attn_out_int8: transpose + int4 quantize + pack -> int8 [b*T,C/2]");
+    m.def("quantize_attn_out_int4_pack", &quantize_attn_out_int4_pack, "int4 variant of quantize_attn_out_int8: transpose + int4 quantize + pack -> int8 [b*T,k_pad/2] (real ch 0..C-1 packed, C..k_pad-1 zero-filled; k_pad<=0 -> C)");
     m.def("quantize_attn_out_int8", &quantize_attn_out_int8,
           "Fused attention-output transpose + int8 quantize (proj-side fusion): [b,nh,T,hd] fp16 -> int8 [b*T,nh*hd]");
     m.def("dequant_accumulate_int4", &dequant_accumulate_int4, "Fused Dequant + Accumulate for INT4 cache");

@@ -225,7 +225,8 @@ class TokenMajorAttentionBlock(nn.Module):
                 else:
                     out = _mc.gemm_w8a8_awq(xq, proj.qweight, proj.w_scale, proj.a_scale)
             else:                # fused transpose+int4-quantize+pack -> W4A4 GEMM
-                xq = _mc.quantize_attn_out_int4_pack(a, proj.a_scale)        # int4 packed [b*T, c/2]
+                # gate above guarantees _awqt_K == in_features here, so k_pad is a no-op pad (== C)
+                xq = _mc.quantize_attn_out_int4_pack(a, proj.a_scale, proj._awqt_K)   # int4 packed [b*T, K_pad/2]
                 out = _mc.gemm_w4a4_awq(xq, proj.qweight, proj.w_scale, proj.a_scale, proj._awqt_K)
                 if proj._awqt_N != proj.out_features:                        # int4 has no unpadded variant -> slice
                     out = out[:, :proj.out_features].contiguous()

@@ -257,10 +257,11 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         modiff / int8-output / int4 needing K-pad, e.g. C=192). Kill-switch MODIFF_FUSE_PROJ_QUANT=0
         (inherited from TokenMajorAttentionBlock)."""
         proj = self.proj
+        # int8 always has _awqt_K == in_features (C % 64 == 0); int4 C=192 needs K=256 pad, now handled
+        # by quantize_attn_out_int4_pack's k_pad zero-fill (so the fp16 F.pad fallback is avoided).
         if (self._fuse_proj_quant and _QuantLinearWxAx is not None and isinstance(proj, _QuantLinearWxAx)
                 and getattr(proj, "_use_bias_res", False) and proj.a_scale is not None
                 and not getattr(proj, "_calib", False) and proj.bits in (8, 4)
-                and proj._awqt_K == proj.in_features                       # no K-pad (excludes int4 C=192)
                 and ((proj.bits == 8 and _HAS_FUSED_ATTN_OUT) or (proj.bits == 4 and _HAS_ATTN_OUT_I4))):
             res = x_in_tok.reshape(b * T, c).contiguous()
             bias = proj.bias if proj.bias is not None else a.new_empty(0)
@@ -269,7 +270,8 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
                 out = _mc.gemm_w8a8_awq_bias_res(xq, proj.qweight, proj.w_scale, proj.a_scale,
                                                  proj.out_features, bias, res)
             else:
-                xq = _mc.quantize_attn_out_int4_pack(a, proj.a_scale)      # packed int4 [b*T,c/2]
+                # k_pad = proj._awqt_K: pack to the GEMM's padded K (zero-fills C..K_pad-1), no fp16 F.pad
+                xq = _mc.quantize_attn_out_int4_pack(a, proj.a_scale, proj._awqt_K)   # packed int4 [b*T,K_pad/2]
                 out = _mc.gemm_w4a4_awq_bias_res(xq, proj.qweight, proj.w_scale, proj.a_scale,
                                                  proj._awqt_K, proj.out_features, bias, res)
             return out.reshape(b, T, c)
