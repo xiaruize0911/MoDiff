@@ -79,16 +79,22 @@ try:
     HAS_NATIVE_GN_SILU = hasattr(modiff_cutlass, "group_norm_silu_nhwc")
     HAS_GN_SILU_QUANTIZE = hasattr(modiff_cutlass, "group_norm_silu_quantize_nhwc")
     HAS_GN_SILU_QUANTIZE_PACK = hasattr(modiff_cutlass, "group_norm_silu_quantize_pack_nhwc")
-    # MoDiff GN->delta-quantize fusion is OPT-IN (default OFF): it is verified
-    # bit-identical to the two-kernel path but measured a small e2e REGRESSION
-    # (~2-3 ms/step) -- the fused kernel iterates group-major, so in NHWC a
-    # group's a_hat/x access is strided by C (poorly coalesced) at the dominant
-    # low-channels-per-group / high-spatial conv shapes, whereas the separate
-    # step1 kernel iterates the tensor flat (coalesced). Enable for experiments
-    # with MODIFF_ENABLE_GN_MODIFF_FUSION=1. See docs/benchmark_5mode_2026-07-20.
-    _GN_MODIFF_FUSION_ON = os.environ.get("MODIFF_ENABLE_GN_MODIFF_FUSION") == "1"
-    HAS_GN_SILU_DELTA_QUANTIZE = _GN_MODIFF_FUSION_ON and hasattr(modiff_cutlass, "group_norm_silu_delta_quantize_nhwc")
-    HAS_GN_SILU_DELTA_QUANTIZE_PACK = _GN_MODIFF_FUSION_ON and hasattr(modiff_cutlass, "group_norm_silu_delta_quantize_pack_nhwc")
+    # MoDiff GN->delta-quantize fusion (default ON): fuse GroupNorm(+mod)+SiLU into
+    # the delta-quantize + a_hat update, replacing the standalone GN kernel + separate
+    # step1 pass and removing the intermediate fp16 `normed` round-trip. Bit-identical
+    # to that two-kernel path (repo gate ALL PASS).
+    #
+    # The earlier single group-major fused kernel was OPT-IN/OFF because it regressed
+    # ~2-3 ms/step -- its pass 2 did the fp16 a_hat read-modify-write group-major, so
+    # in NHWC a group's a_hat access was strided by C (~4-8x uncoalesced at the
+    # dominant low-CPG / high-spatial shapes), costing more than the round-trip it
+    # saved. The kernel is now SPLIT (group_norm_silu.cu) into a group-major stats
+    # reduction + a flat, fully-coalesced apply pass; measured kernel A/B (b128) beats
+    # the two-kernel default at every real conv-input shape (int8 1.07-1.18x, int4
+    # 1.17-1.42x) and the old fused kernel by up to 2.34x. Disable with
+    # MODIFF_DISABLE_GN_MODIFF_FUSION=1. See docs/benchmark_5mode_2026-07-20.
+    HAS_GN_SILU_DELTA_QUANTIZE = hasattr(modiff_cutlass, "group_norm_silu_delta_quantize_nhwc")
+    HAS_GN_SILU_DELTA_QUANTIZE_PACK = hasattr(modiff_cutlass, "group_norm_silu_delta_quantize_pack_nhwc")
     # MoDiff o_hat + residual fusion (default ON): fold the ResBlock skip-add into
     # the o_hat conv's accumulate epilogue (conv2d_intX_fprop_o_hat_residual),
     # removing the trailing aten::add. Low-risk (elementwise, coalesced; the o_hat
@@ -113,6 +119,14 @@ if os.environ.get("MODIFF_DISABLE_GN_INT8_FUSION") == "1":
 
 if os.environ.get("MODIFF_DISABLE_O_HAT_RESIDUAL_FUSION") == "1":
     HAS_O_HAT_RESIDUAL = False
+
+# Kill-switch for the MoDiff GN->delta-quantize fusion (default ON). Set
+# MODIFF_DISABLE_GN_MODIFF_FUSION=1 to fall back to the exact two-kernel modiff path
+# (standalone GroupNorm(+SiLU) kernel, then step1_static_quantize[_pack]_fprop_silu)
+# -- used for A/B benchmarking and as a production safety switch.
+if os.environ.get("MODIFF_DISABLE_GN_MODIFF_FUSION") == "1":
+    HAS_GN_SILU_DELTA_QUANTIZE = False
+    HAS_GN_SILU_DELTA_QUANTIZE_PACK = False
 
 
 def _group_norm_silu(x, num_groups, weight, bias, eps, apply_silu, mod_scale=None, mod_shift=None):
