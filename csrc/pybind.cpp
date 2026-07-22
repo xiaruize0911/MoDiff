@@ -88,6 +88,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "EVT INT8 conv: o_hat[elem] += acc*alpha*weight_scale[k] (in place) ; out = o_hat_new + residual -> fp16 (dual store, no fp32 round-trip)");
     m.def("conv2d_int4_evt_o_hat_residual", &conv2d_int4_evt_o_hat_residual,
           "EVT INT4 conv: o_hat[elem] += acc*alpha*weight_scale[k] (in place) ; out = o_hat_new + residual -> fp16 (dual store, no fp32 round-trip)");
+    m.def("conv2d_int8_evt_o_hat", &conv2d_int8_evt_o_hat,
+          "EVT INT8 conv: o_hat[elem] += acc*alpha*weight_scale[k] (in place, no residual, no fp32 round-trip)");
+    m.def("conv2d_int4_evt_o_hat", &conv2d_int4_evt_o_hat,
+          "EVT INT4 conv: o_hat[elem] += acc*alpha*weight_scale[k] (in place, no residual, no fp32 round-trip)");
 
     // Attention Conv1d layout-transform fusions (kernels/layout_transform.cu)
     m.def("fp16_ncw_to_fp32_cl", &fp16_ncw_to_fp32_cl,

@@ -155,6 +155,13 @@ torch::Tensor conv2d_int4_evt_o_hat_residual(
     torch::Tensor input, torch::Tensor weight_packed, torch::Tensor inv_scale, torch::Tensor weight_scales,
     torch::Tensor o_hat, torch::Tensor residual, torch::Tensor output,
     int sh, int sw, int ph, int pw, int dh, int dw);
+// D2 no-residual: o_hat RMW in place (no `out`).
+torch::Tensor conv2d_int8_evt_o_hat(
+    torch::Tensor input, torch::Tensor weight, torch::Tensor inv_scale, torch::Tensor weight_scales,
+    torch::Tensor o_hat, int sh, int sw, int ph, int pw, int dh, int dw);
+torch::Tensor conv2d_int4_evt_o_hat(
+    torch::Tensor input, torch::Tensor weight_packed, torch::Tensor inv_scale, torch::Tensor weight_scales,
+    torch::Tensor o_hat, int sh, int sw, int ph, int pw, int dh, int dw);
 
 // ---- csrc/kernels/conv/conv2d_int4.cu ----
 torch::Tensor conv2d_int4_fprop(
