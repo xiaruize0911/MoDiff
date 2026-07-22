@@ -326,6 +326,55 @@ def test_int4_modiff_conv():
     return "int4_modiff_conv", lifecycle_ok and acc < 0.40, detail
 
 
+def _ohat_deepfuse_check(kind):
+    """Deep-fuse o_hat (MODIFF_DEEPFUSE_OHAT) vs the base o_hat path. Validates:
+    (1) the modulated-step output tracks the base scale_accumulate path within the
+    fp16-before-add divergence (accepted, see conv_epilogue.cuh), (2) the fp16 cache
+    is in use (deep-fuse eligible), (3) first-step accuracy vs fp32 is unchanged."""
+    import importlib, modiff_cutlass as mc
+    modname = "integration.kernels.int8_optimized" if kind == "int8" else "integration.kernels.int4_optimized"
+    mod = importlib.import_module(modname)
+    Conv = mod.OptimizedInt8Conv2d if kind == "int8" else mod.OptimizedInt4Conv2d
+    entry = "conv2d_int8_dequant_fp16_o_hat_tuned" if kind == "int8" else "conv2d_int4_dequant_fp16_o_hat_tuned"
+    if not hasattr(mc, entry):
+        return f"{kind}_ohat_deepfuse", False, f"{entry} missing (rebuild extension)"
+    tol = 0.02 if kind == "int8" else 0.05
+    acc_bar = 0.20 if kind == "int8" else 0.40
+    torch.manual_seed(0)
+    conv = nn.Conv2d(256, 256, 3, padding=1).to(DEV)
+    calib_x = torch.randn(16, 256, 32, 32, device=DEV)
+    seq = [torch.randn(16, 256, 32, 32, device=DEV, dtype=torch.float16).contiguous(memory_format=torch.channels_last)
+           for _ in range(5)]
+
+    def run(deepfuse):
+        old = mod._DEEPFUSE_OHAT
+        mod._DEEPFUSE_OHAT = deepfuse
+        try:
+            opt = _calib_conv(Conv(conv).to(DEV), calib_x).to(memory_format=torch.channels_last)
+            opt.enable_modiff(True)
+            outs = [opt(x).float() for x in seq]                    # step0=first, 1..4=modulated (o_hat)
+            fp16_cache = opt.o_hat_cache is not None and opt.o_hat_cache.dtype == torch.float16
+            return outs, fp16_cache
+        finally:
+            mod._DEEPFUSE_OHAT = old
+
+    base, _ = run(False)
+    df, df_fp16 = run(True)
+    acc = rel_err(df[0], conv(seq[0].float()))                      # first-step quant accuracy
+    agree = max(rel_err(df[i], base[i]) for i in range(5))          # deep-fuse vs base o_hat evolution
+    finite = all(torch.isfinite(o).all() for o in df)
+    ok = df_fp16 and finite and agree < tol and acc < acc_bar
+    return f"{kind}_ohat_deepfuse", ok, f"fp16cache={df_fp16} agree_vs_base={agree:.4f} acc_vs_fp32={acc:.3f}"
+
+
+def test_int8_ohat_deepfuse():
+    return _ohat_deepfuse_check("int8")
+
+
+def test_int4_ohat_deepfuse():
+    return _ohat_deepfuse_check("int4")
+
+
 class _OneConv(nn.Module):
     def __init__(self, conv):
         super().__init__()
@@ -403,6 +452,7 @@ def test_int8_export_apply():
 
 TESTS = [test_int8_conv, test_int8_conv_channels_last, test_int8_dual_store,
          test_int4_conv, test_int4_dual_store, test_int8_modiff_conv, test_int4_modiff_conv,
+         test_int8_ohat_deepfuse, test_int4_ohat_deepfuse,
          test_int4_export_apply, test_int8_export_apply,
          test_int8_linear, test_group_norm_silu, test_fused_gn_qkv]
 

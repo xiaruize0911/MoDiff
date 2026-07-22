@@ -8,7 +8,11 @@
 //   Permission is hereby granted, free of charge, ... (full text: LICENSES/LICENSE-llm-awq)
 // The original AWQ attribution/citation is preserved in the header comment below.
 // =============================================================================
-// FILE PROVIDES: the vendored AWQ W8A8 GEMM used on MoDiff's Linear qkv/proj path.
+// FILE PROVIDES: a vendored AWQ W8A8 GEMM, kept as a reference/cross-check.
+// NOTE (2026-07-22): the production qkv/proj path uses the OWN-PORT GEMMs in
+// gemm_wxax.cu (gemm_w8a8_awq{,_nout,_bias_res,_out_i8}), NOT this kernel --
+// `awq_w8a8_gemm` has no caller under integration/ (only a benchmark verify
+// script). This header previously claimed production use; corrected.
 // The only function bound to Python (csrc/pybind.cpp) is `awq_w8a8_gemm` ->
 // w8a8_gemm_forward_cuda:
 //   C[M,N] fp16 = (A[M,K] int8 . B[N,K]^T int8) * ascale[m] (PER-TOKEN) * wscale[n] (per-channel).

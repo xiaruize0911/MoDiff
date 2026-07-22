@@ -97,6 +97,17 @@ torch::Tensor conv2d_int8_fprop_o_hat_residual(
     torch::Tensor residual, torch::Tensor output,
     int stride_h, int stride_w, int padding_h, int padding_w, int dilation_h, int dilation_w);
 
+torch::Tensor conv2d_int8_dequant_fp16_o_hat_tuned(
+    torch::Tensor input, torch::Tensor weight, torch::Tensor inv_scale,
+    torch::Tensor weight_scales_half, torch::Tensor o_hat_cache, int64_t config_id,
+    int stride_h, int stride_w, int padding_h, int padding_w, int dilation_h, int dilation_w);
+
+torch::Tensor conv2d_int8_dequant_fp16_o_hat_residual_tuned(
+    torch::Tensor input, torch::Tensor weight, torch::Tensor inv_scale,
+    torch::Tensor weight_scales_half, torch::Tensor o_hat_cache,
+    torch::Tensor residual, torch::Tensor output, int64_t config_id,
+    int stride_h, int stride_w, int padding_h, int padding_w, int dilation_h, int dilation_w);
+
 torch::Tensor conv2d_int8_fprop_no_ohat_prealloc(
     torch::Tensor input, torch::Tensor weight, torch::Tensor inv_scale,
     torch::Tensor weight_scales, torch::Tensor output,
@@ -200,6 +211,17 @@ torch::Tensor conv2d_int4_fprop_o_hat_residual(
     torch::Tensor residual, torch::Tensor output,
     int stride_h, int stride_w, int padding_h, int padding_w, int dilation_h, int dilation_w);
 
+torch::Tensor conv2d_int4_dequant_fp16_o_hat_tuned(
+    torch::Tensor input, torch::Tensor weight_packed, torch::Tensor inv_scale,
+    torch::Tensor weight_scales_half, torch::Tensor o_hat_cache, int64_t config_id,
+    int stride_h, int stride_w, int padding_h, int padding_w, int dilation_h, int dilation_w);
+
+torch::Tensor conv2d_int4_dequant_fp16_o_hat_residual_tuned(
+    torch::Tensor input, torch::Tensor weight_packed, torch::Tensor inv_scale,
+    torch::Tensor weight_scales_half, torch::Tensor o_hat_cache,
+    torch::Tensor residual, torch::Tensor output, int64_t config_id,
+    int stride_h, int stride_w, int padding_h, int padding_w, int dilation_h, int dilation_w);
+
 // ---- csrc/kernels/util/layout_transform.cu ----
 torch::Tensor fp16_ncw_to_fp32_cl(torch::Tensor src, int N, int C, int L);
 torch::Tensor fp32_cl_to_fp16_ncw(torch::Tensor src, int N, int C, int L);
@@ -213,6 +235,13 @@ torch::Tensor group_norm_silu_nhwc(
 
 torch::Tensor group_norm_silu_quantize_nhwc(
     torch::Tensor x, torch::Tensor weight, torch::Tensor bias,
+    int64_t num_groups, double eps, bool apply_silu,
+    torch::Tensor scale, torch::Tensor smooth_inv,
+    torch::Tensor mod_scale, torch::Tensor mod_shift);
+
+torch::Tensor group_norm_silu_quantize_2src_nhwc(
+    torch::Tensor xa, torch::Tensor xb, int64_t split_c1,
+    torch::Tensor weight, torch::Tensor bias,
     int64_t num_groups, double eps, bool apply_silu,
     torch::Tensor scale, torch::Tensor smooth_inv,
     torch::Tensor mod_scale, torch::Tensor mod_shift);
@@ -275,6 +304,9 @@ torch::Tensor flash_attn_int8(torch::Tensor q, torch::Tensor k, torch::Tensor v,
                               torch::Tensor sq, torch::Tensor sk, torch::Tensor sv, double softmax_scale);
 torch::Tensor flash_attn_int8_vt(torch::Tensor q, torch::Tensor k, torch::Tensor vt,
                                  torch::Tensor sq, torch::Tensor sk, torch::Tensor sv, double softmax_scale);
+torch::Tensor flash_attn_int8_vt_out_i8(torch::Tensor q, torch::Tensor k, torch::Tensor vt,
+                                        torch::Tensor sq, torch::Tensor sk, torch::Tensor sv,
+                                        double softmax_scale, double inv_a_scale);
 torch::Tensor flash_attn_int4(torch::Tensor q4, torch::Tensor k4, torch::Tensor v,
                               torch::Tensor sq, torch::Tensor sk, torch::Tensor sv, int64_t hdp4, double softmax_scale);
 torch::Tensor flash_attn_int4_vt(torch::Tensor q4, torch::Tensor k4, torch::Tensor vt,

@@ -126,6 +126,49 @@ class QuantLinearWxAx(nn.Module):
         xq = _mc.quantize_act_int4_pack(xf, a_scale)
         return _mc.gemm_w4a4_awq_bias_res(xq, self.qweight, self.w_scale, a_scale, self._awqt_K, self.out_features, bias, res)
 
+    def can_from_int8(self):
+        """True when forward_from_int8 is usable: W8A8, calibrated static a_scale, no K-pad
+        (in_features % 64 == 0 -> the GN->int8 kernel's C channels feed the AWQ GEMM directly),
+        and the fused-bias/residual epilogue path (not modiff / not int8-output)."""
+        return (self.bits == 8 and self.a_scale is not None and self._awqt_K == self.in_features
+                and self._use_bias_res)
+
+    def forward_from_int8(self, x_i8, residual=None):
+        """Fast path for the fused GN->qkv-quantize: the int8 activation [M, in_features] is
+        produced upstream by group_norm_silu_quantize_nhwc (so the per-layer quantize_act_int8 is
+        skipped). Goes straight to the AWQ W8A8 GEMM with the fused bias(+residual) epilogue.
+        Requires can_from_int8()."""
+        a_scale = self.a_scale
+        rflat = residual.reshape(-1, self.out_features).half().contiguous() if residual is not None else None
+        empty = self.bias.new_empty(0) if self.bias is not None else x_i8.new_empty(0, dtype=torch.float16)
+        bias = self.bias if self.bias is not None else empty
+        res = rflat if rflat is not None else empty
+        out = _mc.gemm_w8a8_awq_bias_res(x_i8, self.qweight, self.w_scale, a_scale, self.out_features, bias, res)
+        return out
+
+    def can_from_int4(self):
+        """True when forward_from_int4 is usable: W4A4, calibrated static a_scale, and the
+        fused-bias/residual epilogue path. Unlike can_from_int8 this does NOT require
+        _awqt_K == in_features -- forward_from_int4 zero-pads the PACKED activation up to the
+        K-tile (C=192 -> 256). The weight's padded K-channels are zero, so the padded
+        activation nibbles contribute 0 to the dot product regardless of value."""
+        return (self.bits == 4 and self.a_scale is not None and self._use_bias_res)
+
+    def forward_from_int4(self, x_i4, residual=None):
+        """int4 counterpart of forward_from_int8 for the fused GN->qkv-quantize path: the PACKED
+        int4 activation [M, in_features/2] is produced upstream by group_norm_silu_quantize_pack_nhwc
+        (so the per-layer quantize_act_int4_pack is skipped). Zero-pads the packed activation to
+        _awqt_K/2 bytes when K-padded (append zero-nibble channels), then runs the AWQ W4A4 GEMM
+        with the fused bias(+residual) epilogue. Requires can_from_int4()."""
+        if self._awqt_K != self.in_features:
+            x_i4 = F.pad(x_i4, (0, (self._awqt_K - self.in_features) // 2)).contiguous()
+        rflat = residual.reshape(-1, self.out_features).half().contiguous() if residual is not None else None
+        empty = self.bias.new_empty(0) if self.bias is not None else x_i4.new_empty(0, dtype=torch.float16)
+        bias = self.bias if self.bias is not None else empty
+        res = rflat if rflat is not None else empty
+        return _mc.gemm_w4a4_awq_bias_res(x_i4, self.qweight, self.w_scale, self.a_scale,
+                                          self._awqt_K, self.out_features, bias, res)
+
     def forward(self, x, residual=None):
         orig = x.shape
         xf = x.reshape(-1, self.in_features).half().contiguous()

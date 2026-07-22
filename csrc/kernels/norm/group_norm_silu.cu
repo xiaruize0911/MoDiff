@@ -394,6 +394,169 @@ torch::Tensor group_norm_silu_quantize_nhwc(
 }
 
 // ============================================================================
+// TWO-SOURCE variant of group_norm_silu_quantize_nhwc: reads the GN input from
+// TWO channel-concatenated NHWC sources (XA [N,H,W,C1], XB [N,H,W,C2]) instead of
+// one pre-concatenated tensor -- channels [0,C1) come from XA, [C1,C1+C2) from XB.
+// Lets the UNet decoder skip concat (torch.cat([h, skip], dim=1)) be READ in-place
+// by this GN, so the CatArrayBatchedCopy that would materialize the concat is
+// eliminated on the GN side. Output is the usual contiguous int8 [N,C,H,W] the
+// downstream conv reads. Math is identical to concat-then-GN (same per-element
+// values, same reduction order) -> bit-identical.
+// ============================================================================
+template <typename TIn>
+__global__ void group_norm_silu_quantize_2src_nhwc_kernel(
+    const TIn* __restrict__ XA,        // [N,H,W,C1] physical (channels_last)
+    const TIn* __restrict__ XB,        // [N,H,W,C2] physical
+    int C1,
+    int8_t* __restrict__ Yq,           // [N,H,W,C] int8, C = C1+C2
+    const TIn* __restrict__ gamma,
+    const TIn* __restrict__ beta,
+    const TIn* __restrict__ mod_scale, // [N,C] or nullptr
+    const TIn* __restrict__ mod_shift, // [N,C] or nullptr
+    const float* __restrict__ scale_ptr,
+    const float* __restrict__ smooth_inv,
+    int C, long HW, int G, float eps, bool apply_silu
+) {
+    const int CPG = C / G;
+    const long group_size = (long)CPG * HW;
+    const int n = blockIdx.x / G;
+    const int g = blockIdx.x % G;
+    const int c_start = g * CPG;
+    const int C2 = C - C1;
+    const TIn* xa_base = XA + (long)n * HW * C1;
+    const TIn* xb_base = XB + (long)n * HW * C2;
+    int8_t* yq_base = Yq + (long)n * HW * C;
+
+    extern __shared__ float sdata[];
+    float* s_sum = sdata;
+    float* s_sumsq = sdata + blockDim.x;
+
+    // Pass 1: stats over this (sample, group), reading each channel from XA or XB.
+    float local_sum = 0.0f, local_sumsq = 0.0f;
+    for (long idx = threadIdx.x; idx < group_size; idx += blockDim.x) {
+        int c_local = idx % CPG;
+        long hw = idx / CPG;
+        int c_global = c_start + c_local;
+        float v = (c_global < C1) ? gn_load(xa_base, hw * C1 + c_global)
+                                  : gn_load(xb_base, hw * C2 + (c_global - C1));
+        local_sum += v;
+        local_sumsq += v * v;
+    }
+    s_sum[threadIdx.x] = local_sum;
+    s_sumsq[threadIdx.x] = local_sumsq;
+    __syncthreads();
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (threadIdx.x < s) {
+            s_sum[threadIdx.x] += s_sum[threadIdx.x + s];
+            s_sumsq[threadIdx.x] += s_sumsq[threadIdx.x + s];
+        }
+        __syncthreads();
+    }
+    __shared__ float mean_s, inv_std_s;
+    if (threadIdx.x == 0) {
+        float mean = s_sum[0] / (float)group_size;
+        float var = s_sumsq[0] / (float)group_size - mean * mean;
+        var = fmaxf(var, 0.0f);
+        mean_s = mean;
+        inv_std_s = rsqrtf(var + eps);
+    }
+    __syncthreads();
+    const float mean = mean_s;
+    const float inv_std = inv_std_s;
+    const float scale = *scale_ptr;
+
+    // Pass 2: normalize, affine, optional mod/SiLU/SmoothQuant, quantize -> int8.
+    for (long idx = threadIdx.x; idx < group_size; idx += blockDim.x) {
+        int c_local = idx % CPG;
+        long hw = idx / CPG;
+        int c_global = c_start + c_local;
+        float v = (c_global < C1) ? gn_load(xa_base, hw * C1 + c_global)
+                                  : gn_load(xb_base, hw * C2 + (c_global - C1));
+        float w = gn_load(gamma, c_global);
+        float b = gn_load(beta, c_global);
+        float normed = (v - mean) * inv_std * w + b;
+        if (mod_scale != nullptr) {
+            long midx = (long)n * C + c_global;
+            normed = normed * (1.0f + gn_load(mod_scale, midx)) + gn_load(mod_shift, midx);
+        }
+        float out = apply_silu ? (normed / (1.0f + expf(-normed))) : normed;
+        if (smooth_inv != nullptr) out *= smooth_inv[c_global];
+        yq_base[hw * C + c_global] = (int8_t)fmaxf(-127.0f, fminf(127.0f, roundf(out * scale)));
+    }
+}
+
+// Host wrapper for the two-source INT8-emitting GroupNorm+SiLU. xa=[N,C1,H,W],
+// xb=[N,C2,H,W] (both channels_last); returns int8 [N,C1+C2,H,W] channels_last.
+// gamma/beta/scale/smooth_inv/mod are indexed over the full C=C1+C2 (as if xa,xb
+// were concatenated). split_c1 must equal xa.size(1) (passed for clarity/checks).
+torch::Tensor group_norm_silu_quantize_2src_nhwc(
+    torch::Tensor xa,
+    torch::Tensor xb,
+    int64_t split_c1,
+    torch::Tensor weight,
+    torch::Tensor bias,
+    int64_t num_groups,
+    double eps,
+    bool apply_silu,
+    torch::Tensor scale,
+    torch::Tensor smooth_inv,
+    torch::Tensor mod_scale,
+    torch::Tensor mod_shift
+) {
+    CHECK_CUDA(xa); CHECK_CONTIGUOUS(xa);
+    CHECK_CUDA(xb); CHECK_CONTIGUOUS(xb);
+    TORCH_CHECK(xa.dim() == 4 && xb.dim() == 4, "group_norm_silu_quantize_2src_nhwc: expects 4D tensors");
+    TORCH_CHECK(xa.scalar_type() == xb.scalar_type() && xa.scalar_type() == weight.scalar_type()
+                && xa.scalar_type() == bias.scalar_type(),
+                "group_norm_silu_quantize_2src_nhwc: xa/xb/weight/bias dtype must match");
+    TORCH_CHECK(xa.scalar_type() == torch::kFloat32 || xa.scalar_type() == torch::kFloat16,
+                "group_norm_silu_quantize_2src_nhwc: only float32/float16 supported");
+    TORCH_CHECK(xa.size(0) == xb.size(0) && xa.size(2) == xb.size(2) && xa.size(3) == xb.size(3),
+                "group_norm_silu_quantize_2src_nhwc: xa/xb must share N,H,W");
+    TORCH_CHECK(split_c1 == xa.size(1), "group_norm_silu_quantize_2src_nhwc: split_c1 must equal xa channels");
+    const bool has_mod = mod_scale.numel() > 0;
+
+    const int N = xa.size(0), C1 = xa.size(1), H = xa.size(2), W = xa.size(3);
+    const int C2 = xb.size(1);
+    const int C = C1 + C2;
+    TORCH_CHECK(C % num_groups == 0, "group_norm_silu_quantize_2src_nhwc: C must be divisible by num_groups");
+    const long HW = (long)H * W;
+    const int CPG = C / (int)num_groups;
+    const long group_size = (long)CPG * HW;
+
+    auto yq = torch::empty({N, C, H, W}, xa.options().dtype(torch::kInt8), torch::MemoryFormat::ChannelsLast);
+
+    int block_size = 32;
+    while (block_size < group_size && block_size < 1024) block_size <<= 1;
+    dim3 grid((unsigned int)(N * num_groups));
+    dim3 block((unsigned int)block_size);
+    size_t shmem_bytes = 2 * (size_t)block_size * sizeof(float);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    const float* smooth_ptr = (smooth_inv.numel() > 0) ? smooth_inv.data_ptr<float>() : nullptr;
+
+    if (xa.scalar_type() == torch::kFloat32) {
+        group_norm_silu_quantize_2src_nhwc_kernel<float><<<grid, block, shmem_bytes, stream>>>(
+            xa.data_ptr<float>(), xb.data_ptr<float>(), C1,
+            reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
+            weight.data_ptr<float>(), bias.data_ptr<float>(),
+            has_mod ? mod_scale.data_ptr<float>() : nullptr,
+            has_mod ? mod_shift.data_ptr<float>() : nullptr,
+            scale.data_ptr<float>(), smooth_ptr, C, HW, (int)num_groups, (float)eps, apply_silu);
+    } else {
+        group_norm_silu_quantize_2src_nhwc_kernel<__half><<<grid, block, shmem_bytes, stream>>>(
+            reinterpret_cast<const __half*>(xa.data_ptr<at::Half>()),
+            reinterpret_cast<const __half*>(xb.data_ptr<at::Half>()), C1,
+            reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
+            reinterpret_cast<const __half*>(weight.data_ptr<at::Half>()),
+            reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
+            has_mod ? reinterpret_cast<const __half*>(mod_scale.data_ptr<at::Half>()) : nullptr,
+            has_mod ? reinterpret_cast<const __half*>(mod_shift.data_ptr<at::Half>()) : nullptr,
+            scale.data_ptr<float>(), smooth_ptr, C, HW, (int)num_groups, (float)eps, apply_silu);
+    }
+    return yq;
+}
+
+// ============================================================================
 // INT8-INPUT variant of group_norm_silu_quantize_nhwc: reads an int8 activation
 // (the upstream conv's int8 output) + a scalar dequant scale, so the conv->GN
 // handoff never materializes an fp16 tensor (halves that write + this read). The

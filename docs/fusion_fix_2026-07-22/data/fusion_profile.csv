@@ -1,0 +1,7 @@
+config,mode,batch,attention,conv (int GEMM),qkv/proj int GEMM,attn bmm (fp16),other fp16 GEMM,GroupNorm,quantize/dequant,modiff cache,upsample/concat,elementwise/copy,other,gpu_busy,wall,eng_ohat,eng_gn_delta,eng_gn_pack
+int8_modiff.ohat_off,int8,64,17.232,16.148,4.032,0.072,0.222,11.078,12.709,5.471,2.446,5.709,0.707,75.825,78.702,0,0,0
+int8_modiff.default,int8,64,17.312,13.287,4.041,0.073,0.221,11.136,12.744,4.325,2.455,5.716,0.707,72.016,75.334,36,0,0
+int4_modiff.ohat_off,int4,64,16.96,9.24,3.989,0.07,0.0,10.991,12.322,5.463,2.447,6.75,0.633,68.865,83.278,0,0,22
+int4_modiff.default,int4,64,16.947,8.037,3.965,0.07,0.041,10.996,12.327,4.335,2.447,6.75,0.632,66.548,81.72,36,0,22
+int4_modiff.gnpack_off,int4,64,16.956,8.024,3.979,0.069,0.0,11.043,12.948,4.336,2.446,7.317,0.631,67.749,82.529,36,0,0
+int8_modiff.gndelta_on,int8,64,17.212,13.173,4.025,0.071,0.219,18.53,8.178,3.169,2.443,7.288,0.702,75.011,78.052,72,64,0

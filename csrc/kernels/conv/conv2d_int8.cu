@@ -623,6 +623,87 @@ torch::Tensor conv2d_int8_fprop_o_hat_residual(
     return output;
 }
 
+// DEEP-FUSE (tuned) MoDiff o_hat accumulate -- the fused replacement for
+// conv2d_int8_fprop_o_hat. Runs the weight-scale-in-epilogue deep-fuse conv into
+// an fp16 scratch (NO fp32 temp, autotunable tile), then o_hat_cache += scratch.
+// vs conv2d_int8_fprop_o_hat this (a) folds the per-channel weight-scale into the
+// CUTLASS epilogue instead of a separate fp32 scale_accumulate pass, and (b) can
+// use an autotuned tile. NOTE: deq is fp16-rounded before the add, so the cache
+// evolves slightly differently than conv2d_int8_fprop_o_hat (accepted, e2e-validated).
+//   Inputs:   input int8 [N,C,H,W] cl; weight int8 [K,R,S,C]; inv_scale fp32 (1-elem alpha);
+//             weight_scales_half fp16 [K]; o_hat_cache fp16 [N,K,H_out,W_out] cl (in-place
+//             accumulate); config_id int64 (<0 = fixed default tile); stride/pad/dilation.
+//   Outputs:  o_hat_cache (returned, in place) += deq_fp16 (deq = acc*alpha*weight_scale[ch]).
+//   Fuses:    deep-fuse dequant (weight scale in epilogue, NO fp32 temp) + o_hat accumulate.
+//   Constraints: o_hat_cache fp16; weight_scales_half fp16; K % 8 == 0.
+torch::Tensor conv2d_int8_dequant_fp16_o_hat_tuned(
+    torch::Tensor input, torch::Tensor weight, torch::Tensor inv_scale,
+    torch::Tensor weight_scales_half, torch::Tensor o_hat_cache, int64_t config_id,
+    int stride_h, int stride_w, int padding_h, int padding_w, int dilation_h, int dilation_w
+) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    TORCH_CHECK(o_hat_cache.scalar_type() == torch::kFloat16,
+                "conv2d_int8_dequant_fp16_o_hat_tuned: o_hat_cache must be float16");
+    auto scratch = torch::empty_like(o_hat_cache);
+    if (config_id < 0) {
+        conv2d_int8_fprop_dequant_fp16_prealloc(
+            input, weight, inv_scale, weight_scales_half, scratch,
+            stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w);
+    } else {
+        conv2d_int8_dequant_fp16_tuned(
+            input, weight, inv_scale, weight_scales_half, scratch, config_id,
+            stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w);
+    }
+    int num_elements = scratch.numel();
+    int block_size = 256;
+    int grid_size = (num_elements + block_size - 1) / block_size;
+    accumulate_from_half_kernel<<<grid_size, block_size, 0, stream>>>(
+        reinterpret_cast<const __half*>(scratch.data_ptr<at::Half>()),
+        reinterpret_cast<__half*>(o_hat_cache.data_ptr<at::Half>()),
+        num_elements);
+    return o_hat_cache;
+}
+
+// DEEP-FUSE (tuned) o_hat accumulate + fused ResBlock skip-add -- fused replacement
+// for conv2d_int8_fprop_o_hat_residual. o_hat_cache += deq (cache excludes residual),
+// output = o_hat_new + residual. Same deep-fuse/no-fp32-temp/autotune as above.
+//   Constraints: o_hat_cache/residual/output fp16; weight_scales_half fp16; K % 8 == 0.
+torch::Tensor conv2d_int8_dequant_fp16_o_hat_residual_tuned(
+    torch::Tensor input, torch::Tensor weight, torch::Tensor inv_scale,
+    torch::Tensor weight_scales_half, torch::Tensor o_hat_cache,
+    torch::Tensor residual, torch::Tensor output, int64_t config_id,
+    int stride_h, int stride_w, int padding_h, int padding_w, int dilation_h, int dilation_w
+) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    TORCH_CHECK(o_hat_cache.scalar_type() == torch::kFloat16,
+                "conv2d_int8_dequant_fp16_o_hat_residual_tuned: o_hat_cache must be float16");
+    CHECK_CUDA(residual); CHECK_CUDA(output);
+    TORCH_CHECK(residual.scalar_type() == torch::kFloat16 && output.scalar_type() == torch::kFloat16,
+                "conv2d_int8_dequant_fp16_o_hat_residual_tuned: residual/output must be float16");
+    auto scratch = torch::empty_like(o_hat_cache);
+    if (config_id < 0) {
+        conv2d_int8_fprop_dequant_fp16_prealloc(
+            input, weight, inv_scale, weight_scales_half, scratch,
+            stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w);
+    } else {
+        conv2d_int8_dequant_fp16_tuned(
+            input, weight, inv_scale, weight_scales_half, scratch, config_id,
+            stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w);
+    }
+    TORCH_CHECK(residual.numel() == scratch.numel() && output.numel() == scratch.numel(),
+                "conv2d_int8_dequant_fp16_o_hat_residual_tuned: residual/output size must match conv output");
+    int num_elements = scratch.numel();
+    int block_size = 256;
+    int grid_size = (num_elements + block_size - 1) / block_size;
+    accumulate_from_half_residual_kernel<<<grid_size, block_size, 0, stream>>>(
+        reinterpret_cast<const __half*>(scratch.data_ptr<at::Half>()),
+        reinterpret_cast<__half*>(o_hat_cache.data_ptr<at::Half>()),
+        reinterpret_cast<const __half*>(residual.data_ptr<at::Half>()),
+        reinterpret_cast<__half*>(output.data_ptr<at::Half>()),
+        num_elements);
+    return output;
+}
+
 // conv2d_int8_fprop, then output = raw_output * weight_scales[channel], written
 // into a caller-provided buffer (still allocates its own intermediate raw
 // conv output + CUTLASS workspace internally — "prealloc" only avoids

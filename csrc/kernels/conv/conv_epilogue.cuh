@@ -50,6 +50,26 @@ __global__ void scale_accumulate_residual_half_cache_kernel(
     int num_channels
 );
 
+// Deep-fuse o_hat accumulate: the deep-fuse conv epilogue already applied the
+// per-channel weight_scale -> fp16 (deq = acc*alpha*weight_scale[ch], no fp32
+// temp), so these only add deq into the fp16 cache. NOTE: deq is rounded to
+// fp16 BEFORE the add (vs scale_accumulate_half_cache_kernel's fp32 product),
+// so the cache evolves slightly differently -- accepted, validated e2e.
+__global__ void accumulate_from_half_kernel(
+    const __half* __restrict__ deq,
+    __half* __restrict__ o_hat_cache,
+    int num_elements
+);
+
+// Same accumulate + fused ResBlock skip-add (output = o_hat_new + residual).
+__global__ void accumulate_from_half_residual_kernel(
+    const __half* __restrict__ deq,
+    __half* __restrict__ o_hat_cache,
+    const __half* __restrict__ residual,
+    __half* __restrict__ output,
+    int num_elements
+);
+
 __global__ void scale_store_kernel(
     const float* __restrict__ conv_output,
     const float* __restrict__ weight_scale,

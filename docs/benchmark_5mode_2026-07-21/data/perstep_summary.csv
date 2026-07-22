@@ -1,0 +1,5 @@
+family,fp16,int8_baseline,int4_baseline,int8_modiff,int4_modiff
+conv (all 89 convs/step),46.107,33.164,23.093,46.054,33.631
+linear qkv/proj+temb (79/step),8.138,9.152,10.826,9.152,10.826
+attention block incl GN+quant (21/step),93.87,56.238,55.375,56.238,55.375
+SUM of standalone kernels,148.115,98.554,89.294,111.444,99.832

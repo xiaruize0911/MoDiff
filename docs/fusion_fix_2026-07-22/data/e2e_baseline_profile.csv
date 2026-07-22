@@ -1,0 +1,4 @@
+config,wall,gpu_busy,attention,conv (int GEMM),qkv/proj int GEMM,attn bmm (fp16),other fp16 GEMM,GroupNorm,quantize/dequant,modiff cache,upsample/concat,elementwise/copy,other
+int8_baseline,115.82,123.56,34.464,24.633,7.531,0.162,0.248,23.313,15.854,0.0,5.001,10.825,1.528
+int4_baseline.proj_off,111.74,116.89,33.624,14.116,6.922,0.152,0.087,22.314,15.78,0.0,4.95,17.041,1.905
+int4_baseline.proj_on,109.68,114.47,33.653,14.147,6.948,0.153,0.087,22.38,16.117,0.0,4.964,14.115,1.91

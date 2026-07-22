@@ -104,6 +104,42 @@ __global__ void scale_accumulate_residual_half_cache_kernel(
     }
 }
 
+// Deep-fuse o_hat accumulate. The deep-fuse conv epilogue already produced
+// deq = acc * alpha * weight_scale[ch] rounded to fp16 (no fp32 temp), so this
+// only needs o_hat_cache[i] += deq[i]. Per-element (no channel indexing, no
+// vectorization) -> no channel-boundary hazard. See note in conv_epilogue.cuh:
+// deq is fp16-rounded before the add, so the cache diverges slightly from the
+// scale_accumulate_half_cache_kernel path (accepted, validated e2e).
+__global__ void accumulate_from_half_kernel(
+    const __half* __restrict__ deq,
+    __half* __restrict__ o_hat_cache,
+    int num_elements
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    for (int i = idx; i < num_elements; i += blockDim.x * gridDim.x) {
+        float new_val = __half2float(o_hat_cache[i]) + __half2float(deq[i]);
+        o_hat_cache[i] = __float2half_rn(new_val);
+    }
+}
+
+// Same as accumulate_from_half_kernel but ALSO writes output = o_hat_new +
+// residual (fuses the ResBlock skip-add). The cache write itself is identical
+// to accumulate_from_half_kernel (residual excluded from the cache).
+__global__ void accumulate_from_half_residual_kernel(
+    const __half* __restrict__ deq,
+    __half* __restrict__ o_hat_cache,
+    const __half* __restrict__ residual,
+    __half* __restrict__ output,
+    int num_elements
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    for (int i = idx; i < num_elements; i += blockDim.x * gridDim.x) {
+        float new_val = __half2float(o_hat_cache[i]) + __half2float(deq[i]);
+        o_hat_cache[i] = __float2half_rn(new_val);
+        output[i] = __float2half_rn(new_val + __half2float(residual[i]));
+    }
+}
+
 __global__ void scale_store_kernel(
     const float* __restrict__ conv_output,
     const float* __restrict__ weight_scale,

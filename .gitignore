@@ -25,3 +25,6 @@ PHASE2_PLAN.md
 /integration/lsun_val
 /benchmark_output
 /.venv-cu124
+
+# large regenerable profiler traces
+docs/*/data/perfetto/

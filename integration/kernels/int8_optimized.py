@@ -35,6 +35,16 @@ except ImportError:
 _CONV_AUTOTUNE = (os.environ.get("MODIFF_DISABLE_CONV_AUTOTUNE") != "1"
                   and HAS_CUTLASS and hasattr(modiff_cutlass, "conv2d_int8_dequant_fp16_tuned"))
 
+# Deep-fuse the MoDiff o_hat accumulate: fold the per-channel weight-scale into the
+# CUTLASS epilogue (no fp32 temp) + use an autotuned tile, instead of the base
+# fp32-output GEMM + separate scale_accumulate pass. Measured: modiff conv 46.05 ->
+# 38.19 ms/step (1.21x) at b128. Default ON; MODIFF_DEEPFUSE_OHAT=0 reverts to the
+# base o_hat path. NOTE: deq is fp16-rounded before the cache add, so the temporal
+# cache evolves slightly differently than the base path (accepted; e2e rel-L2 < 5e-5
+# vs the base path, well within the ~0.02 bar).
+_DEEPFUSE_OHAT = (os.environ.get("MODIFF_DEEPFUSE_OHAT", "1") != "0"
+                  and HAS_CUTLASS and hasattr(modiff_cutlass, "conv2d_int8_dequant_fp16_o_hat_tuned"))
+
 
 class OptimizedInt8Conv2d(nn.Module):
     """
@@ -383,6 +393,51 @@ class OptimizedInt8Conv2d(nn.Module):
                 and self.a_hat_cache.shape == x.shape
                 and x.dtype == torch.float16)
 
+    def _ohat_deepfuse_eligible(self) -> bool:
+        """Deep-fuse o_hat requires the fp16 cache (calibrated path) and K%8==0
+        (the CUTLASS fp16 epilogue vectorizes 8). The dynamic path keeps an fp32
+        cache, so it naturally falls back to the base scale_accumulate kernel."""
+        return (_DEEPFUSE_OHAT
+                and self.o_hat_cache is not None
+                and self.o_hat_cache.dtype == torch.float16
+                and (self.weight_scale_channel_half.numel() % 8 == 0))
+
+    def _o_hat_conv(self, x_int8: torch.Tensor, alpha: torch.Tensor):
+        """Dispatch the MoDiff o_hat accumulate conv. Deep-fuse (weight-scale in
+        the CUTLASS epilogue, no fp32 temp, autotuned tile) when enabled+eligible,
+        else the base fp32-GEMM + separate scale_accumulate path. `alpha` is the
+        1-elem fp32 CUTLASS alpha (already .view(1))."""
+        if self._ohat_deepfuse_eligible():
+            cid = self._ensure_tuned_config(x_int8, tuple(self.o_hat_cache.shape))
+            modiff_cutlass.conv2d_int8_dequant_fp16_o_hat_tuned(
+                x_int8, self.weight_int8, alpha,
+                self.weight_scale_channel_half.view(-1), self.o_hat_cache, cid,
+                self.stride[0], self.stride[1], self.padding[0], self.padding[1],
+                self.dilation[0], self.dilation[1])
+        else:
+            modiff_cutlass.conv2d_int8_fprop_o_hat(
+                x_int8, self.weight_int8, alpha,
+                self.weight_scale_channel.view(-1), self.o_hat_cache,
+                self.stride[0], self.stride[1], self.padding[0], self.padding[1],
+                self.dilation[0], self.dilation[1])
+
+    def _o_hat_conv_residual(self, x_int8: torch.Tensor, alpha: torch.Tensor,
+                             residual: torch.Tensor, out: torch.Tensor):
+        """o_hat accumulate + fused ResBlock skip-add (see _o_hat_conv)."""
+        if self._ohat_deepfuse_eligible():
+            cid = self._ensure_tuned_config(x_int8, tuple(self.o_hat_cache.shape))
+            modiff_cutlass.conv2d_int8_dequant_fp16_o_hat_residual_tuned(
+                x_int8, self.weight_int8, alpha,
+                self.weight_scale_channel_half.view(-1), self.o_hat_cache, residual, out, cid,
+                self.stride[0], self.stride[1], self.padding[0], self.padding[1],
+                self.dilation[0], self.dilation[1])
+        else:
+            modiff_cutlass.conv2d_int8_fprop_o_hat_residual(
+                x_int8, self.weight_int8, alpha,
+                self.weight_scale_channel.view(-1), self.o_hat_cache, residual, out,
+                self.stride[0], self.stride[1], self.padding[0], self.padding[1],
+                self.dilation[0], self.dilation[1])
+
     def _forward_modulated_static_fused_silu(self, x: torch.Tensor) -> torch.Tensor:
         """Same as _forward_modulated's calibrated CUTLASS branch, but `x` is
         the pre-activation input -- SiLU is applied inline inside
@@ -415,16 +470,7 @@ class OptimizedInt8Conv2d(nn.Module):
         profiler.stop("MoDiff INT8 Static Step1 (fused SiLU)", p_step1)
 
         p_conv = profiler.start("MoDiff INT8 Static Conv2d")
-        modiff_cutlass.conv2d_int8_fprop_o_hat(
-            x_int8,
-            self.weight_int8,
-            self._cached_alpha_tensor.view(1),
-            self.weight_scale_channel.view(-1),
-            self.o_hat_cache,
-            self.stride[0], self.stride[1],
-            self.padding[0], self.padding[1],
-            self.dilation[0], self.dilation[1]
-        )
+        self._o_hat_conv(x_int8, self._cached_alpha_tensor.view(1))
         profiler.stop("MoDiff INT8 Static Conv2d", p_conv)
         return self._module_output()
 
@@ -467,11 +513,7 @@ class OptimizedInt8Conv2d(nn.Module):
         profiler.stop("MoDiff INT8 GN-fused Step1 (GN+SiLU+delta)", p_step1)
 
         p_conv = profiler.start("MoDiff INT8 Static Conv2d")
-        modiff_cutlass.conv2d_int8_fprop_o_hat(
-            x_int8, self.weight_int8, self._cached_alpha_tensor.view(1),
-            self.weight_scale_channel.view(-1), self.o_hat_cache,
-            self.stride[0], self.stride[1], self.padding[0], self.padding[1],
-            self.dilation[0], self.dilation[1])
+        self._o_hat_conv(x_int8, self._cached_alpha_tensor.view(1))
         profiler.stop("MoDiff INT8 Static Conv2d", p_conv)
         out = self._module_output()
         if residual is not None:
@@ -503,11 +545,7 @@ class OptimizedInt8Conv2d(nn.Module):
         residual = residual.to(torch.float16).contiguous(memory_format=torch.channels_last)
         out = torch.empty_like(self.o_hat_cache)
         p_conv = profiler.start("MoDiff INT8 Static Conv2d (o_hat+residual)")
-        modiff_cutlass.conv2d_int8_fprop_o_hat_residual(
-            x_int8, self.weight_int8, self._cached_alpha_tensor.view(1),
-            self.weight_scale_channel.view(-1), self.o_hat_cache, residual, out,
-            self.stride[0], self.stride[1], self.padding[0], self.padding[1],
-            self.dilation[0], self.dilation[1])
+        self._o_hat_conv_residual(x_int8, self._cached_alpha_tensor.view(1), residual, out)
         profiler.stop("MoDiff INT8 Static Conv2d (o_hat+residual)", p_conv)
         return out
 
@@ -957,16 +995,7 @@ class OptimizedInt8Conv2d(nn.Module):
             profiler.stop("MoDiff INT8 Static Step1", p_step1)
 
             p_conv = profiler.start("MoDiff INT8 Static Conv2d")
-            modiff_cutlass.conv2d_int8_fprop_o_hat(
-                x_int8,
-                self.weight_int8,
-                self._cached_alpha_tensor.view(1),
-                self.weight_scale_channel.view(-1),
-                self.o_hat_cache,
-                self.stride[0], self.stride[1],
-                self.padding[0], self.padding[1],
-                self.dilation[0], self.dilation[1]
-            )
+            self._o_hat_conv(x_int8, self._cached_alpha_tensor.view(1))
             profiler.stop("MoDiff INT8 Static Conv2d", p_conv)
             return self._module_output()
 
@@ -981,16 +1010,9 @@ class OptimizedInt8Conv2d(nn.Module):
         profiler.stop("MoDiff INT8 Fused Step1", p_step1)
 
         p_conv = profiler.start("MoDiff INT8 Fused Conv2d")
-        modiff_cutlass.conv2d_int8_fprop_o_hat(
-            x_int8,
-            self.weight_int8,
-            self._inv_scale_buf.view(1),
-            self.weight_scale_channel.view(-1),
-            self.o_hat_cache,
-            self.stride[0], self.stride[1],
-            self.padding[0], self.padding[1],
-            self.dilation[0], self.dilation[1]
-        )
+        # Dynamic path keeps an fp32 o_hat cache, so _o_hat_conv falls back to the
+        # base scale_accumulate kernel here (deep-fuse requires the fp16 cache).
+        self._o_hat_conv(x_int8, self._inv_scale_buf.view(1))
         profiler.stop("MoDiff INT8 Fused Conv2d", p_conv)
         return self._module_output()
 

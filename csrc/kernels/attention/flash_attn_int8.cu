@@ -214,10 +214,16 @@ __global__ void flash_attn_int8_tiled_kernel(
 // Multi-warp CTA: FA_MMA_WARPS warps share the K/V smem tiles (loaded once per CTA
 // and reused by all warps -> higher occupancy). Each warp owns a 16-query tile, keeps
 // its O accumulator in registers (fp32 fragments), and runs its own QKᵀ / softmax / PV.
+// OUT_I8=false: fp16 head-major output [N,H,T,hd] (out_ptr is __half*).
+// OUT_I8=true : int8 TOKEN-major output [b*T, C=H*hd] (out_ptr is int8_t*), quantized by the scalar
+//   inv_a_scale (= 1/proj.a_scale) — folds quantize_attn_out_int8 into this epilogue (Step 1 of the
+//   4-kernel plan). The fp16 store path is unchanged.
+template<bool OUT_I8>
 __global__ void flash_attn_int8_mma_kernel(
     const int8_t* __restrict__ q, const int8_t* __restrict__ k, const int8_t* __restrict__ v,
     const float* __restrict__ sq, const float* __restrict__ sk, const float* __restrict__ sv,
-    __half* __restrict__ out, int N, int H, int T, int hd, int hd_pad, float softmax_scale) {
+    void* __restrict__ out_ptr, int N, int H, int T, int hd, int hd_pad, float softmax_scale,
+    float inv_a_scale) {
   const int nh = blockIdx.x;
   const int w = threadIdx.x >> 5;              // warp id in CTA
   const int lane = threadIdx.x & 31, gid = lane >> 2, tig = lane & 3;
@@ -372,13 +378,33 @@ __global__ void flash_attn_int8_mma_kernel(
 
   float invl_g  = (l_run0 > 0.f) ? 1.f / l_run0 : 0.f;
   float invl_g8 = (l_run1 > 0.f) ? 1.f / l_run1 : 0.f;
-  for (int nt2 = 0; nt2 < n_nt2; ++nt2) {
-    int d0 = nt2 * 8 + tig * 2, d1 = d0 + 1;
-    int gi0 = q0 + gid, gi8 = q0 + gid + 8;
-    out[(size_t)(nh * T + gi0) * hd + d0] = __float2half(Oreg[nt2 * 4 + 0] * invl_g);
-    out[(size_t)(nh * T + gi0) * hd + d1] = __float2half(Oreg[nt2 * 4 + 1] * invl_g);
-    out[(size_t)(nh * T + gi8) * hd + d0] = __float2half(Oreg[nt2 * 4 + 2] * invl_g8);
-    out[(size_t)(nh * T + gi8) * hd + d1] = __float2half(Oreg[nt2 * 4 + 3] * invl_g8);
+  if constexpr (OUT_I8) {
+    // int8 token-major [b*T, C=H*hd]: recover batch n and head h from the fused nh index, scatter
+    // each lane's 4 owned elements. Same layout as quantize_attn_out_int8 (quantize.cu:461-475).
+    int8_t* __restrict__ o = reinterpret_cast<int8_t*>(out_ptr);
+    const int C = H * hd, n = nh / H, h = nh % H;
+    auto q8 = [inv_a_scale](float v) -> int8_t {
+      int r = __float2int_rn(v * inv_a_scale);
+      return (int8_t)(r < -127 ? -127 : (r > 127 ? 127 : r));
+    };
+    for (int nt2 = 0; nt2 < n_nt2; ++nt2) {
+      int d0 = nt2 * 8 + tig * 2, d1 = d0 + 1;
+      int gi0 = q0 + gid, gi8 = q0 + gid + 8;
+      o[(size_t)(n * T + gi0) * C + h * hd + d0] = q8(Oreg[nt2 * 4 + 0] * invl_g);
+      o[(size_t)(n * T + gi0) * C + h * hd + d1] = q8(Oreg[nt2 * 4 + 1] * invl_g);
+      o[(size_t)(n * T + gi8) * C + h * hd + d0] = q8(Oreg[nt2 * 4 + 2] * invl_g8);
+      o[(size_t)(n * T + gi8) * C + h * hd + d1] = q8(Oreg[nt2 * 4 + 3] * invl_g8);
+    }
+  } else {
+    __half* __restrict__ out = reinterpret_cast<__half*>(out_ptr);
+    for (int nt2 = 0; nt2 < n_nt2; ++nt2) {
+      int d0 = nt2 * 8 + tig * 2, d1 = d0 + 1;
+      int gi0 = q0 + gid, gi8 = q0 + gid + 8;
+      out[(size_t)(nh * T + gi0) * hd + d0] = __float2half(Oreg[nt2 * 4 + 0] * invl_g);
+      out[(size_t)(nh * T + gi0) * hd + d1] = __float2half(Oreg[nt2 * 4 + 1] * invl_g);
+      out[(size_t)(nh * T + gi8) * hd + d0] = __float2half(Oreg[nt2 * 4 + 2] * invl_g8);
+      out[(size_t)(nh * T + gi8) * hd + d1] = __float2half(Oreg[nt2 * 4 + 3] * invl_g8);
+    }
   }
 }
 
@@ -636,11 +662,38 @@ torch::Tensor flash_attn_int8_vt(torch::Tensor q, torch::Tensor k, torch::Tensor
   auto out = torch::empty({N, H, T, hd}, torch::TensorOptions().dtype(torch::kFloat16).device(q.device()));
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
   dim3 grid(N * H, T / (FA_MMA_WARPS * FA_MMA_BR));
-  flash_attn_int8_mma_kernel<<<grid, FA_MMA_WARPS * 32, 0, stream>>>(
+  flash_attn_int8_mma_kernel<false><<<grid, FA_MMA_WARPS * 32, 0, stream>>>(
       q.data_ptr<int8_t>(), k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
       sq.data_ptr<float>(), sk.data_ptr<float>(), sv.data_ptr<float>(),
-      reinterpret_cast<__half*>(out.data_ptr<at::Half>()),
-      N, H, T, hd, hd_pad, (float)softmax_scale);
+      reinterpret_cast<void*>(out.data_ptr<at::Half>()),
+      N, H, T, hd, hd_pad, (float)softmax_scale, 0.f);
+  return out;
+}
+
+// Same as flash_attn_int8_vt but the epilogue writes int8 TOKEN-major output [b*T, C=H*hd] quantized
+// by inv_a_scale (= 1/proj.a_scale), instead of fp16 [N,H,T,hd]. Folds quantize_attn_out_int8 into the
+// flash store so the proj W8A8 GEMM can consume the result directly (Step 1 of the 4-kernel plan).
+torch::Tensor flash_attn_int8_vt_out_i8(torch::Tensor q, torch::Tensor k, torch::Tensor vt,
+                                        torch::Tensor sq, torch::Tensor sk, torch::Tensor sv,
+                                        double softmax_scale, double inv_a_scale) {
+  TORCH_CHECK(q.is_cuda() && k.is_cuda() && vt.is_cuda(), "flash_attn_int8_vt_out_i8: q/k/vt must be CUDA");
+  TORCH_CHECK(q.dim() == 4 && vt.dim() == 4, "q [N,H,T,hd_pad], vt [N,H,hd_pad,T]");
+  TORCH_CHECK(q.is_contiguous() && k.is_contiguous() && vt.is_contiguous(), "q/k/vt must be contiguous");
+  const int N = q.size(0), H = q.size(1), T = q.size(2), hd_pad = q.size(3);
+  const int hd = sv.size(-1);
+  TORCH_CHECK(hd_pad <= FA_MMA_MAXHD && (T % (FA_MMA_WARPS * FA_MMA_BR)) == 0 && (hd % 8) == 0
+              && (FA_MMA_BC * hd_pad) % 16 == 0, "flash_attn_int8_vt_out_i8: mma-eligible shapes only");
+  TORCH_CHECK(vt.size(2) == hd_pad && vt.size(3) == T, "vt must be [N,H,hd_pad,T]");
+  // token-major int8 [b*T, C=H*hd]
+  auto out = torch::empty({(long)N * T, (long)H * hd},
+                          torch::TensorOptions().dtype(torch::kChar).device(q.device()));
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  dim3 grid(N * H, T / (FA_MMA_WARPS * FA_MMA_BR));
+  flash_attn_int8_mma_kernel<true><<<grid, FA_MMA_WARPS * 32, 0, stream>>>(
+      q.data_ptr<int8_t>(), k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
+      sq.data_ptr<float>(), sk.data_ptr<float>(), sv.data_ptr<float>(),
+      reinterpret_cast<void*>(out.data_ptr<int8_t>()),
+      N, H, T, hd, hd_pad, (float)softmax_scale, (float)inv_a_scale);
   return out;
 }
 
@@ -666,11 +719,11 @@ torch::Tensor flash_attn_int8(torch::Tensor q, torch::Tensor k, torch::Tensor v,
     // (padded channels hd..hd_pad are already zero in v, so the transpose carries zeros).
     auto vt = v.transpose(2, 3).contiguous();       // [N,H,hd_pad,T]
     dim3 grid(N * H, T / (FA_MMA_WARPS * FA_MMA_BR));
-    flash_attn_int8_mma_kernel<<<grid, FA_MMA_WARPS * 32, 0, stream>>>(
+    flash_attn_int8_mma_kernel<false><<<grid, FA_MMA_WARPS * 32, 0, stream>>>(
         q.data_ptr<int8_t>(), k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
         sq.data_ptr<float>(), sk.data_ptr<float>(), sv.data_ptr<float>(),
-        reinterpret_cast<__half*>(out.data_ptr<at::Half>()),
-        N, H, T, hd, hd_pad, (float)softmax_scale);
+        reinterpret_cast<void*>(out.data_ptr<at::Half>()),
+        N, H, T, hd, hd_pad, (float)softmax_scale, 0.f);
   } else if (hd_pad <= FA_TILE_HD) {
     // dp4a tiled fallback (e.g. T not a multiple of 16)
     dim3 grid(N * H, (T + FA_BR - 1) / FA_BR);

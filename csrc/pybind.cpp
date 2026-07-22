@@ -52,6 +52,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("conv2d_int8_fprop_o_hat", &conv2d_int8_fprop_o_hat, "Fused INT8 Conv + o_hat accumulate");
     m.def("conv2d_int8_fprop_o_hat_residual", &conv2d_int8_fprop_o_hat_residual,
           "INT8 Conv + o_hat accumulate + fused ResBlock skip-add into a separate output");
+    m.def("conv2d_int8_dequant_fp16_o_hat_tuned", &conv2d_int8_dequant_fp16_o_hat_tuned,
+          "Deep-fuse (tuned) INT8 conv (weight-scale in epilogue, no fp32 temp) + o_hat accumulate");
+    m.def("conv2d_int8_dequant_fp16_o_hat_residual_tuned", &conv2d_int8_dequant_fp16_o_hat_residual_tuned,
+          "Deep-fuse (tuned) INT8 conv + o_hat accumulate + fused ResBlock skip-add into a separate output");
     m.def("conv2d_int8_fprop_no_ohat_prealloc", &conv2d_int8_fprop_no_ohat_prealloc, "Fused INT8 conv + dequant into a preallocated output buffer");
     m.def("conv2d_int8_fprop_no_ohat_prealloc_bias", &conv2d_int8_fprop_no_ohat_prealloc_bias, "Fused INT8 conv + dequant + bias into a preallocated output buffer");
     m.def("conv2d_int8_fprop_no_ohat_prealloc_bias_residual", &conv2d_int8_fprop_no_ohat_prealloc_bias_residual, "Fused INT8 conv + dequant + bias + residual (skip-add) into a preallocated output buffer");
@@ -77,6 +81,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("conv2d_int4_fprop_o_hat", &conv2d_int4_fprop_o_hat, "Fused INT4 Conv + o_hat accumulate");
     m.def("conv2d_int4_fprop_o_hat_residual", &conv2d_int4_fprop_o_hat_residual,
           "INT4 Conv + o_hat accumulate + fused ResBlock skip-add into a separate output");
+    m.def("conv2d_int4_dequant_fp16_o_hat_tuned", &conv2d_int4_dequant_fp16_o_hat_tuned,
+          "Deep-fuse (tuned) INT4 conv (weight-scale in epilogue, no fp32 temp) + o_hat accumulate");
+    m.def("conv2d_int4_dequant_fp16_o_hat_residual_tuned", &conv2d_int4_dequant_fp16_o_hat_residual_tuned,
+          "Deep-fuse (tuned) INT4 conv + o_hat accumulate + fused ResBlock skip-add into a separate output");
 
     // Attention Conv1d layout-transform fusions (kernels/layout_transform.cu)
     m.def("fp16_ncw_to_fp32_cl", &fp16_ncw_to_fp32_cl,
@@ -93,6 +101,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("group_norm_silu_quantize_nhwc", &group_norm_silu_quantize_nhwc,
           "GroupNorm (+ optional SiLU) that quantizes its output to INT8 inline (out*scale, "
           "clamp/round; optional per-channel smooth_inv), fusing away the separate quantize kernel");
+    m.def("group_norm_silu_quantize_2src_nhwc", &group_norm_silu_quantize_2src_nhwc,
+          "Two-source GroupNorm(+SiLU)+int8-quantize: reads the GN input from two channel-concatenated "
+          "NHWC sources (xa[C1], xb[C2]) in-place, eliminating the decoder-skip cat copy on the GN side");
     m.def("group_norm_silu_quantize_pack_nhwc", &group_norm_silu_quantize_pack_nhwc,
           "GroupNorm (+ optional SiLU) that quantizes to INT4 and packs channel pairs inline "
           "([N,H,W,C/2] byte layout matching scale_quantize_and_pack); requires even CPG");
@@ -106,13 +117,20 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "MoDiff-fused GroupNorm(+mod)+SiLU + INT4 delta-quantize+pack + in-place a_hat update "
           "(int4 counterpart; requires even channels-per-group)");
     m.def("fused_gn_qkv", &fused_gn_qkv, "Fused GroupNorm->qkv (per-sample scale/bias mainloop fusion)");
-    m.def("fused_gn_qkv_int8", &fused_gn_qkv_int8, "Fused GroupNorm->qkv with int8-clamp output (oscale folded into weight/bias)");
+    // NOTE (2026-07-22): DEAD PATH. fused_gn_qkv_int8 compiles/binds, but its intended consumer
+    // `quantize_attn_qkv_from_i8` was never implemented, so nothing under integration/ calls it.
+    // The live int8 GN->qkv fold uses group_norm_silu_quantize_nhwc -> QuantLinearWxAx.forward_from_int8
+    // instead (see quantized_std_attention.py). Kept for reference; do not assume it is exercised.
+    m.def("fused_gn_qkv_int8", &fused_gn_qkv_int8, "Fused GroupNorm->qkv with int8-clamp output (oscale folded into weight/bias) [DEAD: consumer never built]");
 
     // Fused int8/int4 flash attention (tensor-core, scores kept in SRAM, fp32 online softmax).
     m.def("flash_attn_int8", &flash_attn_int8,
           "Fused int8 flash attention: q,k,v int8 [N,H,T,hd_pad], sq,sk [N,H,T], sv [N,H,hd] -> out fp16 [N,H,T,hd]");
     m.def("flash_attn_int8_vt", &flash_attn_int8_vt,
           "Fused int8 flash attention, V PRE-TRANSPOSED [N,H,hd_pad,T] (skips internal transpose; mma path only)");
+    m.def("flash_attn_int8_vt_out_i8", &flash_attn_int8_vt_out_i8,
+          "flash_attn_int8_vt but epilogue writes int8 TOKEN-major [b*T,C=H*hd] quantized by inv_a_scale "
+          "(folds quantize_attn_out_int8 into the flash store)");
     m.def("flash_attn_int4", &flash_attn_int4,
           "Fused int4 flash attention (int4 QKᵀ, int8 PV): q4,k4 packed [N,H,T,hdp4/2], v int8 [N,H,T,hdp_v] -> fp16");
     m.def("flash_attn_int4_vt", &flash_attn_int4_vt,
@@ -123,9 +141,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "Static (calibrated, single-pass) int4 Q/K + int8 V quantize for int4 flash");
     m.def("mma_smoke", &mma_smoke, "m16n8k32.s8 fragment-mapping smoke test");
 
-    // AWQ w8a8 GEMM, vendored verbatim from llm-awq (MIT, (c) 2023 MIT HAN Lab) -- faster than our
-    // gemm_w8a8_awq on the qkv/proj shapes. in[M,K] int8, weight[N,K] int8, wscales[N] half,
-    // ascales[M] half (per-token), out[M,N] fp16 PREALLOCATED. N%128==0, K%64==0.
+    // AWQ w8a8 GEMM, vendored verbatim from llm-awq (MIT, (c) 2023 MIT HAN Lab). Kept as a
+    // reference/cross-check -- NOT the production path (the model uses the own-port gemm_w8a8_awq
+    // in gemm_wxax.cu; this has no integration/ caller, only a benchmark verify script).
+    // in[M,K] int8, weight[N,K] int8, wscales[N] half, ascales[M] half (per-token), out[M,N] fp16
+    // PREALLOCATED. N%128==0, K%64==0.
     m.def("awq_w8a8_gemm", &w8a8_gemm_forward_cuda,
           "AWQ w8a8 GEMM (vendored from llm-awq, MIT): int8xint8 -> fp16, per-token ascale + per-channel wscale");
     m.def("gemm_w8a8_awq", &gemm_w8a8_awq,

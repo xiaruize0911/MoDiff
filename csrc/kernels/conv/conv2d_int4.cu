@@ -1026,3 +1026,63 @@ torch::Tensor conv2d_int4_fprop_o_hat_residual(
     );
     return output;
 }
+
+// DEEP-FUSE (tuned) int4 MoDiff o_hat accumulate -- fused replacement for
+// conv2d_int4_fprop_o_hat. Deep-fuse conv (weight scale in epilogue, no fp32 temp,
+// autotuned tile) -> fp16 scratch, then o_hat_cache += scratch. deq is fp16-rounded
+// before the add (accepted, e2e-validated). config_id<0 -> default tile 0.
+//   Constraints: o_hat_cache fp16; weight_scales_half fp16; K % 8 == 0.
+torch::Tensor conv2d_int4_dequant_fp16_o_hat_tuned(
+    torch::Tensor input, torch::Tensor weight_packed, torch::Tensor inv_scale,
+    torch::Tensor weight_scales_half, torch::Tensor o_hat_cache, int64_t config_id,
+    int stride_h, int stride_w, int padding_h, int padding_w, int dilation_h, int dilation_w
+) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    TORCH_CHECK(o_hat_cache.scalar_type() == torch::kFloat16,
+                "conv2d_int4_dequant_fp16_o_hat_tuned: o_hat_cache must be float16");
+    auto scratch = torch::empty_like(o_hat_cache);
+    conv2d_int4_dequant_fp16_tuned(
+        input, weight_packed, inv_scale, weight_scales_half, scratch, config_id,
+        stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w);
+    int num_elements = scratch.numel();
+    int block_size = 256;
+    int grid_size = (num_elements + block_size - 1) / block_size;
+    accumulate_from_half_kernel<<<grid_size, block_size, 0, stream>>>(
+        reinterpret_cast<const __half*>(scratch.data_ptr<at::Half>()),
+        reinterpret_cast<__half*>(o_hat_cache.data_ptr<at::Half>()),
+        num_elements);
+    return o_hat_cache;
+}
+
+// DEEP-FUSE (tuned) int4 o_hat accumulate + fused ResBlock skip-add -- fused
+// replacement for conv2d_int4_fprop_o_hat_residual.
+//   Constraints: o_hat_cache/residual/output fp16; weight_scales_half fp16; K % 8 == 0.
+torch::Tensor conv2d_int4_dequant_fp16_o_hat_residual_tuned(
+    torch::Tensor input, torch::Tensor weight_packed, torch::Tensor inv_scale,
+    torch::Tensor weight_scales_half, torch::Tensor o_hat_cache,
+    torch::Tensor residual, torch::Tensor output, int64_t config_id,
+    int stride_h, int stride_w, int padding_h, int padding_w, int dilation_h, int dilation_w
+) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    TORCH_CHECK(o_hat_cache.scalar_type() == torch::kFloat16,
+                "conv2d_int4_dequant_fp16_o_hat_residual_tuned: o_hat_cache must be float16");
+    CHECK_CUDA(residual); CHECK_CUDA(output);
+    TORCH_CHECK(residual.scalar_type() == torch::kFloat16 && output.scalar_type() == torch::kFloat16,
+                "conv2d_int4_dequant_fp16_o_hat_residual_tuned: residual/output must be float16");
+    auto scratch = torch::empty_like(o_hat_cache);
+    conv2d_int4_dequant_fp16_tuned(
+        input, weight_packed, inv_scale, weight_scales_half, scratch, config_id,
+        stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w);
+    TORCH_CHECK(residual.numel() == scratch.numel() && output.numel() == scratch.numel(),
+                "conv2d_int4_dequant_fp16_o_hat_residual_tuned: residual/output size must match conv output");
+    int num_elements = scratch.numel();
+    int block_size = 256;
+    int grid_size = (num_elements + block_size - 1) / block_size;
+    accumulate_from_half_residual_kernel<<<grid_size, block_size, 0, stream>>>(
+        reinterpret_cast<const __half*>(scratch.data_ptr<at::Half>()),
+        reinterpret_cast<__half*>(o_hat_cache.data_ptr<at::Half>()),
+        reinterpret_cast<const __half*>(residual.data_ptr<at::Half>()),
+        reinterpret_cast<__half*>(output.data_ptr<at::Half>()),
+        num_elements);
+    return output;
+}

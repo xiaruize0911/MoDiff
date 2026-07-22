@@ -1,0 +1,206 @@
+\documentclass[aspectratio=169,10pt]{beamer}
+\usetheme{Madrid}\usecolortheme{seahorse}
+\usepackage{booktabs}\usepackage{graphicx}
+\setbeamertemplate{navigation symbols}{}
+\setbeamerfont{frametitle}{size=\normalsize}
+\renewcommand{\arraystretch}{1.15}
+\newcommand{\g}[1]{{\footnotesize\color{gray}#1}}
+\title[MoDiff 5-mode benchmark]{MoDiff 5-mode Benchmark --- Measured Results}
+\subtitle{LSUN-Churches LDM-8 UNet \textbullet\ b128 \textbullet\ DDIM \textbullet\ NVIDIA A40}
+\date{2026-07-21}
+\begin{document}
+\frame{\titlepage}
+
+\begin{frame}{Setup \& kernel shape inventory}
+\footnotesize
+\begin{columns}[T]
+\begin{column}{0.46\textwidth}
+\begin{tabular}{@{}ll@{}}
+\toprule
+GPU & NVIDIA A40 (48\,GB, SM 8.6)\\
+PyTorch / CUDA & 2.4.1+cu124 / 12.4\\
+Model & LSUN-Churches LDM-8 UNet\\
+Latent & $4\times32\times32$\\
+Batch & 128\\
+Sampler & DDIM\\
+Modes & fp16, int8/int4 base, int8/int4 modiff\\
+\bottomrule
+\end{tabular}
+\end{column}
+\begin{column}{0.5\textwidth}
+\begin{tabular}{@{}lrr@{}}
+\toprule
+family & shapes & calls/step\\
+\midrule
+conv & 33 & 89\\
+\quad int8/int4 & 20 & 70\\
+\quad fp16-only & 13 & 19\\
+linear & 14 & 79\\
+\quad qkv/proj (AWQ) & 10 & 42\\
+\quad time-embed & 4 & 37\\
+attention & 5 & 21\\
+\quad flash int8/int4 & 3 & 15\\
+\quad fp16 (hd=96) & 2 & 6\\
+\bottomrule
+\end{tabular}
+\end{column}
+\end{columns}
+\end{frame}
+
+\begin{frame}{E2E DDIM step speed (b128, 5$\times$200 steps)}
+\centering\begin{tabular}{@{}lrrr@{}}\toprule
+mode & ms/step & min ms & vs fp16\\\midrule
+fp16 & 188.1 & 187.2 & 1.00$\times$\\
+int8 base & 121.0 & 120.8 & 1.55$\times$\\
+int4 base & 114.9 & 114.8 & 1.64$\times$\\
+int8 modiff & 136.8 & 136.7 & 1.38$\times$\\
+int4 modiff & 141.5 & 138.1 & 1.33$\times$\\
+\bottomrule\end{tabular}
+\end{frame}
+\begin{frame}{E2E per-component timing profile \g{(GPU self-time, ms/step)}}
+\centering\scriptsize\begin{tabular}{@{}lrrrrr@{}}\toprule
+bucket & fp16 & int8 base & int4 base & int8 mod & int4 mod\\\midrule
+attention & 44.2 & 34.3 & 33.5 & 33.7 & 33.4\\
+attn bmm fp16 & 42.0 & 0.2 & 0.2 & 0.2 & 0.1\\
+conv (int GEMM) & 44.7 & 24.4 & 14.0 & 28.2 & 15.6\\
+qkv/proj GEMM & 0.0 & 7.5 & 6.9 & 7.4 & 6.9\\
+GroupNorm & 21.0 & 23.2 & 22.2 & 21.9 & 21.8\\
+quantize/dequant & 0.0 & 18.1 & 16.8 & 27.5 & 25.2\\
+modiff cache & 0.0 & 0.0 & 0.0 & 11.0 & 11.0\\
+elementwise/copy & 32.4 & 10.8 & 18.1 & 5.7 & 11.3\\
+\midrule
+\textbf{gpu\_busy} & 196.6 & 125.3 & 118.6 & 142.1 & 131.7\\
+\midrule
+\textbf{wall} & 188.1 & 119.9 & 114.4 & 136.2 & 147.0\\
+\bottomrule\end{tabular}
+\end{frame}
+\begin{frame}{Time in one DDIM step, per kernel family \g{(ms/step = count$\times\mu$s/call)}}
+\centering\begin{tabular}{@{}lrrrrr@{}}\toprule
+family (calls/step) & fp16 & int8 base & int4 base & int8 mod & int4 mod\\\midrule
+conv (89) & 46.11 & 33.16 & 23.09 & 46.05 & 33.63\\
+linear qkv/proj+temb (79) & 8.14 & 9.15 & 10.83 & 9.15 & 10.83\\
+attention incl GN+quant (21) & 93.87 & 56.24 & 55.38 & 56.24 & 55.38\\
+\midrule
+\textbf{sum of kernels} & 148.12 & 98.55 & 89.29 & 111.44 & 99.83\\
+\bottomrule\end{tabular}
+\end{frame}
+\begin{frame}{Conv kernel --- all 33 geometries \g{($\mu$s/call, 1/2)}}
+\centering\tiny\begin{tabular}{@{}lrrrrrrrrr@{}}\toprule
+$C_{in}\!\to\!C_{out}$ & HW & $\times$ & fp16 & i8\,b & i4\,b & i8\,m & i4\,m & i8b$\times$ & i4b$\times$\\\midrule
+192$\to$192 & 32$^2$ & 7 & 1018 & 771 & 582 & 1431 & 997 & 1.32 & 1.75\\
+384$\to$384 & 16$^2$ & 8 & 847 & 594 & 371 & 754 & 565 & 1.43 & 2.28\\
+384$\to$384 & 32$^2$ & 2 & 3272 & 2216 & 1354 & 2894 & 2096 & 1.48 & 2.42\\
+384$\to$192 & 32$^2$ & 2 & 1768 & 1334 & 832 & 1986 & 1450 & 1.32 & 2.13\\
+768$\to$384 & 16$^2$ & 2 & 1715 & 1023 & 595 & 1243 & 859 & 1.68 & 2.88\\
+576$\to$192 & 32$^2$ & 1 & 2540 & 1863 & 1223 & 2875 & 2065 & 1.36 & 2.08\\
+384$\to$384 & 8$^2$ & 9 & 233 & 156 & 98 & 218 & 157 & 1.50 & 2.36\\
+768$\to$768 & 4$^2$ & 8 & 239 & 145 & 83 & 193 & 120 & 1.64 & 2.88\\
+768$\to$768 & 8$^2$ & 2 & 808 & 481 & 273 & 550 & 362 & 1.68 & 2.96\\
+576$\to$384 & 16$^2$ & 1 & 1244 & 849 & 528 & 1071 & 768 & 1.46 & 2.35\\
+768$\to$768 & 2$^2$ & 13 & 76 & 64 & 64 & 87 & 58 & 1.19 & 1.20\\
+384$\to$192$^\dagger$ & 32$^2$ & 2 & 489 & 489 & 489 & 489 & 489 & 1.00 & 1.00\\
+1536$\to$768 & 4$^2$ & 2 & 473 & 272 & 149 & 341 & 202 & 1.74 & 3.18\\
+768$\to$384 & 8$^2$ & 2 & 428 & 277 & 164 & 351 & 238 & 1.55 & 2.60\\
+1152$\to$384 & 8$^2$ & 1 & 624 & 398 & 228 & 487 & 322 & 1.57 & 2.73\\
+768$\to$384$^\dagger$ & 16$^2$ & 2 & 297 & 297 & 297 & 297 & 297 & 1.00 & 1.00\\
+576$\to$192$^\dagger$ & 32$^2$ & 1 & 574 & 574 & 574 & 574 & 574 & 1.00 & 1.00\\
+\bottomrule\end{tabular}
+\par\vspace{2pt}{\tiny $^\dagger$ fp16-only geometry (skip / $1\times1$ / $C_{in}<32$ / out): same kernel in every mode.}
+\end{frame}
+\begin{frame}{Conv kernel --- all 33 geometries \g{($\mu$s/call, 2/2)}}
+\centering\tiny\begin{tabular}{@{}lrrrrrrrrr@{}}\toprule
+$C_{in}\!\to\!C_{out}$ & HW & $\times$ & fp16 & i8\,b & i4\,b & i8\,m & i4\,m & i8b$\times$ & i4b$\times$\\\midrule
+192$\to$192 & 16$^2$ & 2 & 273 & 208 & 159 & 396 & 279 & 1.31 & 1.72\\
+192$\to$384 & 16$^2$ & 1 & 503 & 365 & 270 & 590 & 427 & 1.38 & 1.86\\
+1152$\to$768 & 4$^2$ & 1 & 352 & 212 & 118 & 268 & 161 & 1.66 & 3.00\\
+1536$\to$768 & 2$^2$ & 3 & 113 & 85 & 74 & 156 & 88 & 1.34 & 1.53\\
+4$\to$192$^\dagger$ & 32$^2$ & 1 & 288 & 288 & 288 & 288 & 288 & 1.00 & 1.00\\
+576$\to$384$^\dagger$ & 16$^2$ & 1 & 253 & 253 & 253 & 253 & 253 & 1.00 & 1.00\\
+192$\to$4$^\dagger$ & 32$^2$ & 1 & 252 & 252 & 252 & 252 & 252 & 1.00 & 1.00\\
+192$\to$384$^\dagger$ & 16$^2$ & 1 & 177 & 177 & 177 & 177 & 177 & 1.00 & 1.00\\
+1536$\to$768$^\dagger$ & 2$^2$ & 3 & 58 & 58 & 58 & 58 & 58 & 1.00 & 1.00\\
+768$\to$384$^\dagger$ & 8$^2$ & 2 & 87 & 87 & 87 & 87 & 87 & 1.00 & 1.00\\
+384$\to$384 & 4$^2$ & 2 & 78 & 62 & 62 & 65 & 55 & 1.25 & 1.26\\
+1536$\to$768$^\dagger$ & 4$^2$ & 2 & 72 & 72 & 72 & 72 & 72 & 1.00 & 1.00\\
+384$\to$768 & 4$^2$ & 1 & 134 & 84 & 62 & 120 & 79 & 1.61 & 2.17\\
+1152$\to$384$^\dagger$ & 8$^2$ & 1 & 114 & 114 & 114 & 114 & 114 & 1.00 & 1.00\\
+1152$\to$768$^\dagger$ & 4$^2$ & 1 & 67 & 67 & 67 & 67 & 67 & 1.00 & 1.00\\
+384$\to$768$^\dagger$ & 4$^2$ & 1 & 53 & 53 & 53 & 53 & 53 & 1.00 & 1.00\\
+\midrule
+\textbf{total/step (ms)} & & 89 & \textbf{46.1} & \textbf{33.2} & \textbf{23.1} & \textbf{46.1} & \textbf{33.6} & 1.39 & 2.00\\
+\bottomrule\end{tabular}
+\par\vspace{2pt}{\tiny $^\dagger$ fp16-only geometry (skip / $1\times1$ / $C_{in}<32$ / out): same kernel in every mode.}
+\end{frame}
+\begin{frame}{Linear GEMM --- all 14 shapes \g{($\mu$s/call; full=quantize+GEMM, gemm=GEMM-only)}}
+\centering\scriptsize\begin{tabular}{@{}llrrrrrrrr@{}}\toprule
+role & $K\!\to\!N$ & M & $\times$ & fp16 & i8 full & i8 gemm & i4 full & i4 gemm & i8$\times$/i4$\times$\\\midrule
+qkv & 192$\to$576 & 131072 & 5 & 412 & 528 & 398 & 779 & 341 & 0.78/0.53\\
+qkv & 384$\to$1152 & 32768 & 5 & 415 & 331 & 262 & 244 & 191 & 1.25/1.70\\
+qkv & 384$\to$1152 & 8192 & 5 & 91 & 101 & 79 & 75 & 59 & 0.90/1.21\\
+qkv & 768$\to$2304 & 2048 & 5 & 80 & 76 & 62 & 51 & 42 & 1.06/1.56\\
+qkv & 768$\to$2304 & 512 & 1 & 28 & 31 & 21 & 31 & 14 & 0.89/0.91\\
+proj & 192$\to$192 & 131072 & 5 & 193 & 297 & 156 & 584 & 134 & 0.65/0.33\\
+proj & 384$\to$384 & 32768 & 5 & 129 & 176 & 107 & 136 & 78 & 0.73/0.95\\
+proj & 384$\to$384 & 8192 & 5 & 58 & 60 & 38 & 47 & 30 & 0.97/1.24\\
+proj & 768$\to$768 & 2048 & 5 & 31 & 40 & 28 & 29 & 18 & 0.78/1.08\\
+proj & 768$\to$768 & 512 & 1 & 26 & 32 & 21 & 29 & 14 & 0.82/0.90\\
+other & 192$\to$768 & 128 & 1 & 26 & 26 & 26 & 26 & 26 & 1.00/1.00\\
+other & 768$\to$768 & 128 & 15 & 30 & 30 & 30 & 30 & 30 & 1.00/1.00\\
+other & 768$\to$384 & 128 & 6 & 31 & 31 & 31 & 31 & 31 & 1.00/1.00\\
+other & 768$\to$1536 & 128 & 15 & 25 & 25 & 25 & 25 & 25 & 1.00/1.00\\
+\midrule
+\textbf{total/step (ms)} & & & 79 & \textbf{8.14} & \textbf{9.15} & 6.73 & \textbf{10.83} & 5.53 & 0.89/0.75\\
+\textbf{vs fp16} & & & & & \textbf{0.89$\times$} & 1.21$\times$ & \textbf{0.75$\times$} & 1.47$\times$ & \\
+\bottomrule\end{tabular}
+\end{frame}
+\begin{frame}{Attention block (GN+quant+attn) --- all 5 blocks \g{($\mu$s/call)}}
+\centering\scriptsize\begin{tabular}{@{}lrrrrrrrr@{}}\toprule
+C/hd/T & $\times$ & GN & fp16 & int8 & int4 & i8$\times$ & i4$\times$ & relL2 i8/i4\\\midrule
+192/24/1024 & 5 & 480 & 16700 & 8246 & 8099 & 2.02 & 2.06 & 0.025/0.144\\
+384/48/256 & 5 & 274 & 1627 & 2152 & 2159 & 0.76 & 0.75 & 0.018/0.150\\
+384/48/64 & 5 & 162 & 318 & 721 & 688 & 0.44 & 0.46 & 0.015/0.142\\
+768/96/16 & 5 & 48 & 113 & 113 & 113 & 1.00 & 1.00 & --\\
+768/96/4 & 1 & 12 & 77 & 77 & 77 & 1.00 & 1.00 & --\\
+\midrule
+\textbf{total/step (ms)} & 21 & & \textbf{93.9} & \textbf{56.2} & \textbf{55.4} & 1.67 & 1.70 & \\
+\bottomrule\end{tabular}
+\end{frame}
+\begin{frame}{Optimization: fuse qkv activation-quantize into GroupNorm \g{(int8; $\mu$s/call)}}
+\centering\scriptsize qkv front-end (GN + quantize + qkv GEMM), per block:\\[2pt]
+\begin{tabular}{@{}lrrrrrr@{}}\toprule
+C/T & $\times$ & fp16 & non-fused & fused & fus/nonf & relL2 vs nonfused\\\midrule
+192/1024 & 5 & 888 & 1000 & 863 & 1.16$\times$ & 0.0034\\
+384/256 & 5 & 675 & 594 & 528 & 1.13$\times$ & 0.0035\\
+384/64 & 5 & 247 & 259 & 240 & 1.08$\times$ & 0.0032\\
+768/16 & 5 & 128 & 120 & 114 & 1.06$\times$ & 0.0034\\
+768/4 & 1 & 42 & 41 & 34 & 1.19$\times$ & 0.0027\\
+\midrule
+\textbf{total/step (ms)} & 21 & \textbf{9.73} & \textbf{9.91} & \textbf{8.76} & \textbf{1.13$\times$} & \\
+\bottomrule\end{tabular}
+\par\vspace{4pt}\scriptsize In-model (int8\_baseline, flag OFF vs ON): output rel-L2 $= 0.0000$ (bit-identical), 21 qkv quantize kernels/step removed (42$\to$21); e2e ms/step 119.8 $\to$ 119.7 (gpu\_busy $-1$ ms/step, wall flat --- quantize was latency-hidden).
+\end{frame}
+\begin{frame}{E2E DDIM step speed}
+\centering\includegraphics[width=\linewidth,height=0.82\textheight,keepaspectratio]{../figs/fig_e2e_speed.png}
+\end{frame}
+\begin{frame}{E2E per-component timing profile}
+\centering\includegraphics[width=\linewidth,height=0.82\textheight,keepaspectratio]{../figs/fig_e2e_timing_profile.png}
+\end{frame}
+\begin{frame}{Per-kernel-family time in one step}
+\centering\includegraphics[width=\linewidth,height=0.82\textheight,keepaspectratio]{../figs/fig_perstep_summary.png}
+\end{frame}
+\begin{frame}{Conv kernel time per geometry + per-step total}
+\centering\includegraphics[width=\linewidth,height=0.82\textheight,keepaspectratio]{../figs/fig_conv_kernel.png}
+\end{frame}
+\begin{frame}{Top conv geometries by per-step contribution}
+\centering\includegraphics[width=\linewidth,height=0.82\textheight,keepaspectratio]{../figs/fig_conv_perstep.png}
+\end{frame}
+\begin{frame}{Linear qkv/proj time per shape + per-step total}
+\centering\includegraphics[width=\linewidth,height=0.82\textheight,keepaspectratio]{../figs/fig_linear_kernel.png}
+\end{frame}
+\begin{frame}{Attention block time per shape + per-step total}
+\centering\includegraphics[width=\linewidth,height=0.82\textheight,keepaspectratio]{../figs/fig_attn_kernel.png}
+\end{frame}
+\begin{frame}{§7 Fuse GN→qkv quantize: per-block front-end + per-step total}
+\centering\includegraphics[width=\linewidth,height=0.82\textheight,keepaspectratio]{../figs/fig_fuse_gn_qkv.png}
+\end{frame}
+\end{document}

@@ -134,6 +134,17 @@ except ImportError:
     HAS_INT4_LINEAR = False
     print("Warning: INT4 Linear not available")
 
+# CUDA Graph capture/replay for the per-step UNet (removes kernel-launch overhead).
+try:
+    from integration.kernels.int8_cudagraph import (
+        install_cuda_graph_replay_pytorch_int8,
+        get_cuda_graph_replay_stats,
+    )
+    HAS_CUDA_GRAPH = True
+except ImportError:
+    HAS_CUDA_GRAPH = False
+    print("Warning: CUDA Graph replay not available")
+
 # FID (optional)
 try:
     from pytorch_fid import fid_score
@@ -278,7 +289,8 @@ class BenchmarkRunner:
                  batch_size: int = 4, steps: int = 50, shape: tuple = (4, 32, 32),
                  calibration_path: str = None, skip_attention: bool = False,
                  skip_resblock: bool = False, skip_groupnorm: bool = False,
-                 linear_backend: str = "fp16", linear_int_gemm_min_m: int = 64):
+                 linear_backend: str = "fp16", linear_int_gemm_min_m: int = 64,
+                 use_cuda_graph: bool = False):
         self.config_path = config_path
         self.ckpt_path = ckpt_path
         self.output_dir = output_dir
@@ -291,6 +303,7 @@ class BenchmarkRunner:
         self.skip_groupnorm = skip_groupnorm
         self.linear_backend = linear_backend
         self.linear_int_gemm_min_m = linear_int_gemm_min_m
+        self.use_cuda_graph = use_cuda_graph or os.environ.get("MODIFF_CUDA_GRAPH", "0") == "1"
         self.results = {}
         
         os.makedirs(output_dir, exist_ok=True)
@@ -828,6 +841,61 @@ class BenchmarkRunner:
             print(f"✓ Saved INT4 static scales: {self.calibration_path}")
         print("✓ INT4 Calibration finished (Static scales locked)")
     
+    def _reset_modiff_state(self, model, mode: str):
+        """Reset all temporal (MoDiff) caches for a mode. In-place zeroing only
+        (never reassigns cache tensors) so it is safe to call between CUDA-graph
+        replays -- the graph's baked-in cache addresses stay valid."""
+        dm = model.model.diffusion_model
+        if mode in ('int8', 'int8_baseline', 'int8_attn_modiff') and HAS_INT8:
+            reset_modiff_state_int8(dm)
+        elif mode in ('int4', 'int4_baseline', 'int4_attn_modiff') and HAS_INT4:
+            reset_modiff_state_int4(dm)
+        if mode in ('int8', 'int8_baseline', 'int8_attn_modiff') and HAS_INT8_LINEAR:
+            reset_modiff_state_linear(dm)
+        elif mode in ('int4', 'int4_baseline', 'int4_attn_modiff') and HAS_INT4_LINEAR:
+            reset_modiff_state_int4_linear(dm)
+        if mode in ('attn_modiff', 'int8_attn_modiff', 'int4_attn_modiff'):
+            from integration.kernels.modiff_attention import reset_attention_modiff
+            reset_attention_modiff(dm)
+
+    def _select_cudagraph_precapture_steps(self, sampler, mode: str) -> int:
+        """Pick a short DDIM schedule that captures every needed graph phase.
+
+        DDIM's uniform discretization only supports step counts that divide the
+        underlying DDPM schedule length cleanly. We only need enough steps to
+        capture the phases ahead of timing: 1 (baseline) or 2 (MoDiff first +
+        modulated). Ported from benchmark_extended."""
+        ddpm_steps = int(getattr(sampler.model, 'num_timesteps', 1000))
+        min_required = 1 if ('baseline' in mode or mode in ('fp16', 'fp32')) else 2
+        for candidate in range(min_required, self.steps + 1):
+            if ddpm_steps % candidate == 0:
+                return candidate
+        return self.steps
+
+    def _maybe_install_cuda_graph(self, model, sampler, mode: str,
+                                  use_autocast: bool, dtype) -> bool:
+        """Install per-step UNet CUDA-graph replay and pre-capture all phases
+        after calibration + cuDNN/autotune warmup have settled. Returns True if
+        the graph is active. Falls back to eager (returns False) on any failure."""
+        if not (self.use_cuda_graph and HAS_CUDA_GRAPH and mode != 'fp32'):
+            return False
+        try:
+            print("  Installing per-step UNet CUDA Graph replay...")
+            install_cuda_graph_replay_pytorch_int8(
+                model.model, batch_size=self.batch_size, shape=self.shape)
+            self._reset_modiff_state(model, mode)
+            precapture_steps = self._select_cudagraph_precapture_steps(sampler, mode)
+            print(f"  Pre-capturing CUDA Graph phases ({precapture_steps} steps)...")
+            with torch.inference_mode(), torch.amp.autocast('cuda', enabled=use_autocast, dtype=dtype):
+                sampler.sample(S=precapture_steps, batch_size=self.batch_size, shape=self.shape,
+                               eta=0.0, verbose=False, **self._cond_kwargs(model, self.batch_size))
+            torch.cuda.synchronize()
+            self._reset_modiff_state(model, mode)
+            return True
+        except Exception as e:
+            print(f"  Warning: CUDA Graph capture failed ({e}); falling back to eager.")
+            return False
+
     def _generate_samples(self, model, sampler, mode: str, num_samples: int,
                           use_autocast: bool = False, dtype: torch.dtype = None):
         """Generate samples and measure time."""
@@ -837,17 +905,7 @@ class BenchmarkRunner:
         # Full warmup at actual batch size + step count to let cuDNN benchmark
         # select optimal kernels. Without this, first timed run includes kernel selection.
         print(f"Warming up cuDNN (full {self.steps}-step pass at batch_size={self.batch_size})...")
-        if mode in ('int8', 'int8_baseline', 'int8_attn_modiff') and HAS_INT8:
-            reset_modiff_state_int8(model.model.diffusion_model)
-        elif mode in ('int4', 'int4_baseline', 'int4_attn_modiff') and HAS_INT4:
-            reset_modiff_state_int4(model.model.diffusion_model)
-        if mode in ('int8', 'int8_baseline', 'int8_attn_modiff') and HAS_INT8_LINEAR:
-            reset_modiff_state_linear(model.model.diffusion_model)
-        elif mode in ('int4', 'int4_baseline', 'int4_attn_modiff') and HAS_INT4_LINEAR:
-            reset_modiff_state_int4_linear(model.model.diffusion_model)
-        if mode in ('attn_modiff', 'int8_attn_modiff', 'int4_attn_modiff'):
-            from integration.kernels.modiff_attention import reset_attention_modiff
-            reset_attention_modiff(model.model.diffusion_model)
+        self._reset_modiff_state(model, mode)
         # Match the timed run's autocast: quantized convs emit fp16 regardless,
         # and some models (cin256) feed that into plain fp32 nn.Conv2d skips, which
         # errors without autocast to reconcile the dtypes.
@@ -860,37 +918,37 @@ class BenchmarkRunner:
         if quant_memory_after_warmup["total_tracked_mib"] > 0:
             print(f"Quant memory after warmup: {format_quant_memory_report(quant_memory_after_warmup)}")
         print("Warmup complete.")
-        
+
+        # Install CUDA-graph replay AFTER calibration + warmup have settled (dtype
+        # of the temporal caches, cuDNN algo selection, and conv autotune configs
+        # must all be frozen before capture -- see _maybe_install_cuda_graph).
+        graph_active = self._maybe_install_cuda_graph(model, sampler, mode, use_autocast, dtype)
+
         total_time = 0.0
         generated = 0
 
         while generated < num_samples:
             batch = min(self.batch_size, num_samples - generated)
-            
-            if mode in ('int8', 'int8_baseline', 'int8_attn_modiff') and HAS_INT8:
-                reset_modiff_state_int8(model.model.diffusion_model)
-            elif mode in ('int4', 'int4_baseline', 'int4_attn_modiff') and HAS_INT4:
-                reset_modiff_state_int4(model.model.diffusion_model)
-            if mode in ('int8', 'int8_baseline', 'int8_attn_modiff') and HAS_INT8_LINEAR:
-                reset_modiff_state_linear(model.model.diffusion_model)
-            elif mode in ('int4', 'int4_baseline', 'int4_attn_modiff') and HAS_INT4_LINEAR:
-                reset_modiff_state_int4_linear(model.model.diffusion_model)
-            if mode in ('attn_modiff', 'int8_attn_modiff', 'int4_attn_modiff'):
-                from integration.kernels.modiff_attention import reset_attention_modiff
-                reset_attention_modiff(model.model.diffusion_model)
+            # A captured graph is bound to the capture batch; replay it at the
+            # fixed batch and slice off the padding for the final partial batch.
+            sample_batch = self.batch_size if graph_active else batch
+
+            self._reset_modiff_state(model, mode)
             # Note: baseline modes have state reset but MoDiff optimizations disabled
-            
+
             torch.cuda.synchronize()
             start = time.time()
-            
+
             with torch.inference_mode(), torch.amp.autocast('cuda', enabled=use_autocast, dtype=dtype):
-                samples, _ = sampler.sample(S=self.steps, batch_size=batch,
+                samples, _ = sampler.sample(S=self.steps, batch_size=sample_batch,
                                            shape=self.shape, eta=0.0, verbose=False,
-                                           **self._cond_kwargs(model, batch))
-            
+                                           **self._cond_kwargs(model, sample_batch))
+                if sample_batch != batch:
+                    samples = samples[:batch]
+
             torch.cuda.synchronize()
             total_time += time.time() - start
-            
+
             self._decode_and_save_samples(
                 model,
                 samples,
@@ -899,8 +957,17 @@ class BenchmarkRunner:
                 use_autocast=use_autocast,
                 dtype=dtype,
             )
-            
+
             generated += batch
+
+        if graph_active:
+            stats = get_cuda_graph_replay_stats(model.model.diffusion_model)
+            if not stats or stats.get('num_graphs', 0) == 0 or stats.get('replay_count', 0) == 0:
+                raise RuntimeError(f"CUDA Graph replay was not exercised correctly: {stats}")
+            print(f"  CUDA Graph stats: {stats}")
+            self._last_cuda_graph_stats = stats
+        else:
+            self._last_cuda_graph_stats = None
 
         return total_time, generated, quant_memory_after_warmup
     
@@ -980,6 +1047,8 @@ class BenchmarkRunner:
             'time_per_step_ms': time_per_step,
             'quant_memory_after_warmup': quant_memory_after_warmup,
         }
+        if getattr(self, '_last_cuda_graph_stats', None):
+            self.results[mode]['cuda_graph'] = self._last_cuda_graph_stats
         
         # Restore original path for next mode in 'all' loop
         self.calibration_path = original_calib_path
@@ -1076,6 +1145,8 @@ def main():
                        help='Skip all AttentionBlocks (identity pass-through). Ablation: conv-only baseline.')
     parser.add_argument('--no_resblock', action='store_true',
                        help='Skip all ResBlocks (identity pass-through). Ablation: attention-only baseline.')
+    parser.add_argument('--cuda_graph', action='store_true',
+                        help='Capture/replay the per-step UNet with a CUDA graph (removes launch overhead)')
     parser.add_argument('--no_groupnorm', action='store_true',
                        help='Skip GroupNorm+SiLU in FusedResBlock (identity). Ablation: conv-only ResBlock.')
     args = parser.parse_args()
@@ -1106,6 +1177,7 @@ def main():
         skip_groupnorm=args.no_groupnorm,
         linear_backend=args.linear_backend,
         linear_int_gemm_min_m=args.linear_int_gemm_min_m,
+        use_cuda_graph=args.cuda_graph,
     )
     
     modes = ['fp32', 'fp16', 'int8', 'int8_baseline', 'int4', 'int4_baseline'] if args.mode == 'all' else [args.mode]

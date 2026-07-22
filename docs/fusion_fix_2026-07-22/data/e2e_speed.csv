@@ -1,0 +1,6 @@
+mode,ms_step,min_ms,speedup_vs_fp16,before_ms_step,delta_vs_before
+fp16,187.16,185.96,1.0,188.1,0.94
+int8_baseline,118.11,117.95,1.585,121.0,2.89
+int4_baseline,109.66,109.45,1.707,114.9,5.24
+int8_modiff,129.15,128.88,1.449,136.8,7.65
+int4_modiff,128.03,127.55,1.462,141.5,13.47
