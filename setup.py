@@ -33,6 +33,7 @@ setup(
                 'csrc/kernels/conv/conv_epilogue.cu',
                 'csrc/kernels/conv/conv2d_int8.cu',
                 'csrc/kernels/conv/conv2d_int4.cu',
+                'csrc/kernels/conv/conv2d_evt.cu',
                 # norm: GroupNorm(+SiLU)(+quantize) and fused GroupNorm->qkv
                 'csrc/kernels/norm/group_norm_silu.cu',
                 'csrc/kernels/norm/fused_gn_qkv.cu',

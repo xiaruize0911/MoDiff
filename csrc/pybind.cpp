@@ -78,6 +78,17 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("conv2d_int4_fprop_o_hat_residual", &conv2d_int4_fprop_o_hat_residual,
           "INT4 Conv + o_hat accumulate + fused ResBlock skip-add into a separate output");
 
+    // EVT-fused conv epilogues (kernels/conv2d_evt.cu): scale+bias+residual / o_hat dual-store,
+    // no post-conv scratch tensor. Bit-exact replacements for the deepfuse+store / o_hat paths.
+    m.def("conv2d_int8_evt_bias_residual_fp16", &conv2d_int8_evt_bias_residual_fp16,
+          "EVT INT8 conv: acc*alpha*weight_scale[k] + bias[k] + residual[elem] -> fp16 (single kernel, no scratch)");
+    m.def("conv2d_int4_evt_bias_residual_fp16", &conv2d_int4_evt_bias_residual_fp16,
+          "EVT INT4 conv: acc*alpha*weight_scale[k] + bias[k] + residual[elem] -> fp16 (single kernel, no scratch)");
+    m.def("conv2d_int8_evt_o_hat_residual", &conv2d_int8_evt_o_hat_residual,
+          "EVT INT8 conv: o_hat[elem] += acc*alpha*weight_scale[k] (in place) ; out = o_hat_new + residual -> fp16 (dual store, no fp32 round-trip)");
+    m.def("conv2d_int4_evt_o_hat_residual", &conv2d_int4_evt_o_hat_residual,
+          "EVT INT4 conv: o_hat[elem] += acc*alpha*weight_scale[k] (in place) ; out = o_hat_new + residual -> fp16 (dual store, no fp32 round-trip)");
+
     // Attention Conv1d layout-transform fusions (kernels/layout_transform.cu)
     m.def("fp16_ncw_to_fp32_cl", &fp16_ncw_to_fp32_cl,
           "Fused FP16 [N,C,L] → FP32 [N*L,C,1,1] channels-last (K1+K2 fusion)");

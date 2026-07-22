@@ -137,6 +137,25 @@ torch::Tensor conv2d_int8_fprop_no_ohat(
     torch::Tensor input, torch::Tensor weight, torch::Tensor inv_scale, torch::Tensor weight_scales,
     int stride_h, int stride_w, int padding_h, int padding_w, int dilation_h, int dilation_w);
 
+// ---- csrc/kernels/conv/conv2d_evt.cu (EVT-fused conv epilogues; scale+bias+residual / o_hat dual-store) ----
+// weight_scales + bias are FP32 [K]; residual/o_hat/output are FP16.
+torch::Tensor conv2d_int8_evt_bias_residual_fp16(
+    torch::Tensor input, torch::Tensor weight, torch::Tensor inv_scale, torch::Tensor weight_scales,
+    torch::Tensor bias, torch::Tensor residual, torch::Tensor output,
+    int sh, int sw, int ph, int pw, int dh, int dw);
+torch::Tensor conv2d_int4_evt_bias_residual_fp16(
+    torch::Tensor input, torch::Tensor weight_packed, torch::Tensor inv_scale, torch::Tensor weight_scales,
+    torch::Tensor bias, torch::Tensor residual, torch::Tensor output,
+    int sh, int sw, int ph, int pw, int dh, int dw);
+torch::Tensor conv2d_int8_evt_o_hat_residual(
+    torch::Tensor input, torch::Tensor weight, torch::Tensor inv_scale, torch::Tensor weight_scales,
+    torch::Tensor o_hat, torch::Tensor residual, torch::Tensor output,
+    int sh, int sw, int ph, int pw, int dh, int dw);
+torch::Tensor conv2d_int4_evt_o_hat_residual(
+    torch::Tensor input, torch::Tensor weight_packed, torch::Tensor inv_scale, torch::Tensor weight_scales,
+    torch::Tensor o_hat, torch::Tensor residual, torch::Tensor output,
+    int sh, int sw, int ph, int pw, int dh, int dw);
+
 // ---- csrc/kernels/conv/conv2d_int4.cu ----
 torch::Tensor conv2d_int4_fprop(
     torch::Tensor input, torch::Tensor weight_packed, torch::Tensor scales, torch::Tensor bias,
