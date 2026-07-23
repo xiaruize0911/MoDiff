@@ -2,8 +2,10 @@
 Both paths pay GroupNorm on the real [b,C,H,W] block input; the quant path additionally pays the
 Q/K/V quantize. Cores:
   fp16 = GroupNorm + fp16 MATH SDPA
-  int8 = GroupNorm + quantize_attn_qkv(int8) + flash_attn_int8_vt   (FUSED flash, sole quant-attn path)
-  int4 = GroupNorm + quantize_attn_qkv_i4qk_i8v + flash_attn_int4_vt (int4 Q/K + int8 V)
+  int8 = GroupNorm + quantize_attn_qkv_packed_static(int8) + flash_attn_int8_vt   (PRODUCTION frozen path)
+  int4 = GroupNorm + quantize_attn_qkv_packed_static(int4) + flash_attn_int4_vt   (int4 Q/K + int8 V)
+The quantize is the packed STATIC kernel the frozen forward actually runs (multi-row aq_qtok + tiled
+V-transpose), not the non-packed dynamic quantize_attn_qkv (which the forward never calls).
 Only hd<=48 & T%64==0 blocks run flash (24/1024, 48/256, 48/64 = 15/21 blocks); the hd=96 blocks
 (16, 4) fall back to fp16. NOTE: attention has no modiff variant, so int8_baseline == int8_modiff
 (int4 likewise). CUDA-event median warm 30 + 100 iters x 5 reps, burn-in. rel-L2 vs fp32 sanity per
@@ -58,14 +60,20 @@ for (C, nh, hd, T, Hs, cnt) in SHAPES:
     with torch.no_grad():
         S = torch.einsum("nhid,nhjd->nhij", q.float(), k.float()) * sc
         ref = torch.einsum("nhij,nhjd->nhid", torch.softmax(S, -1), v.float())
-    qm = q.reshape(BH, T, hd).contiguous(); km = k.reshape(BH, T, hd).contiguous(); vm = v.reshape(BH, T, hd).contiguous()
     eligible = (hd <= 48 and T % 64 == 0)
     t_q8 = t_a8 = t_q4 = t_a4 = None; r8 = r4 = None
     if eligible:
+        # PRODUCTION path: packed qkv [b,T,nh,3,hd] -> packed STATIC quantize (what the frozen forward
+        # runs, incl. the multi-row aq_qtok + tiled V-transpose) -> fused flash. (Was the non-packed
+        # dynamic quantize_attn_qkv, which the forward never uses.)
+        qkv_pk = torch.stack([q.permute(0, 2, 1, 3), k.permute(0, 2, 1, 3), v.permute(0, 2, 1, 3)], dim=3).contiguous()
+        sqc = q.abs().max().item() / 127.0; skc = k.abs().max().item() / 127.0
+        avc = v.abs().amax(dim=(0, 1, 2)).float()   # per-channel V absmax over (b,nh,T)
         # int8 fused flash
         hd_pad = ((hd + 31) // 32) * 32
+        svv8 = torch.ones(hd_pad, device=dev); svv8[:hd] = (avc / 127.0).clamp_min(1e-8); svv8 = svv8.contiguous()
         def quant8():
-            return mc.quantize_attn_qkv(qm, km, vm, hd_pad, hd_pad, 8)
+            return mc.quantize_attn_qkv_packed_static(qkv_pk, H, T, hd, hd_pad, hd_pad, 8, sqc, skc, svv8)
         t_q8 = bench(quant8)
         qi, ki, vt, sq, sk, sv = quant8()
         qi = qi.view(N, H, T, hd_pad); ki = ki.view(N, H, T, hd_pad); vt = vt.view(N, H, hd_pad, T)
@@ -76,8 +84,10 @@ for (C, nh, hd, T, Hs, cnt) in SHAPES:
         t_a8 = bench(flash8)
         # int4 (int4 Q/K + int8 V) fused flash
         hdp4, hdp_v = 64, ((hd + 31) // 32) * 32
+        svv4 = torch.ones(hdp_v, device=dev); svv4[:hd] = (avc / 127.0).clamp_min(1e-8); svv4 = svv4.contiguous()
+        sqc4 = q.abs().max().item() / 7.0; skc4 = k.abs().max().item() / 7.0
         def quant4():
-            return mc.quantize_attn_qkv_i4qk_i8v(qm, km, vm, hdp4, hdp_v)
+            return mc.quantize_attn_qkv_packed_static(qkv_pk, H, T, hd, hdp4, hdp_v, 4, sqc4, skc4, svv4)
         t_q4 = bench(quant4)
         q4, k4, vt4, sq4, sk4, sv4 = quant4()
         q4 = q4.view(N, H, T, -1); k4 = k4.view(N, H, T, -1); vt4 = vt4.view(N, H, hdp_v, T)
