@@ -403,6 +403,222 @@ __global__ void flash_attn_int8_mma_kernel(
 }
 
 // =========================================================================
+// PACKED-INPUT flash: reads the interleaved qkv [b,T,nh,3,hd] (channel order
+// (nh,{q,k,v},hd)) DIRECTLY and does the split + hd->hd_pad zero-pad + V-transpose
+// (and, for fp16 input, the static-scale quantize) INSIDE its smem staging --
+// replacing the separate aq_qtok/aq_vquant (or Route-1 from_i8) reshuffle pass and
+// the qi/ki/vt HBM round-trip. The mma compute core (QKᵀ, online softmax, PV, store)
+// is byte-identical to flash_attn_int8_mma_kernel.
+//   TIn=__half : quantize on load (q_inv=1/sq_c, k_inv=1/sk_c, 1/sv[d] for V) ->
+//                bit-identical to quantize_attn_qkv_packed_static -> flash_attn_int8_vt.
+//   TIn=int8_t : plain gather (input already int8, scales folded upstream, Route-1) ->
+//                bit-identical to quantize_attn_qkv_from_i8 -> flash_attn_int8_vt.
+// 2-stage double-buffer: cp.async-prefetch RAW tiles (dynamic smem, stride hd) so the global
+// load overlaps compute, then quantize+transpose smem->smem into the int8 mma tiles. Scales are
+// the frozen per-tensor sq_c/sk_c + per-channel sv[hd]. Vs uses a padded row stride to soften the
+// transpose-write bank conflict (stride BC would be 0 mod 32 -> 32-way).
+// =========================================================================
+#define FA_VS_STRIDE (FA_MMA_BC + 4)   // padded Vs row stride (4-aligned for the int PV read)
+__device__ __forceinline__ int8_t mfp_stage(__half x, float inv) {   // fp16: quantize
+  int q = __float2int_rn(__half2float(x) * inv);
+  return (int8_t)(q > 127 ? 127 : (q < -127 ? -127 : q));
+}
+__device__ __forceinline__ int8_t mfp_stage(int8_t x, float /*inv*/) { return x; }  // int8: copy
+
+template <typename TIn>
+__global__ void flash_attn_int8_packed_mma_kernel(
+    const TIn* __restrict__ qkv, const float* __restrict__ sv,
+    __half* __restrict__ out, int N, int H, int T, int hd, int hd_pad,
+    float sq_c, float sk_c, float softmax_scale, float q_inv, float k_inv,
+    int8_t* __restrict__ out_q, float proj_inv_scale, int qout_stride) {
+  const int nh = blockIdx.x;
+  const int w = threadIdx.x >> 5;              // warp id in CTA
+  const int lane = threadIdx.x & 31, gid = lane >> 2, tig = lane & 3;
+  const int q0 = (blockIdx.y * FA_MMA_WARPS + w) * FA_MMA_BR;   // this warp's query tile
+
+  // packed base for this CTA's (sample n, head h): X(t,d) = xh[t*pkT + d]
+  const int h = nh % H, n = nh / H;
+  const size_t pkT = (size_t)H * 3 * hd;                          // elements per token, all heads
+  const TIn* qh = qkv + (size_t)n * T * pkT + (size_t)(h * 3 + 0) * hd;
+  const TIn* kh = qkv + (size_t)n * T * pkT + (size_t)(h * 3 + 1) * hd;
+  const TIn* vh = qkv + (size_t)n * T * pkT + (size_t)(h * 3 + 2) * hd;
+
+  // int8 mma tiles (static). Raw fp16/int8 prefetch tiles live in DYNAMIC smem (2-stage double-buffer,
+  // row stride = hd) so the global load overlaps compute via cp.async; the quantize+transpose is a
+  // cheap smem->smem pass. Static: Ks[BC,hd_pad] + Vs[hd_pad,BC] + Qs + Ps = 16 KB.
+  __shared__ int8_t Ks[FA_MMA_BC * FA_MMA_MAXHD];
+  __shared__ int8_t Vs[FA_MMA_MAXHD * FA_VS_STRIDE];   // Vs[d*STRIDE + j] = V[kt+j][d] (padded)
+  __shared__ int8_t Qs[FA_MMA_WARPS * FA_MMA_BR * FA_MMA_MAXHD];
+  __shared__ int8_t Ps[FA_MMA_WARPS * FA_MMA_BR * FA_MMA_BC];
+  extern __shared__ char s_raw[];                   // [2][BC*hd] K then [2][BC*hd] V, TIn-typed
+  TIn* Kraw = reinterpret_cast<TIn*>(s_raw);
+  TIn* Vraw = Kraw + (size_t)2 * FA_MMA_BC * hd;
+
+  int8_t* Qsw = &Qs[w * FA_MMA_BR * hd_pad];
+  int8_t* Psw = &Ps[w * FA_MMA_BR * FA_MMA_BC];
+
+  // Q: per-warp gather from packed qkv + quantize on load (col>=hd or gq>=T -> 0; d-fastest coalesced).
+  for (int idx = lane; idx < FA_MMA_BR * hd_pad; idx += 32) {
+    int row = idx / hd_pad, col = idx % hd_pad, gq = q0 + row;
+    Qsw[idx] = (gq < T && col < hd) ? mfp_stage(qh[(size_t)gq * pkT + col], q_inv) : (int8_t)0;
+  }
+
+  // Per-lane running softmax state (registers). Each lane owns rows gid & gid+8.
+  float m_run0 = -INFINITY, m_run1 = -INFINITY, l_run0 = 0.f, l_run1 = 0.f;
+  float Oreg[FA_MMA_MAXNT * 4];
+#pragma unroll
+  for (int i = 0; i < FA_MMA_MAXNT * 4; ++i) Oreg[i] = 0.f;
+  const int n_nt2 = hd / 8;
+  const int nkt = hd_pad / 32;
+  const int NNT = FA_MMA_BC / 8;                 // QKᵀ N-tiles
+  const int NKV = T / FA_MMA_BC;                 // key tiles (T % BC == 0 on the mma path)
+  const int EPC = 16 / (int)sizeof(TIn);         // elems per 16B cp.async chunk (8 half / 16 int8)
+  const int CPT = hd / EPC;                      // chunks per token (hd*sizeof(TIn) % 16 == 0, host-gated)
+
+  // cp.async a raw K + raw V tile (token-major, stride hd) into double-buffer `buf`.
+  auto load_raw = [&](int buf, int kt) {
+    TIn* Kd = Kraw + (size_t)buf * FA_MMA_BC * hd;
+    TIn* Vd = Vraw + (size_t)buf * FA_MMA_BC * hd;
+    for (int c = threadIdx.x; c < FA_MMA_BC * CPT; c += blockDim.x) {
+      int j = c / CPT, off = (c % CPT) * EPC, gj = kt + j;
+      modiff_cp_async_cg(modiff_smem_ptr(&Kd[j * hd + off]),
+                         (const uint4*)(kh + (size_t)gj * pkT + off), gj < T);
+      modiff_cp_async_cg(modiff_smem_ptr(&Vd[j * hd + off]),
+                         (const uint4*)(vh + (size_t)gj * pkT + off), gj < T);
+    }
+    __pipeline_commit();
+  };
+  // quantize/transpose raw tile `buf` (smem) -> int8 Ks [BC,hd_pad] + Vs [hd_pad,BC] (smem->smem).
+  auto quant_tile = [&](int buf) {
+    const TIn* Ksrc = Kraw + (size_t)buf * FA_MMA_BC * hd;
+    const TIn* Vsrc = Vraw + (size_t)buf * FA_MMA_BC * hd;
+    for (int idx = threadIdx.x; idx < FA_MMA_BC * hd_pad; idx += blockDim.x) {
+      int j = idx / hd_pad, d = idx % hd_pad;
+      Ks[j * hd_pad + d] = (d < hd) ? mfp_stage(Ksrc[j * hd + d], k_inv) : (int8_t)0;
+      Vs[d * FA_VS_STRIDE + j] = (d < hd) ? mfp_stage(Vsrc[j * hd + d], 1.f / sv[d]) : (int8_t)0;
+    }
+  };
+
+  load_raw(0, 0);                                  // prime tile 0 (2-stage double-buffer)
+  for (int ktile = 0; ktile < NKV; ++ktile) {
+    const int buf = ktile & 1;
+    __pipeline_wait_prior(0);   // raw[buf] arrived
+    __syncthreads();            // raw visible; prev Ks/Vs consumed; Q visible (iter 0)
+    const int nxt = ktile + 1;
+    if (nxt < NKV) load_raw(nxt & 1, nxt * FA_MMA_BC);   // prefetch (overlaps quantize+compute)
+    quant_tile(buf);
+    __syncthreads();            // Ks/Vs visible
+    const int kt = ktile * FA_MMA_BC;
+    int8_t* Ksb = Ks;
+    int8_t* Vsb = Vs;
+
+    // ---- QKᵀ: keep the [BR x BC] score tile in registers (Sreg[nt][0..3]) ----
+    float Sreg[FA_MMA_BC / 8][4];
+    for (int nt = 0; nt < NNT; ++nt) {
+      int acc[4] = {0, 0, 0, 0};
+      for (int ks = 0; ks < nkt; ++ks) {
+        int base = ks * 32;
+        unsigned a[4], b[2];
+        a[0] = *(const int*)&Qsw[(gid)     * hd_pad + base + tig * 4];
+        a[1] = *(const int*)&Qsw[(gid + 8) * hd_pad + base + tig * 4];
+        a[2] = *(const int*)&Qsw[(gid)     * hd_pad + base + tig * 4 + 16];
+        a[3] = *(const int*)&Qsw[(gid + 8) * hd_pad + base + tig * 4 + 16];
+        b[0] = *(const int*)&Ksb[(nt * 8 + gid) * hd_pad + base + tig * 4];
+        b[1] = *(const int*)&Ksb[(nt * 8 + gid) * hd_pad + base + tig * 4 + 16];
+        modiff_mma_m16n8k32(acc, a, b);
+      }
+      int c0 = nt * 8 + tig * 2, c1 = c0 + 1;
+      // Same multiply order as flash_attn_int8_mma_kernel (acc*sq*sk*scale) for bit-exactness:
+      // static sq/sk are per-tensor, so sqi0==sqi1==sq_c and sk0==sk1==sk_c.
+      Sreg[nt][0] = (kt + c0 < T) ? acc[0] * sq_c * sk_c * softmax_scale : -INFINITY;
+      Sreg[nt][1] = (kt + c1 < T) ? acc[1] * sq_c * sk_c * softmax_scale : -INFINITY;
+      Sreg[nt][2] = (kt + c0 < T) ? acc[2] * sq_c * sk_c * softmax_scale : -INFINITY;
+      Sreg[nt][3] = (kt + c1 < T) ? acc[3] * sq_c * sk_c * softmax_scale : -INFINITY;
+    }
+
+    // ---- register-parallel online softmax (all 32 lanes active) ----
+    float lm0 = -INFINITY, lm1 = -INFINITY;
+    for (int nt = 0; nt < NNT; ++nt) {
+      lm0 = fmaxf(lm0, fmaxf(Sreg[nt][0], Sreg[nt][1]));
+      lm1 = fmaxf(lm1, fmaxf(Sreg[nt][2], Sreg[nt][3]));
+    }
+    lm0 = fmaxf(lm0, __shfl_xor_sync(0xffffffff, lm0, 1)); lm0 = fmaxf(lm0, __shfl_xor_sync(0xffffffff, lm0, 2));
+    lm1 = fmaxf(lm1, __shfl_xor_sync(0xffffffff, lm1, 1)); lm1 = fmaxf(lm1, __shfl_xor_sync(0xffffffff, lm1, 2));
+    float mcur0 = fmaxf(m_run0, lm0), mcur1 = fmaxf(m_run1, lm1);
+    float a_g  = __expf(m_run0 - mcur0);
+    float a_g8 = __expf(m_run1 - mcur1);
+    float ls0 = 0.f, ls1 = 0.f;
+    for (int nt = 0; nt < NNT; ++nt) {
+      int c0 = nt * 8 + tig * 2, c1 = c0 + 1;
+      float p00 = __expf(Sreg[nt][0] - mcur0), p01 = __expf(Sreg[nt][1] - mcur0);
+      float p10 = __expf(Sreg[nt][2] - mcur1), p11 = __expf(Sreg[nt][3] - mcur1);
+      ls0 += p00 + p01; ls1 += p10 + p11;
+      int q00 = (int)(p00 * 127.f + 0.5f), q01 = (int)(p01 * 127.f + 0.5f);
+      int q10 = (int)(p10 * 127.f + 0.5f), q11 = (int)(p11 * 127.f + 0.5f);
+      Psw[gid       * FA_MMA_BC + c0] = (int8_t)(q00 > 127 ? 127 : q00);
+      Psw[gid       * FA_MMA_BC + c1] = (int8_t)(q01 > 127 ? 127 : q01);
+      Psw[(gid + 8) * FA_MMA_BC + c0] = (int8_t)(q10 > 127 ? 127 : q10);
+      Psw[(gid + 8) * FA_MMA_BC + c1] = (int8_t)(q11 > 127 ? 127 : q11);
+    }
+    ls0 += __shfl_xor_sync(0xffffffff, ls0, 1); ls0 += __shfl_xor_sync(0xffffffff, ls0, 2);
+    ls1 += __shfl_xor_sync(0xffffffff, ls1, 1); ls1 += __shfl_xor_sync(0xffffffff, ls1, 2);
+    l_run0 = l_run0 * a_g + ls0; l_run1 = l_run1 * a_g8 + ls1;
+    m_run0 = mcur0; m_run1 = mcur1;
+    __syncwarp();
+
+    // ---- rescale O (registers) by per-row alpha, then PV accumulate ----
+    for (int nt2 = 0; nt2 < n_nt2; ++nt2) {
+      Oreg[nt2 * 4 + 0] *= a_g;  Oreg[nt2 * 4 + 1] *= a_g;
+      Oreg[nt2 * 4 + 2] *= a_g8; Oreg[nt2 * 4 + 3] *= a_g8;
+      int acc[4] = {0, 0, 0, 0};
+      for (int ks = 0; ks < FA_MMA_BC / 32; ++ks) {
+        int koff = ks * 32;
+        unsigned a[4], b[2];
+        a[0] = *(const int*)&Psw[(gid)     * FA_MMA_BC + koff + tig * 4];
+        a[1] = *(const int*)&Psw[(gid + 8) * FA_MMA_BC + koff + tig * 4];
+        a[2] = *(const int*)&Psw[(gid)     * FA_MMA_BC + koff + tig * 4 + 16];
+        a[3] = *(const int*)&Psw[(gid + 8) * FA_MMA_BC + koff + tig * 4 + 16];
+        b[0] = *(const int*)&Vsb[(nt2 * 8 + gid) * FA_VS_STRIDE + koff + tig * 4];
+        b[1] = *(const int*)&Vsb[(nt2 * 8 + gid) * FA_VS_STRIDE + koff + tig * 4 + 16];
+        modiff_mma_m16n8k32(acc, a, b);
+      }
+      int d0 = nt2 * 8 + tig * 2, d1 = d0 + 1;
+      Oreg[nt2 * 4 + 0] += (1.f / 127.f) * sv[d0] * acc[0];
+      Oreg[nt2 * 4 + 1] += (1.f / 127.f) * sv[d1] * acc[1];
+      Oreg[nt2 * 4 + 2] += (1.f / 127.f) * sv[d0] * acc[2];
+      Oreg[nt2 * 4 + 3] += (1.f / 127.f) * sv[d1] * acc[3];
+    }
+  }
+
+  float invl_g  = (l_run0 > 0.f) ? 1.f / l_run0 : 0.f;
+  float invl_g8 = (l_run1 > 0.f) ? 1.f / l_run1 : 0.f;
+  for (int nt2 = 0; nt2 < n_nt2; ++nt2) {
+    int d0 = nt2 * 8 + tig * 2, d1 = d0 + 1;
+    int gi0 = q0 + gid, gi8 = q0 + gid + 8;
+    float o00 = Oreg[nt2*4+0]*invl_g,  o01 = Oreg[nt2*4+1]*invl_g;
+    float o10 = Oreg[nt2*4+2]*invl_g8, o11 = Oreg[nt2*4+3]*invl_g8;
+    if (out_q == nullptr) {
+      out[(size_t)(nh * T + gi0) * hd + d0] = __float2half(o00);
+      out[(size_t)(nh * T + gi0) * hd + d1] = __float2half(o01);
+      out[(size_t)(nh * T + gi8) * hd + d0] = __float2half(o10);
+      out[(size_t)(nh * T + gi8) * hd + d1] = __float2half(o11);
+    } else {
+      int c0 = h * hd + d0, c1 = h * hd + d1;   // round through fp16 first -> bit-matches
+      int q00 = __float2int_rn(__half2float(__float2half(o00)) * proj_inv_scale);
+      int q01 = __float2int_rn(__half2float(__float2half(o01)) * proj_inv_scale);
+      int q10 = __float2int_rn(__half2float(__float2half(o10)) * proj_inv_scale);
+      int q11 = __float2int_rn(__half2float(__float2half(o11)) * proj_inv_scale);
+      q00 = q00>127?127:(q00<-127?-127:q00); q01 = q01>127?127:(q01<-127?-127:q01);
+      q10 = q10>127?127:(q10<-127?-127:q10); q11 = q11>127?127:(q11<-127?-127:q11);
+      out_q[(size_t)(n * T + gi0) * qout_stride + c0] = (int8_t)q00;
+      out_q[(size_t)(n * T + gi0) * qout_stride + c1] = (int8_t)q01;
+      out_q[(size_t)(n * T + gi8) * qout_stride + c0] = (int8_t)q10;
+      out_q[(size_t)(n * T + gi8) * qout_stride + c1] = (int8_t)q11;
+    }
+  }
+}
+
+// =========================================================================
 // int4 flash: QKᵀ in int4 (mma.m16n8k64.s4), PV kept in int8 (P∈[0,1] at int4 is
 // too coarse). q4,k4 packed int4 [N,H,T,hdp4/2] (hdp4 mult of 64); v int8 PRE-
 // TRANSPOSED [N,H,hdp_v,T] (hdp_v=pad(hd,32)). Documented NEGATIVE result: at hd=24
@@ -708,6 +924,81 @@ torch::Tensor flash_attn_int8_vt_qout(torch::Tensor q, torch::Tensor k, torch::T
       (__half*)nullptr, N, H, T, hd, hd_pad, (float)softmax_scale,
       out_q.data_ptr<int8_t>(), proj_inv_scale, C);
   return out_q;   // int8 [b*T, C] token-major (ready for gemm_w8a8_awq_bias_res)
+}
+
+// ---- PACKED-input flash host entries. Read interleaved qkv [b,T,nh,3,hd] directly (fp16 ->
+//      quantize on load with frozen per-tensor sq_c/sk_c + per-channel sv[d]; int8 -> plain gather).
+//      Replace the separate aq_qtok/aq_vquant (or Route-1 from_i8) reshuffle + the qi/ki/vt HBM
+//      round-trip. sv is f32 [hd] (per-channel V dequant). Dispatch on qkv.dtype(). ----
+template <typename TIn>
+static inline void run_flash_packed(const TIn* qkv, const float* sv, __half* out, int8_t* out_q,
+                                    int N, int H, int T, int hd, int hd_pad,
+                                    float sq_c, float sk_c, float softmax_scale, float q_inv, float k_inv,
+                                    float proj_inv_scale, int qout_stride, cudaStream_t stream) {
+  dim3 grid(N * H, T / (FA_MMA_WARPS * FA_MMA_BR));
+  // dynamic smem: 2 tensors (K,V) x 2 stages x [BC*hd] raw tiles (row stride hd)
+  size_t smem = (size_t)2 * 2 * FA_MMA_BC * hd * sizeof(TIn);
+  flash_attn_int8_packed_mma_kernel<TIn><<<grid, FA_MMA_WARPS * 32, smem, stream>>>(
+      qkv, sv, out, N, H, T, hd, hd_pad, sq_c, sk_c, softmax_scale, q_inv, k_inv,
+      out_q, proj_inv_scale, qout_stride);
+}
+
+static inline void check_packed(torch::Tensor qkv, torch::Tensor sv, int64_t hd_pad,
+                                int& N, int& T, int& H, int& hd) {
+  TORCH_CHECK(qkv.is_cuda() && sv.is_cuda(), "flash_attn_int8_packed: qkv/sv must be CUDA");
+  TORCH_CHECK(qkv.dim() == 5, "qkv must be [b,T,nh,3,hd]");
+  TORCH_CHECK(qkv.size(3) == 3, "qkv dim 3 must be 3 (q,k,v)");
+  TORCH_CHECK(qkv.is_contiguous(), "qkv must be contiguous");
+  TORCH_CHECK(qkv.dtype() == torch::kHalf || qkv.dtype() == torch::kChar, "qkv must be fp16 or int8");
+  TORCH_CHECK(sv.dtype() == torch::kFloat32 && sv.is_contiguous(), "sv must be f32 contiguous");
+  N = qkv.size(0); T = qkv.size(1); H = qkv.size(2); hd = qkv.size(4);
+  TORCH_CHECK(sv.numel() == hd, "sv must be [hd]");
+  TORCH_CHECK(hd_pad <= FA_MMA_MAXHD && (T % (FA_MMA_WARPS * FA_MMA_BR)) == 0 && (hd % 8) == 0
+              && (FA_MMA_BC * hd_pad) % 16 == 0, "flash_attn_int8_packed: mma-eligible shapes only");
+  const int elem = (qkv.dtype() == torch::kHalf) ? 2 : 1;
+  TORCH_CHECK((hd * elem) % 16 == 0, "flash_attn_int8_packed: per-token bytes (hd*sizeof) must be a "
+              "multiple of 16 for cp.async (fp16 always ok; int8 needs hd%16==0)");
+}
+
+torch::Tensor flash_attn_int8_packed_vt(torch::Tensor qkv, torch::Tensor sv, int64_t hd_pad,
+                                        double sq_c, double sk_c, double softmax_scale) {
+  int N, T, H, hd;
+  check_packed(qkv, sv, hd_pad, N, T, H, hd);
+  auto out = torch::empty({N, H, T, hd}, torch::TensorOptions().dtype(torch::kFloat16).device(qkv.device()));
+  const float sqf = (float)sq_c, skf = (float)sk_c, ssf = (float)softmax_scale;
+  const float q_inv = 1.f / sqf, k_inv = 1.f / skf;
+  auto* op_ = reinterpret_cast<__half*>(out.data_ptr<at::Half>());
+  const float* svp = sv.data_ptr<float>();
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  if (qkv.dtype() == torch::kHalf)
+    run_flash_packed<__half>(reinterpret_cast<const __half*>(qkv.data_ptr<at::Half>()), svp, op_,
+                             nullptr, N, H, T, hd, (int)hd_pad, sqf, skf, ssf, q_inv, k_inv, 0.f, 0, stream);
+  else
+    run_flash_packed<int8_t>(qkv.data_ptr<int8_t>(), svp, op_,
+                             nullptr, N, H, T, hd, (int)hd_pad, sqf, skf, ssf, q_inv, k_inv, 0.f, 0, stream);
+  return out;   // fp16 [N,H,T,hd]
+}
+
+torch::Tensor flash_attn_int8_packed_vt_qout(torch::Tensor qkv, torch::Tensor sv, int64_t hd_pad,
+                                             double sq_c, double sk_c, double softmax_scale,
+                                             double proj_a_scale) {
+  int N, T, H, hd;
+  check_packed(qkv, sv, hd_pad, N, T, H, hd);
+  const int C = H * hd;   // int8 proj K == C (C % 64 == 0)
+  auto out_q = torch::empty({(long)N * T, C}, torch::TensorOptions().dtype(torch::kChar).device(qkv.device()));
+  const float sqf = (float)sq_c, skf = (float)sk_c, ssf = (float)softmax_scale;
+  const float q_inv = 1.f / sqf, k_inv = 1.f / skf;
+  const float proj_inv_scale = 1.f / (float)proj_a_scale;
+  int8_t* oqp = out_q.data_ptr<int8_t>();
+  const float* svp = sv.data_ptr<float>();
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  if (qkv.dtype() == torch::kHalf)
+    run_flash_packed<__half>(reinterpret_cast<const __half*>(qkv.data_ptr<at::Half>()), svp, nullptr,
+                             oqp, N, H, T, hd, (int)hd_pad, sqf, skf, ssf, q_inv, k_inv, proj_inv_scale, C, stream);
+  else
+    run_flash_packed<int8_t>(qkv.data_ptr<int8_t>(), svp, nullptr,
+                             oqp, N, H, T, hd, (int)hd_pad, sqf, skf, ssf, q_inv, k_inv, proj_inv_scale, C, stream);
+  return out_q;   // int8 [b*T, C] token-major
 }
 
 torch::Tensor flash_attn_int8(torch::Tensor q, torch::Tensor k, torch::Tensor v,

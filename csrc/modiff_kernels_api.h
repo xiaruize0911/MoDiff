@@ -319,6 +319,15 @@ torch::Tensor flash_attn_int8_vt_qout(torch::Tensor q, torch::Tensor k, torch::T
 torch::Tensor flash_attn_int4_vt_qout(torch::Tensor q4, torch::Tensor k4, torch::Tensor vt,
                                       torch::Tensor sq, torch::Tensor sk, torch::Tensor sv,
                                       int64_t hdp4, double softmax_scale, double proj_a_scale, int64_t k_pad);
+// PACKED-input int8 flash: read interleaved qkv [b,T,nh,3,hd] directly (fp16 -> quantize on load with
+// frozen per-tensor sq_c/sk_c + per-channel sv[hd]; int8 -> plain gather), doing hd->hd_pad pad + the
+// V-transpose in smem. Replaces the aq_qtok/aq_vquant (or Route-1 from_i8) reshuffle + qi/ki/vt HBM
+// round-trip. Dispatches on qkv.dtype(). _qout variant emits proj-quantized int8 token-major [b*T,C].
+torch::Tensor flash_attn_int8_packed_vt(torch::Tensor qkv, torch::Tensor sv, int64_t hd_pad,
+                                        double sq_c, double sk_c, double softmax_scale);
+torch::Tensor flash_attn_int8_packed_vt_qout(torch::Tensor qkv, torch::Tensor sv, int64_t hd_pad,
+                                             double sq_c, double sk_c, double softmax_scale,
+                                             double proj_a_scale);
 torch::Tensor mma_smoke(torch::Tensor A, torch::Tensor B);
 
 // ---- csrc/kernels/attention/attn_quant_gemm.cu (quantize prologue for FUSED flash attention) ----
