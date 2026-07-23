@@ -32,6 +32,7 @@
 #include <ATen/cuda/CUDAContext.h>
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
+#include <cstdlib>
 
 #include "common.cuh"
 
@@ -839,10 +840,69 @@ __global__ void gn_group_stats_kernel(
 // Launch kernel 1 (dtype-dispatched). block_size formula MUST match
 // group_norm_silu_nhwc / group_norm_silu_nhwc_kernel so the fp32 reduction tree --
 // and therefore the mean/inv_std -- is bit-identical to the two-kernel reference.
+// --- Alternate-order (atomic) group stats: element-major grid-stride atomicAdd of sum/sumsq per
+// (sample,group), then finalize. Same math, DIFFERENT fp32 summation order than the group-major tree
+// -- used (MODIFF_GN_STATS_ALT=1) to measure the o_hat DDIM drift a conv-epilogue-fused reduction
+// would introduce, before committing to that fusion. ---
+template <typename TIn>
+__global__ void gn_stats_sum_kernel(const TIn* __restrict__ X, float* __restrict__ sum,
+                                    int C, int G, long sample_stride, long num_elements) {
+    const int CPG = C / G;
+    for (long i = (long)blockIdx.x * blockDim.x + threadIdx.x; i < num_elements;
+         i += (long)blockDim.x * gridDim.x)
+        atomicAdd(&sum[(i / sample_stride) * G + ((int)(i % C) / CPG)], gn_load(X, i));
+}
+template <typename TIn>
+__global__ void gn_stats_var_kernel(const TIn* __restrict__ X, const float* __restrict__ mean,
+                                    float* __restrict__ var, int C, int G, long sample_stride, long num_elements) {
+    const int CPG = C / G;
+    for (long i = (long)blockIdx.x * blockDim.x + threadIdx.x; i < num_elements;
+         i += (long)blockDim.x * gridDim.x) {
+        long s = (i / sample_stride) * G + ((int)(i % C) / CPG);
+        float d = gn_load(X, i) - mean[s];        // subtract mean BEFORE squaring -> stable
+        atomicAdd(&var[s], d * d);
+    }
+}
+__global__ void gn_mean_kernel(const float* __restrict__ sum, float* __restrict__ mean, long gs, int NG) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x; if (i < NG) mean[i] = sum[i] / (float)gs;
+}
+__global__ void gn_invstd_kernel(const float* __restrict__ var, float* __restrict__ inv_std,
+                                 long gs, float eps, int NG, float perturb) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x; if (i < NG) inv_std[i] = perturb / sqrtf(var[i] / (float)gs + eps);
+}
+
 static void gn_launch_group_stats(
     const torch::Tensor& x, int N, int C, long HW, int num_groups, double eps,
     torch::Tensor& mean, torch::Tensor& inv_std
 ) {
+    static const char* _alt = std::getenv("MODIFF_GN_STATS_ALT");
+    if (_alt != nullptr && _alt[0] != '0') {
+        // Stable two-pass, element-major atomic order (different fp32 order than the group-major
+        // tree): pass1 sum->mean, pass2 sum of (x-mean)^2 -> var. Measures reorder drift without
+        // the one-pass sumsq-mean^2 cancellation.
+        auto sopt = torch::TensorOptions().dtype(torch::kFloat32).device(x.device());
+        auto sum = torch::zeros({N * num_groups}, sopt);
+        auto var = torch::zeros({N * num_groups}, sopt);
+        long num_elements = (long)N * C * HW, sample_stride = (long)C * HW;
+        long group_size = (long)(C / num_groups) * HW;
+        int ab = 256; unsigned int ag = (unsigned int)((num_elements + ab - 1) / ab);
+        int NG = N * num_groups, fb = 128, fg = (NG + fb - 1) / fb;
+        cudaStream_t st = at::cuda::getCurrentCUDAStream();
+        if (x.scalar_type() == torch::kFloat32) {
+            gn_stats_sum_kernel<float><<<ag, ab, 0, st>>>(x.data_ptr<float>(), sum.data_ptr<float>(), C, num_groups, sample_stride, num_elements);
+            gn_mean_kernel<<<fg, fb, 0, st>>>(sum.data_ptr<float>(), mean.data_ptr<float>(), group_size, NG);
+            gn_stats_var_kernel<float><<<ag, ab, 0, st>>>(x.data_ptr<float>(), mean.data_ptr<float>(), var.data_ptr<float>(), C, num_groups, sample_stride, num_elements);
+        } else {
+            const __half* xp = reinterpret_cast<const __half*>(x.data_ptr<at::Half>());
+            gn_stats_sum_kernel<__half><<<ag, ab, 0, st>>>(xp, sum.data_ptr<float>(), C, num_groups, sample_stride, num_elements);
+            gn_mean_kernel<<<fg, fb, 0, st>>>(sum.data_ptr<float>(), mean.data_ptr<float>(), group_size, NG);
+            gn_stats_var_kernel<__half><<<ag, ab, 0, st>>>(xp, mean.data_ptr<float>(), var.data_ptr<float>(), C, num_groups, sample_stride, num_elements);
+        }
+        const char* _pf = std::getenv("MODIFF_GN_STATS_PERTURB");   // sanity: >1.0 deliberately perturbs inv_std
+        float perturb = (_pf != nullptr) ? (float)atof(_pf) : 1.0f;
+        gn_invstd_kernel<<<fg, fb, 0, st>>>(var.data_ptr<float>(), inv_std.data_ptr<float>(), group_size, (float)eps, NG, perturb);
+        return;
+    }
     const long group_size = (long)(C / num_groups) * HW;
     int block_size = 32;
     while (block_size < group_size && block_size < 1024) block_size <<= 1;
