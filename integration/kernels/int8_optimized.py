@@ -415,7 +415,7 @@ class OptimizedInt8Conv2d(nn.Module):
         profiler.stop("MoDiff INT8 Static Step1 (fused SiLU)", p_step1)
 
         p_conv = profiler.start("MoDiff INT8 Static Conv2d")
-        modiff_cutlass.conv2d_int8_evt_o_hat(
+        (modiff_cutlass.conv2d_int8_evt_o_hat if self.o_hat_cache.dtype == torch.float16 else modiff_cutlass.conv2d_int8_fprop_o_hat)(
             x_int8,
             self.weight_int8,
             self._cached_alpha_tensor.view(1),
@@ -467,7 +467,7 @@ class OptimizedInt8Conv2d(nn.Module):
         profiler.stop("MoDiff INT8 GN-fused Step1 (GN+SiLU+delta)", p_step1)
 
         p_conv = profiler.start("MoDiff INT8 Static Conv2d")
-        modiff_cutlass.conv2d_int8_evt_o_hat(
+        (modiff_cutlass.conv2d_int8_evt_o_hat if self.o_hat_cache.dtype == torch.float16 else modiff_cutlass.conv2d_int8_fprop_o_hat)(
             x_int8, self.weight_int8, self._cached_alpha_tensor.view(1),
             self.weight_scale_channel.view(-1), self.o_hat_cache,
             self.stride[0], self.stride[1], self.padding[0], self.padding[1],
@@ -966,7 +966,7 @@ class OptimizedInt8Conv2d(nn.Module):
             profiler.stop("MoDiff INT8 Static Step1", p_step1)
 
             p_conv = profiler.start("MoDiff INT8 Static Conv2d")
-            modiff_cutlass.conv2d_int8_evt_o_hat(
+            (modiff_cutlass.conv2d_int8_evt_o_hat if self.o_hat_cache.dtype == torch.float16 else modiff_cutlass.conv2d_int8_fprop_o_hat)(
                 x_int8,
                 self.weight_int8,
                 self._cached_alpha_tensor.view(1),
@@ -990,7 +990,7 @@ class OptimizedInt8Conv2d(nn.Module):
         profiler.stop("MoDiff INT8 Fused Step1", p_step1)
 
         p_conv = profiler.start("MoDiff INT8 Fused Conv2d")
-        modiff_cutlass.conv2d_int8_evt_o_hat(
+        (modiff_cutlass.conv2d_int8_evt_o_hat if self.o_hat_cache.dtype == torch.float16 else modiff_cutlass.conv2d_int8_fprop_o_hat)(
             x_int8,
             self.weight_int8,
             self._inv_scale_buf.view(1),

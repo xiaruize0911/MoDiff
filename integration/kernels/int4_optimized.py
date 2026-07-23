@@ -387,7 +387,7 @@ class OptimizedInt4Conv2d(nn.Module):
         profiler.stop("MoDiff INT4 Static Step1 (fused SiLU)", p_step1)
 
         p_conv = profiler.start("MoDiff INT4 Static Conv2d")
-        modiff_cutlass.conv2d_int4_evt_o_hat(
+        (modiff_cutlass.conv2d_int4_evt_o_hat if self.o_hat_cache.dtype == torch.float16 else modiff_cutlass.conv2d_int4_fprop_o_hat)(
             x_packed,
             self.weight_packed,
             self._cached_alpha_tensor.view(1),
@@ -437,7 +437,7 @@ class OptimizedInt4Conv2d(nn.Module):
         profiler.stop("MoDiff INT4 GN-fused Step1 (GN+SiLU+delta+pack)", p_step1)
 
         p_conv = profiler.start("MoDiff INT4 Static Conv2d")
-        modiff_cutlass.conv2d_int4_evt_o_hat(
+        (modiff_cutlass.conv2d_int4_evt_o_hat if self.o_hat_cache.dtype == torch.float16 else modiff_cutlass.conv2d_int4_fprop_o_hat)(
             x_packed, self.weight_packed, self._cached_alpha_tensor.view(1),
             self.weight_scale_channel.view(-1), self.o_hat_cache,
             self.stride[0], self.stride[1], self.padding[0], self.padding[1],
@@ -903,7 +903,7 @@ class OptimizedInt4Conv2d(nn.Module):
             profiler.stop("MoDiff INT4 Static Step1", p_step1)
 
             p_conv = profiler.start("MoDiff INT4 Static Conv2d")
-            modiff_cutlass.conv2d_int4_evt_o_hat(
+            (modiff_cutlass.conv2d_int4_evt_o_hat if self.o_hat_cache.dtype == torch.float16 else modiff_cutlass.conv2d_int4_fprop_o_hat)(
                 x_packed,
                 self.weight_packed,
                 self._cached_alpha_tensor.view(1),
@@ -942,7 +942,7 @@ class OptimizedInt4Conv2d(nn.Module):
         profiler.stop("MoDiff INT4 Fused Step1", p_step1)
 
         p_conv = profiler.start("MoDiff INT4 Fused Conv2d")
-        modiff_cutlass.conv2d_int4_evt_o_hat(
+        (modiff_cutlass.conv2d_int4_evt_o_hat if self.o_hat_cache.dtype == torch.float16 else modiff_cutlass.conv2d_int4_fprop_o_hat)(
             x_packed,
             self.weight_packed,
             self._inv_scale_buf.view(1),
