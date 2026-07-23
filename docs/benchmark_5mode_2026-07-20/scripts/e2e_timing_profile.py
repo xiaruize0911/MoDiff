@@ -12,7 +12,7 @@ from torch.profiler import profile, ProfilerActivity
 import integration.benchmarks.benchmark_ldm as B
 
 BATCH = 128
-WARMUP, STEPS, NP = 30, 20, 4           # profile NP x STEPS steps; per-step normalization
+WARMUP, STEPS, NP = 50, 25, 6           # profile NP x STEPS steps; per-step normalization
 HERE = "docs/benchmark_5mode_2026-07-20"
 VERS = [("fp16", "fp16"), ("int8_baseline", "int8_baseline"), ("int4_baseline", "int4_baseline"),
         ("int8_modiff", "int8"), ("int4_modiff", "int4")]

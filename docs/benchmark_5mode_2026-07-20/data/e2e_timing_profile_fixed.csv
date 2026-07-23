@@ -1,0 +1,6 @@
+mode,attention,conv,qkv/proj int GEMM,other fp16 GEMM,GroupNorm (pure),quantize (standalone),quantize (fused into GN),resample/concat,elementwise/copy,other,quantize_total,gpu_busy,wall
+fp16,82.1,41.28,0.0,6.68,19.84,0.0,0.0,4.7,30.7,0.02,0.0,185.32,187.11
+int8_baseline,32.65,25.88,7.04,0.55,7.09,14.91,14.89,5.58,5.61,0.01,29.8,114.21,114.86
+int4_baseline,31.84,13.58,6.6,0.24,7.05,13.91,14.35,5.57,10.06,0.01,28.26,103.22,104.2
+int8_modiff,32.58,26.07,7.06,0.52,16.52,15.61,11.39,5.58,9.27,0.01,27.0,124.6,124.35
+int4_modiff,31.79,13.59,6.55,0.24,16.37,14.54,7.73,5.55,11.54,0.03,22.27,107.93,120.92

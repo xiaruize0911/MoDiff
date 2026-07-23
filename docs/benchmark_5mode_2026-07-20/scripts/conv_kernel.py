@@ -23,7 +23,7 @@ CONV_SHAPES = [
 MODES = ["fp16", "int8_baseline", "int4_baseline", "int8_modiff", "int4_modiff"]
 
 
-def cuda_bench(fn, warm=50, iters=200, rounds=5):
+def cuda_bench(fn, warm=80, iters=250, rounds=7):
     meds = []
     for _ in range(rounds):
         for _ in range(warm): fn()

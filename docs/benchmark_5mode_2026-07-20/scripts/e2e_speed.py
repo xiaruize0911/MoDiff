@@ -11,7 +11,7 @@ import torch
 import integration.benchmarks.benchmark_ldm as B
 
 BATCH = 128
-WARMUP, TIMED, RUNS = 30, 200, 5
+WARMUP, TIMED, RUNS = 50, 200, 7
 HERE = "docs/benchmark_5mode_2026-07-20"
 # (report label, _setup_model mode string)
 VERS = [("fp16", "fp16"),

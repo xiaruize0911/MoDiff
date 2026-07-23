@@ -23,7 +23,7 @@ SHAPES = [(192, 8, 24, 1024, 32, 5), (384, 8, 48, 256, 16, 5), (384, 8, 48, 64, 
           (768, 8, 96, 16, 4, 5), (768, 8, 96, 4, 2, 1)]
 
 
-def bench(fn, it=100, warm=30, reps=5):
+def bench(fn, it=200, warm=60, reps=7):
     ts = []
     for _ in range(reps):
         for _ in range(warm): fn()

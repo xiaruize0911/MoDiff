@@ -16,7 +16,7 @@ HERE = "docs/benchmark_5mode_2026-07-20"
 SHAPES = [(192, 1024, 5), (384, 256, 5), (384, 64, 5), (768, 16, 5), (768, 4, 1)]   # (C, T, count)
 
 
-def bench(fn, it=200, warm=50, reps=5):
+def bench(fn, it=300, warm=80, reps=7):
     ts = []
     for _ in range(reps):
         for _ in range(warm): fn()
