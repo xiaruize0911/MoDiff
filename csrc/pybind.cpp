@@ -122,6 +122,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "(int4 counterpart; requires even channels-per-group)");
     m.def("fused_gn_qkv", &fused_gn_qkv, "Fused GroupNorm->qkv (per-sample scale/bias mainloop fusion)");
     m.def("fused_gn_qkv_int8", &fused_gn_qkv_int8, "Fused GroupNorm->qkv with int8-clamp output (oscale folded into weight/bias)");
+    m.def("fused_gn_qkv_i8evt", &fused_gn_qkv_i8evt, "Fused GroupNorm->qkv, int8 output via fp32-bias/int8-clamp EVT epilogue (signed-qkv-correct)");
 
     // Fused int8/int4 flash attention (tensor-core, scores kept in SRAM, fp32 online softmax).
     m.def("flash_attn_int8", &flash_attn_int8,
@@ -182,6 +183,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "packed-qkv dynamic quantize (reads interleaved [b,T,nh,3,hd], no transpose copy; QK int8/int4, V int8)");
     m.def("quantize_attn_qkv_packed_static", &quantize_attn_qkv_packed_static,
           "packed-qkv static quantize (calibrated; reads interleaved qkv, no transpose copy)");
+    m.def("quantize_attn_qkv_from_i8", &quantize_attn_qkv_from_i8,
+          "reshuffle a pre-quantized int8 qkv (fused_gn_qkv_i8evt output) into flash qi/ki/vt (int8->int8, no requant)");
     // fp16 (reference) materialized softmax — used by the fp16-materialized attention path
     // (token_major_attention, MODIFF_FP16_MATERIALIZED; the static-vs-dynamic study). Not int8/int4.
     m.def("attn_softmax_fp16", &attn_softmax_fp16,

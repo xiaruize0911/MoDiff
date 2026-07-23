@@ -35,8 +35,13 @@
 #include "cutlass/conv/device/implicit_gemm_convolution_fusion.h"
 #include "cutlass/epilogue/thread/linear_combination_clamp.h"
 
+#include "cutlass/epilogue/threadblock/fusion/visitors.hpp"
+#include "cutlass/epilogue/threadblock/epilogue_with_visitor_callbacks.h"
+#include "cutlass/conv/device/implicit_gemm_convolution.h"
+
 #include "common.cuh"
 #include "implicit_gemm_fusion_persample.h"
+#include "implicit_gemm_fusion_persample_evt.h"
 
 using Arch = cutlass::arch::Sm80;
 
@@ -320,4 +325,112 @@ torch::Tensor fused_gn_qkv_int8(
   TORCH_CHECK(st == cutlass::Status::kSuccess, "fused_gn_qkv_int8: run failed: ",
               cutlass::cutlassGetStatusString(st));
   return output;
+}
+
+// ==== int8-output variant via a custom EVT epilogue (fixes fused_gn_qkv_int8's signed-qkv bug) ====
+// fused_gn_qkv_int8's epilogue bias is int8 and cannot hold the -oscale*SHIFT*colsum correction
+// (|.|~1600 >> 127). Here the epilogue is an Sm80 EVT tree: acc + RowBroadcast(FP32 bias) ->
+// AuxStore int8 -- the fp32 bias node holds the correction, only the small result is clamped to int8.
+// Driven by the merged per-sample-fusion + EVT kernel (implicit_gemm_fusion_persample_evt.h).
+namespace ct = cutlass::epilogue::threadblock;
+using EvtSwizzle = cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<>;
+using EvtTB = cutlass::gemm::GemmShape<128, 256, 32>;
+using EvtW  = cutlass::gemm::GemmShape<64, 64, 32>;
+using EvtI  = cutlass::gemm::GemmShape<16, 8, 16>;
+static int const kEvtAlignI8 = 128 / cutlass::sizeof_bits<int8_t>::value;   // 16
+using EvtEpiOpI8 = cutlass::epilogue::thread::LinearCombinationClamp<int8_t, kEvtAlignI8, float, float>;
+using EvtDefaultFusion = typename cutlass::conv::kernel::DefaultConv2dFpropFusion<
+    cutlass::half_t, cutlass::layout::TensorNHWC, cutlass::half_t, cutlass::layout::TensorNHWC,
+    cutlass::half_t, cutlass::layout::RowMajor, int8_t, cutlass::layout::TensorNHWC, float,
+    cutlass::arch::OpClassTensorOp, Arch, EvtTB, EvtW, EvtI,
+    EvtEpiOpI8, EvtSwizzle, 3, cutlass::arch::OpMultiplyAdd,
+    cutlass::conv::IteratorAlgorithm::kOptimized>::Kernel;
+using EvtMma = typename EvtDefaultFusion::Mma;
+using EvtDefaultEpi = typename EvtDefaultFusion::Epilogue;
+using EvtTileMap = ct::OutputTileThreadLayout<EvtTB, EvtW, int8_t, kEvtAlignI8, 1>;
+using EvtAccum  = ct::VisitorAccFetch;
+using EvtBiasRow = ct::VisitorRowBroadcast<EvtTileMap, float, cute::Stride<cute::_0, cute::_1, int32_t>>;
+using EvtAdd = ct::VisitorCompute<cutlass::plus, float, float, cutlass::FloatRoundStyle::round_to_nearest>;
+using EvtAuxSt = ct::VisitorAuxStore<EvtTileMap, int8_t, cutlass::FloatRoundStyle::round_to_nearest,
+                                     cute::Stride<int64_t, cute::_1, int64_t>>;
+using EvtAddBias = ct::Sm80EVT<EvtAdd, EvtAccum, EvtBiasRow>;
+using EvtTree = ct::Sm80EVT<EvtAuxSt, EvtAddBias>;
+using EvtEpi = ct::EpilogueWithVisitorCallbacks<EvtDefaultEpi, EvtTree, 1>;
+using EvtConvKernel = modiff::ImplicitGemmConvolutionFusionPerSampleEVT<
+    EvtMma, EvtEpi, EvtSwizzle, cutlass::conv::Operator::kFprop>;
+using EvtConvOp = cutlass::conv::device::ImplicitGemmConvolution<EvtConvKernel>;
+
+// -------- host entry: int8 fused GN->qkv with fp32 EVT bias (signed-qkv-correct) --------
+//   Inputs:  x fp16 [N,C,H,W] channels_last; weight fp16 [3C,1,1,C] (oscale*gamma folded);
+//            bias_f32 fp32 [3C] EVT bias = oscale*(qkv.bias + qkv.w@gn.beta - SHIFT*colsum(Wf));
+//            groups int; eps double; shift double (SHIFT relu-avoidance constant).
+//   Output:  int8 [N,3C,H,W] channels_last (token-major [N,T,3C], channel order (nh,{q,k,v},hd)).
+//   The GN stats (per-sample scale=rstd, bias=-mean*rstd+SHIFT) are computed here (gn_accum/finalize);
+//   the mainloop applies them per-sample; the EVT epilogue adds bias_f32 and clamps to int8.
+torch::Tensor fused_gn_qkv_i8evt(
+    torch::Tensor x, torch::Tensor weight, torch::Tensor bias_f32,
+    int groups, double eps, double shift) {
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  CHECK_CUDA(x); CHECK_CONTIGUOUS(x);
+  int N = x.size(0), C = x.size(1), H = x.size(2), W = x.size(3);
+  int K = weight.size(0);
+  int T = H * W, Cg = C / groups;
+  int64_t M = (int64_t)N * T, ldK = K;
+
+  auto opt_h = torch::TensorOptions().dtype(torch::kFloat16).device(x.device());
+  auto opt_f = torch::TensorOptions().dtype(torch::kFloat32).device(x.device());
+  auto scale = torch::empty({N, C}, opt_h);
+  auto bias  = torch::empty({N, C}, opt_h);
+  auto sumC   = torch::zeros({N, C}, opt_f);
+  auto sumsqC = torch::zeros({N, C}, opt_f);
+
+  const int TILE = 128;
+  int ttiles = (T + TILE - 1) / TILE;
+  dim3 accum_grid(N, ttiles);
+  gn_accum_kernel<<<accum_grid, C, 0, stream>>>(
+      reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
+      sumC.data_ptr<float>(), sumsqC.data_ptr<float>(), N, C, T, TILE);
+  gn_finalize_kernel<<<N, C, 2 * C * (int)sizeof(float), stream>>>(
+      sumC.data_ptr<float>(), sumsqC.data_ptr<float>(),
+      reinterpret_cast<__half*>(scale.data_ptr<at::Half>()),
+      reinterpret_cast<__half*>(bias.data_ptr<at::Half>()),
+      N, C, T, Cg, (float)eps, (float)shift);
+
+  auto out = torch::empty({N, K, H, W}, torch::TensorOptions().dtype(torch::kChar).device(x.device())
+                          .memory_format(torch::MemoryFormat::ChannelsLast));
+  cutlass::conv::Conv2dProblemSize problem(
+      {N, H, W, C}, {K, 1, 1, C}, {0, 0, 0, 0}, {1, 1}, {1, 1},
+      {N, H, W, K}, cutlass::conv::Mode::kCrossCorrelation, 1);
+
+  auto* xp = reinterpret_cast<cutlass::half_t*>(x.data_ptr<at::Half>());
+  auto* wp = reinterpret_cast<cutlass::half_t*>(weight.data_ptr<at::Half>());
+  auto* scp = reinterpret_cast<cutlass::half_t*>(scale.data_ptr<at::Half>());
+  auto* bip = reinterpret_cast<cutlass::half_t*>(bias.data_ptr<at::Half>());
+  auto* bf  = bias_f32.data_ptr<float>();
+  auto* op_ = reinterpret_cast<int8_t*>(out.data_ptr<int8_t>());
+
+  using LN = cutlass::layout::TensorNHWC; using LSB = cutlass::layout::RowMajor;
+  typename EvtConvKernel::TensorRefA refA{xp, LN({C, W * C, H * W * C})};
+  typename EvtConvKernel::TensorRefB refB{wp, LN({C, 1 * C, 1 * 1 * C})};
+  typename EvtConvKernel::TensorRefScaleBias refScale{scp, LSB(C)};
+  typename EvtConvKernel::TensorRefScaleBias refBias{bip, LSB(C)};
+  typename EvtTree::Arguments ep{
+    { {},
+      {bf, 0.f, {cute::_0{}, cute::_1{}, (int32_t)K}},
+      {} },
+    {op_, {ldK, cute::_1{}, M * K}} };
+  typename EvtConvOp::Arguments args{problem, refA, refB, refScale, refBias, ep};
+  EvtConvOp op;
+  cutlass::Status st = op.can_implement(args);
+  TORCH_CHECK(st == cutlass::Status::kSuccess, "fused_gn_qkv_i8evt: can_implement: ",
+              cutlass::cutlassGetStatusString(st));
+  auto ws = torch::empty({(long)op.get_workspace_size(args)},
+                         torch::TensorOptions().dtype(torch::kByte).device(x.device()));
+  st = op.initialize(args, ws.data_ptr(), stream);
+  TORCH_CHECK(st == cutlass::Status::kSuccess, "fused_gn_qkv_i8evt: initialize: ",
+              cutlass::cutlassGetStatusString(st));
+  st = op(stream);
+  TORCH_CHECK(st == cutlass::Status::kSuccess, "fused_gn_qkv_i8evt: run: ",
+              cutlass::cutlassGetStatusString(st));
+  return out;
 }

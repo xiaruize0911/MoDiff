@@ -274,6 +274,11 @@ torch::Tensor fused_gn_qkv(
 torch::Tensor fused_gn_qkv_int8(
     torch::Tensor x, torch::Tensor weight, torch::Tensor epi_bias,
     int groups, double eps, double shift);
+// int8 fused GN->qkv with a custom fp32-bias/int8-clamp EVT epilogue (fixes fused_gn_qkv_int8's
+// signed-qkv overflow). bias_f32 is fp32 [3C]; output int8 [N,3C,H,W] channels_last.
+torch::Tensor fused_gn_qkv_i8evt(
+    torch::Tensor x, torch::Tensor weight, torch::Tensor bias_f32,
+    int groups, double eps, double shift);
 
 // ---- csrc/kernels/linear/awq_w8a8_gemm_cuda.cu (vendored from llm-awq, MIT) ----
 void w8a8_gemm_forward_cuda(torch::Tensor in_feats, torch::Tensor kernel, torch::Tensor wscales, torch::Tensor ascales, torch::Tensor out_feats);
@@ -327,5 +332,7 @@ std::vector<torch::Tensor> quantize_attn_qkv_static(torch::Tensor Q, torch::Tens
 // PACKED-qkv quantize (reads interleaved [b,T,nh,3,hd], no transpose copy). QK int8/int4, V int8.
 std::vector<torch::Tensor> quantize_attn_qkv_packed(torch::Tensor qkv, int64_t nh, int64_t T, int64_t hd, int64_t hp_qk, int64_t hp_av, int64_t qk_bits);
 std::vector<torch::Tensor> quantize_attn_qkv_packed_static(torch::Tensor qkv, int64_t nh, int64_t T, int64_t hd, int64_t hp_qk, int64_t hp_av, int64_t qk_bits, double sq_c, double sk_c, torch::Tensor sv_vec);
+// int8 reshuffle consumer for fused_gn_qkv_i8evt: gather Q/K + transpose V (int8->int8, no requant).
+std::vector<torch::Tensor> quantize_attn_qkv_from_i8(torch::Tensor qkv_i8, int64_t nh, int64_t T, int64_t hd, int64_t hp_qk, int64_t hp_av);
 // fp16 (reference) materialized softmax — used by the fp16-materialized attention path (not int8/int4)
 std::vector<torch::Tensor> attn_softmax_fp16(torch::Tensor S, bool static_c, double c);

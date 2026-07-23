@@ -264,6 +264,47 @@ std::vector<torch::Tensor> quantize_attn_qkv_packed_static(torch::Tensor qkv, in
   return {qi, ki, vt, sq, sk, sv};
 }
 
+// ---- int8 reshuffle consumer for the fused int8 GN->qkv (fused_gn_qkv_i8evt). The int8 qkv is
+// ALREADY quantized with the flash static scales folded in (channel order (nh,{q,k,v},hd) ==
+// [b,T,nh,3,hd]), so this only gathers Q/K (hd->hp pad) and transposes V to channel-major -- NO
+// requant (int8->int8 copy). Output layout == quantize_attn_qkv_packed_static's qi/ki/vt; the scales
+// sq/sk/sv are the calibrated constants, supplied by the caller. int8 Q/K only. ----
+__global__ void from_i8_qtok_kernel(const int8_t* __restrict__ QKV, int8_t* __restrict__ out,
+                                    int nh, int T, int hd, int hp, int sel) {
+  const int r = blockIdx.x, lane = threadIdx.x;
+  const int8_t* xr = QKV + pk_row_off(r, nh, T, hd, sel);
+  int8_t* o8 = out + (size_t)r * hp;
+  for (int d = lane; d < hp; d += 32) o8[d] = (d < hd) ? xr[d] : (int8_t)0;
+}
+__global__ void from_i8_vtrans_kernel(const int8_t* __restrict__ QKV, int8_t* __restrict__ vt,
+                                      int nh, int T, int hd, int hp_av) {
+  const int rd = blockIdx.x, bh = rd / hp_av, d = rd % hp_av;
+  const int h = bh % nh, b = bh / nh;
+  const int tid = threadIdx.x, nt = blockDim.x;
+  int8_t* o = vt + (size_t)rd * T;
+  for (int t = tid; t < T; t += nt) {
+    int8_t val = 0;
+    if (d < hd) { size_t off = ((((size_t)b * T + t) * nh + h) * 3 + 2) * (size_t)hd + d; val = QKV[off]; }
+    o[t] = val;
+  }
+}
+std::vector<torch::Tensor> quantize_attn_qkv_from_i8(torch::Tensor qkv_i8, int64_t nh, int64_t T,
+                                                     int64_t hd, int64_t hp_qk, int64_t hp_av) {
+  TORCH_CHECK(qkv_i8.is_cuda() && qkv_i8.dtype() == torch::kChar, "qkv_i8 int8 CUDA");
+  qkv_i8 = qkv_i8.contiguous();
+  int b = qkv_i8.numel() / ((int)nh * 3 * (int)hd * (int)T);
+  int BH = b * (int)nh;
+  auto oi = torch::TensorOptions().dtype(torch::kChar).device(qkv_i8.device());
+  auto qi = torch::empty({BH, (int)T, (int)hp_qk}, oi), ki = torch::empty({BH, (int)T, (int)hp_qk}, oi);
+  auto vt = torch::empty({BH, (int)hp_av, (int)T}, oi);
+  cudaStream_t s = at::cuda::getCurrentCUDAStream();
+  const int8_t* P = qkv_i8.data_ptr<int8_t>();
+  from_i8_qtok_kernel<<<BH * (int)T, 32, 0, s>>>(P, qi.data_ptr<int8_t>(), (int)nh, (int)T, (int)hd, (int)hp_qk, 0);
+  from_i8_qtok_kernel<<<BH * (int)T, 32, 0, s>>>(P, ki.data_ptr<int8_t>(), (int)nh, (int)T, (int)hd, (int)hp_qk, 1);
+  from_i8_vtrans_kernel<<<BH * (int)hp_av, 256, 0, s>>>(P, vt.data_ptr<int8_t>(), (int)nh, (int)T, (int)hd, (int)hp_av);
+  return {qi, ki, vt};
+}
+
 // ---- ENTRYPOINT (dynamic quantize front-end). Kernels: aq_qtok_kernel<BITS> (Q/K per-token),
 //      aq_vscale_kernel + aq_vquant_trans_kernel<BITS> (V per-channel + transpose). ----
 //   Op:       Attention W8A8/W4A4 — Q/K/V quantize
