@@ -58,6 +58,12 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         # small projections but the fusion removes the separate GroupNorm + its round-trip. int8
         # only (int4 qweight is nibble-packed, can't cheaply rebuild the fp16 weight).
         self._fuse_gn_qkv_i8 = (bits == 8 and os.environ.get("MODIFF_FUSE_GN_QKV_INT8", "0") != "0")
+        # Route 1 (opt-in MODIFF_ROUTE1=1): int8-emitting fused GN->qkv + int8 reshuffle, skipping
+        # both the fp16 qkv round-trip and the separate flash quantize. int8 only; kicks in only once
+        # flash + its static scales have frozen (calibration uses the normal path).
+        self._route1 = (bits == 8 and os.environ.get("MODIFF_ROUTE1", "0") != "0"
+                        and hasattr(_mc, "fused_gn_qkv_i8evt") and hasattr(_mc, "quantize_attn_qkv_from_i8"))
+        self._r1_ready = False
         # static kept for API compat; the flash path always self-calibrates over the first
         # _calib_steps forwards then freezes to a static single-pass quantize.
         self.static = bool(static)
@@ -229,12 +235,59 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         self._flash_choice = self._autotune_flash(qkv)
         return self._flash_choice
 
+    def _ensure_route1(self, device, SHIFT):
+        """Build the Route-1 fused-conv weight + fp32 EVT bias once the flash static scales freeze.
+        oscale folds the frozen flash scales (per-tensor 1/sq,1/sk for Q/K; per-channel 1/sv[d] for V)
+        into the (gamma-folded) qkv weight; fp32 bias = oscale*(qkv.bias + w@beta - SHIFT*colsum)."""
+        if self._r1_ready:
+            return
+        C = self.channels; hd = self.head_dim; K = 3 * C
+        if getattr(self.qkv, "weight", None) is not None:
+            qw = self.qkv.weight.detach().float()                         # [3C,C]
+        else:  # QuantLinearWxAx (int8): rebuild fp16 weight from qweight*w_scale
+            qw = self.qkv.qweight[:K, :C].float() * self.qkv.w_scale[:K].float()[:, None]
+        qb = self.qkv.bias.detach().float()
+        gw = (self.norm.weight.detach().float() if self.norm.weight is not None else torch.ones(C, device=device))
+        gb = (self.norm.bias.detach().float() if self.norm.bias is not None else torch.zeros(C, device=device))
+        Wf = qw * gw[None, :]                                             # [3C,C]
+        epi_real = qb + qw @ gb - SHIFT * Wf.sum(1)                       # [3C]
+        j = torch.arange(K, device=device); sel = (j // hd) % 3; d = j % hd
+        inv = torch.where(sel == 0, torch.tensor(1.0 / float(self._fq_sqc), device=device),
+              torch.where(sel == 1, torch.tensor(1.0 / float(self._fq_skc), device=device),
+                          1.0 / self._fq_svv[d].float()))                 # oscale [3C]
+        self._r1_w = (Wf * inv[:, None]).to(torch.float16).view(K, 1, 1, C).contiguous()
+        self._r1_bias = (inv * epi_real).float().contiguous()
+        self._r1_ready = True
+
+    def _route1_score(self, x, b, T, nh, hd, SHIFT):
+        """int8-emitting fused GN->qkv -> int8 reshuffle -> flash. Returns [b,nh,T,hd] fp16."""
+        self._ensure_route1(x.device, SHIFT)
+        hd_pad = ((hd + 31) // 32) * 32
+        qkv_i8 = _mc.fused_gn_qkv_i8evt(x, self._r1_w, self._r1_bias,
+                                        self.norm.num_groups, self.norm.eps, SHIFT)   # int8 [b,3C,H,W] CL
+        qkv_pk = qkv_i8.permute(0, 2, 3, 1).reshape(b, T, nh, 3, hd).contiguous()     # [b,T,nh,3,hd]
+        qi, ki, vt = _mc.quantize_attn_qkv_from_i8(qkv_pk, nh, T, hd, hd_pad, hd_pad)
+        qi = qi.view(b, nh, T, hd_pad); ki = ki.view(b, nh, T, hd_pad); vt = vt.view(b, nh, hd_pad, T)
+        sq = torch.full((b, nh, T), float(self._fq_sqc), device=x.device, dtype=torch.float32)
+        sk = torch.full((b, nh, T), float(self._fq_skc), device=x.device, dtype=torch.float32)
+        sv = self._fq_svv[:hd].float().view(1, 1, hd).expand(b, nh, hd).contiguous()
+        return _mc.flash_attn_int8_vt(qi, ki, vt, sq, sk, sv, self.scale)             # [b,nh,T,hd]
+
     def forward(self, x):
         b, c, H, W = x.shape
         T = H * W
         nh, hd = self.num_heads, self.head_dim
         x_in_tok = x.permute(0, 2, 3, 1).reshape(b, T, c)
         from integration.fused_ops.token_major_attention import _HAS_FUSED_GN_QKV, _FUSE_TILE_M, _FUSE_SHIFT
+        # ---- Route 1 (opt-in): int8-emitting fused GN->qkv + int8 reshuffle -> flash, skipping the
+        # fp16 qkv round-trip AND the separate flash quantize. Only after flash + scales have frozen
+        # (calibration used the normal path below); eligible int8 blocks with T%128==0, c%8==0. ----
+        if (self._route1 and _HAS_FUSED_GN_QKV and x.dtype == torch.float16
+                and self._flash_choice is True and getattr(self, "_fq_frozen2", False)
+                and (T % _FUSE_TILE_M) == 0 and (c % 8) == 0):
+            a = self._route1_score(x, b, T, nh, hd, _FUSE_SHIFT)
+            out_tok = self._proj_with_residual(a, x_in_tok, b, T, c)
+            return out_tok.reshape(b, H, W, c).permute(0, 3, 1, 2)
         # ---- GN -> qkv: fused GN->qkv (fp16) where eligible, else GroupNorm + qkv Linear ----
         if ((self._fuse_gn_qkv or self._fuse_gn_qkv_i8) and _HAS_FUSED_GN_QKV and x.dtype == torch.float16
                 and (T % _FUSE_TILE_M) == 0 and (c % 8) == 0):
