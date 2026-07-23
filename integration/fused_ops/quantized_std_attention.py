@@ -81,6 +81,15 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         # eligible blocks on fp16 SDPA.
         self._flash_gate = os.environ.get("MODIFF_FLASH_GATE", "auto")
         self._flash_choice = None    # None = undecided; True/False = frozen decision
+        # Packed-input flash (opt-in MODIFF_FLASH_PACKED=1): flash reads the interleaved qkv directly,
+        # folding the Q/K/V quantize + V-transpose into its smem staging (no separate aq_qtok/aq_vquant
+        # + qi/ki/vt HBM round-trip). Wins the smaller blocks (hd48) but LOSES the large hd24/T1024
+        # (the original flash is already efficient), so it's AUTOTUNED per block vs quantize+flash,
+        # once the static scales freeze. Bit-identical to the current path either way.
+        self._flash_packed = (bits == 8 and os.environ.get("MODIFF_FLASH_PACKED", "0") != "0"
+                              and hasattr(_mc, "flash_attn_int8_packed_vt"))
+        self._packed_choice = None       # score path (flash_attn_int8_packed_vt vs quantize+flash_vt)
+        self._packed_qout_choice = None  # fused proj path (packed_vt_qout vs quantize+flash_vt_qout)
 
     def _flash_quant_attn(self, q, k, v):
         """FUSED int8/int4 flash attention. q,k,v: [b,nh,T,hd] fp16 -> [b,nh,T,hd] fp16.
@@ -138,6 +147,34 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         sv = sv[..., :hd].contiguous().view(b, nh, hd)
         return _mc.flash_attn_int4_vt(q4, k4, vt, sq4, sk4, sv, hdp4, self.scale)  # [b,nh,T,hd]
 
+    def _autotune_ab(self, new_fn, cur_fn, warm=3, iters=10):
+        """Time two numerically-equivalent kernels once; True iff new_fn is faster (caller caches)."""
+        def t(fn):
+            for _ in range(warm): fn()
+            torch.cuda.synchronize(); s = torch.cuda.Event(True); e = torch.cuda.Event(True); s.record()
+            for _ in range(iters): fn()
+            e.record(); torch.cuda.synchronize(); return s.elapsed_time(e)
+        return t(new_fn) < t(cur_fn)
+
+    def _packed_ref_vt(self, qkv, b, nh, T, hd, hd_pad):
+        """Current path (quantize_attn_qkv_packed_static -> flash_attn_int8_vt), frozen scales.
+        The reference the packed score path is autotuned against."""
+        qi, ki, vt, sq, sk, sv = _mc.quantize_attn_qkv_packed_static(
+            qkv, nh, T, hd, hd_pad, hd_pad, 8, self._fq_sqc, self._fq_skc, self._fq_svv)
+        qi = qi.view(b, nh, T, hd_pad); ki = ki.view(b, nh, T, hd_pad); vt = vt.view(b, nh, hd_pad, T)
+        sq = sq.view(b, nh, T).contiguous(); sk = sk.view(b, nh, T).contiguous()
+        sv = sv[..., :hd].contiguous().view(b, nh, hd)
+        return _mc.flash_attn_int8_vt(qi, ki, vt, sq, sk, sv, self.scale)
+
+    def _packed_ref_vt_qout(self, qkv, b, nh, T, hd, hd_pad, proj_a):
+        """Current fused-proj path (quantize -> flash_attn_int8_vt_qout). Autotune reference."""
+        qi, ki, vt, sq, sk, sv = _mc.quantize_attn_qkv_packed_static(
+            qkv, nh, T, hd, hd_pad, hd_pad, 8, self._fq_sqc, self._fq_skc, self._fq_svv)
+        qi = qi.view(b, nh, T, hd_pad); ki = ki.view(b, nh, T, hd_pad); vt = vt.view(b, nh, hd_pad, T)
+        sq = sq.view(b, nh, T).contiguous(); sk = sk.view(b, nh, T).contiguous()
+        sv = sv[..., :hd].contiguous().view(b, nh, hd)
+        return _mc.flash_attn_int8_vt_qout(qi, ki, vt, sq, sk, sv, self.scale, proj_a)
+
     def _flash_quant_attn_packed(self, qkv):
         """Same as _flash_quant_attn but reads the interleaved qkv [b,T,nh,3,hd] DIRECTLY via the
         packed quantize kernels -> drops the ~1.2 GB/step fp16 q/k/v.transpose().contiguous() copy
@@ -147,6 +184,16 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         qv, kv, vv = qkv[:, :, :, 0, :], qkv[:, :, :, 1, :], qkv[:, :, :, 2, :]  # strided views (no copy)
         if self.bits == 8:
             hd_pad = ((hd + 31) // 32) * 32
+            # Packed flash (autotuned per block): read qkv directly, fold the quantize into flash's
+            # staging. Only when frozen; falls back to quantize+flash_vt where that's faster (hd24/T1024).
+            if self._flash_packed and getattr(self, "_fq_frozen2", False):
+                sv_hd = self._fq_svv[:hd].contiguous()
+                if self._packed_choice is None:
+                    self._packed_choice = self._autotune_ab(
+                        lambda: _mc.flash_attn_int8_packed_vt(qkv, sv_hd, hd_pad, self._fq_sqc, self._fq_skc, self.scale),
+                        lambda: self._packed_ref_vt(qkv, b, nh, T, hd, hd_pad))
+                if self._packed_choice:
+                    return _mc.flash_attn_int8_packed_vt(qkv, sv_hd, hd_pad, self._fq_sqc, self._fq_skc, self.scale)
             if getattr(self, "_fq_frozen2", False):
                 qi, ki, vt, sq, sk, sv = _mc.quantize_attn_qkv_packed_static(
                     qkv, nh, T, hd, hd_pad, hd_pad, 8, self._fq_sqc, self._fq_skc, self._fq_svv)
@@ -340,6 +387,18 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         bias = proj.bias if proj.bias is not None else qkv.new_empty(0)
         if self.bits == 8:
             hd_pad = ((hd + 31) // 32) * 32
+            # Packed flash+proj (autotuned): emit proj-quantized int8 straight from the packed qkv.
+            if self._flash_packed:
+                sv_hd = self._fq_svv[:hd].contiguous()
+                if self._packed_qout_choice is None:
+                    self._packed_qout_choice = self._autotune_ab(
+                        lambda: _mc.flash_attn_int8_packed_vt_qout(qkv, sv_hd, hd_pad, self._fq_sqc, self._fq_skc, self.scale, proj.a_scale),
+                        lambda: self._packed_ref_vt_qout(qkv, b, nh, T, hd, hd_pad, proj.a_scale))
+                if self._packed_qout_choice:
+                    xq = _mc.flash_attn_int8_packed_vt_qout(qkv, sv_hd, hd_pad, self._fq_sqc, self._fq_skc, self.scale, proj.a_scale)
+                    out = _mc.gemm_w8a8_awq_bias_res(xq, proj.qweight, proj.w_scale, proj.a_scale,
+                                                     proj.out_features, bias, res)
+                    return out.reshape(b, T, c)
             qi, ki, vt, sq, sk, sv = _mc.quantize_attn_qkv_packed_static(
                 qkv, nh, T, hd, hd_pad, hd_pad, 8, self._fq_sqc, self._fq_skc, self._fq_svv)
             qi = qi.view(b, nh, T, hd_pad); ki = ki.view(b, nh, T, hd_pad); vt = vt.view(b, nh, hd_pad, T)
