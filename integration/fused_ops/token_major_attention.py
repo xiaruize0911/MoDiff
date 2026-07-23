@@ -196,7 +196,16 @@ class TokenMajorAttentionBlock(nn.Module):
         if self._fused_ready:
             return
         C = self.channels
-        w = self.qkv.weight.detach().to(torch.float16)      # [3C, C]
+        if getattr(self.qkv, "weight", None) is not None:
+            w = self.qkv.weight.detach().to(torch.float16)      # [3C, C] fp16 Linear
+        else:
+            # qkv was quantized to QuantLinearWxAx (int8): rebuild the (int8-quantized) fp16 weight
+            # from qweight * per-output-channel w_scale, slicing off the AWQ N/K zero-padding.
+            # int8 only (int4 qweight is nibble-packed); the gate guards bits==8.
+            N, K = 3 * C, C
+            qw = self.qkv.qweight[:N, :K].to(torch.float32)
+            ws = self.qkv.w_scale[:N].to(torch.float32).unsqueeze(1)
+            w = (qw * ws).to(torch.float16)                     # [3C, C]
         b = self.qkv.bias.detach().to(torch.float16)        # [3C]
         gw = (self.norm.weight.detach().to(torch.float16) if self.norm.weight is not None
               else torch.ones(C, device=w.device, dtype=torch.float16))

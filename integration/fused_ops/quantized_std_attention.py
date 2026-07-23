@@ -52,6 +52,12 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         super().__init__(orig)
         assert bits in (4, 8)
         self.bits = bits
+        # Opt-in (MODIFF_FUSE_GN_QKV_INT8=1): even in quant mode, run the fp16 fused GN->qkv (A)
+        # for eligible blocks (T%128==0, c%8==0). Measured faster than the int8 separate qkv on the
+        # big memory-bound blocks (T=1024: 1.37x, T=256: 1.15x) since int8 doesn't speed up these
+        # small projections but the fusion removes the separate GroupNorm + its round-trip. int8
+        # only (int4 qweight is nibble-packed, can't cheaply rebuild the fp16 weight).
+        self._fuse_gn_qkv_i8 = (bits == 8 and os.environ.get("MODIFF_FUSE_GN_QKV_INT8", "0") != "0")
         # static kept for API compat; the flash path always self-calibrates over the first
         # _calib_steps forwards then freezes to a static single-pass quantize.
         self.static = bool(static)
@@ -230,7 +236,7 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         x_in_tok = x.permute(0, 2, 3, 1).reshape(b, T, c)
         from integration.fused_ops.token_major_attention import _HAS_FUSED_GN_QKV, _FUSE_TILE_M, _FUSE_SHIFT
         # ---- GN -> qkv: fused GN->qkv (fp16) where eligible, else GroupNorm + qkv Linear ----
-        if (self._fuse_gn_qkv and _HAS_FUSED_GN_QKV and x.dtype == torch.float16
+        if ((self._fuse_gn_qkv or self._fuse_gn_qkv_i8) and _HAS_FUSED_GN_QKV and x.dtype == torch.float16
                 and (T % _FUSE_TILE_M) == 0 and (c % 8) == 0):
             self._ensure_fused()
             qkv_img = _mc.fused_gn_qkv(x, self._fused_conv_w, self._fused_epi_bias,
