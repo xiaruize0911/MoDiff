@@ -205,6 +205,38 @@ __global__ void aq_vquant_trans_packed_kernel(const __half* __restrict__ QKV, co
   }
 }
 
+// V quantize + transpose, COALESCED tiled version. The naive kernel above reads V with a per-thread
+// stride of nh*3*hd (fully uncoalesced). Here each block handles a [VQ_TILE_T tokens x hd] tile for
+// one (b,h): read phase is coalesced over d (contiguous within a token) into smem; write phase is
+// coalesced over t (contiguous in vt[d][t]). Bit-identical per-element quantize to the naive kernel.
+#define VQ_TILE_T 64
+__global__ void aq_vquant_trans_packed_tiled_kernel(const __half* __restrict__ QKV, const float* __restrict__ sv,
+                                                    int8_t* __restrict__ vt, int nh, int T, int hd, int hp_av) {
+  const int bh = blockIdx.x, t0 = blockIdx.y * VQ_TILE_T;
+  const int h = bh % nh, b = bh / nh;
+  const int tt = min(VQ_TILE_T, T - t0);                 // tokens in this tile
+  extern __shared__ int8_t vs[];                          // [VQ_TILE_T * hd] quantized V (token-major)
+  // read + quantize: coalesced over d
+  for (int idx = threadIdx.x; idx < tt * hd; idx += blockDim.x) {
+    int tl = idx / hd, d = idx % hd;
+    size_t off = ((((size_t)b * T + (t0 + tl)) * nh + h) * 3 + 2) * (size_t)hd + d;
+    float val = __half2float(QKV[off]) * (1.f / sv[(size_t)bh * hp_av + d]);
+    int q = __float2int_rn(val);
+    vs[tl * hd + d] = (int8_t)(q > 127 ? 127 : (q < -127 ? -127 : q));
+  }
+  __syncthreads();
+  // write transposed: coalesced over t
+  for (int idx = threadIdx.x; idx < hd * tt; idx += blockDim.x) {
+    int d = idx / tt, tl = idx % tt;
+    vt[((size_t)bh * hp_av + d) * T + (t0 + tl)] = vs[tl * hd + d];
+  }
+  // zero the padding channels [hd, hp_av) for this tile's tokens
+  for (int idx = threadIdx.x; idx < (hp_av - hd) * tt; idx += blockDim.x) {
+    int d = hd + idx / tt, tl = idx % tt;
+    vt[((size_t)bh * hp_av + d) * T + (t0 + tl)] = 0;
+  }
+}
+
 // ---- ENTRYPOINT (packed dynamic). QK int8 or int4 (qk_bits), V always int8 (flash PV). Reads the
 //      interleaved qkv [b,T,nh,3,hd] directly -> no transpose copy. Serves both int8 & int4 flash. ----
 //   Inputs:   qkv fp16 [b,T,nh,3,hd] (contiguous, channel order (nh,3,hd)); nh,T,hd; hp_qk,hp_av;
@@ -234,7 +266,8 @@ std::vector<torch::Tensor> quantize_attn_qkv_packed(torch::Tensor qkv, int64_t n
     aq_qtok_packed_kernel<4><<<BH * (int)T, 32, 0, s>>>(P, ki.data_ptr<int8_t>(), sk.data_ptr<float>(), (int)nh, (int)T, (int)hd, (int)hp_qk, 1);
   }
   aq_vscale_packed_kernel<<<BH * (int)hd, 256, 0, s>>>(P, sv.data_ptr<float>(), (int)nh, (int)T, (int)hd, (int)hp_av, 127.f);
-  aq_vquant_trans_packed_kernel<<<BH * (int)hp_av, 256, 0, s>>>(P, sv.data_ptr<float>(), vt.data_ptr<int8_t>(), (int)nh, (int)T, (int)hd, (int)hp_av);
+  { dim3 vg(BH, ((int)T + VQ_TILE_T - 1) / VQ_TILE_T); size_t vsm = (size_t)VQ_TILE_T * (int)hd;
+    aq_vquant_trans_packed_tiled_kernel<<<vg, 256, vsm, s>>>(P, sv.data_ptr<float>(), vt.data_ptr<int8_t>(), (int)nh, (int)T, (int)hd, (int)hp_av); }
   return {qi, ki, vt, sq, sk, sv};
 }
 
@@ -266,7 +299,8 @@ std::vector<torch::Tensor> quantize_attn_qkv_packed_static(torch::Tensor qkv, in
     aq_qtok_packed_static_kernel<4><<<qblk, RPB * 32, 0, s>>>(P, qi.data_ptr<int8_t>(), sq.data_ptr<float>(), (int)nh, (int)T, (int)hd, (int)hp_qk, (float)sq_c, 0, nrows);
     aq_qtok_packed_static_kernel<4><<<qblk, RPB * 32, 0, s>>>(P, ki.data_ptr<int8_t>(), sk.data_ptr<float>(), (int)nh, (int)T, (int)hd, (int)hp_qk, (float)sk_c, 1, nrows);
   }
-  aq_vquant_trans_packed_kernel<<<BH * (int)hp_av, 256, 0, s>>>(P, sv.data_ptr<float>(), vt.data_ptr<int8_t>(), (int)nh, (int)T, (int)hd, (int)hp_av);
+  { dim3 vg(BH, ((int)T + VQ_TILE_T - 1) / VQ_TILE_T); size_t vsm = (size_t)VQ_TILE_T * (int)hd;
+    aq_vquant_trans_packed_tiled_kernel<<<vg, 256, vsm, s>>>(P, sv.data_ptr<float>(), vt.data_ptr<int8_t>(), (int)nh, (int)T, (int)hd, (int)hp_av); }
   return {qi, ki, vt, sq, sk, sv};
 }
 
