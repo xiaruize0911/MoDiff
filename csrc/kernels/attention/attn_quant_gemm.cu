@@ -145,11 +145,15 @@ __global__ void aq_qtok_packed_kernel(const __half* __restrict__ QKV, int8_t* __
   }
 }
 // Q/K per-token quantize from packed qkv (static/calibrated scale). Mirrors aq_qtok_static_kernel.
+// Multi-row: one WARP per (bh,t) row, WARPS_PER_BLOCK warps per block -> far fewer, fuller blocks
+// than the old one-warp-per-block launch (BH*T can be ~1M rows), for better SM occupancy.
 template <int BITS>
 __global__ void aq_qtok_packed_static_kernel(const __half* __restrict__ QKV, int8_t* __restrict__ out,
                                              float* __restrict__ sc, int nh, int T, int hd, int hp,
-                                             float scale, int sel) {
-  const int r = blockIdx.x, lane = threadIdx.x;
+                                             float scale, int sel, int nrows) {
+  const int r = blockIdx.x * (blockDim.x >> 5) + (threadIdx.x >> 5);
+  if (r >= nrows) return;
+  const int lane = threadIdx.x & 31;
   const __half* xr = QKV + pk_row_off(r, nh, T, hd, sel);
   const float inv = 1.f / scale;
   if (lane == 0) sc[r] = scale;
@@ -253,12 +257,14 @@ std::vector<torch::Tensor> quantize_attn_qkv_packed_static(torch::Tensor qkv, in
   auto sv = sv_vec.to(of).view({1, (int)hp_av}).expand({BH, (int)hp_av}).contiguous();
   cudaStream_t s = at::cuda::getCurrentCUDAStream();
   const __half* P = reinterpret_cast<const __half*>(qkv.data_ptr<at::Half>());
+  const int RPB = 8;                       // rows (warps) per block
+  const int nrows = BH * (int)T, qblk = (nrows + RPB - 1) / RPB;
   if (qk_bits == 8) {
-    aq_qtok_packed_static_kernel<8><<<BH * (int)T, 32, 0, s>>>(P, qi.data_ptr<int8_t>(), sq.data_ptr<float>(), (int)nh, (int)T, (int)hd, (int)hp_qk, (float)sq_c, 0);
-    aq_qtok_packed_static_kernel<8><<<BH * (int)T, 32, 0, s>>>(P, ki.data_ptr<int8_t>(), sk.data_ptr<float>(), (int)nh, (int)T, (int)hd, (int)hp_qk, (float)sk_c, 1);
+    aq_qtok_packed_static_kernel<8><<<qblk, RPB * 32, 0, s>>>(P, qi.data_ptr<int8_t>(), sq.data_ptr<float>(), (int)nh, (int)T, (int)hd, (int)hp_qk, (float)sq_c, 0, nrows);
+    aq_qtok_packed_static_kernel<8><<<qblk, RPB * 32, 0, s>>>(P, ki.data_ptr<int8_t>(), sk.data_ptr<float>(), (int)nh, (int)T, (int)hd, (int)hp_qk, (float)sk_c, 1, nrows);
   } else {
-    aq_qtok_packed_static_kernel<4><<<BH * (int)T, 32, 0, s>>>(P, qi.data_ptr<int8_t>(), sq.data_ptr<float>(), (int)nh, (int)T, (int)hd, (int)hp_qk, (float)sq_c, 0);
-    aq_qtok_packed_static_kernel<4><<<BH * (int)T, 32, 0, s>>>(P, ki.data_ptr<int8_t>(), sk.data_ptr<float>(), (int)nh, (int)T, (int)hd, (int)hp_qk, (float)sk_c, 1);
+    aq_qtok_packed_static_kernel<4><<<qblk, RPB * 32, 0, s>>>(P, qi.data_ptr<int8_t>(), sq.data_ptr<float>(), (int)nh, (int)T, (int)hd, (int)hp_qk, (float)sq_c, 0, nrows);
+    aq_qtok_packed_static_kernel<4><<<qblk, RPB * 32, 0, s>>>(P, ki.data_ptr<int8_t>(), sk.data_ptr<float>(), (int)nh, (int)T, (int)hd, (int)hp_qk, (float)sk_c, 1, nrows);
   }
   aq_vquant_trans_packed_kernel<<<BH * (int)hp_av, 256, 0, s>>>(P, sv.data_ptr<float>(), vt.data_ptr<int8_t>(), (int)nh, (int)T, (int)hd, (int)hp_av);
   return {qi, ki, vt, sq, sk, sv};
