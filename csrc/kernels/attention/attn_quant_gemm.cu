@@ -173,6 +173,50 @@ __global__ void aq_qtok_packed_static_kernel(const __half* __restrict__ QKV, int
     }
   }
 }
+// Merged Q+K per-token quantize from packed qkv (static/calibrated scales). Q (sel=0) and K
+// (sel=1) live in the SAME row, exactly hd fp16 elements apart (pk_row_off(r,...,0) and
+// pk_row_off(r,...,1) differ by hd*sizeof(half) bytes) -- not two unrelated buffers. Handling both
+// in one launch halves the launch count (was 2x aq_qtok_packed_static_kernel, sel=0 then sel=1) and
+// shares the row-pointer decode between them. Per-element math is copy-pasted verbatim from
+// aq_qtok_packed_static_kernel (just duplicated onto the Q and K operands with their own inv/out
+// pointers), so output is bit-identical to running that kernel twice with sel=0 and sel=1.
+template <int BITS>
+__global__ void aq_qtok_packed_static_qk_kernel(const __half* __restrict__ QKV,
+                                                 int8_t* __restrict__ qout, int8_t* __restrict__ kout,
+                                                 float* __restrict__ sq, float* __restrict__ sk,
+                                                 int nh, int T, int hd, int hp,
+                                                 float sq_scale, float sk_scale, int nrows) {
+  const int r = blockIdx.x * (blockDim.x >> 5) + (threadIdx.x >> 5);
+  if (r >= nrows) return;
+  const int lane = threadIdx.x & 31;
+  const __half* xq = QKV + pk_row_off(r, nh, T, hd, 0);
+  const __half* xk = QKV + pk_row_off(r, nh, T, hd, 1);
+  const float invq = 1.f / sq_scale, invk = 1.f / sk_scale;
+  if (lane == 0) { sq[r] = sq_scale; sk[r] = sk_scale; }
+  if (BITS == 8) {
+    int8_t* oq = qout + (size_t)r * hp;
+    int8_t* ok = kout + (size_t)r * hp;
+    for (int d = lane; d < hp; d += 32) {
+      int qq = __float2int_rn((d < hd ? __half2float(xq[d]) * invq : 0.f));
+      int qk = __float2int_rn((d < hd ? __half2float(xk[d]) * invk : 0.f));
+      oq[d] = (int8_t)(qq > 127 ? 127 : (qq < -127 ? -127 : qq));
+      ok[d] = (int8_t)(qk > 127 ? 127 : (qk < -127 ? -127 : qk));
+    }
+  } else {
+    int8_t* oq = qout + (size_t)r * (hp / 2);
+    int8_t* ok = kout + (size_t)r * (hp / 2);
+    for (int dp = lane; dp < hp / 2; dp += 32) {
+      int d0 = dp * 2;
+      int qq0 = __float2int_rn((d0 < hd ? __half2float(xq[d0]) * invq : 0.f)); qq0 = qq0 > 7 ? 7 : (qq0 < -7 ? -7 : qq0);
+      int qq1 = __float2int_rn((d0 + 1 < hd ? __half2float(xq[d0 + 1]) * invq : 0.f)); qq1 = qq1 > 7 ? 7 : (qq1 < -7 ? -7 : qq1);
+      oq[dp] = (int8_t)((qq0 & 0xF) | ((qq1 & 0xF) << 4));
+      int qk0 = __float2int_rn((d0 < hd ? __half2float(xk[d0]) * invk : 0.f)); qk0 = qk0 > 7 ? 7 : (qk0 < -7 ? -7 : qk0);
+      int qk1 = __float2int_rn((d0 + 1 < hd ? __half2float(xk[d0 + 1]) * invk : 0.f)); qk1 = qk1 > 7 ? 7 : (qk1 < -7 ? -7 : qk1);
+      ok[dp] = (int8_t)((qk0 & 0xF) | ((qk1 & 0xF) << 4));
+    }
+  }
+}
+
 // V per-channel (over T) absmax from packed qkv (sel=2). Mirrors aq_vscale_kernel.
 __global__ void aq_vscale_packed_kernel(const __half* __restrict__ QKV, float* __restrict__ sv,
                                         int nh, int T, int hd, int hp_av, float Qm) {
@@ -292,12 +336,12 @@ std::vector<torch::Tensor> quantize_attn_qkv_packed_static(torch::Tensor qkv, in
   const __half* P = reinterpret_cast<const __half*>(qkv.data_ptr<at::Half>());
   const int RPB = 8;                       // rows (warps) per block
   const int nrows = BH * (int)T, qblk = (nrows + RPB - 1) / RPB;
+  // Merged Q+K launch (was 2x aq_qtok_packed_static_kernel, sel=0 then sel=1): same row range,
+  // Q and K read from the same row (offset by hd elements) -- one launch instead of two.
   if (qk_bits == 8) {
-    aq_qtok_packed_static_kernel<8><<<qblk, RPB * 32, 0, s>>>(P, qi.data_ptr<int8_t>(), sq.data_ptr<float>(), (int)nh, (int)T, (int)hd, (int)hp_qk, (float)sq_c, 0, nrows);
-    aq_qtok_packed_static_kernel<8><<<qblk, RPB * 32, 0, s>>>(P, ki.data_ptr<int8_t>(), sk.data_ptr<float>(), (int)nh, (int)T, (int)hd, (int)hp_qk, (float)sk_c, 1, nrows);
+    aq_qtok_packed_static_qk_kernel<8><<<qblk, RPB * 32, 0, s>>>(P, qi.data_ptr<int8_t>(), ki.data_ptr<int8_t>(), sq.data_ptr<float>(), sk.data_ptr<float>(), (int)nh, (int)T, (int)hd, (int)hp_qk, (float)sq_c, (float)sk_c, nrows);
   } else {
-    aq_qtok_packed_static_kernel<4><<<qblk, RPB * 32, 0, s>>>(P, qi.data_ptr<int8_t>(), sq.data_ptr<float>(), (int)nh, (int)T, (int)hd, (int)hp_qk, (float)sq_c, 0, nrows);
-    aq_qtok_packed_static_kernel<4><<<qblk, RPB * 32, 0, s>>>(P, ki.data_ptr<int8_t>(), sk.data_ptr<float>(), (int)nh, (int)T, (int)hd, (int)hp_qk, (float)sk_c, 1, nrows);
+    aq_qtok_packed_static_qk_kernel<4><<<qblk, RPB * 32, 0, s>>>(P, qi.data_ptr<int8_t>(), ki.data_ptr<int8_t>(), sq.data_ptr<float>(), sk.data_ptr<float>(), (int)nh, (int)T, (int)hd, (int)hp_qk, (float)sq_c, (float)sk_c, nrows);
   }
   { dim3 vg(BH, ((int)T + VQ_TILE_T - 1) / VQ_TILE_T); size_t vsm = (size_t)VQ_TILE_T * (int)hd;
     aq_vquant_trans_packed_tiled_kernel<<<vg, 256, vsm, s>>>(P, sv.data_ptr<float>(), vt.data_ptr<int8_t>(), (int)nh, (int)T, (int)hd, (int)hp_av); }

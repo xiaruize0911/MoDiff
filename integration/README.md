@@ -77,8 +77,11 @@ python integration/benchmarks/generate_extended_report.py
 - FID of 8.20 demonstrates excellent quality preservation
 
 ### Adaptive Precision
-- Automatically uses INT8/INT4 for large convolutions (256+ channels)
-- Falls back to FP16 for small convolutions to avoid overhead
+- Converts Conv2d layers with `in_channels >= 32` to INT8/INT4 (see
+  `convert_model_to_optimized_int8`, integration/kernels/int8_optimized.py)
+- Skips: layers with `in_channels < 32`, named "skip" convs, the final output
+  conv (`out.*`), grouped convs, and (by default) 1x1 pointwise convs
+- Falls back to FP16 for all skipped/gated layers
 - Percentile-based calibration (99.99%) for optimal scale selection
 
 ### MoDiff Temporal Caching

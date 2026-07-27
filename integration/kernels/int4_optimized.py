@@ -436,6 +436,22 @@ class OptimizedInt4Conv2d(nn.Module):
             mod_scale2d, mod_shift2d)
         profiler.stop("MoDiff INT4 GN-fused Step1 (GN+SiLU+delta+pack)", p_step1)
 
+        if residual is not None:
+            # EVT dual-store (see int8 counterpart OptimizedInt8Conv2d.forward_gn_fused_modiff
+            # and this file's own forward_modiff_fused_silu_residual, which already uses this
+            # kernel unconditionally): fold the ResBlock skip-add into the o_hat conv's
+            # accumulate epilogue instead of the separate eager `out + residual` below.
+            residual = residual.to(torch.float16).contiguous(memory_format=torch.channels_last)
+            out = torch.empty_like(self.o_hat_cache)
+            p_conv = profiler.start("MoDiff INT4 Static Conv2d (o_hat+residual)")
+            modiff_cutlass.conv2d_int4_evt_o_hat_residual(
+                x_packed, self.weight_packed, self._cached_alpha_tensor.view(1),
+                self.weight_scale_channel.view(-1), self.o_hat_cache, residual, out,
+                self.stride[0], self.stride[1], self.padding[0], self.padding[1],
+                self.dilation[0], self.dilation[1])
+            profiler.stop("MoDiff INT4 Static Conv2d (o_hat+residual)", p_conv)
+            return out
+
         p_conv = profiler.start("MoDiff INT4 Static Conv2d")
         (modiff_cutlass.conv2d_int4_evt_o_hat if self.o_hat_cache.dtype == torch.float16 else modiff_cutlass.conv2d_int4_fprop_o_hat)(
             x_packed, self.weight_packed, self._cached_alpha_tensor.view(1),
@@ -443,10 +459,7 @@ class OptimizedInt4Conv2d(nn.Module):
             self.stride[0], self.stride[1], self.padding[0], self.padding[1],
             self.dilation[0], self.dilation[1])
         profiler.stop("MoDiff INT4 Static Conv2d", p_conv)
-        out = self._module_output()
-        if residual is not None:
-            out = out + residual.to(out.dtype)
-        return out
+        return self._module_output()
 
     def forward_modiff_fused_silu_residual(self, x: torch.Tensor, residual: torch.Tensor) -> torch.Tensor:
         """int4 counterpart of OptimizedInt8Conv2d.forward_modiff_fused_silu_residual:

@@ -81,12 +81,13 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         # eligible blocks on fp16 SDPA.
         self._flash_gate = os.environ.get("MODIFF_FLASH_GATE", "auto")
         self._flash_choice = None    # None = undecided; True/False = frozen decision
-        # Packed-input flash (opt-in MODIFF_FLASH_PACKED=1): flash reads the interleaved qkv directly,
-        # folding the Q/K/V quantize + V-transpose into its smem staging (no separate aq_qtok/aq_vquant
-        # + qi/ki/vt HBM round-trip). Wins the smaller blocks (hd48) but LOSES the large hd24/T1024
-        # (the original flash is already efficient), so it's AUTOTUNED per block vs quantize+flash,
-        # once the static scales freeze. Bit-identical to the current path either way.
-        self._flash_packed = (bits == 8 and os.environ.get("MODIFF_FLASH_PACKED", "0") != "0"
+        # Packed-input flash (default ON; MODIFF_FLASH_PACKED=0 to disable): flash reads the
+        # interleaved qkv directly, folding the Q/K/V quantize + V-transpose into its smem staging
+        # (no separate aq_qtok/aq_vquant + qi/ki/vt HBM round-trip). Wins the smaller blocks (hd48:
+        # measured 1.54x vs quantize+flash, 1.03x vs fp16 SDPA at hd48/T64 on A40) but LOSES the
+        # large hd24/T1024 (the original flash is already efficient), so it's AUTOTUNED per block vs
+        # quantize+flash, once the static scales freeze. Bit-identical to the current path either way.
+        self._flash_packed = (bits == 8 and os.environ.get("MODIFF_FLASH_PACKED", "1") != "0"
                               and hasattr(_mc, "flash_attn_int8_packed_vt"))
         self._packed_choice = None       # score path (flash_attn_int8_packed_vt vs quantize+flash_vt)
         self._packed_qout_choice = None  # fused proj path (packed_vt_qout vs quantize+flash_vt_qout)
@@ -343,10 +344,13 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
                                        self.norm.num_groups, self.norm.eps, _FUSE_SHIFT)
             qkv = qkv_img.permute(0, 2, 3, 1).reshape(b, T, nh, 3, hd)
         else:
-            w, bnorm = self._gn_params(x.dtype)
-            xn = _group_norm_silu(x, self.norm.num_groups, w, bnorm, self.norm.eps, apply_silu=False)
-            xn_tok = xn.permute(0, 2, 3, 1).reshape(b, T, c)
-            qkv = self.qkv(xn_tok).view(b, T, nh, 3, hd)
+            # Falls back to the base class's GN->qkv fusion (group_norm_silu_quantize_nhwc ->
+            # W8A8/W4A4 GEMM, skipping qkv's own separate quantize_act_int8 launch) when eligible
+            # (calibrated static int8/int4 qkv, no K-pad, GN-native layout); else plain GroupNorm +
+            # qkv Linear (which pays quantize_act_int8 as its own launch). Reachable mainly for
+            # blocks the fp16 fused_gn_qkv branch above doesn't cover (T%128!=0 or c%8!=0, e.g.
+            # hd48/T64) and during the qkv scale calibration window.
+            qkv = self._qkv_from_gn(x, b, T, c, nh, hd)
         # ---- Score path (QKᵀ + softmax + AV): fused int8/int4 flash (scores in SRAM) when the
         # gate says it's a win for this block; else fp16 MATH SDPA. The flash kernel needs
         # head_dim<=48 and T%64==0; among eligible blocks the small-T ones lose to fp16, so the

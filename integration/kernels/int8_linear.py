@@ -210,6 +210,21 @@ class OptimizedInt8Linear(nn.Module):
         if not self.modiff_enabled:
             return self._linear(x, with_bias=True)
 
+        # `_int8_gemm_linear`'s K-gate (K_INT8_GATE=2048) means every call on a
+        # layer this small always falls through to `_fp16_linear` anyway (see
+        # that method) -- so the MoDiff delta-quantize bookkeeping below (which
+        # rounds x-a_hat to an int8 grid and accumulates that rounding error
+        # into a_hat_cache every step) only injects quantization noise for zero
+        # GEMM speed benefit. Skip the whole temporal-cache path and run a plain
+        # per-step fp16 linear: strictly higher quality (no injected rounding
+        # error) and strictly cheaper (no sub_absmax_scale/dequant_accumulate_*
+        # kernel launches or a_hat/o_hat tensor bookkeeping) than what it
+        # replaces. (int4_linear.py's OptimizedInt4Linear has no such K-gate --
+        # this short-circuit is INT8-mode-specific.)
+        if self.backend != "int_gemm" or self.in_features < K_INT8_GATE:
+            self.step_count += 1
+            return self._fp16_linear(x, with_bias=True)
+
         if x.dtype != torch.float32:
             x = x.float()
 

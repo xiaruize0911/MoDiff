@@ -1,0 +1,11 @@
+layer_type,ms_per_step,pct_of_total
+Attention,33.0336,28.75
+GroupNorm,28.2138,24.56
+Conv (int GEMM),27.3875,23.84
+Linear (qkv/proj int GEMM),7.176,6.25
+Quantize/Dequant,6.9868,6.08
+Elementwise/Copy,5.4323,4.73
+Upsample/Concat,4.7513,4.14
+Other,1.4043,1.22
+Other fp16 GEMM,0.2851,0.25
+Attention bmm (fp16),0.227,0.2

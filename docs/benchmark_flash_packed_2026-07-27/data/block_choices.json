@@ -1,0 +1,682 @@
+{
+  "int8_baseline_packed0": [
+    {
+      "name": "model.diffusion_model.input_blocks.1.1",
+      "channels": 192,
+      "head_dim": 24,
+      "flash_choice": true,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.input_blocks.2.1",
+      "channels": 192,
+      "head_dim": 24,
+      "flash_choice": true,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.input_blocks.4.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.input_blocks.5.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.input_blocks.7.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.input_blocks.8.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.input_blocks.10.1",
+      "channels": 768,
+      "head_dim": 96,
+      "flash_choice": null,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.input_blocks.11.1",
+      "channels": 768,
+      "head_dim": 96,
+      "flash_choice": null,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.middle_block.1",
+      "channels": 768,
+      "head_dim": 96,
+      "flash_choice": null,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.3.1",
+      "channels": 768,
+      "head_dim": 96,
+      "flash_choice": null,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.4.1",
+      "channels": 768,
+      "head_dim": 96,
+      "flash_choice": null,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.5.1",
+      "channels": 768,
+      "head_dim": 96,
+      "flash_choice": null,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.6.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.7.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.8.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.9.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.10.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.11.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.12.1",
+      "channels": 192,
+      "head_dim": 24,
+      "flash_choice": true,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.13.1",
+      "channels": 192,
+      "head_dim": 24,
+      "flash_choice": true,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.14.1",
+      "channels": 192,
+      "head_dim": 24,
+      "flash_choice": true,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    }
+  ],
+  "int8_baseline_packed1": [
+    {
+      "name": "model.diffusion_model.input_blocks.1.1",
+      "channels": 192,
+      "head_dim": 24,
+      "flash_choice": true,
+      "packed_choice": false,
+      "packed_qout_choice": false
+    },
+    {
+      "name": "model.diffusion_model.input_blocks.2.1",
+      "channels": 192,
+      "head_dim": 24,
+      "flash_choice": true,
+      "packed_choice": false,
+      "packed_qout_choice": false
+    },
+    {
+      "name": "model.diffusion_model.input_blocks.4.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": false,
+      "packed_qout_choice": false
+    },
+    {
+      "name": "model.diffusion_model.input_blocks.5.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": false,
+      "packed_qout_choice": false
+    },
+    {
+      "name": "model.diffusion_model.input_blocks.7.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": true,
+      "packed_qout_choice": true
+    },
+    {
+      "name": "model.diffusion_model.input_blocks.8.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": true,
+      "packed_qout_choice": true
+    },
+    {
+      "name": "model.diffusion_model.input_blocks.10.1",
+      "channels": 768,
+      "head_dim": 96,
+      "flash_choice": null,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.input_blocks.11.1",
+      "channels": 768,
+      "head_dim": 96,
+      "flash_choice": null,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.middle_block.1",
+      "channels": 768,
+      "head_dim": 96,
+      "flash_choice": null,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.3.1",
+      "channels": 768,
+      "head_dim": 96,
+      "flash_choice": null,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.4.1",
+      "channels": 768,
+      "head_dim": 96,
+      "flash_choice": null,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.5.1",
+      "channels": 768,
+      "head_dim": 96,
+      "flash_choice": null,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.6.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": true,
+      "packed_qout_choice": true
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.7.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": true,
+      "packed_qout_choice": true
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.8.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": true,
+      "packed_qout_choice": true
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.9.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": false,
+      "packed_qout_choice": false
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.10.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": false,
+      "packed_qout_choice": false
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.11.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": false,
+      "packed_qout_choice": false
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.12.1",
+      "channels": 192,
+      "head_dim": 24,
+      "flash_choice": true,
+      "packed_choice": false,
+      "packed_qout_choice": false
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.13.1",
+      "channels": 192,
+      "head_dim": 24,
+      "flash_choice": true,
+      "packed_choice": false,
+      "packed_qout_choice": false
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.14.1",
+      "channels": 192,
+      "head_dim": 24,
+      "flash_choice": true,
+      "packed_choice": false,
+      "packed_qout_choice": false
+    }
+  ],
+  "int8_modiff_packed0": [
+    {
+      "name": "model.diffusion_model.input_blocks.1.1",
+      "channels": 192,
+      "head_dim": 24,
+      "flash_choice": true,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.input_blocks.2.1",
+      "channels": 192,
+      "head_dim": 24,
+      "flash_choice": true,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.input_blocks.4.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.input_blocks.5.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.input_blocks.7.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.input_blocks.8.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.input_blocks.10.1",
+      "channels": 768,
+      "head_dim": 96,
+      "flash_choice": null,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.input_blocks.11.1",
+      "channels": 768,
+      "head_dim": 96,
+      "flash_choice": null,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.middle_block.1",
+      "channels": 768,
+      "head_dim": 96,
+      "flash_choice": null,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.3.1",
+      "channels": 768,
+      "head_dim": 96,
+      "flash_choice": null,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.4.1",
+      "channels": 768,
+      "head_dim": 96,
+      "flash_choice": null,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.5.1",
+      "channels": 768,
+      "head_dim": 96,
+      "flash_choice": null,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.6.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.7.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.8.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.9.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.10.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.11.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.12.1",
+      "channels": 192,
+      "head_dim": 24,
+      "flash_choice": true,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.13.1",
+      "channels": 192,
+      "head_dim": 24,
+      "flash_choice": true,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.14.1",
+      "channels": 192,
+      "head_dim": 24,
+      "flash_choice": true,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    }
+  ],
+  "int8_modiff_packed1": [
+    {
+      "name": "model.diffusion_model.input_blocks.1.1",
+      "channels": 192,
+      "head_dim": 24,
+      "flash_choice": true,
+      "packed_choice": false,
+      "packed_qout_choice": false
+    },
+    {
+      "name": "model.diffusion_model.input_blocks.2.1",
+      "channels": 192,
+      "head_dim": 24,
+      "flash_choice": true,
+      "packed_choice": false,
+      "packed_qout_choice": false
+    },
+    {
+      "name": "model.diffusion_model.input_blocks.4.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": false,
+      "packed_qout_choice": false
+    },
+    {
+      "name": "model.diffusion_model.input_blocks.5.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": false,
+      "packed_qout_choice": false
+    },
+    {
+      "name": "model.diffusion_model.input_blocks.7.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": true,
+      "packed_qout_choice": true
+    },
+    {
+      "name": "model.diffusion_model.input_blocks.8.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": true,
+      "packed_qout_choice": true
+    },
+    {
+      "name": "model.diffusion_model.input_blocks.10.1",
+      "channels": 768,
+      "head_dim": 96,
+      "flash_choice": null,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.input_blocks.11.1",
+      "channels": 768,
+      "head_dim": 96,
+      "flash_choice": null,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.middle_block.1",
+      "channels": 768,
+      "head_dim": 96,
+      "flash_choice": null,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.3.1",
+      "channels": 768,
+      "head_dim": 96,
+      "flash_choice": null,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.4.1",
+      "channels": 768,
+      "head_dim": 96,
+      "flash_choice": null,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.5.1",
+      "channels": 768,
+      "head_dim": 96,
+      "flash_choice": null,
+      "packed_choice": null,
+      "packed_qout_choice": null
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.6.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": true,
+      "packed_qout_choice": true
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.7.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": true,
+      "packed_qout_choice": true
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.8.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": true,
+      "packed_qout_choice": true
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.9.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": false,
+      "packed_qout_choice": false
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.10.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": false,
+      "packed_qout_choice": false
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.11.1",
+      "channels": 384,
+      "head_dim": 48,
+      "flash_choice": true,
+      "packed_choice": false,
+      "packed_qout_choice": false
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.12.1",
+      "channels": 192,
+      "head_dim": 24,
+      "flash_choice": true,
+      "packed_choice": false,
+      "packed_qout_choice": false
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.13.1",
+      "channels": 192,
+      "head_dim": 24,
+      "flash_choice": true,
+      "packed_choice": false,
+      "packed_qout_choice": false
+    },
+    {
+      "name": "model.diffusion_model.output_blocks.14.1",
+      "channels": 192,
+      "head_dim": 24,
+      "flash_choice": true,
+      "packed_choice": false,
+      "packed_qout_choice": false
+    }
+  ]
+}

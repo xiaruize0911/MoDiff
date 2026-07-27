@@ -466,6 +466,29 @@ class OptimizedInt8Conv2d(nn.Module):
             mod_scale2d, mod_shift2d)
         profiler.stop("MoDiff INT8 GN-fused Step1 (GN+SiLU+delta)", p_step1)
 
+        if residual is not None:
+            # EVT dual-store (same conv2d_int8_evt_o_hat_residual kernel
+            # forward_modiff_fused_silu_residual already uses): fold the ResBlock
+            # skip-add into the o_hat conv's accumulate epilogue instead of the
+            # separate eager `out + residual` below -- removes an elementwise-add
+            # kernel AND (for the GN-fusion out_conv->next-block-in_conv edge)
+            # restores a direct producer/consumer relationship between this
+            # conv's output and the next GroupNorm's input, with no intervening
+            # op. Caller's can_gn_fuse_modiff(x) precondition (is_calibrated=True)
+            # already guarantees a_hat/o_hat_cache are fp16 (see
+            # _ensure_state_buffers), matching forward_modiff_fused_silu_residual's
+            # own (unconditional) use of the EVT kernel.
+            residual = residual.to(torch.float16).contiguous(memory_format=torch.channels_last)
+            out = torch.empty_like(self.o_hat_cache)
+            p_conv = profiler.start("MoDiff INT8 Static Conv2d (o_hat+residual)")
+            modiff_cutlass.conv2d_int8_evt_o_hat_residual(
+                x_int8, self.weight_int8, self._cached_alpha_tensor.view(1),
+                self.weight_scale_channel.view(-1), self.o_hat_cache, residual, out,
+                self.stride[0], self.stride[1], self.padding[0], self.padding[1],
+                self.dilation[0], self.dilation[1])
+            profiler.stop("MoDiff INT8 Static Conv2d (o_hat+residual)", p_conv)
+            return out
+
         p_conv = profiler.start("MoDiff INT8 Static Conv2d")
         (modiff_cutlass.conv2d_int8_evt_o_hat if self.o_hat_cache.dtype == torch.float16 else modiff_cutlass.conv2d_int8_fprop_o_hat)(
             x_int8, self.weight_int8, self._cached_alpha_tensor.view(1),
@@ -473,10 +496,7 @@ class OptimizedInt8Conv2d(nn.Module):
             self.stride[0], self.stride[1], self.padding[0], self.padding[1],
             self.dilation[0], self.dilation[1])
         profiler.stop("MoDiff INT8 Static Conv2d", p_conv)
-        out = self._module_output()
-        if residual is not None:
-            out = out + residual.to(out.dtype)
-        return out
+        return self._module_output()
 
     def forward_modiff_fused_silu_residual(self, x: torch.Tensor, residual: torch.Tensor) -> torch.Tensor:
         """Same as _forward_modulated_static_fused_silu, but fuses the ResBlock

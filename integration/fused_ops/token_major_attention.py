@@ -264,22 +264,16 @@ class TokenMajorAttentionBlock(nn.Module):
                 if self._qkv_inv_scale_t is None:
                     self._qkv_inv_scale_t = torch.tensor([1.0 / qkv.a_scale], device=x.device, dtype=torch.float32)
                 empty = x.new_empty(0); ng, eps = self.norm.num_groups, self.norm.eps
-                if qkv.bits == 8:   # GN -> int8 (one kernel) -> W8A8 GEMM
+                bias = qkv.bias if qkv.bias is not None else empty
+                if qkv.bits == 8:   # GN -> int8 (one kernel) -> W8A8 GEMM, bias fused into the epilogue
                     xq_img = _mc.group_norm_silu_quantize_nhwc(x, gw, gb, ng, eps, False, self._qkv_inv_scale_t, empty, empty, empty)
                     xq = xq_img.permute(0, 2, 3, 1).reshape(b * T, c)     # int8 [b*T, c] token-major (free view)
-                    if qkv._awqt_N != qkv.out_features:                   # padded N -> write unpadded (no slice-copy)
-                        out = _mc.gemm_w8a8_awq_nout(xq, qkv.qweight, qkv.w_scale, qkv.a_scale, qkv.out_features)
-                    else:
-                        out = _mc.gemm_w8a8_awq(xq, qkv.qweight, qkv.w_scale, qkv.a_scale)
-                else:               # GN -> int4-packed (one kernel, gemm_w4a4 layout) -> W4A4 GEMM
+                    out = _mc.gemm_w8a8_awq_bias_res(xq, qkv.qweight, qkv.w_scale, qkv.a_scale, qkv.out_features, bias, empty)
+                else:               # GN -> int4-packed (one kernel, gemm_w4a4 layout) -> W4A4 GEMM, bias fused
                     xq_img = _mc.group_norm_silu_quantize_pack_nhwc(x, gw, gb, ng, eps, False, self._qkv_inv_scale_t, empty, empty, empty)
                     xq = xq_img.reshape(b * T, c // 2)                    # int4 packed [b*T, c/2] token-major (free view)
-                    out = _mc.gemm_w4a4_awq(xq, qkv.qweight, qkv.w_scale, qkv.a_scale, qkv._awqt_K)
-                    if qkv._awqt_N != qkv.out_features:                   # int4 has no unpadded variant -> slice
-                        out = out[:, :qkv.out_features].contiguous()
+                    out = _mc.gemm_w4a4_awq_bias_res(xq, qkv.qweight, qkv.w_scale, qkv.a_scale, qkv._awqt_K, qkv.out_features, bias, empty)
                 out = out.reshape(b, T, qkv.out_features)
-                if qkv.bias is not None:
-                    out = out + qkv.bias
                 return out.view(b, T, nh, 3, hd)
         # fallback: standard native GroupNorm + int8 qkv Linear
         w, bnorm = self._gn_params(x.dtype)

@@ -1,0 +1,5 @@
+mode,flash_packed,ms_step,min_ms
+int8_baseline,0,121.4,120.11
+int8_baseline,1,122.47,122.24
+int8_modiff,0,131.79,131.59
+int8_modiff,1,131.22,131.12

@@ -191,6 +191,39 @@ def count_conv1d_layers(model: nn.Module) -> int:
     return sum(1 for m in model.modules() if isinstance(m, nn.Conv1d))
 
 
+class _IdentityAttn(nn.Module):
+    """Drop-in replacement for an attention module under the `--no_attention`
+    ablation: passes its input through unchanged."""
+    def forward(self, x):
+        return x
+
+
+def _force_identity_attention(module: nn.Module) -> int:
+    """Recursively replace every AttentionBlock / TokenMajorAttentionBlock /
+    QuantizedStandardAttentionBlock instance in `module` with `_IdentityAttn`.
+
+    Patching `AttentionBlock.forward` (as the skip_attention setup does) only
+    affects instances that are STILL `AttentionBlock` when forward runs -- but
+    the attention-conversion step later in `_setup_model` replaces eligible
+    AttentionBlocks with TokenMajorAttentionBlock/QuantizedStandardAttentionBlock
+    instances, neither of which is an AttentionBlock subclass, so they never
+    consult that patched forward. This runs after all conversion and catches
+    whichever of the three types actually ended up installed. Returns the
+    number of modules replaced.
+    """
+    from ldm.modules.diffusionmodules.openaimodel import AttentionBlock
+    from integration.fused_ops.token_major_attention import TokenMajorAttentionBlock
+    from integration.fused_ops.quantized_std_attention import QuantizedStandardAttentionBlock
+    n = 0
+    for name, child in list(module.named_children()):
+        if isinstance(child, (AttentionBlock, TokenMajorAttentionBlock, QuantizedStandardAttentionBlock)):
+            setattr(module, name, _IdentityAttn())
+            n += 1
+        else:
+            n += _force_identity_attention(child)
+    return n
+
+
 def convert_to_int8_baseline(model: nn.Module):
     """Convert model to INT8 using standard PyTorch (no MoDiff)."""
     model.qconfig = torch.quantization.get_default_qconfig('x86')
@@ -690,13 +723,36 @@ class BenchmarkRunner:
         except Exception as e:
             print(f"  (attention/linear conversion skipped: {e})")
 
+        # skip_attention ablation safety net: the patch at line ~365
+        # (`AttentionBlock.forward = lambda self, x: x`) only affects instances that
+        # are STILL `AttentionBlock` by the time forward runs. But the conversions
+        # above (_to_token_major / convert_attention_to_quantized_std) replace every
+        # eligible AttentionBlock with a TokenMajorAttentionBlock/
+        # QuantizedStandardAttentionBlock instance -- neither is an AttentionBlock
+        # subclass, so they never consult that patched .forward, silently undoing
+        # the ablation for every mode where conversion succeeds (including fp16).
+        # Force-replace whatever attention module ended up installed with an
+        # identity pass-through, unconditionally, as the very last attention-related
+        # step.
+        if self.skip_attention:
+            n_id = _force_identity_attention(model.model.diffusion_model)
+            print(f"  → Forced {n_id} attention modules to identity pass-through (ablation mode)")
+
         # Wire SiLU fusion between each FusedResBlock's GroupNorm and its
         # quantized conv (no-op for modes where in_conv/out_conv are still
         # plain nn.Conv2d, e.g. fp32/fp16).
-        from integration.fused_ops.fused_resblock import wire_silu_fusion
+        from integration.fused_ops.fused_resblock import wire_silu_fusion, convert_upsample_to_fused
         n_silu_wired = wire_silu_fusion(model.model.diffusion_model)
         if n_silu_wired > 0:
             print(f"✓ Wired SiLU fusion for {n_silu_wired} quantized conv layers")
+
+        # Fold each Upsample's F.interpolate(nearest,2x) into its conv's quantize prologue
+        # (no-op / harmless fallback for modes where Upsample.conv is still plain nn.Conv2d
+        # or modiff-enabled, e.g. fp32/fp16/int8_modiff/int4_modiff -- FusedUpsample checks
+        # eligibility per-call and falls back to the original two-step path otherwise).
+        n_ups_wired = convert_upsample_to_fused(model.model.diffusion_model)
+        if n_ups_wired > 0:
+            print(f"✓ Wired Upsample->quantize fusion for {n_ups_wired} Upsample layers")
 
         # Class-conditional models (e.g. cin256) need cross-attention class
         # conditioning and a model-specific latent shape; derive both here so the

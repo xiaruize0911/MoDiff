@@ -38,6 +38,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("step1_static_quantize_pack_int4_fprop", &step1_static_quantize_pack_int4_fprop, "Fused static-scale subtract + dequant + quantize+pack for INT4 step 1");
     m.def("step1_static_quantize_noahat_fprop", &step1_static_quantize_noahat_fprop, "cache-free static int8 quantize (baseline conv, no a_hat)");
     m.def("step1_static_quantize_pack_int4_noahat_fprop", &step1_static_quantize_pack_int4_noahat_fprop, "cache-free static int4 quantize+pack (baseline conv, no a_hat)");
+    m.def("upsample2x_quantize_noahat_fprop", &upsample2x_quantize_noahat_fprop, "fused Upsample(nearest,2x) + static int8 quantize (baseline conv, no a_hat)");
+    m.def("upsample2x_quantize_pack_noahat_fprop", &upsample2x_quantize_pack_noahat_fprop, "fused Upsample(nearest,2x) + static int4 quantize+pack (baseline conv, no a_hat)");
     m.def("step1_static_quantize_pack_int4_fprop_silu", &step1_static_quantize_pack_int4_fprop_silu,
           "Same as step1_static_quantize_pack_int4_fprop but applies SiLU to x inline (FP16 a_hat_cache only)");
     m.def("step1_quantize_pack_int4_no_ahat_fprop", &step1_quantize_pack_int4_no_ahat_fprop,

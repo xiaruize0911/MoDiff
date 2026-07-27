@@ -62,6 +62,14 @@ torch::Tensor step1_static_quantize_noahat_fprop(
 torch::Tensor step1_static_quantize_pack_int4_noahat_fprop(
     torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv);
 
+// Upsample(nearest,2x) + static quantize fusion (baseline conv, NO a_hat): fold Upsample.forward's
+// F.interpolate into the following conv's quantize prologue, never materializing the fp16 upsampled
+// intermediate. x is the SMALL pre-upsample [N,C,H,W]; output is [N,C,2H,2W] (int4: packed [N,2H,2W,C/2]).
+torch::Tensor upsample2x_quantize_noahat_fprop(
+    torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv);
+torch::Tensor upsample2x_quantize_pack_noahat_fprop(
+    torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv);
+
 torch::Tensor step1_static_quantize_pack_int4_fprop_silu(
     torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor scale_buf, torch::Tensor smooth_inv);
 

@@ -729,6 +729,73 @@ def wire_silu_fusion(module):
     return wired
 
 
+class FusedUpsample(nn.Module):
+    """Wraps an ldm `Upsample` module, fusing its `F.interpolate(nearest, 2x)` into the
+    following conv's quantize prologue (`upsample2x_quantize_noahat_fprop` /
+    `_pack_noahat_fprop`, csrc/kernels/quantize/modiff_delta_quantize.cu) when eligible --
+    reads the SMALL pre-upsample tensor once and writes the quantized LARGE tensor
+    directly, so the fp16 upsampled intermediate `F.interpolate` would materialize (and
+    the plain quantize kernel would then re-read) is never allocated. Bit-identical to
+    the unfused path (verified: F.interpolate -> step1_static_quantize[_pack]_noahat_fprop
+    vs upsample2x_quantize[_pack]_noahat_fprop, incl. non-identity SmoothQuant, since a
+    per-channel scale commutes with nearest-neighbor spatial replication).
+
+    Baseline-only (mirrors _prequant_common_ok): the MoDiff modulated path's SmoothQuant
+    and delta-quantize semantics aren't replicated here, and this only ever engages for
+    `Upsample.conv`, which is never inside a ResBlock skip (no residual to fold in).
+    Falls back to the original two-step `self.orig(x)` otherwise (fp32/uncalibrated/
+    modiff-enabled/grouped conv/no conv/dims!=2).
+    """
+    def __init__(self, orig):
+        super().__init__()
+        self.orig = orig
+
+    def _fusable(self, x, conv):
+        if conv is None or self.orig.dims != 2 or x.dtype != torch.float16 or not x.is_cuda:
+            return False
+        return (getattr(conv, 'is_calibrated', False)
+                and not getattr(conv, 'modiff_enabled', True)
+                and getattr(conv, 'use_cutlass', False)
+                and getattr(conv, 'groups', 1) == 1)
+
+    def forward(self, x):
+        assert x.shape[1] == self.orig.channels
+        conv = getattr(self.orig, 'conv', None) if self.orig.use_conv else None
+        if not self._fusable(x, conv):
+            return self.orig(x)
+        if not x.is_contiguous(memory_format=torch.channels_last):
+            x = x.contiguous(memory_format=torch.channels_last)
+        conv._ensure_conv_caches(x.device)
+        smooth_inv = (conv._empty_smooth if getattr(conv, '_smooth_is_identity', True)
+                      else conv._smooth_inv.view(-1).to(torch.float32).contiguous())
+        is_int4 = hasattr(conv, 'weight_packed')
+        if is_int4:
+            x_q = modiff_cutlass.upsample2x_quantize_pack_noahat_fprop(
+                x, conv.static_input_scale.view(1), smooth_inv)
+            return conv._conv_from_int4(x_q, x.shape[2] * 2, x.shape[3] * 2)
+        x_q = modiff_cutlass.upsample2x_quantize_noahat_fprop(
+            x, conv.static_input_scale.view(1), smooth_inv)
+        return conv._conv_from_int8(x_q)
+
+
+def convert_upsample_to_fused(module):
+    """Recursively replace ldm `Upsample` instances with `FusedUpsample` (call this AFTER
+    convert_model_to_optimized_int8/int4, once per model setup, same convention as
+    wire_silu_fusion). Returns the number of Upsample modules wrapped."""
+    try:
+        from ldm.modules.diffusionmodules.openaimodel import Upsample
+    except ImportError:
+        return 0
+    n = 0
+    for name, child in list(module.named_children()):
+        if isinstance(child, Upsample) and not isinstance(child, FusedUpsample):
+            setattr(module, name, FusedUpsample(child))
+            n += 1
+        else:
+            n += convert_upsample_to_fused(child)
+    return n
+
+
 def print_fusion_summary(module):
     """Print summary of fused blocks in the module"""
     fused_blocks = [m for m in module.modules() if isinstance(m, FusedResBlock)]
