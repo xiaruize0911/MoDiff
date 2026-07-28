@@ -41,6 +41,23 @@ __device__ __forceinline__ float gn_load(const __half* p, long i) { return __hal
 __device__ __forceinline__ void gn_store(float* p, long i, float v) { p[i] = v; }
 __device__ __forceinline__ void gn_store(__half* p, long i, float v) { p[i] = __float2half(v); }
 
+// 2-wide (vectorized) counterparts of gn_load/gn_store. Caller guarantees `i` is even
+// relative to `p`'s own base pointer, so the reinterpret-cast to float2/__half2 lands on
+// a naturally-aligned address (every offset used by the vec2 kernels below -- n*HW*C,
+// c_start, pair bases -- is a multiple of an even quantity given C/CPG are even).
+__device__ __forceinline__ float2 gn_load2(const float* p, long i) {
+    return reinterpret_cast<const float2*>(p)[i >> 1];
+}
+__device__ __forceinline__ float2 gn_load2(const __half* p, long i) {
+    return __half22float2(reinterpret_cast<const __half2*>(p)[i >> 1]);
+}
+__device__ __forceinline__ void gn_store2(float* p, long i, float2 v) {
+    reinterpret_cast<float2*>(p)[i >> 1] = v;
+}
+__device__ __forceinline__ void gn_store2(__half* p, long i, float2 v) {
+    reinterpret_cast<__half2*>(p)[i >> 1] = __float22half2_rn(v);
+}
+
 template <typename T>
 __global__ void group_norm_silu_nhwc_kernel(
     const T* __restrict__ X,      // [N, H, W, C] physical (channels_last NCHW logical)
@@ -302,6 +319,118 @@ __global__ void group_norm_silu_quantize_nhwc_kernel(
     }
 }
 
+// Vectorized (half2/float2) counterpart of group_norm_silu_quantize_nhwc_kernel. Pass 1
+// (reduction) is byte-for-byte identical to the scalar kernel above -- deliberately NOT
+// vectorized here (see the plan's Cycle-3 note: vectorizing the read side would change
+// the per-thread index partition and hence fp32 summation order, which is a real
+// numerics risk kept isolated to its own gated cycle). Only pass 2 (apply+quantize,
+// order-independent) is vectorized, using the same pair-major index math
+// group_norm_silu_quantize_pack_nhwc_kernel's pass 2 already uses. Caller (the host
+// wrapper) only dispatches here when CPG is even, so a channel pair never straddles a
+// group boundary and shares one mean/inv_std.
+template <typename TIn>
+__global__ void group_norm_silu_quantize_nhwc_vec2_kernel(
+    const TIn* __restrict__ X,
+    int8_t* __restrict__ Yq,          // [N, H, W, C] physical int8, same layout as X
+    const TIn* __restrict__ gamma,
+    const TIn* __restrict__ beta,
+    const TIn* __restrict__ mod_scale, // [N, C] scale-shift modulation, or nullptr
+    const TIn* __restrict__ mod_shift, // [N, C] scale-shift modulation, or nullptr
+    const float* __restrict__ scale_ptr,    // scalar quant multiplier = 127/absmax
+    const float* __restrict__ smooth_inv,   // [C] SmoothQuant, or nullptr
+    int C,
+    long HW,
+    int G,
+    float eps,
+    bool apply_silu
+) {
+    const int CPG = C / G;
+    const long group_size = (long)CPG * HW;
+
+    const int n = blockIdx.x / G;
+    const int g = blockIdx.x % G;
+    const int c_start = g * CPG;
+
+    const TIn* x_base = X + (long)n * HW * C;
+    int8_t* yq_base = Yq + (long)n * HW * C;
+
+    extern __shared__ float sdata[];
+    float* s_sum = sdata;
+    float* s_sumsq = sdata + blockDim.x;
+
+    // Pass 1: identical to the scalar kernel (kept scalar deliberately -- Cycle 3
+    // attempted a pair-major vectorized version here, but it changes fp32 summation
+    // order vs the reference group_norm_silu_nhwc_kernel and failed
+    // gn_modiff_verify_realinput.py's zero-tolerance gate (max_code_diff=1), so it was
+    // reverted; see docs/benchmark_flash_packed_2026-07-27 for the investigation).
+    float local_sum = 0.0f, local_sumsq = 0.0f;
+    for (long idx = threadIdx.x; idx < group_size; idx += blockDim.x) {
+        int c_local = idx % CPG;
+        long hw = idx / CPG;
+        long mem_idx = hw * C + c_start + c_local;
+        float v = gn_load(x_base, mem_idx);
+        local_sum += v;
+        local_sumsq += v * v;
+    }
+    s_sum[threadIdx.x] = local_sum;
+    s_sumsq[threadIdx.x] = local_sumsq;
+    __syncthreads();
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (threadIdx.x < s) {
+            s_sum[threadIdx.x] += s_sum[threadIdx.x + s];
+            s_sumsq[threadIdx.x] += s_sumsq[threadIdx.x + s];
+        }
+        __syncthreads();
+    }
+    __shared__ float mean_s, inv_std_s;
+    if (threadIdx.x == 0) {
+        float mean = s_sum[0] / (float)group_size;
+        float var = s_sumsq[0] / (float)group_size - mean * mean;
+        var = fmaxf(var, 0.0f);
+        mean_s = mean;
+        inv_std_s = rsqrtf(var + eps);
+    }
+    __syncthreads();
+    const float mean = mean_s;
+    const float inv_std = inv_std_s;
+    const float scale = *scale_ptr;
+
+    // Pass 2: pair-major (vectorized). One thread handles a (even,odd) channel pair at
+    // one spatial position -- same index math as group_norm_silu_quantize_pack_nhwc_kernel's
+    // pass 2, but writes two UNPACKED int8 bytes (one int16 store) instead of one nibble byte.
+    const int HALF_CPG = CPG / 2;
+    const long pairs = group_size / 2;
+    for (long pidx = threadIdx.x; pidx < pairs; pidx += blockDim.x) {
+        int cpair = pidx % HALF_CPG;
+        long hw = pidx / HALF_CPG;
+        int c_global0 = c_start + 2 * cpair;
+        long mem_idx0 = hw * (long)C + c_global0;
+
+        float2 v = gn_load2(x_base, mem_idx0);
+        float2 w = gn_load2(gamma, c_global0);
+        float2 b = gn_load2(beta, c_global0);
+        float n0 = (v.x - mean) * inv_std * w.x + b.x;
+        float n1 = (v.y - mean) * inv_std * w.y + b.y;
+        if (mod_scale != nullptr) {
+            long midx0 = (long)n * C + c_global0;
+            float2 ms = gn_load2(mod_scale, midx0);
+            float2 sh = gn_load2(mod_shift, midx0);
+            n0 = n0 * (1.0f + ms.x) + sh.x;
+            n1 = n1 * (1.0f + ms.y) + sh.y;
+        }
+        float o0 = apply_silu ? (n0 / (1.0f + expf(-n0))) : n0;
+        float o1 = apply_silu ? (n1 / (1.0f + expf(-n1))) : n1;
+        if (smooth_inv != nullptr) {
+            o0 *= smooth_inv[c_global0];
+            o1 *= smooth_inv[c_global0 + 1];
+        }
+        int8_t i0 = (int8_t)fmaxf(-127.0f, fminf(127.0f, roundf(o0 * scale)));
+        int8_t i1 = (int8_t)fmaxf(-127.0f, fminf(127.0f, roundf(o1 * scale)));
+        reinterpret_cast<int16_t*>(yq_base)[mem_idx0 >> 1] =
+            (int16_t)(((unsigned char)i0) | (((unsigned char)i1) << 8));
+    }
+}
+
 // -----------------------------------------------------------------------------
 //   Op:       GroupNorm(+SiLU)+quantize-to-INT8 NHWC (channels_last-native)
 //   Inputs:   x          fp16|fp32 [N,C,H,W] channels_last-contiguous (NHWC physical)
@@ -368,27 +497,57 @@ torch::Tensor group_norm_silu_quantize_nhwc(
     size_t shmem_bytes = 2 * (size_t)block_size * sizeof(float);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     const float* smooth_ptr = (smooth_inv.numel() > 0) ? smooth_inv.data_ptr<float>() : nullptr;
+    // Pass-2 vectorization requires a channel pair to never straddle a group boundary
+    // (both channels then share one mean/inv_std) -- no existing TORCH_CHECK enforces
+    // this (unlike the int4-pack sibling), so this is a genuine runtime fallback, not
+    // just documentation. Real model configs always have even CPG; this dispatch is
+    // exercised by gn_static_quantize_verify.py's synthetic odd-CPG case.
+    const bool use_vec2 = (CPG % 2 == 0);
 
     if (x.scalar_type() == torch::kFloat32) {
-        group_norm_silu_quantize_nhwc_kernel<float><<<grid, block, shmem_bytes, stream>>>(
-            x.data_ptr<float>(), reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
-            weight.data_ptr<float>(), bias.data_ptr<float>(),
-            has_mod ? mod_scale.data_ptr<float>() : nullptr,
-            has_mod ? mod_shift.data_ptr<float>() : nullptr,
-            scale.data_ptr<float>(), smooth_ptr,
-            C, HW, (int)num_groups, (float)eps, apply_silu
-        );
+        if (use_vec2) {
+            group_norm_silu_quantize_nhwc_vec2_kernel<float><<<grid, block, shmem_bytes, stream>>>(
+                x.data_ptr<float>(), reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
+                weight.data_ptr<float>(), bias.data_ptr<float>(),
+                has_mod ? mod_scale.data_ptr<float>() : nullptr,
+                has_mod ? mod_shift.data_ptr<float>() : nullptr,
+                scale.data_ptr<float>(), smooth_ptr,
+                C, HW, (int)num_groups, (float)eps, apply_silu
+            );
+        } else {
+            group_norm_silu_quantize_nhwc_kernel<float><<<grid, block, shmem_bytes, stream>>>(
+                x.data_ptr<float>(), reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
+                weight.data_ptr<float>(), bias.data_ptr<float>(),
+                has_mod ? mod_scale.data_ptr<float>() : nullptr,
+                has_mod ? mod_shift.data_ptr<float>() : nullptr,
+                scale.data_ptr<float>(), smooth_ptr,
+                C, HW, (int)num_groups, (float)eps, apply_silu
+            );
+        }
     } else {
-        group_norm_silu_quantize_nhwc_kernel<__half><<<grid, block, shmem_bytes, stream>>>(
-            reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
-            reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
-            reinterpret_cast<const __half*>(weight.data_ptr<at::Half>()),
-            reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
-            has_mod ? reinterpret_cast<const __half*>(mod_scale.data_ptr<at::Half>()) : nullptr,
-            has_mod ? reinterpret_cast<const __half*>(mod_shift.data_ptr<at::Half>()) : nullptr,
-            scale.data_ptr<float>(), smooth_ptr,
-            C, HW, (int)num_groups, (float)eps, apply_silu
-        );
+        if (use_vec2) {
+            group_norm_silu_quantize_nhwc_vec2_kernel<__half><<<grid, block, shmem_bytes, stream>>>(
+                reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
+                reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
+                reinterpret_cast<const __half*>(weight.data_ptr<at::Half>()),
+                reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
+                has_mod ? reinterpret_cast<const __half*>(mod_scale.data_ptr<at::Half>()) : nullptr,
+                has_mod ? reinterpret_cast<const __half*>(mod_shift.data_ptr<at::Half>()) : nullptr,
+                scale.data_ptr<float>(), smooth_ptr,
+                C, HW, (int)num_groups, (float)eps, apply_silu
+            );
+        } else {
+            group_norm_silu_quantize_nhwc_kernel<__half><<<grid, block, shmem_bytes, stream>>>(
+                reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
+                reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
+                reinterpret_cast<const __half*>(weight.data_ptr<at::Half>()),
+                reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
+                has_mod ? reinterpret_cast<const __half*>(mod_scale.data_ptr<at::Half>()) : nullptr,
+                has_mod ? reinterpret_cast<const __half*>(mod_shift.data_ptr<at::Half>()) : nullptr,
+                scale.data_ptr<float>(), smooth_ptr,
+                C, HW, (int)num_groups, (float)eps, apply_silu
+            );
+        }
     }
 
     return yq;
@@ -641,6 +800,108 @@ __global__ void group_norm_silu_quantize_pack_nhwc_kernel(
     }
 }
 
+// Vectorized (half2/float2) counterpart of group_norm_silu_quantize_pack_nhwc_kernel.
+// The scalar kernel's pass 2 is ALREADY pair-major (one thread per output byte = one
+// channel pair), so this only replaces the per-pair scalar loads with gn_load2 calls --
+// no loop restructuring needed. Pass 1 is untouched/identical (same Cycle-3 deferral
+// rationale as the non-pack kernel above).
+template <typename TIn>
+__global__ void group_norm_silu_quantize_pack_nhwc_vec2_kernel(
+    const TIn* __restrict__ X,
+    int8_t* __restrict__ Yqp,         // [N, H, W, C/2] packed int4, channels_last-flat
+    const TIn* __restrict__ gamma,
+    const TIn* __restrict__ beta,
+    const TIn* __restrict__ mod_scale, // [N, C] scale-shift modulation, or nullptr
+    const TIn* __restrict__ mod_shift,
+    const float* __restrict__ scale_ptr,
+    const float* __restrict__ smooth_inv,
+    int C,
+    long HW,
+    int G,
+    float eps,
+    bool apply_silu
+) {
+    const int CPG = C / G;
+    const long group_size = (long)CPG * HW;
+
+    const int n = blockIdx.x / G;
+    const int g = blockIdx.x % G;
+    const int c_start = g * CPG;
+
+    const TIn* x_base = X + (long)n * HW * C;
+    int8_t* yqp_base = Yqp + (long)n * ((HW * (long)C) / 2);
+
+    extern __shared__ float sdata[];
+    float* s_sum = sdata;
+    float* s_sumsq = sdata + blockDim.x;
+
+    // Pass 1: identical to the scalar kernel (Cycle 3's pair-major vectorization was
+    // reverted here too -- same gn_modiff_verify_realinput.py failure as the non-pack
+    // sibling above).
+    float local_sum = 0.0f, local_sumsq = 0.0f;
+    for (long idx = threadIdx.x; idx < group_size; idx += blockDim.x) {
+        int c_local = idx % CPG;
+        long hw = idx / CPG;
+        long mem_idx = hw * C + c_start + c_local;
+        float v = gn_load(x_base, mem_idx);
+        local_sum += v;
+        local_sumsq += v * v;
+    }
+    s_sum[threadIdx.x] = local_sum;
+    s_sumsq[threadIdx.x] = local_sumsq;
+    __syncthreads();
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (threadIdx.x < s) {
+            s_sum[threadIdx.x] += s_sum[threadIdx.x + s];
+            s_sumsq[threadIdx.x] += s_sumsq[threadIdx.x + s];
+        }
+        __syncthreads();
+    }
+    __shared__ float mean_s, inv_std_s;
+    if (threadIdx.x == 0) {
+        float mean = s_sum[0] / (float)group_size;
+        float var = s_sumsq[0] / (float)group_size - mean * mean;
+        var = fmaxf(var, 0.0f);
+        mean_s = mean;
+        inv_std_s = rsqrtf(var + eps);
+    }
+    __syncthreads();
+    const float mean = mean_s;
+    const float inv_std = inv_std_s;
+    const float scale = *scale_ptr;
+
+    const int HALF_CPG = CPG / 2;
+    const long pairs = group_size / 2;
+    for (long pidx = threadIdx.x; pidx < pairs; pidx += blockDim.x) {
+        int cpair = pidx % HALF_CPG;
+        long hw = pidx / HALF_CPG;
+        int c_global0 = c_start + 2 * cpair;
+        long mem_idx0 = hw * (long)C + c_global0;
+
+        float2 v = gn_load2(x_base, mem_idx0);
+        float2 w = gn_load2(gamma, c_global0);
+        float2 b = gn_load2(beta, c_global0);
+        float n0 = (v.x - mean) * inv_std * w.x + b.x;
+        float n1 = (v.y - mean) * inv_std * w.y + b.y;
+        if (mod_scale != nullptr) {
+            long midx0 = (long)n * C + c_global0;
+            float2 ms = gn_load2(mod_scale, midx0);
+            float2 sh = gn_load2(mod_shift, midx0);
+            n0 = n0 * (1.0f + ms.x) + sh.x;
+            n1 = n1 * (1.0f + ms.y) + sh.y;
+        }
+        float o0 = apply_silu ? (n0 / (1.0f + expf(-n0))) : n0;
+        float o1 = apply_silu ? (n1 / (1.0f + expf(-n1))) : n1;
+        if (smooth_inv != nullptr) {
+            o0 *= smooth_inv[c_global0];
+            o1 *= smooth_inv[c_global0 + 1];
+        }
+        int8_t i0 = (int8_t)fmaxf(-7.0f, fminf(7.0f, roundf(o0 * scale)));
+        int8_t i1 = (int8_t)fmaxf(-7.0f, fminf(7.0f, roundf(o1 * scale)));
+        yqp_base[mem_idx0 / 2] = (int8_t)((i0 & 0x0F) | ((i1 & 0x0F) << 4));
+    }
+}
+
 // -----------------------------------------------------------------------------
 //   Op:       GroupNorm(+SiLU)+quantize-to-INT4+pack NHWC (channels_last-native)
 //   Inputs:   x          fp16|fp32 [N,C,H,W] channels_last-contiguous (NHWC physical)
@@ -715,8 +976,10 @@ torch::Tensor group_norm_silu_quantize_pack_nhwc(
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     const float* smooth_ptr = (smooth_inv.numel() > 0) ? smooth_inv.data_ptr<float>() : nullptr;
 
+    // C%2==0 && CPG%2==0 already TORCH_CHECK'd above -> always safe to use the
+    // vectorized kernel here (unlike the non-pack sibling, no scalar fallback needed).
     if (x.scalar_type() == torch::kFloat32) {
-        group_norm_silu_quantize_pack_nhwc_kernel<float><<<grid, block, shmem_bytes, stream>>>(
+        group_norm_silu_quantize_pack_nhwc_vec2_kernel<float><<<grid, block, shmem_bytes, stream>>>(
             x.data_ptr<float>(), reinterpret_cast<int8_t*>(yqp.data_ptr<int8_t>()),
             weight.data_ptr<float>(), bias.data_ptr<float>(),
             has_mod ? mod_scale.data_ptr<float>() : nullptr,
@@ -725,7 +988,7 @@ torch::Tensor group_norm_silu_quantize_pack_nhwc(
             C, HW, (int)num_groups, (float)eps, apply_silu
         );
     } else {
-        group_norm_silu_quantize_pack_nhwc_kernel<__half><<<grid, block, shmem_bytes, stream>>>(
+        group_norm_silu_quantize_pack_nhwc_vec2_kernel<__half><<<grid, block, shmem_bytes, stream>>>(
             reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
             reinterpret_cast<int8_t*>(yqp.data_ptr<int8_t>()),
             reinterpret_cast<const __half*>(weight.data_ptr<at::Half>()),
@@ -829,6 +1092,66 @@ __global__ void gn_group_stats_kernel(
         // contraction -> bit-identical mean/inv_std, hence a bit-identical `normed`
         // downstream. (A one-liner fmaxf(... , 0) here perturbed var by ~1 ULP at
         // large group sizes, flipping the occasional fine int8 code.)
+        float mean = s_sum[0] / (float)group_size;
+        float var = s_sumsq[0] / (float)group_size - mean * mean;
+        var = fmaxf(var, 0.0f);
+        mean_out[blockIdx.x] = mean;
+        inv_std_out[blockIdx.x] = rsqrtf(var + eps);
+    }
+}
+
+// CYCLE 3 (attempted, REVERTED -- kept here unreferenced as documented history, same
+// convention as aq_vquant_trans_packed_kernel above its _tiled replacement): pair-major
+// vectorized counterpart of gn_group_stats_kernel. Reassigns which elements each thread
+// sums (pair-major instead of strided-across-threads), which changes fp32 addition
+// order vs the scalar kernel. This file's OWN comment above already documented that a
+// MUCH smaller perturbation (a one-line fmaxf reordering) previously flipped occasional
+// int8 codes via a ~1 ULP variance change -- and sure enough, wiring this kernel in
+// (gated on CPG%2==0) passed gn_modiff_verify_kernel.py's random-data check but FAILED
+// gn_modiff_verify_realinput.py with max_code_diff=1. Reverted; gn_launch_group_stats
+// below unconditionally calls the scalar gn_group_stats_kernel again.
+template <typename TIn>
+__global__ void gn_group_stats_vec2_kernel(
+    const TIn* __restrict__ X,
+    float* __restrict__ mean_out,
+    float* __restrict__ inv_std_out,
+    int C, long HW, int G, float eps
+) {
+    const int CPG = C / G;
+    const long group_size = (long)CPG * HW;
+    const int n = blockIdx.x / G;
+    const int g = blockIdx.x % G;
+    const int c_start = g * CPG;
+    const TIn* x_base = X + (long)n * HW * C;
+
+    extern __shared__ float sdata[];
+    float* s_sum = sdata;
+    float* s_sumsq = sdata + blockDim.x;
+
+    float local_sum = 0.0f, local_sumsq = 0.0f;
+    const long pairs = group_size / 2;
+    for (long pidx = threadIdx.x; pidx < pairs; pidx += blockDim.x) {
+        long idx0 = pidx * 2;
+        int c_local0 = (int)(idx0 % CPG);
+        long hw = idx0 / CPG;
+        long mem_idx0 = hw * C + c_start + c_local0;
+        float2 v = gn_load2(x_base, mem_idx0);
+        local_sum += v.x;
+        local_sumsq += v.x * v.x;
+        local_sum += v.y;
+        local_sumsq += v.y * v.y;
+    }
+    s_sum[threadIdx.x] = local_sum;
+    s_sumsq[threadIdx.x] = local_sumsq;
+    __syncthreads();
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (threadIdx.x < s) {
+            s_sum[threadIdx.x] += s_sum[threadIdx.x + s];
+            s_sumsq[threadIdx.x] += s_sumsq[threadIdx.x + s];
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
         float mean = s_sum[0] / (float)group_size;
         float var = s_sumsq[0] / (float)group_size - mean * mean;
         var = fmaxf(var, 0.0f);
@@ -968,6 +1291,9 @@ static void gn_launch_group_stats(
     dim3 block((unsigned int)block_size);
     size_t shmem_bytes = 2 * (size_t)block_size * sizeof(float);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    // Cycle 3 attempted a CPG-even-gated dispatch to gn_group_stats_vec2_kernel here;
+    // reverted after it failed gn_modiff_verify_realinput.py's zero-tolerance gate
+    // (max_code_diff=1) -- see gn_group_stats_vec2_kernel's comment above.
     if (x.scalar_type() == torch::kFloat32) {
         gn_group_stats_kernel<float><<<grid, block, shmem_bytes, stream>>>(
             x.data_ptr<float>(), mean.data_ptr<float>(), inv_std.data_ptr<float>(),
@@ -1029,6 +1355,67 @@ __global__ void gn_apply_delta_quantize_flat_kernel(
     }
 }
 
+// Vectorized (half2/float2) counterpart of gn_apply_delta_quantize_flat_kernel. Pair-major
+// grid-stride loop, mirroring the structure gn_apply_delta_quantize_pack_flat_kernel below
+// already uses. gamma/beta/mod_scale/mod_shift/a_hat_cache all read/written via one gn_load2/
+// gn_store2 call per pair instead of two scalar calls; the two output int8 codes are packed
+// into one int16 store. Requires CPG even (so a pair's c0/c0+1 always share one group and
+// hence one mean/inv_std, exactly like the pack kernel below) -- the caller (host wrapper)
+// only dispatches here when that holds, else falls back to the scalar kernel above.
+template <typename TIn>
+__global__ void gn_apply_delta_quantize_flat_vec2_kernel(
+    const TIn* __restrict__ X,
+    __half* __restrict__ a_hat_cache,     // [N,H,W,C] fp16 channels_last, in place
+    int8_t* __restrict__ Yq,              // [N,H,W,C] int8 quantized delta
+    const TIn* __restrict__ gamma,
+    const TIn* __restrict__ beta,
+    const TIn* __restrict__ mod_scale,    // [N,C] or nullptr
+    const TIn* __restrict__ mod_shift,
+    const float* __restrict__ mean_in,    // [N*G]
+    const float* __restrict__ inv_std_in, // [N*G]
+    const float* __restrict__ scale_ptr,  // scalar quant multiplier = 127/absmax
+    const float* __restrict__ smooth_inv, // [C] or nullptr
+    int C, int G, long sample_stride, long num_elements, bool apply_silu
+) {
+    const int CPG = C / G;
+    const float scale = *scale_ptr;
+    const float inv_scale = 1.0f / scale;
+    const long stride = (long)blockDim.x * gridDim.x;
+    for (long base = 2 * ((long)blockIdx.x * blockDim.x + threadIdx.x);
+         base < num_elements; base += 2 * stride) {
+        int c0 = (int)(base % C);          // even; c0 and c0+1 are in the same group
+        long n = base / sample_stride;
+        long stats_idx = n * G + (c0 / CPG);
+        float mean = mean_in[stats_idx];
+        float inv_std = inv_std_in[stats_idx];
+
+        float2 v = gn_load2(X, base);
+        float2 w = gn_load2(gamma, c0);
+        float2 b = gn_load2(beta, c0);
+        float n0 = (v.x - mean) * inv_std * w.x + b.x;
+        float n1 = (v.y - mean) * inv_std * w.y + b.y;
+        if (mod_scale != nullptr) {
+            long midx = n * C + c0;
+            float2 ms = gn_load2(mod_scale, midx);
+            float2 sh = gn_load2(mod_shift, midx);
+            n0 = n0 * (1.0f + ms.x) + sh.x;
+            n1 = n1 * (1.0f + ms.y) + sh.y;
+        }
+        float n0h = __half2float(__float2half(n0));
+        float n1h = __half2float(__float2half(n1));
+        float o0 = apply_silu ? gns_silu(n0h) : n0h;
+        float o1 = apply_silu ? gns_silu(n1h) : n1h;
+        if (smooth_inv != nullptr) { o0 *= smooth_inv[c0]; o1 *= smooth_inv[c0 + 1]; }
+        float2 cache = gn_load2(a_hat_cache, base);
+        float q0 = fmaxf(-127.0f, fminf(127.0f, roundf((o0 - cache.x) * scale)));
+        float q1 = fmaxf(-127.0f, fminf(127.0f, roundf((o1 - cache.y) * scale)));
+        gn_store2(a_hat_cache, base, make_float2(cache.x + q0 * inv_scale, cache.y + q1 * inv_scale));
+        int8_t i0 = (int8_t)q0, i1 = (int8_t)q1;
+        reinterpret_cast<int16_t*>(Yq)[base >> 1] =
+            (int16_t)(((unsigned char)i0) | (((unsigned char)i1) << 8));
+    }
+}
+
 // Host wrapper: MoDiff GN(+mod)+SiLU + int8 delta-quantize + a_hat update.
 // a_hat_cache is fp16 [N,C,H,W] channels_last, modified in place. Returns int8
 // [N,C,H,W] channels_last (the quantized delta the o_hat conv consumes).
@@ -1063,6 +1450,14 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc(
     const int N = x.size(0), C = x.size(1), H = x.size(2), W = x.size(3);
     TORCH_CHECK(C % num_groups == 0, "group_norm_silu_delta_quantize_nhwc: num_channels must be divisible by num_groups");
     const long HW = (long)H * W;
+    const int CPG = C / (int)num_groups;
+    // Vectorized (vec2) pass requires a channel pair to never straddle a group boundary
+    // (both channels then share one mean/inv_std) -- no existing TORCH_CHECK enforces this
+    // (unlike the int4-pack sibling below), so this is a genuine runtime fallback. Real
+    // model configs always have even CPG; the odd-CPG branch is exercised by
+    // gn_static_quantize_verify.py's synthetic shape (via the sibling static kernel; this
+    // delta-quantize path is covered structurally by the same CPG invariant).
+    const bool use_vec2 = (CPG % 2 == 0);
 
     auto yq = torch::empty_like(x, x.options().dtype(torch::kInt8));
     auto stats_opts = torch::TensorOptions().dtype(torch::kFloat32).device(x.device());
@@ -1075,29 +1470,54 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc(
     const long num_elements = (long)N * C * HW;
     const long sample_stride = (long)C * HW;
     const int ablock = 256;
-    const unsigned int agrid = (unsigned int)((num_elements + ablock - 1) / ablock);
+    const unsigned int agrid_scalar = (unsigned int)((num_elements + ablock - 1) / ablock);
+    const unsigned int agrid_vec2 = (unsigned int)((num_elements / 2 + ablock - 1) / ablock);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
     if (x.scalar_type() == torch::kFloat32) {
-        gn_apply_delta_quantize_flat_kernel<float><<<agrid, ablock, 0, stream>>>(
-            x.data_ptr<float>(), cache_ptr, reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
-            weight.data_ptr<float>(), bias.data_ptr<float>(),
-            has_mod ? mod_scale.data_ptr<float>() : nullptr,
-            has_mod ? mod_shift.data_ptr<float>() : nullptr,
-            mean.data_ptr<float>(), inv_std.data_ptr<float>(),
-            scale.data_ptr<float>(), smooth_ptr,
-            C, (int)num_groups, sample_stride, num_elements, apply_silu);
+        if (use_vec2) {
+            gn_apply_delta_quantize_flat_vec2_kernel<float><<<agrid_vec2, ablock, 0, stream>>>(
+                x.data_ptr<float>(), cache_ptr, reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
+                weight.data_ptr<float>(), bias.data_ptr<float>(),
+                has_mod ? mod_scale.data_ptr<float>() : nullptr,
+                has_mod ? mod_shift.data_ptr<float>() : nullptr,
+                mean.data_ptr<float>(), inv_std.data_ptr<float>(),
+                scale.data_ptr<float>(), smooth_ptr,
+                C, (int)num_groups, sample_stride, num_elements, apply_silu);
+        } else {
+            gn_apply_delta_quantize_flat_kernel<float><<<agrid_scalar, ablock, 0, stream>>>(
+                x.data_ptr<float>(), cache_ptr, reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
+                weight.data_ptr<float>(), bias.data_ptr<float>(),
+                has_mod ? mod_scale.data_ptr<float>() : nullptr,
+                has_mod ? mod_shift.data_ptr<float>() : nullptr,
+                mean.data_ptr<float>(), inv_std.data_ptr<float>(),
+                scale.data_ptr<float>(), smooth_ptr,
+                C, (int)num_groups, sample_stride, num_elements, apply_silu);
+        }
     } else {
-        gn_apply_delta_quantize_flat_kernel<__half><<<agrid, ablock, 0, stream>>>(
-            reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), cache_ptr,
-            reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
-            reinterpret_cast<const __half*>(weight.data_ptr<at::Half>()),
-            reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
-            has_mod ? reinterpret_cast<const __half*>(mod_scale.data_ptr<at::Half>()) : nullptr,
-            has_mod ? reinterpret_cast<const __half*>(mod_shift.data_ptr<at::Half>()) : nullptr,
-            mean.data_ptr<float>(), inv_std.data_ptr<float>(),
-            scale.data_ptr<float>(), smooth_ptr,
-            C, (int)num_groups, sample_stride, num_elements, apply_silu);
+        if (use_vec2) {
+            gn_apply_delta_quantize_flat_vec2_kernel<__half><<<agrid_vec2, ablock, 0, stream>>>(
+                reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), cache_ptr,
+                reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
+                reinterpret_cast<const __half*>(weight.data_ptr<at::Half>()),
+                reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
+                has_mod ? reinterpret_cast<const __half*>(mod_scale.data_ptr<at::Half>()) : nullptr,
+                has_mod ? reinterpret_cast<const __half*>(mod_shift.data_ptr<at::Half>()) : nullptr,
+                mean.data_ptr<float>(), inv_std.data_ptr<float>(),
+                scale.data_ptr<float>(), smooth_ptr,
+                C, (int)num_groups, sample_stride, num_elements, apply_silu);
+        } else {
+            gn_apply_delta_quantize_flat_kernel<__half><<<agrid_scalar, ablock, 0, stream>>>(
+                reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), cache_ptr,
+                reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
+                reinterpret_cast<const __half*>(weight.data_ptr<at::Half>()),
+                reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
+                has_mod ? reinterpret_cast<const __half*>(mod_scale.data_ptr<at::Half>()) : nullptr,
+                has_mod ? reinterpret_cast<const __half*>(mod_shift.data_ptr<at::Half>()) : nullptr,
+                mean.data_ptr<float>(), inv_std.data_ptr<float>(),
+                scale.data_ptr<float>(), smooth_ptr,
+                C, (int)num_groups, sample_stride, num_elements, apply_silu);
+        }
     }
     return yq;
 }
@@ -1159,6 +1579,61 @@ __global__ void gn_apply_delta_quantize_pack_flat_kernel(
     }
 }
 
+// Vectorized (half2/float2) counterpart of gn_apply_delta_quantize_pack_flat_kernel. The
+// scalar kernel's loop is ALREADY pair-major (one thread per output byte = one channel
+// pair) -- this only replaces the per-pair scalar loads/stores with gn_load2/gn_store2
+// calls, no loop restructuring needed.
+template <typename TIn>
+__global__ void gn_apply_delta_quantize_pack_flat_vec2_kernel(
+    const TIn* __restrict__ X,
+    __half* __restrict__ a_hat_cache,     // [N,H,W,C] fp16 channels_last, in place
+    int8_t* __restrict__ Yqp,             // [N,H,W,C/2] packed int4
+    const TIn* __restrict__ gamma,
+    const TIn* __restrict__ beta,
+    const TIn* __restrict__ mod_scale,    // [N,C] or nullptr
+    const TIn* __restrict__ mod_shift,
+    const float* __restrict__ mean_in,    // [N*G]
+    const float* __restrict__ inv_std_in, // [N*G]
+    const float* __restrict__ scale_ptr,
+    const float* __restrict__ smooth_inv, // [C] or nullptr
+    int C, int G, long sample_stride, long num_elements, bool apply_silu
+) {
+    const int CPG = C / G;
+    const float scale = *scale_ptr;
+    const float inv_scale = 1.0f / scale;
+    const long stride = (long)blockDim.x * gridDim.x;
+    for (long base = 2 * ((long)blockIdx.x * blockDim.x + threadIdx.x);
+         base < num_elements; base += 2 * stride) {
+        int c0 = (int)(base % C);
+        long n = base / sample_stride;
+        long stats_idx = n * G + (c0 / CPG);
+        float mean = mean_in[stats_idx];
+        float inv_std = inv_std_in[stats_idx];
+
+        float2 v = gn_load2(X, base);
+        float2 w = gn_load2(gamma, c0);
+        float2 b = gn_load2(beta, c0);
+        float n0 = (v.x - mean) * inv_std * w.x + b.x;
+        float n1 = (v.y - mean) * inv_std * w.y + b.y;
+        if (mod_scale != nullptr) {
+            long midx = n * C + c0;
+            float2 ms = gn_load2(mod_scale, midx);
+            float2 sh = gn_load2(mod_shift, midx);
+            n0 = n0 * (1.0f + ms.x) + sh.x;
+            n1 = n1 * (1.0f + ms.y) + sh.y;
+        }
+        float o0 = apply_silu ? gns_silu(__half2float(__float2half(n0))) : __half2float(__float2half(n0));
+        float o1 = apply_silu ? gns_silu(__half2float(__float2half(n1))) : __half2float(__float2half(n1));
+        if (smooth_inv != nullptr) { o0 *= smooth_inv[c0]; o1 *= smooth_inv[c0 + 1]; }
+        float2 cache = gn_load2(a_hat_cache, base);
+        float q0 = fmaxf(-7.0f, fminf(7.0f, roundf((o0 - cache.x) * scale)));
+        float q1 = fmaxf(-7.0f, fminf(7.0f, roundf((o1 - cache.y) * scale)));
+        gn_store2(a_hat_cache, base, make_float2(cache.x + q0 * inv_scale, cache.y + q1 * inv_scale));
+        int8_t i0 = (int8_t)q0, i1 = (int8_t)q1;
+        Yqp[base / 2] = (int8_t)((i0 & 0x0F) | ((i1 & 0x0F) << 4));
+    }
+}
+
 // Host wrapper: MoDiff GN(+mod)+SiLU + int4 delta-quantize+pack + a_hat update.
 torch::Tensor group_norm_silu_delta_quantize_pack_nhwc(
     torch::Tensor x,
@@ -1210,8 +1685,10 @@ torch::Tensor group_norm_silu_delta_quantize_pack_nhwc(
     const unsigned int agrid = (unsigned int)((num_pairs + ablock - 1) / ablock);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
+    // C%2==0 && CPG%2==0 already TORCH_CHECK'd above -> always safe to use the
+    // vectorized kernel here, no scalar fallback needed.
     if (x.scalar_type() == torch::kFloat32) {
-        gn_apply_delta_quantize_pack_flat_kernel<float><<<agrid, ablock, 0, stream>>>(
+        gn_apply_delta_quantize_pack_flat_vec2_kernel<float><<<agrid, ablock, 0, stream>>>(
             x.data_ptr<float>(), cache_ptr, reinterpret_cast<int8_t*>(yqp.data_ptr<int8_t>()),
             weight.data_ptr<float>(), bias.data_ptr<float>(),
             has_mod ? mod_scale.data_ptr<float>() : nullptr,
@@ -1220,7 +1697,7 @@ torch::Tensor group_norm_silu_delta_quantize_pack_nhwc(
             scale.data_ptr<float>(), smooth_ptr,
             C, (int)num_groups, sample_stride, num_elements, apply_silu);
     } else {
-        gn_apply_delta_quantize_pack_flat_kernel<__half><<<agrid, ablock, 0, stream>>>(
+        gn_apply_delta_quantize_pack_flat_vec2_kernel<__half><<<agrid, ablock, 0, stream>>>(
             reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), cache_ptr,
             reinterpret_cast<int8_t*>(yqp.data_ptr<int8_t>()),
             reinterpret_cast<const __half*>(weight.data_ptr<at::Half>()),

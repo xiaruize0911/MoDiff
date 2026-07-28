@@ -34,6 +34,12 @@ __device__ __forceinline__ void aq_ld8(const uint4* p, float f[8]) {
   f[0] = a.x; f[1] = a.y; f[2] = b.x; f[3] = b.y; f[4] = c.x; f[5] = c.y; f[6] = d.x; f[7] = d.y;
 }
 
+// Load 2 adjacent fp16 elements (one half2) as a float2. Caller guarantees `p` is 4-byte
+// aligned (the offsets used below -- row bases + even d/d0 -- always are).
+__device__ __forceinline__ float2 aq_ld2(const __half* p) {
+  return __half22float2(*reinterpret_cast<const __half2*>(p));
+}
+
 
 // ============================ fused Q/K/V quantize ============================
 // Replaces the PyTorch per-token/per-channel quantize (~+5ms elementwise). Q,K per-token
@@ -217,6 +223,57 @@ __global__ void aq_qtok_packed_static_qk_kernel(const __half* __restrict__ QKV,
   }
 }
 
+// Vectorized (half2) counterpart of aq_qtok_packed_static_qk_kernel. Caller (the host
+// wrapper) TORCH_CHECKs hd % 2 == 0, which -- combined with hp always being a multiple
+// of 32 (hence even) -- guarantees a pair (d0, d0+1) never straddles the [0,hd) / [hd,hp)
+// padding boundary: if d0 is even and d0 < hd <= d0+1, then hd == d0+1 is odd,
+// contradicting hd even. So the two per-element `d<hd` ternaries collapse into one
+// per-pair branch below.
+template <int BITS>
+__global__ void aq_qtok_packed_static_qk_vec2_kernel(const __half* __restrict__ QKV,
+                                                      int8_t* __restrict__ qout, int8_t* __restrict__ kout,
+                                                      float* __restrict__ sq, float* __restrict__ sk,
+                                                      int nh, int T, int hd, int hp,
+                                                      float sq_scale, float sk_scale, int nrows) {
+  const int r = blockIdx.x * (blockDim.x >> 5) + (threadIdx.x >> 5);
+  if (r >= nrows) return;
+  const int lane = threadIdx.x & 31;
+  const __half* xq = QKV + pk_row_off(r, nh, T, hd, 0);
+  const __half* xk = QKV + pk_row_off(r, nh, T, hd, 1);
+  const float invq = 1.f / sq_scale, invk = 1.f / sk_scale;
+  if (lane == 0) { sq[r] = sq_scale; sk[r] = sk_scale; }
+  if (BITS == 8) {
+    int8_t* oq = qout + (size_t)r * hp;
+    int8_t* ok = kout + (size_t)r * hp;
+    for (int d0 = lane * 2; d0 < hp; d0 += 64) {
+      float2 qv = (d0 < hd) ? aq_ld2(xq + d0) : make_float2(0.f, 0.f);
+      float2 kv = (d0 < hd) ? aq_ld2(xk + d0) : make_float2(0.f, 0.f);
+      int qq0 = __float2int_rn(qv.x * invq), qq1 = __float2int_rn(qv.y * invq);
+      int qk0 = __float2int_rn(kv.x * invk), qk1 = __float2int_rn(kv.y * invk);
+      reinterpret_cast<int16_t*>(oq)[d0 >> 1] = (int16_t)(
+          ((unsigned char)(int8_t)(qq0 > 127 ? 127 : (qq0 < -127 ? -127 : qq0))) |
+          (((unsigned char)(int8_t)(qq1 > 127 ? 127 : (qq1 < -127 ? -127 : qq1))) << 8));
+      reinterpret_cast<int16_t*>(ok)[d0 >> 1] = (int16_t)(
+          ((unsigned char)(int8_t)(qk0 > 127 ? 127 : (qk0 < -127 ? -127 : qk0))) |
+          (((unsigned char)(int8_t)(qk1 > 127 ? 127 : (qk1 < -127 ? -127 : qk1))) << 8));
+    }
+  } else {
+    int8_t* oq = qout + (size_t)r * (hp / 2);
+    int8_t* ok = kout + (size_t)r * (hp / 2);
+    for (int dp = lane; dp < hp / 2; dp += 32) {
+      int d0 = dp * 2;
+      float2 qv = (d0 < hd) ? aq_ld2(xq + d0) : make_float2(0.f, 0.f);
+      float2 kv = (d0 < hd) ? aq_ld2(xk + d0) : make_float2(0.f, 0.f);
+      int qq0 = __float2int_rn(qv.x * invq); qq0 = qq0 > 7 ? 7 : (qq0 < -7 ? -7 : qq0);
+      int qq1 = __float2int_rn(qv.y * invq); qq1 = qq1 > 7 ? 7 : (qq1 < -7 ? -7 : qq1);
+      oq[dp] = (int8_t)((qq0 & 0xF) | ((qq1 & 0xF) << 4));
+      int qk0 = __float2int_rn(kv.x * invk); qk0 = qk0 > 7 ? 7 : (qk0 < -7 ? -7 : qk0);
+      int qk1 = __float2int_rn(kv.y * invk); qk1 = qk1 > 7 ? 7 : (qk1 < -7 ? -7 : qk1);
+      ok[dp] = (int8_t)((qk0 & 0xF) | ((qk1 & 0xF) << 4));
+    }
+  }
+}
+
 // V per-channel (over T) absmax from packed qkv (sel=2). Mirrors aq_vscale_kernel.
 __global__ void aq_vscale_packed_kernel(const __half* __restrict__ QKV, float* __restrict__ sv,
                                         int nh, int T, int hd, int hp_av, float Qm) {
@@ -281,6 +338,86 @@ __global__ void aq_vquant_trans_packed_tiled_kernel(const __half* __restrict__ Q
   }
 }
 
+// Vectorized counterpart of aq_vquant_trans_packed_tiled_kernel. Read+quantize phase:
+// half2-loads QKV (contiguous over d, same as the scalar kernel's coalescing, just 2
+// elements/instruction). Write-transposed + zero-pad phases: for a fixed d, 4 consecutive
+// tl map to 4 CONTIGUOUS global-memory bytes in vt (vs[] is smem, strided by hd for fixed
+// d -- 4 cheap scalar smem reads, packed into one int32 global store). Falls back to a
+// scalar tail for the tile's last `tt % 4` tokens (VQ_TILE_T=64 keeps every FULL tile's tt
+// a multiple of 4, but the last, possibly-ragged tile for an arbitrary T is not
+// guaranteed to be).
+__global__ void aq_vquant_trans_packed_tiled_vec2_kernel(const __half* __restrict__ QKV, const float* __restrict__ sv,
+                                                         int8_t* __restrict__ vt, int nh, int T, int hd, int hp_av) {
+  const int bh = blockIdx.x, t0 = blockIdx.y * VQ_TILE_T;
+  const int h = bh % nh, b = bh / nh;
+  const int tt = min(VQ_TILE_T, T - t0);
+  extern __shared__ int8_t vs[];
+  // read + quantize: coalesced over d, half2-vectorized (hd is always even in every real shape).
+  for (int idx = threadIdx.x; idx < tt * (hd / 2); idx += blockDim.x) {
+    int tl = idx / (hd / 2), dp = idx % (hd / 2);
+    int d = dp * 2;
+    size_t off = ((((size_t)b * T + (t0 + tl)) * nh + h) * 3 + 2) * (size_t)hd + d;
+    float2 vals = aq_ld2(QKV + off);
+    float2 inv = make_float2(1.f / sv[(size_t)bh * hp_av + d], 1.f / sv[(size_t)bh * hp_av + d + 1]);
+    int q0 = __float2int_rn(vals.x * inv.x), q1 = __float2int_rn(vals.y * inv.y);
+    vs[tl * hd + d]     = (int8_t)(q0 > 127 ? 127 : (q0 < -127 ? -127 : q0));
+    vs[tl * hd + d + 1] = (int8_t)(q1 > 127 ? 127 : (q1 < -127 ? -127 : q1));
+  }
+  __syncthreads();
+  // The 4-packed int32 store below is only valid when the byte offset
+  // (bh*hp_av+d)*T + (t0+tl0) is 4-aligned for EVERY d -- t0/tl0 are always multiples of
+  // 4 (VQ_TILE_T=64 and the grouping below both are), but the (bh*hp_av+d)*T term's
+  // mod-4 residue depends on d whenever T % 4 != 0, breaking alignment for some d even
+  // though the tile's own token count (tt) is unrelated to this. Every real churches T
+  // (1024/256/64) is a multiple of 4; gate on that and fall back to the original
+  // scalar-per-element loop (bit-identical to the pre-vectorization kernel) otherwise,
+  // rather than assuming it (this exact bug was caught by a synthetic T=97 test case).
+  const int pad = hp_av - hd;
+  if (T % 4 == 0) {
+    const int tt4 = tt / 4, tt_tail = tt - tt4 * 4;
+    // write transposed: 4-packed (coalesced, one int32 store per group of 4 tl).
+    for (int idx = threadIdx.x; idx < hd * tt4; idx += blockDim.x) {
+      int d = idx / tt4, tlq = idx % tt4;
+      int tl0 = tlq * 4;
+      unsigned char b0 = (unsigned char)vs[tl0 * hd + d],       b1 = (unsigned char)vs[(tl0 + 1) * hd + d];
+      unsigned char b2 = (unsigned char)vs[(tl0 + 2) * hd + d], b3 = (unsigned char)vs[(tl0 + 3) * hd + d];
+      int32_t packed = (int32_t)(b0 | (b1 << 8) | (b2 << 16) | (b3 << 24));
+      *reinterpret_cast<int32_t*>(&vt[((size_t)bh * hp_av + d) * T + (t0 + tl0)]) = packed;
+    }
+    // scalar tail: last (tt % 4) tokens of this tile, all d.
+    if (tt_tail > 0) {
+      for (int idx = threadIdx.x; idx < hd * tt_tail; idx += blockDim.x) {
+        int d = idx / tt_tail, tlr = idx % tt_tail;
+        int tl = tt4 * 4 + tlr;
+        vt[((size_t)bh * hp_av + d) * T + (t0 + tl)] = vs[tl * hd + d];
+      }
+    }
+    // zero the padding channels [hd, hp_av) for this tile's tokens -- 4-packed the same way.
+    for (int idx = threadIdx.x; idx < pad * tt4; idx += blockDim.x) {
+      int d = hd + idx / tt4, tlq = idx % tt4;
+      int tl0 = tlq * 4;
+      *reinterpret_cast<int32_t*>(&vt[((size_t)bh * hp_av + d) * T + (t0 + tl0)]) = 0;
+    }
+    if (tt_tail > 0) {
+      for (int idx = threadIdx.x; idx < pad * tt_tail; idx += blockDim.x) {
+        int d = hd + idx / tt_tail, tlr = idx % tt_tail;
+        int tl = tt4 * 4 + tlr;
+        vt[((size_t)bh * hp_av + d) * T + (t0 + tl)] = 0;
+      }
+    }
+  } else {
+    // Scalar fallback (T % 4 != 0): identical to aq_vquant_trans_packed_tiled_kernel.
+    for (int idx = threadIdx.x; idx < hd * tt; idx += blockDim.x) {
+      int d = idx / tt, tl = idx % tt;
+      vt[((size_t)bh * hp_av + d) * T + (t0 + tl)] = vs[tl * hd + d];
+    }
+    for (int idx = threadIdx.x; idx < pad * tt; idx += blockDim.x) {
+      int d = hd + idx / tt, tl = idx % tt;
+      vt[((size_t)bh * hp_av + d) * T + (t0 + tl)] = 0;
+    }
+  }
+}
+
 // ---- ENTRYPOINT (packed dynamic). QK int8 or int4 (qk_bits), V always int8 (flash PV). Reads the
 //      interleaved qkv [b,T,nh,3,hd] directly -> no transpose copy. Serves both int8 & int4 flash. ----
 //   Inputs:   qkv fp16 [b,T,nh,3,hd] (contiguous, channel order (nh,3,hd)); nh,T,hd; hp_qk,hp_av;
@@ -290,6 +427,9 @@ __global__ void aq_vquant_trans_packed_tiled_kernel(const __half* __restrict__ Q
 std::vector<torch::Tensor> quantize_attn_qkv_packed(torch::Tensor qkv, int64_t nh, int64_t T, int64_t hd,
                                                     int64_t hp_qk, int64_t hp_av, int64_t qk_bits) {
   TORCH_CHECK(qkv.is_cuda() && qkv.dtype() == torch::kHalf, "qkv fp16 CUDA");
+  // aq_vquant_trans_packed_tiled_vec2_kernel half2-loads pairs of the hd channel dim --
+  // requires hd even (true for every real churches shape: 24/48/96).
+  TORCH_CHECK(hd % 2 == 0, "quantize_attn_qkv_packed: hd must be even");
   qkv = qkv.contiguous();
   int b = qkv.numel() / ((int)nh * 3 * (int)hd * (int)T);
   int BH = b * (int)nh;
@@ -311,7 +451,7 @@ std::vector<torch::Tensor> quantize_attn_qkv_packed(torch::Tensor qkv, int64_t n
   }
   aq_vscale_packed_kernel<<<BH * (int)hd, 256, 0, s>>>(P, sv.data_ptr<float>(), (int)nh, (int)T, (int)hd, (int)hp_av, 127.f);
   { dim3 vg(BH, ((int)T + VQ_TILE_T - 1) / VQ_TILE_T); size_t vsm = (size_t)VQ_TILE_T * (int)hd;
-    aq_vquant_trans_packed_tiled_kernel<<<vg, 256, vsm, s>>>(P, sv.data_ptr<float>(), vt.data_ptr<int8_t>(), (int)nh, (int)T, (int)hd, (int)hp_av); }
+    aq_vquant_trans_packed_tiled_vec2_kernel<<<vg, 256, vsm, s>>>(P, sv.data_ptr<float>(), vt.data_ptr<int8_t>(), (int)nh, (int)T, (int)hd, (int)hp_av); }
   return {qi, ki, vt, sq, sk, sv};
 }
 
@@ -322,6 +462,11 @@ std::vector<torch::Tensor> quantize_attn_qkv_packed_static(torch::Tensor qkv, in
                                                            double sq_c, double sk_c, torch::Tensor sv_vec) {
   TORCH_CHECK(qkv.is_cuda() && qkv.dtype() == torch::kHalf, "qkv fp16 CUDA");
   TORCH_CHECK(sv_vec.numel() == hp_av, "sv_vec must be [hp_av]");
+  // The vectorized (half2) qtok kernel collapses each pair's two padding-boundary
+  // checks into one, which is only valid when hd is even (see the vec2 kernel's
+  // comment) -- every real churches shape (24/48/96) satisfies this; fail loudly
+  // instead of silently relying on it for a hypothetical odd-hd caller.
+  TORCH_CHECK(hd % 2 == 0, "quantize_attn_qkv_packed_static: hd must be even");
   qkv = qkv.contiguous();
   int b = qkv.numel() / ((int)nh * 3 * (int)hd * (int)T);
   int BH = b * (int)nh;
@@ -339,12 +484,12 @@ std::vector<torch::Tensor> quantize_attn_qkv_packed_static(torch::Tensor qkv, in
   // Merged Q+K launch (was 2x aq_qtok_packed_static_kernel, sel=0 then sel=1): same row range,
   // Q and K read from the same row (offset by hd elements) -- one launch instead of two.
   if (qk_bits == 8) {
-    aq_qtok_packed_static_qk_kernel<8><<<qblk, RPB * 32, 0, s>>>(P, qi.data_ptr<int8_t>(), ki.data_ptr<int8_t>(), sq.data_ptr<float>(), sk.data_ptr<float>(), (int)nh, (int)T, (int)hd, (int)hp_qk, (float)sq_c, (float)sk_c, nrows);
+    aq_qtok_packed_static_qk_vec2_kernel<8><<<qblk, RPB * 32, 0, s>>>(P, qi.data_ptr<int8_t>(), ki.data_ptr<int8_t>(), sq.data_ptr<float>(), sk.data_ptr<float>(), (int)nh, (int)T, (int)hd, (int)hp_qk, (float)sq_c, (float)sk_c, nrows);
   } else {
-    aq_qtok_packed_static_qk_kernel<4><<<qblk, RPB * 32, 0, s>>>(P, qi.data_ptr<int8_t>(), ki.data_ptr<int8_t>(), sq.data_ptr<float>(), sk.data_ptr<float>(), (int)nh, (int)T, (int)hd, (int)hp_qk, (float)sq_c, (float)sk_c, nrows);
+    aq_qtok_packed_static_qk_vec2_kernel<4><<<qblk, RPB * 32, 0, s>>>(P, qi.data_ptr<int8_t>(), ki.data_ptr<int8_t>(), sq.data_ptr<float>(), sk.data_ptr<float>(), (int)nh, (int)T, (int)hd, (int)hp_qk, (float)sq_c, (float)sk_c, nrows);
   }
   { dim3 vg(BH, ((int)T + VQ_TILE_T - 1) / VQ_TILE_T); size_t vsm = (size_t)VQ_TILE_T * (int)hd;
-    aq_vquant_trans_packed_tiled_kernel<<<vg, 256, vsm, s>>>(P, sv.data_ptr<float>(), vt.data_ptr<int8_t>(), (int)nh, (int)T, (int)hd, (int)hp_av); }
+    aq_vquant_trans_packed_tiled_vec2_kernel<<<vg, 256, vsm, s>>>(P, sv.data_ptr<float>(), vt.data_ptr<int8_t>(), (int)nh, (int)T, (int)hd, (int)hp_av); }
   return {qi, ki, vt, sq, sk, sv};
 }
 

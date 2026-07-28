@@ -1,0 +1,130 @@
+{
+  "int8_baseline": {
+    "ms_step": 120.12,
+    "min_ms": 119.91,
+    "quantize_pct_of_total": 23.35,
+    "quantize_kernels_us": [
+      {
+        "name": "void group_norm_silu_quantize_nhwc_vec2_kernel<__half>(__half const*, signed char*, __half const*, __half const*, __half const*, __half const*, float ",
+        "us": 313377.0,
+        "pct_of_total": 18.237
+      },
+      {
+        "name": "void aq_qtok_packed_static_qk_vec2_kernel<8>(__half const*, signed char*, signed char*, float*, float*, int, int, int, int, float, float, int)",
+        "us": 51854.7,
+        "pct_of_total": 3.018
+      },
+      {
+        "name": "aq_vquant_trans_packed_tiled_vec2_kernel(__half const*, float const*, signed char*, int, int, int, int)",
+        "us": 26507.6,
+        "pct_of_total": 1.543
+      },
+      {
+        "name": "scale_quantize_int8_kernel(float const*, signed char*, float const*, int)",
+        "us": 9426.0,
+        "pct_of_total": 0.549
+      }
+    ]
+  },
+  "int4_baseline": {
+    "ms_step": 110.15,
+    "min_ms": 109.87,
+    "quantize_pct_of_total": 23.7,
+    "quantize_kernels_us": [
+      {
+        "name": "void group_norm_silu_quantize_pack_nhwc_vec2_kernel<__half>(__half const*, signed char*, __half const*, __half const*, __half const*, __half const*, f",
+        "us": 279905.6,
+        "pct_of_total": 17.932
+      },
+      {
+        "name": "void aq_qtok_packed_static_qk_vec2_kernel<4>(__half const*, signed char*, signed char*, float*, float*, int, int, int, int, float, float, int)",
+        "us": 51473.2,
+        "pct_of_total": 3.298
+      },
+      {
+        "name": "aq_vquant_trans_packed_tiled_vec2_kernel(__half const*, float const*, signed char*, int, int, int, int)",
+        "us": 28670.4,
+        "pct_of_total": 1.837
+      },
+      {
+        "name": "scale_quantize_pack_kernel(float const*, signed char*, float const*, int)",
+        "us": 9920.2,
+        "pct_of_total": 0.636
+      }
+    ]
+  },
+  "int8_modiff": {
+    "ms_step": 126.11,
+    "min_ms": 125.71,
+    "quantize_pct_of_total": 25.87,
+    "quantize_kernels_us": [
+      {
+        "name": "void gn_group_stats_kernel<__half>(__half const*, float*, float*, int, long, int, float)",
+        "us": 158727.4,
+        "pct_of_total": 8.794
+      },
+      {
+        "name": "void gn_apply_delta_quantize_flat_vec2_kernel<__half>(__half const*, __half*, signed char*, __half const*, __half const*, __half const*, __half const*",
+        "us": 130898.5,
+        "pct_of_total": 7.252
+      },
+      {
+        "name": "void group_norm_silu_quantize_nhwc_vec2_kernel<__half>(__half const*, signed char*, __half const*, __half const*, __half const*, __half const*, float ",
+        "us": 78997.8,
+        "pct_of_total": 4.377
+      },
+      {
+        "name": "void aq_qtok_packed_static_qk_vec2_kernel<8>(__half const*, signed char*, signed char*, float*, float*, int, int, int, int, float, float, int)",
+        "us": 51641.2,
+        "pct_of_total": 2.861
+      },
+      {
+        "name": "aq_vquant_trans_packed_tiled_vec2_kernel(__half const*, float const*, signed char*, int, int, int, int)",
+        "us": 26570.3,
+        "pct_of_total": 1.472
+      },
+      {
+        "name": "void static_quantize_and_update_ahat_kernel_int8_half_cache_vec2<float>(float const*, __half*, signed char*, float const*, float const*, int, int)",
+        "us": 18047.1,
+        "pct_of_total": 1.0
+      },
+      {
+        "name": "void static_quantize_and_update_ahat_kernel_int8_half_cache_vec2<__half>(__half const*, __half*, signed char*, float const*, float const*, int, int)",
+        "us": 2058.9,
+        "pct_of_total": 0.114
+      }
+    ]
+  },
+  "int4_modiff": {
+    "ms_step": 127.27,
+    "min_ms": 126.86,
+    "quantize_pct_of_total": 24.89,
+    "quantize_kernels_us": [
+      {
+        "name": "void gn_group_stats_kernel<__half>(__half const*, float*, float*, int, long, int, float)",
+        "us": 154366.0,
+        "pct_of_total": 9.612
+      },
+      {
+        "name": "void gn_apply_delta_quantize_pack_flat_vec2_kernel<__half>(__half const*, __half*, signed char*, __half const*, __half const*, __half const*, __half c",
+        "us": 123505.9,
+        "pct_of_total": 7.691
+      },
+      {
+        "name": "void aq_qtok_packed_static_qk_vec2_kernel<4>(__half const*, signed char*, signed char*, float*, float*, int, int, int, int, float, float, int)",
+        "us": 50922.6,
+        "pct_of_total": 3.171
+      },
+      {
+        "name": "void group_norm_silu_quantize_pack_nhwc_vec2_kernel<__half>(__half const*, signed char*, __half const*, __half const*, __half const*, __half const*, f",
+        "us": 42349.2,
+        "pct_of_total": 2.637
+      },
+      {
+        "name": "aq_vquant_trans_packed_tiled_vec2_kernel(__half const*, float const*, signed char*, int, int, int, int)",
+        "us": 28565.4,
+        "pct_of_total": 1.779
+      }
+    ]
+  }
+}
