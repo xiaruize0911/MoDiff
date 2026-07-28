@@ -63,6 +63,52 @@ __global__ void fp16_ncw_to_fp32_cl_kernel(
     }
 }
 
+// Vectorized (half2) counterpart of fp16_ncw_to_fp32_cl_kernel. The scalar phase-1 read above
+// moves only 2 bytes/thread (32 threads x 2B = 64B/warp, under a full 128B transaction); this
+// widens it to a half2 load, 2 elements/thread, halving the active thread count for phase 1 only
+// (phase 2, the FP32 write, is already 128B/warp and untouched). Safe when L is even: nl and nl+1
+// share the same n whenever nl is even (since l = nl % L is then even too, and L even means the
+// last element of any n, l=L-1, is always odd -- so an even-aligned pair never straddles the n
+// boundary). The caller only dispatches here when L % 2 == 0, with the scalar kernel as fallback.
+__global__ void fp16_ncw_to_fp32_cl_vec2_kernel(
+    const __half* __restrict__ src,   // [N, C, L]
+    float*        __restrict__ dst,   // [N*L, C]
+    int N, int C, int L
+) {
+    __shared__ float tile[TILE_T][TILE_T + 1];
+
+    int NL      = N * L;
+    int c_base  = blockIdx.x * TILE_T;
+    int nl_base = blockIdx.y * TILE_T;
+
+    // Phase 1: vectorized coalesced reads, 2 nl per thread (threadIdx.x in [0, TILE_T/2))
+    if (threadIdx.x < TILE_T / 2) {
+        int nl0 = nl_base + threadIdx.x * 2;
+        int c   = c_base  + threadIdx.y;
+        float v0 = 0.f, v1 = 0.f;
+        if (c < C && nl0 < NL) {
+            int n = nl0 / L, l0 = nl0 % L;
+            if (nl0 + 1 < NL) {
+                float2 v = __half22float2(*reinterpret_cast<const __half2*>(&src[(long)n * C * L + (long)c * L + l0]));
+                v0 = v.x; v1 = v.y;
+            } else {
+                v0 = __half2float(src[(long)n * C * L + (long)c * L + l0]);
+            }
+        }
+        tile[threadIdx.y][threadIdx.x * 2]     = v0;
+        tile[threadIdx.y][threadIdx.x * 2 + 1] = v1;
+    }
+    __syncthreads();
+
+    // Phase 2: unchanged, coalesced FP32 writes (threadIdx.x -> C direction)
+    {
+        int nl = nl_base + threadIdx.y;
+        int c  = c_base  + threadIdx.x;
+        if (nl < NL && c < C)
+            dst[nl * C + c] = tile[threadIdx.x][threadIdx.y];
+    }
+}
+
 // FP32 [N*L,C,1,1] channels-last -> FP16 [N,C,L] (fuses K7+K8).
 //
 // Phase 1 (coalesced FP32 reads, threadIdx.x varies C):
@@ -98,6 +144,45 @@ __global__ void fp32_cl_to_fp16_ncw_kernel(
     }
 }
 
+// Vectorized (half2) counterpart of fp32_cl_to_fp16_ncw_kernel. Phase 1 (FP32 read) is already
+// 128B/warp and untouched; phase 2 (FP16 write) moves only 2 bytes/thread, widened here to a
+// half2 store, 2 elements/thread. Same L % 2 == 0 safety argument as fp16_ncw_to_fp32_cl_vec2_kernel
+// above (an even-aligned nl pair never straddles an n boundary).
+__global__ void fp32_cl_to_fp16_ncw_vec2_kernel(
+    const float* __restrict__ src,   // [N*L, C]
+    __half*      __restrict__ dst,   // [N, C, L]
+    int NL, int C, int L
+) {
+    __shared__ float tile[TILE_T][TILE_T + 1];
+
+    int c_base  = blockIdx.x * TILE_T;
+    int nl_base = blockIdx.y * TILE_T;
+
+    // Phase 1: unchanged, coalesced FP32 reads (threadIdx.x -> C direction)
+    {
+        int nl = nl_base + threadIdx.y;
+        int c  = c_base  + threadIdx.x;
+        tile[threadIdx.y][threadIdx.x] = (nl < NL && c < C) ? src[nl * C + c] : 0.f;
+    }
+    __syncthreads();
+
+    // Phase 2: vectorized coalesced writes, 2 nl per thread (threadIdx.x in [0, TILE_T/2))
+    if (threadIdx.x < TILE_T / 2) {
+        int nl0 = nl_base + threadIdx.x * 2;
+        int c   = c_base  + threadIdx.y;
+        if (c < C && nl0 < NL) {
+            int n = nl0 / L, l0 = nl0 % L;
+            float v0 = tile[threadIdx.x * 2][threadIdx.y];
+            if (nl0 + 1 < NL) {
+                float v1 = tile[threadIdx.x * 2 + 1][threadIdx.y];
+                *reinterpret_cast<__half2*>(&dst[(long)n * C * L + (long)c * L + l0]) = __floats2half2_rn(v0, v1);
+            } else {
+                dst[(long)n * C * L + (long)c * L + l0] = __float2half(v0);
+            }
+        }
+    }
+}
+
 // C++ wrapper: FP16 NCW -> FP32 channels-last (fuses K1+K2)
 //   Op:       Layout transform (FP16 NCW -> FP32 channels-last) + dtype cast
 //   Inputs:   src FP16 [N,C,L] (NCW); N, C, L ints (logical dims)
@@ -129,11 +214,22 @@ torch::Tensor fp16_ncw_to_fp32_cl(
     dim3 grid((C  + TILE_T - 1) / TILE_T,
               (NL + TILE_T - 1) / TILE_T);
 
-    fp16_ncw_to_fp32_cl_kernel<<<grid, block, 0, stream>>>(
-        reinterpret_cast<const __half*>(src.data_ptr<at::Half>()),
-        dst.data_ptr<float>(),
-        N, C, L
-    );
+    // Vec2 phase-1 read is safe when L is even (see fp16_ncw_to_fp32_cl_vec2_kernel's comment);
+    // the file's own C%4==0 check already guarantees L%2==0 doesn't need a separate assumption
+    // check here since L is an independent dimension (sequence length), not derived from C.
+    if (L % 2 == 0) {
+        fp16_ncw_to_fp32_cl_vec2_kernel<<<grid, block, 0, stream>>>(
+            reinterpret_cast<const __half*>(src.data_ptr<at::Half>()),
+            dst.data_ptr<float>(),
+            N, C, L
+        );
+    } else {
+        fp16_ncw_to_fp32_cl_kernel<<<grid, block, 0, stream>>>(
+            reinterpret_cast<const __half*>(src.data_ptr<at::Half>()),
+            dst.data_ptr<float>(),
+            N, C, L
+        );
+    }
     return dst;
 }
 
@@ -246,6 +342,112 @@ __global__ void fp16_ncw_delta_to_int8_cl_kernel_half_cache(
     }
 }
 
+// Vectorized (half2) phase-1-only counterpart of fp16_ncw_delta_to_int8_cl_kernel. Phase 2 (the
+// delta/quantize/cache-update/int8-write) is left scalar and untouched here -- it interleaves an
+// a_hat read-modify-write with the int8 quantize, more moving parts to re-verify bit-exactly than
+// the plain transpose+cast kernels above, so this round only closes the same fp16-read
+// under-utilization gap (32 threads x 2B = 64B/warp) that fp16_ncw_to_fp32_cl_vec2_kernel does.
+// Same L % 2 == 0 safety gate.
+__global__ void fp16_ncw_delta_to_int8_cl_vec2_kernel(
+    const __half* __restrict__ x,      // [N, C, L]  FP16 NCW
+    float*        __restrict__ a_hat,  // [N*L, C]   FP32 CL  (in-place)
+    int8_t*       __restrict__ out,    // [N*L, C]   INT8 CL
+    float scale,
+    float inv_scale,
+    int N, int C, int L
+) {
+    __shared__ float tile[TILE_T][TILE_T + 1];
+
+    int NL      = N * L;
+    int c_base  = blockIdx.x * TILE_T;
+    int nl_base = blockIdx.y * TILE_T;
+
+    // Phase 1: vectorized coalesced reads, 2 nl per thread
+    if (threadIdx.x < TILE_T / 2) {
+        int nl0 = nl_base + threadIdx.x * 2;
+        int c   = c_base  + threadIdx.y;
+        float v0 = 0.f, v1 = 0.f;
+        if (c < C && nl0 < NL) {
+            int n = nl0 / L, l0 = nl0 % L;
+            if (nl0 + 1 < NL) {
+                float2 v = __half22float2(*reinterpret_cast<const __half2*>(&x[(long)n * C * L + (long)c * L + l0]));
+                v0 = v.x; v1 = v.y;
+            } else {
+                v0 = __half2float(x[(long)n * C * L + (long)c * L + l0]);
+            }
+        }
+        tile[threadIdx.y][threadIdx.x * 2]     = v0;
+        tile[threadIdx.y][threadIdx.x * 2 + 1] = v1;
+    }
+    __syncthreads();
+
+    // Phase 2: unchanged scalar delta/quantize/cache-update/int8-write
+    {
+        int nl  = nl_base + threadIdx.y;
+        int c   = c_base  + threadIdx.x;
+        if (nl < NL && c < C) {
+            float xval = tile[threadIdx.x][threadIdx.y];
+            int   idx  = nl * C + c;
+            float r    = xval - a_hat[idx];
+            float q    = fmaxf(-127.f, fminf(127.f, rintf(r * scale)));
+            a_hat[idx] += q * inv_scale;
+            out[idx]    = (int8_t)q;
+        }
+    }
+}
+
+// Vectorized (half2) phase-1-only counterpart of fp16_ncw_delta_to_int8_cl_kernel_half_cache.
+// Same rationale/gate as fp16_ncw_delta_to_int8_cl_vec2_kernel above; phase 2 (fp16-cache
+// read-modify-write + int8 quantize) is left scalar.
+__global__ void fp16_ncw_delta_to_int8_cl_kernel_half_cache_vec2(
+    const __half* __restrict__ x,      // [N, C, L]  FP16 NCW
+    __half*       __restrict__ a_hat,  // [N*L, C]   FP16 CL  (in-place)
+    int8_t*       __restrict__ out,    // [N*L, C]   INT8 CL
+    float scale,
+    float inv_scale,
+    int N, int C, int L
+) {
+    __shared__ float tile[TILE_T][TILE_T + 1];
+
+    int NL      = N * L;
+    int c_base  = blockIdx.x * TILE_T;
+    int nl_base = blockIdx.y * TILE_T;
+
+    // Phase 1: vectorized coalesced reads, 2 nl per thread
+    if (threadIdx.x < TILE_T / 2) {
+        int nl0 = nl_base + threadIdx.x * 2;
+        int c   = c_base  + threadIdx.y;
+        float v0 = 0.f, v1 = 0.f;
+        if (c < C && nl0 < NL) {
+            int n = nl0 / L, l0 = nl0 % L;
+            if (nl0 + 1 < NL) {
+                float2 v = __half22float2(*reinterpret_cast<const __half2*>(&x[(long)n * C * L + (long)c * L + l0]));
+                v0 = v.x; v1 = v.y;
+            } else {
+                v0 = __half2float(x[(long)n * C * L + (long)c * L + l0]);
+            }
+        }
+        tile[threadIdx.y][threadIdx.x * 2]     = v0;
+        tile[threadIdx.y][threadIdx.x * 2 + 1] = v1;
+    }
+    __syncthreads();
+
+    // Phase 2: unchanged scalar delta/quantize/cache-update/int8-write
+    {
+        int nl  = nl_base + threadIdx.y;
+        int c   = c_base  + threadIdx.x;
+        if (nl < NL && c < C) {
+            float xval = tile[threadIdx.x][threadIdx.y];
+            int   idx  = nl * C + c;
+            float a_v  = __half2float(a_hat[idx]);
+            float r    = xval - a_v;
+            float q    = fmaxf(-127.f, fminf(127.f, rintf(r * scale)));
+            a_hat[idx] = __float2half(a_v + q * inv_scale);
+            out[idx]   = (int8_t)q;
+        }
+    }
+}
+
 // C++ wrapper: FP16 NCW + a_hat (FP32 or FP16) CL -> INT8 CL, a_hat updated
 // in-place. Fuses K1+K2 (layout transpose) + K3 (MoDiff delta quantize).
 //   Op:       Layout transform (FP16 NCW -> INT8 channels-last) + MoDiff delta-quantize + cache update
@@ -291,22 +493,43 @@ torch::Tensor fp16_ncw_delta_to_int8_cl(
     dim3 grid((C  + TILE_T - 1) / TILE_T,
               (NL + TILE_T - 1) / TILE_T);
 
+    const bool use_vec2 = (L % 2 == 0);
     if (a_hat.scalar_type() == at::kHalf) {
-        fp16_ncw_delta_to_int8_cl_kernel_half_cache<<<grid, block, 0, stream>>>(
-            reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
-            reinterpret_cast<__half*>(a_hat.data_ptr<at::Half>()),
-            out.data_ptr<int8_t>(),
-            scale_val, inv_scale_val,
-            N, C, L
-        );
+        if (use_vec2) {
+            fp16_ncw_delta_to_int8_cl_kernel_half_cache_vec2<<<grid, block, 0, stream>>>(
+                reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
+                reinterpret_cast<__half*>(a_hat.data_ptr<at::Half>()),
+                out.data_ptr<int8_t>(),
+                scale_val, inv_scale_val,
+                N, C, L
+            );
+        } else {
+            fp16_ncw_delta_to_int8_cl_kernel_half_cache<<<grid, block, 0, stream>>>(
+                reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
+                reinterpret_cast<__half*>(a_hat.data_ptr<at::Half>()),
+                out.data_ptr<int8_t>(),
+                scale_val, inv_scale_val,
+                N, C, L
+            );
+        }
     } else {
-        fp16_ncw_delta_to_int8_cl_kernel<<<grid, block, 0, stream>>>(
-            reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
-            a_hat.data_ptr<float>(),
-            out.data_ptr<int8_t>(),
-            scale_val, inv_scale_val,
-            N, C, L
-        );
+        if (use_vec2) {
+            fp16_ncw_delta_to_int8_cl_vec2_kernel<<<grid, block, 0, stream>>>(
+                reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
+                a_hat.data_ptr<float>(),
+                out.data_ptr<int8_t>(),
+                scale_val, inv_scale_val,
+                N, C, L
+            );
+        } else {
+            fp16_ncw_delta_to_int8_cl_kernel<<<grid, block, 0, stream>>>(
+                reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
+                a_hat.data_ptr<float>(),
+                out.data_ptr<int8_t>(),
+                scale_val, inv_scale_val,
+                N, C, L
+            );
+        }
     }
     return out;
 }
@@ -340,10 +563,18 @@ torch::Tensor fp32_cl_to_fp16_ncw(
     dim3 grid((C  + TILE_T - 1) / TILE_T,
               (NL + TILE_T - 1) / TILE_T);
 
-    fp32_cl_to_fp16_ncw_kernel<<<grid, block, 0, stream>>>(
-        src.data_ptr<float>(),
-        reinterpret_cast<__half*>(dst.data_ptr<at::Half>()),
-        NL, C, L
-    );
+    if (L % 2 == 0) {
+        fp32_cl_to_fp16_ncw_vec2_kernel<<<grid, block, 0, stream>>>(
+            src.data_ptr<float>(),
+            reinterpret_cast<__half*>(dst.data_ptr<at::Half>()),
+            NL, C, L
+        );
+    } else {
+        fp32_cl_to_fp16_ncw_kernel<<<grid, block, 0, stream>>>(
+            src.data_ptr<float>(),
+            reinterpret_cast<__half*>(dst.data_ptr<at::Half>()),
+            NL, C, L
+        );
+    }
     return dst;
 }
