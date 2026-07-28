@@ -104,6 +104,18 @@ one-line `fmaxf` reordering once flipped int8 codes via a ~1 ULP variance pertur
 confirmed the risk empirically — it passed a random-data correctness gate but failed the
 real-activation-statistics gate with `max_code_diff=1`, and was reverted.
 
+**A second, independent dead end for the same idea, found this round by reading the file's own history:**
+`group_norm_silu.cu:1019-1027` documents that merging `gn_group_stats_kernel` + the delta-quantize apply
+step into *one* kernel launch (group-major, one CTA per `(sample,group)`, stats+apply via
+`__syncthreads()` — bit-exact-safe, since it doesn't touch summation order at all, just launch
+structure) was tried *before* this session (`docs/benchmark_5mode_2026-07-20`) and reverted for a
+*different* reason than Cycle 3's numerics: at this model's dominant low-channels-per-group/high-spatial
+shapes, group-major access fragments the `a_hat` cache's read+write into 4-8x more DRAM sectors than the
+current split (element-major) apply kernel gets, costing ~2-3ms/step e2e — a bandwidth regression, not a
+correctness one. So the "single-pass" idea has now failed twice, for two unrelated reasons (vectorizing
+the reduction breaks bit-exactness; merging the two kernel launches breaks coalescing) — this isn't a
+single untried idea sitting on the table, it's two independently-exhausted ones.
+
 ![vectorization before/after](plots/fig_vectorization_before_after.png)
 
 | mode | ms/step (before → after) | quantize-kernel share (before → after) |
@@ -388,10 +400,14 @@ Pulling every section together, here's what's been fused, what's been ruled out,
   practical option per an earlier FLOP-based analysis in this project's history).
 
 **Correctly NOT fused, with a specific technical reason each:**
-- **GN stats reduction** (Section 3, Section 8): a single-pass rewrite would require a different
-  summation algorithm than the current sum/sumsq two-pass approach, and this file's own code comment
-  plus this session's own Cycle-3 experiment both confirm even much smaller reorderings flip int8 codes
-  under this project's bit-exact correctness bar. Not a missing optimization — a correctly-declined one.
+- **GN stats reduction** (Section 3): exhausted from two independent angles, not one untried idea.
+  Vectorizing the reduction's read side (this session's Cycle-3 experiment) reassigns which elements
+  each thread sums, changing fp32 addition order — failed the real-activation-statistics gate with
+  `max_code_diff=1`. Separately, merging the stats kernel and the delta-quantize apply kernel into one
+  launch (bit-exact-safe in principle — same summation order, just fewer kernel launches) was tried
+  *before* this session and reverted for an unrelated reason: group-major access fragments the `a_hat`
+  cache's DRAM traffic, a ~2-3ms/step regression (`group_norm_silu.cu:1019-1027`). Not a missing
+  optimization — two correctly-declined ones.
 - **Skip-connection concat** (Section 6) — re-analyzed again this round, one level deeper than before.
   `openaimodel.py:242-248` shows `self.skip_connection = conv_nd(dims, channels, out_channels, k)`
   where `k=1` whenever `use_conv=False` is passed to `ResBlock.__init__` (the default, and every
