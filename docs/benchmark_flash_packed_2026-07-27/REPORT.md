@@ -249,6 +249,24 @@ graph — the same tension every other declined item in this report runs into. N
 a correctly-declined one, and evidence this round's search was a genuine fresh sweep, not a repeat of the
 same three conclusions.
 
+**Also checked this round: can GN-stats merge without touching numerics at all?** Both of the two prior
+GN-stats attempts (Section 3, Section 8) changed the *arithmetic* (vectorized reduction order, or
+group-major access) to save the kernel-launch/materialization cost. A third idea avoids touching
+arithmetic entirely: launch `gn_group_stats_kernel` + its apply-kernel sibling as ONE kernel via CUDA
+cooperative groups (`grid.sync()` between the two phases, current per-thread work assignment in each
+phase completely unchanged) — zero numerical change by construction, so it can't hit the bit-exactness
+wall the other two did. Checked the actual constraint before attempting it: cooperative launches require
+the *entire* grid resident on the device simultaneously (that's how a grid-wide sync avoids deadlock).
+`gn_group_stats_kernel` launches `N * num_groups` blocks (`grid_size` at `group_norm_silu.cu:1290`) — at
+this project's production `batch=128, num_groups=32`, that's 4096 blocks. This A40 has 84 SMs; at
+`block_size=32` (tiny, so block-count- not thread/shmem-limited) that's roughly 84 × 16 ≈ 1344 blocks
+resident at once — under a third of what production shapes need. A real cooperative version would need
+occupancy-bounded grid sizing with a grid-stride loop mapping multiple `(n,g)` groups onto each resident
+block, a genuine restructuring with its own correctness surface to re-verify, for a payoff bounded by
+kernel-launch overhead alone (likely under 1ms of the 11-12ms this pair costs, since the dominant cost is
+the reduction's own memory traffic, not the two launches). Declined on risk/reward, not asserted without
+checking the numbers.
+
 ---
 
 ## 8. This round's fixes: the corrected "updown-block gap" and conv_epilogue
