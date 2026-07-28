@@ -150,7 +150,7 @@ survey of `integration/fused_ops/`), turns up concrete fusion-actionable categor
 | Ahat-cache update (modiff) | — | — | 1.4 | 1.5 | int4 variant fixed this round (Section 8) |
 | Attention quantize (standalone) | 5.5 | 5.6 | 5.5 | 6.3 | already assessed not worth a custom kernel (FLOP analysis, earlier session) |
 | Resize (avg_pool/upsample) | 3.0 | 2.7 | 3.8 | 4.2 | **both directions now fused into quantize for baseline** (Section 8); `_modiff` unaffected (fusion is baseline-only) |
-| Skip-connection concat | 2.2 | 2.2 | 2.2 | 2.4 | kernel itself vectorized this round (Section 8); *eliminating* it still needs both a new CUTLASS int32-output epilogue AND restructuring `UNetModel.forward`'s shared decoder call chain — see Section 10 |
+| Skip-connection concat | 2.2 | 2.2 | 2.2 | 2.4 | kernel itself vectorized this round (Section 8); *eliminating* it is unverifiable-bit-exact (closed-source cuDNN accumulation order) AND needs restructuring `UNetModel.forward`'s shared decoder call chain -- see Section 10 |
 | Residual-add/dtype-cast/other | 6.3 | 10.3 | 6.7 | 10.9 | mostly small individual PyTorch elementwise kernels |
 
 **Fixed this round:** `static_quantize_pack_and_update_ahat_kernel_int4_half_cache[_silu]` was still
@@ -341,7 +341,7 @@ that calls it when eligible (FP16, CUDA, channels_last, even channel counts) and
 `torch.cat` otherwise, so it's always correct regardless of mode or shape.
 
 This is **not** the skip-concat *fusion* Section 10 discusses (eliminating the concat's materialization
-entirely, which still needs the CUTLASS int32-output epilogue described there) — it's a much smaller,
+entirely, which Section 10 explains is blocked for reasons unrelated to CUTLASS -- see there) — it's a much smaller,
 purely mechanical win: the same materialization still happens, just via a faster kernel, the same
 relationship vectorization work in Sections 3 and 8 already has to this report's *fusion* work.
 
@@ -437,50 +437,53 @@ Pulling every section together, here's what's been fused, what's been ruled out,
   *before* this session and reverted for an unrelated reason: group-major access fragments the `a_hat`
   cache's DRAM traffic, a ~2-3ms/step regression (`group_norm_silu.cu:1019-1027`). Not a missing
   optimization — two correctly-declined ones.
-- **Skip-connection concat** (Section 6) — re-analyzed again this round, one level deeper than before.
-  `openaimodel.py:242-248` shows `self.skip_connection = conv_nd(dims, channels, out_channels, k)`
-  where `k=1` whenever `use_conv=False` is passed to `ResBlock.__init__` (the default, and every
-  `ResBlock(...)` call site in this codebase leaves it at the default) — **`skip_connection` is a 1x1
-  conv, not a 3x3 one.** That matters: a 1x1 conv has no spatial receptive field, so it needs no
-  im2col gathering at all — it's a per-pixel channel-matmul. That means, unlike `in_conv` (a real 3x3
-  conv, genuinely needing spatial im2col from two sources), `skip_connection`'s two-source form is just
-  `conv(concat(A,B), W) = conv(A, W[:,:C1]) + conv(B, W[:,C1:])`, an exact linear-algebra identity —
-  **not** blocked by CUTLASS's im2col architecture the way this report previously (and still, for
-  `in_conv`) describes it.
-  What *does* block it: this project's zero-tolerance bit-exact bar. `conv2d_int8_fprop`'s CUTLASS
-  epilogue accumulates in int32 internally but returns `int32_accum * alpha` as **fp32** (`conv2d_int8.cu:207`,
-  "output = int32_accum * alpha") — there is no raw-int32-output epilogue instantiation in this codebase.
-  Composing two separate `conv2d_int8_fprop` calls (one per source, same calibrated `input_scale`) and
-  adding their fp32 outputs is only bit-exact to the single-source path if `float32(accum_A) + float32(accum_B)
-  == float32(accum_A + accum_B)` for every real activation — true when both integers are exactly
-  representable (≤2^24), not guaranteed once true accumulators exceed that (plausible at this model's
-  larger channel counts, e.g. 768+768). Getting genuine bit-exactness needs a **new CUTLASS epilogue
-  instantiation with `ElementOutput=int32_t`** (skip the alpha/fp32 conversion entirely), elementwise-add
-  the two exact int32 tensors (integer addition has no precision loss), then dequantize once — a real,
-  scoped, but nontrivial new kernel variant (new template instantiation + explicit compile target +
-  its own correctness gate), not the im2col engineering this report previously conflated it with. GN's
-  two-source read (reading `[h; hs.pop()]` without materializing the concat) is separately tractable —
-  no CUTLASS involved, same "different read address, same summation order" argument that makes the
-  upsample/avgpool fusions above safe — but doesn't help alone: `skip_connection` still needs the
-  materialized concat until its own two-source form ships, so the concat kernel (`cat2_channels_last_fp16`
-  as of this round's vectorization, below) wouldn't disappear from just the GN side.
-  **A further, more fundamental barrier found this round**, by tracing where the concat actually lives:
-  `torch.cat([h, hs.pop()], dim=1)` runs in `UNetModel.forward` (`openaimodel.py:782`), **one call frame
-  above** the ResBlock — `TimestepEmbedSequential.forward(x, emb, ...)` and `FusedResBlock.forward`/
-  `_forward_openai(x, emb, ...)` both take a single already-concatenated `x`; neither ever sees the two
-  source tensors (`h`, `hs.pop()`) separately. So even with a working int32-output epilogue in hand,
-  eliminating the concat needs the two tensors threaded as a pair through `UNetModel.forward` →
-  `TimestepEmbedSequential.forward` → `FusedResBlock.forward` — a call-signature change to the model's
-  shared forward-pass plumbing, not a change contained inside `fused_resblock.py`. And `torch.cat` runs
-  unconditionally for *every* `output_blocks` iteration (not just the 2 updown-transition ones this
-  session's other fusions touch) — so this would mean rewiring ~18 decoder-block call sites, each a
-  chance to regress a path this project's e2e bit-exact gate wouldn't necessarily catch in isolation.
-  **Net:** every fusion shipped this session (upsample, avg_pool, the noahat quantize fixes) was
-  self-contained inside `FusedResBlock`/`fused_resblock.py` and touched exactly the module whose behavior
-  changed. Skip-concat fails that containment test twice over — a new CUTLASS int32-output epilogue
-  *and* restructuring the shared decoder call chain — which is why it's judged out of scope here rather
-  than merely effort-out-of-scope: the risk profile is qualitatively different from this session's other
-  work, not just larger.
+- **Skip-connection concat** (Section 6) — the previous version of this analysis (a new CUTLASS
+  int32-output epilogue would be needed) was built on a **false premise**, caught and corrected this
+  round: `skip_connection` is **never quantized in the first place**. `convert_model_to_optimized_int8`
+  and `convert_model_to_optimized_int4` (`integration/kernels/int8_optimized.py:1182`,
+  `int4_optimized.py:1139`) both contain `is_skip = 'skip' in name; if is_skip ... continue` — an
+  explicit, deliberate exclusion. `skip_connection` stays a plain `nn.Conv2d` (or `nn.Identity` when
+  `out_channels == channels`) in every mode, including int8/int4 — confirmed directly: of the 17 decoder
+  ResBlocks with a real (non-Identity) skip_connection, all 17 are `torch.nn.Conv2d`, none are
+  `OptimizedInt8Conv2d`/`OptimizedInt4Conv2d`. This is presumably intentional (skip connections carry
+  finer-grained detail that may be quantization-sensitive), not an oversight — but it means there is no
+  CUTLASS conv here to write a new epilogue for at all.
+  **What actually happened this round**: still believing the old (incorrect) premise, a full
+  `cat2_quantize_noahat_fprop`/`_pack` kernel (fusing the concat directly into `skip_connection`'s
+  quantize step, mirroring the upsample/avgpool fusions above) was implemented, kernel-level verified
+  bit-exact (32/32 cases), and wired through `UNetModel.forward` → `TimestepEmbedSequential.forward` →
+  `FusedResBlock._forward_openai` via an optional `precomputed_skip` parameter. Instrumented profiling
+  during a real sampling run then showed **0 successful fusions across 150 opportunities**, all failing
+  the `is_calibrated` check — which is when the `is_skip` exclusion above was found. The entire
+  kernel/wrapper/plumbing was reverted (not shipped) once confirmed dead; nothing from this attempt
+  remains in the codebase except this record of it.
+  **Given `skip_connection` is a plain fp16 conv, is fusing the concat away actually easier?** No —
+  verified experimentally, and it's harder for a different reason. Splitting a 1x1 conv into two
+  per-source `F.conv2d` calls and summing is **not** bit-exact to the single combined conv:
+  `F.conv2d(a, w1) + F.conv2d(b, w2)` (each internally accumulated in fp32, then **rounded to fp16
+  before returning**) measured a max diff of 0.125 against `F.conv2d(cat(a,b), w)` on real churches
+  shapes — two roundings instead of one. This is the exact same class of problem that already blocked
+  GN-stats fusion (Section 3): fp32-accumulation-order sensitivity, where this project's own history
+  shows even a 1-ULP perturbation flips int8 output codes. It's arguably **worse** here: GN's own kernel
+  is open-source (`group_norm_silu.cu`), so its exact summation order is directly inspectable and
+  matchable (as done for `nn.AvgPool2d` in this round's avg_pool fusion, verified bit-exact against a
+  real forward pass). `skip_connection`'s `F.conv2d` runs through closed-source cuDNN — its internal
+  fp16 accumulation order isn't inspectable, so there is no way to write a hand-rolled two-source kernel
+  and *prove* it bit-exact the way every other fusion this session has been proven, short of an
+  exhaustive empirical sweep that could never rule out a rare shape/value combination diverging.
+  **The call-chain-plumbing barrier (unaffected by the above, still real)**: `torch.cat([h, hs.pop()],
+  dim=1)` runs in `UNetModel.forward` (`openaimodel.py:782`), **one call frame above** the ResBlock —
+  `TimestepEmbedSequential.forward`/`FusedResBlock.forward`/`_forward_openai` all take a single
+  already-concatenated `x`; none ever sees the two source tensors separately. Eliminating the concat
+  (even hypothetically, with a bit-exact two-source kernel in hand) needs threading `h`/`hs.pop()` as a
+  pair through that shared call chain (used by every decoder block, not just the 2 updown-transition
+  ones this session's other fusions touch) — a model-architecture change, not a change contained inside
+  `fused_resblock.py`.
+  **Net**: skip-concat's materialization is now vectorized (a faster kernel doing the same
+  work — `cat2_channels_last_fp16`, below), but *eliminating* it stays out of scope, for a clearer
+  reason than previously stated: not a missing CUTLASS kernel (there's no CUTLASS conv here to begin
+  with), but an unverifiable-bit-exactness barrier (closed-source cuDNN accumulation order) stacked on
+  top of the same shared-call-chain restructuring risk every version of this analysis has flagged.
 - **avg_pool/upsample fused into their conv's im2col directly** (Section 6, Section 8): both resize
   directions are now fused with the *quantize* step (this round closed the avg_pool half, see above) —
   what remains genuinely unfused, for both directions symmetrically, is going one level deeper and
@@ -505,21 +508,25 @@ Pulling every section together, here's what's been fused, what's been ruled out,
   a_hat read-modify-write + int8 quantize) was left alone since it entangles cache-update correctness
   with the coalescing question, not because it's architecturally blocked like the two items above.
 
-**The actual ceiling for this codebase, given its own correctness bar and its CUTLASS-conv architecture:**
-Attention (36-47ms/step) and the unavoidable GroupNorm cost are the floor — quantization cannot touch
-attention's flash kernel further (already optimal per prior FLOP analysis) and cannot touch GN's
-reduction without risking silent int8/int4 code drift. Conv and GEMM are already compressed 3-6×. What
-remains unfused (skip-concat's `conv`, and both resize directions' `conv`) shares one root cause on
-inspection: CUTLASS's conv kernels require a single contiguous NHWC input tensor, so anything that would
-need a conv to read from two logically-separate sources (a concatenated tensor's two halves) or from a
-not-yet-materialized resize mapping (index-select or 2x2-average coordinates instead of a flat buffer)
-is blocked at the same architectural layer, not by unrelated gaps. Solving either for real means writing
-a custom CUTLASS im2col iterator, or (for skip-concat specifically, since its conv is 1x1 and needs no
-spatial gathering — see above) a new int32-output epilogue — genuine, substantial kernel engineering,
-and the reason these are documented as follow-up work rather than shipped this session. What *was*
-tractable without that engineering — resize's *quantize* step, for both up and down transitions — is
-shipped this session (Section 8): the resize arithmetic itself (index-select or averaging) now fuses
-into the quantize kernel launch; only the subsequent conv call remains a separate kernel.
+**The actual ceiling for this codebase, given its own correctness bar:** Attention (36-47ms/step) and
+the unavoidable GroupNorm cost are the floor — quantization cannot touch attention's flash kernel further
+(already optimal per prior FLOP analysis) and cannot touch GN's reduction without risking silent
+int8/int4 code drift. Conv and GEMM are already compressed 3-6×. What remains unfused splits into two
+genuinely different problems, not one shared root cause as an earlier version of this section claimed:
+- **Both resize directions' `conv`** (up and down): blocked by CUTLASS's architecture specifically —
+  its conv kernels require a single contiguous NHWC input tensor, so reading from a not-yet-materialized
+  resize mapping (index-select or 2x2-average coordinates instead of a flat buffer) needs a custom
+  CUTLASS im2col iterator, genuine new kernel engineering with no precedent in this codebase.
+- **Skip-concat's `conv`**: not a CUTLASS problem at all — `skip_connection` is deliberately never
+  quantized (see above), so there's no CUTLASS kernel here to extend. The blocker is that a two-source
+  fusion can't be proven bit-exact against PyTorch's closed-source cuDNN fp16 conv, the same class of
+  risk (fp32-accumulation-order sensitivity) that already blocked GN-stats fusion, but without GN's
+  advantage of being open-source and thus independently verifiable.
+
+What *was* tractable without either kind of engineering — resize's *quantize* step, for both up and down
+transitions — is shipped this session (Section 8): the resize arithmetic itself (index-select or
+averaging) now fuses into the quantize kernel launch; only the subsequent conv call remains a separate
+kernel. Skip-concat's *materialization* is vectorized (Section 8) even though its *elimination* isn't.
 
 ---
 
@@ -550,21 +557,28 @@ investigated to a concrete, evidence-backed conclusion rather than left as an as
 1. **GN stats reduction** — two independent real attempts, two independent failure modes (bit-exactness;
    DRAM coalescing). Re-attempting without a genuinely new algorithmic idea would just re-derive the same
    result.
-2. **Skip-connection concat (the fusion, not the vectorization above)** — needs both a new CUTLASS kernel
-   (int32-output epilogue) *and* restructuring `UNetModel.forward`'s shared decoder call chain, which also
-   serves the unquantized fp16 path. This is a model-architecture change, not a kernel fusion, and carries
-   regression risk to a code path outside this optimization's own scope.
+2. **Skip-connection concat (the fusion, not the vectorization above)** — `skip_connection` turns out to
+   be deliberately never quantized at all (`is_skip` exclusion in both `convert_model_to_optimized_int8`
+   and `_int4`, found this round), so there's no CUTLASS kernel to extend here; a two-source fusion would
+   have to be proven bit-exact against closed-source cuDNN's fp16 conv, which isn't verifiable the way
+   every other fusion this session has been, and would *also* need restructuring `UNetModel.forward`'s
+   shared decoder call chain, which also serves the unquantized fp16 path — a model-architecture change,
+   not a kernel fusion, carrying regression risk to a code path outside this optimization's own scope.
+   (A real attempt was made this round, believing the old premise that this needed a CUTLASS int32-output
+   epilogue — implemented, verified bit-exact at the kernel level, then found via instrumented profiling
+   to never fire in production because of the `is_skip` exclusion, and reverted. See Section 10.)
 3. **Deeper resize→conv im2col fusion** — payoff measured (not estimated) at under 1% of step time, against
    writing a novel CUTLASS iterator class with no precedent anywhere in this codebase.
 
-Items 2 and 3 require writing genuinely new CUTLASS kernel/epilogue variants under this project's own
-zero-tolerance bit-exact bar — not wiring, extending, or vectorizing an existing kernel, which is what
-every item actually shipped this session (Sections 3, 5, 8, including this round's concat kernel) had in
-common. Item 1 has already failed twice on correctness/performance grounds under real attempts, so a third
-attempt needs a genuinely new algorithmic idea, not just more engineering effort. The `int4_baseline`
-**1.97×** speedup vs fp16, with every measured mode bit-exact, is this session's result as of this
-refresh; it is not a claim that no further work is possible, only that what remains crosses from
-wiring/vectorization into open-ended new-kernel-design risk.
+Item 3 requires writing a genuinely new CUTLASS kernel variant under this project's own zero-tolerance
+bit-exact bar — not wiring, extending, or vectorizing an existing kernel, which is what every item
+actually shipped this session (Sections 3, 5, 8) had in common. Item 2 requires proving bit-exactness
+against a black box this project has no way to inspect. Item 1 has already failed twice on
+correctness/performance grounds under real attempts, so a third attempt needs a genuinely new algorithmic
+idea, not just more engineering effort. The `int4_baseline` **1.97×** speedup vs fp16, with every measured
+mode bit-exact, is this session's result as of this refresh; it is not a claim that no further work is
+possible, only that what remains crosses from wiring/vectorization into open-ended, unverifiable, or
+novel-kernel-design risk.
 
 ## Commits
 
@@ -581,5 +595,5 @@ wiring/vectorization into open-ended new-kernel-design risk.
 - [`ece1991`](https://github.com/xiaruize0911/MoDiff/commit/ece1991) — zero-risk memory optimization: expandable_segments allocator (Section 9)
 - [`ca3f3af`](https://github.com/xiaruize0911/MoDiff/commit/ca3f3af) — upsample->quantize fusion for updown ResBlocks: found existing-but-unwired `FusedUpsample`/`upsample2x_quantize_noahat_fprop` kernel, wired via new `_prequant_upsample_conv`, fixed a `convert_upsample_to_fused` wrapping bug that silently neutralized it, bit-exact verified, real measured speedup (Section 8, 10)
 - [`ceea03b`](https://github.com/xiaruize0911/MoDiff/commit/ceea03b) — fill in commit hash for the upsample-fusion work in REPORT.md
-- [`77049ee`](https://github.com/xiaruize0911/MoDiff/commit/77049ee) — new `avgpool2x_quantize[_pack]_noahat` kernel (down-direction sibling of the upsample fusion) + `_prequant_avgpool_conv` glue, bit-exact verified against a real `nn.AvgPool2d` forward; fixed a real crash bug (`Tensor.__bool__` on `or`-chained fusion attempts) found while wiring it in; investigated and ruled out an `x_upd`->`skip_connection` variant of the same fusion (dead code for this architecture -- `skip_connection` is always `nn.Identity()` for updown ResBlocks, reverted); refined the skip-concat analysis to identify the real blocker as a missing CUTLASS int32-output epilogue, not im2col (Section 8, 10)
+- [`77049ee`](https://github.com/xiaruize0911/MoDiff/commit/77049ee) — new `avgpool2x_quantize[_pack]_noahat` kernel (down-direction sibling of the upsample fusion) + `_prequant_avgpool_conv` glue, bit-exact verified against a real `nn.AvgPool2d` forward; fixed a real crash bug (`Tensor.__bool__` on `or`-chained fusion attempts) found while wiring it in; investigated and ruled out an `x_upd`->`skip_connection` variant of the same fusion (dead code for this architecture -- `skip_connection` is always `nn.Identity()` for updown ResBlocks, reverted); refined the skip-concat analysis to identify skip_connection as a 1x1 conv (later superseded -- see the next skip-concat commit -- by the discovery that it isn't quantized at all) (Section 8, 10)
 - [`7b7c6ff`](https://github.com/xiaruize0911/MoDiff/commit/7b7c6ff) — new `cat2_channels_last_fp16` kernel replacing `torch.cat`'s generic `CatArrayBatchedCopy` for the decoder skip-concat (`UNetModel.forward`), verified bit-identical via direct `torch.equal` (pure data movement, no numerics to drift) plus whole-model `rel_err=0.0000` on all 5 modes including fp16; deepened the skip-concat *fusion* analysis (distinct from this vectorization) with a call-chain-plumbing barrier found by tracing the concat's actual location, one frame above `FusedResBlock` (Section 8, 10)
