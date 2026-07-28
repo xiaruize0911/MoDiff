@@ -70,6 +70,15 @@ torch::Tensor upsample2x_quantize_noahat_fprop(
 torch::Tensor upsample2x_quantize_pack_noahat_fprop(
     torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv);
 
+// Downsample(avg_pool,2x2,stride2) + static quantize fusion (baseline conv, NO a_hat): fold
+// Downsample.forward's nn.AvgPool2d into the following conv's quantize prologue, never
+// materializing the fp16 pooled intermediate. x is the LARGE pre-pool [N,C,H,W]; output is
+// [N,C,H/2,W/2] (int4: packed [N,H/2,W/2,C/2]). Bit-exact to nn.AvgPool2d -> quantize.
+torch::Tensor avgpool2x_quantize_noahat_fprop(
+    torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv);
+torch::Tensor avgpool2x_quantize_pack_noahat_fprop(
+    torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv);
+
 torch::Tensor step1_static_quantize_pack_int4_fprop_silu(
     torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor scale_buf, torch::Tensor smooth_inv);
 

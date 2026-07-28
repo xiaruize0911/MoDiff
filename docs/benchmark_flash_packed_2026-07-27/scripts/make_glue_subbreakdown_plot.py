@@ -19,8 +19,8 @@ SUB_RULES = [
      ["group_norm_silu_nhwc_kernel", "scale_quantize_int8_kernel", "quant_act_int4_pack_kernel"]),
     ("Ahat-cache update (modiff ancillary)", ["static_quantize_and_update_ahat", "static_quantize_pack_and_update_ahat"]),
     ("Attention quantize (standalone)", ["aq_qtok", "aq_vquant", "aq_kquant"]),
-    ("Resize: avg_pool (unfused) / upsample+quantize (fused)",
-     ["avg_pool2d", "upsample_nearest2d", "upsample2x_quantize"]),
+    ("Resize+quantize (baseline: fused both directions; x_upd's calls unfused, feed skip_connection)",
+     ["avg_pool2d", "upsample_nearest2d", "upsample2x_quantize", "avgpool2x_quantize"]),
     ("Skip-connection concat", ["catarraybatchedcopy"]),
 ]
 
