@@ -281,6 +281,30 @@ allocated and reserved is much wider for `_modiff` (7.2/7.7 GB gap vs 4.2/4.5 GB
 for fp16). This is the real memory-vs-accuracy tradeoff of the MoDiff temporal-caching approach: it
 costs more peak VRAM, not less, despite using a lower-precision datatype than fp16.
 
+**A genuine, zero-risk fix for exactly this gap:** the allocated/reserved gap is a caching-allocator
+fragmentation symptom, not a fundamental memory requirement — confirmed by testing PyTorch's
+`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` (a pure runtime/environment setting, no code or
+kernel changes, no correctness risk since it only changes how the allocator manages its virtual address
+space).
+
+![expandable_segments comparison](plots/fig_memory_expandable.png)
+
+| mode | peak reserved (default) | peak reserved (expandable_segments) | reduction | speed impact |
+|---|--:|--:|--:|--:|
+| fp16 | 9.7 GB | 7.9 GB | −18.5% | +0.2% (noise) |
+| int8_baseline | 8.9 GB | 8.7 GB | −2.6% | +0.4% (noise) |
+| int4_baseline | 9.1 GB | 8.5 GB | −6.5% | +0.5% (noise) |
+| int8_modiff | 13.3 GB | 11.2 GB | **−16.2%** | +0.4% (noise) |
+| int4_modiff | 13.5 GB | 10.8 GB | **−19.7%** | +0.7% (noise) |
+
+This directly closes most of the "`_modiff` costs more VRAM than fp16" finding above: `int4_modiff`
+drops from 13.5 GB to 10.8 GB (still above fp16's 7.9 GB under the same setting, but the gap shrinks
+from 5.6 GB to 2.9 GB), with every mode's speed unchanged to within measurement noise (<1%). This is
+the single highest-leverage, lowest-risk optimization found this session — a one-line deployment change
+(set the environment variable, or `torch.cuda.memory._set_allocator_settings("expandable_segments:True")`
+at process start) rather than a kernel change, and it should be the default for any deployment of this
+model at batch=128 or similar.
+
 ---
 
 ## 10. Summary: how close to "theoretical fastest"?

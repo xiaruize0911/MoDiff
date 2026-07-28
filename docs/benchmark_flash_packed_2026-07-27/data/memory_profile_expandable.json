@@ -1,0 +1,27 @@
+{
+  "fp16": {
+    "ms_step": 193.79,
+    "peak_alloc_mb": 7873.7,
+    "peak_reserved_mb": 8096.0
+  },
+  "int8_baseline": {
+    "ms_step": 109.48,
+    "peak_alloc_mb": 4741.6,
+    "peak_reserved_mb": 8918.0
+  },
+  "int4_baseline": {
+    "ms_step": 101.2,
+    "peak_alloc_mb": 4660.9,
+    "peak_reserved_mb": 8684.0
+  },
+  "int8_modiff": {
+    "ms_step": 116.24,
+    "peak_alloc_mb": 6145.5,
+    "peak_reserved_mb": 11436.0
+  },
+  "int4_modiff": {
+    "ms_step": 115.4,
+    "peak_alloc_mb": 5941.5,
+    "peak_reserved_mb": 11080.0
+  }
+}
