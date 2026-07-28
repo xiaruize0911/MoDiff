@@ -42,18 +42,25 @@ convention rather than the fastest possible fp16.
 
 ---
 
-## 2. Time-cost breakdown by category
+## 2. Time cost per layer type
 
-![time-cost breakdown](plots/fig_breakdown.png)
+![time cost per layer type](plots/fig_breakdown.png)
 
-- **`attention_flash` (30-33%) is the single largest category in every quantized mode** — bigger than
-  the fused-compute bucket in the int4 modes. This is the pre-existing custom int8/int4 flash kernel;
-  none of this round of work touched it.
-- **fp16's `unfused attention math` (22%)** is the MATH-backend bmm+softmax+bmm decomposition described
-  above — structurally absent from every quantized mode (they use the flash kernel, or fall back to the
-  same SDPA path only for the always-ineligible L3/Middle blocks, ≤0.02% of total time).
-- **`standalone quantize kernel` (4-6%) and the quantize slice of `fused quantized compute`** are what
-  Section 3 below vectorized.
+One panel per layer type, absolute ms/step for all 5 modes side by side (replaces an earlier
+percent-stacked version that lumped conv+norm+gemm into one slice and hid which layer type actually
+dominates each mode):
+
+- **Attention is the single most expensive layer type in every mode** (36-46 ms/step) and shrinks the
+  least under quantization (fp16 46.4 → int8/int4 baseline 36-38 ms) because it's the pre-existing
+  custom int8/int4 flash kernel — none of this round of work touched it.
+- **Conv shows the largest relative win**: fp16 41.9 ms → int4_baseline 15.9 ms (2.6×). GroupNorm+SiLU
+  moves the other way for `_modiff` modes (21.5 → 29-31 ms) because the temporal-delta cache path does
+  strictly more GN/quantize work per step than the baseline path, trading some speed for its accuracy
+  benefit (consistent with Section 1's `_modiff` vs `_baseline` note).
+- **GEMM/Linear collapses hardest**: fp16 45.0 ms → ~8-9 ms across all 4 quantized modes (~5×), the
+  single biggest per-layer-type speedup in this breakdown.
+- **Quantize (standalone)** is 0 in fp16 (no quantization happens) and a flat 5.5-6.3 ms in every
+  quantized mode — this is what Section 3 below vectorized.
 
 ---
 

@@ -44,53 +44,50 @@ fig.savefig(f"{HERE}/plots/fig_speedup.png", dpi=150)
 plt.close(fig)
 
 # ---------------------------------------------------------------------------
-# Figure 2: time-cost breakdown by category, stacked horizontal bar, all 5 modes.
-# Bars are sized in ABSOLUTE ms/step (not normalized to 100%), so bar length itself
-# shows that fp16 costs ~1.7-1.9x more wall-clock time than the quantized modes --
-# a percent-only stack would hide that a "smaller" percentage slice on a slower mode
-# can still be more absolute time than a "bigger" slice on a faster one. Every
-# segment worth >=3% of that mode's own total is labeled with its ms value.
+# Figure 2: time cost broken down PER LAYER TYPE, one small-multiple panel per
+# layer type, each panel showing that layer type's absolute ms/step across all
+# 5 modes. This replaces the earlier single stacked bar (which lumped conv+
+# norm+gemm together into one "fused quantized compute" slice and was hard to
+# read) -- here every layer type gets its own clearly-labeled panel, so e.g.
+# "how much does Attention cost in each mode" is a single glance, not a
+# mental subtraction across a stacked segment.
 # ---------------------------------------------------------------------------
-def bucket_ms(cat_pct, ms_step):
-    g = lambda *ks: sum(cat_pct.get(k, 0.0) for k in ks) / 100.0 * ms_step
-    return {
-        "fused quantized compute": g("conv_int_fused", "gn_silu_quantize_fused", "gemm_quant_fused"),
-        "flash attention": g("attention_flash"),
-        "standalone quantize kernel": g("quantize_standalone"),
-        "unquantized fp16 compute": g("conv_fp16", "gemm_fp16"),
-        "unfused attention math (fp16 only)": g("attention_sdpa_math_unfused"),
-        "structural resize / boundary": g("resize_unfused", "gn_silu"),
-        "elementwise / glue / other": g("elementwise_misc", "other"),
-    }
+LAYER_TYPES = [
+    ("Conv", ("conv_int_fused", "conv_fp16", "upsample_conv_fused")),
+    ("Attention", ("attention_flash", "attention_sdpa_math_unfused", "attention_sdpa_fused")),
+    ("GroupNorm + SiLU", ("gn_silu_quantize_fused", "gn_silu")),
+    ("GEMM / Linear", ("gemm_quant_fused", "gemm_fp16")),
+    ("Quantize (standalone)", ("quantize_standalone",)),
+    ("Resize / Upsample", ("resize_unfused",)),
+    ("Elementwise / other", ("elementwise_misc", "other")),
+]
 
 modes5 = ["fp16", "int8_baseline", "int4_baseline", "int8_modiff", "int4_modiff"]
-ms_steps = [final[m]["ms_step"] for m in modes5]
-buckets = [bucket_ms(final[m]["category_pct"], ms) for m, ms in zip(modes5, ms_steps)]
-cat_names = list(buckets[0].keys())
-colors = ["#2a78d6", "#199e70", "#eda100", "#73726c", "#e34948", "#b4b2a9", "#d3d1c7"]
+mode_labels = ["fp16", "int8\nbaseline", "int4\nbaseline", "int8\nmodiff", "int4\nmodiff"]
+mode_colors = ["#73726c", "#1D9E75", "#2a9d8f", "#2a78d6", "#eda100"]
+ms_steps = {m: final[m]["ms_step"] for m in modes5}
 
-fig, ax = plt.subplots(figsize=(11, 5.5))
-left = [0.0] * len(modes5)
-LABEL_MIN_FRAC = 0.03  # only label segments >=3% of that mode's own total (avoids clutter on slivers)
-for cat, color in zip(cat_names, colors):
-    vals = [b[cat] for b in buckets]
-    bars = ax.barh(modes5, vals, left=left, color=color, label=cat, height=0.62)
-    for bar, v, total in zip(bars, vals, ms_steps):
-        if v / total >= LABEL_MIN_FRAC:
-            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_y() + bar.get_height() / 2,
-                    f"{v:.0f}", ha="center", va="center", fontsize=9, color="white",
-                    fontweight="bold")
-    left = [l + v for l, v in zip(left, vals)]
-# total-ms label at the end of each bar, so absolute scale is unambiguous even without a ruler
-for i, (mode, total) in enumerate(zip(modes5, ms_steps)):
-    ax.text(total + 3, i, f"{total:.0f} ms", va="center", fontsize=10, fontweight="bold", color="#2C2C2A")
+def layer_ms(mode, keys):
+    pct = final[mode]["category_pct"]
+    return sum(pct.get(k, 0.0) for k in keys) / 100.0 * ms_steps[mode]
 
-ax.set_xlabel("ms / step (absolute -- bar length reflects true e2e time cost)")
-ax.set_xlim(0, max(ms_steps) * 1.12)
-ax.set_title("Time-cost breakdown by category, in absolute ms/step (same-session measurement)")
-ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.12), ncol=2, frameon=False, fontsize=9)
-ax.spines[["top", "right"]].set_visible(False)
-fig.tight_layout()
+fig, axes = plt.subplots(2, 4, figsize=(16, 8))
+axes = axes.flatten()
+for i, (name, keys) in enumerate(LAYER_TYPES):
+    ax = axes[i]
+    vals = [layer_ms(m, keys) for m in modes5]
+    bars = ax.bar(mode_labels, vals, color=mode_colors, width=0.65)
+    for b, v in zip(bars, vals):
+        ax.text(b.get_x() + b.get_width() / 2, v + max(vals) * 0.02, f"{v:.1f}",
+                ha="center", fontsize=9, fontweight="bold")
+    ax.set_title(name, fontsize=12, fontweight="bold")
+    ax.set_ylabel("ms / step")
+    ax.set_ylim(0, max(vals) * 1.25 if max(vals) > 0 else 1)
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.tick_params(axis="x", labelsize=9)
+axes[-1].axis("off")
+fig.suptitle("Time cost per layer type, absolute ms/step (same-session measurement)", fontsize=14)
+fig.tight_layout(rect=[0, 0, 1, 0.96])
 fig.savefig(f"{HERE}/plots/fig_breakdown.png", dpi=150, bbox_inches="tight")
 plt.close(fig)
 
