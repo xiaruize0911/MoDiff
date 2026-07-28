@@ -22,11 +22,13 @@ VERS = [("fp16", "fp16"), ("int8_baseline", "int8_baseline"), ("int4_baseline", 
 # to know which top-level bucket each kernel maps to (Conv / Attention / Linear-GEMM /
 # glue) so we can isolate the glue kernels and keep their individual names.
 NON_GLUE_RULES = [
-    ("conv", ["modiff", "xmma_fprop", "fprop_optimized", "cudnn_convolution", "implicit_gemm"]),
+    ("conv", ["modiff", "xmma_fprop", "fprop_optimized", "cudnn_convolution", "implicit_gemm",
+              "implicitgemm", "nhwcaddpadding"]),
     ("attention", ["flash_attn_int8", "flash_attn_int4", "flash_attn", "aten::bmm", "aten::_softmax",
                    "softmax_warp_forward", "aten::baddbmm", "flash_fwd", "fmha",
                    "scaled_dot_product", "efficient_attention"]),
-    ("linear_gemm", ["gemm_w8a8", "gemm_w4a4", "wmma_tensorop", "addmm", "cublas"]),
+    ("linear_gemm", ["gemm_w8a8", "gemm_w4a4", "wmma_tensorop", "tensorop_f16", "addmm", "cublas",
+                     "ampere_fp16_s16", "xmma_gemm"]),
 ]
 
 def top_bucket(name):
