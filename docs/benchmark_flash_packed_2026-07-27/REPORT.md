@@ -134,7 +134,7 @@ survey of `integration/fused_ops/`), turns up concrete fusion-actionable categor
 | Ahat-cache update (modiff) | — | — | 1.4 | 1.5 | int4 variant fixed this round (Section 8) |
 | Attention quantize (standalone) | 5.5 | 5.7 | 5.5 | 6.3 | already assessed not worth a custom kernel (FLOP analysis, earlier session) |
 | Resize (avg_pool/upsample) | 3.8 | 3.8 | 3.8 | 4.2 | unfused; no existing fusion kernel covers this model's up/down path |
-| Skip-connection concat | 2.6 | 2.6 | 2.6 | 2.9 | unfused; flat cost in every quantized mode |
+| Skip-connection concat | 2.6 | 2.6 | 2.6 | 2.9 | blocked by CUTLASS conv architecture, not merely unfused — see Section 10 |
 | Residual-add/dtype-cast/other | 6.4 | 12.3 | 6.7 | 11.0 | mostly small individual PyTorch elementwise kernels |
 
 **Fixed this round:** `static_quantize_pack_and_update_ahat_kernel_int4_half_cache[_silu]` was still
@@ -200,7 +200,6 @@ None of these have been fixed yet — listed here for triage, ranked by how load
 - `aq_qtok_packed_static_kernel` and the non-tiled `aq_vquant_trans_packed_kernel` in `attn_quant_gemm.cu`
   were confirmed dead (zero launch sites) and removed.
 
-**Resolved this round:**
 - `csrc/kernels/util/layout_transform.cu`'s NCW↔CL transpose/cast kernels are now vectorized (Section 8).
 
 **Still open, lower priority:**
@@ -302,22 +301,36 @@ Pulling every section together, here's what's been fused, what's been ruled out,
   summation algorithm than the current sum/sumsq two-pass approach, and this file's own code comment
   plus this session's own Cycle-3 experiment both confirm even much smaller reorderings flip int8 codes
   under this project's bit-exact correctness bar. Not a missing optimization — a correctly-declined one.
-- **Skip-connection concat** (Section 6): eliminating it needs a two-source GroupNorm kernel variant
-  across the full combinatorial matrix of existing fusion paths (int8/int4 × modiff/baseline ×
-  modulation × smoothquant) — large, well-scoped, but not attempted this session for time reasons.
+- **Skip-connection concat** (Section 6): re-verified this round by reading the actual code, not just
+  estimating scope — this is **not** merely "a two-source GroupNorm kernel," and it does not reduce to
+  a bigger version of what was already fused this session. `openaimodel.py:242-248` shows
+  `self.skip_connection = conv_nd(dims, channels, out_channels, k)` where `channels = ch + ich` (the
+  post-concat channel count) — so the concatenated tensor is consumed by a **real CUTLASS conv**
+  (the skip path), not just GroupNorm. Even a working two-source GN kernel would eliminate GN's read of
+  the materialized buffer but **not the materialization itself**, since the skip conv still needs a
+  single contiguous NHWC input for its im2col — CUTLASS convs don't have a "read from 2 tensors" mode.
+  Concretely: `CatArrayBatchedCopy` would still run every time. This is blocked by the **identical**
+  CUTLASS-single-input limitation as resize+conv fusion below, not a separate, more tractable problem —
+  correcting an earlier characterization in this report that called it "large, well-scoped."
 - **Resize+quantize/conv fusion** (Section 6): nearest-upsample could reorder with quantize (order-safe);
   avg_pool cannot (would compound quantization error). Either direction needs new CUTLASS im2col-level
   engineering for a payoff of ~1-4ms/step.
-- **layout_transform.cu** (this section, Section 6): already fully warp-coalesced; the remaining
-  ~2× bandwidth opportunity needs a genuine transpose-index restructuring, not a load-width swap.
+- **layout_transform.cu** (Section 6): the two simple transpose+cast kernels and the delta-quantize
+  kernels' fp16 phase are now vectorized (Section 8); the remaining scalar phase (delta-quantize's
+  a_hat read-modify-write + int8 quantize) was left alone since it entangles cache-update correctness
+  with the coalescing question, not because it's architecturally blocked like the two items above.
 
-**The actual ceiling for this codebase, given its own correctness bar:** Attention (36-47ms/step) and
-the unavoidable GroupNorm cost are the floor — quantization cannot touch attention's flash kernel
-further (already optimal per prior FLOP analysis) and cannot touch GN's reduction without risking
-silent int8/int4 code drift. Conv and GEMM are already compressed 3-6×. The remaining unfused items
-(skip-concat, resize) are real but bounded to single-digit milliseconds each, and require substantially
-more engineering than anything else fused this session — they are documented, scoped, and available as
-follow-up work, not abandoned.
+**The actual ceiling for this codebase, given its own correctness bar and its CUTLASS-conv architecture:**
+Attention (36-47ms/step) and the unavoidable GroupNorm cost are the floor — quantization cannot touch
+attention's flash kernel further (already optimal per prior FLOP analysis) and cannot touch GN's
+reduction without risking silent int8/int4 code drift. Conv and GEMM are already compressed 3-6×. The
+two remaining unfused items (skip-concat, resize+conv) turn out to share one root cause on inspection:
+CUTLASS's conv kernels require a single contiguous NHWC input tensor, so anything that would need a
+conv to read from two logically-separate sources (a concatenated tensor's two halves, or a
+not-yet-materialized resize output) is blocked at the same architectural layer, not by two unrelated
+gaps. Solving either for real means writing a custom CUTLASS im2col iterator that gathers from two
+sources or from resize coordinates instead of one contiguous buffer — genuine, substantial kernel
+engineering, and the reason these are documented as follow-up work rather than shipped this session.
 
 ---
 
