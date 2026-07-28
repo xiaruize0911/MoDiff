@@ -138,7 +138,7 @@ survey of `integration/fused_ops/`), turns up concrete fusion-actionable categor
 | Ahat-cache update (modiff) | — | — | 1.4 | 1.5 | int4 variant fixed this round (Section 8) |
 | Attention quantize (standalone) | 5.5 | 5.6 | 5.5 | 6.3 | already assessed not worth a custom kernel (FLOP analysis, earlier session) |
 | Resize (avg_pool/upsample) | 3.0 | 2.7 | 3.8 | 4.2 | **both directions now fused into quantize for baseline** (Section 8); `_modiff` unaffected (fusion is baseline-only) |
-| Skip-connection concat | 2.6 | 2.6 | 2.6 | 2.9 | blocked on a new CUTLASS int32-output epilogue, not im2col — see Section 10's corrected analysis |
+| Skip-connection concat | 2.6 | 2.6 | 2.6 | 2.9 | blocked on both a new CUTLASS int32-output epilogue AND restructuring `UNetModel.forward`'s shared decoder call chain — see Section 10's corrected analysis |
 | Residual-add/dtype-cast/other | 6.3 | 10.3 | 6.7 | 10.9 | mostly small individual PyTorch elementwise kernels |
 
 **Fixed this round:** `static_quantize_pack_and_update_ahat_kernel_int4_half_cache[_silu]` was still
@@ -418,9 +418,24 @@ Pulling every section together, here's what's been fused, what's been ruled out,
   no CUTLASS involved, same "different read address, same summation order" argument that makes the
   upsample/avgpool fusions above safe — but doesn't help alone: `skip_connection` still needs the
   materialized concat until its own two-source form ships, so `CatArrayBatchedCopy` wouldn't disappear
-  from just the GN side. **Net:** more tractable in principle than previously stated (no im2col engineering
-  required), but still gated on writing and validating a new int32-output CUTLASS epilogue — judged
-  out of scope for this session given ~2.6ms/step of payload against that engineering and validation cost.
+  from just the GN side.
+  **A further, more fundamental barrier found this round**, by tracing where the concat actually lives:
+  `torch.cat([h, hs.pop()], dim=1)` runs in `UNetModel.forward` (`openaimodel.py:782`), **one call frame
+  above** the ResBlock — `TimestepEmbedSequential.forward(x, emb, ...)` and `FusedResBlock.forward`/
+  `_forward_openai(x, emb, ...)` both take a single already-concatenated `x`; neither ever sees the two
+  source tensors (`h`, `hs.pop()`) separately. So even with a working int32-output epilogue in hand,
+  eliminating the concat needs the two tensors threaded as a pair through `UNetModel.forward` →
+  `TimestepEmbedSequential.forward` → `FusedResBlock.forward` — a call-signature change to the model's
+  shared forward-pass plumbing, not a change contained inside `fused_resblock.py`. And `torch.cat` runs
+  unconditionally for *every* `output_blocks` iteration (not just the 2 updown-transition ones this
+  session's other fusions touch) — so this would mean rewiring ~18 decoder-block call sites, each a
+  chance to regress a path this project's e2e bit-exact gate wouldn't necessarily catch in isolation.
+  **Net:** every fusion shipped this session (upsample, avg_pool, the noahat quantize fixes) was
+  self-contained inside `FusedResBlock`/`fused_resblock.py` and touched exactly the module whose behavior
+  changed. Skip-concat fails that containment test twice over — a new CUTLASS int32-output epilogue
+  *and* restructuring the shared decoder call chain — which is why it's judged out of scope here rather
+  than merely effort-out-of-scope: the risk profile is qualitatively different from this session's other
+  work, not just larger.
 - **avg_pool/upsample fused into their conv's im2col directly** (Section 6, Section 8): both resize
   directions are now fused with the *quantize* step (this round closed the avg_pool half, see above) —
   what remains genuinely unfused, for both directions symmetrically, is going one level deeper and
