@@ -1,11 +1,11 @@
 """All figures for the final report, from data/*.json.
 
   fig_e2e_speedup.png       e2e speedup vs fp16, 5 modes
+  fig_icicle_<mode>.png     hierarchical (icicle) profile tree: layer type -> role -> kernel
+  fig_layer_pipeline_speedup.png   per-layer-type pipeline speedup, every real shape
+  fig_intra_layer_*.png     inside each layer, by role (absolute us and % variants)
   fig_profile_tree.png      hierarchical time cost: layer type -> role, per mode
   fig_layer_stack.png       absolute ms/step stacked by layer type, all modes side by side
-  fig_kernel_conv.png       conv kernel speedup vs cuDNN fp16, every real shape
-  fig_kernel_gn.png         GN(+SiLU[+quantize]) fused vs reference, every real shape
-  fig_kernel_fusions.png    this session's resize+quantize / skip-concat fusions
 """
 import json, textwrap
 import matplotlib
@@ -29,6 +29,22 @@ def load(name):
         return json.load(open(f"{HERE}/data/{name}"))
     except FileNotFoundError:
         return None
+
+
+def load_tree():
+    """Prefer the caller-attributed profile when present.
+
+    profile_tree.json classifies kernels by NAME, which cannot tell apart the same kernel
+    serving different callers -- in fp16 mode cuBLAS dispatches SDPA's QK^T/AV (aten::bmm)
+    to a `cutlass_..._gemm` kernel indistinguishable from a plain Linear GEMM, so 44 ms/step
+    of attention work was billed to Linear-GEMM. profile_tree_by_caller.json joins kernels
+    to the ATen op that launched them and is therefore the correct source; keep the
+    name-based file only as a fallback.
+    """
+    t = load("profile_tree_by_caller.json")
+    if t:
+        return t, "by-caller"
+    return load("profile_tree.json"), "by-name"
 
 
 def fig_e2e_speedup(tree):
@@ -127,8 +143,9 @@ def fig_profile_tree(tree, mode="int4_baseline"):
         tick.set_fontweight("bold" if L else "normal")
     ax.set_xlabel("ms / step")
     ax.set_xlim(0, max(vals) * 1.26)
-    ax.set_title(f"Hierarchical profile — {mode} ({tree[mode]['ms_step']:.1f} ms/step, "
-                 f"{tree[mode]['n_distinct_kernels']} distinct CUDA kernels)\n"
+    nk = tree[mode].get('n_distinct_kernels')
+    nk_txt = f", {nk} distinct CUDA kernels" if nk else ""
+    ax.set_title(f"Hierarchical profile — {mode} ({tree[mode]['ms_step']:.1f} ms/step{nk_txt})\n"
                  f"bold = layer type, indented = role within it")
     ax.spines[["top", "right", "left"]].set_visible(False)
     ax.tick_params(axis="y", length=0)
@@ -138,131 +155,14 @@ def fig_profile_tree(tree, mode="int4_baseline"):
     print(f"wrote fig_profile_tree_{mode}.png")
 
 
-def fig_kernel_conv(kd):
-    if not kd:
-        return
-    rows = [r for r in kd["conv"] if r.get("fp16_us")]
-    if not rows:
-        return
-    rows.sort(key=lambda r: (r["C"], r["H"], r["K"]))
-    labels = [f"{r['C']}->{r['K']}\n{r['H']}x{r['W']}" + (f" s{r['stride']}" if r['stride'] != 1 else "")
-              for r in rows]
-    series = [("int8_baseline_us", "int8 baseline", "#378ADD"),
-              ("int4_baseline_us", "int4 baseline", "#1D9E75"),
-              ("int8_modiff_us", "int8 modiff", "#BA7517"),
-              ("int4_modiff_us", "int4 modiff", "#E24B4A")]
-    x = np.arange(len(rows))
-    w = 0.2
-    fig, ax = plt.subplots(figsize=(max(11, 0.85 * len(rows)), 5.4))
-    for i, (key, lab, col) in enumerate(series):
-        sp = [(r["fp16_us"] / r[key]) if r.get(key) else np.nan for r in rows]
-        ax.bar(x + (i - 1.5) * w, sp, w, label=lab, color=col)
-    ax.axhline(1.0, ls="--", color="#555", lw=1)
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels, fontsize=8)
-    ax.set_ylabel("speedup vs cuDNN fp16 conv")
-    ax.set_title(f"Conv kernel speedup vs fp16, every real UNet conv shape (b{kd['batch']})\n"
-                 "above 1.0 = the quantized kernel is faster at that shape")
-    ax.legend(frameon=False, ncol=4, loc="upper center", bbox_to_anchor=(0.5, -0.13))
-    ax.spines[["top", "right"]].set_visible(False)
-    fig.tight_layout()
-    fig.savefig(f"{HERE}/plots/fig_kernel_conv.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print("wrote fig_kernel_conv.png")
-
-
-def fig_kernel_gn(kd):
-    if not kd:
-        return
-    rows = [r for r in kd["groupnorm"] if r.get("fp16_gn_silu_us")]
-    if not rows:
-        return
-    rows.sort(key=lambda r: (r["C"], r["H"]))
-    labels = [f"C{r['C']}\n{r['H']}x{r['W']}" for r in rows]
-    x = np.arange(len(rows))
-    w = 0.26
-    fig, ax = plt.subplots(figsize=(max(10, 0.9 * len(rows)), 5.2))
-    a = [r["fp16_gn_silu_us"] / r["fused_gn_silu_us"] if r.get("fused_gn_silu_us") else np.nan
-         for r in rows]
-    b = [r["twostep_gn_then_quant_int8_us"] / r["fused_gn_silu_quant_int8_us"]
-         if r.get("fused_gn_silu_quant_int8_us") and r.get("twostep_gn_then_quant_int8_us") else np.nan
-         for r in rows]
-    c = [r["twostep_gn_then_quant_int4_us"] / r["fused_gn_silu_quant_int4_us"]
-         if r.get("fused_gn_silu_quant_int4_us") and r.get("twostep_gn_then_quant_int4_us") else np.nan
-         for r in rows]
-    ax.bar(x - w, a, w, label="GN+SiLU kernel vs F.group_norm+F.silu", color="#1D9E75")
-    ax.bar(x, b, w, label="GN+SiLU+int8-quant FUSED vs 2-kernel", color="#378ADD")
-    ax.bar(x + w, c, w, label="GN+SiLU+int4-quant FUSED vs 2-kernel", color="#BA7517")
-    ax.axhline(1.0, ls="--", color="#555", lw=1)
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels, fontsize=8)
-    ax.set_ylabel("speedup vs reference")
-    ax.set_title(f"GroupNorm(+SiLU[+quantize]) kernel speedup, every real GN shape (b{kd['batch']})")
-    ax.legend(frameon=False, ncol=1, loc="upper left", fontsize=9)
-    ax.spines[["top", "right"]].set_visible(False)
-    fig.tight_layout()
-    fig.savefig(f"{HERE}/plots/fig_kernel_gn.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print("wrote fig_kernel_gn.png")
-
-
-def fig_kernel_fusions(kd):
-    """This session's fusions: resize+quantize (both directions) and skip-concat."""
-    if not kd:
-        return
-    up = [r for r in kd["resize"] if r["family"] == "resize_upsample" and r.get("twostep_int8_us")]
-    dn = [r for r in kd["resize"] if r["family"] == "resize_avgpool" and r.get("twostep_int8_us")]
-    cc = [r for r in kd["concat"] if r.get("torch_cat_us")]
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.6))
-
-    for ax, rows, title in ((axes[0], up, "upsample(nearest,2x)+quantize"),
-                            (axes[1], dn, "avg_pool(2x2)+quantize")):
-        rows = sorted(rows, key=lambda r: (r["C"], r["H"]))
-        x = np.arange(len(rows))
-        s8 = [r["twostep_int8_us"] / r["fused_int8_us"] if r.get("fused_int8_us") else np.nan for r in rows]
-        s4 = [r["twostep_int4_us"] / r["fused_int4_us"]
-              if r.get("fused_int4_us") and r.get("twostep_int4_us") else np.nan for r in rows]
-        ax.bar(x - 0.2, s8, 0.4, label="int8", color="#378ADD")
-        ax.bar(x + 0.2, s4, 0.4, label="int4", color="#1D9E75")
-        ax.axhline(1.0, ls="--", color="#555", lw=1)
-        ax.set_xticks(x)
-        ax.set_xticklabels([f"C{r['C']}\n{r['H']}x{r['W']}" for r in rows], fontsize=7.5)
-        ax.set_title(f"{title}\nFUSED vs resize-then-quantize", fontsize=10)
-        ax.set_ylabel("speedup")
-        ax.legend(frameon=False, fontsize=9)
-        ax.spines[["top", "right"]].set_visible(False)
-
-    ax = axes[2]
-    cc = sorted(cc, key=lambda r: -(r["C1"] + r["C2"]))
-    x = np.arange(len(cc))
-    sp = [r["torch_cat_us"] / r["fused_us"] if r.get("fused_us") else np.nan for r in cc]
-    ax.bar(x, sp, 0.55, color="#BA7517")
-    ax.axhline(1.0, ls="--", color="#555", lw=1)
-    ax.set_xticks(x)
-    ax.set_xticklabels([f"{r['C1']}+{r['C2']}\n{r['H']}x{r['W']}" for r in cc], fontsize=7.5)
-    ax.set_title("decoder skip-concat\ncat2_channels_last vs torch.cat", fontsize=10)
-    ax.set_ylabel("speedup")
-    ax.spines[["top", "right"]].set_visible(False)
-
-    fig.suptitle(f"Fusion/specialization kernels added this session — speedup at every real shape (b{kd['batch']})",
-                 fontsize=11)
-    fig.tight_layout()
-    fig.savefig(f"{HERE}/plots/fig_kernel_fusions.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print("wrote fig_kernel_fusions.png")
-
-
 def main_e2e():
-    tree = load("profile_tree.json")
-    kd = load("kernel_speedup_all_shapes.json")
+    tree, src = load_tree()
+    print(f"[tree source] {src}")
     fig_e2e_speedup(tree)
     fig_layer_stack(tree)
     if tree:
         for m in ("int4_baseline", "int8_baseline", "int4_modiff", "fp16"):
             fig_profile_tree(tree, m)
-    fig_kernel_conv(kd)
-    fig_kernel_gn(kd)
-    fig_kernel_fusions(kd)
 
 
 # ---------------------------------------------------------------------------
@@ -492,8 +392,9 @@ def fig_profile_icicle(tree, mode="int4_baseline", min_ms=0.05, kernel_level=Tru
     ax.set_yticklabels(["layer type", "role", "kernel"][:3 if kernel_level else 2],
                        fontsize=10, fontweight="bold")
     ax.set_xlabel("ms / step  (box width is proportional to time; each row partitions the same total)")
-    ax.set_title(f"Profile tree — {mode}: {tree[mode]['ms_step']:.2f} ms/step, "
-                 f"{tree[mode]['n_distinct_kernels']} distinct CUDA kernels\n"
+    nk = tree[mode].get('n_distinct_kernels')
+    nk_txt = f", {nk} distinct CUDA kernels" if nk else ""
+    ax.set_title(f"Profile tree — {mode}: {tree[mode]['ms_step']:.2f} ms/step{nk_txt}\n"
                  f"layer type → role → kernel; boxes narrower than ~5.5% are unlabelled, "
                  f"kernels under {min_ms} ms are pooled as \"(+N small)\"", fontsize=11)
     ax.tick_params(axis="y", length=0)
@@ -514,4 +415,4 @@ def fig_icicle_all(tree):
 if __name__ == "__main__":
     main_e2e()
     main_layers()
-    fig_icicle_all(load("profile_tree.json"))
+    fig_icicle_all(load_tree()[0])

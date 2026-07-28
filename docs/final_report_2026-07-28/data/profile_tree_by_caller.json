@@ -1,0 +1,4146 @@
+{
+  "fp16": {
+    "ms_step": 210.23,
+    "name_attributed_ms_step": 23.0882,
+    "name_attributed_pct": 10.98,
+    "name_attributed_top": [
+      "group_norm_silu_nhwc_kernel",
+      "ImplicitGemmConvolutionFusionPerSample",
+      "cat2_channels_last_fp16_kernel",
+      "gn_accum_kernel",
+      "gn_finalize_kernel",
+      "Memcpy DtoH"
+    ],
+    "tree": {
+      "Attention": {
+        "ms_step": 100.104,
+        "roles": {
+          "fp16 tensor-core GEMM (cuBLAS)": {
+            "ms_step": 48.5855,
+            "kernels": [
+              {
+                "kernel": "cutlass_80_wmma_tensorop_f16_s161616gemm_f16_32x32_32x1_nn",
+                "called_by": "aten::bmm",
+                "attributed_via": "caller",
+                "ms_step": 22.6715,
+                "calls_per_step": 5.0
+              },
+              {
+                "kernel": "cutlass_80_wmma_tensorop_f16_s161616gemm_f16_32x32_128x2_n",
+                "called_by": "aten::bmm",
+                "attributed_via": "caller",
+                "ms_step": 21.6347,
+                "calls_per_step": 5.0
+              },
+              {
+                "kernel": "ampere_fp16_s1688gemm_fp16_256x64_ldg8_f2f_stages_32x1_nn",
+                "called_by": "aten::bmm",
+                "attributed_via": "caller",
+                "ms_step": 1.8508,
+                "calls_per_step": 5.0
+              },
+              {
+                "kernel": "ampere_fp16_s1688gemm_fp16_64x128_sliced1x2_ldg8_f2f_nn",
+                "called_by": "aten::bmm",
+                "attributed_via": "caller",
+                "ms_step": 1.8421,
+                "calls_per_step": 5.0
+              },
+              {
+                "kernel": "cutlass_80_wmma_tensorop_f16_s161616gemm_f16_32x32_64x1_nn",
+                "called_by": "aten::bmm",
+                "attributed_via": "caller",
+                "ms_step": 0.4201,
+                "calls_per_step": 10.0
+              },
+              {
+                "kernel": "cutlass_80_wmma_tensorop_f16_s161616gemm_f16_16x16_32x1_nn",
+                "called_by": "aten::bmm",
+                "attributed_via": "caller",
+                "ms_step": 0.0889,
+                "calls_per_step": 6.0
+              },
+              {
+                "kernel": "cutlass_80_wmma_tensorop_f16_s161616gemm_f16_16x16_64x1_nn",
+                "called_by": "aten::bmm",
+                "attributed_via": "caller",
+                "ms_step": 0.0774,
+                "calls_per_step": 6.0
+              }
+            ],
+            "pct_of_total": 23.11
+          },
+          "fp16 SDPA (unfused math backend: BMM + softmax)": {
+            "ms_step": 46.5478,
+            "kernels": [
+              {
+                "kernel": "softmax_warp_forward",
+                "called_by": "aten::_softmax",
+                "attributed_via": "caller",
+                "ms_step": 46.5478,
+                "calls_per_step": 21.0
+              }
+            ],
+            "pct_of_total": 22.14
+          },
+          "fused GroupNorm->QKV projection (CUTLASS per-sample fusion)": {
+            "ms_step": 4.822,
+            "kernels": [
+              {
+                "kernel": "ImplicitGemmConvolutionFusionPerSample",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 4.2394,
+                "calls_per_step": 7.0
+              },
+              {
+                "kernel": "ImplicitGemmConvolutionFusionPerSample",
+                "called_by": "aten::as_strided",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.2698,
+                "calls_per_step": 0.5
+              },
+              {
+                "kernel": "ImplicitGemmConvolutionFusionPerSample",
+                "called_by": "aten::expand",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0712,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "ImplicitGemmConvolutionFusionPerSample",
+                "called_by": "aten::bmm",
+                "attributed_via": "caller",
+                "ms_step": 0.0705,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "ImplicitGemmConvolutionFusionPerSample",
+                "called_by": "aten::_unsafe_view",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0702,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "ImplicitGemmConvolutionFusionPerSample",
+                "called_by": "aten::t",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0512,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "ImplicitGemmConvolutionFusionPerSample",
+                "called_by": "aten::narrow",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0497,
+                "calls_per_step": 0.1
+              }
+            ],
+            "pct_of_total": 2.29
+          },
+          "GN+SiLU only (fp16 out; updown blocks + fp16 mode)": {
+            "ms_step": 0.1368,
+            "kernels": [
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::bmm",
+                "attributed_via": "caller",
+                "ms_step": 0.0922,
+                "calls_per_step": 0.4
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::scaled_dot_product_attention",
+                "attributed_via": "caller",
+                "ms_step": 0.0221,
+                "calls_per_step": 0.2
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::_scaled_dot_product_attention_math",
+                "attributed_via": "caller",
+                "ms_step": 0.021,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::_softmax",
+                "attributed_via": "caller",
+                "ms_step": 0.0016,
+                "calls_per_step": 0.1
+              }
+            ],
+            "pct_of_total": 0.07
+          },
+          "GN accumulate/finalize (split two-pass helper kernels)": {
+            "ms_step": 0.012,
+            "kernels": [
+              {
+                "kernel": "gn_accum_kernel",
+                "called_by": "aten::bmm",
+                "attributed_via": "caller",
+                "ms_step": 0.012,
+                "calls_per_step": 0.1
+              }
+            ],
+            "pct_of_total": 0.01
+          }
+        },
+        "pct_of_total": 47.62
+      },
+      "Conv": {
+        "ms_step": 43.2212,
+        "roles": {
+          "fp16 cuDNN conv": {
+            "ms_step": 41.9509,
+            "kernels": [
+              {
+                "kernel": "cutlass_tensorop_f16_s16816fprop_optimized_f16_128x128_32x",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 14.4483,
+                "calls_per_step": 13.0
+              },
+              {
+                "kernel": "cutlass_tensorop_f16_s16816fprop_optimized_f16_128x64_64x3",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 10.9941,
+                "calls_per_step": 12.0
+              },
+              {
+                "kernel": "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_n",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 4.7298,
+                "calls_per_step": 4.0
+              },
+              {
+                "kernel": "cutlass_tensorop_f16_s16816fprop_optimized_f16_128x64_32x6",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 4.4059,
+                "calls_per_step": 10.0
+              },
+              {
+                "kernel": "cutlass_tensorop_f16_s16816fprop_optimized_f16_64x64_64x5_",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 3.3945,
+                "calls_per_step": 14.0
+              },
+              {
+                "kernel": "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_n",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 2.8392,
+                "calls_per_step": 15.0
+              },
+              {
+                "kernel": "sm86_xmma_fprop_implicit_gemm_indexed_f16f16_f16f32_f32_nh",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 1.0116,
+                "calls_per_step": 13.0
+              },
+              {
+                "kernel": "sm80_xmma_fprop_implicit_gemm_indexed_wo_smem_f16f16_f16f3",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.1161,
+                "calls_per_step": 1.0
+              },
+              {
+                "kernel": "nhwcAddPaddingKernel",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.0115,
+                "calls_per_step": 2.0
+              }
+            ],
+            "pct_of_total": 19.96
+          },
+          "GN+SiLU only (fp16 out; updown blocks + fp16 mode)": {
+            "ms_step": 0.7512,
+            "kernels": [
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.2852,
+                "calls_per_step": 0.8
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::conv2d",
+                "attributed_via": "caller",
+                "ms_step": 0.2548,
+                "calls_per_step": 0.7
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.1618,
+                "calls_per_step": 0.3
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.0493,
+                "calls_per_step": 0.3
+              }
+            ],
+            "pct_of_total": 0.36
+          },
+          "fp16 tensor-core GEMM (cuBLAS)": {
+            "ms_step": 0.2801,
+            "kernels": [
+              {
+                "kernel": "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize192x128x32_s",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.1257,
+                "calls_per_step": 2.0
+              },
+              {
+                "kernel": "ampere_fp16_s16816gemm_fp16_128x64_ldg8_f2f_stages_32x6_tn",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.0727,
+                "calls_per_step": 3.0
+              },
+              {
+                "kernel": "ampere_fp16_s1688gemm_fp16_128x128_ldg8_f2f_stages_32x1_tn",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.0553,
+                "calls_per_step": 1.0
+              },
+              {
+                "kernel": "ampere_fp16_s16816gemm_fp16_256x128_ldg8_f2f_stages_32x3_t",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.0264,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 0.13
+          },
+          "fused GroupNorm->QKV projection (CUTLASS per-sample fusion)": {
+            "ms_step": 0.1706,
+            "kernels": [
+              {
+                "kernel": "ImplicitGemmConvolutionFusionPerSample",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.0703,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "ImplicitGemmConvolutionFusionPerSample",
+                "called_by": "aten::convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.0511,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "ImplicitGemmConvolutionFusionPerSample",
+                "called_by": "aten::conv2d",
+                "attributed_via": "caller",
+                "ms_step": 0.0493,
+                "calls_per_step": 0.1
+              }
+            ],
+            "pct_of_total": 0.08
+          },
+          "skip-concat (decoder): specialized 2-tensor channels-last": {
+            "ms_step": 0.0321,
+            "kernels": [
+              {
+                "kernel": "cat2_channels_last_fp16_kernel",
+                "called_by": "aten::convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.022,
+                "calls_per_step": 0.2
+              },
+              {
+                "kernel": "cat2_channels_last_fp16_kernel",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.0101,
+                "calls_per_step": 0.2
+              }
+            ],
+            "pct_of_total": 0.02
+          },
+          "memset / memcpy": {
+            "ms_step": 0.021,
+            "kernels": [
+              {
+                "kernel": "Memset",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.021,
+                "calls_per_step": 18.0
+              }
+            ],
+            "pct_of_total": 0.01
+          },
+          "GN accumulate/finalize (split two-pass helper kernels)": {
+            "ms_step": 0.0153,
+            "kernels": [
+              {
+                "kernel": "gn_accum_kernel",
+                "called_by": "aten::conv2d",
+                "attributed_via": "caller",
+                "ms_step": 0.0073,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "gn_accum_kernel",
+                "called_by": "aten::convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.0073,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "gn_finalize_kernel",
+                "called_by": "aten::convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.0004,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "gn_finalize_kernel",
+                "called_by": "aten::_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.0004,
+                "calls_per_step": 0.1
+              }
+            ],
+            "pct_of_total": 0.01
+          }
+        },
+        "pct_of_total": 20.56
+      },
+      "Elementwise-Cast": {
+        "ms_step": 40.7755,
+        "roles": {
+          "dtype cast / device copy": {
+            "ms_step": 16.9578,
+            "kernels": [
+              {
+                "kernel": "elementwise_kernel[direct_copy_kernel_cuda]",
+                "called_by": "aten::copy_",
+                "attributed_via": "caller",
+                "ms_step": 10.2775,
+                "calls_per_step": 157.0
+              },
+              {
+                "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+                "called_by": "aten::copy_",
+                "attributed_via": "caller",
+                "ms_step": 5.0032,
+                "calls_per_step": 55.6
+              },
+              {
+                "kernel": "elementwise_kernel[direct_copy_kernel_cuda]",
+                "called_by": "aten::cat",
+                "attributed_via": "caller",
+                "ms_step": 1.6771,
+                "calls_per_step": 8.0
+              }
+            ],
+            "pct_of_total": 8.07
+          },
+          "residual add": {
+            "ms_step": 13.1123,
+            "kernels": [
+              {
+                "kernel": "elementwise_kernel[CUDAFunctor_add]",
+                "called_by": "aten::add_",
+                "attributed_via": "caller",
+                "ms_step": 6.5449,
+                "calls_per_step": 89.0
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel[CUDAFunctor_add]",
+                "called_by": "aten::add",
+                "attributed_via": "caller",
+                "ms_step": 5.1194,
+                "calls_per_step": 52.0
+              },
+              {
+                "kernel": "unrolled_elementwise_kernel[CUDAFunctor_add]",
+                "called_by": "aten::add",
+                "attributed_via": "caller",
+                "ms_step": 1.4255,
+                "calls_per_step": 4.0
+              },
+              {
+                "kernel": "elementwise_kernel[CUDAFunctor_add]",
+                "called_by": "aten::sub",
+                "attributed_via": "caller",
+                "ms_step": 0.0125,
+                "calls_per_step": 1.0
+              },
+              {
+                "kernel": "elementwise_kernel[CUDAFunctor_add]",
+                "called_by": "aten::add",
+                "attributed_via": "caller",
+                "ms_step": 0.01,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 6.24
+          },
+          "other elementwise": {
+            "ms_step": 4.2725,
+            "kernels": [
+              {
+                "kernel": "elementwise_kernel",
+                "called_by": "aten::mul",
+                "attributed_via": "caller",
+                "ms_step": 4.2552,
+                "calls_per_step": 42.0
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::mul",
+                "attributed_via": "caller",
+                "ms_step": 0.0163,
+                "calls_per_step": 4.2
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::sub",
+                "attributed_via": "caller",
+                "ms_step": 0.0005,
+                "calls_per_step": 0.3
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::div",
+                "attributed_via": "caller",
+                "ms_step": 0.0004,
+                "calls_per_step": 0.2
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::sqrt",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0002,
+                "calls_per_step": 0.1
+              }
+            ],
+            "pct_of_total": 2.03
+          },
+          "GN+SiLU only (fp16 out; updown blocks + fp16 mode)": {
+            "ms_step": 3.3877,
+            "kernels": [
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::copy_",
+                "attributed_via": "caller",
+                "ms_step": 0.6883,
+                "calls_per_step": 1.3
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::reshape",
+                "attributed_via": "caller",
+                "ms_step": 0.3843,
+                "calls_per_step": 1.3
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::clone",
+                "attributed_via": "caller",
+                "ms_step": 0.3189,
+                "calls_per_step": 1.3
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::empty",
+                "attributed_via": "caller",
+                "ms_step": 0.2898,
+                "calls_per_step": 1.6
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::empty_like",
+                "attributed_via": "caller",
+                "ms_step": 0.288,
+                "calls_per_step": 1.3
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::view",
+                "attributed_via": "caller",
+                "ms_step": 0.2538,
+                "calls_per_step": 1.2
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::empty_strided",
+                "attributed_via": "caller",
+                "ms_step": 0.2413,
+                "calls_per_step": 1.4
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::to",
+                "attributed_via": "caller",
+                "ms_step": 0.2395,
+                "calls_per_step": 0.6
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::contiguous",
+                "attributed_via": "caller",
+                "ms_step": 0.2283,
+                "calls_per_step": 0.9
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::_to_copy",
+                "attributed_via": "caller",
+                "ms_step": 0.1246,
+                "calls_per_step": 0.3
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::slice",
+                "attributed_via": "caller",
+                "ms_step": 0.0651,
+                "calls_per_step": 0.3
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::add_",
+                "attributed_via": "caller",
+                "ms_step": 0.0639,
+                "calls_per_step": 0.4
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::add",
+                "attributed_via": "caller",
+                "ms_step": 0.0503,
+                "calls_per_step": 0.3
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::mul",
+                "attributed_via": "caller",
+                "ms_step": 0.0495,
+                "calls_per_step": 0.4
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::transpose",
+                "attributed_via": "caller",
+                "ms_step": 0.0463,
+                "calls_per_step": 0.4
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::split",
+                "attributed_via": "caller",
+                "ms_step": 0.0239,
+                "calls_per_step": 0.2
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::permute",
+                "attributed_via": "caller",
+                "ms_step": 0.0232,
+                "calls_per_step": 0.2
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::chunk",
+                "attributed_via": "caller",
+                "ms_step": 0.0069,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::silu",
+                "attributed_via": "caller",
+                "ms_step": 0.0017,
+                "calls_per_step": 0.1
+              }
+            ],
+            "pct_of_total": 1.61
+          },
+          "skip-concat (decoder): specialized 2-tensor channels-last": {
+            "ms_step": 1.2559,
+            "kernels": [
+              {
+                "kernel": "cat2_channels_last_fp16_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 0.9029,
+                "calls_per_step": 7.7
+              },
+              {
+                "kernel": "cat2_channels_last_fp16_kernel",
+                "called_by": "aten::as_strided",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.1155,
+                "calls_per_step": 0.7
+              },
+              {
+                "kernel": "cat2_channels_last_fp16_kernel",
+                "called_by": "aten::view",
+                "attributed_via": "caller",
+                "ms_step": 0.0827,
+                "calls_per_step": 0.3
+              },
+              {
+                "kernel": "cat2_channels_last_fp16_kernel",
+                "called_by": "aten::reshape",
+                "attributed_via": "caller",
+                "ms_step": 0.0407,
+                "calls_per_step": 0.2
+              },
+              {
+                "kernel": "cat2_channels_last_fp16_kernel",
+                "called_by": "aten::permute",
+                "attributed_via": "caller",
+                "ms_step": 0.0388,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "cat2_channels_last_fp16_kernel",
+                "called_by": "aten::chunk",
+                "attributed_via": "caller",
+                "ms_step": 0.0343,
+                "calls_per_step": 0.2
+              },
+              {
+                "kernel": "cat2_channels_last_fp16_kernel",
+                "called_by": "aten::empty",
+                "attributed_via": "caller",
+                "ms_step": 0.0153,
+                "calls_per_step": 0.2
+              },
+              {
+                "kernel": "cat2_channels_last_fp16_kernel",
+                "called_by": "aten::_unsafe_view",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0101,
+                "calls_per_step": 0.2
+              },
+              {
+                "kernel": "cat2_channels_last_fp16_kernel",
+                "called_by": "aten::mul",
+                "attributed_via": "caller",
+                "ms_step": 0.005,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "cat2_channels_last_fp16_kernel",
+                "called_by": "aten::copy_",
+                "attributed_via": "caller",
+                "ms_step": 0.0039,
+                "calls_per_step": 0.3
+              },
+              {
+                "kernel": "cat2_channels_last_fp16_kernel",
+                "called_by": "aten::unsqueeze",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0026,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "cat2_channels_last_fp16_kernel",
+                "called_by": "aten::narrow",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.002,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "cat2_channels_last_fp16_kernel",
+                "called_by": "aten::_reshape_alias",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0007,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "cat2_channels_last_fp16_kernel",
+                "called_by": "aten::transpose",
+                "attributed_via": "caller",
+                "ms_step": 0.0007,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "cat2_channels_last_fp16_kernel",
+                "called_by": "aten::new_empty",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0007,
+                "calls_per_step": 0.1
+              }
+            ],
+            "pct_of_total": 0.6
+          },
+          "fused GroupNorm->QKV projection (CUTLASS per-sample fusion)": {
+            "ms_step": 1.003,
+            "kernels": [
+              {
+                "kernel": "ImplicitGemmConvolutionFusionPerSample",
+                "called_by": "aten::split",
+                "attributed_via": "caller",
+                "ms_step": 0.1423,
+                "calls_per_step": 0.2
+              },
+              {
+                "kernel": "ImplicitGemmConvolutionFusionPerSample",
+                "called_by": "aten::transpose",
+                "attributed_via": "caller",
+                "ms_step": 0.14,
+                "calls_per_step": 0.2
+              },
+              {
+                "kernel": "ImplicitGemmConvolutionFusionPerSample",
+                "called_by": "aten::to",
+                "attributed_via": "caller",
+                "ms_step": 0.1396,
+                "calls_per_step": 0.2
+              },
+              {
+                "kernel": "ImplicitGemmConvolutionFusionPerSample",
+                "called_by": "aten::view",
+                "attributed_via": "caller",
+                "ms_step": 0.1221,
+                "calls_per_step": 0.2
+              },
+              {
+                "kernel": "ImplicitGemmConvolutionFusionPerSample",
+                "called_by": "aten::reshape",
+                "attributed_via": "caller",
+                "ms_step": 0.1206,
+                "calls_per_step": 0.2
+              },
+              {
+                "kernel": "ImplicitGemmConvolutionFusionPerSample",
+                "called_by": "aten::add_",
+                "attributed_via": "caller",
+                "ms_step": 0.0977,
+                "calls_per_step": 0.2
+              },
+              {
+                "kernel": "ImplicitGemmConvolutionFusionPerSample",
+                "called_by": "aten::permute",
+                "attributed_via": "caller",
+                "ms_step": 0.0707,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "ImplicitGemmConvolutionFusionPerSample",
+                "called_by": "aten::empty_strided",
+                "attributed_via": "caller",
+                "ms_step": 0.0701,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "ImplicitGemmConvolutionFusionPerSample",
+                "called_by": "aten::slice",
+                "attributed_via": "caller",
+                "ms_step": 0.05,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "ImplicitGemmConvolutionFusionPerSample",
+                "called_by": "aten::add",
+                "attributed_via": "caller",
+                "ms_step": 0.0499,
+                "calls_per_step": 0.1
+              }
+            ],
+            "pct_of_total": 0.48
+          },
+          "SiLU / activation (standalone)": {
+            "ms_step": 0.5123,
+            "kernels": [
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::silu",
+                "attributed_via": "caller",
+                "ms_step": 0.5123,
+                "calls_per_step": 37.0
+              }
+            ],
+            "pct_of_total": 0.24
+          },
+          "GN accumulate/finalize (split two-pass helper kernels)": {
+            "ms_step": 0.2184,
+            "kernels": [
+              {
+                "kernel": "gn_accum_kernel",
+                "called_by": "aten::transpose",
+                "attributed_via": "caller",
+                "ms_step": 0.0554,
+                "calls_per_step": 0.5
+              },
+              {
+                "kernel": "gn_accum_kernel",
+                "called_by": "aten::empty_like",
+                "attributed_via": "caller",
+                "ms_step": 0.0314,
+                "calls_per_step": 0.3
+              },
+              {
+                "kernel": "gn_accum_kernel",
+                "called_by": "aten::reshape",
+                "attributed_via": "caller",
+                "ms_step": 0.0314,
+                "calls_per_step": 0.3
+              },
+              {
+                "kernel": "gn_accum_kernel",
+                "called_by": "aten::view",
+                "attributed_via": "caller",
+                "ms_step": 0.0294,
+                "calls_per_step": 0.4
+              },
+              {
+                "kernel": "gn_accum_kernel",
+                "called_by": "aten::add",
+                "attributed_via": "caller",
+                "ms_step": 0.0194,
+                "calls_per_step": 0.2
+              },
+              {
+                "kernel": "gn_accum_kernel",
+                "called_by": "aten::empty_strided",
+                "attributed_via": "caller",
+                "ms_step": 0.012,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "gn_accum_kernel",
+                "called_by": "aten::add_",
+                "attributed_via": "caller",
+                "ms_step": 0.0119,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "gn_accum_kernel",
+                "called_by": "aten::contiguous",
+                "attributed_via": "caller",
+                "ms_step": 0.0073,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "gn_accum_kernel",
+                "called_by": "aten::empty",
+                "attributed_via": "caller",
+                "ms_step": 0.0073,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "gn_accum_kernel",
+                "called_by": "aten::silu",
+                "attributed_via": "caller",
+                "ms_step": 0.0073,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "gn_finalize_kernel",
+                "called_by": "aten::add_",
+                "attributed_via": "caller",
+                "ms_step": 0.0008,
+                "calls_per_step": 0.2
+              },
+              {
+                "kernel": "gn_finalize_kernel",
+                "called_by": "aten::add",
+                "attributed_via": "caller",
+                "ms_step": 0.0007,
+                "calls_per_step": 0.2
+              },
+              {
+                "kernel": "gn_finalize_kernel",
+                "called_by": "aten::empty_strided",
+                "attributed_via": "caller",
+                "ms_step": 0.0007,
+                "calls_per_step": 0.2
+              },
+              {
+                "kernel": "gn_finalize_kernel",
+                "called_by": "aten::clone",
+                "attributed_via": "caller",
+                "ms_step": 0.0007,
+                "calls_per_step": 0.2
+              },
+              {
+                "kernel": "gn_finalize_kernel",
+                "called_by": "aten::permute",
+                "attributed_via": "caller",
+                "ms_step": 0.0007,
+                "calls_per_step": 0.2
+              },
+              {
+                "kernel": "gn_finalize_kernel",
+                "called_by": "aten::contiguous",
+                "attributed_via": "caller",
+                "ms_step": 0.0004,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "gn_finalize_kernel",
+                "called_by": "aten::copy_",
+                "attributed_via": "caller",
+                "ms_step": 0.0003,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "gn_finalize_kernel",
+                "called_by": "aten::transpose",
+                "attributed_via": "caller",
+                "ms_step": 0.0003,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "gn_finalize_kernel",
+                "called_by": "aten::empty",
+                "attributed_via": "caller",
+                "ms_step": 0.0003,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "gn_finalize_kernel",
+                "called_by": "aten::fill_",
+                "attributed_via": "caller",
+                "ms_step": 0.0003,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "gn_finalize_kernel",
+                "called_by": "aten::view",
+                "attributed_via": "caller",
+                "ms_step": 0.0003,
+                "calls_per_step": 0.1
+              }
+            ],
+            "pct_of_total": 0.1
+          },
+          "fill / zero-init": {
+            "ms_step": 0.0418,
+            "kernels": [
+              {
+                "kernel": "vectorized_elementwise_kernel[FillFunctor]",
+                "called_by": "aten::fill_",
+                "attributed_via": "caller",
+                "ms_step": 0.0418,
+                "calls_per_step": 21.0
+              }
+            ],
+            "pct_of_total": 0.02
+          },
+          "memset / memcpy": {
+            "ms_step": 0.0057,
+            "kernels": [
+              {
+                "kernel": "Memcpy DtoD",
+                "called_by": "aten::copy_",
+                "attributed_via": "caller",
+                "ms_step": 0.0043,
+                "calls_per_step": 1.1
+              },
+              {
+                "kernel": "Memcpy DtoH",
+                "called_by": "aten::copy_",
+                "attributed_via": "caller",
+                "ms_step": 0.0008,
+                "calls_per_step": 0.6
+              },
+              {
+                "kernel": "Memcpy HtoD",
+                "called_by": "aten::copy_",
+                "attributed_via": "caller",
+                "ms_step": 0.0006,
+                "calls_per_step": 0.8
+              }
+            ],
+            "pct_of_total": 0.0
+          },
+          "reduction (amax/absmax for dynamic scales)": {
+            "ms_step": 0.0043,
+            "kernels": [
+              {
+                "kernel": "reduce_kernel",
+                "called_by": "aten::max",
+                "attributed_via": "caller",
+                "ms_step": 0.0043,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 0.0
+          },
+          "DDIM schedule indexing / noise generation": {
+            "ms_step": 0.0038,
+            "kernels": [
+              {
+                "kernel": "indexSelectLargeIndex",
+                "called_by": "aten::index_select",
+                "attributed_via": "caller",
+                "ms_step": 0.0038,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 0.0
+          }
+        },
+        "pct_of_total": 19.4
+      },
+      "Normalization": {
+        "ms_step": 17.9553,
+        "roles": {
+          "GN+SiLU only (fp16 out; updown blocks + fp16 mode)": {
+            "ms_step": 16.5465,
+            "kernels": [
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 15.081,
+                "calls_per_step": 56.7
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::as_strided",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.4394,
+                "calls_per_step": 1.8
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::_unsafe_view",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.253,
+                "calls_per_step": 0.5
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::_reshape_alias",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.1428,
+                "calls_per_step": 0.5
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::unsqueeze",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.1387,
+                "calls_per_step": 0.3
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::select",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.1196,
+                "calls_per_step": 0.4
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::narrow",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0959,
+                "calls_per_step": 0.5
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::expand",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0729,
+                "calls_per_step": 0.7
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::new_empty",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0695,
+                "calls_per_step": 0.3
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::t",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0624,
+                "calls_per_step": 0.3
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::dropout",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0555,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::zeros",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0112,
+                "calls_per_step": 0.3
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::unbind",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0045,
+                "calls_per_step": 0.2
+              }
+            ],
+            "pct_of_total": 7.87
+          },
+          "GN accumulate/finalize (split two-pass helper kernels)": {
+            "ms_step": 0.749,
+            "kernels": [
+              {
+                "kernel": "gn_accum_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 0.6772,
+                "calls_per_step": 7.0
+              },
+              {
+                "kernel": "gn_finalize_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 0.0248,
+                "calls_per_step": 7.0
+              },
+              {
+                "kernel": "gn_accum_kernel",
+                "called_by": "aten::zero_",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0121,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "gn_accum_kernel",
+                "called_by": "aten::as_strided",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.012,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "gn_accum_kernel",
+                "called_by": "aten::expand",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0119,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "gn_accum_kernel",
+                "called_by": "aten::_reshape_alias",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0072,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "gn_finalize_kernel",
+                "called_by": "aten::as_strided",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.002,
+                "calls_per_step": 0.6
+              },
+              {
+                "kernel": "gn_finalize_kernel",
+                "called_by": "aten::zero_",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0004,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "gn_finalize_kernel",
+                "called_by": "aten::expand",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0004,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "gn_finalize_kernel",
+                "called_by": "aten::t",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0004,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "gn_finalize_kernel",
+                "called_by": "aten::_reshape_alias",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0004,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "gn_finalize_kernel",
+                "called_by": "aten::_unsafe_view",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0003,
+                "calls_per_step": 0.1
+              }
+            ],
+            "pct_of_total": 0.36
+          },
+          "other elementwise": {
+            "ms_step": 0.395,
+            "kernels": [
+              {
+                "kernel": "elementwise_kernel",
+                "called_by": "aten::native_group_norm",
+                "attributed_via": "caller",
+                "ms_step": 0.395,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 0.19
+          },
+          "PyTorch native GroupNorm internals (fp16 fallback path)": {
+            "ms_step": 0.2648,
+            "kernels": [
+              {
+                "kernel": "RowwiseMomentsCUDAKernel",
+                "called_by": "aten::native_group_norm",
+                "attributed_via": "caller",
+                "ms_step": 0.2607,
+                "calls_per_step": 1.0
+              },
+              {
+                "kernel": "ComputeFusedParamsCUDAKernel",
+                "called_by": "aten::native_group_norm",
+                "attributed_via": "caller",
+                "ms_step": 0.0041,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 0.13
+          }
+        },
+        "pct_of_total": 8.54
+      },
+      "Linear-GEMM": {
+        "ms_step": 4.2491,
+        "roles": {
+          "fp16 tensor-core GEMM (cuBLAS)": {
+            "ms_step": 3.5913,
+            "kernels": [
+              {
+                "kernel": "ampere_fp16_s1688gemm_fp16_128x128_ldg8_relu_f2f_tn",
+                "called_by": "aten::addmm",
+                "attributed_via": "caller",
+                "ms_step": 1.5481,
+                "calls_per_step": 10.0
+              },
+              {
+                "kernel": "cutlass_80_tensorop_f16_s16816gemm_relu_f16_128x256_32x3_t",
+                "called_by": "aten::addmm",
+                "attributed_via": "caller",
+                "ms_step": 0.7095,
+                "calls_per_step": 5.0
+              },
+              {
+                "kernel": "ampere_fp16_s16816gemm_fp16_256x128_ldg8_relu_f2f_stages_3",
+                "called_by": "aten::addmm",
+                "attributed_via": "caller",
+                "ms_step": 0.4611,
+                "calls_per_step": 5.0
+              },
+              {
+                "kernel": "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize96x128x32_st",
+                "called_by": "aten::addmm",
+                "attributed_via": "caller",
+                "ms_step": 0.3092,
+                "calls_per_step": 5.0
+              },
+              {
+                "kernel": "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize32x32x64_sta",
+                "called_by": "aten::addmm",
+                "attributed_via": "caller",
+                "ms_step": 0.1847,
+                "calls_per_step": 21.0
+              },
+              {
+                "kernel": "ampere_fp16_s16816gemm_fp16_64x64_sliced1x2_ldg8_relu_f2f_",
+                "called_by": "aten::addmm",
+                "attributed_via": "caller",
+                "ms_step": 0.1679,
+                "calls_per_step": 15.0
+              },
+              {
+                "kernel": "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize160x128x32_s",
+                "called_by": "aten::addmm",
+                "attributed_via": "caller",
+                "ms_step": 0.1628,
+                "calls_per_step": 5.0
+              },
+              {
+                "kernel": "cutlass_80_tensorop_f16_s16816gemm_relu_f16_128x128_32x4_t",
+                "called_by": "aten::addmm",
+                "attributed_via": "caller",
+                "ms_step": 0.0271,
+                "calls_per_step": 1.0
+              },
+              {
+                "kernel": "ampere_fp16_s16816gemm_fp16_128x64_ldg8_relu_f2f_stages_64",
+                "called_by": "aten::addmm",
+                "attributed_via": "caller",
+                "ms_step": 0.0149,
+                "calls_per_step": 1.0
+              },
+              {
+                "kernel": "cutlass_80_wmma_tensorop_f16_s161616gemm_f16_32x32_128x2_t",
+                "called_by": "aten::addmm",
+                "attributed_via": "caller",
+                "ms_step": 0.0059,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 1.71
+          },
+          "GN+SiLU only (fp16 out; updown blocks + fp16 mode)": {
+            "ms_step": 0.5988,
+            "kernels": [
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::linear",
+                "attributed_via": "caller",
+                "ms_step": 0.4868,
+                "calls_per_step": 1.1
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::matmul",
+                "attributed_via": "caller",
+                "ms_step": 0.1044,
+                "calls_per_step": 0.5
+              },
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::addmm",
+                "attributed_via": "caller",
+                "ms_step": 0.0076,
+                "calls_per_step": 0.2
+              }
+            ],
+            "pct_of_total": 0.28
+          },
+          "fused GroupNorm->QKV projection (CUTLASS per-sample fusion)": {
+            "ms_step": 0.0507,
+            "kernels": [
+              {
+                "kernel": "ImplicitGemmConvolutionFusionPerSample",
+                "called_by": "aten::linear",
+                "attributed_via": "caller",
+                "ms_step": 0.0507,
+                "calls_per_step": 0.1
+              }
+            ],
+            "pct_of_total": 0.02
+          },
+          "GN accumulate/finalize (split two-pass helper kernels)": {
+            "ms_step": 0.0076,
+            "kernels": [
+              {
+                "kernel": "gn_accum_kernel",
+                "called_by": "aten::matmul",
+                "attributed_via": "caller",
+                "ms_step": 0.0072,
+                "calls_per_step": 0.1
+              },
+              {
+                "kernel": "gn_finalize_kernel",
+                "called_by": "aten::linear",
+                "attributed_via": "caller",
+                "ms_step": 0.0004,
+                "calls_per_step": 0.1
+              }
+            ],
+            "pct_of_total": 0.0
+          },
+          "skip-concat (decoder): specialized 2-tensor channels-last": {
+            "ms_step": 0.0007,
+            "kernels": [
+              {
+                "kernel": "cat2_channels_last_fp16_kernel",
+                "called_by": "aten::linear",
+                "attributed_via": "caller",
+                "ms_step": 0.0007,
+                "calls_per_step": 0.1
+              }
+            ],
+            "pct_of_total": 0.0
+          }
+        },
+        "pct_of_total": 2.02
+      },
+      "Resize": {
+        "ms_step": 3.9157,
+        "roles": {
+          "nearest upsample (unfused; x_upd path)": {
+            "ms_step": 2.8229,
+            "kernels": [
+              {
+                "kernel": "upsample_nearest2d_nhwc_out_frame",
+                "called_by": "aten::upsample_nearest2d",
+                "attributed_via": "caller",
+                "ms_step": 2.8229,
+                "calls_per_step": 8.0
+              }
+            ],
+            "pct_of_total": 1.34
+          },
+          "avg_pool 2x2 (unfused; x_upd path)": {
+            "ms_step": 1.0329,
+            "kernels": [
+              {
+                "kernel": "avg_pool2d_out_cuda_frame_nhwc",
+                "called_by": "aten::avg_pool2d",
+                "attributed_via": "caller",
+                "ms_step": 1.0329,
+                "calls_per_step": 8.0
+              }
+            ],
+            "pct_of_total": 0.49
+          },
+          "GN+SiLU only (fp16 out; updown blocks + fp16 mode)": {
+            "ms_step": 0.0598,
+            "kernels": [
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "aten::avg_pool2d",
+                "attributed_via": "caller",
+                "ms_step": 0.0598,
+                "calls_per_step": 0.1
+              }
+            ],
+            "pct_of_total": 0.03
+          }
+        },
+        "pct_of_total": 1.86
+      },
+      "Memory-op": {
+        "ms_step": 0.0058,
+        "roles": {
+          "memset / memcpy": {
+            "ms_step": 0.0058,
+            "kernels": [
+              {
+                "kernel": "Memcpy DtoH",
+                "called_by": "aten::_local_scalar_dense",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0058,
+                "calls_per_step": 4.0
+              }
+            ],
+            "pct_of_total": 0.0
+          }
+        },
+        "pct_of_total": 0.0
+      },
+      "Sampler-side": {
+        "ms_step": 0.0008,
+        "roles": {
+          "DDIM schedule indexing / noise generation": {
+            "ms_step": 0.0008,
+            "kernels": [
+              {
+                "kernel": "distribution_elementwise_grid_stride_kernel",
+                "called_by": "aten::normal_",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0008,
+                "calls_per_step": 0.1
+              }
+            ],
+            "pct_of_total": 0.0
+          }
+        },
+        "pct_of_total": 0.0
+      }
+    }
+  },
+  "int8_baseline": {
+    "ms_step": 117.82,
+    "name_attributed_ms_step": 106.6891,
+    "name_attributed_pct": 90.55,
+    "name_attributed_top": [
+      "flash_attn_int8_mma_kernel",
+      "ImplicitGemmConvolutionEVT",
+      "group_norm_silu_quantize_nhwc_vec2_kernel",
+      "gemm_w8a8_kernel_awq",
+      "aq_qtok_packed_static_qk_vec2_kernel",
+      "cat2_channels_last_fp16_kernel"
+    ],
+    "tree": {
+      "Attention": {
+        "ms_step": 43.6676,
+        "roles": {
+          "int8/int4 flash kernel (fused QK^T+softmax+AV)": {
+            "ms_step": 37.8867,
+            "kernels": [
+              {
+                "kernel": "flash_attn_int8_mma_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 36.9167,
+                "calls_per_step": 10.0
+              },
+              {
+                "kernel": "flash_attn_int8_packed_mma_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 0.9699,
+                "calls_per_step": 5.0
+              }
+            ],
+            "pct_of_total": 32.16
+          },
+          "Q/K/V quantize (packed, static scales)": {
+            "ms_step": 3.6252,
+            "kernels": [
+              {
+                "kernel": "aq_qtok_packed_static_qk_vec2_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 3.6252,
+                "calls_per_step": 10.0
+              }
+            ],
+            "pct_of_total": 3.08
+          },
+          "V quantize + transpose to AV layout": {
+            "ms_step": 1.8539,
+            "kernels": [
+              {
+                "kernel": "aq_vquant_trans_packed_tiled_vec2_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 1.8539,
+                "calls_per_step": 10.0
+              }
+            ],
+            "pct_of_total": 1.57
+          },
+          "fp16 tensor-core GEMM (cuBLAS)": {
+            "ms_step": 0.1681,
+            "kernels": [
+              {
+                "kernel": "cutlass_80_wmma_tensorop_f16_s161616gemm_f16_16x16_32x1_nn",
+                "called_by": "aten::bmm",
+                "attributed_via": "caller",
+                "ms_step": 0.09,
+                "calls_per_step": 6.0
+              },
+              {
+                "kernel": "cutlass_80_wmma_tensorop_f16_s161616gemm_f16_16x16_64x1_nn",
+                "called_by": "aten::bmm",
+                "attributed_via": "caller",
+                "ms_step": 0.0781,
+                "calls_per_step": 6.0
+              }
+            ],
+            "pct_of_total": 0.14
+          },
+          "attention output quantize (for the proj GEMM)": {
+            "ms_step": 0.1111,
+            "kernels": [
+              {
+                "kernel": "quant_attn_out_int8_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 0.1111,
+                "calls_per_step": 6.0
+              }
+            ],
+            "pct_of_total": 0.09
+          },
+          "fp16 SDPA (unfused math backend: BMM + softmax)": {
+            "ms_step": 0.0227,
+            "kernels": [
+              {
+                "kernel": "softmax_warp_forward",
+                "called_by": "aten::_softmax",
+                "attributed_via": "caller",
+                "ms_step": 0.0227,
+                "calls_per_step": 6.0
+              }
+            ],
+            "pct_of_total": 0.02
+          }
+        },
+        "pct_of_total": 37.06
+      },
+      "Conv": {
+        "ms_step": 30.6753,
+        "roles": {
+          "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)": {
+            "ms_step": 28.0371,
+            "kernels": [
+              {
+                "kernel": "ImplicitGemmConvolutionEVT",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 28.0371,
+                "calls_per_step": 70.0
+              }
+            ],
+            "pct_of_total": 23.8
+          },
+          "fp16 cuDNN conv": {
+            "ms_step": 2.3562,
+            "kernels": [
+              {
+                "kernel": "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_n",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 1.9556,
+                "calls_per_step": 10.0
+              },
+              {
+                "kernel": "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_n",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.2745,
+                "calls_per_step": 1.0
+              },
+              {
+                "kernel": "sm80_xmma_fprop_implicit_gemm_indexed_wo_smem_f16f16_f16f3",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.1149,
+                "calls_per_step": 1.0
+              },
+              {
+                "kernel": "nhwcAddPaddingKernel",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.0112,
+                "calls_per_step": 2.0
+              }
+            ],
+            "pct_of_total": 2.0
+          },
+          "fp16 tensor-core GEMM (cuBLAS)": {
+            "ms_step": 0.2786,
+            "kernels": [
+              {
+                "kernel": "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize192x128x32_s",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.1248,
+                "calls_per_step": 2.0
+              },
+              {
+                "kernel": "ampere_fp16_s16816gemm_fp16_128x64_ldg8_f2f_stages_32x6_tn",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.0726,
+                "calls_per_step": 3.0
+              },
+              {
+                "kernel": "ampere_fp16_s1688gemm_fp16_128x128_ldg8_f2f_stages_32x1_tn",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.0551,
+                "calls_per_step": 1.0
+              },
+              {
+                "kernel": "ampere_fp16_s16816gemm_fp16_256x128_ldg8_f2f_stages_32x3_t",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.0261,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 0.24
+          },
+          "memset / memcpy": {
+            "ms_step": 0.0034,
+            "kernels": [
+              {
+                "kernel": "Memset",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.0034,
+                "calls_per_step": 2.0
+              }
+            ],
+            "pct_of_total": 0.0
+          }
+        },
+        "pct_of_total": 26.04
+      },
+      "Normalization": {
+        "ms_step": 24.4113,
+        "roles": {
+          "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": {
+            "ms_step": 21.9072,
+            "kernels": [
+              {
+                "kernel": "group_norm_silu_quantize_nhwc_vec2_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 21.9072,
+                "calls_per_step": 83.0
+              }
+            ],
+            "pct_of_total": 18.59
+          },
+          "GN+SiLU only (fp16 out; updown blocks + fp16 mode)": {
+            "ms_step": 1.8391,
+            "kernels": [
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 1.8391,
+                "calls_per_step": 8.0
+              }
+            ],
+            "pct_of_total": 1.56
+          },
+          "other elementwise": {
+            "ms_step": 0.3991,
+            "kernels": [
+              {
+                "kernel": "elementwise_kernel",
+                "called_by": "aten::native_group_norm",
+                "attributed_via": "caller",
+                "ms_step": 0.3991,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 0.34
+          },
+          "PyTorch native GroupNorm internals (fp16 fallback path)": {
+            "ms_step": 0.2659,
+            "kernels": [
+              {
+                "kernel": "RowwiseMomentsCUDAKernel",
+                "called_by": "aten::native_group_norm",
+                "attributed_via": "caller",
+                "ms_step": 0.262,
+                "calls_per_step": 1.0
+              },
+              {
+                "kernel": "ComputeFusedParamsCUDAKernel",
+                "called_by": "aten::native_group_norm",
+                "attributed_via": "caller",
+                "ms_step": 0.0039,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 0.23
+          }
+        },
+        "pct_of_total": 20.72
+      },
+      "Linear-GEMM": {
+        "ms_step": 8.5971,
+        "roles": {
+          "int8/int4 quantized GEMM (W8A8 / W4A4)": {
+            "ms_step": 8.2273,
+            "kernels": [
+              {
+                "kernel": "gemm_w8a8_kernel_awq",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 8.2273,
+                "calls_per_step": 42.0
+              }
+            ],
+            "pct_of_total": 6.98
+          },
+          "fp16 tensor-core GEMM (cuBLAS)": {
+            "ms_step": 0.3698,
+            "kernels": [
+              {
+                "kernel": "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize32x32x64_sta",
+                "called_by": "aten::addmm",
+                "attributed_via": "caller",
+                "ms_step": 0.185,
+                "calls_per_step": 21.0
+              },
+              {
+                "kernel": "ampere_fp16_s16816gemm_fp16_64x64_sliced1x2_ldg8_relu_f2f_",
+                "called_by": "aten::addmm",
+                "attributed_via": "caller",
+                "ms_step": 0.179,
+                "calls_per_step": 15.0
+              },
+              {
+                "kernel": "cutlass_80_wmma_tensorop_f16_s161616gemm_f16_32x32_128x2_t",
+                "called_by": "aten::addmm",
+                "attributed_via": "caller",
+                "ms_step": 0.0058,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 0.31
+          }
+        },
+        "pct_of_total": 7.3
+      },
+      "Elementwise-Cast": {
+        "ms_step": 7.5146,
+        "roles": {
+          "dtype cast / device copy": {
+            "ms_step": 3.1435,
+            "kernels": [
+              {
+                "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+                "called_by": "aten::copy_",
+                "attributed_via": "caller",
+                "ms_step": 1.6943,
+                "calls_per_step": 15.8
+              },
+              {
+                "kernel": "elementwise_kernel[direct_copy_kernel_cuda]",
+                "called_by": "aten::copy_",
+                "attributed_via": "caller",
+                "ms_step": 1.4492,
+                "calls_per_step": 111.0
+              }
+            ],
+            "pct_of_total": 2.67
+          },
+          "skip-concat (decoder): specialized 2-tensor channels-last": {
+            "ms_step": 2.163,
+            "kernels": [
+              {
+                "kernel": "cat2_channels_last_fp16_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 2.163,
+                "calls_per_step": 15.0
+              }
+            ],
+            "pct_of_total": 1.84
+          },
+          "residual add": {
+            "ms_step": 1.4719,
+            "kernels": [
+              {
+                "kernel": "elementwise_kernel[CUDAFunctor_add]",
+                "called_by": "aten::add_",
+                "attributed_via": "caller",
+                "ms_step": 1.4496,
+                "calls_per_step": 19.0
+              },
+              {
+                "kernel": "elementwise_kernel[CUDAFunctor_add]",
+                "called_by": "aten::sub",
+                "attributed_via": "caller",
+                "ms_step": 0.0123,
+                "calls_per_step": 1.0
+              },
+              {
+                "kernel": "elementwise_kernel[CUDAFunctor_add]",
+                "called_by": "aten::add",
+                "attributed_via": "caller",
+                "ms_step": 0.0099,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 1.25
+          },
+          "SiLU / activation (standalone)": {
+            "ms_step": 0.5173,
+            "kernels": [
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::silu",
+                "attributed_via": "caller",
+                "ms_step": 0.5173,
+                "calls_per_step": 37.0
+              }
+            ],
+            "pct_of_total": 0.44
+          },
+          "other elementwise": {
+            "ms_step": 0.2035,
+            "kernels": [
+              {
+                "kernel": "elementwise_kernel",
+                "called_by": "aten::mul",
+                "attributed_via": "caller",
+                "ms_step": 0.1864,
+                "calls_per_step": 12.0
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::mul",
+                "attributed_via": "caller",
+                "ms_step": 0.0159,
+                "calls_per_step": 4.2
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::sub",
+                "attributed_via": "caller",
+                "ms_step": 0.0005,
+                "calls_per_step": 0.3
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::div",
+                "attributed_via": "caller",
+                "ms_step": 0.0004,
+                "calls_per_step": 0.2
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::sqrt",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0002,
+                "calls_per_step": 0.1
+              }
+            ],
+            "pct_of_total": 0.17
+          },
+          "memset / memcpy": {
+            "ms_step": 0.0057,
+            "kernels": [
+              {
+                "kernel": "Memcpy DtoD",
+                "called_by": "aten::copy_",
+                "attributed_via": "caller",
+                "ms_step": 0.0043,
+                "calls_per_step": 1.1
+              },
+              {
+                "kernel": "Memcpy DtoH",
+                "called_by": "aten::copy_",
+                "attributed_via": "caller",
+                "ms_step": 0.0009,
+                "calls_per_step": 0.6
+              },
+              {
+                "kernel": "Memcpy HtoD",
+                "called_by": "aten::copy_",
+                "attributed_via": "caller",
+                "ms_step": 0.0006,
+                "calls_per_step": 0.8
+              }
+            ],
+            "pct_of_total": 0.0
+          },
+          "reduction (amax/absmax for dynamic scales)": {
+            "ms_step": 0.0042,
+            "kernels": [
+              {
+                "kernel": "reduce_kernel",
+                "called_by": "aten::max",
+                "attributed_via": "caller",
+                "ms_step": 0.0042,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 0.0
+          },
+          "DDIM schedule indexing / noise generation": {
+            "ms_step": 0.0037,
+            "kernels": [
+              {
+                "kernel": "indexSelectLargeIndex",
+                "called_by": "aten::index_select",
+                "attributed_via": "caller",
+                "ms_step": 0.0037,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 0.0
+          },
+          "fill / zero-init": {
+            "ms_step": 0.0018,
+            "kernels": [
+              {
+                "kernel": "vectorized_elementwise_kernel[FillFunctor]",
+                "called_by": "aten::fill_",
+                "attributed_via": "caller",
+                "ms_step": 0.0018,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 0.0
+          }
+        },
+        "pct_of_total": 6.38
+      },
+      "Resize": {
+        "ms_step": 2.9486,
+        "roles": {
+          "nearest upsample (unfused; x_upd path)": {
+            "ms_step": 1.3998,
+            "kernels": [
+              {
+                "kernel": "upsample_nearest2d_nhwc_out_frame",
+                "called_by": "aten::upsample_nearest2d",
+                "attributed_via": "caller",
+                "ms_step": 1.3998,
+                "calls_per_step": 4.0
+              }
+            ],
+            "pct_of_total": 1.19
+          },
+          "upsample(nearest,2x)+quantize FUSED": {
+            "ms_step": 0.8381,
+            "kernels": [
+              {
+                "kernel": "upsample2x_quantize_noahat_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 0.8381,
+                "calls_per_step": 4.0
+              }
+            ],
+            "pct_of_total": 0.71
+          },
+          "avg_pool 2x2 (unfused; x_upd path)": {
+            "ms_step": 0.5166,
+            "kernels": [
+              {
+                "kernel": "avg_pool2d_out_cuda_frame_nhwc",
+                "called_by": "aten::avg_pool2d",
+                "attributed_via": "caller",
+                "ms_step": 0.5166,
+                "calls_per_step": 4.0
+              }
+            ],
+            "pct_of_total": 0.44
+          },
+          "avg_pool(2x2)+quantize FUSED": {
+            "ms_step": 0.194,
+            "kernels": [
+              {
+                "kernel": "avgpool2x_quantize_noahat_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 0.194,
+                "calls_per_step": 4.0
+              }
+            ],
+            "pct_of_total": 0.16
+          }
+        },
+        "pct_of_total": 2.5
+      },
+      "Memory-op": {
+        "ms_step": 0.0056,
+        "roles": {
+          "memset / memcpy": {
+            "ms_step": 0.0056,
+            "kernels": [
+              {
+                "kernel": "Memcpy DtoH",
+                "called_by": "aten::_local_scalar_dense",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0056,
+                "calls_per_step": 4.0
+              }
+            ],
+            "pct_of_total": 0.0
+          }
+        },
+        "pct_of_total": 0.0
+      },
+      "Sampler-side": {
+        "ms_step": 0.0008,
+        "roles": {
+          "DDIM schedule indexing / noise generation": {
+            "ms_step": 0.0008,
+            "kernels": [
+              {
+                "kernel": "distribution_elementwise_grid_stride_kernel",
+                "called_by": "aten::normal_",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0008,
+                "calls_per_step": 0.1
+              }
+            ],
+            "pct_of_total": 0.0
+          }
+        },
+        "pct_of_total": 0.0
+      }
+    }
+  },
+  "int4_baseline": {
+    "ms_step": 106.43,
+    "name_attributed_ms_step": 92.2363,
+    "name_attributed_pct": 86.66,
+    "name_attributed_top": [
+      "flash_attn_int4_mma_kernel",
+      "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+      "ImplicitGemmConvolutionEVT",
+      "gemm_w4a4_kernel_awq",
+      "group_norm_silu_nhwc_kernel",
+      "aq_qtok_packed_static_qk_vec2_kernel"
+    ],
+    "tree": {
+      "Attention": {
+        "ms_step": 42.3805,
+        "roles": {
+          "int8/int4 flash kernel (fused QK^T+softmax+AV)": {
+            "ms_step": 36.4528,
+            "kernels": [
+              {
+                "kernel": "flash_attn_int4_mma_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 36.4528,
+                "calls_per_step": 15.0
+              }
+            ],
+            "pct_of_total": 34.25
+          },
+          "Q/K/V quantize (packed, static scales)": {
+            "ms_step": 3.6355,
+            "kernels": [
+              {
+                "kernel": "aq_qtok_packed_static_qk_vec2_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 3.6355,
+                "calls_per_step": 15.0
+              }
+            ],
+            "pct_of_total": 3.42
+          },
+          "V quantize + transpose to AV layout": {
+            "ms_step": 2.0143,
+            "kernels": [
+              {
+                "kernel": "aq_vquant_trans_packed_tiled_vec2_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 2.0143,
+                "calls_per_step": 15.0
+              }
+            ],
+            "pct_of_total": 1.89
+          },
+          "fp16 tensor-core GEMM (cuBLAS)": {
+            "ms_step": 0.1689,
+            "kernels": [
+              {
+                "kernel": "cutlass_80_wmma_tensorop_f16_s161616gemm_f16_16x16_32x1_nn",
+                "called_by": "aten::bmm",
+                "attributed_via": "caller",
+                "ms_step": 0.0896,
+                "calls_per_step": 6.0
+              },
+              {
+                "kernel": "cutlass_80_wmma_tensorop_f16_s161616gemm_f16_16x16_64x1_nn",
+                "called_by": "aten::bmm",
+                "attributed_via": "caller",
+                "ms_step": 0.0793,
+                "calls_per_step": 6.0
+              }
+            ],
+            "pct_of_total": 0.16
+          },
+          "attention output quantize (for the proj GEMM)": {
+            "ms_step": 0.0857,
+            "kernels": [
+              {
+                "kernel": "quant_attn_out_int4_pack_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 0.0857,
+                "calls_per_step": 6.0
+              }
+            ],
+            "pct_of_total": 0.08
+          },
+          "fp16 SDPA (unfused math backend: BMM + softmax)": {
+            "ms_step": 0.0233,
+            "kernels": [
+              {
+                "kernel": "softmax_warp_forward",
+                "called_by": "aten::_softmax",
+                "attributed_via": "caller",
+                "ms_step": 0.0233,
+                "calls_per_step": 6.0
+              }
+            ],
+            "pct_of_total": 0.02
+          }
+        },
+        "pct_of_total": 39.82
+      },
+      "Normalization": {
+        "ms_step": 25.0955,
+        "roles": {
+          "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": {
+            "ms_step": 19.7955,
+            "kernels": [
+              {
+                "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 19.7955,
+                "calls_per_step": 78.0
+              }
+            ],
+            "pct_of_total": 18.6
+          },
+          "GN+SiLU only (fp16 out; updown blocks + fp16 mode)": {
+            "ms_step": 4.6334,
+            "kernels": [
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 4.6334,
+                "calls_per_step": 13.0
+              }
+            ],
+            "pct_of_total": 4.35
+          },
+          "other elementwise": {
+            "ms_step": 0.3991,
+            "kernels": [
+              {
+                "kernel": "elementwise_kernel",
+                "called_by": "aten::native_group_norm",
+                "attributed_via": "caller",
+                "ms_step": 0.3991,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 0.38
+          },
+          "PyTorch native GroupNorm internals (fp16 fallback path)": {
+            "ms_step": 0.2675,
+            "kernels": [
+              {
+                "kernel": "RowwiseMomentsCUDAKernel",
+                "called_by": "aten::native_group_norm",
+                "attributed_via": "caller",
+                "ms_step": 0.2636,
+                "calls_per_step": 1.0
+              },
+              {
+                "kernel": "ComputeFusedParamsCUDAKernel",
+                "called_by": "aten::native_group_norm",
+                "attributed_via": "caller",
+                "ms_step": 0.0039,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 0.25
+          }
+        },
+        "pct_of_total": 23.58
+      },
+      "Conv": {
+        "ms_step": 16.2233,
+        "roles": {
+          "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)": {
+            "ms_step": 13.5691,
+            "kernels": [
+              {
+                "kernel": "ImplicitGemmConvolutionEVT",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 13.5691,
+                "calls_per_step": 70.0
+              }
+            ],
+            "pct_of_total": 12.75
+          },
+          "fp16 cuDNN conv": {
+            "ms_step": 2.3746,
+            "kernels": [
+              {
+                "kernel": "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_n",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 1.9734,
+                "calls_per_step": 10.0
+              },
+              {
+                "kernel": "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_n",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.2754,
+                "calls_per_step": 1.0
+              },
+              {
+                "kernel": "sm80_xmma_fprop_implicit_gemm_indexed_wo_smem_f16f16_f16f3",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.1146,
+                "calls_per_step": 1.0
+              },
+              {
+                "kernel": "nhwcAddPaddingKernel",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.0112,
+                "calls_per_step": 2.0
+              }
+            ],
+            "pct_of_total": 2.23
+          },
+          "fp16 tensor-core GEMM (cuBLAS)": {
+            "ms_step": 0.2761,
+            "kernels": [
+              {
+                "kernel": "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize192x128x32_s",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.1243,
+                "calls_per_step": 2.0
+              },
+              {
+                "kernel": "ampere_fp16_s16816gemm_fp16_128x64_ldg8_f2f_stages_32x6_tn",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.0718,
+                "calls_per_step": 3.0
+              },
+              {
+                "kernel": "ampere_fp16_s1688gemm_fp16_128x128_ldg8_f2f_stages_32x1_tn",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.0543,
+                "calls_per_step": 1.0
+              },
+              {
+                "kernel": "ampere_fp16_s16816gemm_fp16_256x128_ldg8_f2f_stages_32x3_t",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.0257,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 0.26
+          },
+          "memset / memcpy": {
+            "ms_step": 0.0034,
+            "kernels": [
+              {
+                "kernel": "Memset",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.0034,
+                "calls_per_step": 2.0
+              }
+            ],
+            "pct_of_total": 0.0
+          }
+        },
+        "pct_of_total": 15.24
+      },
+      "Elementwise-Cast": {
+        "ms_step": 11.4854,
+        "roles": {
+          "dtype cast / device copy": {
+            "ms_step": 4.658,
+            "kernels": [
+              {
+                "kernel": "elementwise_kernel[direct_copy_kernel_cuda]",
+                "called_by": "aten::copy_",
+                "attributed_via": "caller",
+                "ms_step": 2.5487,
+                "calls_per_step": 126.0
+              },
+              {
+                "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+                "called_by": "aten::copy_",
+                "attributed_via": "caller",
+                "ms_step": 2.1093,
+                "calls_per_step": 125.8
+              }
+            ],
+            "pct_of_total": 4.38
+          },
+          "skip-concat (decoder): specialized 2-tensor channels-last": {
+            "ms_step": 2.1754,
+            "kernels": [
+              {
+                "kernel": "cat2_channels_last_fp16_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 2.1754,
+                "calls_per_step": 15.0
+              }
+            ],
+            "pct_of_total": 2.04
+          },
+          "residual add": {
+            "ms_step": 1.4836,
+            "kernels": [
+              {
+                "kernel": "elementwise_kernel[CUDAFunctor_add]",
+                "called_by": "aten::add_",
+                "attributed_via": "caller",
+                "ms_step": 1.4615,
+                "calls_per_step": 19.0
+              },
+              {
+                "kernel": "elementwise_kernel[CUDAFunctor_add]",
+                "called_by": "aten::sub",
+                "attributed_via": "caller",
+                "ms_step": 0.0123,
+                "calls_per_step": 1.0
+              },
+              {
+                "kernel": "elementwise_kernel[CUDAFunctor_add]",
+                "called_by": "aten::add",
+                "attributed_via": "caller",
+                "ms_step": 0.0098,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 1.39
+          },
+          "other elementwise": {
+            "ms_step": 1.1086,
+            "kernels": [
+              {
+                "kernel": "elementwise_kernel",
+                "called_by": "aten::bitwise_and",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.2165,
+                "calls_per_step": 74.0
+              },
+              {
+                "kernel": "elementwise_kernel",
+                "called_by": "aten::mul",
+                "attributed_via": "caller",
+                "ms_step": 0.185,
+                "calls_per_step": 12.0
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::clamp",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.143,
+                "calls_per_step": 74.0
+              },
+              {
+                "kernel": "elementwise_kernel",
+                "called_by": "aten::div",
+                "attributed_via": "caller",
+                "ms_step": 0.143,
+                "calls_per_step": 37.0
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::abs",
+                "attributed_via": "caller",
+                "ms_step": 0.0787,
+                "calls_per_step": 37.0
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::round",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0675,
+                "calls_per_step": 37.0
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::add",
+                "attributed_via": "caller",
+                "ms_step": 0.0664,
+                "calls_per_step": 37.0
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::div",
+                "attributed_via": "caller",
+                "ms_step": 0.0652,
+                "calls_per_step": 37.2
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::bitwise_or",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0631,
+                "calls_per_step": 37.0
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::__lshift__",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0628,
+                "calls_per_step": 37.0
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::mul",
+                "attributed_via": "caller",
+                "ms_step": 0.0167,
+                "calls_per_step": 4.2
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::sub",
+                "attributed_via": "caller",
+                "ms_step": 0.0005,
+                "calls_per_step": 0.3
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::sqrt",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0002,
+                "calls_per_step": 0.1
+              }
+            ],
+            "pct_of_total": 1.04
+          },
+          "fill / zero-init": {
+            "ms_step": 0.9046,
+            "kernels": [
+              {
+                "kernel": "vectorized_elementwise_kernel[FillFunctor]",
+                "called_by": "aten::fill_",
+                "attributed_via": "caller",
+                "ms_step": 0.9046,
+                "calls_per_step": 21.0
+              }
+            ],
+            "pct_of_total": 0.85
+          },
+          "reduction (amax/absmax for dynamic scales)": {
+            "ms_step": 0.6304,
+            "kernels": [
+              {
+                "kernel": "reduce_kernel",
+                "called_by": "aten::amax",
+                "attributed_via": "caller",
+                "ms_step": 0.6262,
+                "calls_per_step": 37.0
+              },
+              {
+                "kernel": "reduce_kernel",
+                "called_by": "aten::max",
+                "attributed_via": "caller",
+                "ms_step": 0.0042,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 0.59
+          },
+          "SiLU / activation (standalone)": {
+            "ms_step": 0.5153,
+            "kernels": [
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::silu",
+                "attributed_via": "caller",
+                "ms_step": 0.5153,
+                "calls_per_step": 37.0
+              }
+            ],
+            "pct_of_total": 0.48
+          },
+          "memset / memcpy": {
+            "ms_step": 0.0057,
+            "kernels": [
+              {
+                "kernel": "Memcpy DtoD",
+                "called_by": "aten::copy_",
+                "attributed_via": "caller",
+                "ms_step": 0.0043,
+                "calls_per_step": 1.1
+              },
+              {
+                "kernel": "Memcpy DtoH",
+                "called_by": "aten::copy_",
+                "attributed_via": "caller",
+                "ms_step": 0.0008,
+                "calls_per_step": 0.6
+              },
+              {
+                "kernel": "Memcpy HtoD",
+                "called_by": "aten::copy_",
+                "attributed_via": "caller",
+                "ms_step": 0.0006,
+                "calls_per_step": 0.8
+              }
+            ],
+            "pct_of_total": 0.01
+          },
+          "DDIM schedule indexing / noise generation": {
+            "ms_step": 0.0037,
+            "kernels": [
+              {
+                "kernel": "indexSelectLargeIndex",
+                "called_by": "aten::index_select",
+                "attributed_via": "caller",
+                "ms_step": 0.0037,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 0.0
+          }
+        },
+        "pct_of_total": 10.79
+      },
+      "Linear-GEMM": {
+        "ms_step": 7.7328,
+        "roles": {
+          "int8/int4 quantized GEMM (W8A8 / W4A4)": {
+            "ms_step": 7.7328,
+            "kernels": [
+              {
+                "kernel": "gemm_w4a4_kernel_awq",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 7.0458,
+                "calls_per_step": 42.0
+              },
+              {
+                "kernel": "_gemm_w4a4_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 0.687,
+                "calls_per_step": 37.0
+              }
+            ],
+            "pct_of_total": 7.27
+          }
+        },
+        "pct_of_total": 7.27
+      },
+      "Resize": {
+        "ms_step": 2.6702,
+        "roles": {
+          "nearest upsample (unfused; x_upd path)": {
+            "ms_step": 1.4045,
+            "kernels": [
+              {
+                "kernel": "upsample_nearest2d_nhwc_out_frame",
+                "called_by": "aten::upsample_nearest2d",
+                "attributed_via": "caller",
+                "ms_step": 1.4045,
+                "calls_per_step": 4.0
+              }
+            ],
+            "pct_of_total": 1.32
+          },
+          "upsample(nearest,2x)+quantize FUSED": {
+            "ms_step": 0.5594,
+            "kernels": [
+              {
+                "kernel": "upsample2x_quantize_pack_noahat_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 0.5594,
+                "calls_per_step": 4.0
+              }
+            ],
+            "pct_of_total": 0.53
+          },
+          "avg_pool 2x2 (unfused; x_upd path)": {
+            "ms_step": 0.5186,
+            "kernels": [
+              {
+                "kernel": "avg_pool2d_out_cuda_frame_nhwc",
+                "called_by": "aten::avg_pool2d",
+                "attributed_via": "caller",
+                "ms_step": 0.5186,
+                "calls_per_step": 4.0
+              }
+            ],
+            "pct_of_total": 0.49
+          },
+          "avg_pool(2x2)+quantize FUSED": {
+            "ms_step": 0.1877,
+            "kernels": [
+              {
+                "kernel": "avgpool2x_quantize_pack_noahat_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 0.1877,
+                "calls_per_step": 4.0
+              }
+            ],
+            "pct_of_total": 0.18
+          }
+        },
+        "pct_of_total": 2.51
+      },
+      "Quantize": {
+        "ms_step": 0.8351,
+        "roles": {
+          "activation quantize / int4 pack (standalone)": {
+            "ms_step": 0.8351,
+            "kernels": [
+              {
+                "kernel": "quant_act_int4_pack_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 0.8351,
+                "calls_per_step": 5.0
+              }
+            ],
+            "pct_of_total": 0.78
+          }
+        },
+        "pct_of_total": 0.78
+      },
+      "Memory-op": {
+        "ms_step": 0.0056,
+        "roles": {
+          "memset / memcpy": {
+            "ms_step": 0.0056,
+            "kernels": [
+              {
+                "kernel": "Memcpy DtoH",
+                "called_by": "aten::_local_scalar_dense",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0056,
+                "calls_per_step": 4.0
+              }
+            ],
+            "pct_of_total": 0.01
+          }
+        },
+        "pct_of_total": 0.01
+      },
+      "Sampler-side": {
+        "ms_step": 0.0008,
+        "roles": {
+          "DDIM schedule indexing / noise generation": {
+            "ms_step": 0.0008,
+            "kernels": [
+              {
+                "kernel": "distribution_elementwise_grid_stride_kernel",
+                "called_by": "aten::normal_",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0008,
+                "calls_per_step": 0.1
+              }
+            ],
+            "pct_of_total": 0.0
+          }
+        },
+        "pct_of_total": 0.0
+      }
+    }
+  },
+  "int8_modiff": {
+    "ms_step": 125.42,
+    "name_attributed_ms_step": 111.8299,
+    "name_attributed_pct": 89.16,
+    "name_attributed_top": [
+      "flash_attn_int8_mma_kernel",
+      "ImplicitGemmConvolutionEVT",
+      "gn_group_stats_kernel",
+      "gn_apply_delta_quantize_flat_vec2_kernel",
+      "gemm_w8a8_kernel_awq",
+      "group_norm_silu_quantize_nhwc_vec2_kernel"
+    ],
+    "tree": {
+      "Attention": {
+        "ms_step": 43.4442,
+        "roles": {
+          "int8/int4 flash kernel (fused QK^T+softmax+AV)": {
+            "ms_step": 37.6881,
+            "kernels": [
+              {
+                "kernel": "flash_attn_int8_mma_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 36.7185,
+                "calls_per_step": 10.0
+              },
+              {
+                "kernel": "flash_attn_int8_packed_mma_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 0.9696,
+                "calls_per_step": 5.0
+              }
+            ],
+            "pct_of_total": 30.05
+          },
+          "Q/K/V quantize (packed, static scales)": {
+            "ms_step": 3.6018,
+            "kernels": [
+              {
+                "kernel": "aq_qtok_packed_static_qk_vec2_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 3.6018,
+                "calls_per_step": 10.0
+              }
+            ],
+            "pct_of_total": 2.87
+          },
+          "V quantize + transpose to AV layout": {
+            "ms_step": 1.8529,
+            "kernels": [
+              {
+                "kernel": "aq_vquant_trans_packed_tiled_vec2_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 1.8529,
+                "calls_per_step": 10.0
+              }
+            ],
+            "pct_of_total": 1.48
+          },
+          "fp16 tensor-core GEMM (cuBLAS)": {
+            "ms_step": 0.1675,
+            "kernels": [
+              {
+                "kernel": "cutlass_80_wmma_tensorop_f16_s161616gemm_f16_16x16_32x1_nn",
+                "called_by": "aten::bmm",
+                "attributed_via": "caller",
+                "ms_step": 0.0898,
+                "calls_per_step": 6.0
+              },
+              {
+                "kernel": "cutlass_80_wmma_tensorop_f16_s161616gemm_f16_16x16_64x1_nn",
+                "called_by": "aten::bmm",
+                "attributed_via": "caller",
+                "ms_step": 0.0777,
+                "calls_per_step": 6.0
+              }
+            ],
+            "pct_of_total": 0.13
+          },
+          "attention output quantize (for the proj GEMM)": {
+            "ms_step": 0.1111,
+            "kernels": [
+              {
+                "kernel": "quant_attn_out_int8_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 0.1111,
+                "calls_per_step": 6.0
+              }
+            ],
+            "pct_of_total": 0.09
+          },
+          "fp16 SDPA (unfused math backend: BMM + softmax)": {
+            "ms_step": 0.0228,
+            "kernels": [
+              {
+                "kernel": "softmax_warp_forward",
+                "called_by": "aten::_softmax",
+                "attributed_via": "caller",
+                "ms_step": 0.0228,
+                "calls_per_step": 6.0
+              }
+            ],
+            "pct_of_total": 0.02
+          }
+        },
+        "pct_of_total": 34.64
+      },
+      "Conv": {
+        "ms_step": 31.8861,
+        "roles": {
+          "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)": {
+            "ms_step": 29.2579,
+            "kernels": [
+              {
+                "kernel": "ImplicitGemmConvolutionEVT",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 29.2579,
+                "calls_per_step": 70.0
+              }
+            ],
+            "pct_of_total": 23.33
+          },
+          "fp16 cuDNN conv": {
+            "ms_step": 2.348,
+            "kernels": [
+              {
+                "kernel": "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_n",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 1.9482,
+                "calls_per_step": 10.0
+              },
+              {
+                "kernel": "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_n",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.2746,
+                "calls_per_step": 1.0
+              },
+              {
+                "kernel": "sm80_xmma_fprop_implicit_gemm_indexed_wo_smem_f16f16_f16f3",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.114,
+                "calls_per_step": 1.0
+              },
+              {
+                "kernel": "nhwcAddPaddingKernel",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.0112,
+                "calls_per_step": 2.0
+              }
+            ],
+            "pct_of_total": 1.87
+          },
+          "fp16 tensor-core GEMM (cuBLAS)": {
+            "ms_step": 0.2768,
+            "kernels": [
+              {
+                "kernel": "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize192x128x32_s",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.1242,
+                "calls_per_step": 2.0
+              },
+              {
+                "kernel": "ampere_fp16_s16816gemm_fp16_128x64_ldg8_f2f_stages_32x6_tn",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.0722,
+                "calls_per_step": 3.0
+              },
+              {
+                "kernel": "ampere_fp16_s1688gemm_fp16_128x128_ldg8_f2f_stages_32x1_tn",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.0545,
+                "calls_per_step": 1.0
+              },
+              {
+                "kernel": "ampere_fp16_s16816gemm_fp16_256x128_ldg8_f2f_stages_32x3_t",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.0259,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 0.22
+          },
+          "memset / memcpy": {
+            "ms_step": 0.0034,
+            "kernels": [
+              {
+                "kernel": "Memset",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.0034,
+                "calls_per_step": 2.0
+              }
+            ],
+            "pct_of_total": 0.0
+          }
+        },
+        "pct_of_total": 25.42
+      },
+      "Normalization": {
+        "ms_step": 28.2098,
+        "roles": {
+          "GN group-statistics reduction (mean/var; deliberately scalar)": {
+            "ms_step": 11.0818,
+            "kernels": [
+              {
+                "kernel": "gn_group_stats_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 11.0818,
+                "calls_per_step": 62.0
+              }
+            ],
+            "pct_of_total": 8.84
+          },
+          "MoDiff GN+SiLU+delta-quantize+cache apply": {
+            "ms_step": 9.1237,
+            "kernels": [
+              {
+                "kernel": "gn_apply_delta_quantize_flat_vec2_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 9.1237,
+                "calls_per_step": 62.0
+              }
+            ],
+            "pct_of_total": 7.27
+          },
+          "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": {
+            "ms_step": 5.513,
+            "kernels": [
+              {
+                "kernel": "group_norm_silu_quantize_nhwc_vec2_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 5.513,
+                "calls_per_step": 21.0
+              }
+            ],
+            "pct_of_total": 4.4
+          },
+          "GN+SiLU only (fp16 out; updown blocks + fp16 mode)": {
+            "ms_step": 1.8304,
+            "kernels": [
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 1.8304,
+                "calls_per_step": 8.0
+              }
+            ],
+            "pct_of_total": 1.46
+          },
+          "other elementwise": {
+            "ms_step": 0.3966,
+            "kernels": [
+              {
+                "kernel": "elementwise_kernel",
+                "called_by": "aten::native_group_norm",
+                "attributed_via": "caller",
+                "ms_step": 0.3966,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 0.32
+          },
+          "PyTorch native GroupNorm internals (fp16 fallback path)": {
+            "ms_step": 0.2644,
+            "kernels": [
+              {
+                "kernel": "RowwiseMomentsCUDAKernel",
+                "called_by": "aten::native_group_norm",
+                "attributed_via": "caller",
+                "ms_step": 0.2605,
+                "calls_per_step": 1.0
+              },
+              {
+                "kernel": "ComputeFusedParamsCUDAKernel",
+                "called_by": "aten::native_group_norm",
+                "attributed_via": "caller",
+                "ms_step": 0.0039,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 0.21
+          }
+        },
+        "pct_of_total": 22.49
+      },
+      "Linear-GEMM": {
+        "ms_step": 8.5737,
+        "roles": {
+          "int8/int4 quantized GEMM (W8A8 / W4A4)": {
+            "ms_step": 8.2134,
+            "kernels": [
+              {
+                "kernel": "gemm_w8a8_kernel_awq",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 8.2134,
+                "calls_per_step": 42.0
+              }
+            ],
+            "pct_of_total": 6.55
+          },
+          "fp16 tensor-core GEMM (cuBLAS)": {
+            "ms_step": 0.3604,
+            "kernels": [
+              {
+                "kernel": "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize32x32x64_sta",
+                "called_by": "aten::addmm",
+                "attributed_via": "caller",
+                "ms_step": 0.1813,
+                "calls_per_step": 21.0
+              },
+              {
+                "kernel": "ampere_fp16_s16816gemm_fp16_64x64_sliced1x2_ldg8_relu_f2f_",
+                "called_by": "aten::addmm",
+                "attributed_via": "caller",
+                "ms_step": 0.1734,
+                "calls_per_step": 15.0
+              },
+              {
+                "kernel": "cutlass_80_wmma_tensorop_f16_s161616gemm_f16_32x32_128x2_t",
+                "called_by": "aten::addmm",
+                "attributed_via": "caller",
+                "ms_step": 0.0057,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 0.29
+          }
+        },
+        "pct_of_total": 6.84
+      },
+      "Elementwise-Cast": {
+        "ms_step": 8.0957,
+        "roles": {
+          "dtype cast / device copy": {
+            "ms_step": 3.727,
+            "kernels": [
+              {
+                "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+                "called_by": "aten::copy_",
+                "attributed_via": "caller",
+                "ms_step": 2.2969,
+                "calls_per_step": 127.8
+              },
+              {
+                "kernel": "elementwise_kernel[direct_copy_kernel_cuda]",
+                "called_by": "aten::copy_",
+                "attributed_via": "caller",
+                "ms_step": 1.4301,
+                "calls_per_step": 111.0
+              }
+            ],
+            "pct_of_total": 2.97
+          },
+          "skip-concat (decoder): specialized 2-tensor channels-last": {
+            "ms_step": 2.1563,
+            "kernels": [
+              {
+                "kernel": "cat2_channels_last_fp16_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 2.1563,
+                "calls_per_step": 15.0
+              }
+            ],
+            "pct_of_total": 1.72
+          },
+          "residual add": {
+            "ms_step": 1.4674,
+            "kernels": [
+              {
+                "kernel": "elementwise_kernel[CUDAFunctor_add]",
+                "called_by": "aten::add_",
+                "attributed_via": "caller",
+                "ms_step": 1.4453,
+                "calls_per_step": 19.0
+              },
+              {
+                "kernel": "elementwise_kernel[CUDAFunctor_add]",
+                "called_by": "aten::sub",
+                "attributed_via": "caller",
+                "ms_step": 0.0122,
+                "calls_per_step": 1.0
+              },
+              {
+                "kernel": "elementwise_kernel[CUDAFunctor_add]",
+                "called_by": "aten::add",
+                "attributed_via": "caller",
+                "ms_step": 0.0099,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 1.17
+          },
+          "SiLU / activation (standalone)": {
+            "ms_step": 0.5284,
+            "kernels": [
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::silu",
+                "attributed_via": "caller",
+                "ms_step": 0.5284,
+                "calls_per_step": 37.0
+              }
+            ],
+            "pct_of_total": 0.42
+          },
+          "other elementwise": {
+            "ms_step": 0.2013,
+            "kernels": [
+              {
+                "kernel": "elementwise_kernel",
+                "called_by": "aten::mul",
+                "attributed_via": "caller",
+                "ms_step": 0.1843,
+                "calls_per_step": 12.0
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::mul",
+                "attributed_via": "caller",
+                "ms_step": 0.0159,
+                "calls_per_step": 4.2
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::sub",
+                "attributed_via": "caller",
+                "ms_step": 0.0005,
+                "calls_per_step": 0.3
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::div",
+                "attributed_via": "caller",
+                "ms_step": 0.0004,
+                "calls_per_step": 0.2
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::sqrt",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0002,
+                "calls_per_step": 0.1
+              }
+            ],
+            "pct_of_total": 0.16
+          },
+          "memset / memcpy": {
+            "ms_step": 0.0056,
+            "kernels": [
+              {
+                "kernel": "Memcpy DtoD",
+                "called_by": "aten::copy_",
+                "attributed_via": "caller",
+                "ms_step": 0.0042,
+                "calls_per_step": 1.1
+              },
+              {
+                "kernel": "Memcpy DtoH",
+                "called_by": "aten::copy_",
+                "attributed_via": "caller",
+                "ms_step": 0.0008,
+                "calls_per_step": 0.6
+              },
+              {
+                "kernel": "Memcpy HtoD",
+                "called_by": "aten::copy_",
+                "attributed_via": "caller",
+                "ms_step": 0.0006,
+                "calls_per_step": 0.8
+              }
+            ],
+            "pct_of_total": 0.0
+          },
+          "reduction (amax/absmax for dynamic scales)": {
+            "ms_step": 0.0042,
+            "kernels": [
+              {
+                "kernel": "reduce_kernel",
+                "called_by": "aten::max",
+                "attributed_via": "caller",
+                "ms_step": 0.0042,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 0.0
+          },
+          "DDIM schedule indexing / noise generation": {
+            "ms_step": 0.0037,
+            "kernels": [
+              {
+                "kernel": "indexSelectLargeIndex",
+                "called_by": "aten::index_select",
+                "attributed_via": "caller",
+                "ms_step": 0.0037,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 0.0
+          },
+          "fill / zero-init": {
+            "ms_step": 0.0018,
+            "kernels": [
+              {
+                "kernel": "vectorized_elementwise_kernel[FillFunctor]",
+                "called_by": "aten::fill_",
+                "attributed_via": "caller",
+                "ms_step": 0.0018,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 0.0
+          }
+        },
+        "pct_of_total": 6.45
+      },
+      "Resize": {
+        "ms_step": 3.815,
+        "roles": {
+          "nearest upsample (unfused; x_upd path)": {
+            "ms_step": 2.7868,
+            "kernels": [
+              {
+                "kernel": "upsample_nearest2d_nhwc_out_frame",
+                "called_by": "aten::upsample_nearest2d",
+                "attributed_via": "caller",
+                "ms_step": 2.7868,
+                "calls_per_step": 8.0
+              }
+            ],
+            "pct_of_total": 2.22
+          },
+          "avg_pool 2x2 (unfused; x_upd path)": {
+            "ms_step": 1.0281,
+            "kernels": [
+              {
+                "kernel": "avg_pool2d_out_cuda_frame_nhwc",
+                "called_by": "aten::avg_pool2d",
+                "attributed_via": "caller",
+                "ms_step": 1.0281,
+                "calls_per_step": 8.0
+              }
+            ],
+            "pct_of_total": 0.82
+          }
+        },
+        "pct_of_total": 3.04
+      },
+      "Quantize": {
+        "ms_step": 1.3928,
+        "roles": {
+          "MoDiff delta-quantize + a_hat cache update": {
+            "ms_step": 1.3928,
+            "kernels": [
+              {
+                "kernel": "static_quantize_and_update_ahat_kernel_int8_half_cache_vec",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 1.3928,
+                "calls_per_step": 8.0
+              }
+            ],
+            "pct_of_total": 1.11
+          }
+        },
+        "pct_of_total": 1.11
+      },
+      "Memory-op": {
+        "ms_step": 0.0058,
+        "roles": {
+          "memset / memcpy": {
+            "ms_step": 0.0058,
+            "kernels": [
+              {
+                "kernel": "Memcpy DtoH",
+                "called_by": "aten::_local_scalar_dense",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0058,
+                "calls_per_step": 4.0
+              }
+            ],
+            "pct_of_total": 0.0
+          }
+        },
+        "pct_of_total": 0.0
+      },
+      "Sampler-side": {
+        "ms_step": 0.0008,
+        "roles": {
+          "DDIM schedule indexing / noise generation": {
+            "ms_step": 0.0008,
+            "kernels": [
+              {
+                "kernel": "distribution_elementwise_grid_stride_kernel",
+                "called_by": "aten::normal_",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0008,
+                "calls_per_step": 0.1
+              }
+            ],
+            "pct_of_total": 0.0
+          }
+        },
+        "pct_of_total": 0.0
+      }
+    }
+  },
+  "int4_modiff": {
+    "ms_step": 127.26,
+    "name_attributed_ms_step": 109.056,
+    "name_attributed_pct": 85.69,
+    "name_attributed_top": [
+      "flash_attn_int4_mma_kernel",
+      "ImplicitGemmConvolutionEVT",
+      "gn_group_stats_kernel",
+      "gn_apply_delta_quantize_pack_flat_vec2_kernel",
+      "group_norm_silu_nhwc_kernel",
+      "gemm_w4a4_kernel_awq"
+    ],
+    "tree": {
+      "Attention": {
+        "ms_step": 52.9292,
+        "roles": {
+          "int8/int4 flash kernel (fused QK^T+softmax+AV)": {
+            "ms_step": 48.0124,
+            "kernels": [
+              {
+                "kernel": "flash_attn_int4_mma_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 48.0124,
+                "calls_per_step": 15.0
+              }
+            ],
+            "pct_of_total": 37.73
+          },
+          "Q/K/V quantize (packed, static scales)": {
+            "ms_step": 3.0365,
+            "kernels": [
+              {
+                "kernel": "aq_qtok_packed_static_qk_vec2_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 3.0365,
+                "calls_per_step": 15.0
+              }
+            ],
+            "pct_of_total": 2.39
+          },
+          "V quantize + transpose to AV layout": {
+            "ms_step": 1.6522,
+            "kernels": [
+              {
+                "kernel": "aq_vquant_trans_packed_tiled_vec2_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 1.6522,
+                "calls_per_step": 15.0
+              }
+            ],
+            "pct_of_total": 1.3
+          },
+          "fp16 tensor-core GEMM (cuBLAS)": {
+            "ms_step": 0.1387,
+            "kernels": [
+              {
+                "kernel": "cutlass_80_wmma_tensorop_f16_s161616gemm_f16_16x16_32x1_nn",
+                "called_by": "aten::bmm",
+                "attributed_via": "caller",
+                "ms_step": 0.0746,
+                "calls_per_step": 6.0
+              },
+              {
+                "kernel": "cutlass_80_wmma_tensorop_f16_s161616gemm_f16_16x16_64x1_nn",
+                "called_by": "aten::bmm",
+                "attributed_via": "caller",
+                "ms_step": 0.0641,
+                "calls_per_step": 6.0
+              }
+            ],
+            "pct_of_total": 0.11
+          },
+          "attention output quantize (for the proj GEMM)": {
+            "ms_step": 0.0707,
+            "kernels": [
+              {
+                "kernel": "quant_attn_out_int4_pack_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 0.0707,
+                "calls_per_step": 6.0
+              }
+            ],
+            "pct_of_total": 0.06
+          },
+          "fp16 SDPA (unfused math backend: BMM + softmax)": {
+            "ms_step": 0.0186,
+            "kernels": [
+              {
+                "kernel": "softmax_warp_forward",
+                "called_by": "aten::_softmax",
+                "attributed_via": "caller",
+                "ms_step": 0.0186,
+                "calls_per_step": 6.0
+              }
+            ],
+            "pct_of_total": 0.01
+          }
+        },
+        "pct_of_total": 41.59
+      },
+      "Normalization": {
+        "ms_step": 28.0464,
+        "roles": {
+          "GN group-statistics reduction (mean/var; deliberately scalar)": {
+            "ms_step": 9.8825,
+            "kernels": [
+              {
+                "kernel": "gn_group_stats_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 9.8825,
+                "calls_per_step": 62.0
+              }
+            ],
+            "pct_of_total": 7.77
+          },
+          "MoDiff GN+SiLU+delta-quantize+cache apply": {
+            "ms_step": 8.4407,
+            "kernels": [
+              {
+                "kernel": "gn_apply_delta_quantize_pack_flat_vec2_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 8.4407,
+                "calls_per_step": 62.0
+              }
+            ],
+            "pct_of_total": 6.63
+          },
+          "GN+SiLU only (fp16 out; updown blocks + fp16 mode)": {
+            "ms_step": 6.6144,
+            "kernels": [
+              {
+                "kernel": "group_norm_silu_nhwc_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 6.6144,
+                "calls_per_step": 13.0
+              }
+            ],
+            "pct_of_total": 5.2
+          },
+          "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": {
+            "ms_step": 2.5257,
+            "kernels": [
+              {
+                "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 2.5257,
+                "calls_per_step": 16.0
+              }
+            ],
+            "pct_of_total": 1.98
+          },
+          "other elementwise": {
+            "ms_step": 0.3623,
+            "kernels": [
+              {
+                "kernel": "elementwise_kernel",
+                "called_by": "aten::native_group_norm",
+                "attributed_via": "caller",
+                "ms_step": 0.3623,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 0.28
+          },
+          "PyTorch native GroupNorm internals (fp16 fallback path)": {
+            "ms_step": 0.2208,
+            "kernels": [
+              {
+                "kernel": "RowwiseMomentsCUDAKernel",
+                "called_by": "aten::native_group_norm",
+                "attributed_via": "caller",
+                "ms_step": 0.2176,
+                "calls_per_step": 1.0
+              },
+              {
+                "kernel": "ComputeFusedParamsCUDAKernel",
+                "called_by": "aten::native_group_norm",
+                "attributed_via": "caller",
+                "ms_step": 0.0032,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 0.17
+          }
+        },
+        "pct_of_total": 22.04
+      },
+      "Conv": {
+        "ms_step": 18.8914,
+        "roles": {
+          "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)": {
+            "ms_step": 16.0167,
+            "kernels": [
+              {
+                "kernel": "ImplicitGemmConvolutionEVT",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 16.0167,
+                "calls_per_step": 70.0
+              }
+            ],
+            "pct_of_total": 12.59
+          },
+          "fp16 cuDNN conv": {
+            "ms_step": 2.6438,
+            "kernels": [
+              {
+                "kernel": "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_n",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 1.6261,
+                "calls_per_step": 10.0
+              },
+              {
+                "kernel": "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_n",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.9138,
+                "calls_per_step": 1.0
+              },
+              {
+                "kernel": "sm80_xmma_fprop_implicit_gemm_indexed_wo_smem_f16f16_f16f3",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.0946,
+                "calls_per_step": 1.0
+              },
+              {
+                "kernel": "nhwcAddPaddingKernel",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.0094,
+                "calls_per_step": 2.0
+              }
+            ],
+            "pct_of_total": 2.08
+          },
+          "fp16 tensor-core GEMM (cuBLAS)": {
+            "ms_step": 0.2282,
+            "kernels": [
+              {
+                "kernel": "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize192x128x32_s",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.1022,
+                "calls_per_step": 2.0
+              },
+              {
+                "kernel": "ampere_fp16_s16816gemm_fp16_128x64_ldg8_f2f_stages_32x6_tn",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.0591,
+                "calls_per_step": 3.0
+              },
+              {
+                "kernel": "ampere_fp16_s1688gemm_fp16_128x128_ldg8_f2f_stages_32x1_tn",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.045,
+                "calls_per_step": 1.0
+              },
+              {
+                "kernel": "ampere_fp16_s16816gemm_fp16_256x128_ldg8_f2f_stages_32x3_t",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.0218,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 0.18
+          },
+          "memset / memcpy": {
+            "ms_step": 0.0027,
+            "kernels": [
+              {
+                "kernel": "Memset",
+                "called_by": "aten::cudnn_convolution",
+                "attributed_via": "caller",
+                "ms_step": 0.0027,
+                "calls_per_step": 2.0
+              }
+            ],
+            "pct_of_total": 0.0
+          }
+        },
+        "pct_of_total": 14.84
+      },
+      "Elementwise-Cast": {
+        "ms_step": 12.6609,
+        "roles": {
+          "dtype cast / device copy": {
+            "ms_step": 6.0674,
+            "kernels": [
+              {
+                "kernel": "elementwise_kernel[direct_copy_kernel_cuda]",
+                "called_by": "aten::copy_",
+                "attributed_via": "caller",
+                "ms_step": 3.4795,
+                "calls_per_step": 126.0
+              },
+              {
+                "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+                "called_by": "aten::copy_",
+                "attributed_via": "caller",
+                "ms_step": 2.5879,
+                "calls_per_step": 127.8
+              }
+            ],
+            "pct_of_total": 4.77
+          },
+          "skip-concat (decoder): specialized 2-tensor channels-last": {
+            "ms_step": 2.9444,
+            "kernels": [
+              {
+                "kernel": "cat2_channels_last_fp16_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 2.9444,
+                "calls_per_step": 15.0
+              }
+            ],
+            "pct_of_total": 2.31
+          },
+          "residual add": {
+            "ms_step": 1.4263,
+            "kernels": [
+              {
+                "kernel": "elementwise_kernel[CUDAFunctor_add]",
+                "called_by": "aten::add_",
+                "attributed_via": "caller",
+                "ms_step": 1.199,
+                "calls_per_step": 19.0
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel[CUDAFunctor_add]",
+                "called_by": "aten::sub",
+                "attributed_via": "caller",
+                "ms_step": 0.1064,
+                "calls_per_step": 37.0
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel[CUDAFunctor_add]",
+                "called_by": "aten::add_",
+                "attributed_via": "caller",
+                "ms_step": 0.1016,
+                "calls_per_step": 37.0
+              },
+              {
+                "kernel": "elementwise_kernel[CUDAFunctor_add]",
+                "called_by": "aten::sub",
+                "attributed_via": "caller",
+                "ms_step": 0.0109,
+                "calls_per_step": 1.0
+              },
+              {
+                "kernel": "elementwise_kernel[CUDAFunctor_add]",
+                "called_by": "aten::add",
+                "attributed_via": "caller",
+                "ms_step": 0.0083,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 1.12
+          },
+          "fill / zero-init": {
+            "ms_step": 0.9892,
+            "kernels": [
+              {
+                "kernel": "vectorized_elementwise_kernel[FillFunctor]",
+                "called_by": "aten::fill_",
+                "attributed_via": "caller",
+                "ms_step": 0.9892,
+                "calls_per_step": 21.0
+              }
+            ],
+            "pct_of_total": 0.78
+          },
+          "other elementwise": {
+            "ms_step": 0.7566,
+            "kernels": [
+              {
+                "kernel": "elementwise_kernel",
+                "called_by": "aten::bitwise_and",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.1846,
+                "calls_per_step": 74.0
+              },
+              {
+                "kernel": "elementwise_kernel",
+                "called_by": "aten::mul",
+                "attributed_via": "caller",
+                "ms_step": 0.151,
+                "calls_per_step": 12.0
+              },
+              {
+                "kernel": "elementwise_kernel",
+                "called_by": "aten::div",
+                "attributed_via": "caller",
+                "ms_step": 0.117,
+                "calls_per_step": 37.0
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::round",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0645,
+                "calls_per_step": 37.0
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::clamp",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0619,
+                "calls_per_step": 37.0
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::add",
+                "attributed_via": "caller",
+                "ms_step": 0.0584,
+                "calls_per_step": 37.0
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::bitwise_or",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0521,
+                "calls_per_step": 37.0
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::__lshift__",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0517,
+                "calls_per_step": 37.0
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::mul",
+                "attributed_via": "caller",
+                "ms_step": 0.0143,
+                "calls_per_step": 4.2
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::sub",
+                "attributed_via": "caller",
+                "ms_step": 0.0004,
+                "calls_per_step": 0.3
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::div",
+                "attributed_via": "caller",
+                "ms_step": 0.0003,
+                "calls_per_step": 0.2
+              },
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::sqrt",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0002,
+                "calls_per_step": 0.1
+              }
+            ],
+            "pct_of_total": 0.59
+          },
+          "SiLU / activation (standalone)": {
+            "ms_step": 0.439,
+            "kernels": [
+              {
+                "kernel": "vectorized_elementwise_kernel",
+                "called_by": "aten::silu",
+                "attributed_via": "caller",
+                "ms_step": 0.439,
+                "calls_per_step": 37.0
+              }
+            ],
+            "pct_of_total": 0.34
+          },
+          "memset / memcpy": {
+            "ms_step": 0.0313,
+            "kernels": [
+              {
+                "kernel": "Memcpy HtoD",
+                "called_by": "aten::copy_",
+                "attributed_via": "caller",
+                "ms_step": 0.0271,
+                "calls_per_step": 37.8
+              },
+              {
+                "kernel": "Memcpy DtoD",
+                "called_by": "aten::copy_",
+                "attributed_via": "caller",
+                "ms_step": 0.0035,
+                "calls_per_step": 1.1
+              },
+              {
+                "kernel": "Memcpy DtoH",
+                "called_by": "aten::copy_",
+                "attributed_via": "caller",
+                "ms_step": 0.0007,
+                "calls_per_step": 0.6
+              }
+            ],
+            "pct_of_total": 0.02
+          },
+          "reduction (amax/absmax for dynamic scales)": {
+            "ms_step": 0.0035,
+            "kernels": [
+              {
+                "kernel": "reduce_kernel",
+                "called_by": "aten::max",
+                "attributed_via": "caller",
+                "ms_step": 0.0035,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 0.0
+          },
+          "DDIM schedule indexing / noise generation": {
+            "ms_step": 0.0032,
+            "kernels": [
+              {
+                "kernel": "indexSelectLargeIndex",
+                "called_by": "aten::index_select",
+                "attributed_via": "caller",
+                "ms_step": 0.0032,
+                "calls_per_step": 1.0
+              }
+            ],
+            "pct_of_total": 0.0
+          }
+        },
+        "pct_of_total": 9.95
+      },
+      "Linear-GEMM": {
+        "ms_step": 6.6295,
+        "roles": {
+          "int8/int4 quantized GEMM (W8A8 / W4A4)": {
+            "ms_step": 6.6295,
+            "kernels": [
+              {
+                "kernel": "gemm_w4a4_kernel_awq",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 6.0927,
+                "calls_per_step": 42.0
+              },
+              {
+                "kernel": "_gemm_w4a4_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 0.5368,
+                "calls_per_step": 37.0
+              }
+            ],
+            "pct_of_total": 5.21
+          }
+        },
+        "pct_of_total": 5.21
+      },
+      "Resize": {
+        "ms_step": 5.2883,
+        "roles": {
+          "nearest upsample (unfused; x_upd path)": {
+            "ms_step": 3.7413,
+            "kernels": [
+              {
+                "kernel": "upsample_nearest2d_nhwc_out_frame",
+                "called_by": "aten::upsample_nearest2d",
+                "attributed_via": "caller",
+                "ms_step": 3.7413,
+                "calls_per_step": 8.0
+              }
+            ],
+            "pct_of_total": 2.94
+          },
+          "avg_pool 2x2 (unfused; x_upd path)": {
+            "ms_step": 1.5469,
+            "kernels": [
+              {
+                "kernel": "avg_pool2d_out_cuda_frame_nhwc",
+                "called_by": "aten::avg_pool2d",
+                "attributed_via": "caller",
+                "ms_step": 1.5469,
+                "calls_per_step": 8.0
+              }
+            ],
+            "pct_of_total": 1.22
+          }
+        },
+        "pct_of_total": 4.16
+      },
+      "Quantize": {
+        "ms_step": 2.8089,
+        "roles": {
+          "activation quantize / int4 pack (standalone)": {
+            "ms_step": 1.6118,
+            "kernels": [
+              {
+                "kernel": "quant_act_int4_pack_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 1.6118,
+                "calls_per_step": 5.0
+              }
+            ],
+            "pct_of_total": 1.27
+          },
+          "MoDiff delta-quantize + a_hat cache update": {
+            "ms_step": 1.1049,
+            "kernels": [
+              {
+                "kernel": "static_quantize_pack_and_update_ahat_kernel_int4_half_cach",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 1.1049,
+                "calls_per_step": 8.0
+              }
+            ],
+            "pct_of_total": 0.87
+          },
+          "MoDiff dequant + accumulate (int4 o_hat return path)": {
+            "ms_step": 0.0922,
+            "kernels": [
+              {
+                "kernel": "dequant_accumulate_and_return_int4_kernel",
+                "called_by": "(pybind, no aten op)",
+                "attributed_via": "name(no-aten-parent)",
+                "ms_step": 0.0922,
+                "calls_per_step": 37.0
+              }
+            ],
+            "pct_of_total": 0.07
+          }
+        },
+        "pct_of_total": 2.21
+      },
+      "Memory-op": {
+        "ms_step": 0.0055,
+        "roles": {
+          "memset / memcpy": {
+            "ms_step": 0.0055,
+            "kernels": [
+              {
+                "kernel": "Memcpy DtoH",
+                "called_by": "aten::_local_scalar_dense",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0055,
+                "calls_per_step": 4.0
+              }
+            ],
+            "pct_of_total": 0.0
+          }
+        },
+        "pct_of_total": 0.0
+      },
+      "Sampler-side": {
+        "ms_step": 0.0007,
+        "roles": {
+          "DDIM schedule indexing / noise generation": {
+            "ms_step": 0.0007,
+            "kernels": [
+              {
+                "kernel": "distribution_elementwise_grid_stride_kernel",
+                "called_by": "aten::normal_",
+                "attributed_via": "name(unknown-caller)",
+                "ms_step": 0.0007,
+                "calls_per_step": 0.1
+              }
+            ],
+            "pct_of_total": 0.0
+          }
+        },
+        "pct_of_total": 0.0
+      }
+    }
+  }
+}
