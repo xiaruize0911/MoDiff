@@ -2,7 +2,7 @@
 
 **GPU:** NVIDIA A40 (48 GB, SM 8.6) · **PyTorch:** 2.4.1+cu124 · **CUDA:** 12.4
 **Model:** LSUN-Churches LDM-8 UNet (unconditional, 256×256) · **Batch:** 128 · **Sampler:** DDIM, 200 steps
-**Date:** 2026-07-28 (final refresh: noahat-kernel + conv_epilogue vectorization, memory profiling) · repo: `feat/conv-attn-epilogue-fusion` @ [`b54043c`](https://github.com/xiaruize0911/MoDiff/commit/b54043c)
+**Date:** 2026-07-28 (final refresh: + layout_transform vectorization) · repo: `feat/conv-attn-epilogue-fusion` @ [`269f2c6`](https://github.com/xiaruize0911/MoDiff/commit/269f2c6)
 
 **5 modes:** `fp16`, `int8_baseline`, `int4_baseline`, `int8_modiff`, `int4_modiff`. int8/int4 use the
 fused-flash quantized attention kernel; `_modiff` adds the temporal-delta conv cache.
@@ -200,13 +200,10 @@ None of these have been fixed yet — listed here for triage, ranked by how load
 - `aq_qtok_packed_static_kernel` and the non-tiled `aq_vquant_trans_packed_kernel` in `attn_quant_gemm.cu`
   were confirmed dead (zero launch sites) and removed.
 
+**Resolved this round:**
+- `csrc/kernels/util/layout_transform.cu`'s NCW↔CL transpose/cast kernels are now vectorized (Section 8).
+
 **Still open, lower priority:**
-- `csrc/kernels/util/layout_transform.cu`'s NCW↔CL transpose/quantize kernels — called twice per
-  AttentionBlock per step. Investigated (Section 6 of the earlier round): these already achieve full
-  warp coalescing via a shared-memory tile transpose, so this is NOT the same "swap scalar load for
-  vector load" pattern as everything else vectorized this session — halving the per-thread element
-  count would require restructuring the tile-index math itself (real risk of a silent wrong-transpose
-  bug, not just a missed-alignment crash). Deferred.
 - Several `attn_quant_gemm.cu` kernels (`aq_vquant_trans_kernel`, `from_i8_qtok/vtrans`) only fire on
   non-default/opt-in paths (calibration warmup, `MODIFF_ROUTE1=1`) — low priority given limited exposure.
 
@@ -231,6 +228,21 @@ caught by tracing the exact kernels involved rather than trusting the earlier ca
   non-reduction pattern, gated on `num_channels % 2 == 0`. Verified: 24/24 capture-compare cases
   bit-identical, full gate suite `ALL PASS`, whole-model `rel_err=0.0000` on all 5 modes.
   Measured effect: real but small (well under 1ms/step) — this was always a low-payoff item.
+
+**`layout_transform.cu` vectorization** (`fp16_ncw_to_fp32_cl_kernel`, `fp32_cl_to_fp16_ncw_kernel`,
+`fp16_ncw_delta_to_int8_cl_kernel[_half_cache]`): unlike everything else vectorized this session,
+these kernels' shared-memory tile transpose already achieves full warp coalescing on both sides —
+the gap here was that the fp16-typed phase of each moves only 64B/warp (half of a 128B transaction).
+Added `half2` counterparts for the fp16 read/write phase specifically (the already-optimal fp32 phase,
+and — for the delta kernels — the more entangled a_hat-update+quantize phase, are untouched), gated on
+`L % 2 == 0` (safe: an even-aligned pair of sequence positions never straddles a batch-item boundary
+when `L` is even). Verified: 8/8 capture-compare cases bit-identical (3 real shapes + a synthetic
+odd-`L=97` case exercising the scalar fallback), full gate suite `ALL PASS`, whole-model
+`rel_err=0.0000`. **Measured e2e effect: none detectable** — a same-session rerun showed all 5 modes
+within ~1ms of the pre-fix numbers (noise floor). Expected: these kernels touch a QKV/output-proj
+buffer of size `[N·L, C]` per AttentionBlock call, a much smaller absolute data volume than the
+per-conv-layer quantize kernels vectorized earlier in this session, so even a genuine 2× local
+bandwidth improvement is too small in absolute terms to clear the e2e measurement's noise floor.
 
 **conv_epilogue.cu vectorization** (`scale_accumulate_half_cache_kernel`, `_residual_half_cache`,
 `scale_store_half_kernel` → `_vec2`): implemented and fully verified, but tracing the actual Python
@@ -327,3 +339,5 @@ follow-up work, not abandoned.
 - [`1e7f05c`](https://github.com/xiaruize0911/MoDiff/commit/1e7f05c) — Conv/GEMM categorization fix, refreshed benchmarks (Section 2)
 - [`663210a`](https://github.com/xiaruize0911/MoDiff/commit/663210a) — noahat quantize kernel vectorization, corrected updown-gap analysis (Section 8)
 - [`b54043c`](https://github.com/xiaruize0911/MoDiff/commit/b54043c) — conv_epilogue vectorization + dead-code removal (Section 8)
+- [`5cbeeb4`](https://github.com/xiaruize0911/MoDiff/commit/5cbeeb4) — memory profiling, final synthesis (Section 9-10)
+- [`269f2c6`](https://github.com/xiaruize0911/MoDiff/commit/269f2c6) — layout_transform vectorization (Section 8)
