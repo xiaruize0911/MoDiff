@@ -2,7 +2,7 @@
 
 **GPU:** NVIDIA A40 (48 GB, SM 8.6) · **PyTorch:** 2.4.1+cu124 · **CUDA:** 12.4
 **Model:** LSUN-Churches LDM-8 UNet (unconditional, 256×256) · **Batch:** 128 · **Sampler:** DDIM, 200 steps
-**Date:** 2026-07-28 (refreshed after the int4 ahat-cache fix and a categorization-script correction, see below) · repo: `feat/conv-attn-epilogue-fusion` @ [`c80f2b3`](https://github.com/xiaruize0911/MoDiff/commit/c80f2b3)
+**Date:** 2026-07-28 (final refresh: noahat-kernel + conv_epilogue vectorization, memory profiling) · repo: `feat/conv-attn-epilogue-fusion` @ [`b54043c`](https://github.com/xiaruize0911/MoDiff/commit/b54043c)
 
 **5 modes:** `fp16`, `int8_baseline`, `int4_baseline`, `int8_modiff`, `int4_modiff`. int8/int4 use the
 fused-flash quantized attention kernel; `_modiff` adds the temporal-delta conv cache.
@@ -130,8 +130,8 @@ survey of `integration/fused_ops/`), turns up concrete fusion-actionable categor
 |---|--:|--:|--:|--:|---|
 | GN+quantize fused (K1 path) | 21.9 | 19.8 | 14.7 | 13.1 | already maximally fused |
 | GN stats (modiff reduction) | — | — | 11.1 | 12.2 | unfused; vectorizing it was attempted and reverted (numerically unsafe, see Section 3) |
-| Updown-block GN+quantize gap | 2.5 | 5.5 | 1.8 | 6.1 | **real gap**: `_prequant_gn_conv` skips `updown=True` ResBlocks |
-| Ahat-cache update (modiff) | — | — | 1.4 | 1.5 | fixed this round (see below) |
+| Updown-block GN+quantize gap | 2.5 | 5.5 | 1.8 | 6.1 | **mostly unavoidable GN cost, not a real gap** — see correction in Section 8 |
+| Ahat-cache update (modiff) | — | — | 1.4 | 1.5 | int4 variant fixed this round (Section 8) |
 | Attention quantize (standalone) | 5.5 | 5.7 | 5.5 | 6.3 | already assessed not worth a custom kernel (FLOP analysis, earlier session) |
 | Resize (avg_pool/upsample) | 3.8 | 3.8 | 3.8 | 4.2 | unfused; no existing fusion kernel covers this model's up/down path |
 | Skip-connection concat | 2.6 | 2.6 | 2.6 | 2.9 | unfused; flat cost in every quantized mode |
@@ -170,11 +170,10 @@ None of these have been fixed yet — listed here for triage, ranked by how load
   freeze "use fp16 SDPA" on blocks where, under the MATH baseline every accuracy number in this repo was
   measured against, the int8/int4 flash kernel would have won. Worth a test that pins both flags
   together and checks the autotune's decision doesn't silently flip.
-- **Two fp32-`a_hat_cache` kernel variants (`static_quantize_and_update_ahat_kernel_int8` /
-  `static_quantize_pack_and_update_ahat_kernel_int4`) look unreachable in production** — the calibrated
-  hot path always uses fp16 cache once `is_calibrated=True`, and the static-scale kernels only fire
-  once calibrated. Either confirm dead and delete, or find the live path (in which case it's a missed
-  vectorization target, not the dead code it appears to be).
+- **Resolved this round:** the two fp32-`a_hat_cache` kernel variants (`static_quantize_and_update_ahat_kernel_int8`
+  / `static_quantize_pack_and_update_ahat_kernel_int4`) are confirmed unreachable from the production
+  inference path (calibrated hot path always uses fp16 cache) but are NOT dead code — they're exercised
+  by `analysis_int4_vs_int8/04_all_conv_sizes_fp32_compare.py`, an offline analysis script. Left as-is.
 
 **Test-coverage gaps (all currently untested, ranked by exposure):**
 - The **dynamic (cache-free) quantize path** — `sub_absmax_scale_kernel`, `dynamic_quantize_int8_fprop`,
@@ -191,32 +190,140 @@ None of these have been fixed yet — listed here for triage, ranked by how load
 - `groups > 1` conv support is confirmed **fully dead code** (the UNet never passes `groups=`) —
   informational only, not worth testing.
 
-**Other unvectorized memory-bound kernels (same low-risk class as this session's quantize-kernel work,
-but outside the 3 files already covered):**
+**Resolved this round:**
 - `csrc/kernels/conv/conv_epilogue.cu`'s `scale_accumulate_half_cache_kernel` / `_residual_half_cache` /
-  `scale_store_half_kernel` — pure per-element `o = acc*scale [+ residual]`, no reduction, called once
-  per quantized Conv2d layer in every ResBlock, every step — the widest-reach unvectorized kernel found.
-  The same file already has a working `float4` pattern for the fp32-cache siblings to copy.
+  `scale_store_half_kernel` are now vectorized (Section 8) — but tracing the actual Python dispatch
+  logic (not just static call-site counts) revealed they're **not on this model's hot path**: the
+  calibrated case always routes through the CUTLASS EVT deep-fuse kernel instead, and this model's
+  channel counts are always `%8==0` so the scalar-store fallback never fires either. A real, verified
+  fix with zero measured impact for this model. See Section 8 for the full story.
+- `aq_qtok_packed_static_kernel` and the non-tiled `aq_vquant_trans_packed_kernel` in `attn_quant_gemm.cu`
+  were confirmed dead (zero launch sites) and removed.
+
+**Still open, lower priority:**
 - `csrc/kernels/util/layout_transform.cu`'s NCW↔CL transpose/quantize kernels — called twice per
-  AttentionBlock per step (QKV-proj input, output-proj output), still scalar.
-- Lower priority: several `attn_quant_gemm.cu` kernels (`aq_vquant_trans_kernel`, `from_i8_qtok/vtrans`)
-  only fire on non-default/opt-in paths (calibration warmup, `MODIFF_ROUTE1=1`); `aq_qtok_packed_static_kernel`
-  and the non-tiled `aq_vquant_trans_packed_kernel` appear to be **dead code** (no launch site found).
+  AttentionBlock per step. Investigated (Section 6 of the earlier round): these already achieve full
+  warp coalescing via a shared-memory tile transpose, so this is NOT the same "swap scalar load for
+  vector load" pattern as everything else vectorized this session — halving the per-thread element
+  count would require restructuring the tile-index math itself (real risk of a silent wrong-transpose
+  bug, not just a missed-alignment crash). Deferred.
+- Several `attn_quant_gemm.cu` kernels (`aq_vquant_trans_kernel`, `from_i8_qtok/vtrans`) only fire on
+  non-default/opt-in paths (calibration warmup, `MODIFF_ROUTE1=1`) — low priority given limited exposure.
 
 ---
 
-## 7. Correctness
+## 8. This round's fixes: the corrected "updown-block gap" and conv_epilogue
+
+Section 5's original "updown-block GN+quantize gap" (2.5-6.1ms/step) turned out to be a **mis-measurement**,
+caught by tracing the exact kernels involved rather than trusting the earlier category label:
+
+- The bucket lumped together `group_norm_silu_nhwc_kernel` (the plain, unavoidable GN+SiLU cost every
+  updown ResBlock pays — fused or not, this work has to happen) with the genuinely-fixable standalone
+  quantize step. Since resize sits physically between GN+SiLU and quantize for these blocks, GN can
+  never be fused with quantize here regardless of kernel work — so most of that 2.5-6.1ms was never
+  fusable overhead to begin with.
+- The true fixable piece was much smaller: for up-transition blocks (nearest-upsample, autocast-forced
+  to fp32), the quantize step already used an already-vectorized kernel (`scale_quantize_int8_kernel`,
+  float4). For down-transition blocks (avg_pool, stays fp16), it used `static_quantize_int8_noahat_kernel`
+  / `static_quantize_pack_int4_noahat_kernel` — genuinely scalar, and missed by the original
+  vectorization sweep (which covered the `*_update_ahat` cache-bearing kernels but not this cache-free
+  "noahat" family used by the baseline path). **Fixed**: added `_vec2` counterparts, same safe
+  non-reduction pattern, gated on `num_channels % 2 == 0`. Verified: 24/24 capture-compare cases
+  bit-identical, full gate suite `ALL PASS`, whole-model `rel_err=0.0000` on all 5 modes.
+  Measured effect: real but small (well under 1ms/step) — this was always a low-payoff item.
+
+**conv_epilogue.cu vectorization** (`scale_accumulate_half_cache_kernel`, `_residual_half_cache`,
+`scale_store_half_kernel` → `_vec2`): implemented and fully verified, but tracing the actual Python
+dispatch (`int8_optimized.py`/`int4_optimized.py`) revealed these are **not on this model's hot path**.
+The calibrated case always routes through the CUTLASS EVT deep-fuse kernel (`conv2d_int8_evt_o_hat`)
+instead — a single fused kernel that does dequant+accumulate inside the GEMM epilogue itself, with no
+separate post-processing launch at all. Cross-checked against every kernel actually seen in this
+session's profiling data across all 4 quantized modes: **zero occurrences** of any
+`scale_accumulate*`/`scale_store*` kernel. This is a genuine, correct optimization — kept because it's
+free and would matter for a config with `out_channels % 8 != 0` or during uncalibrated warmup — but it
+is **not a measured win** for the LSUN-Churches UNet this report benchmarks. Worth flagging as a lesson:
+an earlier code-survey pass had called this "the widest-reach unvectorized kernel found" based on static
+call-site counts, which missed the runtime `if calibrated: EVT else: fallback` branch entirely.
+
+---
+
+## 9. Peak memory
+
+![peak memory](plots/fig_memory.png)
+
+| mode | peak allocated (tensors) | peak reserved (VRAM footprint) |
+|---|--:|--:|
+| fp16 | 7.7 GB | 9.7 GB |
+| int8_baseline | 4.7 GB | 8.9 GB |
+| int4_baseline | 4.6 GB | 9.1 GB |
+| int8_modiff | 6.1 GB | 13.3 GB |
+| int4_modiff | 5.8 GB | 13.5 GB |
+
+Quantization roughly halves the actual tensor memory (**allocated**) versus fp16, as expected (int8/int4
+activations and weights are 2-4× smaller than fp16). But the **reserved** VRAM footprint tells a
+different story: `_modiff` modes reserve *more* VRAM than even fp16 (13.3-13.5 GB vs 9.7 GB), despite
+holding *less* actual tensor data than fp16. This is the persistent per-layer `a_hat_cache`/`o_hat_cache`
+temporal-delta buffers (35 ResBlocks' worth, resident for the whole `sample()` call) — PyTorch's caching
+allocator reserves memory for these long-lived buffers and can't easily reuse/compact around them the
+way it does for the short-lived activation tensors in `_baseline`/`fp16` mode, so the gap between
+allocated and reserved is much wider for `_modiff` (7.2/7.7 GB gap vs 4.2/4.5 GB for baseline, 2.0 GB
+for fp16). This is the real memory-vs-accuracy tradeoff of the MoDiff temporal-caching approach: it
+costs more peak VRAM, not less, despite using a lower-precision datatype than fp16.
+
+---
+
+## 10. Summary: how close to "theoretical fastest"?
+
+Pulling every section together, here's what's been fused, what's been ruled out, and why:
+
+**Fused / already at the safe ceiling:**
+- GN+SiLU+quantize for all non-updown ResBlocks (K1 fusion, pre-existing) — vectorized this session.
+- MoDiff temporal-delta apply + quantize + cache-update, for both int8 and int4 (this session).
+- The cache-free "noahat" static quantize kernels for updown ResBlocks (this session, Section 8).
+- Bias+residual folded into GEMM/conv epilogues where the shape permits (pre-existing EVT/deep-fuse
+  kernels this session traced and confirmed are the actual hot path).
+- The custom int8/int4 flash attention kernel (pre-existing, out of scope — already the fastest
+  practical option per an earlier FLOP-based analysis in this project's history).
+
+**Correctly NOT fused, with a specific technical reason each:**
+- **GN stats reduction** (Section 3, Section 8): a single-pass rewrite would require a different
+  summation algorithm than the current sum/sumsq two-pass approach, and this file's own code comment
+  plus this session's own Cycle-3 experiment both confirm even much smaller reorderings flip int8 codes
+  under this project's bit-exact correctness bar. Not a missing optimization — a correctly-declined one.
+- **Skip-connection concat** (Section 6): eliminating it needs a two-source GroupNorm kernel variant
+  across the full combinatorial matrix of existing fusion paths (int8/int4 × modiff/baseline ×
+  modulation × smoothquant) — large, well-scoped, but not attempted this session for time reasons.
+- **Resize+quantize/conv fusion** (Section 6): nearest-upsample could reorder with quantize (order-safe);
+  avg_pool cannot (would compound quantization error). Either direction needs new CUTLASS im2col-level
+  engineering for a payoff of ~1-4ms/step.
+- **layout_transform.cu** (this section, Section 6): already fully warp-coalesced; the remaining
+  ~2× bandwidth opportunity needs a genuine transpose-index restructuring, not a load-width swap.
+
+**The actual ceiling for this codebase, given its own correctness bar:** Attention (36-47ms/step) and
+the unavoidable GroupNorm cost are the floor — quantization cannot touch attention's flash kernel
+further (already optimal per prior FLOP analysis) and cannot touch GN's reduction without risking
+silent int8/int4 code drift. Conv and GEMM are already compressed 3-6×. The remaining unfused items
+(skip-concat, resize) are real but bounded to single-digit milliseconds each, and require substantially
+more engineering than anything else fused this session — they are documented, scoped, and available as
+follow-up work, not abandoned.
+
+---
+
+## 11. Correctness
 
 - **Kernel-level:** `integration/tests/test_kernel_correctness.py`,
   `docs/benchmark_5mode_2026-07-20/scripts/gn_modiff_verify_kernel.py` / `_realinput.py`,
-  `docs/flash_attention_2026-07-19/scripts/test_packed_quant.py`, plus three new capture-vs-compare
-  scripts under `scripts/vectorize_verify/` — all `ALL PASS`, zero diffs.
+  `docs/flash_attention_2026-07-19/scripts/test_packed_quant.py`, plus capture-vs-compare scripts under
+  `scripts/vectorize_verify/` — all `ALL PASS`, zero diffs, run fresh after every rebuild this session.
 - **Whole-model:** `integration/tests/e2e_output_check.py --compare` (seeded DDIM output) shows
-  **`rel_err = 0.0000` for every one of the 5 modes** — bit-identical end-to-end output. The speedup in
-  Section 3 is free; it is not a quality tradeoff.
+  **`rel_err = 0.0000` for every one of the 5 modes**, checked after every kernel change — bit-identical
+  end-to-end output throughout. Every speedup in this report is free; none of it is a quality tradeoff.
 
 ## Commits
 
 - [`13df347`](https://github.com/xiaruize0911/MoDiff/commit/13df347) — SDPA backend re-read-per-call fix (the fairness issue referenced in Section 1's caveat)
 - [`dad8dfb`](https://github.com/xiaruize0911/MoDiff/commit/dad8dfb) — quantize kernel vectorization (Section 3)
 - [`c80f2b3`](https://github.com/xiaruize0911/MoDiff/commit/c80f2b3) — int4 ahat-cache vectorization fix (Section 5)
+- [`1e7f05c`](https://github.com/xiaruize0911/MoDiff/commit/1e7f05c) — Conv/GEMM categorization fix, refreshed benchmarks (Section 2)
+- [`663210a`](https://github.com/xiaruize0911/MoDiff/commit/663210a) — noahat quantize kernel vectorization, corrected updown-gap analysis (Section 8)
+- [`b54043c`](https://github.com/xiaruize0911/MoDiff/commit/b54043c) — conv_epilogue vectorization + dead-code removal (Section 8)
