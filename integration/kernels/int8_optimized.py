@@ -343,28 +343,6 @@ class OptimizedInt8Conv2d(nn.Module):
             out = out + self.bias
         return out
 
-    def _int8_conv_fused(self, x: torch.Tensor, scale: torch.Tensor, inv_scale: torch.Tensor) -> torch.Tensor:
-        """Optimized INT8 conv for modulated path: scale and inv_scale already computed on GPU.
-        No .item() sync, no 1/scale computation kernel. Uses device pointer alpha for CUTLASS.
-        Returns RAW (unscaled) CUTLASS output — caller applies weight_scale_channel via scale_accumulate.
-        """
-        if not x.is_contiguous(memory_format=torch.channels_last):
-            x = x.contiguous(memory_format=torch.channels_last)
-        x_int8 = modiff_cutlass.scale_quantize_int8(x, scale)
-
-        if self._empty_bias is None or self._empty_bias.device != x.device:
-            self._empty_bias = torch.empty(0, device=x.device)
-
-        return modiff_cutlass.conv2d_int8_fprop(
-            x_int8,
-            self.weight_int8,
-            inv_scale.view(1),
-            self._empty_bias,
-            self.stride[0], self.stride[1],
-            self.padding[0], self.padding[1],
-            self.dilation[0], self.dilation[1]
-        )
-
     # ==================================================================
     # Forward paths
     # ==================================================================
@@ -1223,9 +1201,6 @@ class CalibrationConfig:
     def update(self, layer_name: str, scale: float):
         self.scales[layer_name] = float(scale)
 
-    def get_scale(self, layer_name: str):
-        return self.scales.get(layer_name, None)
-
     def load(self, path):
         self.scales = torch.load(path, weights_only=True)
         self.is_calibrated = True
@@ -1323,19 +1298,3 @@ def apply_static_scales(model, *args, **kwargs):
     _calib_config.is_calibrated = True
     return loaded
 
-
-# Stubs for backward compatibility with benchmark_ldm.py
-def convert_model_to_optimized_int8_static(model, sample_inputs=None, num_timesteps=None, device='cuda', **kwargs):
-    model = convert_model_to_optimized_int8(model)
-    if sample_inputs is not None and len(sample_inputs) > 0:
-        set_calibrating(model, True)
-        with torch.no_grad():
-            for x in sample_inputs[:16]:
-                t = torch.randint(0, 1000, (x.shape[0],), device=x.device)
-                _ = model(x, t, None)
-        set_calibrating(model, False)
-    return model
-
-
-def calibrate_int8_static_scales(model, *args, **kwargs):
-    return export_int8_static_scales(model)

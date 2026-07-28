@@ -175,11 +175,6 @@ class OptimizedInt4Conv2d(nn.Module):
     def _cache_dtype(self) -> torch.dtype:
         return torch.float16 if self.is_calibrated else torch.float32
 
-    def _new_cache_like(self, tensor: torch.Tensor) -> torch.Tensor:
-        return torch.zeros(
-            tensor.shape, device=tensor.device, dtype=self._cache_dtype()
-        ).contiguous(memory_format=torch.channels_last)
-
     def _module_output(self) -> torch.Tensor:
         # See OptimizedInt8Conv2d._module_output: forcing fp32 here just to have
         # the next fp16-autocast op cast back down again is a wasted full-tensor
@@ -321,28 +316,6 @@ class OptimizedInt4Conv2d(nn.Module):
         if with_bias and self.bias is not None:
             out = out + self.bias
         return out
-
-    def _int4_conv_fused(self, x: torch.Tensor, scale: torch.Tensor, inv_scale: torch.Tensor) -> torch.Tensor:
-        """Optimized INT4 conv for modulated path: scale and inv_scale already computed on GPU.
-        No .item() sync, no 1/scale computation kernel. Uses device pointer alpha for CUTLASS.
-        Returns RAW (unscaled) CUTLASS output — caller applies weight_scale_channel via scale_accumulate.
-        """
-        if not x.is_contiguous(memory_format=torch.channels_last):
-            x = x.contiguous(memory_format=torch.channels_last)
-        x_packed = modiff_cutlass.scale_quantize_and_pack(x, scale)
-
-        if self._empty_bias is None or self._empty_bias.device != x.device:
-            self._empty_bias = torch.empty(0, device=x.device)
-
-        return modiff_cutlass.conv2d_int4_fprop(
-            x_packed,
-            self.weight_packed,
-            inv_scale.view(1),
-            self._empty_bias,
-            self.stride[0], self.stride[1],
-            self.padding[0], self.padding[1],
-            self.dilation[0], self.dilation[1]
-        )
 
     # ==================================================================
     # Forward paths

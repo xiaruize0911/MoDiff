@@ -325,7 +325,7 @@ __global__ void group_norm_silu_quantize_nhwc_kernel(
 // the per-thread index partition and hence fp32 summation order, which is a real
 // numerics risk kept isolated to its own gated cycle). Only pass 2 (apply+quantize,
 // order-independent) is vectorized, using the same pair-major index math
-// group_norm_silu_quantize_pack_nhwc_kernel's pass 2 already uses. Caller (the host
+// group_norm_silu_quantize_pack_nhwc_vec2_kernel's pass 2 already uses. Caller (the host
 // wrapper) only dispatches here when CPG is even, so a channel pair never straddles a
 // group boundary and shares one mean/inv_std.
 template <typename TIn>
@@ -396,7 +396,7 @@ __global__ void group_norm_silu_quantize_nhwc_vec2_kernel(
     const float scale = *scale_ptr;
 
     // Pass 2: pair-major (vectorized). One thread handles a (even,odd) channel pair at
-    // one spatial position -- same index math as group_norm_silu_quantize_pack_nhwc_kernel's
+    // one spatial position -- same index math as group_norm_silu_quantize_pack_nhwc_vec2_kernel's
     // pass 2, but writes two UNPACKED int8 bytes (one int16 store) instead of one nibble byte.
     const int HALF_CPG = CPG / 2;
     const long pairs = group_size / 2;
@@ -554,6 +554,24 @@ torch::Tensor group_norm_silu_quantize_nhwc(
 }
 
 // ============================================================================
+// STATUS: built, verified correct, measured faster -- but NOT currently reachable from
+// Python, by design. Not dead code; do not delete.
+//
+//   Validated (docs/comprehensive_benchmark_2026-07-15/REPORT.md §"int8-conv-output"):
+//   matches the fp16-input path to <=1 int8 code on 100% of elements, and runs
+//   ~1.03-1.09x faster (it reads half the bytes). Quality of the conv->int8->GN handoff
+//   was separately measured via the MODIFF_CONV_INT8_OUT fake-quant probe in
+//   integration/fused_ops/fused_resblock.py: only +0.0023..0.0033 rel-err, far inside the
+//   0.02 gate. So both halves of the idea check out.
+//
+//   Blocked on the CONV side, not here: to feed this kernel, the upstream conv must write
+//   int8 directly. The existing int8-output path (forward_to_int8 -> relu_requant)
+//   materializes an fp16 scratch tensor first, so end-to-end it moves MORE bytes, not fewer
+//   (measured 0.83-0.97x, i.e. a slowdown). Realizing the win needs a direct-int8-output
+//   CUTLASS conv epilogue (int32 acc -> dequant -> round/clamp -> int8, no fp16 scratch),
+//   whose mixed-type output is non-trivial in CUTLASS. Projected e2e gain ~2%; deferred as
+//   a low effort/payoff item. This kernel is the finished half, kept ready for that day.
+// ============================================================================
 // INT8-INPUT variant of group_norm_silu_quantize_nhwc: reads an int8 activation
 // (the upstream conv's int8 output) + a scalar dequant scale, so the conv->GN
 // handoff never materializes an fp16 tensor (halves that write + this read). The
@@ -693,118 +711,22 @@ torch::Tensor group_norm_silu_dequant_quantize_nhwc(
     return yq;
 }
 
-// INT4-emitting variant: identical GroupNorm(+SiLU) math, but pass 2 quantizes to
-// int4 codes in [-7,7] and packs adjacent-channel pairs into one byte, producing
-// output byte-identical to scale_quantize_and_pack(SiLU(GN(x)), scale) so the
-// following calibrated INT4 conv can read it directly. Packing is along the
-// (contiguous) NHWC channel dim: byte = flat_element/2, low nibble = even channel,
-// high nibble = odd channel -- exactly quantize.cu::scale_quantize_pack_kernel's
-// convention. Requires channels-per-group (CPG) even so a channel pair never
-// straddles a group boundary (both channels then share one group's mean/inv_std);
-// the host wrapper enforces this and the Python caller gates on it, falling back
-// to the two-kernel path otherwise.
-template <typename TIn>
-__global__ void group_norm_silu_quantize_pack_nhwc_kernel(
-    const TIn* __restrict__ X,
-    int8_t* __restrict__ Yqp,         // [N, H, W, C/2] packed int4, channels_last-flat
-    const TIn* __restrict__ gamma,
-    const TIn* __restrict__ beta,
-    const TIn* __restrict__ mod_scale, // [N, C] scale-shift modulation, or nullptr
-    const TIn* __restrict__ mod_shift,
-    const float* __restrict__ scale_ptr,
-    const float* __restrict__ smooth_inv,
-    int C,
-    long HW,
-    int G,
-    float eps,
-    bool apply_silu
-) {
-    const int CPG = C / G;
-    const long group_size = (long)CPG * HW;
-
-    const int n = blockIdx.x / G;
-    const int g = blockIdx.x % G;
-    const int c_start = g * CPG;
-
-    const TIn* x_base = X + (long)n * HW * C;
-    int8_t* yqp_base = Yqp + (long)n * ((HW * (long)C) / 2);  // packed bytes per sample
-
-    extern __shared__ float sdata[];
-    float* s_sum = sdata;
-    float* s_sumsq = sdata + blockDim.x;
-
-    // Pass 1: sum + sum-of-squares over this (sample, group).
-    float local_sum = 0.0f, local_sumsq = 0.0f;
-    for (long idx = threadIdx.x; idx < group_size; idx += blockDim.x) {
-        int c_local = idx % CPG;
-        long hw = idx / CPG;
-        long mem_idx = hw * C + c_start + c_local;
-        float v = gn_load(x_base, mem_idx);
-        local_sum += v;
-        local_sumsq += v * v;
-    }
-    s_sum[threadIdx.x] = local_sum;
-    s_sumsq[threadIdx.x] = local_sumsq;
-    __syncthreads();
-    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
-        if (threadIdx.x < s) {
-            s_sum[threadIdx.x] += s_sum[threadIdx.x + s];
-            s_sumsq[threadIdx.x] += s_sumsq[threadIdx.x + s];
-        }
-        __syncthreads();
-    }
-    __shared__ float mean_s, inv_std_s;
-    if (threadIdx.x == 0) {
-        float mean = s_sum[0] / (float)group_size;
-        float var = s_sumsq[0] / (float)group_size - mean * mean;
-        var = fmaxf(var, 0.0f);
-        mean_s = mean;
-        inv_std_s = rsqrtf(var + eps);
-    }
-    __syncthreads();
-    const float mean = mean_s;
-    const float inv_std = inv_std_s;
-    const float scale = *scale_ptr;
-
-    // Pass 2: one thread per output byte = one (even,odd) channel pair at a
-    // spatial position. c_start and C are both even (CPG even), so the even
-    // channel's flat index mem_idx0 is even and byte = mem_idx0/2.
-    const int HALF_CPG = CPG / 2;
-    const long pairs = group_size / 2;   // = HALF_CPG * HW
-    for (long pidx = threadIdx.x; pidx < pairs; pidx += blockDim.x) {
-        int cpair = pidx % HALF_CPG;
-        long hw = pidx / HALF_CPG;
-        int c_global0 = c_start + 2 * cpair;
-        long mem_idx0 = hw * (long)C + c_global0;
-
-        float v0 = gn_load(x_base, mem_idx0);
-        float v1 = gn_load(x_base, mem_idx0 + 1);
-        float w0 = gn_load(gamma, c_global0),     b0 = gn_load(beta, c_global0);
-        float w1 = gn_load(gamma, c_global0 + 1), b1 = gn_load(beta, c_global0 + 1);
-        float n0 = (v0 - mean) * inv_std * w0 + b0;
-        float n1 = (v1 - mean) * inv_std * w1 + b1;
-        if (mod_scale != nullptr) {
-            long midx0 = (long)n * C + c_global0;
-            n0 = n0 * (1.0f + gn_load(mod_scale, midx0))     + gn_load(mod_shift, midx0);
-            n1 = n1 * (1.0f + gn_load(mod_scale, midx0 + 1)) + gn_load(mod_shift, midx0 + 1);
-        }
-        float o0 = apply_silu ? (n0 / (1.0f + expf(-n0))) : n0;
-        float o1 = apply_silu ? (n1 / (1.0f + expf(-n1))) : n1;
-        if (smooth_inv != nullptr) {
-            o0 *= smooth_inv[c_global0];
-            o1 *= smooth_inv[c_global0 + 1];
-        }
-        int8_t i0 = (int8_t)fmaxf(-7.0f, fminf(7.0f, roundf(o0 * scale)));
-        int8_t i1 = (int8_t)fmaxf(-7.0f, fminf(7.0f, roundf(o1 * scale)));
-        yqp_base[mem_idx0 / 2] = (int8_t)((i0 & 0x0F) | ((i1 & 0x0F) << 4));
-    }
-}
-
-// Vectorized (half2/float2) counterpart of group_norm_silu_quantize_pack_nhwc_kernel.
-// The scalar kernel's pass 2 is ALREADY pair-major (one thread per output byte = one
-// channel pair), so this only replaces the per-pair scalar loads with gn_load2 calls --
-// no loop restructuring needed. Pass 1 is untouched/identical (same Cycle-3 deferral
-// rationale as the non-pack kernel above).
+// INT4-emitting GroupNorm(+SiLU)+quantize+pack, half2/float2-vectorized.
+//
+// Identical GroupNorm(+SiLU) math to group_norm_silu_quantize_nhwc_vec2_kernel, but pass 2
+// quantizes to int4 codes in [-7,7] and packs adjacent-channel pairs into one byte, producing
+// output byte-identical to scale_quantize_and_pack(SiLU(GN(x)), scale) so the following
+// calibrated INT4 conv can read it directly. Packing is along the (contiguous) NHWC channel
+// dim: byte = flat_element/2, low nibble = even channel, high nibble = odd channel -- exactly
+// quantize.cu::scale_quantize_pack_kernel's convention.
+//
+// Requires channels-per-group (CPG) even, so a channel pair never straddles a group boundary
+// (both channels then share one group's mean/inv_std); the host wrapper enforces this and the
+// Python caller gates on it, falling back to the two-kernel path otherwise. Pass 2 is
+// naturally pair-major (one thread per output byte = one channel pair), so vectorizing it
+// needed no loop restructuring -- just gn_load2 in place of per-element loads. Pass 1 (the
+// stats reduction) is deliberately NOT vectorized: see the Cycle-3 note on
+// gn_group_stats_vec2_kernel below.
 template <typename TIn>
 __global__ void group_norm_silu_quantize_pack_nhwc_vec2_kernel(
     const TIn* __restrict__ X,
@@ -1100,9 +1022,16 @@ __global__ void gn_group_stats_kernel(
     }
 }
 
-// CYCLE 3 (attempted, REVERTED -- kept here unreferenced as documented history, same
-// convention as aq_vquant_trans_packed_kernel above its _tiled replacement): pair-major
-// vectorized counterpart of gn_group_stats_kernel. Reassigns which elements each thread
+// ============================================================================
+// UNREFERENCED ON PURPOSE -- do not wire this in. This is a FAILED experiment kept as
+// executable documentation of *why* the GN stats reduction stays scalar.
+//
+// Retention rule for this codebase: a superseded-but-correct scalar kernel is deleted once
+// its vectorized replacement ships (git history has it). A kernel is only kept unreferenced
+// when the *reason it isn't used* is a correctness finding worth not rediscovering -- this
+// one, and it alone, meets that bar.
+//
+// What it is: pair-major vectorized counterpart of gn_group_stats_kernel. Reassigns which elements each thread
 // sums (pair-major instead of strided-across-threads), which changes fp32 addition
 // order vs the scalar kernel. This file's OWN comment above already documented that a
 // MUCH smaller perturbation (a one-line fmaxf reordering) previously flipped occasional
@@ -1356,7 +1285,7 @@ __global__ void gn_apply_delta_quantize_flat_kernel(
 }
 
 // Vectorized (half2/float2) counterpart of gn_apply_delta_quantize_flat_kernel. Pair-major
-// grid-stride loop, mirroring the structure gn_apply_delta_quantize_pack_flat_kernel below
+// grid-stride loop, mirroring the structure gn_apply_delta_quantize_pack_flat_vec2_kernel below
 // already uses. gamma/beta/mod_scale/mod_shift/a_hat_cache all read/written via one gn_load2/
 // gn_store2 call per pair instead of two scalar calls; the two output int8 codes are packed
 // into one int16 store. Requires CPG even (so a pair's c0/c0+1 always share one group and
@@ -1522,67 +1451,14 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc(
     return yq;
 }
 
-// Kernel 2 (int4): flat, coalesced counterpart of gn_apply_delta_quantize_flat_kernel
-// that quantizes the delta to [-7,7] and packs adjacent channel pairs (even -> low
-// nibble, odd -> high) into one byte, matching group_norm_silu_quantize_pack_nhwc's
-// layout and step1_static_quantize_pack_int4_fprop_silu's semantics. One thread per
-// pair; base is even and channels-per-group is even, so a pair never straddles a
-// group boundary (both channels share group c0/CPG).
-template <typename TIn>
-__global__ void gn_apply_delta_quantize_pack_flat_kernel(
-    const TIn* __restrict__ X,
-    __half* __restrict__ a_hat_cache,     // [N,H,W,C] fp16 channels_last, in place
-    int8_t* __restrict__ Yqp,             // [N,H,W,C/2] packed int4
-    const TIn* __restrict__ gamma,
-    const TIn* __restrict__ beta,
-    const TIn* __restrict__ mod_scale,    // [N,C] or nullptr
-    const TIn* __restrict__ mod_shift,
-    const float* __restrict__ mean_in,    // [N*G]
-    const float* __restrict__ inv_std_in, // [N*G]
-    const float* __restrict__ scale_ptr,
-    const float* __restrict__ smooth_inv, // [C] or nullptr
-    int C, int G, long sample_stride, long num_elements, bool apply_silu
-) {
-    const int CPG = C / G;
-    const float scale = *scale_ptr;
-    const float inv_scale = 1.0f / scale;
-    const long stride = (long)blockDim.x * gridDim.x;
-    for (long base = 2 * ((long)blockIdx.x * blockDim.x + threadIdx.x);
-         base < num_elements; base += 2 * stride) {
-        int c0 = (int)(base % C);          // even; c0 and c0+1 are in the same group
-        long n = base / sample_stride;
-        long stats_idx = n * G + (c0 / CPG);
-        float mean = mean_in[stats_idx];
-        float inv_std = inv_std_in[stats_idx];
-
-        // Three-temp form per lane, matching group_norm_silu_nhwc_kernel's pass 2.
-        float v0 = gn_load(X, base),     w0 = gn_load(gamma, c0),     b0 = gn_load(beta, c0);
-        float v1 = gn_load(X, base + 1), w1 = gn_load(gamma, c0 + 1), b1 = gn_load(beta, c0 + 1);
-        float n0 = (v0 - mean) * inv_std * w0 + b0;
-        float n1 = (v1 - mean) * inv_std * w1 + b1;
-        if (mod_scale != nullptr) {
-            long midx = n * C + c0;
-            n0 = n0 * (1.0f + gn_load(mod_scale, midx))     + gn_load(mod_shift, midx);
-            n1 = n1 * (1.0f + gn_load(mod_scale, midx + 1)) + gn_load(mod_shift, midx + 1);
-        }
-        float o0 = apply_silu ? gns_silu(__half2float(__float2half(n0))) : __half2float(__float2half(n0));
-        float o1 = apply_silu ? gns_silu(__half2float(__float2half(n1))) : __half2float(__float2half(n1));
-        if (smooth_inv != nullptr) { o0 *= smooth_inv[c0]; o1 *= smooth_inv[c0 + 1]; }
-        float c0v = __half2float(a_hat_cache[base]);
-        float c1v = __half2float(a_hat_cache[base + 1]);
-        float q0 = fmaxf(-7.0f, fminf(7.0f, roundf((o0 - c0v) * scale)));
-        float q1 = fmaxf(-7.0f, fminf(7.0f, roundf((o1 - c1v) * scale)));
-        a_hat_cache[base]     = __float2half_rn(c0v + q0 * inv_scale);
-        a_hat_cache[base + 1] = __float2half_rn(c1v + q1 * inv_scale);
-        int8_t i0 = (int8_t)q0, i1 = (int8_t)q1;
-        Yqp[base / 2] = (int8_t)((i0 & 0x0F) | ((i1 & 0x0F) << 4));
-    }
-}
-
-// Vectorized (half2/float2) counterpart of gn_apply_delta_quantize_pack_flat_kernel. The
-// scalar kernel's loop is ALREADY pair-major (one thread per output byte = one channel
-// pair) -- this only replaces the per-pair scalar loads/stores with gn_load2/gn_store2
-// calls, no loop restructuring needed.
+// Kernel 2 (int4), half2/float2-vectorized: flat, coalesced MoDiff delta-quantize that
+// packs adjacent channel pairs (even -> low nibble, odd -> high) into one byte, matching
+// group_norm_silu_quantize_pack_nhwc's layout and
+// step1_static_quantize_pack_int4_fprop_silu's semantics. One thread per pair; base is even
+// and channels-per-group is even, so a pair never straddles a group boundary (both channels
+// share group c0/CPG). The loop is naturally pair-major (one thread per output byte), so
+// vectorizing it needed no restructuring -- just gn_load2/gn_store2 in place of per-element
+// accesses.
 template <typename TIn>
 __global__ void gn_apply_delta_quantize_pack_flat_vec2_kernel(
     const TIn* __restrict__ X,

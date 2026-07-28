@@ -50,9 +50,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 # --- int8-conv-output quality probe (MODIFF_CONV_INT8_OUT = pt | pc) --------------
-# Fake-quant the in_conv fp16 output through int8 before the out-norm GN reads it,
-# to measure the quality ceiling of "conv writes int8 -> GN reads int8" BEFORE
-# building the CUDA kernel. pt = per-tensor scale, pc = per-output-channel scale.
+# Fake-quant the in_conv fp16 output through int8 before the out-norm GN reads it, to
+# measure the quality ceiling of "conv writes int8 -> GN reads int8". pt = per-tensor
+# scale, pc = per-output-channel scale. Off unless the env var is set.
+#
+# STATUS: this probe already returned its answer -- quality is fine (+0.0023..0.0033
+# rel-err, far inside the 0.02 gate), and the GN half of the fusion was then built and
+# verified (group_norm_silu_dequant_quantize_nhwc in csrc/kernels/norm/group_norm_silu.cu,
+# see its STATUS comment). The blocker is the CONV half: it needs a direct-int8-output
+# CUTLASS epilogue, without which the handoff moves more bytes than it saves. Kept because
+# it is the measurement harness for that remaining work, not leftover debugging.
 _CONV_INT8_OUT = os.environ.get("MODIFF_CONV_INT8_OUT", "")
 def _fake_quant_int8_out(h):
     if _CONV_INT8_OUT == "pt":
