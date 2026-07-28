@@ -1,0 +1,92 @@
+{
+  "fp16": {
+    "ms_step": 210.2,
+    "min_ms": 208.65,
+    "speedup_vs_fp16": 1.0,
+    "category_pct": {
+      "attention_sdpa_math_unfused": 22.09,
+      "gemm_fp16": 21.42,
+      "conv_fp16": 19.94,
+      "elementwise_misc": 17.45,
+      "gn_silu": 10.23,
+      "other": 7.03,
+      "resize_unfused": 1.84
+    }
+  },
+  "int8_baseline": {
+    "ms_step": 119.9,
+    "min_ms": 119.6,
+    "speedup_vs_fp16": 1.753,
+    "category_pct": {
+      "attention_flash": 31.54,
+      "conv_int_fused": 23.34,
+      "gn_silu_quantize_fused": 18.23,
+      "elementwise_misc": 7.13,
+      "gemm_quant_fused": 6.88,
+      "quantize_standalone": 5.11,
+      "resize_unfused": 3.19,
+      "conv_fp16": 1.94,
+      "gn_silu": 1.53,
+      "other": 0.83,
+      "gemm_fp16": 0.25,
+      "attention_sdpa_math_unfused": 0.02
+    }
+  },
+  "int4_baseline": {
+    "ms_step": 110.09,
+    "min_ms": 109.76,
+    "speedup_vs_fp16": 1.909,
+    "category_pct": {
+      "attention_flash": 33.07,
+      "gn_silu_quantize_fused": 17.95,
+      "conv_int_fused": 12.33,
+      "elementwise_misc": 11.98,
+      "gemm_quant_fused": 7.01,
+      "quantize_standalone": 5.76,
+      "gn_silu": 4.2,
+      "resize_unfused": 3.47,
+      "conv_fp16": 2.14,
+      "other": 1.82,
+      "gemm_fp16": 0.27,
+      "attention_sdpa_math_unfused": 0.02
+    }
+  },
+  "int8_modiff": {
+    "ms_step": 125.89,
+    "min_ms": 125.69,
+    "speedup_vs_fp16": 1.67,
+    "category_pct": {
+      "attention_flash": 29.96,
+      "conv_int_fused": 23.23,
+      "gn_silu_quantize_fused": 21.55,
+      "elementwise_misc": 7.1,
+      "gemm_quant_fused": 6.51,
+      "quantize_standalone": 4.34,
+      "resize_unfused": 3.03,
+      "conv_fp16": 1.85,
+      "gn_silu": 1.46,
+      "other": 0.73,
+      "gemm_fp16": 0.24,
+      "attention_sdpa_math_unfused": 0.02
+    }
+  },
+  "int4_modiff": {
+    "ms_step": 127.73,
+    "min_ms": 127.05,
+    "speedup_vs_fp16": 1.646,
+    "category_pct": {
+      "attention_flash": 32.01,
+      "gn_silu_quantize_fused": 19.92,
+      "conv_int_fused": 13.71,
+      "elementwise_misc": 10.49,
+      "gemm_quant_fused": 6.69,
+      "quantize_standalone": 4.95,
+      "gn_silu": 4.03,
+      "resize_unfused": 3.31,
+      "other": 2.55,
+      "conv_fp16": 2.06,
+      "gemm_fp16": 0.25,
+      "attention_sdpa_math_unfused": 0.02
+    }
+  }
+}
