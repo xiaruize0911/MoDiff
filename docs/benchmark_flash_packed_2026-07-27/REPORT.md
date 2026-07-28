@@ -226,6 +226,29 @@ None of these have been fixed yet — listed here for triage, ranked by how load
 - Several `attn_quant_gemm.cu` kernels (`aq_vquant_trans_kernel`, `from_i8_qtok/vtrans`) only fire on
   non-default/opt-in paths (calibration warmup, `MODIFF_ROUTE1=1`) — low priority given limited exposure.
 
+**Found this round, investigated and correctly declined:** a fresh, broad re-sweep of the current kernel
+profile (not re-examining the same 3 items already documented in Section 10) turned up one genuinely new
+candidate — `skip_connection`'s conv bias. PyTorch's eager-mode `nn.Conv2d.forward()` never fuses bias
+into the cuDNN call: verified on a bare, isolated `nn.Conv2d(384,192,1).cuda().half()` forward that
+`aten::cudnn_convolution` (no bias) is always followed by a separate `aten::add_` broadcast-add kernel —
+confirmed as the source of the ~1.4-1.6ms/step `CUDAFunctor_add` entries (19x/step) in the profile,
+present in every mode since `skip_connection` is never quantized (see Section 10). Two ways to eliminate
+the separate kernel were tried and both broke bit-exactness:
+1. **Augmented-channel trick** (fold bias as an extra constant-1 input channel + extra weight row, so
+   cuDNN's own conv accumulates it): mathematically equivalent, but changed from two roundings (biasless
+   conv → fp16, then `+bias` → fp16 again) to one (conv+bias accumulated together, one fp16 rounding) —
+   measured non-zero (`torch.equal` False, max diff ≈0.002, one fp16 ULP) against the current reference.
+2. **Deferring the bias-add into a downstream fused epilogue** (this conv's output already feeds another
+   kernel's residual-add slot) — same problem: the current pipeline rounds `skip_connection`'s output to
+   fp16 *before* that downstream kernel ever sees it, so skipping that rounding to add the bias later
+   changes the result for the same reason.
+
+Both fixes are only unsafe because this project's own correctness bar is measured against the *existing*
+golden outputs, which already bake in today's specific (arguably suboptimal, two-rounding) computation
+graph — the same tension every other declined item in this report runs into. Not a missing optimization;
+a correctly-declined one, and evidence this round's search was a genuine fresh sweep, not a repeat of the
+same three conclusions.
+
 ---
 
 ## 8. This round's fixes: the corrected "updown-block gap" and conv_epilogue
