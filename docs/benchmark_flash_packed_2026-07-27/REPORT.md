@@ -2,7 +2,7 @@
 
 **GPU:** NVIDIA A40 (48 GB, SM 8.6) · **PyTorch:** 2.4.1+cu124 · **CUDA:** 12.4
 **Model:** LSUN-Churches LDM-8 UNet (unconditional, 256×256) · **Batch:** 128 · **Sampler:** DDIM, 200 steps
-**Date:** 2026-07-28 (final refresh: + layout_transform vectorization) · repo: `feat/conv-attn-epilogue-fusion` @ [`269f2c6`](https://github.com/xiaruize0911/MoDiff/commit/269f2c6)
+**Date:** 2026-07-28 (final refresh: + upsample->quantize fusion for updown ResBlocks, a real architectural fusion, not just vectorization) · repo: `feat/conv-attn-epilogue-fusion` @ HEAD
 
 **5 modes:** `fp16`, `int8_baseline`, `int4_baseline`, `int8_modiff`, `int4_modiff`. int8/int4 use the
 fused-flash quantized attention kernel; `_modiff` adds the temporal-delta conv cache.
@@ -20,11 +20,14 @@ reused here. Data: `data/*.json` · figures: `plots/*.png` · scripts: `scripts/
 
 | mode | ms/step | speedup |
 |---|--:|--:|
-| fp16 | 211.23 | 1.00× |
-| int8_baseline | 120.11 | 1.76× |
-| **int4_baseline** | **110.21** | **1.92×** |
-| int8_modiff | 126.11 | 1.68× |
-| int4_modiff | 127.65 | 1.66× |
+| fp16 | 210.60 | 1.00× |
+| int8_baseline | 118.85 | 1.77× |
+| **int4_baseline** | **107.50** | **1.96×** |
+| int8_modiff | 126.01 | 1.67× |
+| int4_modiff | 128.08 | 1.64× |
+
+(`int8_baseline`/`int4_baseline` improved from 1.76×/1.92× earlier in this report — see Section 8's
+upsample-fusion fix, a real architectural fusion, not just a vectorization tweak.)
 
 ![speedup vs fp16](plots/fig_speedup.png)
 
@@ -133,7 +136,7 @@ survey of `integration/fused_ops/`), turns up concrete fusion-actionable categor
 | Updown-block GN+quantize gap | 2.5 | 5.5 | 1.8 | 6.1 | **mostly unavoidable GN cost, not a real gap** — see correction in Section 8 |
 | Ahat-cache update (modiff) | — | — | 1.4 | 1.5 | int4 variant fixed this round (Section 8) |
 | Attention quantize (standalone) | 5.5 | 5.7 | 5.5 | 6.3 | already assessed not worth a custom kernel (FLOP analysis, earlier session) |
-| Resize (avg_pool/upsample) | 3.8 | 3.8 | 3.8 | 4.2 | unfused; no existing fusion kernel covers this model's up/down path |
+| Resize (avg_pool/upsample) | 3.3 | 3.0 | 3.8 | 4.3 | up-transition now fused into quantize (Section 8); down-transition (avg_pool) still unfused, CUTLASS-blocked |
 | Skip-connection concat | 2.6 | 2.6 | 2.6 | 2.9 | blocked by CUTLASS conv architecture, not merely unfused — see Section 10 |
 | Residual-add/dtype-cast/other | 6.4 | 12.3 | 6.7 | 11.0 | mostly small individual PyTorch elementwise kernels |
 
@@ -149,10 +152,12 @@ measurement's run-to-run noise floor, as expected for a low-risk/low-payoff item
 - **GN stats reduction** (11-12ms, ~9-10% of modiff-mode total) — single-pass (Welford-style) algorithm
   could remove the second memory pass, but touches the same fp32-summation-order-sensitive code that
   already broke once under vectorization (Section 3). High risk, needs extensive re-verification.
-- **Resize** — nearest-upsample could in principle be reordered after quantize (nearest is an exact
-  index-select, order-safe) for the 4 up-transition blocks, but avg_pool **cannot**: averaging int8
-  codes ≠ averaging then quantizing, so downsample would have to stay fp16, and a real win needs a
-  custom CUTLASS im2col reader — high engineering effort for ~1ms of payoff.
+- **Resize, up-transition half — fixed this round (Section 8).** Nearest-upsample reorders exactly with
+  quantize (an index-select, order-safe) for the 4 up-transition blocks; wired via `_prequant_upsample_conv`
+  reusing an existing-but-unwired kernel. Baseline modes' resize cost drops from 3.8ms to 3.0-3.3ms/step.
+- **Resize, down-transition half (avg_pool) — still not fused.** Averaging int8/int4 codes is not
+  equivalent to averaging then quantizing, so downsample must stay fp16 before quantize; a real win here
+  needs a custom CUTLASS im2col reader — high engineering effort for ~1ms of payoff.
 
 ---
 
@@ -256,6 +261,58 @@ is **not a measured win** for the LSUN-Churches UNet this report benchmarks. Wor
 an earlier code-survey pass had called this "the widest-reach unvectorized kernel found" based on static
 call-site counts, which missed the runtime `if calibrated: EVT else: fallback` branch entirely.
 
+**Upsample->quantize fusion for updown ResBlocks — a real architectural fusion, not a vectorization.**
+This report originally classified resize+quantize/conv fusion as blocked by CUTLASS's single-contiguous-
+input requirement (Section 6/10). That conclusion was right for `avg_pool` (averaging int8 codes isn't
+equivalent to averaging then quantizing) but **wrong for nearest-upsample**, which is an exact
+index-select with no arithmetic — quantizing before or after it produces bit-identical results. Better
+still: this codebase already had the fused kernel (`upsample2x_quantize_noahat_fprop`/`_pack`, plus the
+`FusedUpsample` wrapper class in `fused_resblock.py` and its correctness gate) built for exactly this
+reordering — it just never applied to *this* model. `FusedUpsample` wraps standalone `Upsample(use_conv=True)`
+modules (interpolate immediately followed by the conv it owns), but `resblock_updown=True` means this
+UNet never constructs one — every resize goes through `ResBlock.h_upd`/`x_upd` (`use_conv=False`,
+`in_conv` is a sibling, not an owned child), a call site `FusedUpsample` structurally can't reach.
+
+**Fix:** added `_prequant_upsample_conv` (pure Python, no new CUDA kernel — reuses the existing fused
+kernel) and wired it into `FusedResBlock._forward_openai`'s updown branch, fusing `h_upd`'s
+`F.interpolate(nearest,2x)` with `in_conv`'s quantize step for the 4 up-transition ResBlocks in baseline
+mode. Same eligibility gates as `FusedUpsample` (calibrated, non-modiff, `use_cutlass`, `groups==1`);
+falls through to the original two-step path otherwise (down-transition blocks, modiff mode, uncalibrated).
+
+**A real bug found and fixed along the way:** the first version silently never fired in production. A
+separate, pre-existing conversion pass (`convert_upsample_to_fused`, called unconditionally during model
+setup) walks the *entire* UNet's module tree and wraps every `Upsample` instance it finds — including
+`h_upd`/`x_upd`, which are genuine `Upsample` submodules of `FusedResBlock` even though `FusedUpsample`
+itself can't use them. This replaced `self.h_upd` with a `FusedUpsample`-wrapped object, so
+`isinstance(h_upd, Upsample)` in the new code returned `False` for every real inference call (it only
+returned `True` transiently during calibration, before that conversion pass ran) — the fusion looked like
+it worked in isolated testing but was silently inert end-to-end. Caught by instrumenting the actual
+call site and cross-checking `Upsample.forward` invocation counts against the fusion's fire count, not
+just trusting that "returns non-None sometimes" meant "works in production." Fixed by unwrapping
+`getattr(h_upd, 'orig', h_upd)` before the eligibility check.
+
+**Verified:** whole-model `e2e_output_check.py` bit-identical (`rel_err=0.0000`) on all 5 modes,
+`test_kernel_correctness.py` `ALL PASS`, `gn_modiff_verify_kernel.py`/`_realinput.py` (int8+int4)
+`max_code_diff=0` — all re-run after the fix, not just after the initial (silently-inert) version.
+
+**Measured, real speedup** (same-session, clean, isolated):
+
+| mode | before | after | Δ |
+|---|--:|--:|--:|
+| int8_baseline | 120.19 ms | 118.85 ms | −1.34 ms (−1.1%) |
+| int4_baseline | 110.32 ms | 107.50 ms | **−2.82 ms (−2.6%)** |
+| int8_modiff / int4_modiff | — | — | unchanged (fusion is baseline-only, `modiff_enabled` required False) |
+
+Kernel-level confirmation: `upsample_nearest2d` calls dropped from 8/step to 4/step (only `x_upd`'s calls
+remain — that path still isn't fused, since `x_upd`'s output feeds `skip_connection`, a real conv, the
+same CUTLASS-single-input limitation as Section 10 describes), and the new `upsample2x_quantize_noahat_kernel`
+appears with 4 calls/step in its place. `int4_baseline`'s speedup vs fp16 improves from 1.91× to **1.96×**.
+This is the one item in this report that moved from "documented as architecturally blocked" to "actually
+fixed," once the nearest-vs-avg_pool distinction was taken seriously instead of grouped together.
+(One more small fix along the way: `make_glue_subbreakdown_plot.py`'s categorization rules didn't
+recognize the new kernel's name, so its time was silently landing in the "other glue" catch-all instead
+of the "Resize" category in Section 5's chart — fixed by adding the `upsample2x_quantize` name pattern.)
+
 ---
 
 ## 9. Peak memory
@@ -315,6 +372,9 @@ Pulling every section together, here's what's been fused, what's been ruled out,
 - GN+SiLU+quantize for all non-updown ResBlocks (K1 fusion, pre-existing) — vectorized this session.
 - MoDiff temporal-delta apply + quantize + cache-update, for both int8 and int4 (this session).
 - The cache-free "noahat" static quantize kernels for updown ResBlocks (this session, Section 8).
+- **Nearest-upsample + quantize for up-transition ResBlocks** (this session, Section 8): reused an
+  existing-but-previously-unwired kernel/wrapper pair (`upsample2x_quantize[_pack]_noahat_fprop`,
+  `FusedUpsample`) via new `_prequant_upsample_conv` glue — real speedup, not just vectorization.
 - Bias+residual folded into GEMM/conv epilogues where the shape permits (pre-existing EVT/deep-fuse
   kernels this session traced and confirmed are the actual hot path).
 - The custom int8/int4 flash attention kernel (pre-existing, out of scope — already the fastest
@@ -336,9 +396,12 @@ Pulling every section together, here's what's been fused, what's been ruled out,
   Concretely: `CatArrayBatchedCopy` would still run every time. This is blocked by the **identical**
   CUTLASS-single-input limitation as resize+conv fusion below, not a separate, more tractable problem —
   correcting an earlier characterization in this report that called it "large, well-scoped."
-- **Resize+quantize/conv fusion** (Section 6): nearest-upsample could reorder with quantize (order-safe);
-  avg_pool cannot (would compound quantization error). Either direction needs new CUTLASS im2col-level
-  engineering for a payoff of ~1-4ms/step.
+- **avg_pool+quantize/conv fusion** (Section 6, Section 8): unlike nearest-upsample (now fused, above),
+  averaging int8/int4 codes is not equivalent to averaging then quantizing — reordering would compound
+  quantization error, so this direction genuinely needs new CUTLASS im2col-level engineering (reading
+  the down-transition conv's input from unmaterialized pooling coordinates), not just wiring, for a
+  payoff of roughly 1-2ms/step (half of the original combined resize estimate, since the upsample half
+  is now shipped).
 - **layout_transform.cu** (Section 6): the two simple transpose+cast kernels and the delta-quantize
   kernels' fp16 phase are now vectorized (Section 8); the remaining scalar phase (delta-quantize's
   a_hat read-modify-write + int8 quantize) was left alone since it entangles cache-update correctness
@@ -348,13 +411,15 @@ Pulling every section together, here's what's been fused, what's been ruled out,
 Attention (36-47ms/step) and the unavoidable GroupNorm cost are the floor — quantization cannot touch
 attention's flash kernel further (already optimal per prior FLOP analysis) and cannot touch GN's
 reduction without risking silent int8/int4 code drift. Conv and GEMM are already compressed 3-6×. The
-two remaining unfused items (skip-concat, resize+conv) turn out to share one root cause on inspection:
+two remaining unfused items (skip-concat, avg_pool+conv) turn out to share one root cause on inspection:
 CUTLASS's conv kernels require a single contiguous NHWC input tensor, so anything that would need a
 conv to read from two logically-separate sources (a concatenated tensor's two halves, or a
-not-yet-materialized resize output) is blocked at the same architectural layer, not by two unrelated
+not-yet-materialized pooling output) is blocked at the same architectural layer, not by two unrelated
 gaps. Solving either for real means writing a custom CUTLASS im2col iterator that gathers from two
-sources or from resize coordinates instead of one contiguous buffer — genuine, substantial kernel
+sources or from pooling coordinates instead of one contiguous buffer — genuine, substantial kernel
 engineering, and the reason these are documented as follow-up work rather than shipped this session.
+Nearest-upsample's half of the original resize+conv item did not require that engineering (Section 8)
+and is shipped.
 
 ---
 
@@ -378,3 +443,7 @@ engineering, and the reason these are documented as follow-up work rather than s
 - [`b54043c`](https://github.com/xiaruize0911/MoDiff/commit/b54043c) — conv_epilogue vectorization + dead-code removal (Section 8)
 - [`5cbeeb4`](https://github.com/xiaruize0911/MoDiff/commit/5cbeeb4) — memory profiling, final synthesis (Section 9-10)
 - [`269f2c6`](https://github.com/xiaruize0911/MoDiff/commit/269f2c6) — layout_transform vectorization (Section 8)
+- [`a61269f`](https://github.com/xiaruize0911/MoDiff/commit/a61269f) — final report update: layout_transform vectorization result
+- [`34a9b11`](https://github.com/xiaruize0911/MoDiff/commit/34a9b11) — corrected skip-concat fusion analysis: blocked by CUTLASS, not just unscoped (Section 6, 10)
+- [`ece1991`](https://github.com/xiaruize0911/MoDiff/commit/ece1991) — zero-risk memory optimization: expandable_segments allocator (Section 9)
+- `PENDING` — upsample->quantize fusion for updown ResBlocks: found existing-but-unwired `FusedUpsample`/`upsample2x_quantize_noahat_fprop` kernel, wired via new `_prequant_upsample_conv`, fixed a `convert_upsample_to_fused` wrapping bug that silently neutralized it, bit-exact verified, real measured speedup (Section 8, 10)
