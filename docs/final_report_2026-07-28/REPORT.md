@@ -97,7 +97,6 @@ fp16 与 4 个量化模式**在同一进程内**测量，因此加速比是同�
 
 ### 2.1 每种 layer 的流水线加速比（vs fp16 同层流水线）
 
-
 **ResBlock（无 resize）** — 共 27 个实例，16 种 shape
 
 | 输入 shape (C, HxW) | 实例数 | fp16 (us) | int8_base | int4_base | int8_modiff | int4_modiff |
@@ -145,11 +144,10 @@ fp16 与 4 个量化模式**在同一进程内**测量，因此加速比是同�
 
 | 图 | Y 轴 | 用来看什么 |
 |---|---|---|
-| `plots/fig_intra_layer_<kind>_<mode>.png` | 绝对 us | **时间在哪里**——柱高是真实 GPU 时间，跨 shape 可直接比较（3369 us 的层明显高过 567 us 的层） |
-| `plots/fig_intra_layer_<kind>_<mode>_pct.png` | % of layer | **构成如何随 shape 变化**——每柱归一化到 100%，剥离层的绝对成本；绝对视图会把小 shape 压扁到看不清构成 |
+| `plots/fig_intra_layer_<kind>_<mode>.png` | 绝对 us | **时间在哪里**——柱高是真实 GPU 时间，跨 shape 可直接比较 |
+| `plots/fig_intra_layer_<kind>_<mode>_pct.png` | % of layer | **构成如何随 shape 变化**——每柱归一化到 100%，剥离层的绝对成本 |
 
-百分比图的 x 标签下方仍标注该层的绝对耗时，避免归一化后失去量级参照。
-
+百分比图的 x 标签下方仍标注该层的绝对耗时，归一化后不丢量级参照。
 
 **fp16 / resblock_plain** — 最大 shape C576 32×32，流水线 6093 us，GPU busy 100.2%
 
@@ -200,7 +198,30 @@ fp16 与 4 个量化模式**在同一进程内**测量，因此加速比是同�
 
 **int4_baseline / resblock_plain** — 最大 shape C576 32×32，流水线 3377 us，GPU busy 99.8%
 
-![layer pipeline speedup](plots/fig_layer_pipeline_speedup.png)
+| role | us | % of layer | kernel 数 |
+|---|--:|--:|--:|
+| GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out) | 1583.3 | 47.0% | 1 |
+| quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue) | 1133.1 | 33.6% | 2 |
+| fp16 cuDNN conv | 387.3 | 11.5% | 1 |
+| residual add | 191.7 | 5.7% | 1 |
+| other elementwise | 22.0 | 0.7% | 9 |
+| dtype cast / device copy | 18.1 | 0.5% | 4 |
+| reduction (amax/absmax for dynamic scales) | 15.5 | 0.5% | 1 |
+| int8/int4 quantized GEMM (W8A8 / W4A4) | 15.3 | 0.5% | 1 |
+| SiLU / activation (standalone) | 3.0 | 0.1% | 1 |
+
+**int4_baseline / attention** — 最大 shape C192 32×32，流水线 7739 us，GPU busy 101.3%
+
+| role | us | % of layer | kernel 数 |
+|---|--:|--:|--:|
+| int8/int4 flash kernel (fused QK^T+softmax+AV) | 5411.8 | 69.0% | 1 |
+| int8/int4 quantized GEMM (W8A8 / W4A4) | 698.0 | 8.9% | 1 |
+| GN+SiLU only (fp16 out; updown blocks + fp16 mode) | 516.1 | 6.6% | 1 |
+| Q/K/V quantize (packed, static scales) | 496.7 | 6.3% | 1 |
+| V quantize + transpose to AV layout | 228.6 | 2.9% | 1 |
+| dtype cast / device copy | 195.7 | 2.5% | 2 |
+| activation quantize / int4 pack (standalone) | 149.9 | 1.9% | 1 |
+| fill / zero-init | 145.8 | 1.9% | 2 |
 
 ### 2.3 为什么测"流水线"而不是"单个 kernel"
 
@@ -751,12 +772,24 @@ int4_modiff  127.15 ms/step
 ![intra layer int4 pct](plots/fig_intra_layer_resblock_plain_int4_baseline_pct.png)
 
 在 `int4_baseline` 最大的 ResBlock（C576 32×32，共 3369 us）里，**GN+SiLU+quantize 融合 kernel
-用掉 1583 us，反超量化 conv 的 1133 us**；换算成占比是 45–67% vs 22–39%（全部 shape 范围）。
-构成视图给出的补充信息是：GN+quantize 在**每一个** shape 上都是层内最大项，占比在
-**44.9%–66.8%** 之间波动。注意这不是随 shape 单调变化的趋势——按元素数排序后占比是
-47.0 / 47.9 / 56.5 / 44.9 / 45.6 / 55.6 / 53.9 / 47.5 / 56.2 / 66.8 %，无序。
-它同时受 C 和 H×W 影响（GN 的归约沿 C 分组、apply 沿元素展开，两者与 conv 的 FLOP 缩放方式不同），
-所以"最大 shape 47% vs 最小 shape 67%"只是首尾两点，不能当成趋势读。
+用掉 1583 us，反超量化 conv 的 1133 us**。
+
+这个反超在 **12/16 个 shape** 上成立（GN+quantize 占比 16.4–66.8%）；在最小的 4 个 shape
+上 conv 仍是最大项——分界约在 `C×H×W ≈ 12k`。按时间加权（各 shape 的 fp16 流水线耗时 × 实例数），
+GN 占优的那 12 个 shape 承载 **92.2%** 的 ResBlock 总时间，conv 占优的 4 个只占 7.8%。
+所以准确说法是：**在承载 92% 时间的中大 shape 上，Normalization 已成为层内头号开销**。
+构成视图给出的补充信息是：GN+quantize 在 **12/16 个 shape 上是层内最大项**，占比范围
+**16.4%–66.8%**。但**它并非在所有 shape 上都最大**——最小的 4 个 shape
+（C768 4×4、C384 4×4、C1536 2×2、C768 2×2，占比 34.9% / 28.9% / 17.4% / 16.4%）上，
+量化 conv 才是最大项。分界线大致在 `C×H×W ≈ 12k`，与 §2.4 那个 int4 转正的临界点同一量级。
+
+占比也不随 shape 单调变化：按元素数降序是
+47.0 / 47.9 / 56.5 / 44.9 / 45.6 / 55.6 / 53.9 / 47.5 / 56.2 / 66.8 / 41.5 / 44.1 / 34.9 / 28.9 / 17.4 / 16.4 %，
+在大 shape 区间内无序，只在最小的几个 shape 上明确下滑。它同时受 C 和 H×W 影响
+（GN 的归约沿 C 分组、apply 沿元素展开，与 conv 的 FLOP 缩放方式不同）。
+
+**上面那张图只画了最大的 10 个 shape**（`topn=10`），所以图上看不到占比跌到 16% 的那几个；
+完整 16 个 shape 的数值见 `data/layer_pipeline_bench.json`。
 
 全模型层面同样成立：Normalization 从 fp16 的 22.84 ms（10.8%）上升到 int4_baseline 的
 24.77 ms（**23.2%**）——绝对值几乎没降，占比翻倍。
