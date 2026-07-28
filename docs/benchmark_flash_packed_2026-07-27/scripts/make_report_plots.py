@@ -52,31 +52,33 @@ plt.close(fig)
 # "how much does Attention cost in each mode" is a single glance, not a
 # mental subtraction across a stacked segment.
 # ---------------------------------------------------------------------------
+# The model's actual learnable layer types are Conv2d, Attention, and Linear/GEMM
+# (the AttentionBlock's qkv/proj_out are 1x1 convs, mathematically per-token Linear,
+# and this repo quantizes them through the same GEMM kernel as nn.Linear). GroupNorm+
+# SiLU and resize (avg_pool/nearest-interpolate) are non-learnable glue between those
+# layers, not layers themselves; "quantize" doesn't exist in the original fp16 model at
+# all -- it's an artifact of the int8/int4 pipeline. So: 3 real layer types + 1 glue bucket.
 LAYER_TYPES = [
-    ("Conv", ("conv_int_fused", "conv_fp16", "upsample_conv_fused")),
-    ("Attention", ("attention_flash", "attention_sdpa_math_unfused", "attention_sdpa_fused")),
-    ("GroupNorm + SiLU", ("gn_silu_quantize_fused", "gn_silu")),
-    ("GEMM / Linear", ("gemm_quant_fused", "gemm_fp16")),
-    ("Quantize (standalone)", ("quantize_standalone",)),
-    ("Resize / Upsample", ("resize_unfused",)),
-    ("Elementwise / other", ("elementwise_misc", "other")),
+    ("Conv", ("conv_int_fused", "conv_fp16", "upsample_conv_fused"), "#378ADD"),
+    ("Attention", ("attention_flash", "attention_sdpa_math_unfused", "attention_sdpa_fused"), "#D85A30"),
+    ("Linear / GEMM", ("gemm_quant_fused", "gemm_fp16"), "#BA7517"),
+    ("Norm / resize / quantize glue",
+     ("gn_silu_quantize_fused", "gn_silu", "resize_unfused", "quantize_standalone",
+      "elementwise_misc", "other"), "#888780"),
 ]
 
 modes5 = ["fp16", "int8_baseline", "int4_baseline", "int8_modiff", "int4_modiff"]
 mode_labels = ["fp16", "int8\nbaseline", "int4\nbaseline", "int8\nmodiff", "int4\nmodiff"]
-mode_colors = ["#73726c", "#1D9E75", "#2a9d8f", "#2a78d6", "#eda100"]
 ms_steps = {m: final[m]["ms_step"] for m in modes5}
 
 def layer_ms(mode, keys):
     pct = final[mode]["category_pct"]
     return sum(pct.get(k, 0.0) for k in keys) / 100.0 * ms_steps[mode]
 
-fig, axes = plt.subplots(2, 4, figsize=(16, 8))
-axes = axes.flatten()
-for i, (name, keys) in enumerate(LAYER_TYPES):
-    ax = axes[i]
+fig, axes = plt.subplots(1, 4, figsize=(16, 4.5))
+for ax, (name, keys, color) in zip(axes, LAYER_TYPES):
     vals = [layer_ms(m, keys) for m in modes5]
-    bars = ax.bar(mode_labels, vals, color=mode_colors, width=0.65)
+    bars = ax.bar(mode_labels, vals, color=color, width=0.6)
     for b, v in zip(bars, vals):
         ax.text(b.get_x() + b.get_width() / 2, v + max(vals) * 0.02, f"{v:.1f}",
                 ha="center", fontsize=9, fontweight="bold")
@@ -85,9 +87,8 @@ for i, (name, keys) in enumerate(LAYER_TYPES):
     ax.set_ylim(0, max(vals) * 1.25 if max(vals) > 0 else 1)
     ax.spines[["top", "right"]].set_visible(False)
     ax.tick_params(axis="x", labelsize=9)
-axes[-1].axis("off")
-fig.suptitle("Time cost per layer type, absolute ms/step (same-session measurement)", fontsize=14)
-fig.tight_layout(rect=[0, 0, 1, 0.96])
+fig.suptitle("Time cost by real layer type: Conv, Attention, Linear/GEMM (+ non-GEMM glue), ms/step", fontsize=13)
+fig.tight_layout(rect=[0, 0, 1, 0.93])
 fig.savefig(f"{HERE}/plots/fig_breakdown.png", dpi=150, bbox_inches="tight")
 plt.close(fig)
 

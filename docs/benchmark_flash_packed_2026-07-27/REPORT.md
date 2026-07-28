@@ -42,25 +42,30 @@ convention rather than the fastest possible fp16.
 
 ---
 
-## 2. Time cost per layer type
+## 2. Time cost by real layer type
+
+![UNet layer architecture](plots/unet_layer_architecture.svg)
 
 ![time cost per layer type](plots/fig_breakdown.png)
 
-One panel per layer type, absolute ms/step for all 5 modes side by side (replaces an earlier
-percent-stacked version that lumped conv+norm+gemm into one slice and hid which layer type actually
-dominates each mode):
+The model's actual learnable layer types are **Conv2d**, **Attention**, and **Linear/GEMM** (the
+AttentionBlock's `qkv`/`proj_out` are 1×1 convs — mathematically per-token Linear, and this repo routes
+them through the same GEMM kernel as `nn.Linear`). GroupNorm+SiLU and resize (avg_pool/nearest-interpolate)
+are non-learnable glue between those layers, not layers themselves, and "quantize" doesn't exist in the
+original fp16 model at all — it's an artifact of the int8/int4 pipeline. See the architecture diagram
+above for exactly where each type sits in the 35 ResBlocks / 21 AttentionBlocks that make up this UNet.
 
 - **Attention is the single most expensive layer type in every mode** (36-46 ms/step) and shrinks the
   least under quantization (fp16 46.4 → int8/int4 baseline 36-38 ms) because it's the pre-existing
   custom int8/int4 flash kernel — none of this round of work touched it.
-- **Conv shows the largest relative win**: fp16 41.9 ms → int4_baseline 15.9 ms (2.6×). GroupNorm+SiLU
-  moves the other way for `_modiff` modes (21.5 → 29-31 ms) because the temporal-delta cache path does
-  strictly more GN/quantize work per step than the baseline path, trading some speed for its accuracy
-  benefit (consistent with Section 1's `_modiff` vs `_baseline` note).
-- **GEMM/Linear collapses hardest**: fp16 45.0 ms → ~8-9 ms across all 4 quantized modes (~5×), the
+- **Conv shows a strong win**: fp16 41.9 ms → int4_baseline 15.9 ms (2.6×).
+- **Linear/GEMM collapses hardest**: fp16 45.0 ms → ~8-9 ms across all 4 quantized modes (~5×), the
   single biggest per-layer-type speedup in this breakdown.
-- **Quantize (standalone)** is 0 in fp16 (no quantization happens) and a flat 5.5-6.3 ms in every
-  quantized mode — this is what Section 3 below vectorized.
+- **Norm/resize/quantize glue** drops from 76.8 ms (fp16) to 43-58 ms; the `_modiff` modes sit higher
+  in this bucket (48-58 ms vs 43-50 ms baseline) because the temporal-delta cache path does strictly
+  more GroupNorm/quantize work per step than the baseline path, trading some speed for its accuracy
+  benefit (consistent with Section 1's `_modiff` vs `_baseline` note). The quantize-kernel slice of this
+  bucket (5.5-6.3 ms flat across all 4 quantized modes) is what Section 3 below vectorized.
 
 ---
 
