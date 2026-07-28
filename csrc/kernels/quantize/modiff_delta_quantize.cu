@@ -569,6 +569,55 @@ __global__ void static_quantize_pack_and_update_ahat_kernel_int4_half_cache(
     }
 }
 
+// Vectorized (half2/float2) counterpart of static_quantize_pack_and_update_ahat_kernel_int4_half_cache.
+// The scalar kernel above is already pair-major (base = idx*2); this only widens the per-pair
+// load/store from two independent scalar accesses to one vectorized half2/float2 access -- same
+// technique, same safety argument, as the INT8 sibling's _vec2 kernel above. Requires
+// num_channels % 2 == 0 for the smooth_inv fast path (not a new risk: base is always even here,
+// so base % num_channels is even too when num_channels is even, so the pair never straddles a
+// channel boundary); the caller only dispatches here when that holds.
+template <typename T_IN>
+__global__ void static_quantize_pack_and_update_ahat_kernel_int4_half_cache_vec2(
+    const T_IN* __restrict__ x,
+    __half* __restrict__ a_hat_cache,
+    int8_t* __restrict__ output_packed,
+    const float* __restrict__ scale_ptr,
+    const float* __restrict__ smooth_inv,
+    int num_channels,
+    int num_elements
+) {
+    float scale = *scale_ptr;
+    float inv_scale = 1.0f / scale;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for (int base = idx * 2; base < num_elements; base += stride * 2) {
+        if (base + 1 < num_elements) {
+            float2 xv = load_as_float2(x, base);
+            if (smooth_inv != nullptr) {
+                int c0 = base % num_channels;
+                float2 sm = *reinterpret_cast<const float2*>(&smooth_inv[c0]);
+                xv.x *= sm.x; xv.y *= sm.y;
+            }
+            float2 cache = half_cache_load2(a_hat_cache, base);
+            float q0 = fmaxf(-7.0f, fminf(7.0f, roundf((xv.x - cache.x) * scale)));
+            float q1 = fmaxf(-7.0f, fminf(7.0f, roundf((xv.y - cache.y) * scale)));
+            half_cache_store2(a_hat_cache, base, make_float2(cache.x + q0 * inv_scale, cache.y + q1 * inv_scale));
+            output_packed[base / 2] =
+                (static_cast<int8_t>(q0) & 0x0F) |
+                ((static_cast<int8_t>(q1) & 0x0F) << 4);
+        } else {
+            // odd num_elements: single leftover element, same math as the scalar kernel.
+            float x0 = load_as_float(x, base);
+            if (smooth_inv != nullptr) x0 *= smooth_inv[base % num_channels];
+            float c0 = __half2float(a_hat_cache[base]);
+            float q0 = fmaxf(-7.0f, fminf(7.0f, roundf((x0 - c0) * scale)));
+            a_hat_cache[base] = __float2half_rn(c0 + q0 * inv_scale);
+            output_packed[base / 2] = static_cast<int8_t>(q0) & 0x0F;
+        }
+    }
+}
+
 // ---- TRUE cache-free static quantize (baseline, NO a_hat): same as the *_update_ahat kernels
 // above but without the a_hat read/subtract/write. Baseline conv doesn't do temporal caching, so
 // residual = x - a_hat collapses to x; dropping a_hat removes the a_hat read+write + the zero-fill.
@@ -653,6 +702,51 @@ __global__ void static_quantize_pack_and_update_ahat_kernel_int4_half_cache_silu
         output_packed[base / 2] =
             (static_cast<int8_t>(q0) & 0x0F) |
             ((static_cast<int8_t>(q1) & 0x0F) << 4);
+    }
+}
+
+// Vectorized (half2/float2) counterpart of static_quantize_pack_and_update_ahat_kernel_int4_half_cache_silu.
+// Same pair-major vec2 treatment as static_quantize_pack_and_update_ahat_kernel_int4_half_cache_vec2
+// above, with SiLU applied per-lane before the residual/quantize math.
+template <typename T_IN>
+__global__ void static_quantize_pack_and_update_ahat_kernel_int4_half_cache_silu_vec2(
+    const T_IN* __restrict__ x,
+    __half* __restrict__ a_hat_cache,
+    int8_t* __restrict__ output_packed,
+    const float* __restrict__ scale_ptr,
+    const float* __restrict__ smooth_inv,
+    int num_channels,
+    int num_elements
+) {
+    float scale = *scale_ptr;
+    float inv_scale = 1.0f / scale;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for (int base = idx * 2; base < num_elements; base += stride * 2) {
+        if (base + 1 < num_elements) {
+            float2 xv = load_as_float2(x, base);
+            xv.x = silu_f(xv.x); xv.y = silu_f(xv.y);
+            if (smooth_inv != nullptr) {
+                int c0 = base % num_channels;
+                float2 sm = *reinterpret_cast<const float2*>(&smooth_inv[c0]);
+                xv.x *= sm.x; xv.y *= sm.y;
+            }
+            float2 cache = half_cache_load2(a_hat_cache, base);
+            float q0 = fmaxf(-7.0f, fminf(7.0f, roundf((xv.x - cache.x) * scale)));
+            float q1 = fmaxf(-7.0f, fminf(7.0f, roundf((xv.y - cache.y) * scale)));
+            half_cache_store2(a_hat_cache, base, make_float2(cache.x + q0 * inv_scale, cache.y + q1 * inv_scale));
+            output_packed[base / 2] =
+                (static_cast<int8_t>(q0) & 0x0F) |
+                ((static_cast<int8_t>(q1) & 0x0F) << 4);
+        } else {
+            float x0 = silu_f(load_as_float(x, base));
+            if (smooth_inv != nullptr) x0 *= smooth_inv[base % num_channels];
+            float c0 = __half2float(a_hat_cache[base]);
+            float q0 = fmaxf(-7.0f, fminf(7.0f, roundf((x0 - c0) * scale)));
+            a_hat_cache[base] = __float2half_rn(c0 + q0 * inv_scale);
+            output_packed[base / 2] = static_cast<int8_t>(q0) & 0x0F;
+        }
     }
 }
 
@@ -1289,26 +1383,56 @@ torch::Tensor step1_static_quantize_pack_int4_fprop(
     }
 
     if (a_hat_cache.scalar_type() == torch::kFloat16) {
+        // Vec2 fast path requires num_channels % 2 == 0 for the smooth_inv half2 load -- see
+        // step1_static_quantize_fprop's identical gate for the INT8 sibling. Right-size the grid
+        // for the 2-wide step rather than reusing the float4-sized `grid_size` above.
+        const bool use_vec2 = (num_channels % 2 == 0);
+        const int num_work_items_vec2 = (num_input + 1) / 2;
+        const int grid_size_vec2 = (num_work_items_vec2 + block_size - 1) / block_size;
         if (x.scalar_type() == torch::kHalf) {
-            static_quantize_pack_and_update_ahat_kernel_int4_half_cache<__half><<<grid_size, block_size, 0, stream>>>(
-                reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
-                reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>()),
-                x_packed.data_ptr<int8_t>(),
-                scale_buf.data_ptr<float>(),
-                smooth_ptr,
-                num_channels,
-                num_input
-            );
+            if (use_vec2) {
+                static_quantize_pack_and_update_ahat_kernel_int4_half_cache_vec2<__half><<<grid_size_vec2, block_size, 0, stream>>>(
+                    reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
+                    reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>()),
+                    x_packed.data_ptr<int8_t>(),
+                    scale_buf.data_ptr<float>(),
+                    smooth_ptr,
+                    num_channels,
+                    num_input
+                );
+            } else {
+                static_quantize_pack_and_update_ahat_kernel_int4_half_cache<__half><<<grid_size, block_size, 0, stream>>>(
+                    reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
+                    reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>()),
+                    x_packed.data_ptr<int8_t>(),
+                    scale_buf.data_ptr<float>(),
+                    smooth_ptr,
+                    num_channels,
+                    num_input
+                );
+            }
         } else {
-            static_quantize_pack_and_update_ahat_kernel_int4_half_cache<float><<<grid_size, block_size, 0, stream>>>(
-                x.data_ptr<float>(),
-                reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>()),
-                x_packed.data_ptr<int8_t>(),
-                scale_buf.data_ptr<float>(),
-                smooth_ptr,
-                num_channels,
-                num_input
-            );
+            if (use_vec2) {
+                static_quantize_pack_and_update_ahat_kernel_int4_half_cache_vec2<float><<<grid_size_vec2, block_size, 0, stream>>>(
+                    x.data_ptr<float>(),
+                    reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>()),
+                    x_packed.data_ptr<int8_t>(),
+                    scale_buf.data_ptr<float>(),
+                    smooth_ptr,
+                    num_channels,
+                    num_input
+                );
+            } else {
+                static_quantize_pack_and_update_ahat_kernel_int4_half_cache<float><<<grid_size, block_size, 0, stream>>>(
+                    x.data_ptr<float>(),
+                    reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>()),
+                    x_packed.data_ptr<int8_t>(),
+                    scale_buf.data_ptr<float>(),
+                    smooth_ptr,
+                    num_channels,
+                    num_input
+                );
+            }
         }
     } else {
         static_quantize_pack_and_update_ahat_kernel_int4<<<grid_size, block_size, 0, stream>>>(
@@ -1542,26 +1666,54 @@ torch::Tensor step1_static_quantize_pack_int4_fprop_silu(
         num_channels = smooth_inv.numel();
     }
 
+    // See step1_static_quantize_pack_int4_fprop for the use_vec2 gate rationale.
+    const bool use_vec2 = (num_channels % 2 == 0);
+    const int num_work_items_vec2 = (num_input + 1) / 2;
+    const int grid_size_vec2 = (num_work_items_vec2 + block_size - 1) / block_size;
     if (x.scalar_type() == torch::kHalf) {
-        static_quantize_pack_and_update_ahat_kernel_int4_half_cache_silu<__half><<<grid_size, block_size, 0, stream>>>(
-            reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
-            reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>()),
-            x_packed.data_ptr<int8_t>(),
-            scale_buf.data_ptr<float>(),
-            smooth_ptr,
-            num_channels,
-            num_input
-        );
+        if (use_vec2) {
+            static_quantize_pack_and_update_ahat_kernel_int4_half_cache_silu_vec2<__half><<<grid_size_vec2, block_size, 0, stream>>>(
+                reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
+                reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>()),
+                x_packed.data_ptr<int8_t>(),
+                scale_buf.data_ptr<float>(),
+                smooth_ptr,
+                num_channels,
+                num_input
+            );
+        } else {
+            static_quantize_pack_and_update_ahat_kernel_int4_half_cache_silu<__half><<<grid_size, block_size, 0, stream>>>(
+                reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
+                reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>()),
+                x_packed.data_ptr<int8_t>(),
+                scale_buf.data_ptr<float>(),
+                smooth_ptr,
+                num_channels,
+                num_input
+            );
+        }
     } else {
-        static_quantize_pack_and_update_ahat_kernel_int4_half_cache_silu<float><<<grid_size, block_size, 0, stream>>>(
-            x.data_ptr<float>(),
-            reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>()),
-            x_packed.data_ptr<int8_t>(),
-            scale_buf.data_ptr<float>(),
-            smooth_ptr,
-            num_channels,
-            num_input
-        );
+        if (use_vec2) {
+            static_quantize_pack_and_update_ahat_kernel_int4_half_cache_silu_vec2<float><<<grid_size_vec2, block_size, 0, stream>>>(
+                x.data_ptr<float>(),
+                reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>()),
+                x_packed.data_ptr<int8_t>(),
+                scale_buf.data_ptr<float>(),
+                smooth_ptr,
+                num_channels,
+                num_input
+            );
+        } else {
+            static_quantize_pack_and_update_ahat_kernel_int4_half_cache_silu<float><<<grid_size, block_size, 0, stream>>>(
+                x.data_ptr<float>(),
+                reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>()),
+                x_packed.data_ptr<int8_t>(),
+                scale_buf.data_ptr<float>(),
+                smooth_ptr,
+                num_channels,
+                num_input
+            );
+        }
     }
 
     int N = x.size(0);
