@@ -425,6 +425,93 @@ def main_layers():
                 fig_intra_layer_split(lp, mode, kind, yaxis="pct")
 
 
+
+
+
+# ---------------------------------------------------------------------------
+# Icicle (hierarchical) plot of the profile tree: 3 stacked levels, each level
+# partitioning the SAME x range, width proportional to ms/step. This shows the
+# grouping (which kernels roll up into which role, which roles into which layer
+# type) and the time cost in one picture -- a plain bar chart can only do one.
+# ---------------------------------------------------------------------------
+def fig_profile_icicle(tree, mode="int4_baseline", min_ms=0.05, kernel_level=True):
+    if not tree or mode not in tree:
+        return
+    import matplotlib.colors as mcolors
+    t = tree[mode]["tree"]
+    total = sum(n["ms_step"] for n in t.values())
+    fig_h = 5.2 if kernel_level else 3.4
+    fig, ax = plt.subplots(figsize=(16, fig_h))
+
+    ROW = {0: (2.10, 0.92), 1: (1.08, 0.92), 2: (0.06, 0.92)}   # level -> (y, height)
+
+    def draw(x, w, level, label, color, alpha, ms):
+        y, h = ROW[level]
+        ax.add_patch(plt.Rectangle((x, y), w, h, facecolor=mcolors.to_rgba(color, alpha),
+                                   edgecolor="white", linewidth=1.1))
+        # only label if the box is wide enough to hold readable text
+        frac = w / total
+        if frac >= 0.042:
+            fs = 9.0 if level == 0 else (8.0 if level == 1 else 7.0)
+            txt = label if len(label) <= int(frac * 165) else label[:max(3, int(frac * 165))] + "…"
+            # Pick text color from the ACTUAL blended background luminance -- a fixed
+            # "white on level 0" breaks on light layer colors (Elementwise-Cast is #D3D1C7).
+            bg = np.array(mcolors.to_rgb(color)) * alpha + (1 - alpha)   # over white
+            lum = 0.299 * bg[0] + 0.587 * bg[1] + 0.114 * bg[2]
+            fg = "#FFFFFF" if lum < 0.55 else "#1A1A1A"
+            fg2 = "#F0F0F0" if lum < 0.55 else "#3A3A3A"
+            ax.text(x + w / 2, y + h * 0.60, txt, ha="center", va="center",
+                    fontsize=fs, fontweight="bold" if level == 0 else "normal", color=fg)
+            ax.text(x + w / 2, y + h * 0.22, f"{ms:.1f} ms · {frac*100:.1f}%",
+                    ha="center", va="center", fontsize=fs - 1.2, color=fg2)
+
+    x0 = 0.0
+    for layer, node in t.items():
+        base = LAYER_COLORS.get(layer, "#999999")
+        draw(x0, node["ms_step"], 0, layer, base, 1.0, node["ms_step"])
+        xr = x0
+        for role, rnode in node["roles"].items():
+            draw(xr, rnode["ms_step"], 1, role, base, 0.55, rnode["ms_step"])
+            if kernel_level:
+                xk = xr
+                # group the sub-min_ms tail into one "(+N small)" box so the row stays readable
+                ks = [k for k in rnode["kernels"] if k["ms_step"] >= min_ms]
+                tail = [k for k in rnode["kernels"] if k["ms_step"] < min_ms]
+                for k in ks:
+                    draw(xk, k["ms_step"], 2, k["kernel"], base, 0.27, k["ms_step"])
+                    xk += k["ms_step"]
+                if tail:
+                    tms = sum(k["ms_step"] for k in tail)
+                    draw(xk, tms, 2, f"(+{len(tail)} small)", base, 0.18, tms)
+            xr += rnode["ms_step"]
+        x0 += node["ms_step"]
+
+    ax.set_xlim(0, total)
+    ax.set_ylim(0, 3.15)
+    ax.set_yticks([ROW[0][0] + 0.46, ROW[1][0] + 0.46, ROW[2][0] + 0.46][:3 if kernel_level else 2])
+    ax.set_yticklabels(["layer type", "role", "kernel"][:3 if kernel_level else 2],
+                       fontsize=10, fontweight="bold")
+    ax.set_xlabel("ms / step  (box width is proportional to time; each row partitions the same total)")
+    ax.set_title(f"Profile tree — {mode}: {tree[mode]['ms_step']:.2f} ms/step, "
+                 f"{tree[mode]['n_distinct_kernels']} distinct CUDA kernels\n"
+                 f"layer type → role → kernel; boxes narrower than ~5.5% are unlabelled, "
+                 f"kernels under {min_ms} ms are pooled as \"(+N small)\"", fontsize=11)
+    ax.tick_params(axis="y", length=0)
+    ax.spines[["top", "right", "left"]].set_visible(False)
+    fig.tight_layout()
+    fig.savefig(f"{HERE}/plots/fig_icicle_{mode}.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"wrote fig_icicle_{mode}.png")
+
+
+def fig_icicle_all(tree):
+    for m in ("fp16", "int8_baseline", "int4_baseline", "int8_modiff", "int4_modiff"):
+        fig_profile_icicle(tree, m)
+
+
+# Single entry point, kept at the very END of the file: every helper above must already be
+# defined when it runs (an earlier __main__ block here raised NameError on fig_icicle_all).
 if __name__ == "__main__":
     main_e2e()
     main_layers()
+    fig_icicle_all(load("profile_tree.json"))

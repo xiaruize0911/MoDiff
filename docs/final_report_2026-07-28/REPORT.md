@@ -12,6 +12,12 @@
 fp16 与 4 个量化模式**在同一进程内**测量，因此加速比是同条件可比的。
 数据 `data/*.json` · 图 `plots/*.png` · 脚本 `scripts/*.py`。
 
+> **数据轮次**：§1/§3 的数字取自同一次 profile 运行（`data/profile_tree.json`），
+> §1.1 的 GPU busy 取自 `data/gpu_busy_fraction.json`（复用同一轮的未插桩墙钟做分母），
+> §2 取自 `data/layer_pipeline_bench.json`。同一模式在不同轮次间有 ~0.1–0.3% 的正常波动
+> （例：fp16 210.04 → 210.25 ms/step），因此**跨小节比对时请以各小节标注的数据文件为准**，
+> 不要把不同轮次的数字混算。
+>
 > **本报告不含回滚 A/B 测试**：所有数字都取自当前 HEAD 的单一构建，没有"改回去再测一遍"的对比。
 > 历史对比只引用早先已提交报告里记录过的数字，并明确标注来源。
 
@@ -34,28 +40,28 @@ fp16 与 4 个量化模式**在同一进程内**测量，因此加速比是同�
 
 ### 1.1 端到端
 
-| mode | ms/step | speedup vs fp16 | 相异 CUDA kernel 数 | GPU 时间覆盖率 |
-|---|--:|--:|--:|--:|
-| fp16 | 210.04 | 1.000× | 79 | 100.0% |
-| int8_baseline | 117.86 | 1.782× | 61 | 100.0% |
-| **int4_baseline** | **106.45** | **1.973×** | 80 | 100.0% |
-| int8_modiff | 125.57 | 1.673× | 62 | 100.0% |
-| int4_modiff | 126.88 | 1.655× | 73 | 100.0% |
+| mode | ms/step | speedup vs fp16 | 相异 kernel | launch/step | GPU busy | 未分类 |
+|---|--:|--:|--:|--:|--:|--:|
+| fp16 | 210.25 | 1.000× | 78 | 846 | 88.7% | 0.00 ms |
+| int8_baseline | 117.93 | 1.783× | 62 | 564 | 87.5% | 0.00 ms |
+| **int4_baseline** | **106.58** | **1.973×** | 81 | 1168 | 87.3% | 0.00 ms |
+| int8_modiff | 125.64 | 1.673× | 63 | 746 | 88.0% | 0.00 ms |
+| int4_modiff | 127.15 | 1.654× | 74 | 1240 | 78.0% | 0.00 ms |
 
 ### 1.2 按 layer type 的绝对耗时（ms/step）
 
 | layer type | fp16 | int8_baseline | int4_baseline | int8_modiff | int4_modiff |
 |---|--:|--:|--:|--:|--:|
-| Attention | 52.53 (25.0%) | 43.52 (36.9%) | 42.18 (39.6%) | 43.36 (34.5%) | 47.14 (37.1%) |
-| Conv | 41.97 (20.0%) | 30.41 (25.8%) | 15.95 (15.0%) | 31.61 (25.2%) | 20.09 (15.8%) |
-| Linear-GEMM | 52.53 (25.0%) | 9.05 (7.7%) | 8.19 (7.7%) | 9.03 (7.2%) | 9.07 (7.2%) |
-| Normalization | 22.79 (10.8%) | 24.03 (20.4%) | 24.74 (23.2%) | 27.86 (22.2%) | 30.92 (24.4%) |
-| Quantize | — | — | 0.83 (0.8%) | 1.39 (1.1%) | 2.54 (2.0%) |
-| Resize | 3.86 (1.8%) | 2.95 (2.5%) | 2.67 (2.5%) | 3.82 (3.0%) | 4.24 (3.3%) |
-| Elementwise-Cast | 36.32 (17.3%) | 7.89 (6.7%) | 11.86 (11.1%) | 8.48 (6.8%) | 12.85 (10.1%) |
+| Attention | 52.48 (25.0%) | 43.54 (36.9%) | 42.21 (39.6%) | 43.35 (34.5%) | 47.28 (37.2%) |
+| Conv | 42.12 (20.0%) | 30.44 (25.8%) | 15.98 (15.0%) | 31.65 (25.2%) | 20.17 (15.9%) |
+| Linear-GEMM | 52.56 (25.0%) | 9.05 (7.7%) | 8.22 (7.7%) | 9.04 (7.2%) | 9.06 (7.1%) |
+| Normalization | 22.84 (10.9%) | 24.05 (20.4%) | 24.77 (23.2%) | 27.88 (22.2%) | 30.93 (24.3%) |
+| Quantize | — | — | 0.84 (0.8%) | 1.40 (1.1%) | 2.55 (2.0%) |
+| Resize | 3.87 (1.8%) | 2.95 (2.5%) | 2.68 (2.5%) | 3.83 (3.0%) | 4.24 (3.3%) |
+| Elementwise-Cast | 36.33 (17.3%) | 7.89 (6.7%) | 11.88 (11.2%) | 8.49 (6.8%) | 12.88 (10.1%) |
 | Memory-op | 0.03 (0.0%) | 0.01 (0.0%) | 0.01 (0.0%) | 0.01 (0.0%) | 0.04 (0.0%) |
 | Sampler-side | 0.00 (0.0%) | 0.00 (0.0%) | 0.00 (0.0%) | 0.00 (0.0%) | 0.00 (0.0%) |
-| **合计** | **210.04** | **117.86** | **106.45** | **125.57** | **126.88** |
+| **合计** | **210.25** | **117.93** | **106.58** | **125.64** | **127.15** |
 
 
 ![layer stack](plots/fig_layer_stack.png)
@@ -69,7 +75,18 @@ fp16 与 4 个量化模式**在同一进程内**测量，因此加速比是同�
   （`docs/benchmark_flash_packed_2026-07-27/data/sdpa_backend_e2e.json`），那样 int8 会**反过来变慢**、
   int4 优势也大幅缩小。**上表的加速比只在其所对比的 fp16 基线意义下成立**，沿用的是本仓库既有惯例，
   而非"最快可能的 fp16"。
-- **GPU 时间覆盖率 100%**：分类规则覆盖了全部实测 kernel，没有任何 kernel 落进兜底桶（见 §3）。
+- **GPU busy 78–89%，即每步有 11–22% 的时间 GPU 在空转等 kernel launch**（`fp16` 23.8 ms、
+  `int8_baseline` 14.8 ms、`int4_baseline` 13.6 ms、`int4_modiff` 28.0 ms 是纯空闲）。
+  这是 §2.4 那个层级发现的模型级对应物，也是本项目当前最大的单项剩余余量。
+  `int4_modiff` 最差（78.0% busy、1240 次 launch/step）——**它比 int8_modiff 慢，不是因为算得慢，
+  而是因为 launch 更多**。
+- **未分类时间 0.00 ms**：分类规则覆盖了全部实测 kernel，没有任何 kernel 落进兜底桶（见 §3）。
+
+> **关于 "GPU busy" 的口径（重要）**：它 = Σkernel 设备自时间 ÷ **未开 profiler 的**墙钟。
+> 不能用 profiler 窗口自身的墙钟做分母——profiler 给每次 launch 加开销，那样算出来的 "busy"
+> 会随 kernel 数下降（实测 fp16 44.1% / int4 25.2%），看着像 GPU 大量空闲，其实是在测
+> 仪表开销。kernel 自时间由 CUPTI 在设备上测得、不受影响，所以只需换掉分母。
+> 见 `scripts/gpu_busy_fraction.py` 的文件头注释。
 
 ---
 
@@ -245,178 +262,188 @@ scale 归约、以及那条没被量化的 skip conv）。张量足够大时每�
 规则表里刻意保留了一个 **`Other / unclassified`** 兜底桶并让它显眼——新 kernel 若没被分类会
 立刻暴露，而不是静默混进某个粗桶。当前实测结果是该桶为空。
 
+**Icicle 图（三层分组 + 耗时）**：每行切分同一总时间，盒宽 ∝ ms/step，从上到下是
+layer type → role → kernel。它同时表达"分组关系"和"耗时大小"，普通条形图只能表达其中之一。
+
+![icicle int4_baseline](plots/fig_icicle_int4_baseline.png)
+
+![icicle fp16](plots/fig_icicle_fp16.png)
+
+另外 4 个模式的 icicle 见 `plots/fig_icicle_{fp16,int8_baseline,int4_baseline,int8_modiff,int4_modiff}.png`。
+
+**同数据的水平条形视图**（层级用缩进表示，便于精确读数）：
+
 ![profile tree int4_baseline](plots/fig_profile_tree_int4_baseline.png)
 
 <details>
 <summary><b>完整树形分解（5 模式，点击展开）</b></summary>
 
-
-#### fp16 — 210.04 ms/step, 79 distinct CUDA kernels
+#### fp16 — 210.25 ms/step, 78 distinct CUDA kernels
 
 ```
-fp16  210.04 ms/step   (100% of GPU time accounted)
-├─ Linear-GEMM              52.53 ms   25.0%
-│  └─ fp16 tensor-core GEMM (cuBLAS)                                 52.53 ms  25.0%
-│     ├─ cutlass::Kernel2                                          22.781 ms  x5
-│     ├─ cutlass::Kernel2                                          21.599 ms  x5
-│     ├─ ampere_fp16_s1688gemm_fp16_256x64_ldg8_f2f_stages_32x1_n   1.848 ms  x5
-│     ├─ ampere_fp16_s1688gemm_fp16_64x128_sliced1x2_ldg8_f2f_nn    1.840 ms  x5
-│     ├─ ampere_fp16_s1688gemm_fp16_128x128_ldg8_relu_f2f_tn        1.547 ms  x10
-│     ├─ cutlass::Kernel2                                           0.710 ms  x5
+fp16  210.25 ms/step
+├─ Linear-GEMM              52.56 ms   25.0%
+│  └─ fp16 tensor-core GEMM (cuBLAS)                                 52.56 ms  25.0%
+│     ├─ cutlass_80_wmma_tensorop_f16_s161616gemm_f16_32x32_32x1_  22.826 ms  x5
+│     ├─ cutlass_80_wmma_tensorop_f16_s161616gemm_f16_32x32_128x2  21.586 ms  x5
+│     ├─ ampere_fp16_s1688gemm_fp16_256x64_ldg8_f2f_stages_32x1_n   1.847 ms  x5
+│     ├─ ampere_fp16_s1688gemm_fp16_64x128_sliced1x2_ldg8_f2f_nn    1.839 ms  x5
+│     ├─ ampere_fp16_s1688gemm_fp16_128x128_ldg8_relu_f2f_tn        1.548 ms  x10
+│     ├─ cutlass_80_tensorop_f16_s16816gemm_relu_f16_128x256_32x3   0.712 ms  x5
 │     ├─ ampere_fp16_s16816gemm_fp16_256x128_ldg8_relu_f2f_stages   0.463 ms  x5
-│     ├─ cutlass::Kernel2                                           0.420 ms  x10
-│     ├─ ma_gemm_f16f16_f16f32_f32_tn_n_tilesize96x128x32_stage4_   0.310 ms  x5
-│     ├─ mma_gemm_f16f16_f16f32_f32_tn_n_tilesize32x32x64_stage6_   0.186 ms  x21
+│     ├─ cutlass_80_wmma_tensorop_f16_s161616gemm_f16_32x32_64x1_   0.419 ms  x10
+│     ├─ sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize96x128x32_   0.309 ms  x5
+│     ├─ sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize32x32x64_s   0.186 ms  x21
 │     ├─ ampere_fp16_s16816gemm_fp16_64x64_sliced1x2_ldg8_relu_f2   0.169 ms  x15
-│     ├─ a_gemm_f16f16_f16f32_f32_tn_n_tilesize160x128x32_stage4_   0.163 ms  x5
-│     ├─ 2_f32_tn_n_tilesize192x128x32_stage4_warpsize4x2x1_tenso   0.126 ms  x2
-│     ├─ cutlass::Kernel2                                           0.075 ms  x5
+│     ├─ sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize160x128x32   0.164 ms  x5
+│     ├─ sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize192x128x32   0.127 ms  x2
+│     ├─ cutlass_80_wmma_tensorop_f16_s161616gemm_f16_16x16_32x1_   0.075 ms  x5
 │     ├─ ampere_fp16_s16816gemm_fp16_128x64_ldg8_f2f_stages_32x6_   0.073 ms  x3
-│     ├─ cutlass::Kernel2                                           0.070 ms  x5
+│     ├─ cutlass_80_wmma_tensorop_f16_s161616gemm_f16_16x16_64x1_   0.071 ms  x5
 │     ├─ ampere_fp16_s1688gemm_fp16_128x128_ldg8_f2f_stages_32x1_   0.055 ms  x1
-│     ├─ cutlass::Kernel2                                           0.027 ms  x1
+│     ├─ cutlass_80_tensorop_f16_s16816gemm_relu_f16_128x128_32x4   0.027 ms  x1
 │     ├─ ampere_fp16_s16816gemm_fp16_256x128_ldg8_f2f_stages_32x3   0.026 ms  x1
 │     ├─ ampere_fp16_s16816gemm_fp16_128x64_ldg8_relu_f2f_stages_   0.015 ms  x1
-│     └─ cutlass::Kernel2                                           0.015 ms  x1
-├─ Attention                52.53 ms   25.0%
-│  ├─ fp16 SDPA (unfused math backend: BMM + softmax)                46.48 ms  22.1%
-│  │  ├─                                                           43.603 ms  x5
-│  │  ├─                                                            2.678 ms  x5
-│  │  ├─                                                            0.172 ms  x5
-│  │  └─                                                            0.021 ms  x5
+│     └─ cutlass_80_wmma_tensorop_f16_s161616gemm_f16_16x16_32x1_   0.015 ms  x1
+├─ Attention                52.48 ms   25.0%
+│  ├─ fp16 SDPA (unfused math backend: BMM + softmax)                46.41 ms  22.1%
+│  │  ├─ softmax_warp_forward                                      43.542 ms  x5
+│  │  ├─ softmax_warp_forward                                       2.676 ms  x5
+│  │  ├─ softmax_warp_forward                                       0.173 ms  x5
+│  │  └─ softmax_warp_forward                                       0.021 ms  x5
 │  └─ fused GroupNorm->QKV projection (CUTLASS per-sample fusion)     6.06 ms   2.9%
-│     └─ IdentityThreadblockSwizzleILi1EEELNS1_8OperatorE0ENS1_17   6.056 ms  x10
-├─ Conv                     41.97 ms   20.0%
-│  └─ fp16 cuDNN conv                                                41.97 ms  20.0%
-│     ├─ cutlass__5x_cudnn::Kernel                                 17.691 ms  x15
-│     ├─ cutlass__5x_cudnn::Kernel                                 13.419 ms  x13
-│     ├─ cutlass__5x_cudnn::Kernel                                  3.404 ms  x14
-│     ├─ cutlass__5x_cudnn::Kernel                                  2.483 ms  x11
-│     ├─ krsc_nhwc_tilesize128x64x32_stage4_warpsize2x2x1_g1_tens   1.528 ms  x7
-│     ├─ rsc_nhwc_tilesize256x128x32_stage3_warpsize4x2x1_g1_tens   1.220 ms  x1
-│     ├─ krsc_nhwc_tilesize64x128x32_stage4_warpsize2x2x1_g1_tens   1.014 ms  x13
-│     ├─ rsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tens   0.638 ms  x5
-│     ├─ krsc_nhwc_tilesize128x32x32_stage4_warpsize4x1x1_g1_tens   0.282 ms  x1
-│     ├─ c_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x   0.164 ms  x1
-│     ├─ ze128x16x32_stage1_warpsize4x1x1_g1_tensor16x8x16_aligna   0.117 ms  x1
+│     └─ ImplicitGemmConvolutionFusionPerSample                     6.064 ms  x10
+├─ Conv                     42.12 ms   20.0%
+│  └─ fp16 cuDNN conv                                                42.12 ms  20.0%
+│     ├─ cutlass_tensorop_f16_s16816fprop_optimized_f16_128x128_3  17.805 ms  x16
+│     ├─ cutlass_tensorop_f16_s16816fprop_optimized_f16_128x64_64  12.263 ms  x13
+│     ├─ cutlass_tensorop_f16_s16816fprop_optimized_f16_128x64_32   4.906 ms  x12
+│     ├─ cutlass_tensorop_f16_s16816fprop_optimized_f16_64x64_64x   2.495 ms  x12
+│     ├─ sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc   1.988 ms  x7
+│     ├─ sm86_xmma_fprop_implicit_gemm_indexed_f16f16_f16f32_f32_   1.017 ms  x13
+│     ├─ sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc   0.801 ms  x6
+│     ├─ sm80_xmma_fprop_implicit_gemm_indexed_f16f16_f16f32_f32_   0.434 ms  x1
+│     ├─ sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc   0.282 ms  x1
+│     ├─ sm80_xmma_fprop_implicit_gemm_indexed_wo_smem_f16f16_f16   0.117 ms  x1
 │     └─ nhwcAddPaddingKernel                                       0.011 ms  x2
-├─ Elementwise-Cast         36.32 ms   17.3%
-│  ├─ dtype cast / device copy                                       16.73 ms   8.0%
-│  │  ├─ elementwise_kernel                                         9.819 ms  x156
-│  │  ├─ unrolled_elementwise_kernel                                4.047 ms  x31
-│  │  ├─ elementwise_kernel                                         1.609 ms  x5
-│  │  ├─ unrolled_elementwise_kernel                                0.724 ms  x9
-│  │  └─ elementwise_kernel                                         0.532 ms  x4
+├─ Elementwise-Cast         36.33 ms   17.3%
+│  ├─ dtype cast / device copy                                       16.74 ms   8.0%
+│  │  ├─ elementwise_kernel[direct_copy_kernel_cuda]                9.833 ms  x156
+│  │  ├─ unrolled_elementwise_kernel[direct_copy_kernel_cuda]       4.048 ms  x31
+│  │  ├─ elementwise_kernel[direct_copy_kernel_cuda]                1.608 ms  x5
+│  │  ├─ unrolled_elementwise_kernel[direct_copy_kernel_cuda]       0.724 ms  x9
+│  │  └─ elementwise_kernel[direct_copy_kernel_cuda]                0.530 ms  x4
 │  ├─ residual add                                                   13.08 ms   6.2%
-│  │  ├─ elementwise_kernel                                         6.524 ms  x89
-│  │  ├─ vectorized_elementwise_kernel                              5.115 ms  x52
-│  │  ├─ unrolled_elementwise_kernel                                1.419 ms  x4
-│  │  └─ elementwise_kernel                                         0.022 ms  x2
+│  │  ├─ elementwise_kernel[CUDAFunctor_add]                        6.525 ms  x89
+│  │  ├─ vectorized_elementwise_kernel[CUDAFunctor_add]             5.114 ms  x52
+│  │  ├─ unrolled_elementwise_kernel[CUDAFunctor_add]               1.422 ms  x4
+│  │  └─ elementwise_kernel[CUDAFunctor_add]                        0.022 ms  x2
 │  ├─ other elementwise                                               4.66 ms   2.2%
-│  │  ├─ elementwise_kernel                                         4.251 ms  x42
-│  │  └─ elementwise_kernel                                         0.395 ms  x1
+│  │  ├─ elementwise_kernel                                         4.249 ms  x42
+│  │  └─ elementwise_kernel                                         0.394 ms  x1
 │  ├─ skip-concat (decoder): specialized 2-tensor channels-last       1.29 ms   0.6%
-│  │  └─ cat2_channels_last_fp16_kernel                             1.286 ms  x11
+│  │  └─ cat2_channels_last_fp16_kernel                             1.288 ms  x11
 │  ├─ SiLU / activation (standalone)                                  0.51 ms   0.2%
-│  │  ├─ vectorized_elementwise_kernel                              0.395 ms  x1
-│  │  └─ vectorized_elementwise_kernel                              0.118 ms  x36
+│  │  ├─ vectorized_elementwise_kernel                              0.394 ms  x1
+│  │  └─ vectorized_elementwise_kernel                              0.117 ms  x36
 │  ├─ fill / zero-init                                                0.04 ms   0.0%
-│  │  └─ vectorized_elementwise_kernel                              0.040 ms  x20
+│  │  └─ vectorized_elementwise_kernel[FillFunctor]                 0.040 ms  x20
 │  └─ reduction (amax/absmax for dynamic scales)                      0.00 ms   0.0%
-├─ Normalization            22.79 ms   10.8%
-│  ├─ GN+SiLU only (fp16 out; updown blocks + fp16 mode)             21.52 ms  10.2%
-│  │  ├─ group_norm_silu_nhwc_kernel                               18.235 ms  x77
-│  │  └─ group_norm_silu_nhwc_kernel                                3.284 ms  x4
+├─ Normalization            22.84 ms   10.9%
+│  ├─ GN+SiLU only (fp16 out; updown blocks + fp16 mode)             21.57 ms  10.3%
+│  │  ├─ group_norm_silu_nhwc_kernel                               18.287 ms  x77
+│  │  └─ group_norm_silu_nhwc_kernel                                3.287 ms  x4
 │  ├─ GN accumulate/finalize (split two-pass helper kernels)          1.00 ms   0.5%
-│  │  ├─ gn_accum_kernel                                            0.966 ms  x10
+│  │  ├─ gn_accum_kernel                                            0.964 ms  x10
 │  │  └─ gn_finalize_kernel                                         0.035 ms  x10
 │  └─ PyTorch native GroupNorm internals (fp16 fallback path)         0.26 ms   0.1%
-│     └─                                                            0.261 ms  x1
-├─ Resize                    3.86 ms    1.8%
+│     └─ RowwiseMomentsCUDAKernel                                   0.261 ms  x1
+├─ Resize                    3.87 ms    1.8%
 │  ├─ nearest upsample (unfused; x_upd path)                          2.83 ms   1.4%
-│  │  └─                                                            2.828 ms  x8
+│  │  └─ upsample_nearest2d_nhwc_out_frame                          2.833 ms  x8
 │  └─ avg_pool 2x2 (unfused; x_upd path)                              1.04 ms   0.5%
-│     └─                                                            1.036 ms  x8
+│     └─ avg_pool2d_out_cuda_frame_nhwc                             1.041 ms  x8
 ├─ Memory-op                 0.03 ms    0.0%
 │  └─ memset / memcpy                                                 0.03 ms   0.0%
-│     └─ Memset                                                     0.021 ms  x18
+│     └─ Memset                                                     0.024 ms  x20
 └─ Sampler-side              0.00 ms    0.0%
    └─ DDIM schedule indexing / noise generation                       0.00 ms   0.0%
 ```
 
-#### int8_baseline — 117.86 ms/step, 61 distinct CUDA kernels
+#### int8_baseline — 117.93 ms/step, 62 distinct CUDA kernels
 
 ```
-int8_baseline  117.86 ms/step   (100% of GPU time accounted)
-├─ Attention                43.52 ms   36.9%
-│  ├─ int8/int4 flash kernel (fused QK^T+softmax+AV)                 37.90 ms  32.2%
-│  │  ├─ flash_attn_int8_mma_kernel                                36.934 ms  x10
-│  │  └─ flash_attn_int8_packed_mma_kernel                          0.970 ms  x5
+int8_baseline  117.93 ms/step
+├─ Attention                43.54 ms   36.9%
+│  ├─ int8/int4 flash kernel (fused QK^T+softmax+AV)                 37.92 ms  32.2%
+│  │  ├─ flash_attn_int8_mma_kernel                                36.953 ms  x10
+│  │  └─ flash_attn_int8_packed_mma_kernel                          0.971 ms  x5
 │  ├─ Q/K/V quantize (packed, static scales)                          3.63 ms   3.1%
-│  │  └─ aq_qtok_packed_static_qk_vec2_kernel                       3.625 ms  x10
+│  │  └─ aq_qtok_packed_static_qk_vec2_kernel                       3.626 ms  x10
 │  ├─ V quantize + transpose to AV layout                             1.85 ms   1.6%
-│  │  └─ aq_vquant_trans_packed_tiled_vec2_kernel                   1.852 ms  x10
+│  │  └─ aq_vquant_trans_packed_tiled_vec2_kernel                   1.854 ms  x10
 │  ├─ attention output quantize (for the proj GEMM)                   0.11 ms   0.1%
 │  │  └─ quant_attn_out_int8_kernel                                 0.112 ms  x6
 │  └─ fp16 SDPA (unfused math backend: BMM + softmax)                 0.02 ms   0.0%
-│     └─                                                            0.021 ms  x5
-├─ Conv                     30.41 ms   25.8%
-│  ├─ quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)     28.06 ms  23.8%
-│  │  ├─ IdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17  15.640 ms  x35
-│  │  └─ IdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17  12.417 ms  x35
-│  └─ fp16 cuDNN conv                                                 2.35 ms   2.0%
-│     ├─ krsc_nhwc_tilesize128x64x32_stage4_warpsize2x2x1_g1_tens   1.147 ms  x4
-│     ├─ rsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tens   0.635 ms  x5
-│     ├─ krsc_nhwc_tilesize128x32x32_stage4_warpsize4x1x1_g1_tens   0.276 ms  x1
-│     ├─ c_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x   0.164 ms  x1
-│     ├─ ze128x16x32_stage1_warpsize4x1x1_g1_tensor16x8x16_aligna   0.115 ms  x1
+│     └─ softmax_warp_forward                                       0.021 ms  x5
+├─ Conv                     30.44 ms   25.8%
+│  ├─ quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)     28.08 ms  23.8%
+│  │  ├─ ImplicitGemmConvolutionEVT                                15.653 ms  x35
+│  │  └─ ImplicitGemmConvolutionEVT                                12.426 ms  x35
+│  └─ fp16 cuDNN conv                                                 2.36 ms   2.0%
+│     ├─ sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc   0.797 ms  x6
+│     ├─ sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc   0.637 ms  x2
+│     ├─ sm80_xmma_fprop_implicit_gemm_indexed_f16f16_f16f32_f32_   0.436 ms  x1
+│     ├─ sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc   0.275 ms  x1
+│     ├─ sm80_xmma_fprop_implicit_gemm_indexed_wo_smem_f16f16_f16   0.115 ms  x1
+│     ├─ cutlass_tensorop_f16_s16816fprop_optimized_f16_128x128_3   0.090 ms  x1
 │     └─ nhwcAddPaddingKernel                                       0.011 ms  x2
-├─ Normalization            24.03 ms   20.4%
-│  ├─ GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)    21.92 ms  18.6%
-│  │  └─ group_norm_silu_quantize_nhwc_vec2_kernel                 21.923 ms  x83
+├─ Normalization            24.05 ms   20.4%
+│  ├─ GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)    21.94 ms  18.6%
+│  │  └─ group_norm_silu_quantize_nhwc_vec2_kernel                 21.939 ms  x83
 │  ├─ GN+SiLU only (fp16 out; updown blocks + fp16 mode)              1.84 ms   1.6%
-│  │  └─ group_norm_silu_nhwc_kernel                                1.841 ms  x8
+│  │  └─ group_norm_silu_nhwc_kernel                                1.842 ms  x8
 │  └─ PyTorch native GroupNorm internals (fp16 fallback path)         0.27 ms   0.2%
-│     └─                                                            0.262 ms  x1
+│     └─ RowwiseMomentsCUDAKernel                                   0.262 ms  x1
 ├─ Linear-GEMM               9.05 ms    7.7%
 │  ├─ int8/int4 quantized GEMM (W8A8 / W4A4)                          8.23 ms   7.0%
-│  │  └─ gemm_w8a8_kernel_awq                                       8.234 ms  x42
+│  │  └─ gemm_w8a8_kernel_awq                                       8.232 ms  x42
 │  └─ fp16 tensor-core GEMM (cuBLAS)                                  0.82 ms   0.7%
-│     ├─ mma_gemm_f16f16_f16f32_f32_tn_n_tilesize32x32x64_stage6_   0.184 ms  x21
+│     ├─ sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize32x32x64_s   0.184 ms  x21
 │     ├─ ampere_fp16_s16816gemm_fp16_64x64_sliced1x2_ldg8_relu_f2   0.179 ms  x15
-│     ├─ 2_f32_tn_n_tilesize192x128x32_stage4_warpsize4x2x1_tenso   0.125 ms  x2
-│     ├─ cutlass::Kernel2                                           0.075 ms  x5
+│     ├─ sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize192x128x32   0.125 ms  x2
+│     ├─ cutlass_80_wmma_tensorop_f16_s161616gemm_f16_16x16_32x1_   0.075 ms  x5
 │     ├─ ampere_fp16_s16816gemm_fp16_128x64_ldg8_f2f_stages_32x6_   0.073 ms  x3
-│     ├─ cutlass::Kernel2                                           0.072 ms  x5
+│     ├─ cutlass_80_wmma_tensorop_f16_s161616gemm_f16_16x16_64x1_   0.072 ms  x5
 │     ├─ ampere_fp16_s1688gemm_fp16_128x128_ldg8_f2f_stages_32x1_   0.055 ms  x1
 │     ├─ ampere_fp16_s16816gemm_fp16_256x128_ldg8_f2f_stages_32x3   0.026 ms  x1
-│     └─ cutlass::Kernel2                                           0.015 ms  x1
+│     └─ cutlass_80_wmma_tensorop_f16_s161616gemm_f16_16x16_32x1_   0.015 ms  x1
 ├─ Elementwise-Cast          7.89 ms    6.7%
-│  ├─ dtype cast / device copy                                        3.13 ms   2.7%
-│  │  ├─ unrolled_elementwise_kernel                                1.168 ms  x9
-│  │  ├─ elementwise_kernel                                         0.901 ms  x90
-│  │  ├─ elementwise_kernel                                         0.549 ms  x21
-│  │  └─ unrolled_elementwise_kernel                                0.515 ms  x5
+│  ├─ dtype cast / device copy                                        3.13 ms   2.6%
+│  │  ├─ unrolled_elementwise_kernel[direct_copy_kernel_cuda]       1.167 ms  x9
+│  │  ├─ elementwise_kernel[direct_copy_kernel_cuda]                0.898 ms  x90
+│  │  ├─ elementwise_kernel[direct_copy_kernel_cuda]                0.550 ms  x21
+│  │  └─ unrolled_elementwise_kernel[direct_copy_kernel_cuda]       0.515 ms  x5
 │  ├─ skip-concat (decoder): specialized 2-tensor channels-last       2.16 ms   1.8%
-│  │  └─ cat2_channels_last_fp16_kernel                             2.163 ms  x15
+│  │  └─ cat2_channels_last_fp16_kernel                             2.164 ms  x15
 │  ├─ residual add                                                    1.47 ms   1.2%
-│  │  ├─ elementwise_kernel                                         1.448 ms  x19
-│  │  └─ elementwise_kernel                                         0.022 ms  x2
+│  │  ├─ elementwise_kernel[CUDAFunctor_add]                        1.448 ms  x19
+│  │  └─ elementwise_kernel[CUDAFunctor_add]                        0.023 ms  x2
 │  ├─ other elementwise                                               0.60 ms   0.5%
-│  │  ├─ elementwise_kernel                                         0.400 ms  x1
+│  │  ├─ elementwise_kernel                                         0.398 ms  x1
 │  │  └─ elementwise_kernel                                         0.186 ms  x12
 │  ├─ SiLU / activation (standalone)                                  0.52 ms   0.4%
-│  │  ├─ vectorized_elementwise_kernel                              0.398 ms  x1
-│  │  └─ vectorized_elementwise_kernel                              0.120 ms  x36
+│  │  ├─ vectorized_elementwise_kernel                              0.397 ms  x1
+│  │  └─ vectorized_elementwise_kernel                              0.118 ms  x36
 │  ├─ reduction (amax/absmax for dynamic scales)                      0.00 ms   0.0%
 │  └─ fill / zero-init                                                0.00 ms   0.0%
 ├─ Resize                    2.95 ms    2.5%
 │  ├─ nearest upsample (unfused; x_upd path)                          1.40 ms   1.2%
-│  │  └─                                                            1.402 ms  x4
+│  │  └─ upsample_nearest2d_nhwc_out_frame                          1.402 ms  x4
 │  ├─ upsample(nearest,2x)+quantize FUSED                             0.84 ms   0.7%
 │  │  └─ upsample2x_quantize_noahat_kernel                          0.840 ms  x4
 │  ├─ avg_pool 2x2 (unfused; x_upd path)                              0.52 ms   0.4%
-│  │  └─                                                            0.517 ms  x4
+│  │  └─ avg_pool2d_out_cuda_frame_nhwc                             0.518 ms  x4
 │  └─ avg_pool(2x2)+quantize FUSED                                    0.19 ms   0.2%
 │     └─ avgpool2x_quantize_noahat_kernel                           0.194 ms  x4
 ├─ Memory-op                 0.01 ms    0.0%
@@ -425,276 +452,279 @@ int8_baseline  117.86 ms/step   (100% of GPU time accounted)
    └─ DDIM schedule indexing / noise generation                       0.00 ms   0.0%
 ```
 
-#### int4_baseline — 106.45 ms/step, 80 distinct CUDA kernels
+#### int4_baseline — 106.58 ms/step, 81 distinct CUDA kernels
 
 ```
-int4_baseline  106.45 ms/step   (100% of GPU time accounted)
-├─ Attention                42.18 ms   39.6%
-│  ├─ int8/int4 flash kernel (fused QK^T+softmax+AV)                 36.42 ms  34.2%
-│  │  └─ flash_attn_int4_mma_kernel                                36.419 ms  x15
+int4_baseline  106.58 ms/step
+├─ Attention                42.21 ms   39.6%
+│  ├─ int8/int4 flash kernel (fused QK^T+softmax+AV)                 36.44 ms  34.2%
+│  │  └─ flash_attn_int4_mma_kernel                                36.441 ms  x15
 │  ├─ Q/K/V quantize (packed, static scales)                          3.64 ms   3.4%
-│  │  └─ aq_qtok_packed_static_qk_vec2_kernel                       3.638 ms  x15
+│  │  └─ aq_qtok_packed_static_qk_vec2_kernel                       3.642 ms  x15
 │  ├─ V quantize + transpose to AV layout                             2.01 ms   1.9%
-│  │  └─ aq_vquant_trans_packed_tiled_vec2_kernel                   2.011 ms  x15
+│  │  └─ aq_vquant_trans_packed_tiled_vec2_kernel                   2.013 ms  x15
 │  ├─ attention output quantize (for the proj GEMM)                   0.09 ms   0.1%
 │  │  └─ quant_attn_out_int4_pack_kernel                            0.086 ms  x6
 │  └─ fp16 SDPA (unfused math backend: BMM + softmax)                 0.02 ms   0.0%
-│     └─                                                            0.021 ms  x5
-├─ Normalization            24.74 ms   23.2%
-│  ├─ GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)    19.83 ms  18.6%
-│  │  └─ group_norm_silu_quantize_pack_nhwc_vec2_kernel            19.831 ms  x78
-│  ├─ GN+SiLU only (fp16 out; updown blocks + fp16 mode)              4.64 ms   4.4%
-│  │  └─ group_norm_silu_nhwc_kernel                                4.641 ms  x13
+│     └─ softmax_warp_forward                                       0.021 ms  x5
+├─ Normalization            24.77 ms   23.2%
+│  ├─ GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)    19.85 ms  18.6%
+│  │  └─ group_norm_silu_quantize_pack_nhwc_vec2_kernel            19.854 ms  x78
+│  ├─ GN+SiLU only (fp16 out; updown blocks + fp16 mode)              4.65 ms   4.4%
+│  │  └─ group_norm_silu_nhwc_kernel                                4.647 ms  x13
 │  └─ PyTorch native GroupNorm internals (fp16 fallback path)         0.27 ms   0.2%
-│     └─                                                            0.263 ms  x1
-├─ Conv                     15.95 ms   15.0%
-│  ├─ quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)     13.59 ms  12.8%
-│  │  ├─ IdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17   7.614 ms  x35
-│  │  └─ IdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17   5.976 ms  x35
-│  └─ fp16 cuDNN conv                                                 2.36 ms   2.2%
-│     ├─ krsc_nhwc_tilesize128x64x32_stage4_warpsize2x2x1_g1_tens   1.161 ms  x4
-│     ├─ rsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tens   0.638 ms  x5
-│     ├─ krsc_nhwc_tilesize128x32x32_stage4_warpsize4x1x1_g1_tens   0.273 ms  x1
-│     ├─ c_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x   0.164 ms  x1
-│     ├─ ze128x16x32_stage1_warpsize4x1x1_g1_tensor16x8x16_aligna   0.115 ms  x1
+│     └─ RowwiseMomentsCUDAKernel                                   0.263 ms  x1
+├─ Conv                     15.98 ms   15.0%
+│  ├─ quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)     13.60 ms  12.8%
+│  │  ├─ ImplicitGemmConvolutionEVT                                 7.619 ms  x35
+│  │  └─ ImplicitGemmConvolutionEVT                                 5.981 ms  x35
+│  └─ fp16 cuDNN conv                                                 2.38 ms   2.2%
+│     ├─ sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc   0.803 ms  x6
+│     ├─ sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc   0.643 ms  x2
+│     ├─ sm80_xmma_fprop_implicit_gemm_indexed_f16f16_f16f32_f32_   0.440 ms  x1
+│     ├─ sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc   0.276 ms  x1
+│     ├─ sm80_xmma_fprop_implicit_gemm_indexed_wo_smem_f16f16_f16   0.114 ms  x1
+│     ├─ cutlass_tensorop_f16_s16816fprop_optimized_f16_128x128_3   0.092 ms  x1
 │     └─ nhwcAddPaddingKernel                                       0.011 ms  x2
-├─ Elementwise-Cast         11.86 ms   11.1%
-│  ├─ dtype cast / device copy                                        4.64 ms   4.4%
-│  │  ├─ elementwise_kernel                                         1.950 ms  x95
-│  │  ├─ unrolled_elementwise_kernel                                1.322 ms  x45
-│  │  ├─ elementwise_kernel                                         0.594 ms  x31
-│  │  ├─ unrolled_elementwise_kernel                                0.522 ms  x5
-│  │  ├─ unrolled_elementwise_kernel                                0.141 ms  x37
-│  │  └─ unrolled_elementwise_kernel                                0.111 ms  x37
-│  ├─ skip-concat (decoder): specialized 2-tensor channels-last       2.17 ms   2.0%
-│  │  └─ cat2_channels_last_fp16_kernel                             2.174 ms  x15
-│  ├─ other elementwise                                               1.51 ms   1.4%
-│  │  ├─ elementwise_kernel                                         0.401 ms  x1
+├─ Elementwise-Cast         11.88 ms   11.2%
+│  ├─ dtype cast / device copy                                        4.65 ms   4.4%
+│  │  ├─ elementwise_kernel[direct_copy_kernel_cuda]                1.955 ms  x95
+│  │  ├─ unrolled_elementwise_kernel[direct_copy_kernel_cuda]       1.323 ms  x45
+│  │  ├─ elementwise_kernel[direct_copy_kernel_cuda]                0.595 ms  x31
+│  │  ├─ unrolled_elementwise_kernel[direct_copy_kernel_cuda]       0.522 ms  x5
+│  │  ├─ unrolled_elementwise_kernel[direct_copy_kernel_cuda]       0.143 ms  x37
+│  │  └─ unrolled_elementwise_kernel[direct_copy_kernel_cuda]       0.110 ms  x37
+│  ├─ skip-concat (decoder): specialized 2-tensor channels-last       2.18 ms   2.0%
+│  │  └─ cat2_channels_last_fp16_kernel                             2.176 ms  x15
+│  ├─ other elementwise                                               1.52 ms   1.4%
+│  │  ├─ elementwise_kernel                                         0.402 ms  x1
 │  │  ├─ elementwise_kernel                                         0.218 ms  x74
-│  │  ├─ elementwise_kernel                                         0.185 ms  x12
-│  │  ├─ elementwise_kernel                                         0.140 ms  x36
+│  │  ├─ elementwise_kernel                                         0.186 ms  x12
+│  │  ├─ elementwise_kernel                                         0.141 ms  x36
 │  │  ├─ vectorized_elementwise_kernel                              0.140 ms  x72
-│  │  ├─ vectorized_elementwise_kernel                              0.077 ms  x36
+│  │  ├─ vectorized_elementwise_kernel                              0.078 ms  x36
 │  │  ├─ vectorized_elementwise_kernel                              0.066 ms  x36
 │  │  ├─ vectorized_elementwise_kernel                              0.065 ms  x36
-│  │  ├─ vectorized_elementwise_kernel                              0.063 ms  x36
-│  │  ├─ vectorized_elementwise_kernel                              0.063 ms  x37
+│  │  ├─ vectorized_elementwise_kernel                              0.064 ms  x36
+│  │  ├─ vectorized_elementwise_kernel                              0.064 ms  x37
 │  │  └─ vectorized_elementwise_kernel                              0.063 ms  x37
 │  ├─ residual add                                                    1.48 ms   1.4%
-│  │  ├─ elementwise_kernel                                         1.461 ms  x19
-│  │  └─ elementwise_kernel                                         0.022 ms  x2
+│  │  ├─ elementwise_kernel[CUDAFunctor_add]                        1.460 ms  x19
+│  │  └─ elementwise_kernel[CUDAFunctor_add]                        0.022 ms  x2
 │  ├─ fill / zero-init                                                0.90 ms   0.8%
-│  │  ├─ vectorized_elementwise_kernel                              0.655 ms  x5
-│  │  └─ vectorized_elementwise_kernel                              0.247 ms  x15
+│  │  ├─ vectorized_elementwise_kernel[FillFunctor]                 0.655 ms  x5
+│  │  └─ vectorized_elementwise_kernel[FillFunctor]                 0.248 ms  x15
 │  ├─ reduction (amax/absmax for dynamic scales)                      0.63 ms   0.6%
 │  │  └─ reduce_kernel                                              0.622 ms  x36
-│  └─ SiLU / activation (standalone)                                  0.51 ms   0.5%
+│  └─ SiLU / activation (standalone)                                  0.52 ms   0.5%
 │     ├─ vectorized_elementwise_kernel                              0.401 ms  x1
-│     └─ vectorized_elementwise_kernel                              0.114 ms  x36
-├─ Linear-GEMM               8.19 ms    7.7%
-│  ├─ int8/int4 quantized GEMM (W8A8 / W4A4)                          7.75 ms   7.3%
-│  │  ├─ gemm_w4a4_kernel_awq                                       7.056 ms  x42
+│     └─ vectorized_elementwise_kernel                              0.117 ms  x36
+├─ Linear-GEMM               8.22 ms    7.7%
+│  ├─ int8/int4 quantized GEMM (W8A8 / W4A4)                          7.77 ms   7.3%
+│  │  ├─ gemm_w4a4_kernel_awq                                       7.081 ms  x42
 │  │  └─ _gemm_w4a4_kernel                                          0.689 ms  x37
 │  └─ fp16 tensor-core GEMM (cuBLAS)                                  0.45 ms   0.4%
-│     ├─ 2_f32_tn_n_tilesize192x128x32_stage4_warpsize4x2x1_tenso   0.125 ms  x2
-│     ├─ cutlass::Kernel2                                           0.076 ms  x5
-│     ├─ cutlass::Kernel2                                           0.072 ms  x5
+│     ├─ sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize192x128x32   0.125 ms  x2
+│     ├─ cutlass_80_wmma_tensorop_f16_s161616gemm_f16_16x16_32x1_   0.076 ms  x5
 │     ├─ ampere_fp16_s16816gemm_fp16_128x64_ldg8_f2f_stages_32x6_   0.072 ms  x3
+│     ├─ cutlass_80_wmma_tensorop_f16_s161616gemm_f16_16x16_64x1_   0.072 ms  x5
 │     ├─ ampere_fp16_s1688gemm_fp16_128x128_ldg8_f2f_stages_32x1_   0.055 ms  x1
 │     ├─ ampere_fp16_s16816gemm_fp16_256x128_ldg8_f2f_stages_32x3   0.026 ms  x1
-│     └─ cutlass::Kernel2                                           0.015 ms  x1
-├─ Resize                    2.67 ms    2.5%
+│     └─ cutlass_80_wmma_tensorop_f16_s161616gemm_f16_16x16_32x1_   0.015 ms  x1
+├─ Resize                    2.68 ms    2.5%
 │  ├─ nearest upsample (unfused; x_upd path)                          1.41 ms   1.3%
-│  │  └─                                                            1.406 ms  x4
+│  │  └─ upsample_nearest2d_nhwc_out_frame                          1.410 ms  x4
 │  ├─ upsample(nearest,2x)+quantize FUSED                             0.56 ms   0.5%
-│  │  └─ upsample2x_quantize_pack_noahat_kernel                     0.561 ms  x4
+│  │  └─ upsample2x_quantize_pack_noahat_kernel                     0.562 ms  x4
 │  ├─ avg_pool 2x2 (unfused; x_upd path)                              0.52 ms   0.5%
-│  │  └─                                                            0.520 ms  x4
+│  │  └─ avg_pool2d_out_cuda_frame_nhwc                             0.521 ms  x4
 │  └─ avg_pool(2x2)+quantize FUSED                                    0.19 ms   0.2%
 │     └─ avgpool2x_quantize_pack_noahat_kernel                      0.188 ms  x4
-├─ Quantize                  0.83 ms    0.8%
-│  └─ activation quantize / int4 pack (standalone)                    0.83 ms   0.8%
-│     └─ quant_act_int4_pack_kernel                                 0.834 ms  x5
+├─ Quantize                  0.84 ms    0.8%
+│  └─ activation quantize / int4 pack (standalone)                    0.84 ms   0.8%
+│     └─ quant_act_int4_pack_kernel                                 0.835 ms  x5
 ├─ Memory-op                 0.01 ms    0.0%
 │  └─ memset / memcpy                                                 0.01 ms   0.0%
 └─ Sampler-side              0.00 ms    0.0%
    └─ DDIM schedule indexing / noise generation                       0.00 ms   0.0%
 ```
 
-#### int8_modiff — 125.57 ms/step, 62 distinct CUDA kernels
+#### int8_modiff — 125.64 ms/step, 63 distinct CUDA kernels
 
 ```
-int8_modiff  125.57 ms/step   (100% of GPU time accounted)
-├─ Attention                43.36 ms   34.5%
+int8_modiff  125.64 ms/step
+├─ Attention                43.35 ms   34.5%
 │  ├─ int8/int4 flash kernel (fused QK^T+softmax+AV)                 37.76 ms  30.1%
-│  │  ├─ flash_attn_int8_mma_kernel                                36.788 ms  x10
-│  │  └─ flash_attn_int8_packed_mma_kernel                          0.976 ms  x5
-│  ├─ Q/K/V quantize (packed, static scales)                          3.60 ms   2.9%
-│  │  └─ aq_qtok_packed_static_qk_vec2_kernel                       3.605 ms  x10
+│  │  ├─ flash_attn_int8_mma_kernel                                36.785 ms  x10
+│  │  └─ flash_attn_int8_packed_mma_kernel                          0.972 ms  x5
+│  ├─ Q/K/V quantize (packed, static scales)                          3.61 ms   2.9%
+│  │  └─ aq_qtok_packed_static_qk_vec2_kernel                       3.607 ms  x10
 │  ├─ V quantize + transpose to AV layout                             1.85 ms   1.5%
-│  │  └─ aq_vquant_trans_packed_tiled_vec2_kernel                   1.855 ms  x10
+│  │  └─ aq_vquant_trans_packed_tiled_vec2_kernel                   1.854 ms  x10
 │  ├─ attention output quantize (for the proj GEMM)                   0.11 ms   0.1%
-│  │  └─ quant_attn_out_int8_kernel                                 0.111 ms  x6
+│  │  └─ quant_attn_out_int8_kernel                                 0.112 ms  x6
 │  └─ fp16 SDPA (unfused math backend: BMM + softmax)                 0.02 ms   0.0%
-│     └─                                                            0.021 ms  x5
-├─ Conv                     31.61 ms   25.2%
-│  ├─ quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)     29.27 ms  23.3%
-│  │  ├─ IdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17  15.967 ms  x35
-│  │  └─ IdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17  13.305 ms  x35
-│  └─ fp16 cuDNN conv                                                 2.34 ms   1.9%
-│     ├─ krsc_nhwc_tilesize128x64x32_stage4_warpsize2x2x1_g1_tens   1.146 ms  x4
-│     ├─ rsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tens   0.632 ms  x5
-│     ├─ krsc_nhwc_tilesize128x32x32_stage4_warpsize4x1x1_g1_tens   0.275 ms  x1
-│     ├─ c_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x   0.164 ms  x1
-│     ├─ ze128x16x32_stage1_warpsize4x1x1_g1_tensor16x8x16_aligna   0.115 ms  x1
+│     └─ softmax_warp_forward                                       0.021 ms  x5
+├─ Conv                     31.65 ms   25.2%
+│  ├─ quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)     29.29 ms  23.3%
+│  │  ├─ ImplicitGemmConvolutionEVT                                15.984 ms  x35
+│  │  └─ ImplicitGemmConvolutionEVT                                13.309 ms  x35
+│  └─ fp16 cuDNN conv                                                 2.35 ms   1.9%
+│     ├─ sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc   0.795 ms  x6
+│     ├─ sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc   0.635 ms  x2
+│     ├─ sm80_xmma_fprop_implicit_gemm_indexed_f16f16_f16f32_f32_   0.434 ms  x1
+│     ├─ sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc   0.274 ms  x1
+│     ├─ sm80_xmma_fprop_implicit_gemm_indexed_wo_smem_f16f16_f16   0.115 ms  x1
+│     ├─ cutlass_tensorop_f16_s16816fprop_optimized_f16_128x128_3   0.090 ms  x1
 │     └─ nhwcAddPaddingKernel                                       0.011 ms  x2
-├─ Normalization            27.86 ms   22.2%
-│  ├─ GN group-statistics reduction (mean/var; deliberately scalar   11.10 ms   8.8%
-│  │  └─ gn_group_stats_kernel                                     11.098 ms  x62
-│  ├─ MoDiff GN+SiLU+delta-quantize+cache apply                       9.14 ms   7.3%
-│  │  └─ gn_apply_delta_quantize_flat_vec2_kernel                   9.142 ms  x62
+├─ Normalization            27.88 ms   22.2%
+│  ├─ GN group-statistics reduction (mean/var; deliberately scalar   11.11 ms   8.8%
+│  │  └─ gn_group_stats_kernel                                     11.107 ms  x62
+│  ├─ MoDiff GN+SiLU+delta-quantize+cache apply                       9.15 ms   7.3%
+│  │  └─ gn_apply_delta_quantize_flat_vec2_kernel                   9.146 ms  x62
 │  ├─ GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)     5.52 ms   4.4%
-│  │  └─ group_norm_silu_quantize_nhwc_vec2_kernel                  5.521 ms  x21
+│  │  └─ group_norm_silu_quantize_nhwc_vec2_kernel                  5.523 ms  x21
 │  ├─ GN+SiLU only (fp16 out; updown blocks + fp16 mode)              1.84 ms   1.5%
-│  │  └─ group_norm_silu_nhwc_kernel                                1.835 ms  x8
+│  │  └─ group_norm_silu_nhwc_kernel                                1.836 ms  x8
 │  └─ PyTorch native GroupNorm internals (fp16 fallback path)         0.26 ms   0.2%
-│     └─                                                            0.261 ms  x1
-├─ Linear-GEMM               9.03 ms    7.2%
-│  ├─ int8/int4 quantized GEMM (W8A8 / W4A4)                          8.22 ms   6.5%
-│  │  └─ gemm_w8a8_kernel_awq                                       8.220 ms  x42
+│     └─ RowwiseMomentsCUDAKernel                                   0.261 ms  x1
+├─ Linear-GEMM               9.04 ms    7.2%
+│  ├─ int8/int4 quantized GEMM (W8A8 / W4A4)                          8.23 ms   6.5%
+│  │  └─ gemm_w8a8_kernel_awq                                       8.229 ms  x42
 │  └─ fp16 tensor-core GEMM (cuBLAS)                                  0.81 ms   0.6%
-│     ├─ mma_gemm_f16f16_f16f32_f32_tn_n_tilesize32x32x64_stage6_   0.181 ms  x21
-│     ├─ ampere_fp16_s16816gemm_fp16_64x64_sliced1x2_ldg8_relu_f2   0.173 ms  x15
-│     ├─ 2_f32_tn_n_tilesize192x128x32_stage4_warpsize4x2x1_tenso   0.124 ms  x2
-│     ├─ cutlass::Kernel2                                           0.075 ms  x5
+│     ├─ sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize32x32x64_s   0.181 ms  x21
+│     ├─ ampere_fp16_s16816gemm_fp16_64x64_sliced1x2_ldg8_relu_f2   0.174 ms  x15
+│     ├─ sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize192x128x32   0.125 ms  x2
+│     ├─ cutlass_80_wmma_tensorop_f16_s161616gemm_f16_16x16_32x1_   0.076 ms  x5
 │     ├─ ampere_fp16_s16816gemm_fp16_128x64_ldg8_f2f_stages_32x6_   0.073 ms  x3
-│     ├─ cutlass::Kernel2                                           0.071 ms  x5
-│     ├─ ampere_fp16_s1688gemm_fp16_128x128_ldg8_f2f_stages_32x1_   0.054 ms  x1
+│     ├─ cutlass_80_wmma_tensorop_f16_s161616gemm_f16_16x16_64x1_   0.071 ms  x5
+│     ├─ ampere_fp16_s1688gemm_fp16_128x128_ldg8_f2f_stages_32x1_   0.055 ms  x1
 │     ├─ ampere_fp16_s16816gemm_fp16_256x128_ldg8_f2f_stages_32x3   0.026 ms  x1
-│     └─ cutlass::Kernel2                                           0.015 ms  x1
-├─ Elementwise-Cast          8.48 ms    6.8%
+│     └─ cutlass_80_wmma_tensorop_f16_s161616gemm_f16_16x16_32x1_   0.015 ms  x1
+├─ Elementwise-Cast          8.49 ms    6.8%
 │  ├─ dtype cast / device copy                                        3.72 ms   3.0%
-│  │  ├─ unrolled_elementwise_kernel                                1.426 ms  x80
-│  │  ├─ elementwise_kernel                                         0.881 ms  x90
-│  │  ├─ unrolled_elementwise_kernel                                0.864 ms  x46
-│  │  └─ elementwise_kernel                                         0.548 ms  x21
+│  │  ├─ unrolled_elementwise_kernel[direct_copy_kernel_cuda]       1.427 ms  x80
+│  │  ├─ elementwise_kernel[direct_copy_kernel_cuda]                0.881 ms  x90
+│  │  ├─ unrolled_elementwise_kernel[direct_copy_kernel_cuda]       0.863 ms  x46
+│  │  └─ elementwise_kernel[direct_copy_kernel_cuda]                0.548 ms  x21
 │  ├─ skip-concat (decoder): specialized 2-tensor channels-last       2.16 ms   1.7%
-│  │  └─ cat2_channels_last_fp16_kernel                             2.158 ms  x15
+│  │  └─ cat2_channels_last_fp16_kernel                             2.160 ms  x15
 │  ├─ residual add                                                    1.47 ms   1.2%
-│  │  ├─ elementwise_kernel                                         1.447 ms  x19
-│  │  └─ elementwise_kernel                                         0.022 ms  x2
+│  │  ├─ elementwise_kernel[CUDAFunctor_add]                        1.447 ms  x19
+│  │  └─ elementwise_kernel[CUDAFunctor_add]                        0.022 ms  x2
 │  ├─ other elementwise                                               0.60 ms   0.5%
-│  │  ├─ elementwise_kernel                                         0.398 ms  x1
+│  │  ├─ elementwise_kernel                                         0.399 ms  x1
 │  │  └─ elementwise_kernel                                         0.185 ms  x12
 │  ├─ SiLU / activation (standalone)                                  0.53 ms   0.4%
-│  │  └─ vectorized_elementwise_kernel                              0.529 ms  x37
+│  │  └─ vectorized_elementwise_kernel                              0.530 ms  x37
 │  ├─ reduction (amax/absmax for dynamic scales)                      0.00 ms   0.0%
 │  └─ fill / zero-init                                                0.00 ms   0.0%
-├─ Resize                    3.82 ms    3.0%
-│  ├─ nearest upsample (unfused; x_upd path)                          2.79 ms   2.2%
-│  │  └─                                                            2.792 ms  x8
+├─ Resize                    3.83 ms    3.0%
+│  ├─ nearest upsample (unfused; x_upd path)                          2.80 ms   2.2%
+│  │  └─ upsample_nearest2d_nhwc_out_frame                          2.796 ms  x8
 │  └─ avg_pool 2x2 (unfused; x_upd path)                              1.03 ms   0.8%
-│     └─                                                            1.031 ms  x8
-├─ Quantize                  1.39 ms    1.1%
-│  └─ MoDiff delta-quantize + a_hat cache update                      1.39 ms   1.1%
-│     ├─ static_quantize_and_update_ahat_kernel_int8_half_cache_v   1.255 ms  x4
-│     └─ static_quantize_and_update_ahat_kernel_int8_half_cache_v   0.140 ms  x4
+│     └─ avg_pool2d_out_cuda_frame_nhwc                             1.032 ms  x8
+├─ Quantize                  1.40 ms    1.1%
+│  └─ MoDiff delta-quantize + a_hat cache update                      1.40 ms   1.1%
+│     ├─ static_quantize_and_update_ahat_kernel_int8_half_cache_v   1.256 ms  x4
+│     └─ static_quantize_and_update_ahat_kernel_int8_half_cache_v   0.141 ms  x4
 ├─ Memory-op                 0.01 ms    0.0%
 │  └─ memset / memcpy                                                 0.01 ms   0.0%
 └─ Sampler-side              0.00 ms    0.0%
    └─ DDIM schedule indexing / noise generation                       0.00 ms   0.0%
 ```
 
-#### int4_modiff — 126.88 ms/step, 73 distinct CUDA kernels
+#### int4_modiff — 127.15 ms/step, 74 distinct CUDA kernels
 
 ```
-int4_modiff  126.88 ms/step   (100% of GPU time accounted)
-├─ Attention                47.14 ms   37.1%
-│  ├─ int8/int4 flash kernel (fused QK^T+softmax+AV)                 40.70 ms  32.1%
-│  │  └─ flash_attn_int4_mma_kernel                                40.705 ms  x15
+int4_modiff  127.15 ms/step
+├─ Attention                47.28 ms   37.2%
+│  ├─ int8/int4 flash kernel (fused QK^T+softmax+AV)                 40.83 ms  32.1%
+│  │  └─ flash_attn_int4_mma_kernel                                40.833 ms  x15
 │  ├─ Q/K/V quantize (packed, static scales)                          4.05 ms   3.2%
-│  │  └─ aq_qtok_packed_static_qk_vec2_kernel                       4.050 ms  x15
-│  ├─ V quantize + transpose to AV layout                             2.26 ms   1.8%
-│  │  └─ aq_vquant_trans_packed_tiled_vec2_kernel                   2.261 ms  x15
+│  │  └─ aq_qtok_packed_static_qk_vec2_kernel                       4.046 ms  x15
+│  ├─ V quantize + transpose to AV layout                             2.28 ms   1.8%
+│  │  └─ aq_vquant_trans_packed_tiled_vec2_kernel                   2.276 ms  x15
 │  ├─ attention output quantize (for the proj GEMM)                   0.10 ms   0.1%
-│  │  └─ quant_attn_out_int4_pack_kernel                            0.096 ms  x6
+│  │  └─ quant_attn_out_int4_pack_kernel                            0.095 ms  x6
 │  └─ fp16 SDPA (unfused math backend: BMM + softmax)                 0.02 ms   0.0%
-│     └─                                                            0.023 ms  x5
-├─ Normalization            30.92 ms   24.4%
+│     └─ softmax_warp_forward                                       0.022 ms  x5
+├─ Normalization            30.93 ms   24.3%
 │  ├─ GN group-statistics reduction (mean/var; deliberately scalar   12.28 ms   9.7%
-│  │  └─ gn_group_stats_kernel                                     12.280 ms  x62
-│  ├─ MoDiff GN+SiLU+delta-quantize+cache apply                       9.82 ms   7.7%
-│  │  └─ gn_apply_delta_quantize_pack_flat_vec2_kernel              9.824 ms  x62
+│  │  └─ gn_group_stats_kernel                                     12.276 ms  x62
+│  ├─ MoDiff GN+SiLU+delta-quantize+cache apply                       9.85 ms   7.7%
+│  │  └─ gn_apply_delta_quantize_pack_flat_vec2_kernel              9.847 ms  x62
 │  ├─ GN+SiLU only (fp16 out; updown blocks + fp16 mode)              5.14 ms   4.0%
-│  │  └─ group_norm_silu_nhwc_kernel                                5.144 ms  x13
+│  │  └─ group_norm_silu_nhwc_kernel                                5.141 ms  x13
 │  ├─ GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)     3.37 ms   2.6%
 │  │  └─ group_norm_silu_quantize_pack_nhwc_vec2_kernel             3.367 ms  x16
 │  └─ PyTorch native GroupNorm internals (fp16 fallback path)         0.30 ms   0.2%
-│     └─                                                            0.296 ms  x1
-├─ Conv                     20.09 ms   15.8%
-│  ├─ quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)     17.46 ms  13.8%
-│  │  ├─ IdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17   8.846 ms  x35
-│  │  └─ IdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17   8.614 ms  x35
-│  └─ fp16 cuDNN conv                                                 2.63 ms   2.1%
-│     ├─ krsc_nhwc_tilesize128x64x32_stage4_warpsize2x2x1_g1_tens   1.305 ms  x4
-│     ├─ rsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tens   0.708 ms  x5
-│     ├─ krsc_nhwc_tilesize128x32x32_stage4_warpsize4x1x1_g1_tens   0.298 ms  x1
-│     ├─ c_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x   0.184 ms  x1
-│     ├─ ze128x16x32_stage1_warpsize4x1x1_g1_tensor16x8x16_aligna   0.126 ms  x1
-│     └─ nhwcAddPaddingKernel                                       0.012 ms  x2
-├─ Elementwise-Cast         12.85 ms   10.1%
-│  ├─ dtype cast / device copy                                        5.41 ms   4.3%
-│  │  ├─ elementwise_kernel                                         2.163 ms  x95
-│  │  ├─ unrolled_elementwise_kernel                                1.477 ms  x43
-│  │  ├─ unrolled_elementwise_kernel                                0.825 ms  x9
-│  │  ├─ elementwise_kernel                                         0.663 ms  x31
-│  │  ├─ unrolled_elementwise_kernel                                0.155 ms  x37
-│  │  └─ unrolled_elementwise_kernel                                0.122 ms  x37
-│  ├─ skip-concat (decoder): specialized 2-tensor channels-last       2.43 ms   1.9%
-│  │  └─ cat2_channels_last_fp16_kernel                             2.428 ms  x15
-│  ├─ residual add                                                    1.94 ms   1.5%
-│  │  ├─ elementwise_kernel                                         1.639 ms  x19
-│  │  ├─ vectorized_elementwise_kernel                              0.279 ms  x74
-│  │  └─ elementwise_kernel                                         0.025 ms  x2
+│     └─ RowwiseMomentsCUDAKernel                                   0.296 ms  x1
+├─ Conv                     20.17 ms   15.9%
+│  ├─ quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)     17.50 ms  13.8%
+│  │  ├─ ImplicitGemmConvolutionEVT                                 8.888 ms  x35
+│  │  └─ ImplicitGemmConvolutionEVT                                 8.615 ms  x35
+│  └─ fp16 cuDNN conv                                                 2.66 ms   2.1%
+│     ├─ sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc   0.894 ms  x6
+│     ├─ sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc   0.726 ms  x2
+│     ├─ sm80_xmma_fprop_implicit_gemm_indexed_f16f16_f16f32_f32_   0.499 ms  x1
+│     ├─ sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc   0.302 ms  x1
+│     ├─ sm80_xmma_fprop_implicit_gemm_indexed_wo_smem_f16f16_f16   0.126 ms  x1
+│     ├─ cutlass_tensorop_f16_s16816fprop_optimized_f16_128x128_3   0.105 ms  x1
+│     └─ nhwcAddPaddingKernel                                       0.013 ms  x2
+├─ Elementwise-Cast         12.88 ms   10.1%
+│  ├─ dtype cast / device copy                                        5.42 ms   4.3%
+│  │  ├─ elementwise_kernel[direct_copy_kernel_cuda]                2.171 ms  x95
+│  │  ├─ unrolled_elementwise_kernel[direct_copy_kernel_cuda]       1.481 ms  x43
+│  │  ├─ unrolled_elementwise_kernel[direct_copy_kernel_cuda]       0.828 ms  x9
+│  │  ├─ elementwise_kernel[direct_copy_kernel_cuda]                0.667 ms  x31
+│  │  ├─ unrolled_elementwise_kernel[direct_copy_kernel_cuda]       0.156 ms  x37
+│  │  └─ unrolled_elementwise_kernel[direct_copy_kernel_cuda]       0.121 ms  x37
+│  ├─ skip-concat (decoder): specialized 2-tensor channels-last       2.44 ms   1.9%
+│  │  └─ cat2_channels_last_fp16_kernel                             2.438 ms  x15
+│  ├─ residual add                                                    1.95 ms   1.5%
+│  │  ├─ elementwise_kernel[CUDAFunctor_add]                        1.641 ms  x19
+│  │  ├─ vectorized_elementwise_kernel[CUDAFunctor_add]             0.281 ms  x74
+│  │  └─ elementwise_kernel[CUDAFunctor_add]                        0.025 ms  x2
 │  ├─ other elementwise                                               1.45 ms   1.1%
-│  │  ├─ elementwise_kernel                                         0.454 ms  x1
+│  │  ├─ elementwise_kernel                                         0.453 ms  x1
 │  │  ├─ elementwise_kernel                                         0.246 ms  x74
-│  │  ├─ elementwise_kernel                                         0.206 ms  x12
-│  │  ├─ elementwise_kernel                                         0.149 ms  x37
+│  │  ├─ elementwise_kernel                                         0.207 ms  x12
+│  │  ├─ elementwise_kernel                                         0.148 ms  x37
 │  │  ├─ vectorized_elementwise_kernel                              0.083 ms  x37
 │  │  ├─ vectorized_elementwise_kernel                              0.079 ms  x37
 │  │  ├─ vectorized_elementwise_kernel                              0.078 ms  x37
 │  │  ├─ vectorized_elementwise_kernel                              0.070 ms  x37
 │  │  └─ vectorized_elementwise_kernel                              0.069 ms  x37
-│  ├─ fill / zero-init                                                1.01 ms   0.8%
-│  │  ├─ vectorized_elementwise_kernel                              0.736 ms  x5
-│  │  └─ vectorized_elementwise_kernel                              0.275 ms  x15
+│  ├─ fill / zero-init                                                1.02 ms   0.8%
+│  │  ├─ vectorized_elementwise_kernel[FillFunctor]                 0.738 ms  x5
+│  │  └─ vectorized_elementwise_kernel[FillFunctor]                 0.276 ms  x15
 │  ├─ SiLU / activation (standalone)                                  0.60 ms   0.5%
-│  │  └─ vectorized_elementwise_kernel                              0.600 ms  x37
+│  │  └─ vectorized_elementwise_kernel                              0.601 ms  x37
 │  └─ reduction (amax/absmax for dynamic scales)                      0.00 ms   0.0%
-├─ Linear-GEMM               9.07 ms    7.2%
-│  ├─ int8/int4 quantized GEMM (W8A8 / W4A4)                          8.58 ms   6.8%
-│  │  ├─ gemm_w4a4_kernel_awq                                       7.859 ms  x42
-│  │  └─ _gemm_w4a4_kernel                                          0.721 ms  x37
+├─ Linear-GEMM               9.06 ms    7.1%
+│  ├─ int8/int4 quantized GEMM (W8A8 / W4A4)                          8.57 ms   6.7%
+│  │  ├─ gemm_w4a4_kernel_awq                                       7.846 ms  x42
+│  │  └─ _gemm_w4a4_kernel                                          0.719 ms  x37
 │  └─ fp16 tensor-core GEMM (cuBLAS)                                  0.49 ms   0.4%
-│     ├─ 2_f32_tn_n_tilesize192x128x32_stage4_warpsize4x2x1_tenso   0.137 ms  x2
-│     ├─ cutlass::Kernel2                                           0.082 ms  x5
+│     ├─ sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize192x128x32   0.137 ms  x2
+│     ├─ cutlass_80_wmma_tensorop_f16_s161616gemm_f16_16x16_32x1_   0.082 ms  x5
+│     ├─ cutlass_80_wmma_tensorop_f16_s161616gemm_f16_16x16_64x1_   0.080 ms  x5
 │     ├─ ampere_fp16_s16816gemm_fp16_128x64_ldg8_f2f_stages_32x6_   0.080 ms  x3
-│     ├─ cutlass::Kernel2                                           0.080 ms  x5
 │     ├─ ampere_fp16_s1688gemm_fp16_128x128_ldg8_f2f_stages_32x1_   0.060 ms  x1
-│     ├─ ampere_fp16_s16816gemm_fp16_256x128_ldg8_f2f_stages_32x3   0.031 ms  x1
-│     └─ cutlass::Kernel2                                           0.016 ms  x1
+│     ├─ ampere_fp16_s16816gemm_fp16_256x128_ldg8_f2f_stages_32x3   0.030 ms  x1
+│     └─ cutlass_80_wmma_tensorop_f16_s161616gemm_f16_16x16_32x1_   0.016 ms  x1
 ├─ Resize                    4.24 ms    3.3%
-│  ├─ nearest upsample (unfused; x_upd path)                          3.08 ms   2.4%
-│  │  └─                                                            3.084 ms  x8
+│  ├─ nearest upsample (unfused; x_upd path)                          3.09 ms   2.4%
+│  │  └─ upsample_nearest2d_nhwc_out_frame                          3.088 ms  x8
 │  └─ avg_pool 2x2 (unfused; x_upd path)                              1.15 ms   0.9%
-│     └─                                                            1.153 ms  x8
-├─ Quantize                  2.54 ms    2.0%
-│  ├─ MoDiff delta-quantize + a_hat cache update                      1.48 ms   1.2%
-│  │  ├─ static_quantize_pack_and_update_ahat_kernel_int4_half_ca   1.332 ms  x4
-│  │  └─ static_quantize_pack_and_update_ahat_kernel_int4_half_ca   0.148 ms  x4
-│  ├─ activation quantize / int4 pack (standalone)                    0.93 ms   0.7%
-│  │  └─ quant_act_int4_pack_kernel                                 0.935 ms  x5
+│     └─ avg_pool2d_out_cuda_frame_nhwc                             1.153 ms  x8
+├─ Quantize                  2.55 ms    2.0%
+│  ├─ MoDiff delta-quantize + a_hat cache update                      1.49 ms   1.2%
+│  │  ├─ static_quantize_pack_and_update_ahat_kernel_int4_half_ca   1.339 ms  x4
+│  │  └─ static_quantize_pack_and_update_ahat_kernel_int4_half_ca   0.150 ms  x4
+│  ├─ activation quantize / int4 pack (standalone)                    0.94 ms   0.7%
+│  │  └─ quant_act_int4_pack_kernel                                 0.938 ms  x5
 │  └─ MoDiff dequant + accumulate (int4 o_hat return path)            0.12 ms   0.1%
 │     └─ dequant_accumulate_and_return_int4_kernel                  0.123 ms  x37
 ├─ Memory-op                 0.04 ms    0.0%
@@ -728,11 +758,11 @@ int4_modiff  126.88 ms/step   (100% of GPU time accounted)
 它同时受 C 和 H×W 影响（GN 的归约沿 C 分组、apply 沿元素展开，两者与 conv 的 FLOP 缩放方式不同），
 所以"最大 shape 47% vs 最小 shape 67%"只是首尾两点，不能当成趋势读。
 
-全模型层面同样成立：Normalization 从 fp16 的 22.79 ms（10.8%）上升到 int4_baseline 的
-24.74 ms（**23.2%**）——绝对值几乎没降，占比翻倍。
+全模型层面同样成立：Normalization 从 fp16 的 22.84 ms（10.8%）上升到 int4_baseline 的
+24.77 ms（**23.2%**）——绝对值几乎没降，占比翻倍。
 
-这是量化的直接后果：conv 被压缩 2.6×（41.97→15.95 ms）、Linear/GEMM 被压缩 6.4×
-（52.53→8.19 ms），而 GroupNorm 本身不能量化（它的 mean/var 归约对 fp32 求和顺序敏感，
+这是量化的直接后果：conv 被压缩 2.6×（42.12→15.98 ms）、Linear/GEMM 被压缩 6.4×
+（52.48→8.22 ms），而 GroupNorm 本身不能量化（它的 mean/var 归约对 fp32 求和顺序敏感，
 本项目历史上有过 1 ULP 方差扰动翻转 int8 code 的记录）。于是它成了新瓶颈。
 
 ### 4.2 层内可见一条从未被量化的 fp16 conv
@@ -745,7 +775,7 @@ int4_modiff  126.88 ms/step   (100% of GPU time accounted)
 
 ### 4.3 Attention 是绝对瓶颈，且已接近其上限
 
-Attention 在每个量化模式里都是最大单项（34.5%–39.6%）。它只从 52.53 ms 降到 42.18 ms（1.25×），
+Attention 在每个量化模式里都是最大单项（34.5%–39.6%）。它只从 52.48 ms 降到 42.21 ms（1.25×），
 远低于 conv/GEMM 的压缩幅度，因为它用的已经是本项目自研的 int8/int4 flash kernel。
 单层看，最大的那个 attention（C192 32×32，fp16 下 18.4 ms/层）能拿到 2.4×，但其余 shape 只有
 1.23–1.39×——整体被小 shape 拖平。
@@ -756,7 +786,7 @@ Attention 在每个量化模式里都是最大单项（34.5%–39.6%）。它只
 有 51–68% 的层时间是 launch 间隙。结合 §4.1（Normalization 反超 conv 成为层内头号开销），
 本项目的优化重心其实已经转移了：
 
-- **早期**：让 conv/GEMM 的算术更快（量化）→ 已完成，conv 2.6×、GEMM 6.4×
+- **早期**：让 conv/GEMM 的算术更快（量化）→ 已完成，conv 2.64×、GEMM 6.40×
 - **现在**：减少 launch 次数与访存往返（融合）→ 本周做的 upsample/avg_pool→quantize、
   skip-concat、以及各处 epilogue 融合都属于这一类
 - **下一步真正有价值的方向**：继续合并小 kernel。但需要注意 §6.2 里那几项已被证据排除的路线——
@@ -764,7 +794,7 @@ Attention 在每个量化模式里都是最大单项（34.5%–39.6%）。它只
 
 ### 4.5 fp16 的 Elementwise 开销异常大，量化后反而消失
 
-fp16 的 `Elementwise-Cast` 是 36.32 ms（17.3%），量化后掉到 7.89 ms。主因是 fp16 路径上
+fp16 的 `Elementwise-Cast` 是 36.33 ms（17.3%），量化后掉到 7.89 ms。主因是 fp16 路径上
 `elementwise_kernel[direct_copy_kernel_cuda]` 这类 dtype cast / layout copy 极多；量化路径把这些
 折进了 conv/GN 的 epilogue。这说明 fp16 基线本身留有未优化空间——**这也是 §1 那条基线公平性
 提醒的另一面**。
@@ -814,7 +844,7 @@ ground truth 验证。结果查出三处：
    （它出现在所有 cuDNN kernel 名里，且从不出现在我们的 kernel 名里）并优先匹配。
 2. **Attention 的 GN→QKV 融合投影被计进了 Conv。** 它来自 `fused_gn_qkv.cu` 的
    `ImplicitGemmConvolutionFusionPerSample`，名字里带 `ImplicitGemm` 所以落进 Conv 规则。
-   b128 下有 **6.06 ms** 被错记：修正后 fp16 的 Attention 从 46.5 → 52.53 ms、Conv 从 48.1 → 41.97 ms，
+   b128 下有 **6.06 ms** 被错记：修正后 fp16 的 Attention 从 46.5 → 52.48 ms、Conv 从 48.1 → 42.12 ms，
    两边差值都恰好等于 6.06，自相一致。
 3. **`fprop_optimized` 是危险判别词。** 我们自己的 int8 conv 叫
    `cutlass_tensorop_s8_i8816fprop_optimized_*`，若用它识别 cuDNN 会反过来把我们的 kernel 偷走。

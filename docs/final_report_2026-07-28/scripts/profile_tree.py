@@ -248,9 +248,16 @@ def run(mode):
         ms.append((time.time() - t0) / TIMED * 1000)
     mean_ms = statistics.mean(ms)
 
+    # Wall-clock the profiled window too: the sum of kernel self-times divided by this is
+    # a REAL measurement (how much of the window the GPU was actually executing kernels,
+    # vs idle in launch gaps). Note the profiler adds its own overhead, so treat this as a
+    # lower bound on the un-profiled run's busy fraction.
+    torch.cuda.synchronize()
+    _t0 = time.time()
     with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
         smp(PROF_STEPS)
         torch.cuda.synchronize()
+    prof_window_ms = (time.time() - _t0) * 1000.0
 
     ktime, kcalls, total = {}, {}, 0.0
     for evt in prof.key_averages():
@@ -289,11 +296,25 @@ def run(mode):
         node["roles"] = dict(sorted(node["roles"].items(), key=lambda kv: -kv[1]["ms_step"]))
     tree = dict(sorted(tree.items(), key=lambda kv: -kv[1]["ms_step"]))
 
+    # NOT a validation metric -- this is an identity. Every kernel's ms_step is
+    # (its share of `total`) x mean_ms and classify() has a catch-all, so the shares always
+    # sum to 1 and this always equals mean_ms. Kept only as an arithmetic self-check.
     accounted = sum(n["ms_step"] for n in tree.values())
+
+    # These two ARE measurements:
+    #  gpu_busy_frac  = fraction of the profiled window the GPU spent executing kernels
+    #                   (the rest is launch gaps / idle). total is in us, window in ms.
+    #  unclassified_* = how much time landed in the catch-all bucket, i.e. whether the
+    #                   classification actually covered the kernels that ran.
+    gpu_busy_frac = (total / 1000.0) / prof_window_ms if prof_window_ms > 0 else None
+    unk = tree.get("Other / unclassified")
     del model, sampler, prof
     torch.cuda.empty_cache()
     return dict(ms_step=round(mean_ms, 2),
-                gpu_accounted_ms_step=round(accounted, 3),
+                gpu_busy_frac_profiled_window=(round(gpu_busy_frac, 4) if gpu_busy_frac else None),
+                unclassified_ms_step=round(unk["ms_step"], 4) if unk else 0.0,
+                unclassified_n_kernels=sum(len(r["kernels"]) for r in unk["roles"].values()) if unk else 0,
+                sum_of_tree_equals_wall_clock=round(accounted, 3),
                 n_distinct_kernels=len(ktime), tree=tree)
 
 
