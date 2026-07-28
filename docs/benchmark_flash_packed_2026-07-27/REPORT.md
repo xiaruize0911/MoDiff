@@ -2,7 +2,7 @@
 
 **GPU:** NVIDIA A40 (48 GB, SM 8.6) · **PyTorch:** 2.4.1+cu124 · **CUDA:** 12.4
 **Model:** LSUN-Churches LDM-8 UNet (unconditional, 256×256) · **Batch:** 128 · **Sampler:** DDIM, 200 steps
-**Date:** 2026-07-28 (final refresh: + avg_pool->quantize fusion for updown ResBlocks, closing the down-direction sibling of the upsample fusion) · repo: `feat/conv-attn-epilogue-fusion` @ HEAD
+**Date:** 2026-07-28 (final refresh: + avg_pool->quantize fusion for updown ResBlocks, closing the down-direction sibling of the upsample fusion) · repo: `feat/conv-attn-epilogue-fusion` @ `77049ee`
 
 **5 modes:** `fp16`, `int8_baseline`, `int4_baseline`, `int8_modiff`, `int4_modiff`. int8/int4 use the
 fused-flash quantized attention kernel; `_modiff` adds the temporal-delta conv cache.
@@ -478,4 +478,4 @@ into the quantize kernel launch; only the subsequent conv call remains a separat
 - [`ece1991`](https://github.com/xiaruize0911/MoDiff/commit/ece1991) — zero-risk memory optimization: expandable_segments allocator (Section 9)
 - [`ca3f3af`](https://github.com/xiaruize0911/MoDiff/commit/ca3f3af) — upsample->quantize fusion for updown ResBlocks: found existing-but-unwired `FusedUpsample`/`upsample2x_quantize_noahat_fprop` kernel, wired via new `_prequant_upsample_conv`, fixed a `convert_upsample_to_fused` wrapping bug that silently neutralized it, bit-exact verified, real measured speedup (Section 8, 10)
 - [`ceea03b`](https://github.com/xiaruize0911/MoDiff/commit/ceea03b) — fill in commit hash for the upsample-fusion work in REPORT.md
-- `PENDING` — new `avgpool2x_quantize[_pack]_noahat` kernel (down-direction sibling of the upsample fusion) + `_prequant_avgpool_conv` glue, bit-exact verified against a real `nn.AvgPool2d` forward; fixed a real crash bug (`Tensor.__bool__` on `or`-chained fusion attempts) found while wiring it in; investigated and ruled out an `x_upd`->`skip_connection` variant of the same fusion (dead code for this architecture -- `skip_connection` is always `nn.Identity()` for updown ResBlocks, reverted); refined the skip-concat analysis to identify the real blocker as a missing CUTLASS int32-output epilogue, not im2col (Section 8, 10)
+- [`77049ee`](https://github.com/xiaruize0911/MoDiff/commit/77049ee) — new `avgpool2x_quantize[_pack]_noahat` kernel (down-direction sibling of the upsample fusion) + `_prequant_avgpool_conv` glue, bit-exact verified against a real `nn.AvgPool2d` forward; fixed a real crash bug (`Tensor.__bool__` on `or`-chained fusion attempts) found while wiring it in; investigated and ruled out an `x_upd`->`skip_connection` variant of the same fusion (dead code for this architecture -- `skip_connection` is always `nn.Identity()` for updown ResBlocks, reverted); refined the skip-concat analysis to identify the real blocker as a missing CUTLASS int32-output epilogue, not im2col (Section 8, 10)
