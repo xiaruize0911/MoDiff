@@ -504,6 +504,31 @@ into the quantize kernel launch; only the subsequent conv call remains a separat
   **`rel_err = 0.0000` for every one of the 5 modes**, checked after every kernel change — bit-identical
   end-to-end output throughout. Every speedup in this report is free; none of it is a quality tradeoff.
 
+## 12. Closing status: where this session stops, and why
+
+Every fusion achievable by reusing or lightly extending existing kernel/wrapper patterns already present
+in this codebase, self-contained inside `fused_resblock.py`/`integration/kernels/`, and provable
+bit-exact by a straightforward before/after comparison, has been shipped and verified (Sections 3, 5, 8).
+What remains (Section 10) is three items, each investigated to a concrete, evidence-backed conclusion
+rather than left as an assumption:
+
+1. **GN stats reduction** — two independent real attempts, two independent failure modes (bit-exactness;
+   DRAM coalescing). Re-attempting without a genuinely new algorithmic idea would just re-derive the same
+   result.
+2. **Skip-connection concat** — needs both a new CUTLASS kernel (int32-output epilogue) *and* restructuring
+   `UNetModel.forward`'s shared decoder call chain, which also serves the unquantized fp16 path. This is a
+   model-architecture change, not a kernel fusion, and carries regression risk to a code path outside this
+   optimization's own scope.
+3. **Deeper resize→conv im2col fusion** — payoff measured (not estimated) at under 1% of step time, against
+   writing a novel CUTLASS iterator class with no precedent anywhere in this codebase.
+
+Given this project's own zero-tolerance bit-exact bar — which items 1's two failed attempts already cost
+real engineering time against — pursuing 2 or 3 further would mean accepting either shared-architecture
+regression risk or open-ended novel-kernel risk for a combined <4ms/step (≈3% of a 107-127ms step). That
+tradeoff was raised explicitly and the decision to stop here, rather than continue into that risk
+category, was made with the user's authorization to exercise this judgment. The int4_baseline **1.97×**
+speedup vs fp16, achieved with every measured mode bit-exact, is this session's final result.
+
 ## Commits
 
 - [`13df347`](https://github.com/xiaruize0911/MoDiff/commit/13df347) — SDPA backend re-read-per-call fix (the fairness issue referenced in Section 1's caveat)
