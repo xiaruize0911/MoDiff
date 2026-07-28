@@ -112,8 +112,10 @@ def fig_profile_tree(tree, mode="int4_baseline"):
     fig, ax = plt.subplots(figsize=(13, 0.34 * len(rows) + 1.6))
     y = np.arange(len(rows))[::-1]
     vals = [r[1] for r in rows]
-    ax.barh(y, vals, color=colors,
-            alpha=[1.0 if L else 0.45 for L in is_layer], height=0.72)
+    # matplotlib's alpha must be scalar, so fold the layer/role distinction into RGBA.
+    import matplotlib.colors as mcolors
+    rgba = [mcolors.to_rgba(c, 1.0 if L else 0.45) for c, L in zip(colors, is_layer)]
+    ax.barh(y, vals, color=rgba, height=0.72)
     for yy, (label, ms, pct), L in zip(y, rows, is_layer):
         ax.text(ms + max(vals) * 0.012, yy, f"{ms:.2f} ms  ({pct:.1f}%)",
                 va="center", fontsize=8.5, fontweight="bold" if L else "normal")
@@ -250,7 +252,7 @@ def fig_kernel_fusions(kd):
     print("wrote fig_kernel_fusions.png")
 
 
-def main():
+def main_e2e():
     tree = load("profile_tree.json")
     kd = load("kernel_speedup_all_shapes.json")
     fig_e2e_speedup(tree)
@@ -263,5 +265,116 @@ def main():
     fig_kernel_fusions(kd)
 
 
+# ---------------------------------------------------------------------------
+# Layer-pipeline figures (from layer_pipeline_bench.py): per-layer-type pipeline
+# speedup, and the INTRA-layer time split (which roles eat a layer's own GPU time).
+# ---------------------------------------------------------------------------
+ROLE_COLORS = {}
+
+
+def _role_color(role, layer_type):
+    if role not in ROLE_COLORS:
+        base = LAYER_COLORS.get(layer_type, "#999999")
+        n = sum(1 for r in ROLE_COLORS if ROLE_COLORS[r][1] == layer_type)
+        # vary lightness within a layer type so roles are distinguishable but still
+        # read as "belonging to" their layer type's color family
+        import matplotlib.colors as mc
+        c = np.array(mc.to_rgb(base))
+        f = 1.0 - 0.16 * (n % 5)
+        ROLE_COLORS[role] = (tuple(np.clip(c * f + (1 - f) * 0.85, 0, 1)), layer_type)
+    return ROLE_COLORS[role][0]
+
+
+def fig_layer_pipeline_speedup(lp):
+    """Per-layer-type pipeline speedup vs the fp16 pipeline, at every real shape."""
+    if not lp:
+        return
+    modes = [m for m in ["int8_baseline", "int4_baseline", "int8_modiff", "int4_modiff"]
+             if m in lp["modes"]]
+    kinds = ["resblock_plain", "resblock_updown", "attention"]
+    kinds = [k for k in kinds if any(r["kind"] == k for r in lp["modes"]["fp16"])]
+    fig, axes = plt.subplots(len(kinds), 1, figsize=(13, 4.2 * len(kinds)), squeeze=False)
+    colors = {"int8_baseline": "#378ADD", "int4_baseline": "#1D9E75",
+              "int8_modiff": "#BA7517", "int4_modiff": "#E24B4A"}
+    for ax, kind in zip(axes[:, 0], kinds):
+        ref = [r for r in lp["modes"]["fp16"] if r["kind"] == kind]
+        ref.sort(key=lambda r: -(r["x_shape"][1] * r["x_shape"][2] * r["x_shape"][3]))
+        keys = [tuple(r["x_shape"]) for r in ref]
+        labels = [f"C{k[1]}\n{k[2]}x{k[3]}" for k in keys]
+        x = np.arange(len(keys))
+        w = 0.8 / max(1, len(modes))
+        for i, m in enumerate(modes):
+            byshape = {tuple(r["x_shape"]): r for r in lp["modes"][m] if r["kind"] == kind}
+            sp = [byshape.get(k, {}).get("speedup_vs_fp16") or np.nan for k in keys]
+            ax.bar(x + (i - (len(modes) - 1) / 2) * w, sp, w, label=m, color=colors.get(m))
+        ax.axhline(1.0, ls="--", color="#555", lw=1)
+        ax.set_xticks(x); ax.set_xticklabels(labels, fontsize=8)
+        ax.set_ylabel("pipeline speedup vs fp16")
+        n_inst = {tuple(r["x_shape"]): r["n_instances"] for r in ref}
+        ax.set_title(f"{kind}  —  whole-layer kernel-pipeline speedup vs the fp16 pipeline "
+                     f"(b{lp['batch']}); x-labels are input C and HxW", fontsize=10.5)
+        ax.legend(frameon=False, ncol=len(modes), fontsize=9)
+        ax.spines[["top", "right"]].set_visible(False)
+    fig.tight_layout()
+    fig.savefig(f"{HERE}/plots/fig_layer_pipeline_speedup.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print("wrote fig_layer_pipeline_speedup.png")
+
+
+def fig_intra_layer_split(lp, mode="int4_baseline", kind="resblock_plain", topn=10):
+    """Stacked 100% bars: inside each layer instance, which roles eat its GPU time."""
+    if not lp or mode not in lp["modes"]:
+        return
+    rows = [r for r in lp["modes"][mode] if r["kind"] == kind and r.get("roles")]
+    if not rows:
+        return
+    rows.sort(key=lambda r: -(r["x_shape"][1] * r["x_shape"][2] * r["x_shape"][3]))
+    rows = rows[:topn]
+    all_roles = {}
+    for r in rows:
+        for role, a in r["roles"].items():
+            all_roles[role] = all_roles.get(role, 0.0) + a["us"]
+    order = [r for r, _ in sorted(all_roles.items(), key=lambda kv: -kv[1])]
+    fig, ax = plt.subplots(figsize=(12, 5.6))
+    x = np.arange(len(rows))
+    bottom = np.zeros(len(rows))
+    for role in order:
+        vals = np.array([r["roles"].get(role, {}).get("pct_of_layer", 0.0) for r in rows])
+        lt = next((k["layer_type"] for r in rows for k in r["kernels"] if k["role"] == role),
+                  "Other / unclassified")
+        ax.bar(x, vals, bottom=bottom, width=0.68,
+               label=textwrap.shorten(role, 58, placeholder="..."),
+               color=_role_color(role, lt))
+        for i, (v, b) in enumerate(zip(vals, bottom)):
+            if v >= 6:
+                ax.text(i, b + v / 2, f"{v:.0f}", ha="center", va="center",
+                        fontsize=7.5, color="white", fontweight="bold")
+        bottom += vals
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"C{r['x_shape'][1]}\n{r['x_shape'][2]}x{r['x_shape'][3]}\n"
+                        f"{r['pipeline_us']:.0f}us" for r in rows], fontsize=8)
+    ax.set_ylabel("% of this layer's own GPU time")
+    ax.set_ylim(0, 105)
+    ax.set_title(f"Inside each layer — time split by role  ({kind}, {mode}, b{lp['batch']})\n"
+                 "each bar is one layer shape; bottom label is its measured pipeline time",
+                 fontsize=11)
+    ax.legend(frameon=False, loc="upper center", bbox_to_anchor=(0.5, -0.16), ncol=2, fontsize=8.5)
+    ax.spines[["top", "right"]].set_visible(False)
+    fig.tight_layout()
+    fig.savefig(f"{HERE}/plots/fig_intra_layer_{kind}_{mode}.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"wrote fig_intra_layer_{kind}_{mode}.png")
+
+
+def main_layers():
+    lp = load("layer_pipeline_bench.json")
+    fig_layer_pipeline_speedup(lp)
+    if lp:
+        for mode in ("fp16", "int8_baseline", "int4_baseline", "int4_modiff"):
+            for kind in ("resblock_plain", "resblock_updown", "attention"):
+                fig_intra_layer_split(lp, mode, kind)
+
+
 if __name__ == "__main__":
-    main()
+    main_e2e()
+    main_layers()

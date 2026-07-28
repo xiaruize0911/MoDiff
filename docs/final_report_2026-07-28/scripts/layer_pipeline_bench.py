@@ -35,6 +35,9 @@ HERE = "docs/final_report_2026-07-28"
 BATCH = int(os.environ.get("LBENCH_BATCH", "128"))
 WARM, ITERS, ROUNDS = 20, 60, 5
 PROF_ITERS = 30
+# AttentionBlock gets swapped for one of these wrappers by the mode conversion, so all
+# three names must be matched or the quantized modes report zero attention layers.
+ATTN_CLASSES = ("AttentionBlock", "TokenMajorAttentionBlock", "QuantizedStandardAttentionBlock")
 MODES = [("fp16", "fp16"), ("int8_baseline", "int8_baseline"), ("int4_baseline", "int4_baseline"),
          ("int8_modiff", "int8"), ("int4_modiff", "int4")]
 
@@ -135,7 +138,7 @@ def collect_layers(mode_key):
     handles = []
     for name, m in unet.named_modules():
         cls = type(m).__name__
-        if isinstance(m, FusedResBlock) or cls in ("AttentionBlock",):
+        if isinstance(m, FusedResBlock) or cls in ATTN_CLASSES:
             handles.append(m.register_forward_hook(mk(name, m)))
     with torch.inference_mode(), torch.amp.autocast("cuda", enabled=True, dtype=torch.float16):
         sampler.sample(S=2, batch_size=BATCH, shape=r.shape, eta=0.0, verbose=False, **cond)
@@ -150,7 +153,7 @@ def collect_layers(mode_key):
         cls = type(m).__name__
         if isinstance(m, FusedResBlock):
             kind = "resblock_updown" if getattr(m, "updown", False) else "resblock_plain"
-        elif cls == "AttentionBlock":
+        elif cls in ATTN_CLASSES:
             kind = "attention"
         else:
             continue
