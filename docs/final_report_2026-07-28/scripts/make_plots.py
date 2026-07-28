@@ -330,12 +330,21 @@ def fig_layer_pipeline_speedup(lp):
     print("wrote fig_layer_pipeline_speedup.png")
 
 
-def fig_intra_layer_split(lp, mode="int4_baseline", kind="resblock_plain", topn=10):
-    """Inside each layer instance, which roles eat its GPU time -- in ABSOLUTE us.
+def fig_intra_layer_split(lp, mode="int4_baseline", kind="resblock_plain", topn=10,
+                          yaxis="abs"):
+    """Inside each layer instance, which roles eat its GPU time.
 
-    Y is real time (us per layer call), not a percentage, so bar HEIGHT is comparable
-    across shapes: a 100%-normalized stack makes a 569 us layer look as tall as a 3377 us
-    one, which hides where the time actually is.
+    Both views are produced and both are kept, because they answer different questions:
+
+      yaxis="abs"  Y = real us per layer call. Bar HEIGHT is comparable across shapes, so
+                   this is the view that shows WHERE THE TIME IS (a 3369 us layer towers
+                   over a 567 us one).
+      yaxis="pct"  Y = % of that layer's own GPU time, every bar normalized to 100%. This
+                   is the view that shows COMPOSITION, i.e. how the mix shifts with shape
+                   independent of the layer's absolute cost -- which the absolute view
+                   compresses out of visibility on the small shapes.
+
+    Filenames: fig_intra_layer_<kind>_<mode>.png (abs) and ..._pct.png (percentage).
     """
     if not lp or mode not in lp["modes"]:
         return
@@ -349,45 +358,61 @@ def fig_intra_layer_split(lp, mode="int4_baseline", kind="resblock_plain", topn=
         for role, a in r["roles"].items():
             all_roles[role] = all_roles.get(role, 0.0) + a["us"]
     order = [r for r, _ in sorted(all_roles.items(), key=lambda kv: -kv[1])]
+    key = "us" if yaxis == "abs" else "pct_of_layer"
+
     fig, ax = plt.subplots(figsize=(12.5, 6.0))
     x = np.arange(len(rows))
     bottom = np.zeros(len(rows))
     for role in order:
-        vals = np.array([r["roles"].get(role, {}).get("us", 0.0) for r in rows])
+        vals = np.array([r["roles"].get(role, {}).get(key, 0.0) for r in rows])
         lt = next((k["layer_type"] for r in rows for k in r["kernels"] if k["role"] == role),
                   "Other / unclassified")
         ax.bar(x, vals, bottom=bottom, width=0.68,
                label=textwrap.shorten(role, 58, placeholder="..."),
                color=_role_color(role, lt))
         bottom += vals
-    # Label each segment with its absolute us, but only where the segment is tall enough
-    # to hold text (relative to the tallest bar, so labels stay legible at every scale).
+
+    # Label segments, thresholding relative to the tallest bar so labels stay legible at
+    # any scale (a fixed threshold drops every label on the short bars in the abs view).
     ymax = float(bottom.max()) if len(bottom) else 1.0
     bottom2 = np.zeros(len(rows))
+    fmt = (lambda v: f"{v:.0f}") if yaxis == "abs" else (lambda v: f"{v:.0f}")
     for role in order:
-        vals = np.array([r["roles"].get(role, {}).get("us", 0.0) for r in rows])
+        vals = np.array([r["roles"].get(role, {}).get(key, 0.0) for r in rows])
         for i, (v, b) in enumerate(zip(vals, bottom2)):
             if v >= ymax * 0.035:
-                ax.text(i, b + v / 2, f"{v:.0f}", ha="center", va="center",
+                ax.text(i, b + v / 2, fmt(v), ha="center", va="center",
                         fontsize=7.5, color="white", fontweight="bold")
         bottom2 += vals
-    for i, tot in enumerate(bottom):
-        ax.text(i, tot + ymax * 0.012, f"{tot:.0f} us", ha="center",
-                fontsize=8.5, fontweight="bold", color="#2C2C2A")
+
     ax.set_xticks(x)
-    ax.set_xticklabels([f"C{r['x_shape'][1]}\n{r['x_shape'][2]}x{r['x_shape'][3]}" for r in rows],
-                       fontsize=8.5)
-    ax.set_ylabel("us per layer call (absolute GPU time)")
-    ax.set_ylim(0, ymax * 1.13)
-    ax.set_title(f"Inside each layer — absolute time split by role  ({kind}, {mode}, b{lp['batch']})\n"
-                 "bar height is real GPU time, so heights are comparable across shapes",
-                 fontsize=11)
+    if yaxis == "abs":
+        for i, tot in enumerate(bottom):
+            ax.text(i, tot + ymax * 0.012, f"{tot:.0f} us", ha="center",
+                    fontsize=8.5, fontweight="bold", color="#2C2C2A")
+        ax.set_xticklabels([f"C{r['x_shape'][1]}\n{r['x_shape'][2]}x{r['x_shape'][3]}"
+                            for r in rows], fontsize=8.5)
+        ax.set_ylabel("us per layer call (absolute GPU time)")
+        ax.set_ylim(0, ymax * 1.13)
+        sub = "bar height is real GPU time, so heights are comparable across shapes"
+    else:
+        # keep the absolute total on the x label so the normalized view stays interpretable
+        ax.set_xticklabels([f"C{r['x_shape'][1]}\n{r['x_shape'][2]}x{r['x_shape'][3]}\n"
+                            f"{r['pipeline_us']:.0f}us" for r in rows], fontsize=8)
+        ax.set_ylabel("% of this layer's own GPU time")
+        ax.set_ylim(0, 105)
+        sub = ("every bar normalized to 100% to show COMPOSITION; the layer's absolute "
+               "cost is printed under each label")
+    ax.set_title(f"Inside each layer — {'absolute' if yaxis == 'abs' else 'relative'} time "
+                 f"split by role  ({kind}, {mode}, b{lp['batch']})\n{sub}", fontsize=11)
     ax.legend(frameon=False, loc="upper center", bbox_to_anchor=(0.5, -0.14), ncol=2, fontsize=8.5)
     ax.spines[["top", "right"]].set_visible(False)
     fig.tight_layout()
-    fig.savefig(f"{HERE}/plots/fig_intra_layer_{kind}_{mode}.png", dpi=150, bbox_inches="tight")
+    suffix = "" if yaxis == "abs" else "_pct"
+    fig.savefig(f"{HERE}/plots/fig_intra_layer_{kind}_{mode}{suffix}.png",
+                dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print(f"wrote fig_intra_layer_{kind}_{mode}.png")
+    print(f"wrote fig_intra_layer_{kind}_{mode}{suffix}.png")
 
 
 def main_layers():
@@ -396,7 +421,8 @@ def main_layers():
     if lp:
         for mode in ("fp16", "int8_baseline", "int4_baseline", "int4_modiff"):
             for kind in ("resblock_plain", "resblock_updown", "attention"):
-                fig_intra_layer_split(lp, mode, kind)
+                fig_intra_layer_split(lp, mode, kind, yaxis="abs")
+                fig_intra_layer_split(lp, mode, kind, yaxis="pct")
 
 
 if __name__ == "__main__":

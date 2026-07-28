@@ -124,9 +124,14 @@ fp16 与 4 个量化模式**在同一进程内**测量，因此加速比是同�
 
 ### 2.2 layer 内部时间分解（绝对 us + 占该层自身 GPU 时间的百分比）
 
-下表同时给出**绝对时间**和百分比；配套图 `plots/fig_intra_layer_*.png` 的 Y 轴用的是绝对 us，
-这样不同 shape 的柱高可直接比较（100% 归一化会让 567 us 的层和 3369 us 的层一样高，反而掩盖
-时间真正在哪里）。
+下表同时给出**绝对时间**和百分比。配套图保留**两个视图**，因为它们回答的是不同问题：
+
+| 图 | Y 轴 | 用来看什么 |
+|---|---|---|
+| `plots/fig_intra_layer_<kind>_<mode>.png` | 绝对 us | **时间在哪里**——柱高是真实 GPU 时间，跨 shape 可直接比较（3369 us 的层明显高过 567 us 的层） |
+| `plots/fig_intra_layer_<kind>_<mode>_pct.png` | % of layer | **构成如何随 shape 变化**——每柱归一化到 100%，剥离层的绝对成本；绝对视图会把小 shape 压扁到看不清构成 |
+
+百分比图的 x 标签下方仍标注该层的绝对耗时，避免归一化后失去量级参照。
 
 
 **fp16 / resblock_plain** — 最大 shape C576 32×32，流水线 6093 us，GPU busy 100.2%
@@ -707,11 +712,21 @@ int4_modiff  126.88 ms/step   (100% of GPU time accounted)
 
 ### 4.1 Normalization 已取代 Conv 成为层内头号开销
 
-![intra layer int4](plots/fig_intra_layer_resblock_plain_int4_baseline.png)
+绝对时间视图（柱高 = 真实 GPU 时间，跨 shape 可比）：
 
-图中 Y 轴是**真实 GPU 时间（us）**而非百分比，所以柱高在不同 shape 间可直接比较。
+![intra layer int4 abs](plots/fig_intra_layer_resblock_plain_int4_baseline.png)
+
+同一数据的构成视图（每柱归一化到 100%）：
+
+![intra layer int4 pct](plots/fig_intra_layer_resblock_plain_int4_baseline_pct.png)
+
 在 `int4_baseline` 最大的 ResBlock（C576 32×32，共 3369 us）里，**GN+SiLU+quantize 融合 kernel
 用掉 1583 us，反超量化 conv 的 1133 us**；换算成占比是 45–67% vs 22–39%（全部 shape 范围）。
+构成视图给出的补充信息是：GN+quantize 在**每一个** shape 上都是层内最大项，占比在
+**44.9%–66.8%** 之间波动。注意这不是随 shape 单调变化的趋势——按元素数排序后占比是
+47.0 / 47.9 / 56.5 / 44.9 / 45.6 / 55.6 / 53.9 / 47.5 / 56.2 / 66.8 %，无序。
+它同时受 C 和 H×W 影响（GN 的归约沿 C 分组、apply 沿元素展开，两者与 conv 的 FLOP 缩放方式不同），
+所以"最大 shape 47% vs 最小 shape 67%"只是首尾两点，不能当成趋势读。
 
 全模型层面同样成立：Normalization 从 fp16 的 22.79 ms（10.8%）上升到 int4_baseline 的
 24.74 ms（**23.2%**）——绝对值几乎没降，占比翻倍。
