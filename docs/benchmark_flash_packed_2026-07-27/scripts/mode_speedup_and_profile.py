@@ -4,16 +4,22 @@ the environment drift seen between the 07-25 run and today's session (heavy pip 
 
 For each mode: build the model via BenchmarkRunner (same harness as e2e_speed.py), warm up
 (lets calibration + flash/packed autotune freeze), then:
-  1. time E2E (30 warm + 5x150 steps) -> mean/min ms/step, speedup vs fp16
-  2. torch.profiler over 10 more steps -> per-CUDA-kernel self time, bucketed into categories
-     (fused GN+SiLU+quantize, int conv, flash/SDPA attention, standalone quantize, quantized
-     gemm, fp conv/gemm, elementwise/misc) to see where time goes AND whether any category
-     indicates un-fused leftover kernels.
+  1. time E2E (30 warm + 5x150 steps) -> per-round ms (printed for outlier diagnosis),
+     mean/median/min ms/step, speedup vs fp16 (computed from median, robust to a single
+     stalled round -- e.g. a cudnn.benchmark re-tune or GPU clock dip on one round).
+  2. torch.profiler over 10 more steps -> per-CUDA-KERNEL self time (device-side events only;
+     CPU-side `aten::*` dispatcher entries are EXCLUDED because their self_device_time_total
+     duplicates the very kernel they launch -- summing both double-counts the same GPU work,
+     confirmed by exact-matching pairs like aten::upsample_nearest2d vs
+     upsample_nearest2d_nhwc_out_frame). Bucketed into categories (fused GN+SiLU+quantize, int
+     conv, flash/SDPA attention, standalone quantize, quantized gemm, fp conv/gemm,
+     elementwise/misc) to see where time goes AND whether any category indicates un-fused
+     leftover kernels.
 """
 import os, sys, csv, json, time, statistics
 os.chdir("/workspace/MoDiff"); sys.path.insert(0, "/workspace/MoDiff"); sys.path.insert(0, "/workspace/MoDiff/src/taming-transformers")
 import torch
-from torch.profiler import profile, ProfilerActivity
+from torch.profiler import profile, ProfilerActivity, DeviceType
 import integration.benchmarks.benchmark_ldm as B
 
 BATCH = 128
@@ -25,21 +31,24 @@ VERS = [("fp16", "fp16"), ("int8_baseline", "int8_baseline"), ("int4_baseline", 
 
 CATEGORY_RULES = [
     ("attention_flash", ["flash_attn_int8", "flash_attn_int4", "flash_attn"]),
-    ("attention_sdpa", ["scaled_dot_product", "efficient_attention", "fmha", "attention"]),
-    ("gn_silu_quantize_fused", ["group_norm_silu_quantize", "group_norm_silu_delta_quantize"]),
+    ("attention_sdpa", ["softmax", "scaled_dot_product", "efficient_attention", "fmha"]),
+    ("gn_silu_quantize_fused", ["group_norm_silu_quantize", "group_norm_silu_delta_quantize",
+                               "gn_apply_delta_quantize", "gn_group_stats"]),
     ("gn_silu", ["group_norm_silu", "group_norm", "native_group_norm"]),
     ("upsample_fused", ["upsample2x_quantize"]),
-    ("conv_int_fused", ["conv2d_int8_fprop", "conv2d_int4_fprop", "conv2d_intx"]),
+    ("upsample_plain", ["upsample_nearest", "upsample_bilinear"]),
+    ("conv_int_fused", ["conv2d_int8_fprop", "conv2d_int4_fprop", "conv2d_intx",
+                        "modiff26implicitgemmconvolution", "modiffimplicitgemmconvolution"]),
     ("gemm_quant_fused", ["gemm_w8a8", "gemm_w4a4"]),
     ("quantize_standalone", ["quantize_attn_qkv", "quantize_attn_out", "scale_quantize",
-                             "quantize_act_int8", "quantize_and_pack"]),
-    ("conv_fp", ["cudnn_convolution", "conv2d", "implicit_gemm", "convolution"]),
-    ("gemm_fp", ["addmm", "cublas", "aten::linear", "gemm"]),
-    ("elementwise_misc", ["aten::add", "aten::mul", "aten::copy", "aten::to", "aten::contiguous",
-                          "aten::cat", "aten::div", "aten::silu", "aten::mean", "aten::sub",
-                          "aten::clamp", "aten::round", "aten::chunk", "aten::permute",
-                          "aten::view", "aten::reshape", "aten::empty", "aten::fill",
-                          "aten::index", "elementwise", "vectorized", "CatArrayBatched"]),
+                             "quantize_act_int8", "quantize_and_pack", "aq_qtok", "aq_vquant"]),
+    ("conv_fp", ["cudnn_convolution", "implicit_gemm", "cutlass_tensorop_f16", "cutlass__5x_cudnn",
+                "wmma_tensorop_f16", "xmma_fprop"]),
+    ("gemm_fp", ["cutlass_80_tensorop", "cublas", "gemm"]),
+    ("copy_cat_misc", ["copy_", "catarraybatched", "cat"]),
+    ("elementwise_misc", ["add", "mul", "div", "silu", "mean", "sub", "clamp", "round",
+                          "chunk", "permute", "view", "reshape", "empty", "fill", "index",
+                          "elementwise", "vectorized"]),
 ]
 
 def categorize(name):
@@ -72,9 +81,11 @@ def run(mode):
     smp(WARMUP); torch.cuda.synchronize()
 
     ms = []
-    for _ in range(RUNS):
+    for i in range(RUNS):
         torch.cuda.synchronize(); t0 = time.time(); smp(TIMED); torch.cuda.synchronize()
-        ms.append((time.time() - t0) / TIMED * 1000)
+        rt = (time.time() - t0) / TIMED * 1000
+        ms.append(rt)
+        print(f"    round {i}: {rt:.2f} ms/step")
 
     with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
         smp(PROF_STEPS)
@@ -83,6 +94,8 @@ def run(mode):
     cat_time = {}
     kernel_time = {}
     for evt in prof.key_averages():
+        if evt.device_type != DeviceType.CUDA:
+            continue          # skip CPU-side aten:: dispatcher entries (double-count guard)
         t = evt.self_device_time_total
         if t <= 0:
             continue
@@ -95,7 +108,7 @@ def run(mode):
     top_kernels = [dict(name=k, us_total=round(v, 1)) for k, v in top_kernels]
 
     del model, sampler, prof; torch.cuda.empty_cache()
-    return statistics.mean(ms), min(ms), cat_pct, top_kernels
+    return statistics.mean(ms), statistics.median(ms), min(ms), cat_pct, top_kernels
 
 
 os.makedirs(f"{HERE}/data", exist_ok=True)
@@ -107,16 +120,18 @@ for _ in range(60):
 torch.cuda.synchronize()
 
 rows, profiles = [], {}
-fp16_ms = None
+fp16_med = None
 print(f"5-mode speed + profile @ b{BATCH} (today's session, shipped defaults)\n")
-print(f"{'mode':16} {'ms/step':>9} {'min':>8} {'speedup':>9}")
+print(f"{'mode':16} {'mean':>9} {'median':>9} {'min':>8} {'speedup(median)':>16}")
 for label, mode in VERS:
-    mean, mn, cat_pct, top_k = run(mode)
-    if fp16_ms is None:
-        fp16_ms = mean
-    sp = fp16_ms / mean
-    print(f"{label:16} {mean:9.2f} {mn:8.2f} {sp:8.3f}x")
-    rows.append(dict(mode=label, ms_step=round(mean, 2), min_ms=round(mn, 2), speedup_vs_fp16=round(sp, 3)))
+    print(f"  -- {label} --")
+    mean, med, mn, cat_pct, top_k = run(mode)
+    if fp16_med is None:
+        fp16_med = med
+    sp = fp16_med / med
+    print(f"{label:16} {mean:9.2f} {med:9.2f} {mn:8.2f} {sp:16.3f}x")
+    rows.append(dict(mode=label, mean_ms=round(mean, 2), median_ms=round(med, 2), min_ms=round(mn, 2),
+                     speedup_vs_fp16=round(sp, 3)))
     profiles[label] = dict(category_pct=cat_pct, top_kernels=top_k)
 
 with open(f"{HERE}/data/speedup_today.csv", "w", newline="") as f:

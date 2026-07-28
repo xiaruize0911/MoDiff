@@ -31,11 +31,28 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# The fp16 attention SDPA backend: the materialized MATH backend (scores computed
-# in fp16), which is the quantizable-attention baseline.
+# The fp16 attention SDPA backend: MATH (default) is the materialized, quantizable-
+# attention baseline. EXPERIMENTAL: MODIFF_SDPA_BACKEND=flash|efficient switches to
+# PyTorch's fused kernels -- measured on A40 (b128, real per-level shapes) 1.9-9.2x
+# faster than MATH (dominated by hd24/T1024 = L0's 9.2x) at ~4e-4 rel-L2 vs MATH,
+# an order of magnitude below the ~4e-3 rel-L2 the int8 quantized path already adds.
+# Not yet the default: MATH is the reference every quantized-mode accuracy number in
+# this repo has been measured against, so flipping the default would shift that
+# baseline (by ~4e-4, likely immaterial, but unverified end-to-end -- see
+# docs/benchmark_flash_packed_2026-07-27 for the isolated-op numbers this is based on).
+#
+# Reads the env var on every call (not cached at import time): this module is only
+# ever imported once per process, so a module-level `os.environ.get(...)` baked into
+# a lambda at import time would freeze whatever backend was set on the FIRST call and
+# silently ignore any later os.environ["MODIFF_SDPA_BACKEND"] change in the same
+# process (e.g. a multi-mode benchmark loop that flips it per iteration).
 try:
     from torch.nn.attention import sdpa_kernel, SDPBackend
-    _SDPA_CTX = lambda: sdpa_kernel(SDPBackend.MATH)
+    _SDPA_BACKEND_MAP = {"math": SDPBackend.MATH, "flash": SDPBackend.FLASH_ATTENTION,
+                         "efficient": SDPBackend.EFFICIENT_ATTENTION}
+    def _SDPA_CTX():
+        backend = _SDPA_BACKEND_MAP.get(os.environ.get("MODIFF_SDPA_BACKEND", "math").lower(), SDPBackend.MATH)
+        return sdpa_kernel(backend)
 except Exception:  # pragma: no cover - older torch
     from contextlib import contextmanager
     @contextmanager

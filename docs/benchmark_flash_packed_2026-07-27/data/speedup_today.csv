@@ -1,6 +1,6 @@
-mode,ms_step,min_ms,speedup_vs_fp16
-fp16,420.87,238.18,1.0
-int8_baseline,122.64,122.38,3.432
-int4_baseline,111.24,110.89,3.783
-int8_modiff,131.46,131.18,3.202
-int4_modiff,129.59,128.54,3.248
+mode,mean_ms,median_ms,min_ms,speedup_vs_fp16
+fp16,213.05,211.54,210.08,1.0
+int8_baseline,122.77,122.68,122.21,1.724
+int4_baseline,111.51,111.31,111.29,1.9
+int8_modiff,210.46,213.0,130.9,0.993
+int4_modiff,276.46,271.84,248.59,0.778
