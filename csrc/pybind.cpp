@@ -104,6 +104,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "Fused FP32 [N*L,C,1,1] channels-last → FP16 [N,C,L] (K7+K8 fusion)");
     m.def("fp16_ncw_delta_to_int8_cl", &fp16_ncw_delta_to_int8_cl,
           "Fused FP16 [N,C,L] → INT8 [N*L,C,1,1] CL with MoDiff delta subtract+quantize (K1+K2+K3 fusion)");
+    m.def("cat2_channels_last_fp16", &cat2_channels_last_fp16,
+          "Specialized vectorized 2-tensor channels-last FP16 concat along dim=1 (replaces torch.cat for UNetModel's decoder skip-concat)");
 
     // Native channels_last GroupNorm(+SiLU) (kernels/group_norm_silu.cu)
     m.def("group_norm_silu_nhwc", &group_norm_silu_nhwc,

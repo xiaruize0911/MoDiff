@@ -578,3 +578,82 @@ torch::Tensor fp32_cl_to_fp16_ncw(
     }
     return dst;
 }
+
+// =========================================================================
+// Specialized 2-tensor channels-last concat, replacing openaimodel.py's
+// `torch.cat([h, hs.pop()], dim=1)` (UNetModel.forward's decoder skip-concat).
+// Pure data movement -- no arithmetic at all, so this is bit-identical to
+// torch.cat([a, b], dim=1) by construction (not something that needs a
+// tolerance-based check; a `torch.equal` capture-compare is enough).
+//
+// ATen's generic N-way `CatArrayBatchedCopy` doesn't know at compile time
+// that there are exactly 2 inputs, both channels_last fp16 -- it moves 2
+// bytes/thread (measured as the `OpaqueType<2u>` scalar path). Since both C1
+// and C2 are even for every real shape in this model (192/384/768/1536,
+// confirmed by tracing every skip-concat call site this session), every
+// output half2 pair falls entirely within one source tensor's channel range
+// (a pair can only straddle the A/B boundary if C1 is odd), so this can
+// always vectorize with a plain per-pair branch and never needs a scalar
+// tail/boundary case for this model's shapes -- verified by the C1%2==0/
+// C2%2==0 TORCH_CHECK below; the Python call site falls back to plain
+// `torch.cat` whenever a shape wouldn't satisfy it.
+//   Op:       Channels-last concat along dim=1, specialized for exactly 2 FP16 inputs
+//   Inputs:   a [N,C1,H,W], b [N,C2,H,W], both channels_last FP16 CUDA, same N,H,W
+//   Outputs:  [N,C1+C2,H,W] channels_last FP16, identical to torch.cat([a,b],dim=1)
+//   Fuses:    n/a (not a fusion -- a specialized vectorized replacement for a generic ATen op)
+//   Constraints: C1 % 2 == 0 && C2 % 2 == 0 (TORCH_CHECK'd; every real shape in this model satisfies this)
+__global__ void cat2_channels_last_fp16_kernel(
+    const __half* __restrict__ a, const __half* __restrict__ b,
+    __half* __restrict__ out, long num_positions, int C1, int C2
+) {
+    int Ctot = C1 + C2;
+    int pairs_per_pos = Ctot / 2;
+    int a_pairs = C1 / 2;
+    long total_pairs = num_positions * (long)pairs_per_pos;
+    long idx = (long)blockIdx.x * blockDim.x + threadIdx.x;
+    long stride = (long)blockDim.x * gridDim.x;
+    for (long i = idx; i < total_pairs; i += stride) {
+        long p = i / pairs_per_pos;
+        int pair_c = (int)(i % pairs_per_pos);
+        __half2 v;
+        if (pair_c < a_pairs) {
+            v = *reinterpret_cast<const __half2*>(&a[p * C1 + pair_c * 2]);
+        } else {
+            int pair_b = pair_c - a_pairs;
+            v = *reinterpret_cast<const __half2*>(&b[p * C2 + pair_b * 2]);
+        }
+        *reinterpret_cast<__half2*>(&out[p * Ctot + pair_c * 2]) = v;
+    }
+}
+
+torch::Tensor cat2_channels_last_fp16(torch::Tensor a, torch::Tensor b) {
+    TORCH_CHECK(a.is_cuda() && b.is_cuda(), "cat2_channels_last_fp16: expected CUDA tensors");
+    TORCH_CHECK(a.scalar_type() == at::kHalf && b.scalar_type() == at::kHalf,
+                "cat2_channels_last_fp16: expected FP16 tensors");
+    TORCH_CHECK(a.dim() == 4 && b.dim() == 4, "cat2_channels_last_fp16: expected 4D [N,C,H,W] tensors");
+    TORCH_CHECK(a.size(0) == b.size(0) && a.size(2) == b.size(2) && a.size(3) == b.size(3),
+                "cat2_channels_last_fp16: N,H,W must match");
+    TORCH_CHECK(a.is_contiguous(at::MemoryFormat::ChannelsLast) &&
+                b.is_contiguous(at::MemoryFormat::ChannelsLast),
+                "cat2_channels_last_fp16: both inputs must be channels_last contiguous");
+    int N = a.size(0), C1 = a.size(1), H = a.size(2), W = a.size(3), C2 = b.size(1);
+    TORCH_CHECK(C1 % 2 == 0 && C2 % 2 == 0, "cat2_channels_last_fp16: C1 and C2 must be even");
+
+    auto out = torch::empty({N, C1 + C2, H, W},
+        a.options().memory_format(at::MemoryFormat::ChannelsLast));
+
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    long num_positions = (long)N * H * W;
+    int pairs_per_pos = (C1 + C2) / 2;
+    long total_pairs = num_positions * (long)pairs_per_pos;
+    int block_size = 256;
+    int grid_size = (int)std::min<long>((total_pairs + block_size - 1) / block_size, 2147483647L);
+
+    cat2_channels_last_fp16_kernel<<<grid_size, block_size, 0, stream>>>(
+        reinterpret_cast<const __half*>(a.data_ptr<at::Half>()),
+        reinterpret_cast<const __half*>(b.data_ptr<at::Half>()),
+        reinterpret_cast<__half*>(out.data_ptr<at::Half>()),
+        num_positions, C1, C2
+    );
+    return out;
+}

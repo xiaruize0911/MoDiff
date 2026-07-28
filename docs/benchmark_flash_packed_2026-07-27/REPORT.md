@@ -2,7 +2,7 @@
 
 **GPU:** NVIDIA A40 (48 GB, SM 8.6) · **PyTorch:** 2.4.1+cu124 · **CUDA:** 12.4
 **Model:** LSUN-Churches LDM-8 UNet (unconditional, 256×256) · **Batch:** 128 · **Sampler:** DDIM, 200 steps
-**Date:** 2026-07-28 (final refresh: + avg_pool->quantize fusion for updown ResBlocks, closing the down-direction sibling of the upsample fusion) · repo: `feat/conv-attn-epilogue-fusion` @ `77049ee`
+**Date:** 2026-07-28 (final refresh: + specialized 2-tensor channels-last concat kernel, replacing torch.cat's generic CatArrayBatchedCopy for the decoder skip-concat) · repo: `feat/conv-attn-epilogue-fusion` @ HEAD
 
 **5 modes:** `fp16`, `int8_baseline`, `int4_baseline`, `int8_modiff`, `int4_modiff`. int8/int4 use the
 fused-flash quantized attention kernel; `_modiff` adds the temporal-delta conv cache.
@@ -20,15 +20,15 @@ reused here. Data: `data/*.json` · figures: `plots/*.png` · scripts: `scripts/
 
 | mode | ms/step | speedup |
 |---|--:|--:|
-| fp16 | 210.44 | 1.00× |
-| int8_baseline | 118.24 | 1.78× |
-| **int4_baseline** | **107.02** | **1.97×** |
-| int8_modiff | 126.26 | 1.67× |
-| int4_modiff | 127.10 | 1.66× |
+| fp16 | 210.06 | 1.00× |
+| int8_baseline | 118.13 | 1.78× |
+| **int4_baseline** | **106.69** | **1.97×** |
+| int8_modiff | 125.58 | 1.67× |
+| int4_modiff | 127.04 | 1.65× |
 
-(`int8_baseline`/`int4_baseline` improved from 1.76×/1.92× earlier in this report via the upsample-fusion
-fix, then to 1.78×/1.97× via this round's avg_pool-fusion fix — see Section 8. Both are real
-architectural fusions, not vectorization tweaks.)
+(`int8_baseline`/`int4_baseline` improved from 1.76×/1.92× via the upsample-fusion fix, to 1.78×/1.97×
+via the avg_pool-fusion fix, then held at 1.78×/1.97× (small absolute gain, within measurement noise at
+this granularity) via this round's specialized skip-concat kernel — see Section 8.)
 
 ![speedup vs fp16](plots/fig_speedup.png)
 
@@ -150,7 +150,7 @@ survey of `integration/fused_ops/`), turns up concrete fusion-actionable categor
 | Ahat-cache update (modiff) | — | — | 1.4 | 1.5 | int4 variant fixed this round (Section 8) |
 | Attention quantize (standalone) | 5.5 | 5.6 | 5.5 | 6.3 | already assessed not worth a custom kernel (FLOP analysis, earlier session) |
 | Resize (avg_pool/upsample) | 3.0 | 2.7 | 3.8 | 4.2 | **both directions now fused into quantize for baseline** (Section 8); `_modiff` unaffected (fusion is baseline-only) |
-| Skip-connection concat | 2.6 | 2.6 | 2.6 | 2.9 | blocked on both a new CUTLASS int32-output epilogue AND restructuring `UNetModel.forward`'s shared decoder call chain — see Section 10's corrected analysis |
+| Skip-connection concat | 2.2 | 2.2 | 2.2 | 2.4 | kernel itself vectorized this round (Section 8); *eliminating* it still needs both a new CUTLASS int32-output epilogue AND restructuring `UNetModel.forward`'s shared decoder call chain — see Section 10 |
 | Residual-add/dtype-cast/other | 6.3 | 10.3 | 6.7 | 10.9 | mostly small individual PyTorch elementwise kernels |
 
 **Fixed this round:** `static_quantize_pack_and_update_ahat_kernel_int4_half_cache[_silu]` was still
@@ -328,6 +328,35 @@ fixed," once the nearest-vs-avg_pool distinction was taken seriously instead of 
 recognize the new kernel's name, so its time was silently landing in the "other glue" catch-all instead
 of the "Resize" category in Section 5's chart — fixed by adding the `upsample2x_quantize` name pattern.)
 
+**Specialized 2-tensor channels-last concat, replacing `CatArrayBatchedCopy` for the decoder
+skip-concat.** `UNetModel.forward`'s decoder loop does `h = torch.cat([h, hs.pop()], dim=1)` before
+handing the result to the next `TimestepEmbedSequential` (`openaimodel.py`, unconditionally, for every
+mode including fp16). ATen's generic N-way `CatArrayBatchedCopy` doesn't know at compile time that
+there are exactly 2 inputs, both channels_last FP16 — it was moving memory at a 2-byte/thread
+granularity (visible in the profiler as the `OpaqueType<2u>` instantiation). Every real channel count in
+this model (192/384/768) is even, so a specialized 2-input kernel can always vectorize with `half2` and
+never needs a scalar tail for this model's shapes — added `cat2_channels_last_fp16`
+(`csrc/kernels/util/layout_transform.cu`) and a Python-side `_skip_concat` wrapper in `openaimodel.py`
+that calls it when eligible (FP16, CUDA, channels_last, even channel counts) and falls back to plain
+`torch.cat` otherwise, so it's always correct regardless of mode or shape.
+
+This is **not** the skip-concat *fusion* Section 10 discusses (eliminating the concat's materialization
+entirely, which still needs the CUTLASS int32-output epilogue described there) — it's a much smaller,
+purely mechanical win: the same materialization still happens, just via a faster kernel, the same
+relationship vectorization work in Sections 3 and 8 already has to this report's *fusion* work.
+
+**Verified:** new `cat2_channels_last_compare.py` — since concatenation is pure data movement with no
+arithmetic at all, a direct `torch.equal` against `torch.cat([a,b],dim=1)` is exactly as strong a
+correctness guarantee as a capture-compare would be (no numerics can drift). All 6 shapes (the 3 real
+churches skip-concat shapes plus edge cases) pass, plus a clean rejection for odd channel counts.
+`test_kernel_correctness.py` `ALL PASS`; whole-model `e2e_output_check.py` `rel_err=0.0000` on all 5
+modes (including fp16, confirming the shared `openaimodel.py` call site didn't regress any mode).
+
+**Measured:** the kernel itself drops from ~2.6-2.9ms/step (`CatArrayBatchedCopy`) to ~2.2-2.4ms/step
+(`cat2_channels_last_fp16`) — real, but modest (concatenation was already a fairly cheap, if
+under-vectorized, op relative to this model's ~107-127ms step time). `CatArrayBatchedCopy` no longer
+appears anywhere in any mode's profile.
+
 ---
 
 ## 9. Peak memory
@@ -433,8 +462,8 @@ Pulling every section together, here's what's been fused, what's been ruled out,
   two-source read (reading `[h; hs.pop()]` without materializing the concat) is separately tractable —
   no CUTLASS involved, same "different read address, same summation order" argument that makes the
   upsample/avgpool fusions above safe — but doesn't help alone: `skip_connection` still needs the
-  materialized concat until its own two-source form ships, so `CatArrayBatchedCopy` wouldn't disappear
-  from just the GN side.
+  materialized concat until its own two-source form ships, so the concat kernel (`cat2_channels_last_fp16`
+  as of this round's vectorization, below) wouldn't disappear from just the GN side.
   **A further, more fundamental barrier found this round**, by tracing where the concat actually lives:
   `torch.cat([h, hs.pop()], dim=1)` runs in `UNetModel.forward` (`openaimodel.py:782`), **one call frame
   above** the ResBlock — `TimestepEmbedSequential.forward(x, emb, ...)` and `FusedResBlock.forward`/
@@ -545,3 +574,4 @@ speedup vs fp16, achieved with every measured mode bit-exact, is this session's 
 - [`ca3f3af`](https://github.com/xiaruize0911/MoDiff/commit/ca3f3af) — upsample->quantize fusion for updown ResBlocks: found existing-but-unwired `FusedUpsample`/`upsample2x_quantize_noahat_fprop` kernel, wired via new `_prequant_upsample_conv`, fixed a `convert_upsample_to_fused` wrapping bug that silently neutralized it, bit-exact verified, real measured speedup (Section 8, 10)
 - [`ceea03b`](https://github.com/xiaruize0911/MoDiff/commit/ceea03b) — fill in commit hash for the upsample-fusion work in REPORT.md
 - [`77049ee`](https://github.com/xiaruize0911/MoDiff/commit/77049ee) — new `avgpool2x_quantize[_pack]_noahat` kernel (down-direction sibling of the upsample fusion) + `_prequant_avgpool_conv` glue, bit-exact verified against a real `nn.AvgPool2d` forward; fixed a real crash bug (`Tensor.__bool__` on `or`-chained fusion attempts) found while wiring it in; investigated and ruled out an `x_upd`->`skip_connection` variant of the same fusion (dead code for this architecture -- `skip_connection` is always `nn.Identity()` for updown ResBlocks, reverted); refined the skip-concat analysis to identify the real blocker as a missing CUTLASS int32-output epilogue, not im2col (Section 8, 10)
+- `PENDING` — new `cat2_channels_last_fp16` kernel replacing `torch.cat`'s generic `CatArrayBatchedCopy` for the decoder skip-concat (`UNetModel.forward`), verified bit-identical via direct `torch.equal` (pure data movement, no numerics to drift) plus whole-model `rel_err=0.0000` on all 5 modes including fp16; deepened the skip-concat *fusion* analysis (distinct from this vectorization) with a call-chain-plumbing barrier found by tracing the concat's actual location, one frame above `FusedResBlock` (Section 8, 10)

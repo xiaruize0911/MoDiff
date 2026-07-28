@@ -21,7 +21,7 @@ SUB_RULES = [
     ("Attention quantize (standalone)", ["aq_qtok", "aq_vquant", "aq_kquant"]),
     ("Resize+quantize (baseline: fused both directions; x_upd's calls unfused, feed skip_connection)",
      ["avg_pool2d", "upsample_nearest2d", "upsample2x_quantize", "avgpool2x_quantize"]),
-    ("Skip-connection concat", ["catarraybatchedcopy"]),
+    ("Skip-connection concat", ["catarraybatchedcopy", "cat2_channels_last"]),
 ]
 
 def classify(name):

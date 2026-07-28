@@ -247,6 +247,7 @@ torch::Tensor conv2d_int4_fprop_o_hat_residual(
 torch::Tensor fp16_ncw_to_fp32_cl(torch::Tensor src, int N, int C, int L);
 torch::Tensor fp32_cl_to_fp16_ncw(torch::Tensor src, int N, int C, int L);
 torch::Tensor fp16_ncw_delta_to_int8_cl(torch::Tensor x, torch::Tensor a_hat, torch::Tensor scale_t, int N, int C, int L);
+torch::Tensor cat2_channels_last_fp16(torch::Tensor a, torch::Tensor b);
 
 // ---- csrc/kernels/norm/group_norm_silu.cu ----
 torch::Tensor group_norm_silu_nhwc(

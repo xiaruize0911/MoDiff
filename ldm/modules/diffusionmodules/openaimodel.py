@@ -26,6 +26,29 @@ try:
 except ImportError:
     USE_TIMESTEP_CACHE = False
 
+# Specialized 2-tensor channels-last concat for the decoder skip-concat below (pure data
+# movement, bit-identical to torch.cat by construction -- see
+# csrc/kernels/util/layout_transform.cu's cat2_channels_last_fp16). Falls back to plain
+# torch.cat whenever the fast path's preconditions aren't met (fp32/CPU/odd channel
+# counts), so this is always correct, and applies to every mode uniformly (fp16 included
+# -- ResBlock fusion, and its channels_last convention, runs for every mode).
+try:
+    import modiff_cutlass as _cat2_cutlass
+    _HAS_CAT2_CHANNELS_LAST = hasattr(_cat2_cutlass, "cat2_channels_last_fp16")
+except ImportError:
+    _cat2_cutlass = None
+    _HAS_CAT2_CHANNELS_LAST = False
+
+
+def _skip_concat(h, skip):
+    if (_HAS_CAT2_CHANNELS_LAST and h.dtype == th.float16 and skip.dtype == th.float16
+            and h.is_cuda and skip.is_cuda
+            and h.is_contiguous(memory_format=th.channels_last)
+            and skip.is_contiguous(memory_format=th.channels_last)
+            and h.shape[1] % 2 == 0 and skip.shape[1] % 2 == 0):
+        return _cat2_cutlass.cat2_channels_last_fp16(h, skip)
+    return th.cat([h, skip], dim=1)
+
 
 # dummy replace
 def convert_module_to_f16(x):
@@ -779,7 +802,7 @@ class UNetModel(nn.Module):
                 split = h.shape[1]
             else:
                 split = 0
-            h = th.cat([h, hs.pop()], dim=1)
+            h = _skip_concat(h, hs.pop())
             h = module(h, emb, context, split=split)
         h = h.type(x.dtype)
         if self.predict_codebook_ids:
