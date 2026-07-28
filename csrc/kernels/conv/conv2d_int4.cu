@@ -559,13 +559,24 @@ torch::Tensor conv2d_int4_fprop_no_ohat_prealloc(
     int grid_size = (num_work_items + block_size - 1) / block_size;
 
     if (output.scalar_type() == torch::kFloat16) {
-        scale_store_half_kernel<<<grid_size, block_size, 0, stream>>>(
-            conv_out.data_ptr<float>(),
-            weight_scales.data_ptr<float>(),
-            reinterpret_cast<__half*>(output.data_ptr<at::Half>()),
-            num_elements,
-            num_channels
-        );
+        if (num_channels % 2 == 0) {
+            int grid_size_vec2 = (((num_elements + 1) / 2) + block_size - 1) / block_size;
+            scale_store_half_vec2_kernel<<<grid_size_vec2, block_size, 0, stream>>>(
+                conv_out.data_ptr<float>(),
+                weight_scales.data_ptr<float>(),
+                reinterpret_cast<__half*>(output.data_ptr<at::Half>()),
+                num_elements,
+                num_channels
+            );
+        } else {
+            scale_store_half_kernel<<<grid_size, block_size, 0, stream>>>(
+                conv_out.data_ptr<float>(),
+                weight_scales.data_ptr<float>(),
+                reinterpret_cast<__half*>(output.data_ptr<at::Half>()),
+                num_elements,
+                num_channels
+            );
+        }
     } else {
         scale_store_kernel<<<grid_size, block_size, 0, stream>>>(
             conv_out.data_ptr<float>(),
@@ -960,13 +971,24 @@ torch::Tensor conv2d_int4_fprop_o_hat(
     int grid_size = (num_work_items + block_size - 1) / block_size;
 
     if (o_hat_cache.scalar_type() == torch::kFloat16) {
-        scale_accumulate_half_cache_kernel<<<grid_size, block_size, 0, stream>>>(
-            conv_out.data_ptr<float>(),
-            weight_scales.data_ptr<float>(),
-            reinterpret_cast<__half*>(o_hat_cache.data_ptr<at::Half>()),
-            num_elements,
-            num_channels
-        );
+        if (num_channels % 2 == 0) {
+            int grid_size_vec2 = (((num_elements + 1) / 2) + block_size - 1) / block_size;
+            scale_accumulate_half_cache_vec2_kernel<<<grid_size_vec2, block_size, 0, stream>>>(
+                conv_out.data_ptr<float>(),
+                weight_scales.data_ptr<float>(),
+                reinterpret_cast<__half*>(o_hat_cache.data_ptr<at::Half>()),
+                num_elements,
+                num_channels
+            );
+        } else {
+            scale_accumulate_half_cache_kernel<<<grid_size, block_size, 0, stream>>>(
+                conv_out.data_ptr<float>(),
+                weight_scales.data_ptr<float>(),
+                reinterpret_cast<__half*>(o_hat_cache.data_ptr<at::Half>()),
+                num_elements,
+                num_channels
+            );
+        }
     } else {
         scale_accumulate_kernel<<<grid_size, block_size, 0, stream>>>(
             conv_out.data_ptr<float>(),
@@ -1015,14 +1037,27 @@ torch::Tensor conv2d_int4_fprop_o_hat_residual(
     int block_size = 256;
     int grid_size = (num_elements + block_size - 1) / block_size;
 
-    scale_accumulate_residual_half_cache_kernel<<<grid_size, block_size, 0, stream>>>(
-        conv_out.data_ptr<float>(),
-        weight_scales.data_ptr<float>(),
-        reinterpret_cast<__half*>(o_hat_cache.data_ptr<at::Half>()),
-        reinterpret_cast<const __half*>(residual.data_ptr<at::Half>()),
-        reinterpret_cast<__half*>(output.data_ptr<at::Half>()),
-        num_elements,
-        num_channels
-    );
+    if (num_channels % 2 == 0) {
+        int grid_size_vec2 = (((num_elements + 1) / 2) + block_size - 1) / block_size;
+        scale_accumulate_residual_half_cache_vec2_kernel<<<grid_size_vec2, block_size, 0, stream>>>(
+            conv_out.data_ptr<float>(),
+            weight_scales.data_ptr<float>(),
+            reinterpret_cast<__half*>(o_hat_cache.data_ptr<at::Half>()),
+            reinterpret_cast<const __half*>(residual.data_ptr<at::Half>()),
+            reinterpret_cast<__half*>(output.data_ptr<at::Half>()),
+            num_elements,
+            num_channels
+        );
+    } else {
+        scale_accumulate_residual_half_cache_kernel<<<grid_size, block_size, 0, stream>>>(
+            conv_out.data_ptr<float>(),
+            weight_scales.data_ptr<float>(),
+            reinterpret_cast<__half*>(o_hat_cache.data_ptr<at::Half>()),
+            reinterpret_cast<const __half*>(residual.data_ptr<at::Half>()),
+            reinterpret_cast<__half*>(output.data_ptr<at::Half>()),
+            num_elements,
+            num_channels
+        );
+    }
     return output;
 }

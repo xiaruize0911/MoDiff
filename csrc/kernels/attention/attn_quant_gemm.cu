@@ -150,42 +150,12 @@ __global__ void aq_qtok_packed_kernel(const __half* __restrict__ QKV, int8_t* __
     }
   }
 }
-// Q/K per-token quantize from packed qkv (static/calibrated scale). Mirrors aq_qtok_static_kernel.
-// Multi-row: one WARP per (bh,t) row, WARPS_PER_BLOCK warps per block -> far fewer, fuller blocks
-// than the old one-warp-per-block launch (BH*T can be ~1M rows), for better SM occupancy.
-template <int BITS>
-__global__ void aq_qtok_packed_static_kernel(const __half* __restrict__ QKV, int8_t* __restrict__ out,
-                                             float* __restrict__ sc, int nh, int T, int hd, int hp,
-                                             float scale, int sel, int nrows) {
-  const int r = blockIdx.x * (blockDim.x >> 5) + (threadIdx.x >> 5);
-  if (r >= nrows) return;
-  const int lane = threadIdx.x & 31;
-  const __half* xr = QKV + pk_row_off(r, nh, T, hd, sel);
-  const float inv = 1.f / scale;
-  if (lane == 0) sc[r] = scale;
-  if (BITS == 8) {
-    int8_t* o8 = out + (size_t)r * hp;
-    for (int d = lane; d < hp; d += 32) {
-      int q = __float2int_rn((d < hd ? __half2float(xr[d]) * inv : 0.f));
-      o8[d] = (int8_t)(q > 127 ? 127 : (q < -127 ? -127 : q));
-    }
-  } else {
-    int8_t* o4 = out + (size_t)r * (hp / 2);
-    for (int dp = lane; dp < hp / 2; dp += 32) {
-      int d0 = dp * 2;
-      int q0 = __float2int_rn((d0 < hd ? __half2float(xr[d0]) * inv : 0.f)); q0 = q0 > 7 ? 7 : (q0 < -7 ? -7 : q0);
-      int q1 = __float2int_rn((d0 + 1 < hd ? __half2float(xr[d0 + 1]) * inv : 0.f)); q1 = q1 > 7 ? 7 : (q1 < -7 ? -7 : q1);
-      o4[dp] = (int8_t)((q0 & 0xF) | ((q1 & 0xF) << 4));
-    }
-  }
-}
 // Merged Q+K per-token quantize from packed qkv (static/calibrated scales). Q (sel=0) and K
 // (sel=1) live in the SAME row, exactly hd fp16 elements apart (pk_row_off(r,...,0) and
 // pk_row_off(r,...,1) differ by hd*sizeof(half) bytes) -- not two unrelated buffers. Handling both
-// in one launch halves the launch count (was 2x aq_qtok_packed_static_kernel, sel=0 then sel=1) and
-// shares the row-pointer decode between them. Per-element math is copy-pasted verbatim from
-// aq_qtok_packed_static_kernel (just duplicated onto the Q and K operands with their own inv/out
-// pointers), so output is bit-identical to running that kernel twice with sel=0 and sel=1.
+// in one launch halves the launch count (used to be 2 separate per-operand launches, sel=0 then
+// sel=1, via a single-operand kernel -- since removed as dead code, superseded by this merged
+// kernel everywhere) and shares the row-pointer decode between them.
 template <int BITS>
 __global__ void aq_qtok_packed_static_qk_kernel(const __half* __restrict__ QKV,
                                                  int8_t* __restrict__ qout, int8_t* __restrict__ kout,
@@ -289,27 +259,11 @@ __global__ void aq_vscale_packed_kernel(const __half* __restrict__ QKV, float* _
   for (int s = nt >> 1; s > 0; s >>= 1) { if (tid < s) red[tid] = fmaxf(red[tid], red[tid + s]); __syncthreads(); }
   if (tid == 0) sv[(size_t)bh * hp_av + d] = fmaxf(red[0], 1e-8f) / Qm;
 }
-// V quantize + transpose to channel-major from packed qkv (sel=2), int8 (flash PV is int8 for both
-// int8 and int4-QK paths). Mirrors aq_vquant_trans_kernel<8>.
-__global__ void aq_vquant_trans_packed_kernel(const __half* __restrict__ QKV, const float* __restrict__ sv,
-                                              int8_t* __restrict__ vt, int nh, int T, int hd, int hp_av) {
-  const int rd = blockIdx.x, bh = rd / hp_av, d = rd % hp_av;   // grid = BH*hp_av
-  const int h = bh % nh, b = bh / nh;
-  const int tid = threadIdx.x, nt = blockDim.x;
-  const float inv = (d < hd) ? 1.f / sv[(size_t)bh * hp_av + d] : 0.f;
-  int8_t* o = vt + (size_t)rd * T;
-  for (int t = tid; t < T; t += nt) {
-    float val = 0.f;
-    if (d < hd) { size_t off = ((((size_t)b * T + t) * nh + h) * 3 + 2) * (size_t)hd + d; val = __half2float(QKV[off]) * inv; }
-    int q = __float2int_rn(val);
-    o[t] = (int8_t)(q > 127 ? 127 : (q < -127 ? -127 : q));
-  }
-}
-
-// V quantize + transpose, COALESCED tiled version. The naive kernel above reads V with a per-thread
-// stride of nh*3*hd (fully uncoalesced). Here each block handles a [VQ_TILE_T tokens x hd] tile for
-// one (b,h): read phase is coalesced over d (contiguous within a token) into smem; write phase is
-// coalesced over t (contiguous in vt[d][t]). Bit-identical per-element quantize to the naive kernel.
+// V quantize + transpose, COALESCED tiled version. A now-removed naive predecessor kernel read V
+// with a per-thread stride of nh*3*hd (fully uncoalesced). Here each block handles a [VQ_TILE_T
+// tokens x hd] tile for one (b,h): read phase is coalesced over d (contiguous within a token) into
+// smem; write phase is coalesced over t (contiguous in vt[d][t]). Bit-identical per-element
+// quantize to that predecessor.
 #define VQ_TILE_T 64
 __global__ void aq_vquant_trans_packed_tiled_kernel(const __half* __restrict__ QKV, const float* __restrict__ sv,
                                                     int8_t* __restrict__ vt, int nh, int T, int hd, int hp_av) {

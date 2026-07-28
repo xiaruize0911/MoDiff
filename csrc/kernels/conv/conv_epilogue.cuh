@@ -39,8 +39,26 @@ __global__ void scale_accumulate_half_cache_kernel(
     int num_channels
 );
 
+__global__ void scale_accumulate_half_cache_vec2_kernel(
+    const float* __restrict__ conv_output,
+    const float* __restrict__ weight_scale,
+    __half* __restrict__ o_hat_cache,
+    int num_elements,
+    int num_channels
+);
+
 // o_hat accumulate (fp16 cache) + fused ResBlock skip-add into a separate output.
 __global__ void scale_accumulate_residual_half_cache_kernel(
+    const float* __restrict__ conv_output,
+    const float* __restrict__ weight_scale,
+    __half* __restrict__ o_hat_cache,
+    const __half* __restrict__ residual,
+    __half* __restrict__ output,
+    int num_elements,
+    int num_channels
+);
+
+__global__ void scale_accumulate_residual_half_cache_vec2_kernel(
     const float* __restrict__ conv_output,
     const float* __restrict__ weight_scale,
     __half* __restrict__ o_hat_cache,
@@ -59,6 +77,14 @@ __global__ void scale_store_kernel(
 );
 
 __global__ void scale_store_half_kernel(
+    const float* __restrict__ conv_output,
+    const float* __restrict__ weight_scale,
+    __half* __restrict__ output,
+    int num_elements,
+    int num_channels
+);
+
+__global__ void scale_store_half_vec2_kernel(
     const float* __restrict__ conv_output,
     const float* __restrict__ weight_scale,
     __half* __restrict__ output,

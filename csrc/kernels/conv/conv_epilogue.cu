@@ -76,6 +76,37 @@ __global__ void scale_accumulate_half_cache_kernel(
     }
 }
 
+// Vectorized (float2/half2) counterpart of scale_accumulate_half_cache_kernel. Reads
+// conv_output (fp32) and weight_scale as float2, reads/writes o_hat_cache (fp16) as half2.
+// Requires num_channels % 2 == 0 so a pair never straddles a channel boundary (true for
+// every real channel count in this project, per this file's header comment); the caller
+// only dispatches here when that holds, with a scalar fallback (and odd-tail epilogue)
+// otherwise.
+__global__ void scale_accumulate_half_cache_vec2_kernel(
+    const float* __restrict__ conv_output,
+    const float* __restrict__ weight_scale,
+    __half* __restrict__ o_hat_cache,
+    int num_elements,
+    int num_channels
+) {
+    const int stride = blockDim.x * gridDim.x;
+    for (int base = 2 * (blockIdx.x * blockDim.x + threadIdx.x); base < num_elements; base += 2 * stride) {
+        if (base + 1 < num_elements) {
+            int ch = base % num_channels;
+            float2 conv_v = *reinterpret_cast<const float2*>(&conv_output[base]);
+            float2 scale_v = *reinterpret_cast<const float2*>(&weight_scale[ch]);
+            float2 cache_v = __half22float2(*reinterpret_cast<const __half2*>(&o_hat_cache[base]));
+            cache_v.x += conv_v.x * scale_v.x;
+            cache_v.y += conv_v.y * scale_v.y;
+            *reinterpret_cast<__half2*>(&o_hat_cache[base]) = __float22half2_rn(cache_v);
+        } else {
+            int ch = base % num_channels;
+            float cache = __half2float(o_hat_cache[base]);
+            o_hat_cache[base] = __float2half_rn(cache + conv_output[base] * weight_scale[ch]);
+        }
+    }
+}
+
 // Same o_hat accumulate as scale_accumulate_half_cache_kernel, but ALSO writes a
 // separate `output` = (updated o_hat) + residual -- fusing the ResBlock skip-add
 // into the accumulate pass so the modiff conv doesn't pay a trailing aten::add.
@@ -101,6 +132,39 @@ __global__ void scale_accumulate_residual_half_cache_kernel(
         float new_val = __half2float(o_hat_cache[i]) + conv_output[i] * weight_scale[ch];
         o_hat_cache[i] = __float2half_rn(new_val);
         output[i] = __float2half_rn(new_val + __half2float(residual[i]));
+    }
+}
+
+// Vectorized (float2/half2) counterpart of scale_accumulate_residual_half_cache_kernel.
+// Same num_channels % 2 == 0 gate rationale as scale_accumulate_half_cache_vec2_kernel above.
+__global__ void scale_accumulate_residual_half_cache_vec2_kernel(
+    const float* __restrict__ conv_output,
+    const float* __restrict__ weight_scale,
+    __half* __restrict__ o_hat_cache,
+    const __half* __restrict__ residual,
+    __half* __restrict__ output,
+    int num_elements,
+    int num_channels
+) {
+    const int stride = blockDim.x * gridDim.x;
+    for (int base = 2 * (blockIdx.x * blockDim.x + threadIdx.x); base < num_elements; base += 2 * stride) {
+        if (base + 1 < num_elements) {
+            int ch = base % num_channels;
+            float2 conv_v = *reinterpret_cast<const float2*>(&conv_output[base]);
+            float2 scale_v = *reinterpret_cast<const float2*>(&weight_scale[ch]);
+            float2 cache_v = __half22float2(*reinterpret_cast<const __half2*>(&o_hat_cache[base]));
+            float2 res_v = __half22float2(*reinterpret_cast<const __half2*>(&residual[base]));
+            float nv0 = cache_v.x + conv_v.x * scale_v.x;
+            float nv1 = cache_v.y + conv_v.y * scale_v.y;
+            *reinterpret_cast<__half2*>(&o_hat_cache[base]) = __float22half2_rn(make_float2(nv0, nv1));
+            *reinterpret_cast<__half2*>(&output[base]) =
+                __float22half2_rn(make_float2(nv0 + res_v.x, nv1 + res_v.y));
+        } else {
+            int ch = base % num_channels;
+            float new_val = __half2float(o_hat_cache[base]) + conv_output[base] * weight_scale[ch];
+            o_hat_cache[base] = __float2half_rn(new_val);
+            output[base] = __float2half_rn(new_val + __half2float(residual[base]));
+        }
     }
 }
 
@@ -148,6 +212,30 @@ __global__ void scale_store_half_kernel(
     for (int i = idx; i < num_elements; i += blockDim.x * gridDim.x) {
         int ch = i % num_channels;
         output[i] = __float2half_rn(conv_output[i] * weight_scale[ch]);
+    }
+}
+
+// Vectorized (float2/half2) counterpart of scale_store_half_kernel. Same num_channels % 2
+// == 0 gate rationale as scale_accumulate_half_cache_vec2_kernel above.
+__global__ void scale_store_half_vec2_kernel(
+    const float* __restrict__ conv_output,
+    const float* __restrict__ weight_scale,
+    __half* __restrict__ output,
+    int num_elements,
+    int num_channels
+) {
+    const int stride = blockDim.x * gridDim.x;
+    for (int base = 2 * (blockIdx.x * blockDim.x + threadIdx.x); base < num_elements; base += 2 * stride) {
+        if (base + 1 < num_elements) {
+            int ch = base % num_channels;
+            float2 conv_v = *reinterpret_cast<const float2*>(&conv_output[base]);
+            float2 scale_v = *reinterpret_cast<const float2*>(&weight_scale[ch]);
+            float2 out_v = make_float2(conv_v.x * scale_v.x, conv_v.y * scale_v.y);
+            *reinterpret_cast<__half2*>(&output[base]) = __float22half2_rn(out_v);
+        } else {
+            int ch = base % num_channels;
+            output[base] = __float2half_rn(conv_output[base] * weight_scale[ch]);
+        }
     }
 }
 
