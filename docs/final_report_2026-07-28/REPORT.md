@@ -122,7 +122,11 @@ fp16 与 4 个量化模式**在同一进程内**测量，因此加速比是同�
 | C768, 4×4 | 5 | 362 | 1.27× | 1.26× | 1.06× | 1.25× |
 | C768, 2×2 | 1 | 351 | 1.24× | 1.25× | 1.24× | 1.24× |
 
-### 2.2 layer 内部时间占比（各 role 占该层自身 GPU 时间的百分比）
+### 2.2 layer 内部时间分解（绝对 us + 占该层自身 GPU 时间的百分比）
+
+下表同时给出**绝对时间**和百分比；配套图 `plots/fig_intra_layer_*.png` 的 Y 轴用的是绝对 us，
+这样不同 shape 的柱高可直接比较（100% 归一化会让 567 us 的层和 3369 us 的层一样高，反而掩盖
+时间真正在哪里）。
 
 
 **fp16 / resblock_plain** — 最大 shape C576 32×32，流水线 6093 us，GPU busy 100.2%
@@ -705,9 +709,12 @@ int4_modiff  126.88 ms/step   (100% of GPU time accounted)
 
 ![intra layer int4](plots/fig_intra_layer_resblock_plain_int4_baseline.png)
 
-在 `int4_baseline` 的 ResBlock 内部，**GN+SiLU+quantize 融合 kernel 占该层 45–67%，
-反超量化 conv 的 22–39%**。全模型层面同样成立：Normalization 从 fp16 的 22.79 ms（10.8%）
-上升到 int4_baseline 的 24.74 ms（**23.2%**）——绝对值几乎没降，占比翻倍。
+图中 Y 轴是**真实 GPU 时间（us）**而非百分比，所以柱高在不同 shape 间可直接比较。
+在 `int4_baseline` 最大的 ResBlock（C576 32×32，共 3369 us）里，**GN+SiLU+quantize 融合 kernel
+用掉 1583 us，反超量化 conv 的 1133 us**；换算成占比是 45–67% vs 22–39%（全部 shape 范围）。
+
+全模型层面同样成立：Normalization 从 fp16 的 22.79 ms（10.8%）上升到 int4_baseline 的
+24.74 ms（**23.2%**）——绝对值几乎没降，占比翻倍。
 
 这是量化的直接后果：conv 被压缩 2.6×（41.97→15.95 ms）、Linear/GEMM 被压缩 6.4×
 （52.53→8.19 ms），而 GroupNorm 本身不能量化（它的 mean/var 归约对 fp32 求和顺序敏感，
@@ -715,7 +722,8 @@ int4_modiff  126.88 ms/step   (100% of GPU time accounted)
 
 ### 4.2 层内可见一条从未被量化的 fp16 conv
 
-上图中 int4 层内始终有 **7–11% 的 "fp16 cuDNN conv"**。它是 `skip_connection`：
+上图中 int4 层内始终有一条 **"fp16 cuDNN conv"**（最大层 387 us，各 shape 占 7–11%）。
+它是 `skip_connection`：
 `convert_model_to_optimized_int8/_int4` 里有一句显式 `is_skip = 'skip' in name; if is_skip: continue`,
 **故意从不量化 skip 连接**。已直接核实：17 个非 Identity 的 `skip_connection` 全部是原生
 `torch.nn.Conv2d`。这是本轮独立于代码审计、纯从 profile 数据侧再次看到同一事实。

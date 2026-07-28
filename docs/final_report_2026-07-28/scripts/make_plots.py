@@ -272,16 +272,25 @@ def main_e2e():
 ROLE_COLORS = {}
 
 
+# Elementwise-Cast's layer color (#D3D1C7) is already near-white, so shading it produces
+# several roles that are indistinguishable in a legend. Give that family a darker base and
+# spread its variants over hue as well as lightness.
+_ROLE_BASE_OVERRIDE = {"Elementwise-Cast": "#8C8880", "Memory-op": "#5F5E5A",
+                       "Sampler-side": "#6B6560"}
+
+
 def _role_color(role, layer_type):
+    """Stable color per role: same hue family as its layer type, distinguishable within it."""
     if role not in ROLE_COLORS:
-        base = LAYER_COLORS.get(layer_type, "#999999")
+        base = _ROLE_BASE_OVERRIDE.get(layer_type, LAYER_COLORS.get(layer_type, "#999999"))
         n = sum(1 for r in ROLE_COLORS if ROLE_COLORS[r][1] == layer_type)
-        # vary lightness within a layer type so roles are distinguishable but still
-        # read as "belonging to" their layer type's color family
         import matplotlib.colors as mc
-        c = np.array(mc.to_rgb(base))
-        f = 1.0 - 0.16 * (n % 5)
-        ROLE_COLORS[role] = (tuple(np.clip(c * f + (1 - f) * 0.85, 0, 1)), layer_type)
+        import colorsys
+        h, l, sat = colorsys.rgb_to_hls(*mc.to_rgb(base))
+        # walk lightness up and hue slightly, so 5+ roles in one family stay separable
+        l = min(0.88, l + 0.13 * (n % 4))
+        h = (h + 0.035 * (n // 4)) % 1.0
+        ROLE_COLORS[role] = (colorsys.hls_to_rgb(h, l, sat), layer_type)
     return ROLE_COLORS[role][0]
 
 
@@ -322,7 +331,12 @@ def fig_layer_pipeline_speedup(lp):
 
 
 def fig_intra_layer_split(lp, mode="int4_baseline", kind="resblock_plain", topn=10):
-    """Stacked 100% bars: inside each layer instance, which roles eat its GPU time."""
+    """Inside each layer instance, which roles eat its GPU time -- in ABSOLUTE us.
+
+    Y is real time (us per layer call), not a percentage, so bar HEIGHT is comparable
+    across shapes: a 100%-normalized stack makes a 569 us layer look as tall as a 3377 us
+    one, which hides where the time actually is.
+    """
     if not lp or mode not in lp["modes"]:
         return
     rows = [r for r in lp["modes"][mode] if r["kind"] == kind and r.get("roles")]
@@ -335,30 +349,40 @@ def fig_intra_layer_split(lp, mode="int4_baseline", kind="resblock_plain", topn=
         for role, a in r["roles"].items():
             all_roles[role] = all_roles.get(role, 0.0) + a["us"]
     order = [r for r, _ in sorted(all_roles.items(), key=lambda kv: -kv[1])]
-    fig, ax = plt.subplots(figsize=(12, 5.6))
+    fig, ax = plt.subplots(figsize=(12.5, 6.0))
     x = np.arange(len(rows))
     bottom = np.zeros(len(rows))
     for role in order:
-        vals = np.array([r["roles"].get(role, {}).get("pct_of_layer", 0.0) for r in rows])
+        vals = np.array([r["roles"].get(role, {}).get("us", 0.0) for r in rows])
         lt = next((k["layer_type"] for r in rows for k in r["kernels"] if k["role"] == role),
                   "Other / unclassified")
         ax.bar(x, vals, bottom=bottom, width=0.68,
                label=textwrap.shorten(role, 58, placeholder="..."),
                color=_role_color(role, lt))
-        for i, (v, b) in enumerate(zip(vals, bottom)):
-            if v >= 6:
+        bottom += vals
+    # Label each segment with its absolute us, but only where the segment is tall enough
+    # to hold text (relative to the tallest bar, so labels stay legible at every scale).
+    ymax = float(bottom.max()) if len(bottom) else 1.0
+    bottom2 = np.zeros(len(rows))
+    for role in order:
+        vals = np.array([r["roles"].get(role, {}).get("us", 0.0) for r in rows])
+        for i, (v, b) in enumerate(zip(vals, bottom2)):
+            if v >= ymax * 0.035:
                 ax.text(i, b + v / 2, f"{v:.0f}", ha="center", va="center",
                         fontsize=7.5, color="white", fontweight="bold")
-        bottom += vals
+        bottom2 += vals
+    for i, tot in enumerate(bottom):
+        ax.text(i, tot + ymax * 0.012, f"{tot:.0f} us", ha="center",
+                fontsize=8.5, fontweight="bold", color="#2C2C2A")
     ax.set_xticks(x)
-    ax.set_xticklabels([f"C{r['x_shape'][1]}\n{r['x_shape'][2]}x{r['x_shape'][3]}\n"
-                        f"{r['pipeline_us']:.0f}us" for r in rows], fontsize=8)
-    ax.set_ylabel("% of this layer's own GPU time")
-    ax.set_ylim(0, 105)
-    ax.set_title(f"Inside each layer — time split by role  ({kind}, {mode}, b{lp['batch']})\n"
-                 "each bar is one layer shape; bottom label is its measured pipeline time",
+    ax.set_xticklabels([f"C{r['x_shape'][1]}\n{r['x_shape'][2]}x{r['x_shape'][3]}" for r in rows],
+                       fontsize=8.5)
+    ax.set_ylabel("us per layer call (absolute GPU time)")
+    ax.set_ylim(0, ymax * 1.13)
+    ax.set_title(f"Inside each layer — absolute time split by role  ({kind}, {mode}, b{lp['batch']})\n"
+                 "bar height is real GPU time, so heights are comparable across shapes",
                  fontsize=11)
-    ax.legend(frameon=False, loc="upper center", bbox_to_anchor=(0.5, -0.16), ncol=2, fontsize=8.5)
+    ax.legend(frameon=False, loc="upper center", bbox_to_anchor=(0.5, -0.14), ncol=2, fontsize=8.5)
     ax.spines[["top", "right"]].set_visible(False)
     fig.tight_layout()
     fig.savefig(f"{HERE}/plots/fig_intra_layer_{kind}_{mode}.png", dpi=150, bbox_inches="tight")
