@@ -458,9 +458,19 @@ Pulling every section together, here's what's been fused, what's been ruled out,
   fusing the resize into the *conv's own im2col read* (so the conv reads directly from the small
   pre-resize tensor with no separate resize-and-quantize kernel launch at all). That needs a custom
   CUTLASS im2col iterator that resolves each output pixel's input coordinate through the resize mapping
-  (nearest-index or 2x2-average) instead of reading a materialized NHWC buffer — genuine, substantial
-  kernel engineering for both directions, for a payoff on the order of ~1ms/step each (what's left after
-  this round's quantize-fusion already captured most of the win; see Section 5's Resize row).
+  (nearest-index or 2x2-average) instead of reading a materialized NHWC buffer, implementing CUTLASS's
+  internal iterator concept from scratch — a categorically different kind of engineering than anything
+  else fused this session (which all reused or lightly extended existing kernel/wrapper patterns already
+  present in this codebase; this has no precedent here to build from).
+  **Precisely bounded payoff, measured, not estimated:** the *only* thing such an iterator could still
+  eliminate is the standalone `upsample2x_quantize_noahat`/`avgpool2x_quantize_noahat` kernels this
+  session just shipped — 0.842+0.195=1.037ms/step for int8_baseline (0.87% of 118.5ms), 0.560+0.188=0.748ms/step
+  for int4_baseline (0.70% of 107.0ms) (`data/glue_breakdown_detail.json`). That is the hard ceiling on
+  this item's remaining value, not a rough guess — under 1% of the step either way. Weighed against
+  novel, unprecedented-in-this-codebase CUTLASS iterator engineering under a zero-tolerance bit-exact
+  bar (a bar this exact class of change has already failed twice this session for other kernels, per the
+  two GN-stats dead ends above), this is a clear case for stopping at the quantize-fusion depth already
+  shipped, not a case of "ran out of time before trying."
 - **layout_transform.cu** (Section 6): the two simple transpose+cast kernels and the delta-quantize
   kernels' fp16 phase are now vectorized (Section 8); the remaining scalar phase (delta-quantize's
   a_hat read-modify-write + int8 quantize) was left alone since it entangles cache-update correctness
