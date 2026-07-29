@@ -127,6 +127,16 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         # Task 2: int4 fused. ONE-PASS mixed quantize (quantize_attn_qkv_i4qk_i8v): int4-packed Q/K
         # (matches the flash kernel) + int8 transposed V (flash uses int8 PV) in a single sweep of q/k/v
         # -> no eager nibble-pack, no wasted int4-V, no double V quantize. Feeds flash_attn_int4_vt directly.
+        #
+        # hdp4 is 64 because mma.m16n8k64.s4 has no shorter K. At hd=24 that pads the k-depth 24->64,
+        # so 62% of it is zeros and int4 issues the SAME number of mma instructions as int8's
+        # m16n8k32 -- measured: int4 is 1.01x int8 at T=1024/hd=24 (no advantage), against 1.30x at
+        # hd=48 where the wider instruction does pay. Switching to m16n8k32.s4 for hd<=32 was measured
+        # and rejected (data/attn_headroom.json): it would halve K's smem/HBM traffic but not the mma
+        # count, and this kernel is nowhere near memory-bound -- even the pessimistic traffic model
+        # (K/V re-read grid.y times, every CTA missing L2) puts it at 56% of the 590 GB/s ceiling,
+        # and the unit-floor analysis leaves t_hbm 6.8x below the measured time. Upper bound on the
+        # whole idea: 1.28x, and only if bandwidth were the binding constraint. It is not.
         hdp4, hdp_v = 64, ((hd + 31) // 32) * 32
         if getattr(self, "_fq4_frozen", False):   # static single-pass (calibrated) — no runtime amax
             q4, k4, vt, sq4, sk4, sv = _mc.quantize_attn_qkv_i4qk_i8v_static(

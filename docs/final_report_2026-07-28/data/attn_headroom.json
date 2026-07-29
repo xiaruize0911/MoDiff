@@ -1,0 +1,132 @@
+{
+  "part4_hd48_occupancy": [
+    {
+      "T": 256,
+      "config": "BC32_W4",
+      "regs": 96,
+      "cta_per_sm": 5,
+      "occupancy_pct": 41.7,
+      "us": 349.57,
+      "binding": "registers + shared memory"
+    },
+    {
+      "T": 256,
+      "config": "BC32_W8",
+      "regs": 96,
+      "cta_per_sm": 2,
+      "occupancy_pct": 33.3,
+      "us": 267.41,
+      "binding": "registers"
+    },
+    {
+      "T": 256,
+      "config": "BC64_W4",
+      "regs": 127,
+      "cta_per_sm": 4,
+      "occupancy_pct": 33.3,
+      "us": 335.45,
+      "binding": "registers + shared memory"
+    },
+    {
+      "T": 256,
+      "config": "BC64_W8",
+      "regs": 127,
+      "cta_per_sm": 2,
+      "occupancy_pct": 33.3,
+      "us": 264.42,
+      "binding": "registers"
+    },
+    {
+      "T": 64,
+      "config": "BC32_W4",
+      "regs": 96,
+      "cta_per_sm": 5,
+      "occupancy_pct": 41.7,
+      "us": 46.63,
+      "binding": "registers + shared memory"
+    },
+    {
+      "T": 64,
+      "config": "BC32_W4",
+      "regs": 96,
+      "cta_per_sm": 5,
+      "occupancy_pct": 41.7,
+      "us": 46.61,
+      "binding": "registers + shared memory"
+    },
+    {
+      "T": 64,
+      "config": "BC64_W4",
+      "regs": 127,
+      "cta_per_sm": 4,
+      "occupancy_pct": 33.3,
+      "us": 49.99,
+      "binding": "registers + shared memory"
+    },
+    {
+      "T": 64,
+      "config": "BC64_W4",
+      "regs": 127,
+      "cta_per_sm": 4,
+      "occupancy_pct": 33.3,
+      "us": 49.9,
+      "binding": "registers + shared memory"
+    }
+  ],
+  "part4_verdict": [
+    {
+      "T": 64,
+      "fastest": "BC32_W4",
+      "fastest_us": 46.61,
+      "fastest_occ": 41.7,
+      "highest_occ": "BC32_W4",
+      "highest_occ_pct": 41.7,
+      "highest_occ_us": 46.63,
+      "occupancy_wins": true
+    },
+    {
+      "T": 256,
+      "fastest": "BC64_W8",
+      "fastest_us": 264.42,
+      "fastest_occ": 33.3,
+      "highest_occ": "BC32_W4",
+      "highest_occ_pct": 41.7,
+      "highest_occ_us": 349.57,
+      "occupancy_wins": false
+    }
+  ],
+  "part5_int4_padding": [
+    {
+      "T": 1024,
+      "hd": 24,
+      "warps": 8,
+      "grid_y": 8,
+      "int8_us": 1882.4,
+      "int4_us": 1868.1,
+      "int4_vs_int8": 1.008,
+      "mb_optimistic": 151.0,
+      "mb_pessimistic": 620.8,
+      "gbs_optimistic": 80.8,
+      "gbs_pessimistic": 332.3,
+      "pct_ceiling_pessimistic": 56.3,
+      "mb_saved_by_k32": 134.2,
+      "max_gain_if_bw_bound": 1.276
+    },
+    {
+      "T": 256,
+      "hd": 48,
+      "warps": 8,
+      "grid_y": 2,
+      "int8_us": 279.7,
+      "int4_us": 214.8,
+      "int4_vs_int8": 1.302,
+      "mb_optimistic": 58.7,
+      "mb_pessimistic": 83.9,
+      "gbs_optimistic": 273.4,
+      "gbs_pessimistic": 390.5,
+      "pct_ceiling_pessimistic": 66.2,
+      "mb_saved_by_k32": 8.4,
+      "max_gain_if_bw_bound": 1.111
+    }
+  ]
+}

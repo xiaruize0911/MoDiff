@@ -22,6 +22,7 @@
 // =========================================================================
 #include <ATen/cuda/CUDAContext.h>
 #include <cuda_fp16.h>
+#include <cstdlib>   // getenv/atoi for MODIFF_FA_BC
 #include <cuda_pipeline_primitives.h>
 #include <torch/extension.h>
 
@@ -201,7 +202,8 @@ __global__ void flash_attn_int8_tiled_kernel(
 // =========================================================================
 // Tensor-core flash kernel: mma.m16n8k32.s8 for QKᵀ and PV, softmax on the
 // smem S tile (no global T×T). One warp per (n,head,16-query tile).
-//   BR=16 (mma M), BC=32 (key tile = mma K for PV, 4 mma N-tiles for QKᵀ).
+//   BR=16 (mma M), BC = template arg, 32 or 64 (key tile; BC/8 mma N-tiles for QKᵀ,
+//   BC/32 mma K-steps for PV). Runtime-selected by MODIFF_FA_BC, default 64.
 // Requires hd_pad<=64, T%16==0, hd%8==0 (all int8-path churches blocks qualify).
 // Fragment mapping matches mma_smoke (validated exact).
 // =========================================================================
@@ -214,17 +216,34 @@ __global__ void flash_attn_int8_tiled_kernel(
 // Multi-warp CTA: FA_MMA_WARPS warps share the K/V smem tiles (loaded once per CTA
 // and reused by all warps -> higher occupancy). Each warp owns a 16-query tile, keeps
 // its O accumulator in registers (fp32 fragments), and runs its own QKᵀ / softmax / PV.
-__global__ void flash_attn_int8_mma_kernel(
+// TEMPLATED on HD_PAD. This matters a lot, not cosmetically:
+//   * hd_pad used to be a RUNTIME arg, so Oreg[] was indexed by the runtime n_nt2 and the
+//     compiler could not keep it in registers -- cuobjdump showed STACK:128, i.e. all 32
+//     fp32 accumulators spilled to LOCAL memory and every PV accumulate did a DRAM-backed
+//     round trip. That, not arithmetic, is why int8 and int4 reached the SAME ~19-25 TOPS.
+//   * smem was sized for FA_MMA_MAXHD=64 regardless of the real hd_pad, so an hd_pad=32
+//     shape wasted half its smem: 24 KB/CTA -> 4 CTA/SM -> 33% occupancy on A40.
+// With HD_PAD a compile-time constant: Oreg lives in registers (no spill), smem is exact
+// (14 KB at HD_PAD=32 -> 7 CTA/SM), and the k/n-tile loops fully unroll.
+// WARPS is also templated: more warps per CTA share ONE K/V smem tile, so the number of CTAs
+// per (n,h) -- each of which streams the whole K and V -- drops proportionally. At T=1024,
+// WARPS=4 gives grid.y=16 (K/V read 16x, ~1.11 GB, measured 365 GB/s of the ~590 GB/s this
+// card sustains, i.e. memory-bound); WARPS=8 halves that to 0.57 GB at the same thread-level
+// occupancy (3 CTA x 256 thr == 6 CTA x 128 thr == 768 thr/SM).
+template <int HD_PAD, int WARPS, int BC>
+__global__ void flash_attn_int8_mma_kernel_t(
     const int8_t* __restrict__ q, const int8_t* __restrict__ k, const int8_t* __restrict__ v,
     const float* __restrict__ sq, const float* __restrict__ sk, const float* __restrict__ sv,
-    __half* __restrict__ out, int N, int H, int T, int hd, int hd_pad, float softmax_scale,
+    __half* __restrict__ out, int N, int H, int T, int hd, int hd_pad_rt, float softmax_scale,
     int8_t* __restrict__ out_q, float proj_inv_scale, int qout_stride) {
+  constexpr int hd_pad = HD_PAD;
+  (void)hd_pad_rt;
   // out_q != nullptr => fused proj-quantize store: emit int8 token-major [b*T, qout_stride]
   // (qout_stride = C = H*hd), quantized by proj_inv_scale, instead of the fp16 head-major `out`.
   const int nh = blockIdx.x;
   const int w = threadIdx.x >> 5;              // warp id in CTA
   const int lane = threadIdx.x & 31, gid = lane >> 2, tig = lane & 3;
-  const int q0 = (blockIdx.y * FA_MMA_WARPS + w) * FA_MMA_BR;   // this warp's query tile
+  const int q0 = (blockIdx.y * WARPS + w) * FA_MMA_BR;   // this warp's query tile
 
   const int8_t* kb = k + (size_t)nh * T * hd_pad;
   const int8_t* vb = v + (size_t)nh * T * hd_pad;
@@ -232,34 +251,103 @@ __global__ void flash_attn_int8_mma_kernel(
   const float*  skb = sk + (size_t)nh * T;
   const float*  svb = sv + (size_t)nh * hd;
 
-  // Triple-buffered cp.async tiles (FA_STAGES-deep pipeline). V is taken PRE-TRANSPOSED
+  // Double-buffered cp.async tiles (FA_STAGES-deep pipeline). V is taken PRE-TRANSPOSED
   // [N,H,hd_pad,T] so both K ([BC,hd_pad]) and V ([hd_pad,BC]) tiles are HBM-contiguous.
-  #define FA_STAGES 2   // 2-stage double-buffer (3 tried: slower at T1024, occupancy-bound)
-  __shared__ int8_t Ks[FA_STAGES][FA_MMA_BC * FA_MMA_MAXHD];
-  __shared__ int8_t Vs[FA_STAGES][FA_MMA_MAXHD * FA_MMA_BC];  // Vs[buf][d*BC+j] = V[kt+j][d]
-  __shared__ int8_t Qs[FA_MMA_WARPS * FA_MMA_BR * FA_MMA_MAXHD];
-  __shared__ int8_t Ps[FA_MMA_WARPS * FA_MMA_BR * FA_MMA_BC];
+  // Pipeline depth: 2, unconditionally. It used to be `(BC <= 32) ? 3 : 2` on the reasoning that
+  // "deeper prefetch is exactly what a latency-bound kernel wants, and BC=32 is where it is
+  // affordable". Both halves of that turned out to be wrong:
+  //
+  //   * The 3-stage path COMPUTED WRONG ANSWERS. BC=32 was the only config that got 3 stages and
+  //     the only one that was numerically broken: rel-L2 vs an fp32 reference was 0.415
+  //     (hd_pad=64,T=64), 0.197 (hd_pad=32,T=256), 0.068 (hd_pad=32,T=1024) against ~0.014-0.020
+  //     for every 2-stage config. It was a race, not a rounding issue: the error grew with grid.x
+  //     (9.6e-3 at N*H=16, 0.415 at N*H=1024, which is why a 16-CTA correctness gate never saw it)
+  //     and WARPS=4 vs WARPS=8 gave DIFFERENT results, though warp count cannot change the math.
+  //     Forcing 2 stages makes all 12 (BC x WARPS x T) configs agree to 0.0095-0.0203 and makes
+  //     W=4 and W=8 bit-identical. int4 hardcoded 2 stages all along and was never affected.
+  //   * The third stage bought no speed anyway: BC=32/W=8 at T=1024 (the config the heuristic
+  //     picks for the dominant C192 block) measured 1891.8 us with 3 stages and 1881.9 us with 2.
+  //     Every other cell moved within +-1%. So this is a pure correctness win, not a trade.
+  //
+  // The un-diagnosed part is *which* of the 3-stage buffer/commit interactions raced;
+  // `__pipeline_wait_prior(FA_STAGES-2)` with three buffers is the obvious suspect. Anyone
+  // restoring a deeper pipeline must re-run scripts/qattn_correctness.py at its LARGE (128,8,*)
+  // cases -- the small ones pass even when the kernel is wrong.
+  constexpr int FA_STAGES = 2;
+  __shared__ int8_t Ks[FA_STAGES][BC * HD_PAD];
+  __shared__ int8_t Vs[FA_STAGES][HD_PAD * BC];  // Vs[buf][d*BC+j] = V[kt+j][d]
+  __shared__ int8_t Qs[WARPS * FA_MMA_BR * HD_PAD];
+  __shared__ int8_t Ps[WARPS * FA_MMA_BR * BC];
+  // Per-key K scales for the current tile, staged once per CTA (512 B). They used to be read
+  // straight from HBM inside the score loop -- 24 LDG per lane PER KEY TILE in the SASS census.
+  __shared__ float SKs[FA_STAGES][BC];
 
   int8_t* Qsw = &Qs[w * FA_MMA_BR * hd_pad];
-  int8_t* Psw = &Ps[w * FA_MMA_BR * FA_MMA_BC];
+  int8_t* Psw = &Ps[w * FA_MMA_BR * BC];
 
+  // No bounds mask: grid.y == T/(WARPS*BR) and the host enforces T % (FA_MMA_WARPS*FA_MMA_BR) == 0,
+  // so q0 + FA_MMA_BR <= T always. Same reasoning kills the kt + c < T masks in the score loop.
   for (int idx = lane; idx < FA_MMA_BR * hd_pad; idx += 32) {
-    int row = idx / hd_pad, col = idx % hd_pad, gq = q0 + row;
-    Qsw[idx] = (gq < T) ? q[(size_t)nh * T * hd_pad + (size_t)gq * hd_pad + col] : 0;
+    int row = idx / hd_pad, col = idx % hd_pad;
+    Qsw[idx] = q[(size_t)nh * T * hd_pad + (size_t)(q0 + row) * hd_pad + col];
   }
 
   // Per-lane running softmax state (registers, no smem). Each lane owns rows gid & gid+8;
   // the 4 lanes sharing a gid (tig=0..3) agree on m/l after the __shfl_xor reduction.
   float m_run0 = -INFINITY, m_run1 = -INFINITY, l_run0 = 0.f, l_run1 = 0.f;
-  float Oreg[FA_MMA_MAXNT * 4];
+  // Exactly the accumulators this HD_PAD needs, and a compile-time count so they stay in
+  // registers instead of spilling (the whole point of templating -- see the header note).
+  constexpr int NT_MAX = HD_PAD / 8;
+  float Oreg[NT_MAX * 4];
 #pragma unroll
-  for (int i = 0; i < FA_MMA_MAXNT * 4; ++i) Oreg[i] = 0.f;
-  const int n_nt2 = hd / 8;
-  const int nkt = hd_pad / 32;
-  const int NNT = FA_MMA_BC / 8;                 // QKᵀ N-tiles (=4 for BC=32)
-  const float sqi0 = sqb[q0 + gid], sqi1 = sqb[q0 + gid + 8];
-  const int NKV = T / FA_MMA_BC;                  // key tiles (T % BC == 0 on the mma path)
-  const int KV16 = (FA_MMA_BC * hd_pad) / 16;     // 16B chunks per K tile (== per V tile)
+  for (int i = 0; i < NT_MAX * 4; ++i) Oreg[i] = 0.f;
+  const int n_nt2 = hd / 8;                      // <= NT_MAX; hd may be < HD_PAD (padding)
+  constexpr int nkt = HD_PAD / 32;
+  constexpr int NNT = BC / 8;             // QKᵀ N-tiles
+  const int NKV = T / BC;                  // key tiles (T % BC == 0 on the mma path)
+  const int KV16 = (BC * hd_pad) / 16;     // 16B chunks per K tile (== per V tile)
+
+  // ---- fold every loop-invariant scalar into per-lane constants, in log2 units ----
+  // The SASS census showed 222 FMUL per lane per key tile against 16 IMMA: this kernel is
+  // issue-bound on the fp32 dequant/softmax/requant epilogue, not on the tensor cores. Each
+  // fold below removes 32 FMUL per key tile (one per score element this lane owns):
+  //   * softmax_scale and log2(e) folded into the Q scale  -> score comes out already in log2
+  //     units, so modiff_ex2() is a single MUFU.EX2 with no log2(e) multiply of its own;
+  //   * the P requantize factor 127 folded into the running max (mq = mcur - log2(127)), so
+  //     modiff_ex2(S - mq) IS 127*exp(S - mcur) and the separate "* 127.f" disappears;
+  //   * consequently l_run and Oreg both carry a factor of 127, which cancels in Oreg/l_run,
+  //     so the PV epilogue's "* (1/127)" disappears too.
+  constexpr float FA_LOG2E   = 1.4426950408889634f;
+  constexpr float FA_LOG2_127 = 6.98868468677217f;      // log2(127)
+  const float sqs0 = sqb[q0 + gid]     * softmax_scale * FA_LOG2E;
+  const float sqs1 = sqb[q0 + gid + 8] * softmax_scale * FA_LOG2E;
+  // This lane's V scales, hoisted out of the key loop (they depend only on nt2 and tig).
+  float svr[NT_MAX][2];
+#pragma unroll
+  for (int i = 0; i < NT_MAX; ++i) {
+    const int d0 = i * 8 + tig * 2;
+    svr[i][0] = (d0     < hd) ? svb[d0]     : 0.f;
+    svr[i][1] = (d0 + 1 < hd) ? svb[d0 + 1] : 0.f;
+  }
+
+  // ---- hoist the Q A-fragment into registers, ONCE, outside the key loop ----
+  // Q is loop-invariant: the same [BR x hd_pad] tile feeds every key tile and every N-tile.
+  // It used to be re-read from Qsw inside the mma loop, i.e. NNT*nkt*4 = 32 (HD_PAD=32) or
+  // 64 (HD_PAD=64) redundant smem loads per lane PER KEY TILE -- by far the largest single
+  // item of smem traffic in the kernel, and the reason both int8 and int4 plateaued at
+  // ~15% of their (very different) peaks: the mma units were starved by the smem pipe,
+  // not by arithmetic. nkt is compile-time so this is 4*nkt = 4 or 8 registers, held for
+  // the whole kernel, and the loads happen NKV times fewer.
+  __syncwarp();                      // Qsw was filled cooperatively by this warp's 32 lanes
+  unsigned Qa[nkt][4];
+#pragma unroll
+  for (int ks = 0; ks < nkt; ++ks) {
+    const int base = ks * 32;
+    Qa[ks][0] = *(const unsigned*)&Qsw[(gid)     * hd_pad + base + tig * 4];
+    Qa[ks][1] = *(const unsigned*)&Qsw[(gid + 8) * hd_pad + base + tig * 4];
+    Qa[ks][2] = *(const unsigned*)&Qsw[(gid)     * hd_pad + base + tig * 4 + 16];
+    Qa[ks][3] = *(const unsigned*)&Qsw[(gid + 8) * hd_pad + base + tig * 4 + 16];
+  }
 
   // cp.async a K tile ([BC,hd_pad] from k[nh]) and V tile ([hd_pad,BC] from pre-T v[nh]) into buf.
   auto load_kv = [&](int buf, int kt) {
@@ -269,53 +357,77 @@ __global__ void flash_attn_int8_mma_kernel(
       modiff_cp_async_cg(modiff_smem_ptr(&Ks[buf][off]),
                          (const uint4*)(kb + (size_t)kt * hd_pad + off), true);
       // V (pre-transposed [hd_pad,T]): row-major [hd_pad,BC], HBM vb[d*T + kt+j]
-      int d = off / FA_MMA_BC, j = off % FA_MMA_BC;
+      int d = off / BC, j = off % BC;
       modiff_cp_async_cg(modiff_smem_ptr(&Vs[buf][off]),
                          (const uint4*)(vb + (size_t)d * T + kt + j), true);
     }
+    // K scales for this tile: 64 floats = 16 chunks of 16 B, same pipeline as K/V.
+    for (int c = threadIdx.x; c < BC / 4; c += blockDim.x)
+      modiff_cp_async_cg(modiff_smem_ptr(&SKs[buf][c * 4]),
+                         (const uint4*)(skb + kt + c * 4), true);
     __pipeline_commit();
   };
 
   // prime FA_STAGES-1 tiles (commits in flight)
 #pragma unroll
-  for (int s = 0; s < FA_STAGES - 1; ++s) if (s < NKV) load_kv(s % FA_STAGES, s * FA_MMA_BC);
+  for (int s = 0; s < FA_STAGES - 1; ++s) if (s < NKV) load_kv(s % FA_STAGES, s * BC);
 
   for (int ktile = 0; ktile < NKV; ++ktile) {
-    const int kt = ktile * FA_MMA_BC;
+    const int kt = ktile * BC;
     const int buf = ktile % FA_STAGES;
     __pipeline_wait_prior(FA_STAGES - 2);   // wait until oldest (tile ktile) has arrived
     __syncthreads();                        // all warps done with prev tile's buffer; tile ktile visible
     const int nxt = ktile + (FA_STAGES - 1);
-    if (nxt < NKV) load_kv(nxt % FA_STAGES, nxt * FA_MMA_BC);  // prefetch tile ktile+STAGES-1
+    if (nxt < NKV) load_kv(nxt % FA_STAGES, nxt * BC);  // prefetch tile ktile+STAGES-1
     int8_t* Ksb = Ks[buf];
     int8_t* Vsb = Vs[buf];
 
     // ---- QKᵀ: keep the [BR x BC] score tile in registers (Sreg[nt][0..3]) ----
     // Sreg[nt] = {row gid col c0, row gid col c1, row gid+8 col c0, row gid+8 col c1}
-    float Sreg[FA_MMA_BC / 8][4];
+    //
+    // DO NOT "tile Sreg to cut registers" -- measured and rejected (data/attn_headroom.json).
+    // The online softmax is incremental over columns, so splitting this tile into halves of BC/2
+    // computes exactly what a smaller BC computes: the idea IS BC=32, which already exists and
+    // already lowers REG 127 -> 96. Two measurements kill it at hd=48 (the shape it was aimed at):
+    //   * REG 96 at WARPS=8 still allows only 2 CTA/SM -- the SAME 33.3% occupancy as REG 127, so
+    //     the register saving buys no occupancy at all (3 CTA would need REG <= 85).
+    //   * The one config that does reach higher occupancy, BC=32/W=4 at 41.7%, is the SLOWEST of
+    //     the four: 349.6 us vs 264.4 us for BC=64/W=8 at T=256. This kernel gains more from the
+    //     WARPS=8 K/V smem sharing than from occupancy.
+    float Sreg[BC / 8][4];
+#pragma unroll
     for (int nt = 0; nt < NNT; ++nt) {
       int acc[4] = {0, 0, 0, 0};
+#pragma unroll
       for (int ks = 0; ks < nkt; ++ks) {
         int base = ks * 32;
-        unsigned a[4], b[2];
-        a[0] = *(const int*)&Qsw[(gid)     * hd_pad + base + tig * 4];
-        a[1] = *(const int*)&Qsw[(gid + 8) * hd_pad + base + tig * 4];
-        a[2] = *(const int*)&Qsw[(gid)     * hd_pad + base + tig * 4 + 16];
-        a[3] = *(const int*)&Qsw[(gid + 8) * hd_pad + base + tig * 4 + 16];
+        unsigned b[2];
         b[0] = *(const int*)&Ksb[(nt * 8 + gid) * hd_pad + base + tig * 4];
         b[1] = *(const int*)&Ksb[(nt * 8 + gid) * hd_pad + base + tig * 4 + 16];
-        modiff_mma_m16n8k32(acc, a, b);
+        modiff_mma_m16n8k32(acc, Qa[ks], b);   // Q from registers (hoisted), not smem
       }
-      int c0 = nt * 8 + tig * 2, c1 = c0 + 1;
-      float sk0 = (kt + c0 < T) ? skb[kt + c0] : 0.f, sk1 = (kt + c1 < T) ? skb[kt + c1] : 0.f;
-      Sreg[nt][0] = (kt + c0 < T) ? acc[0] * sqi0 * sk0 * softmax_scale : -INFINITY;
-      Sreg[nt][1] = (kt + c1 < T) ? acc[1] * sqi0 * sk1 * softmax_scale : -INFINITY;
-      Sreg[nt][2] = (kt + c0 < T) ? acc[2] * sqi1 * sk0 * softmax_scale : -INFINITY;
-      Sreg[nt][3] = (kt + c1 < T) ? acc[3] * sqi1 * sk1 * softmax_scale : -INFINITY;
+      // Apply ONLY the per-key scale here: Sreg holds acc*sk[j], not the full score. The
+      // per-row Q scale is deliberately left out and applied later inside the exp argument.
+      // That is exact, not an approximation: every quantization scale is strictly positive, so
+      //     max_j (sq_i * u_ij) == sq_i * max_j u_ij
+      // and the running max can be tracked in these unscaled units. Doing it this way turns
+      // 2 multiplies per element (sqs*sk, then acc*that) plus the later (S - m) subtract into
+      // 1 multiply plus 1 FFMA -- 4 fewer instructions per N-tile. No bounds mask (see above).
+      const int c0 = nt * 8 + tig * 2;
+      const float sk0 = SKs[buf][c0], sk1 = SKs[buf][c0 + 1];
+      Sreg[nt][0] = acc[0] * sk0;
+      Sreg[nt][1] = acc[1] * sk1;
+      Sreg[nt][2] = acc[2] * sk0;
+      Sreg[nt][3] = acc[3] * sk1;
     }
 
     // ---- register-parallel online softmax (all 32 lanes active) ----
     // local max over this lane's 8 cols for each of its 2 rows
+    // Single accumulator chain, deliberately. A 4-way split (chain depth 8 -> 4) was measured
+    // and is a REGRESSION here: it pushes the kernel from REG:83 to REG:96, which drops
+    // occupancy from 3 CTA/SM (24 warps, 50%) to 2 CTA/SM (16 warps, 33%), and T=1024/hd=24
+    // went 1973 -> 2032 us. The kernel is latency-bound, but on this shape occupancy buys more
+    // latency hiding than instruction-level parallelism does.
     float lm0 = -INFINITY, lm1 = -INFINITY;
     for (int nt = 0; nt < NNT; ++nt) {
       lm0 = fmaxf(lm0, fmaxf(Sreg[nt][0], Sreg[nt][1]));
@@ -325,21 +437,35 @@ __global__ void flash_attn_int8_mma_kernel(
     lm0 = fmaxf(lm0, __shfl_xor_sync(0xffffffff, lm0, 1)); lm0 = fmaxf(lm0, __shfl_xor_sync(0xffffffff, lm0, 2));
     lm1 = fmaxf(lm1, __shfl_xor_sync(0xffffffff, lm1, 1)); lm1 = fmaxf(lm1, __shfl_xor_sync(0xffffffff, lm1, 2));
     float mcur0 = fmaxf(m_run0, lm0), mcur1 = fmaxf(m_run1, lm1);
-    float a_g  = __expf(m_run0 - mcur0);      // per-row alpha (registers)
-    float a_g8 = __expf(m_run1 - mcur1);
-    // exp P, requant to int8 (fixed scale 127), partial row-sum
+    // m_run/mcur are in the unscaled u = acc*sk units, so the per-row Q scale enters here.
+    float a_g  = modiff_ex2(sqs0 * (m_run0 - mcur0));   // per-row alpha (registers)
+    float a_g8 = modiff_ex2(sqs1 * (m_run1 - mcur1));
+    // One FFMA per element does the whole exp argument:
+    //     sqs*u + nb  where  nb = log2(127) - sqs*mcur
+    //   = sqs*(u - mcur) + log2(127)
+    // so modiff_ex2 of it IS 127*exp(score - max): the Q scale, the max subtraction and the
+    // int8 requantize factor all ride in one instruction. l_run and Oreg both carry the 127,
+    // which cancels in the final Oreg/l_run.
+    const float nb0 = FA_LOG2_127 - sqs0 * mcur0, nb1 = FA_LOG2_127 - sqs1 * mcur1;
     float ls0 = 0.f, ls1 = 0.f;
+#pragma unroll
     for (int nt = 0; nt < NNT; ++nt) {
-      int c0 = nt * 8 + tig * 2, c1 = c0 + 1;
-      float p00 = __expf(Sreg[nt][0] - mcur0), p01 = __expf(Sreg[nt][1] - mcur0);
-      float p10 = __expf(Sreg[nt][2] - mcur1), p11 = __expf(Sreg[nt][3] - mcur1);
+      const int c0 = nt * 8 + tig * 2;
+      float p00 = modiff_ex2(fmaf(sqs0, Sreg[nt][0], nb0));
+      float p01 = modiff_ex2(fmaf(sqs0, Sreg[nt][1], nb0));
+      float p10 = modiff_ex2(fmaf(sqs1, Sreg[nt][2], nb1));
+      float p11 = modiff_ex2(fmaf(sqs1, Sreg[nt][3], nb1));
       ls0 += p00 + p01; ls1 += p10 + p11;
-      int q00 = (int)(p00 * 127.f + 0.5f), q01 = (int)(p01 * 127.f + 0.5f);
-      int q10 = (int)(p10 * 127.f + 0.5f), q11 = (int)(p11 * 127.f + 0.5f);
-      Psw[gid       * FA_MMA_BC + c0] = (int8_t)(q00 > 127 ? 127 : q00);
-      Psw[gid       * FA_MMA_BC + c1] = (int8_t)(q01 > 127 ? 127 : q01);
-      Psw[(gid + 8) * FA_MMA_BC + c0] = (int8_t)(q10 > 127 ? 127 : q10);
-      Psw[(gid + 8) * FA_MMA_BC + c1] = (int8_t)(q11 > 127 ? 127 : q11);
+      // p is already in [0,127]. __float2int_rn is a single F2I.RN, so we get round-to-nearest
+      // (matching the old "* 127.f + 0.5f") for free and still need no clamp select: rn of a
+      // value <= 127.0f cannot reach 128. Plain truncation here cost ~2x the requantize error.
+      // c0 is even, so the two adjacent columns go out as one 2-byte store instead of two.
+      // cvt.pack.sat.s8.s32 replaces the shift+or (IMAD.SHL + LOP3) with one instruction and
+      // saturates on the way, so no clamp select is needed either.
+      unsigned r0 = modiff_pack2_s8(__float2int_rn(p00), __float2int_rn(p01));
+      unsigned r1 = modiff_pack2_s8(__float2int_rn(p10), __float2int_rn(p11));
+      *(short*)&Psw[gid       * BC + c0] = (short)r0;
+      *(short*)&Psw[(gid + 8) * BC + c0] = (short)r1;
     }
     // reduce partial sums across the tig-group, combine with running sum (rescaled)
     ls0 += __shfl_xor_sync(0xffffffff, ls0, 1); ls0 += __shfl_xor_sync(0xffffffff, ls0, 2);
@@ -348,27 +474,41 @@ __global__ void flash_attn_int8_mma_kernel(
     m_run0 = mcur0; m_run1 = mcur1;
     __syncwarp();
 
+    // Hoist the P A-fragment: it depends only on (ks, gid, tig), NOT on nt2, yet the PV loop
+    // re-read it from Psw once per output tile -- n_nt2 * (BC/32) * 4 = up to 64 smem loads per
+    // lane per key tile where 8 suffice. Together with the Q hoist above this cuts inner-loop
+    // smem traffic ~2.6x (hd=48: 168 -> 64 loads/lane/tile).
+    unsigned Pa[BC / 32][4];
+#pragma unroll
+    for (int ks = 0; ks < BC / 32; ++ks) {
+      const int koff = ks * 32;
+      Pa[ks][0] = *(const unsigned*)&Psw[(gid)     * BC + koff + tig * 4];
+      Pa[ks][1] = *(const unsigned*)&Psw[(gid + 8) * BC + koff + tig * 4];
+      Pa[ks][2] = *(const unsigned*)&Psw[(gid)     * BC + koff + tig * 4 + 16];
+      Pa[ks][3] = *(const unsigned*)&Psw[(gid + 8) * BC + koff + tig * 4 + 16];
+    }
+
     // ---- rescale O (registers) by per-row alpha, then PV accumulate ----
-    for (int nt2 = 0; nt2 < n_nt2; ++nt2) {
+#pragma unroll
+    for (int nt2 = 0; nt2 < NT_MAX; ++nt2) {
+      if (nt2 >= n_nt2) break;                   // NT_MAX is compile-time; n_nt2 <= NT_MAX
       Oreg[nt2 * 4 + 0] *= a_g;  Oreg[nt2 * 4 + 1] *= a_g;
       Oreg[nt2 * 4 + 2] *= a_g8; Oreg[nt2 * 4 + 3] *= a_g8;
       int acc[4] = {0, 0, 0, 0};
-      for (int ks = 0; ks < FA_MMA_BC / 32; ++ks) {          // K = BC (one or more mma k-steps)
+#pragma unroll
+      for (int ks = 0; ks < BC / 32; ++ks) {          // K = BC (one or more mma k-steps)
         int koff = ks * 32;
-        unsigned a[4], b[2];
-        a[0] = *(const int*)&Psw[(gid)     * FA_MMA_BC + koff + tig * 4];
-        a[1] = *(const int*)&Psw[(gid + 8) * FA_MMA_BC + koff + tig * 4];
-        a[2] = *(const int*)&Psw[(gid)     * FA_MMA_BC + koff + tig * 4 + 16];
-        a[3] = *(const int*)&Psw[(gid + 8) * FA_MMA_BC + koff + tig * 4 + 16];
-        b[0] = *(const int*)&Vsb[(nt2 * 8 + gid) * FA_MMA_BC + koff + tig * 4];
-        b[1] = *(const int*)&Vsb[(nt2 * 8 + gid) * FA_MMA_BC + koff + tig * 4 + 16];
-        modiff_mma_m16n8k32(acc, a, b);
+        unsigned b[2];
+        b[0] = *(const int*)&Vsb[(nt2 * 8 + gid) * BC + koff + tig * 4];
+        b[1] = *(const int*)&Vsb[(nt2 * 8 + gid) * BC + koff + tig * 4 + 16];
+        modiff_mma_m16n8k32(acc, Pa[ks], b);   // P from registers (hoisted out of the nt2 loop)
       }
-      int d0 = nt2 * 8 + tig * 2, d1 = d0 + 1;
-      Oreg[nt2 * 4 + 0] += (1.f / 127.f) * svb[d0] * acc[0];
-      Oreg[nt2 * 4 + 1] += (1.f / 127.f) * svb[d1] * acc[1];
-      Oreg[nt2 * 4 + 2] += (1.f / 127.f) * svb[d0] * acc[2];
-      Oreg[nt2 * 4 + 3] += (1.f / 127.f) * svb[d1] * acc[3];
+      // svr is pre-loaded and the 1/127 is folded into l_run (see the mq note above), so this is
+      // one FFMA per accumulator instead of two FMUL + one FADD.
+      Oreg[nt2 * 4 + 0] += svr[nt2][0] * acc[0];
+      Oreg[nt2 * 4 + 1] += svr[nt2][1] * acc[1];
+      Oreg[nt2 * 4 + 2] += svr[nt2][0] * acc[2];
+      Oreg[nt2 * 4 + 3] += svr[nt2][1] * acc[3];
     }
     // buffer reuse safety handled by next iter's __pipeline_wait_prior + __syncthreads
   }
@@ -376,7 +516,9 @@ __global__ void flash_attn_int8_mma_kernel(
   float invl_g  = (l_run0 > 0.f) ? 1.f / l_run0 : 0.f;
   float invl_g8 = (l_run1 > 0.f) ? 1.f / l_run1 : 0.f;
   const int h = nh % H, n = nh / H;           // (n,h) for the token-major fused-quant store
-  for (int nt2 = 0; nt2 < n_nt2; ++nt2) {
+#pragma unroll
+  for (int nt2 = 0; nt2 < NT_MAX; ++nt2) {
+    if (nt2 >= n_nt2) break;
     int d0 = nt2 * 8 + tig * 2, d1 = d0 + 1;
     int gi0 = q0 + gid, gi8 = q0 + gid + 8;
     float o00 = Oreg[nt2*4+0]*invl_g,  o01 = Oreg[nt2*4+1]*invl_g;
@@ -416,7 +558,7 @@ __global__ void flash_attn_int8_mma_kernel(
 // 2-stage double-buffer: cp.async-prefetch RAW tiles (dynamic smem, stride hd) so the global
 // load overlaps compute, then quantize+transpose smem->smem into the int8 mma tiles. Scales are
 // the frozen per-tensor sq_c/sk_c + per-channel sv[hd]. Vs uses a padded row stride to soften the
-// transpose-write bank conflict (stride BC would be 0 mod 32 -> 32-way).
+// transpose-write bank conflict (stride FA_MMA_BC would be 0 mod 32 -> 32-way).
 // =========================================================================
 #define FA_VS_STRIDE (FA_MMA_BC + 4)   // padded Vs row stride (4-aligned for the int PV read)
 __device__ __forceinline__ int8_t mfp_stage(__half x, float inv) {   // fp16: quantize
@@ -425,12 +567,22 @@ __device__ __forceinline__ int8_t mfp_stage(__half x, float inv) {   // fp16: qu
 }
 __device__ __forceinline__ int8_t mfp_stage(int8_t x, float /*inv*/) { return x; }  // int8: copy
 
-template <typename TIn>
+// TEMPLATED on HD_PAD, for the same reason the unpacked kernel was (see
+// flash_attn_int8_mma_kernel_t's header). This kernel was left behind by that round and was
+// still the ONLY production flash kernel that spilled: cuobjdump reported REG:126 STACK:32,
+// because Oreg/svr were sized by FA_MMA_MAXNT and indexed against the runtime n_nt2, and the
+// smem tiles were sized for FA_MMA_MAXHD=64 whatever the real HD_PAD. That is why the packed
+// path measured 8499 us at T=1024/hd=24 against 2595 us for quantize+unpacked-flash (3.3x
+// WORSE), which the per-block autotune then correctly refused to use -- so the fusion it exists
+// to provide (folding the Q/K/V quantize into flash's staging, worth the 724 us S3+quant pass)
+// was never actually available.
+template <typename TIn, int HD_PAD>
 __global__ void flash_attn_int8_packed_mma_kernel(
     const TIn* __restrict__ qkv, const float* __restrict__ sv,
-    __half* __restrict__ out, int N, int H, int T, int hd, int hd_pad,
+    __half* __restrict__ out, int N, int H, int T, int hd, int hd_pad_rt,
     float sq_c, float sk_c, float softmax_scale, float q_inv, float k_inv,
     int8_t* __restrict__ out_q, float proj_inv_scale, int qout_stride) {
+  (void)hd_pad_rt;                 // HD_PAD is the compile-time truth; the host asserts they match
   const int nh = blockIdx.x;
   const int w = threadIdx.x >> 5;              // warp id in CTA
   const int lane = threadIdx.x & 31, gid = lane >> 2, tig = lane & 3;
@@ -445,35 +597,70 @@ __global__ void flash_attn_int8_packed_mma_kernel(
 
   // int8 mma tiles (static). Raw fp16/int8 prefetch tiles live in DYNAMIC smem (2-stage double-buffer,
   // row stride = hd) so the global load overlaps compute via cp.async; the quantize+transpose is a
-  // cheap smem->smem pass. Static: Ks[BC,hd_pad] + Vs[hd_pad,BC] + Qs + Ps = 16 KB.
-  __shared__ int8_t Ks[FA_MMA_BC * FA_MMA_MAXHD];
-  __shared__ int8_t Vs[FA_MMA_MAXHD * FA_VS_STRIDE];   // Vs[d*STRIDE + j] = V[kt+j][d] (padded)
-  __shared__ int8_t Qs[FA_MMA_WARPS * FA_MMA_BR * FA_MMA_MAXHD];
+  // cheap smem->smem pass. Static: Ks[BC,HD_PAD] + Vs[HD_PAD,BC] + Qs + Ps = 16 KB.
+  __shared__ int8_t Ks[FA_MMA_BC * HD_PAD];
+  __shared__ int8_t Vs[HD_PAD * FA_VS_STRIDE];   // Vs[d*STRIDE + j] = V[kt+j][d] (padded)
+  __shared__ int8_t Qs[FA_MMA_WARPS * FA_MMA_BR * HD_PAD];
   __shared__ int8_t Ps[FA_MMA_WARPS * FA_MMA_BR * FA_MMA_BC];
   extern __shared__ char s_raw[];                   // [2][BC*hd] K then [2][BC*hd] V, TIn-typed
   TIn* Kraw = reinterpret_cast<TIn*>(s_raw);
   TIn* Vraw = Kraw + (size_t)2 * FA_MMA_BC * hd;
 
-  int8_t* Qsw = &Qs[w * FA_MMA_BR * hd_pad];
+  int8_t* Qsw = &Qs[w * FA_MMA_BR * HD_PAD];
   int8_t* Psw = &Ps[w * FA_MMA_BR * FA_MMA_BC];
 
   // Q: per-warp gather from packed qkv + quantize on load (col>=hd or gq>=T -> 0; d-fastest coalesced).
-  for (int idx = lane; idx < FA_MMA_BR * hd_pad; idx += 32) {
-    int row = idx / hd_pad, col = idx % hd_pad, gq = q0 + row;
-    Qsw[idx] = (gq < T && col < hd) ? mfp_stage(qh[(size_t)gq * pkT + col], q_inv) : (int8_t)0;
+  for (int idx = lane; idx < FA_MMA_BR * HD_PAD; idx += 32) {
+    // grid.y == T/(WARPS*BR) and the host gates T % (FA_MMA_WARPS*FA_MMA_BR) == 0, so
+    // q0 + FA_MMA_BR <= T: no row mask. col < hd is the real hd-padding mask and stays.
+    int row = idx / HD_PAD, col = idx % HD_PAD;
+    Qsw[idx] = (col < hd) ? mfp_stage(qh[(size_t)(q0 + row) * pkT + col], q_inv) : (int8_t)0;
   }
 
   // Per-lane running softmax state (registers). Each lane owns rows gid & gid+8.
   float m_run0 = -INFINITY, m_run1 = -INFINITY, l_run0 = 0.f, l_run1 = 0.f;
-  float Oreg[FA_MMA_MAXNT * 4];
+  // Exactly this HD_PAD's accumulators, compile-time counted so they stay in registers.
+  constexpr int NT_MAX = HD_PAD / 8;
+  float Oreg[NT_MAX * 4];
 #pragma unroll
-  for (int i = 0; i < FA_MMA_MAXNT * 4; ++i) Oreg[i] = 0.f;
+  for (int i = 0; i < NT_MAX * 4; ++i) Oreg[i] = 0.f;
   const int n_nt2 = hd / 8;
-  const int nkt = hd_pad / 32;
+  constexpr int nkt = HD_PAD / 32;
   const int NNT = FA_MMA_BC / 8;                 // QKᵀ N-tiles
   const int NKV = T / FA_MMA_BC;                 // key tiles (T % BC == 0 on the mma path)
   const int EPC = 16 / (int)sizeof(TIn);         // elems per 16B cp.async chunk (8 half / 16 int8)
   const int CPT = hd / EPC;                      // chunks per token (hd*sizeof(TIn) % 16 == 0, host-gated)
+  // Same instruction-count folds as the other two mma kernels (see the FA_LOG2E block in
+  // flash_attn_int8_mma_kernel_t). This path uses calibrated STATIC scales, so the whole
+  // dequant chain collapses to one compile-time-invariant constant in log2 units.
+  constexpr float FAP_LOG2E    = 1.4426950408889634f;
+  constexpr float FAP_LOG2_127 = 6.98868468677217f;
+  const float sqk = sq_c * sk_c * softmax_scale * FAP_LOG2E;
+  // This lane's V scales, hoisted out of the key loop (1/127 folded into l_run, see below).
+  float svr[NT_MAX][2];
+#pragma unroll
+  for (int i = 0; i < NT_MAX; ++i) {
+    const int d0 = i * 8 + tig * 2;
+    svr[i][0] = (d0     < hd) ? sv[d0]     : 0.f;
+    svr[i][1] = (d0 + 1 < hd) ? sv[d0 + 1] : 0.f;
+  }
+
+  // Hoist the loop-invariant Q A-fragment into registers -- same reason as in the templated
+  // kernel above: re-reading it inside the mma loop cost NNT*nkt*4 = up to 64 redundant smem
+  // loads per lane PER KEY TILE, which starved the mma units. Bound is the compile-time max
+  // (FA_MMA_MAXHD/32 = 2) so the array stays in registers even though nkt is a runtime value.
+  __syncwarp();                                  // Qsw was filled by this warp's 32 lanes
+  constexpr int NKT_MAX = HD_PAD / 32;
+  unsigned Qa[NKT_MAX][4];
+#pragma unroll
+  for (int ks = 0; ks < NKT_MAX; ++ks) {
+    if (ks >= nkt) break;
+    const int base = ks * 32;
+    Qa[ks][0] = *(const unsigned*)&Qsw[(gid)     * HD_PAD + base + tig * 4];
+    Qa[ks][1] = *(const unsigned*)&Qsw[(gid + 8) * HD_PAD + base + tig * 4];
+    Qa[ks][2] = *(const unsigned*)&Qsw[(gid)     * HD_PAD + base + tig * 4 + 16];
+    Qa[ks][3] = *(const unsigned*)&Qsw[(gid + 8) * HD_PAD + base + tig * 4 + 16];
+  }
 
   // cp.async a raw K + raw V tile (token-major, stride hd) into double-buffer `buf`.
   auto load_raw = [&](int buf, int kt) {
@@ -488,13 +675,13 @@ __global__ void flash_attn_int8_packed_mma_kernel(
     }
     __pipeline_commit();
   };
-  // quantize/transpose raw tile `buf` (smem) -> int8 Ks [BC,hd_pad] + Vs [hd_pad,BC] (smem->smem).
+  // quantize/transpose raw tile `buf` (smem) -> int8 Ks [BC,HD_PAD] + Vs [HD_PAD,BC] (smem->smem).
   auto quant_tile = [&](int buf) {
     const TIn* Ksrc = Kraw + (size_t)buf * FA_MMA_BC * hd;
     const TIn* Vsrc = Vraw + (size_t)buf * FA_MMA_BC * hd;
-    for (int idx = threadIdx.x; idx < FA_MMA_BC * hd_pad; idx += blockDim.x) {
-      int j = idx / hd_pad, d = idx % hd_pad;
-      Ks[j * hd_pad + d] = (d < hd) ? mfp_stage(Ksrc[j * hd + d], k_inv) : (int8_t)0;
+    for (int idx = threadIdx.x; idx < FA_MMA_BC * HD_PAD; idx += blockDim.x) {
+      int j = idx / HD_PAD, d = idx % HD_PAD;
+      Ks[j * HD_PAD + d] = (d < hd) ? mfp_stage(Ksrc[j * hd + d], k_inv) : (int8_t)0;
       Vs[d * FA_VS_STRIDE + j] = (d < hd) ? mfp_stage(Vsrc[j * hd + d], 1.f / sv[d]) : (int8_t)0;
     }
   };
@@ -514,30 +701,28 @@ __global__ void flash_attn_int8_packed_mma_kernel(
 
     // ---- QKᵀ: keep the [BR x BC] score tile in registers (Sreg[nt][0..3]) ----
     float Sreg[FA_MMA_BC / 8][4];
+#pragma unroll
     for (int nt = 0; nt < NNT; ++nt) {
       int acc[4] = {0, 0, 0, 0};
       for (int ks = 0; ks < nkt; ++ks) {
         int base = ks * 32;
-        unsigned a[4], b[2];
-        a[0] = *(const int*)&Qsw[(gid)     * hd_pad + base + tig * 4];
-        a[1] = *(const int*)&Qsw[(gid + 8) * hd_pad + base + tig * 4];
-        a[2] = *(const int*)&Qsw[(gid)     * hd_pad + base + tig * 4 + 16];
-        a[3] = *(const int*)&Qsw[(gid + 8) * hd_pad + base + tig * 4 + 16];
-        b[0] = *(const int*)&Ksb[(nt * 8 + gid) * hd_pad + base + tig * 4];
-        b[1] = *(const int*)&Ksb[(nt * 8 + gid) * hd_pad + base + tig * 4 + 16];
-        modiff_mma_m16n8k32(acc, a, b);
+        unsigned b[2];
+        b[0] = *(const int*)&Ksb[(nt * 8 + gid) * HD_PAD + base + tig * 4];
+        b[1] = *(const int*)&Ksb[(nt * 8 + gid) * HD_PAD + base + tig * 4 + 16];
+        modiff_mma_m16n8k32(acc, Qa[ks], b);   // Q from registers (hoisted), not smem
       }
       int c0 = nt * 8 + tig * 2, c1 = c0 + 1;
       // Same multiply order as flash_attn_int8_mma_kernel (acc*sq*sk*scale) for bit-exactness:
       // static sq/sk are per-tensor, so sqi0==sqi1==sq_c and sk0==sk1==sk_c.
-      Sreg[nt][0] = (kt + c0 < T) ? acc[0] * sq_c * sk_c * softmax_scale : -INFINITY;
-      Sreg[nt][1] = (kt + c1 < T) ? acc[1] * sq_c * sk_c * softmax_scale : -INFINITY;
-      Sreg[nt][2] = (kt + c0 < T) ? acc[2] * sq_c * sk_c * softmax_scale : -INFINITY;
-      Sreg[nt][3] = (kt + c1 < T) ? acc[3] * sq_c * sk_c * softmax_scale : -INFINITY;
+      Sreg[nt][0] = acc[0] * sqk;      // one FMUL, already in log2 units; no bounds mask
+      Sreg[nt][1] = acc[1] * sqk;
+      Sreg[nt][2] = acc[2] * sqk;
+      Sreg[nt][3] = acc[3] * sqk;
     }
 
     // ---- register-parallel online softmax (all 32 lanes active) ----
     float lm0 = -INFINITY, lm1 = -INFINITY;
+#pragma unroll
     for (int nt = 0; nt < NNT; ++nt) {
       lm0 = fmaxf(lm0, fmaxf(Sreg[nt][0], Sreg[nt][1]));
       lm1 = fmaxf(lm1, fmaxf(Sreg[nt][2], Sreg[nt][3]));
@@ -545,20 +730,30 @@ __global__ void flash_attn_int8_packed_mma_kernel(
     lm0 = fmaxf(lm0, __shfl_xor_sync(0xffffffff, lm0, 1)); lm0 = fmaxf(lm0, __shfl_xor_sync(0xffffffff, lm0, 2));
     lm1 = fmaxf(lm1, __shfl_xor_sync(0xffffffff, lm1, 1)); lm1 = fmaxf(lm1, __shfl_xor_sync(0xffffffff, lm1, 2));
     float mcur0 = fmaxf(m_run0, lm0), mcur1 = fmaxf(m_run1, lm1);
-    float a_g  = __expf(m_run0 - mcur0);
-    float a_g8 = __expf(m_run1 - mcur1);
+    float a_g  = modiff_ex2(m_run0 - mcur0);         // one MUFU.EX2, no library range guard
+    float a_g8 = modiff_ex2(m_run1 - mcur1);
+    // mq = mcur - log2(127) makes modiff_ex2(S - mq) == 127*exp(S - mcur), so the P requantize
+    // scale is free; l_run and Oreg then both carry the 127 and it cancels at the end.
+    const float mq0 = mcur0 - FAP_LOG2_127, mq1 = mcur1 - FAP_LOG2_127;
     float ls0 = 0.f, ls1 = 0.f;
+#pragma unroll
+    // NNT is a runtime const here (this kernel is not templated on HD_PAD), so without an
+    // explicit unroll Sreg[8][4] gets a runtime subscript and part of it lands on the stack
+    // -- cuobjdump showed STACK:32 for this kernel while the templated ones show STACK:0.
+#pragma unroll
     for (int nt = 0; nt < NNT; ++nt) {
-      int c0 = nt * 8 + tig * 2, c1 = c0 + 1;
-      float p00 = __expf(Sreg[nt][0] - mcur0), p01 = __expf(Sreg[nt][1] - mcur0);
-      float p10 = __expf(Sreg[nt][2] - mcur1), p11 = __expf(Sreg[nt][3] - mcur1);
+      const int c0 = nt * 8 + tig * 2;
+      float p00 = modiff_ex2(Sreg[nt][0] - mq0), p01 = modiff_ex2(Sreg[nt][1] - mq0);
+      float p10 = modiff_ex2(Sreg[nt][2] - mq1), p11 = modiff_ex2(Sreg[nt][3] - mq1);
       ls0 += p00 + p01; ls1 += p10 + p11;
-      int q00 = (int)(p00 * 127.f + 0.5f), q01 = (int)(p01 * 127.f + 0.5f);
-      int q10 = (int)(p10 * 127.f + 0.5f), q11 = (int)(p11 * 127.f + 0.5f);
-      Psw[gid       * FA_MMA_BC + c0] = (int8_t)(q00 > 127 ? 127 : q00);
-      Psw[gid       * FA_MMA_BC + c1] = (int8_t)(q01 > 127 ? 127 : q01);
-      Psw[(gid + 8) * FA_MMA_BC + c0] = (int8_t)(q10 > 127 ? 127 : q10);
-      Psw[(gid + 8) * FA_MMA_BC + c1] = (int8_t)(q11 > 127 ? 127 : q11);
+      // p is already in [0,127] (127 folded into mq); F2I.RN needs no clamp select, and the
+      // two adjacent columns leave as one 2-byte store.
+      // cvt.pack.sat.s8.s32 replaces the shift+or (IMAD.SHL + LOP3) with one instruction and
+      // saturates on the way, so no clamp select is needed either.
+      unsigned r0 = modiff_pack2_s8(__float2int_rn(p00), __float2int_rn(p01));
+      unsigned r1 = modiff_pack2_s8(__float2int_rn(p10), __float2int_rn(p11));
+      *(short*)&Psw[gid       * FA_MMA_BC + c0] = (short)r0;
+      *(short*)&Psw[(gid + 8) * FA_MMA_BC + c0] = (short)r1;
     }
     ls0 += __shfl_xor_sync(0xffffffff, ls0, 1); ls0 += __shfl_xor_sync(0xffffffff, ls0, 2);
     ls1 += __shfl_xor_sync(0xffffffff, ls1, 1); ls1 += __shfl_xor_sync(0xffffffff, ls1, 2);
@@ -566,33 +761,49 @@ __global__ void flash_attn_int8_packed_mma_kernel(
     m_run0 = mcur0; m_run1 = mcur1;
     __syncwarp();
 
+    // Hoist the P A-fragment: it depends only on (ks, gid, tig), NOT on nt2, yet the PV loop
+    // re-read it from Psw once per output tile -- n_nt2 * (BC/32) * 4 = up to 64 smem loads per
+    // lane per key tile where 8 suffice. Together with the Q hoist above this cuts inner-loop
+    // smem traffic ~2.6x (hd=48: 168 -> 64 loads/lane/tile).
+    unsigned Pa[FA_MMA_BC / 32][4];
+#pragma unroll
+    for (int ks = 0; ks < FA_MMA_BC / 32; ++ks) {
+      const int koff = ks * 32;
+      Pa[ks][0] = *(const unsigned*)&Psw[(gid)     * FA_MMA_BC + koff + tig * 4];
+      Pa[ks][1] = *(const unsigned*)&Psw[(gid + 8) * FA_MMA_BC + koff + tig * 4];
+      Pa[ks][2] = *(const unsigned*)&Psw[(gid)     * FA_MMA_BC + koff + tig * 4 + 16];
+      Pa[ks][3] = *(const unsigned*)&Psw[(gid + 8) * FA_MMA_BC + koff + tig * 4 + 16];
+    }
+
     // ---- rescale O (registers) by per-row alpha, then PV accumulate ----
-    for (int nt2 = 0; nt2 < n_nt2; ++nt2) {
+    // static bound + break -> Oreg stays in registers (runtime n_nt2 gave STACK:128)
+    #pragma unroll
+    for (int nt2 = 0; nt2 < NT_MAX; ++nt2) {
+      if (nt2 >= n_nt2) break;
       Oreg[nt2 * 4 + 0] *= a_g;  Oreg[nt2 * 4 + 1] *= a_g;
       Oreg[nt2 * 4 + 2] *= a_g8; Oreg[nt2 * 4 + 3] *= a_g8;
       int acc[4] = {0, 0, 0, 0};
+#pragma unroll
       for (int ks = 0; ks < FA_MMA_BC / 32; ++ks) {
         int koff = ks * 32;
-        unsigned a[4], b[2];
-        a[0] = *(const int*)&Psw[(gid)     * FA_MMA_BC + koff + tig * 4];
-        a[1] = *(const int*)&Psw[(gid + 8) * FA_MMA_BC + koff + tig * 4];
-        a[2] = *(const int*)&Psw[(gid)     * FA_MMA_BC + koff + tig * 4 + 16];
-        a[3] = *(const int*)&Psw[(gid + 8) * FA_MMA_BC + koff + tig * 4 + 16];
+        unsigned b[2];
         b[0] = *(const int*)&Vsb[(nt2 * 8 + gid) * FA_VS_STRIDE + koff + tig * 4];
         b[1] = *(const int*)&Vsb[(nt2 * 8 + gid) * FA_VS_STRIDE + koff + tig * 4 + 16];
-        modiff_mma_m16n8k32(acc, a, b);
+        modiff_mma_m16n8k32(acc, Pa[ks], b);   // P from registers (hoisted out of the nt2 loop)
       }
-      int d0 = nt2 * 8 + tig * 2, d1 = d0 + 1;
-      Oreg[nt2 * 4 + 0] += (1.f / 127.f) * sv[d0] * acc[0];
-      Oreg[nt2 * 4 + 1] += (1.f / 127.f) * sv[d1] * acc[1];
-      Oreg[nt2 * 4 + 2] += (1.f / 127.f) * sv[d0] * acc[2];
-      Oreg[nt2 * 4 + 3] += (1.f / 127.f) * sv[d1] * acc[3];
+      Oreg[nt2 * 4 + 0] += svr[nt2][0] * acc[0];   // 1/127 folded into l_run
+      Oreg[nt2 * 4 + 1] += svr[nt2][1] * acc[1];
+      Oreg[nt2 * 4 + 2] += svr[nt2][0] * acc[2];
+      Oreg[nt2 * 4 + 3] += svr[nt2][1] * acc[3];
     }
   }
 
   float invl_g  = (l_run0 > 0.f) ? 1.f / l_run0 : 0.f;
   float invl_g8 = (l_run1 > 0.f) ? 1.f / l_run1 : 0.f;
-  for (int nt2 = 0; nt2 < n_nt2; ++nt2) {
+  // static bound + break -> Oreg stays in registers (runtime n_nt2 gave STACK:128)
+  #pragma unroll
+  for (int nt2 = 0; nt2 < NT_MAX; ++nt2) {
+    if (nt2 >= n_nt2) break;
     int d0 = nt2 * 8 + tig * 2, d1 = d0 + 1;
     int gi0 = q0 + gid, gi8 = q0 + gid + 8;
     float o00 = Oreg[nt2*4+0]*invl_g,  o01 = Oreg[nt2*4+1]*invl_g;
@@ -625,18 +836,33 @@ __global__ void flash_attn_int8_packed_mma_kernel(
 // the int4 K-pad (24->64, 62% waste) makes QKᵀ no faster than int8, so this loses to
 // fp16 flash like the int8 kernel. Same register-parallel softmax + cp.async as int8.
 // =========================================================================
-__global__ void flash_attn_int4_mma_kernel(
+// TEMPLATED on HDP_V (the V / output head dim, = pad(hd,32) -> 32 or 64) for the same reason
+// the int8 kernel is templated on HD_PAD: with hdp_v a runtime arg, Oreg[] was indexed by the
+// runtime n_nt2 and cuobjdump reported STACK:128, i.e. all 32 fp32 accumulators living in LOCAL
+// memory. Vs was also sized for FA_MMA_MAXHD=64 regardless of the real hdp_v.
+// TEMPLATED on WARPS as well as (HDP_V, BC). WARPS was previously fixed at FA_MMA_WARPS on the
+// claim that it "measured flat on the int8 side" -- the (BC x WARPS) sweep over every real shape
+// (data/attn_tile_sweep.json) contradicts that: int8 gains 1.19x at T=1024/hd=24 (2246 -> 1892 us)
+// and 1.32x at T=256/hd=48 (336 -> 265 us) from WARPS=8, because more warps per CTA share ONE
+// K/V smem tile, so the number of CTAs per (n,h) -- each of which streams all of K and V -- drops
+// proportionally. Nothing about that mechanism is int8-specific; the int4 kernel has the same
+// per-CTA K/V streaming, and the sweep confirmed int4 was pinned flat (2264 vs 2263 us) purely
+// because MODIFF_FA_MMA4_DISPATCH ignored the knob.
+template <int HDP_V, int BC, int WARPS>
+__global__ void flash_attn_int4_mma_kernel_t(
     const int8_t* __restrict__ q4, const int8_t* __restrict__ k4, const int8_t* __restrict__ v,
     const float* __restrict__ sq, const float* __restrict__ sk, const float* __restrict__ sv,
-    __half* __restrict__ out, int N, int H, int T, int hd, int hdp4, int hdp_v, float softmax_scale,
+    __half* __restrict__ out, int N, int H, int T, int hd, int hdp4, int hdp_v_rt, float softmax_scale,
     int8_t* __restrict__ out_q, float proj_inv_scale, int qout_bstride) {
+  const int hdp_v = HDP_V;
+  (void)hdp_v_rt;
   // out_q != nullptr => fused proj-quantize store: emit packed int4 token-major [b*T, qout_bstride]
   // (qout_bstride = K_pad/2 bytes/row), quantized by proj_inv_scale. K-pad tail bytes are pre-zeroed
   // by the caller (torch::zeros), so this only writes the real channel-pair bytes.
   const int nh = blockIdx.x;
   const int w = threadIdx.x >> 5;
   const int lane = threadIdx.x & 31, gid = lane >> 2, tig = lane & 3;
-  const int q0 = (blockIdx.y * FA_MMA_WARPS + w) * FA_MMA_BR;
+  const int q0 = (blockIdx.y * WARPS + w) * FA_MMA_BR;
   const int rowb4 = hdp4 / 2;                          // packed bytes per Q/K row
   const int kb_stride = (size_t)T * rowb4;
 
@@ -646,30 +872,62 @@ __global__ void flash_attn_int4_mma_kernel(
   const float*  skb = sk + (size_t)nh * T;
   const float*  svb = sv + (size_t)nh * hd;
 
-  __shared__ int8_t Ks[2][FA_MMA_BC * 32];             // packed int4 rows (<=32 bytes, hdp4<=64)
-  __shared__ int8_t Vs[2][FA_MMA_MAXHD * FA_MMA_BC];   // int8 transposed Vs[buf][d*BC+j]
-  __shared__ int8_t Qs[FA_MMA_WARPS * FA_MMA_BR * 32];
-  __shared__ int8_t Ps[FA_MMA_WARPS * FA_MMA_BR * FA_MMA_BC];
+  __shared__ int8_t Ks[2][BC * 32];             // packed int4 rows (<=32 bytes, hdp4<=64)
+  __shared__ int8_t Vs[2][HDP_V * BC];          // int8 transposed Vs[buf][d*BC+j], exact size
+  __shared__ int8_t Qs[WARPS * FA_MMA_BR * 32];
+  __shared__ int8_t Ps[WARPS * FA_MMA_BR * BC];
+  __shared__ float SKs[2][BC];                  // per-key K scales, staged per tile
 
   int8_t* Qsw = &Qs[w * FA_MMA_BR * rowb4];
-  int8_t* Psw = &Ps[w * FA_MMA_BR * FA_MMA_BC];
+  int8_t* Psw = &Ps[w * FA_MMA_BR * BC];
 
+  // host enforces T % (WARPS*FA_MMA_BR) == 0 and grid.y == T/(WARPS*BR), so q0+BR <= T
   for (int idx = lane; idx < FA_MMA_BR * rowb4; idx += 32) {
-    int row = idx / rowb4, col = idx % rowb4, gq = q0 + row;
-    Qsw[idx] = (gq < T) ? q4[(size_t)nh * kb_stride + (size_t)gq * rowb4 + col] : 0;
+    int row = idx / rowb4, col = idx % rowb4;
+    Qsw[idx] = q4[(size_t)nh * kb_stride + (size_t)(q0 + row) * rowb4 + col];
   }
 
   float m_run0 = -INFINITY, m_run1 = -INFINITY, l_run0 = 0.f, l_run1 = 0.f;
-  float Oreg[FA_MMA_MAXNT * 4];
+  constexpr int NT_MAX = HDP_V / 8;                     // compile-time -> Oreg stays in registers
+  float Oreg[NT_MAX * 4];
 #pragma unroll
-  for (int i = 0; i < FA_MMA_MAXNT * 4; ++i) Oreg[i] = 0.f;
-  const int n_nt2 = hd / 8;
+  for (int i = 0; i < NT_MAX * 4; ++i) Oreg[i] = 0.f;
+  const int n_nt2 = hd / 8;                             // <= NT_MAX (hd may be < HDP_V)
   const int nkt4 = hdp4 / 64;                           // int4 k-steps (K=64 each)
-  const int NNT = FA_MMA_BC / 8;
-  const float sqi0 = sqb[q0 + gid], sqi1 = sqb[q0 + gid + 8];
-  const int NKV = T / FA_MMA_BC;
-  const int K16 = (FA_MMA_BC * rowb4) / 16;             // 16B chunks per K tile (packed)
-  const int V16 = (FA_MMA_BC * hdp_v) / 16;             // 16B chunks per V tile
+  const int NNT = BC / 8;
+  const int NKV = T / BC;
+  const int K16 = (BC * rowb4) / 16;             // 16B chunks per K tile (packed)
+  // Same instruction-count folds as the int8 kernel (see its FA_LOG2E block): softmax_scale and
+  // log2(e) fold into the Q scale so modiff_ex2 is a single MUFU.EX2, and log2(127) folds into the
+  // running max so the P requantize scale and the PV 1/127 both disappear. The SASS census
+  // showed this kernel spends ~98% of its issue slots on this fp32 epilogue, not on the mma.
+  constexpr float FA4_LOG2E    = 1.4426950408889634f;
+  constexpr float FA4_LOG2_127 = 6.98868468677217f;
+  const float sqs0 = sqb[q0 + gid]     * softmax_scale * FA4_LOG2E;
+  const float sqs1 = sqb[q0 + gid + 8] * softmax_scale * FA4_LOG2E;
+  float svr[NT_MAX][2];
+#pragma unroll
+  for (int i = 0; i < NT_MAX; ++i) {
+    const int d0 = i * 8 + tig * 2;
+    svr[i][0] = (d0     < hd) ? svb[d0]     : 0.f;
+    svr[i][1] = (d0 + 1 < hd) ? svb[d0 + 1] : 0.f;
+  }
+  const int V16 = (BC * hdp_v) / 16;             // 16B chunks per V tile
+
+  // Hoist the loop-invariant Q A-fragment into registers (see the int8 kernel's note). Ks is
+  // sized [BC*32] so rowb4 <= 32, i.e. hdp4 <= 64 and nkt4 == 1 -- one 4-register fragment.
+  __syncwarp();                                         // Qsw filled by this warp's 32 lanes
+  constexpr int NKT4_MAX = 1;
+  unsigned Qa[NKT4_MAX][4];
+#pragma unroll
+  for (int ks = 0; ks < NKT4_MAX; ++ks) {
+    if (ks >= nkt4) break;
+    const int base = ks * 32;
+    Qa[ks][0] = *(const unsigned*)&Qsw[(gid)     * rowb4 + base + tig * 4];
+    Qa[ks][1] = *(const unsigned*)&Qsw[(gid + 8) * rowb4 + base + tig * 4];
+    Qa[ks][2] = *(const unsigned*)&Qsw[(gid)     * rowb4 + base + tig * 4 + 16];
+    Qa[ks][3] = *(const unsigned*)&Qsw[(gid + 8) * rowb4 + base + tig * 4 + 16];
+  }
 
   auto load_kv = [&](int buf, int kt) {
     for (int c = threadIdx.x; c < K16; c += blockDim.x) {   // K packed [BC,rowb4]
@@ -678,47 +936,55 @@ __global__ void flash_attn_int4_mma_kernel(
                          (const uint4*)(kb + (size_t)kt * rowb4 + off), true);
     }
     for (int c = threadIdx.x; c < V16; c += blockDim.x) {   // V int8 transposed [hdp_v,BC] from [hdp_v,T]
-      int off = c * 16, d = off / FA_MMA_BC, j = off % FA_MMA_BC;
+      int off = c * 16, d = off / BC, j = off % BC;
       modiff_cp_async_cg(modiff_smem_ptr(&Vs[buf][off]),
                          (const uint4*)(vb + (size_t)d * T + kt + j), true);
     }
+    for (int c = threadIdx.x; c < BC / 4; c += blockDim.x)   // 64 K scales = 16 chunks
+      modiff_cp_async_cg(modiff_smem_ptr(&SKs[buf][c * 4]),
+                         (const uint4*)(skb + kt + c * 4), true);
     __pipeline_commit();
   };
 
   load_kv(0, 0);
   for (int ktile = 0; ktile < NKV; ++ktile) {
-    const int kt = ktile * FA_MMA_BC;
+    const int kt = ktile * BC;
     const int buf = ktile & 1;
     __pipeline_wait_prior(0);
     __syncthreads();
-    if (ktile + 1 < NKV) load_kv((ktile + 1) & 1, (ktile + 1) * FA_MMA_BC);
+    if (ktile + 1 < NKV) load_kv((ktile + 1) & 1, (ktile + 1) * BC);
     int8_t* Ksb = Ks[buf];
     int8_t* Vsb = Vs[buf];
 
     // ---- QKᵀ (int4, m16n8k64.s4) -> Sreg ----
-    float Sreg[FA_MMA_BC / 8][4];
+    float Sreg[BC / 8][4];
     for (int nt = 0; nt < NNT; ++nt) {
       int acc[4] = {0, 0, 0, 0};
-      for (int ks = 0; ks < nkt4; ++ks) {
+#pragma unroll
+      for (int ks = 0; ks < NKT4_MAX; ++ks) {
+        if (ks >= nkt4) break;
         int base = ks * 32;                              // 64 int4 = 32 bytes
-        unsigned a[4], b[2];
-        a[0] = *(const int*)&Qsw[(gid)     * rowb4 + base + tig * 4];
-        a[1] = *(const int*)&Qsw[(gid + 8) * rowb4 + base + tig * 4];
-        a[2] = *(const int*)&Qsw[(gid)     * rowb4 + base + tig * 4 + 16];
-        a[3] = *(const int*)&Qsw[(gid + 8) * rowb4 + base + tig * 4 + 16];
+        unsigned b[2];
         b[0] = *(const int*)&Ksb[(nt * 8 + gid) * rowb4 + base + tig * 4];
         b[1] = *(const int*)&Ksb[(nt * 8 + gid) * rowb4 + base + tig * 4 + 16];
-        modiff_mma_m16n8k64_s4(acc, a, b);
+        modiff_mma_m16n8k64_s4(acc, Qa[ks], b);          // Q from registers (hoisted)
       }
-      int c0 = nt * 8 + tig * 2, c1 = c0 + 1;
-      float sk0 = skb[kt + c0], sk1 = skb[kt + c1];
-      Sreg[nt][0] = acc[0] * sqi0 * sk0 * softmax_scale;
-      Sreg[nt][1] = acc[1] * sqi0 * sk1 * softmax_scale;
-      Sreg[nt][2] = acc[2] * sqi1 * sk0 * softmax_scale;
-      Sreg[nt][3] = acc[3] * sqi1 * sk1 * softmax_scale;
+      // Only the per-key scale here; the per-row Q scale is applied inside the exp argument
+      // below (exact because all scales are positive -- see the int8 kernel's note).
+      const int c0 = nt * 8 + tig * 2;
+      const float sk0 = SKs[buf][c0], sk1 = SKs[buf][c0 + 1];   // smem, not HBM
+      Sreg[nt][0] = acc[0] * sk0;
+      Sreg[nt][1] = acc[1] * sk1;
+      Sreg[nt][2] = acc[2] * sk0;
+      Sreg[nt][3] = acc[3] * sk1;
     }
 
     // ---- register-parallel online softmax (identical to int8) ----
+    // Single accumulator chain, deliberately. A 4-way split (chain depth 8 -> 4) was measured
+    // and is a REGRESSION here: it pushes the kernel from REG:83 to REG:96, which drops
+    // occupancy from 3 CTA/SM (24 warps, 50%) to 2 CTA/SM (16 warps, 33%), and T=1024/hd=24
+    // went 1973 -> 2032 us. The kernel is latency-bound, but on this shape occupancy buys more
+    // latency hiding than instruction-level parallelism does.
     float lm0 = -INFINITY, lm1 = -INFINITY;
     for (int nt = 0; nt < NNT; ++nt) {
       lm0 = fmaxf(lm0, fmaxf(Sreg[nt][0], Sreg[nt][1]));
@@ -727,19 +993,28 @@ __global__ void flash_attn_int4_mma_kernel(
     lm0 = fmaxf(lm0, __shfl_xor_sync(0xffffffff, lm0, 1)); lm0 = fmaxf(lm0, __shfl_xor_sync(0xffffffff, lm0, 2));
     lm1 = fmaxf(lm1, __shfl_xor_sync(0xffffffff, lm1, 1)); lm1 = fmaxf(lm1, __shfl_xor_sync(0xffffffff, lm1, 2));
     float mcur0 = fmaxf(m_run0, lm0), mcur1 = fmaxf(m_run1, lm1);
-    float a_g = __expf(m_run0 - mcur0), a_g8 = __expf(m_run1 - mcur1);
+    float a_g  = modiff_ex2(sqs0 * (m_run0 - mcur0));
+    float a_g8 = modiff_ex2(sqs1 * (m_run1 - mcur1));
+    // one FFMA carries the Q scale + max subtraction + the 127 requantize factor (see int8)
+    const float nb0 = FA4_LOG2_127 - sqs0 * mcur0, nb1 = FA4_LOG2_127 - sqs1 * mcur1;
     float ls0 = 0.f, ls1 = 0.f;
+#pragma unroll
     for (int nt = 0; nt < NNT; ++nt) {
-      int c0 = nt * 8 + tig * 2, c1 = c0 + 1;
-      float p00 = __expf(Sreg[nt][0] - mcur0), p01 = __expf(Sreg[nt][1] - mcur0);
-      float p10 = __expf(Sreg[nt][2] - mcur1), p11 = __expf(Sreg[nt][3] - mcur1);
+      const int c0 = nt * 8 + tig * 2;
+      float p00 = modiff_ex2(fmaf(sqs0, Sreg[nt][0], nb0));
+      float p01 = modiff_ex2(fmaf(sqs0, Sreg[nt][1], nb0));
+      float p10 = modiff_ex2(fmaf(sqs1, Sreg[nt][2], nb1));
+      float p11 = modiff_ex2(fmaf(sqs1, Sreg[nt][3], nb1));
       ls0 += p00 + p01; ls1 += p10 + p11;
-      int q00 = (int)(p00 * 127.f + 0.5f), q01 = (int)(p01 * 127.f + 0.5f);
-      int q10 = (int)(p10 * 127.f + 0.5f), q11 = (int)(p11 * 127.f + 0.5f);
-      Psw[gid       * FA_MMA_BC + c0] = (int8_t)(q00 > 127 ? 127 : q00);
-      Psw[gid       * FA_MMA_BC + c1] = (int8_t)(q01 > 127 ? 127 : q01);
-      Psw[(gid + 8) * FA_MMA_BC + c0] = (int8_t)(q10 > 127 ? 127 : q10);
-      Psw[(gid + 8) * FA_MMA_BC + c1] = (int8_t)(q11 > 127 ? 127 : q11);
+      // p is already in [0,127] -- the 127 is folded into mq0/mq1, so there is no "* 127.f"
+      // here. F2I.RN needs no clamp select (rn of a value <= 127.0f cannot reach 128), and the
+      // two adjacent columns leave as a single 2-byte store.
+      // cvt.pack.sat.s8.s32 replaces the shift+or (IMAD.SHL + LOP3) with one instruction and
+      // saturates on the way, so no clamp select is needed either.
+      unsigned r0 = modiff_pack2_s8(__float2int_rn(p00), __float2int_rn(p01));
+      unsigned r1 = modiff_pack2_s8(__float2int_rn(p10), __float2int_rn(p11));
+      *(short*)&Psw[gid       * BC + c0] = (short)r0;
+      *(short*)&Psw[(gid + 8) * BC + c0] = (short)r1;
     }
     ls0 += __shfl_xor_sync(0xffffffff, ls0, 1); ls0 += __shfl_xor_sync(0xffffffff, ls0, 2);
     ls1 += __shfl_xor_sync(0xffffffff, ls1, 1); ls1 += __shfl_xor_sync(0xffffffff, ls1, 2);
@@ -747,34 +1022,48 @@ __global__ void flash_attn_int4_mma_kernel(
     m_run0 = mcur0; m_run1 = mcur1;
     __syncwarp();
 
+    // Hoist the P A-fragment: it depends only on (ks, gid, tig), NOT on nt2, yet the PV loop
+    // re-read it from Psw once per output tile -- n_nt2 * (BC/32) * 4 = up to 64 smem loads per
+    // lane per key tile where 8 suffice. Together with the Q hoist above this cuts inner-loop
+    // smem traffic ~2.6x (hd=48: 168 -> 64 loads/lane/tile).
+    unsigned Pa[BC / 32][4];
+#pragma unroll
+    for (int ks = 0; ks < BC / 32; ++ks) {
+      const int koff = ks * 32;
+      Pa[ks][0] = *(const unsigned*)&Psw[(gid)     * BC + koff + tig * 4];
+      Pa[ks][1] = *(const unsigned*)&Psw[(gid + 8) * BC + koff + tig * 4];
+      Pa[ks][2] = *(const unsigned*)&Psw[(gid)     * BC + koff + tig * 4 + 16];
+      Pa[ks][3] = *(const unsigned*)&Psw[(gid + 8) * BC + koff + tig * 4 + 16];
+    }
+
     // ---- PV (int8, m16n8k32) ----
-    for (int nt2 = 0; nt2 < n_nt2; ++nt2) {
+#pragma unroll
+    for (int nt2 = 0; nt2 < NT_MAX; ++nt2) {
+      if (nt2 >= n_nt2) break;                           // NT_MAX compile-time; n_nt2 <= NT_MAX
       Oreg[nt2 * 4 + 0] *= a_g;  Oreg[nt2 * 4 + 1] *= a_g;
       Oreg[nt2 * 4 + 2] *= a_g8; Oreg[nt2 * 4 + 3] *= a_g8;
       int acc[4] = {0, 0, 0, 0};
-      for (int ks = 0; ks < FA_MMA_BC / 32; ++ks) {
+#pragma unroll
+      for (int ks = 0; ks < BC / 32; ++ks) {
         int koff = ks * 32;
-        unsigned a[4], b[2];
-        a[0] = *(const int*)&Psw[(gid)     * FA_MMA_BC + koff + tig * 4];
-        a[1] = *(const int*)&Psw[(gid + 8) * FA_MMA_BC + koff + tig * 4];
-        a[2] = *(const int*)&Psw[(gid)     * FA_MMA_BC + koff + tig * 4 + 16];
-        a[3] = *(const int*)&Psw[(gid + 8) * FA_MMA_BC + koff + tig * 4 + 16];
-        b[0] = *(const int*)&Vsb[(nt2 * 8 + gid) * FA_MMA_BC + koff + tig * 4];
-        b[1] = *(const int*)&Vsb[(nt2 * 8 + gid) * FA_MMA_BC + koff + tig * 4 + 16];
-        modiff_mma_m16n8k32(acc, a, b);
+        unsigned b[2];
+        b[0] = *(const int*)&Vsb[(nt2 * 8 + gid) * BC + koff + tig * 4];
+        b[1] = *(const int*)&Vsb[(nt2 * 8 + gid) * BC + koff + tig * 4 + 16];
+        modiff_mma_m16n8k32(acc, Pa[ks], b);   // P from registers (hoisted out of the nt2 loop)
       }
-      int d0 = nt2 * 8 + tig * 2, d1 = d0 + 1;
-      Oreg[nt2 * 4 + 0] += (1.f / 127.f) * svb[d0] * acc[0];
-      Oreg[nt2 * 4 + 1] += (1.f / 127.f) * svb[d1] * acc[1];
-      Oreg[nt2 * 4 + 2] += (1.f / 127.f) * svb[d0] * acc[2];
-      Oreg[nt2 * 4 + 3] += (1.f / 127.f) * svb[d1] * acc[3];
+      Oreg[nt2 * 4 + 0] += svr[nt2][0] * acc[0];   // 1/127 folded into l_run
+      Oreg[nt2 * 4 + 1] += svr[nt2][1] * acc[1];
+      Oreg[nt2 * 4 + 2] += svr[nt2][0] * acc[2];
+      Oreg[nt2 * 4 + 3] += svr[nt2][1] * acc[3];
     }
   }
 
   float invl_g  = (l_run0 > 0.f) ? 1.f / l_run0 : 0.f;
   float invl_g8 = (l_run1 > 0.f) ? 1.f / l_run1 : 0.f;
   const int h = nh % H, n = nh / H;           // (n,h) for the token-major fused-quant store
-  for (int nt2 = 0; nt2 < n_nt2; ++nt2) {
+#pragma unroll
+  for (int nt2 = 0; nt2 < NT_MAX; ++nt2) {
+    if (nt2 >= n_nt2) break;                  // keep Oreg register-resident in the epilogue too
     int d0 = nt2 * 8 + tig * 2, d1 = d0 + 1;
     int gi0 = q0 + gid, gi8 = q0 + gid + 8;
     float o00 = Oreg[nt2*4+0]*invl_g,  o01 = Oreg[nt2*4+1]*invl_g;
@@ -876,6 +1165,115 @@ torch::Tensor mma_smoke(torch::Tensor A, torch::Tensor B) {
 //             over the [BH,T,T] score matrix that the materialized path pays.
 // V-pre-transposed variant: vt is ALREADY [N,H,hd_pad,T] (e.g. straight from quantize_attn_qkv),
 // so we skip the internal v.transpose(2,3).contiguous() copy. mma tensor-core path only.
+// Dispatch to the hd_pad-templated kernel. Only 32 and 64 are needed: hd_pad is
+// ceil(hd/32)*32 and the mma path requires hd_pad <= FA_MMA_MAXHD (=64), so hd<=32 -> 32 and
+// 33..64 -> 64. Anything else must not reach here (callers TORCH_CHECK hd_pad <= FA_MMA_MAXHD).
+// Pick WARPS per call: 8 when T is a multiple of 8*BR (halves K/V re-reads), else 4.
+// grid.y must be computed with the SAME WARPS -- both go through modiff_fa_warps(T).
+// Key-tile width, chosen once per process. 64 is the default; 32 trades ~30% more
+// instructions per unit of work (every per-tile fixed cost doubles) for a smaller Sreg/Pa
+// register footprint, which is what caps occupancy on this kernel. Only these two are
+// instantiated, so anything else falls back to 64.
+// Key-tile width, chosen per shape. Measured on A40 (batch 128, heads 8), int8 path:
+//
+//   hd_pad  T     BC=64    BC=32   winner
+//   32      1024  1989.8   1881.5  32  (+6%)
+//   64      256    285.1    299.4  64  (+5%)
+//   64      64      52.1     49.2  32  (+6%)
+//   64      1024  3637.9   3650.8  64  (tie)
+//
+// BC=32 costs +38% instructions per unit of work (every per-tile fixed cost doubles) and does
+// NOT raise occupancy at WARPS=8 -- REG only falls 83 -> 68, and 4 CTAs of 256 threads need
+// REG <= 64. It still wins at hd_pad=32 and at small T because NNT = BC/8 halves, which halves
+// the depth of the row-max reduction chain that every exp, every P store and the whole PV mma
+// wait on. That the win survives a 38% instruction increase is the clearest evidence that this
+// kernel is latency-bound rather than issue-bound.
+//
+// MODIFF_FA_BC overrides for experiments; anything other than 32/64 falls back to the heuristic.
+//
+// A guard used to live here forcing BC=64 whenever WARPS==4, because BC=32 produced wrong results
+// in that combination. That was a symptom of the 3-stage cp.async pipeline (see the FA_STAGES note
+// in the kernel); with 2 stages every (BC, WARPS) pair is correct, so the guard is gone and BC=32
+// is selectable again -- worth 46.6 vs 50.0 us on the T=64/hd=48 block (x5 instances).
+static inline int modiff_fa_bc(int hd_pad, int T) {
+  static const int forced = [] {
+    const char* e = getenv("MODIFF_FA_BC");
+    const int v = e ? atoi(e) : 0;
+    return (v == 32 || v == 64) ? v : 0;
+  }();
+  if (forced) return forced;
+  return (hd_pad <= 32 || T < 128) ? 32 : 64;
+}
+
+// Warps per CTA. 8 halves the CTA count per (n,h) so K/V smem is shared more widely, but it also
+// quadruples register pressure per CTA, and register pressure is what caps occupancy here.
+// MODIFF_FA_WARPS forces 4 or 8 for experiments; the default keeps the historical rule.
+static inline int modiff_fa_warps(int T) {
+  static const int forced = [] {
+    const char* e = getenv("MODIFF_FA_WARPS");
+    const int v = e ? atoi(e) : 0;
+    return (v == 4 || v == 8) ? v : 0;
+  }();
+  const int w = forced ? forced : ((T % (8 * FA_MMA_BR) == 0) ? 8 : FA_MMA_WARPS);
+  return (T % (w * FA_MMA_BR) == 0) ? w : FA_MMA_WARPS;   // grid.y must divide exactly
+}
+
+#define MODIFF_FA_MMA_LAUNCH(HD, W, BC, GRID, STREAM, ...)                                       \
+  flash_attn_int8_mma_kernel_t<HD, W, BC><<<(GRID), (W)*32, 0, (STREAM)>>>(__VA_ARGS__)
+
+#define MODIFF_FA_MMA_DISPATCH(GRID, W, STREAM, HDPAD, T_, ...)                                   \
+  do {                                                                                           \
+    const int bc_ = modiff_fa_bc((HDPAD), (T_));                                                  \
+    if ((HDPAD) <= 32) {                                                                          \
+      if ((W) == 8) {                                                                              \
+        if (bc_ == 32) MODIFF_FA_MMA_LAUNCH(32, 8, 32, GRID, STREAM, __VA_ARGS__);                  \
+        else           MODIFF_FA_MMA_LAUNCH(32, 8, 64, GRID, STREAM, __VA_ARGS__);                  \
+      } else {                                                                                     \
+        if (bc_ == 32) MODIFF_FA_MMA_LAUNCH(32, 4, 32, GRID, STREAM, __VA_ARGS__);                  \
+        else           MODIFF_FA_MMA_LAUNCH(32, 4, 64, GRID, STREAM, __VA_ARGS__);                  \
+      }                                                                                            \
+    } else {                                                                                       \
+      if ((W) == 8) {                                                                              \
+        if (bc_ == 32) MODIFF_FA_MMA_LAUNCH(64, 8, 32, GRID, STREAM, __VA_ARGS__);                  \
+        else           MODIFF_FA_MMA_LAUNCH(64, 8, 64, GRID, STREAM, __VA_ARGS__);                  \
+      } else {                                                                                     \
+        if (bc_ == 32) MODIFF_FA_MMA_LAUNCH(64, 4, 32, GRID, STREAM, __VA_ARGS__);                  \
+        else           MODIFF_FA_MMA_LAUNCH(64, 4, 64, GRID, STREAM, __VA_ARGS__);                  \
+      }                                                                                            \
+    }                                                                                              \
+  } while (0)
+
+// int4 counterpart: same three template axes as the int8 path (HDP_V, BC, WARPS). WARPS used to be
+// pinned to FA_MMA_WARPS here; see the kernel's header comment for the measurement that overturned
+// that. Both paths now share modiff_fa_bc / modiff_fa_warps, so a heuristic change applies to both.
+#define MODIFF_FA_MMA4_LAUNCH(HDPV, BC, W, GRID, STREAM, ...)                                     \
+  flash_attn_int4_mma_kernel_t<HDPV, BC, W><<<(GRID), (W)*32, 0, (STREAM)>>>(__VA_ARGS__)
+
+// Same per-shape BC choice as the int8 path. The int4 kernel's V/output dim is hdp_v, so that is
+// what feeds the heuristic (hdp4 is always 64 -- the m16n8k64.s4 minimum -- and says nothing about
+// the score-tile register footprint).
+#define MODIFF_FA_MMA4_DISPATCH(GRID, W, STREAM, HDPV, T_, ...)                                    \
+  do {                                                                                            \
+    const int bc4_ = modiff_fa_bc((HDPV), (T_));                                                     \
+    if ((HDPV) <= 32) {                                                                             \
+      if ((W) == 8) {                                                                               \
+        if (bc4_ == 32) MODIFF_FA_MMA4_LAUNCH(32, 32, 8, GRID, STREAM, __VA_ARGS__);                 \
+        else            MODIFF_FA_MMA4_LAUNCH(32, 64, 8, GRID, STREAM, __VA_ARGS__);                 \
+      } else {                                                                                      \
+        if (bc4_ == 32) MODIFF_FA_MMA4_LAUNCH(32, 32, 4, GRID, STREAM, __VA_ARGS__);                 \
+        else            MODIFF_FA_MMA4_LAUNCH(32, 64, 4, GRID, STREAM, __VA_ARGS__);                 \
+      }                                                                                             \
+    } else {                                                                                        \
+      if ((W) == 8) {                                                                               \
+        if (bc4_ == 32) MODIFF_FA_MMA4_LAUNCH(64, 32, 8, GRID, STREAM, __VA_ARGS__);                 \
+        else            MODIFF_FA_MMA4_LAUNCH(64, 64, 8, GRID, STREAM, __VA_ARGS__);                 \
+      } else {                                                                                      \
+        if (bc4_ == 32) MODIFF_FA_MMA4_LAUNCH(64, 32, 4, GRID, STREAM, __VA_ARGS__);                 \
+        else            MODIFF_FA_MMA4_LAUNCH(64, 64, 4, GRID, STREAM, __VA_ARGS__);                 \
+      }                                                                                             \
+    }                                                                                               \
+  } while (0)
+
 torch::Tensor flash_attn_int8_vt(torch::Tensor q, torch::Tensor k, torch::Tensor vt,
                                  torch::Tensor sq, torch::Tensor sk, torch::Tensor sv,
                                  double softmax_scale) {
@@ -885,12 +1283,14 @@ torch::Tensor flash_attn_int8_vt(torch::Tensor q, torch::Tensor k, torch::Tensor
   const int N = q.size(0), H = q.size(1), T = q.size(2), hd_pad = q.size(3);
   const int hd = sv.size(-1);
   TORCH_CHECK(hd_pad <= FA_MMA_MAXHD && (T % (FA_MMA_WARPS * FA_MMA_BR)) == 0 && (hd % 8) == 0
-              && (FA_MMA_BC * hd_pad) % 16 == 0, "flash_attn_int8_vt: mma-eligible shapes only");
+              && (32 * hd_pad) % 16 == 0,   // 32 = smallest instantiated BC
+              "flash_attn_int8_vt: mma-eligible shapes only");
   TORCH_CHECK(vt.size(2) == hd_pad && vt.size(3) == T, "vt must be [N,H,hd_pad,T]");
   auto out = torch::empty({N, H, T, hd}, torch::TensorOptions().dtype(torch::kFloat16).device(q.device()));
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-  dim3 grid(N * H, T / (FA_MMA_WARPS * FA_MMA_BR));
-  flash_attn_int8_mma_kernel<<<grid, FA_MMA_WARPS * 32, 0, stream>>>(
+  const int fa_w = modiff_fa_warps(T);
+  dim3 grid(N * H, T / (fa_w * FA_MMA_BR));
+  MODIFF_FA_MMA_DISPATCH(grid, fa_w, stream, hd_pad, T,
       q.data_ptr<int8_t>(), k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
       sq.data_ptr<float>(), sk.data_ptr<float>(), sv.data_ptr<float>(),
       reinterpret_cast<__half*>(out.data_ptr<at::Half>()),
@@ -917,8 +1317,9 @@ torch::Tensor flash_attn_int8_vt_qout(torch::Tensor q, torch::Tensor k, torch::T
   auto out_q = torch::empty({(long)N * T, C}, torch::TensorOptions().dtype(torch::kChar).device(q.device()));
   const float proj_inv_scale = 1.f / (float)proj_a_scale;
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-  dim3 grid(N * H, T / (FA_MMA_WARPS * FA_MMA_BR));
-  flash_attn_int8_mma_kernel<<<grid, FA_MMA_WARPS * 32, 0, stream>>>(
+  const int fa_w = modiff_fa_warps(T);
+  dim3 grid(N * H, T / (fa_w * FA_MMA_BR));
+  MODIFF_FA_MMA_DISPATCH(grid, fa_w, stream, hd_pad, T,
       q.data_ptr<int8_t>(), k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
       sq.data_ptr<float>(), sk.data_ptr<float>(), sv.data_ptr<float>(),
       (__half*)nullptr, N, H, T, hd, hd_pad, (float)softmax_scale,
@@ -930,17 +1331,59 @@ torch::Tensor flash_attn_int8_vt_qout(torch::Tensor q, torch::Tensor k, torch::T
 //      quantize on load with frozen per-tensor sq_c/sk_c + per-channel sv[d]; int8 -> plain gather).
 //      Replace the separate aq_qtok/aq_vquant (or Route-1 from_i8) reshuffle + the qi/ki/vt HBM
 //      round-trip. sv is f32 [hd] (per-channel V dequant). Dispatch on qkv.dtype(). ----
-template <typename TIn>
-static inline void run_flash_packed(const TIn* qkv, const float* sv, __half* out, int8_t* out_q,
+// HD_PAD is a template arg so the kernel's smem/registers are exact (see the kernel header);
+// run_flash_packed keeps the old runtime-hd_pad signature and dispatches, so callers are unchanged.
+template <typename TIn, int HD_PAD>
+static inline void run_flash_packed_t(const TIn* qkv, const float* sv, __half* out, int8_t* out_q,
                                     int N, int H, int T, int hd, int hd_pad,
                                     float sq_c, float sk_c, float softmax_scale, float q_inv, float k_inv,
                                     float proj_inv_scale, int qout_stride, cudaStream_t stream) {
   dim3 grid(N * H, T / (FA_MMA_WARPS * FA_MMA_BR));
   // dynamic smem: 2 tensors (K,V) x 2 stages x [BC*hd] raw tiles (row stride hd)
   size_t smem = (size_t)2 * 2 * FA_MMA_BC * hd * sizeof(TIn);
-  flash_attn_int8_packed_mma_kernel<TIn><<<grid, FA_MMA_WARPS * 32, smem, stream>>>(
+  // Anything past 48 KB of DYNAMIC smem needs an explicit per-kernel opt-in, even though sm_86
+  // allows ~100 KB per block. fp16 with hd=64 needs 32 KB dynamic on top of this kernel's 16.6 KB
+  // static, which trips the default cap and surfaced only as a bare cudaErrorInvalidValue
+  // ("invalid argument") at launch. The model's head dims (24/48) stay under it, so this was a
+  // latent failure for hd=64 callers. Function-local static => runs once per instantiation.
+  static const bool smem_optin = [] {
+    // The opt-in value must fit the DEVICE's per-block total minus this kernel's static
+    // allocation: sm_86 caps static+dynamic at 100 KB, and asking for more than that makes
+    // cudaFuncSetAttribute fail (a request of 96 KB does, since static is ~16.6 KB). The
+    // failure is silent unless checked, after which the launch still uses the 48 KB default
+    // and dies with a bare cudaErrorInvalidValue.
+    int dev = 0, optin = 0;
+    cudaGetDevice(&dev);
+    cudaDeviceGetAttribute(&optin, cudaDevAttrMaxSharedMemoryPerBlockOptin, dev);
+    cudaFuncAttributes fa{};
+    const void* fn = reinterpret_cast<const void*>(&flash_attn_int8_packed_mma_kernel<TIn, HD_PAD>);
+    if (cudaFuncGetAttributes(&fa, fn) == cudaSuccess) {
+      const int req = optin - (int)fa.sharedSizeBytes;
+      if (req > 48 * 1024)
+        cudaFuncSetAttribute(fn, cudaFuncAttributeMaxDynamicSharedMemorySize, req);
+    }
+    cudaGetLastError();          // clear any probe error; the launch reports real failures
+    return true;
+  }();
+  (void)smem_optin;
+  flash_attn_int8_packed_mma_kernel<TIn, HD_PAD><<<grid, FA_MMA_WARPS * 32, smem, stream>>>(
       qkv, sv, out, N, H, T, hd, hd_pad, sq_c, sk_c, softmax_scale, q_inv, k_inv,
       out_q, proj_inv_scale, qout_stride);
+}
+
+// Runtime-hd_pad entry: pick the instantiation. Only 32 and 64 exist -- hd_pad is ceil(hd/32)*32 and
+// the packed mma path requires hd_pad <= FA_MMA_MAXHD (64), same as the unpacked kernel.
+template <typename TIn>
+static inline void run_flash_packed(const TIn* qkv, const float* sv, __half* out, int8_t* out_q,
+                                    int N, int H, int T, int hd, int hd_pad,
+                                    float sq_c, float sk_c, float softmax_scale, float q_inv, float k_inv,
+                                    float proj_inv_scale, int qout_stride, cudaStream_t stream) {
+  if (hd_pad <= 32)
+    run_flash_packed_t<TIn, 32>(qkv, sv, out, out_q, N, H, T, hd, hd_pad, sq_c, sk_c,
+                                softmax_scale, q_inv, k_inv, proj_inv_scale, qout_stride, stream);
+  else
+    run_flash_packed_t<TIn, 64>(qkv, sv, out, out_q, N, H, T, hd, hd_pad, sq_c, sk_c,
+                                softmax_scale, q_inv, k_inv, proj_inv_scale, qout_stride, stream);
 }
 
 static inline void check_packed(torch::Tensor qkv, torch::Tensor sv, int64_t hd_pad,
@@ -1022,8 +1465,9 @@ torch::Tensor flash_attn_int8(torch::Tensor q, torch::Tensor k, torch::Tensor v,
     // V is fed PRE-TRANSPOSED [N,H,hd_pad,T] so the cp.async V-tile read is contiguous
     // (padded channels hd..hd_pad are already zero in v, so the transpose carries zeros).
     auto vt = v.transpose(2, 3).contiguous();       // [N,H,hd_pad,T]
-    dim3 grid(N * H, T / (FA_MMA_WARPS * FA_MMA_BR));
-    flash_attn_int8_mma_kernel<<<grid, FA_MMA_WARPS * 32, 0, stream>>>(
+    const int fa_w = modiff_fa_warps(T);
+    dim3 grid(N * H, T / (fa_w * FA_MMA_BR));
+    MODIFF_FA_MMA_DISPATCH(grid, fa_w, stream, hd_pad, T,
         q.data_ptr<int8_t>(), k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
         sq.data_ptr<float>(), sk.data_ptr<float>(), sv.data_ptr<float>(),
         reinterpret_cast<__half*>(out.data_ptr<at::Half>()),
@@ -1084,8 +1528,9 @@ torch::Tensor flash_attn_int4_vt(torch::Tensor q4, torch::Tensor k4, torch::Tens
   TORCH_CHECK(vt.size(2) == hdp_v && vt.size(3) == T, "vt must be [N,H,hdp_v,T]");
   auto out = torch::empty({N, H, T, hd}, torch::TensorOptions().dtype(torch::kFloat16).device(q4.device()));
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-  dim3 grid(N * H, T / (FA_MMA_WARPS * FA_MMA_BR));
-  flash_attn_int4_mma_kernel<<<grid, FA_MMA_WARPS * 32, 0, stream>>>(
+  const int fa_w4 = modiff_fa_warps(T);                // must match grid.y (see the int8 path)
+  dim3 grid(N * H, T / (fa_w4 * FA_MMA_BR));
+  MODIFF_FA_MMA4_DISPATCH(grid, fa_w4, stream, hdp_v, T,
       q4.data_ptr<int8_t>(), k4.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
       sq.data_ptr<float>(), sk.data_ptr<float>(), sv.data_ptr<float>(),
       reinterpret_cast<__half*>(out.data_ptr<at::Half>()),
@@ -1116,8 +1561,9 @@ torch::Tensor flash_attn_int4_vt_qout(torch::Tensor q4, torch::Tensor k4, torch:
   auto out_q = torch::zeros({(long)N * T, bstride}, torch::TensorOptions().dtype(torch::kChar).device(q4.device()));
   const float proj_inv_scale = 1.f / (float)proj_a_scale;
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-  dim3 grid(N * H, T / (FA_MMA_WARPS * FA_MMA_BR));
-  flash_attn_int4_mma_kernel<<<grid, FA_MMA_WARPS * 32, 0, stream>>>(
+  const int fa_w4 = modiff_fa_warps(T);                // must match grid.y (see the int8 path)
+  dim3 grid(N * H, T / (fa_w4 * FA_MMA_BR));
+  MODIFF_FA_MMA4_DISPATCH(grid, fa_w4, stream, hdp_v, T,
       q4.data_ptr<int8_t>(), k4.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
       sq.data_ptr<float>(), sk.data_ptr<float>(), sv.data_ptr<float>(),
       (__half*)nullptr, N, H, T, hd, (int)hdp4, hdp_v, (float)softmax_scale,
@@ -1138,8 +1584,9 @@ torch::Tensor flash_attn_int4(torch::Tensor q4, torch::Tensor k4, torch::Tensor 
   auto out = torch::empty({N, H, T, hd}, torch::TensorOptions().dtype(torch::kFloat16).device(q4.device()));
   auto vt = v.transpose(2, 3).contiguous();            // [N,H,hdp_v,T]
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-  dim3 grid(N * H, T / (FA_MMA_WARPS * FA_MMA_BR));
-  flash_attn_int4_mma_kernel<<<grid, FA_MMA_WARPS * 32, 0, stream>>>(
+  const int fa_w4 = modiff_fa_warps(T);                // must match grid.y (see the int8 path)
+  dim3 grid(N * H, T / (fa_w4 * FA_MMA_BR));
+  MODIFF_FA_MMA4_DISPATCH(grid, fa_w4, stream, hdp_v, T,
       q4.data_ptr<int8_t>(), k4.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
       sq.data_ptr<float>(), sk.data_ptr<float>(), sv.data_ptr<float>(),
       reinterpret_cast<__half*>(out.data_ptr<at::Half>()),

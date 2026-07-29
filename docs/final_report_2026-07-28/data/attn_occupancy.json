@@ -1,0 +1,176 @@
+{
+  "gpu": "A40 (sm_86)",
+  "sm_regs": 65536,
+  "sm_smem": 102400,
+  "sm_threads": 1536,
+  "rows": [
+    {
+      "label": "int8 HD32 W4 BC32",
+      "bits": 8,
+      "hd_pad": 32,
+      "warps": 4,
+      "bc": 32,
+      "regs": 68,
+      "spill_bytes": 0,
+      "smem_bytes": 10624,
+      "threads_per_cta": 128,
+      "cta_per_sm": 7,
+      "resident_threads": 896,
+      "occupancy_pct": 58.3,
+      "binding_resource": "registers",
+      "limits": {
+        "registers": 7,
+        "shared memory": 9,
+        "thread slots": 12,
+        "block slots": 16
+      }
+    },
+    {
+      "label": "int8 HD32 W4 BC64",
+      "bits": 8,
+      "hd_pad": 32,
+      "warps": 4,
+      "bc": 64,
+      "regs": 83,
+      "spill_bytes": 0,
+      "smem_bytes": 14848,
+      "threads_per_cta": 128,
+      "cta_per_sm": 6,
+      "resident_threads": 768,
+      "occupancy_pct": 50.0,
+      "binding_resource": "registers + shared memory",
+      "limits": {
+        "registers": 6,
+        "shared memory": 6,
+        "thread slots": 12,
+        "block slots": 16
+      }
+    },
+    {
+      "label": "int8 HD32 W8 BC32",
+      "bits": 8,
+      "hd_pad": 32,
+      "warps": 8,
+      "bc": 32,
+      "regs": 68,
+      "spill_bytes": 0,
+      "smem_bytes": 14720,
+      "threads_per_cta": 256,
+      "cta_per_sm": 3,
+      "resident_threads": 768,
+      "occupancy_pct": 50.0,
+      "binding_resource": "registers",
+      "limits": {
+        "registers": 3,
+        "shared memory": 6,
+        "thread slots": 6,
+        "block slots": 16
+      }
+    },
+    {
+      "label": "int8 HD32 W8 BC64",
+      "bits": 8,
+      "hd_pad": 32,
+      "warps": 8,
+      "bc": 64,
+      "regs": 83,
+      "spill_bytes": 0,
+      "smem_bytes": 20992,
+      "threads_per_cta": 256,
+      "cta_per_sm": 3,
+      "resident_threads": 768,
+      "occupancy_pct": 50.0,
+      "binding_resource": "registers",
+      "limits": {
+        "registers": 3,
+        "shared memory": 4,
+        "thread slots": 6,
+        "block slots": 16
+      }
+    },
+    {
+      "label": "int8 HD64 W4 BC32",
+      "bits": 8,
+      "hd_pad": 64,
+      "warps": 4,
+      "bc": 32,
+      "regs": 96,
+      "spill_bytes": 0,
+      "smem_bytes": 18816,
+      "threads_per_cta": 128,
+      "cta_per_sm": 5,
+      "resident_threads": 640,
+      "occupancy_pct": 41.7,
+      "binding_resource": "registers + shared memory",
+      "limits": {
+        "registers": 5,
+        "shared memory": 5,
+        "thread slots": 12,
+        "block slots": 16
+      }
+    },
+    {
+      "label": "int8 HD64 W4 BC64",
+      "bits": 8,
+      "hd_pad": 64,
+      "warps": 4,
+      "bc": 64,
+      "regs": 127,
+      "spill_bytes": 0,
+      "smem_bytes": 25088,
+      "threads_per_cta": 128,
+      "cta_per_sm": 4,
+      "resident_threads": 512,
+      "occupancy_pct": 33.3,
+      "binding_resource": "registers + shared memory",
+      "limits": {
+        "registers": 4,
+        "shared memory": 4,
+        "thread slots": 12,
+        "block slots": 16
+      }
+    },
+    {
+      "label": "int8 HD64 W8 BC32",
+      "bits": 8,
+      "hd_pad": 64,
+      "warps": 8,
+      "bc": 32,
+      "regs": 96,
+      "spill_bytes": 0,
+      "smem_bytes": 24960,
+      "threads_per_cta": 256,
+      "cta_per_sm": 2,
+      "resident_threads": 512,
+      "occupancy_pct": 33.3,
+      "binding_resource": "registers",
+      "limits": {
+        "registers": 2,
+        "shared memory": 4,
+        "thread slots": 6,
+        "block slots": 16
+      }
+    },
+    {
+      "label": "int8 HD64 W8 BC64",
+      "bits": 8,
+      "hd_pad": 64,
+      "warps": 8,
+      "bc": 64,
+      "regs": 127,
+      "spill_bytes": 0,
+      "smem_bytes": 33280,
+      "threads_per_cta": 256,
+      "cta_per_sm": 2,
+      "resident_threads": 512,
+      "occupancy_pct": 33.3,
+      "binding_resource": "registers",
+      "limits": {
+        "registers": 2,
+        "shared memory": 3,
+        "thread slots": 6,
+        "block slots": 16
+      }
+    }
+  ]
+}

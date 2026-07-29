@@ -261,11 +261,14 @@ torch::Tensor group_norm_silu_quantize_nhwc(
     torch::Tensor scale, torch::Tensor smooth_inv,
     torch::Tensor mod_scale, torch::Tensor mod_shift);
 
+// k_pad: padded row width in channels for the int4 GEMM's K alignment (<=C -> no padding). Lets a
+// block whose C is not a multiple of the GEMM's K tile (C=192 -> K_pad 256) keep the fused
+// GN->quantize->pack path instead of GN + F.pad + a standalone quantize_act_int4_pack.
 torch::Tensor group_norm_silu_quantize_pack_nhwc(
     torch::Tensor x, torch::Tensor weight, torch::Tensor bias,
     int64_t num_groups, double eps, bool apply_silu,
     torch::Tensor scale, torch::Tensor smooth_inv,
-    torch::Tensor mod_scale, torch::Tensor mod_shift);
+    torch::Tensor mod_scale, torch::Tensor mod_shift, int64_t k_pad = 0);
 
 torch::Tensor group_norm_silu_dequant_quantize_nhwc(
     torch::Tensor x_int8, double in_dequant, torch::Tensor weight, torch::Tensor bias,

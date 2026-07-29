@@ -1,0 +1,132 @@
+{
+  "batch": 128,
+  "heads": 8,
+  "rows": [
+    {
+      "C": 192,
+      "HW": "32x32",
+      "T": 1024,
+      "hd": 24,
+      "count": 5,
+      "bits": 8,
+      "cells": {
+        "BC32_W4": 2232.49,
+        "BC32_W8": 1881.9,
+        "BC64_W4": 2216.48,
+        "BC64_W8": 2028.2
+      },
+      "best": "BC32_W8",
+      "best_us": 1881.9,
+      "heuristic": "BC32_W8",
+      "heuristic_us": 1881.9,
+      "spread": 1.186,
+      "heuristic_is_best": true,
+      "left_on_table": 1.0
+    },
+    {
+      "C": 192,
+      "HW": "32x32",
+      "T": 1024,
+      "hd": 24,
+      "count": 5,
+      "bits": 4,
+      "cells": {
+        "BC32_W4": 2259.13,
+        "BC32_W8": 1888.23,
+        "BC64_W4": 2231.28,
+        "BC64_W8": 1992.04
+      },
+      "best": "BC32_W8",
+      "best_us": 1888.23,
+      "heuristic": "BC32_W8",
+      "heuristic_us": 1888.23,
+      "spread": 1.196,
+      "heuristic_is_best": true,
+      "left_on_table": 1.0
+    },
+    {
+      "C": 384,
+      "HW": "16x16",
+      "T": 256,
+      "hd": 48,
+      "count": 5,
+      "bits": 8,
+      "cells": {
+        "BC32_W4": 349.57,
+        "BC32_W8": 267.41,
+        "BC64_W4": 335.45,
+        "BC64_W8": 264.42
+      },
+      "best": "BC64_W8",
+      "best_us": 264.42,
+      "heuristic": "BC64_W8",
+      "heuristic_us": 264.42,
+      "spread": 1.322,
+      "heuristic_is_best": true,
+      "left_on_table": 1.0
+    },
+    {
+      "C": 384,
+      "HW": "16x16",
+      "T": 256,
+      "hd": 48,
+      "count": 5,
+      "bits": 4,
+      "cells": {
+        "BC32_W4": 273.25,
+        "BC32_W8": 221.59,
+        "BC64_W4": 261.48,
+        "BC64_W8": 206.7
+      },
+      "best": "BC64_W8",
+      "best_us": 206.7,
+      "heuristic": "BC64_W8",
+      "heuristic_us": 206.7,
+      "spread": 1.322,
+      "heuristic_is_best": true,
+      "left_on_table": 1.0
+    },
+    {
+      "C": 384,
+      "HW": "8x8",
+      "T": 64,
+      "hd": 48,
+      "count": 5,
+      "bits": 8,
+      "cells": {
+        "BC32_W4": 46.63,
+        "BC32_W8": 46.61,
+        "BC64_W4": 49.99,
+        "BC64_W8": 49.9
+      },
+      "best": "BC32_W8",
+      "best_us": 46.61,
+      "heuristic": "BC32_W4",
+      "heuristic_us": 46.63,
+      "spread": 1.073,
+      "heuristic_is_best": false,
+      "left_on_table": 1.0
+    },
+    {
+      "C": 384,
+      "HW": "8x8",
+      "T": 64,
+      "hd": 48,
+      "count": 5,
+      "bits": 4,
+      "cells": {
+        "BC32_W4": 38.42,
+        "BC32_W8": 38.59,
+        "BC64_W4": 36.9,
+        "BC64_W8": 37.03
+      },
+      "best": "BC64_W4",
+      "best_us": 36.9,
+      "heuristic": "BC32_W4",
+      "heuristic_us": 38.42,
+      "spread": 1.046,
+      "heuristic_is_best": false,
+      "left_on_table": 1.041
+    }
+  ]
+}

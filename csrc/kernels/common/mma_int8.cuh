@@ -71,6 +71,38 @@ __device__ __forceinline__ void modiff_cp_async_cg(uint32_t smem_int_ptr,
                "r"(smem_int_ptr), "l"(src), "n"(cp_size));
 }
 
+// ---- softmax/requantize primitives, hand-written because the CUDA library versions cost
+// extra instructions that show up clearly in the SASS census of the flash kernels. ----
+
+// A softmax exponential in ONE instruction. Two layers of overhead are stripped here, both
+// found by reading the flash kernel's SASS:
+//   * exp2f() adds a library range check and an argument fixup around MUFU.EX2;
+//   * even ex2.approx.f32 (without .ftz) emits subnormal handling -- ptxas generates
+//       FSETP.GEU P, x, -126 ; @!P FMUL x, x, 0.5 ; MUFU.EX2 ; @!P FMUL r, r, r
+//     i.e. 1 predicate + 2 conditional multiplies per call, which measured 34 FSETP + 68 FMUL
+//     per lane per key tile -- 17% of the loop body.
+// .ftz is exact here rather than a tolerance trade: the result feeds an int8 requantize with a
+// range of [0,127], and an argument below -126 means 2^x is subnormal, so 127*2^x rounds to 0
+// either way. Callers must keep the argument <= 0 (it is: score - running_max).
+__device__ __forceinline__ float modiff_ex2(float x) {
+  float r;
+  asm("ex2.approx.ftz.f32 %0, %1;" : "=f"(r) : "f"(x));
+  return r;
+}
+
+// Pack two s32 into the low two bytes of one register, with saturation, in ONE instruction.
+// Replaces the shift+or pair (IMAD.SHL + LOP3) that `lo | (hi << 8)` compiles to, and the
+// saturation makes any explicit clamp dead. Byte order per PTX: d[7:0]=sat(b), d[15:8]=sat(a).
+__device__ __forceinline__ unsigned modiff_pack2_s8(int lo, int hi) {
+  // PTX: the 8-bit form of cvt.pack takes FOUR operands and a .b32 tail type --
+  //   cvt.pack.sat.s8.s32.b32 d, a, b, c;  =>  d = { c[15:0], sat_s8(a), sat_s8(b) }
+  // so `lo` must be the SECOND source to land in d[7:0]. The 3-operand spelling only exists
+  // for the 16-bit conversions and ptxas rejects it here.
+  unsigned d, z = 0u;
+  asm("cvt.pack.sat.s8.s32.b32 %0, %1, %2, %3;" : "=r"(d) : "r"(hi), "r"(lo), "r"(z));
+  return d;
+}
+
 // m16n8k32.row.col.s32.s8.s8.s32 : C[16x8] += A[16x32] * B[8x32]^T  (A=4 regs, B=2 regs, each 4 int8/reg)
 __device__ __forceinline__ void modiff_mma_m16n8k32(void* C, void* A, void* B) {
   asm volatile(

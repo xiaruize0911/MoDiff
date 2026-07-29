@@ -114,9 +114,18 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("group_norm_silu_quantize_nhwc", &group_norm_silu_quantize_nhwc,
           "GroupNorm (+ optional SiLU) that quantizes its output to INT8 inline (out*scale, "
           "clamp/round; optional per-channel smooth_inv), fusing away the separate quantize kernel");
+    // k_pad is the only optional arg in this module: taking &f drops the C++ default, and every
+    // existing caller (fused_resblock.py, token_major_attention.py, the docs/ scripts) passes 10
+    // args, so the default has to be declared here for them to keep working.
     m.def("group_norm_silu_quantize_pack_nhwc", &group_norm_silu_quantize_pack_nhwc,
           "GroupNorm (+ optional SiLU) that quantizes to INT4 and packs channel pairs inline "
-          "([N,H,W,C/2] byte layout matching scale_quantize_and_pack); requires even CPG");
+          "([N,H,W,k_pad/2] byte layout matching scale_quantize_and_pack); requires even CPG. "
+          "k_pad (default 0 = no padding) zero-pads the row to the int4 GEMM's K alignment.",
+          pybind11::arg("x"), pybind11::arg("weight"), pybind11::arg("bias"),
+          pybind11::arg("num_groups"), pybind11::arg("eps"), pybind11::arg("apply_silu"),
+          pybind11::arg("scale"), pybind11::arg("smooth_inv"),
+          pybind11::arg("mod_scale"), pybind11::arg("mod_shift"),
+          pybind11::arg("k_pad") = 0);
     m.def("group_norm_silu_dequant_quantize_nhwc", &group_norm_silu_dequant_quantize_nhwc,
           "INT8-in GroupNorm(+SiLU): reads int8 activation + dequant scale (upstream conv's "
           "int8 output), computes GN from dequantized values, requantizes to int8 output");

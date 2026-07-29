@@ -741,17 +741,19 @@ __global__ void group_norm_silu_quantize_pack_nhwc_vec2_kernel(
     long HW,
     int G,
     float eps,
-    bool apply_silu
+    bool apply_silu,
+    int Kpad                       // padded row width in CHANNELS (>= C, even); == C for no padding
 ) {
     const int CPG = C / G;
     const long group_size = (long)CPG * HW;
+    const int KpadH = Kpad / 2;    // bytes per spatial position in the output
 
     const int n = blockIdx.x / G;
     const int g = blockIdx.x % G;
     const int c_start = g * CPG;
 
     const TIn* x_base = X + (long)n * HW * C;
-    int8_t* yqp_base = Yqp + (long)n * ((HW * (long)C) / 2);
+    int8_t* yqp_base = Yqp + (long)n * (HW * (long)KpadH);
 
     extern __shared__ float sdata[];
     float* s_sum = sdata;
@@ -820,7 +822,11 @@ __global__ void group_norm_silu_quantize_pack_nhwc_vec2_kernel(
         }
         int8_t i0 = (int8_t)fmaxf(-7.0f, fminf(7.0f, roundf(o0 * scale)));
         int8_t i1 = (int8_t)fmaxf(-7.0f, fminf(7.0f, roundf(o1 * scale)));
-        yqp_base[mem_idx0 / 2] = (int8_t)((i0 & 0x0F) | ((i1 & 0x0F) << 4));
+        // Row width is KpadH bytes, not C/2: with Kpad == C this is exactly the old mem_idx0/2
+        // (mem_idx0 = hw*C + c_global0 and c_global0 is even), so the no-pad path is bit-identical.
+        // Channels >= C are never visited by any group, so the pad bytes are left at the zero the
+        // host pre-filled them with.
+        yqp_base[hw * (long)KpadH + (c_global0 >> 1)] = (int8_t)((i0 & 0x0F) | ((i1 & 0x0F) << 4));
     }
 }
 
@@ -860,7 +866,8 @@ torch::Tensor group_norm_silu_quantize_pack_nhwc(
     torch::Tensor scale,
     torch::Tensor smooth_inv,
     torch::Tensor mod_scale,   // [N, C] scale-shift modulation, or empty for none
-    torch::Tensor mod_shift
+    torch::Tensor mod_shift,
+    int64_t k_pad              // padded row width in channels for the int4 GEMM; <=0 or ==C -> no pad
 ) {
     CHECK_CUDA(x);
     CHECK_CONTIGUOUS(x);
@@ -885,9 +892,17 @@ torch::Tensor group_norm_silu_quantize_pack_nhwc(
     const long HW = (long)H * W;
     const long group_size = (long)CPG * HW;
 
-    // [N, H, W, C/2] contiguous == the same flat byte order as scale_quantize_and_pack.
-    auto yqp = torch::empty({N, H, W, C / 2},
-                            torch::TensorOptions().dtype(torch::kInt8).device(x.device()));
+    // [N, H, W, Kpad/2] contiguous. With Kpad == C this is the same flat byte order as
+    // scale_quantize_and_pack (the historical behaviour). With Kpad > C the extra channels are the
+    // int4 GEMM's K zero-padding, which lets the C=192 attention blocks (K 192 -> 256) stay on the
+    // fused GN->pack path instead of paying group_norm_silu_nhwc + F.pad + a standalone
+    // quantize_act_int4_pack -- mirrors quantize_attn_out_int4_pack's k_pad. The kernel writes only
+    // real channels, so the pad bytes must already be zero: allocate zeroed when padding.
+    const int Kpad = (k_pad > (int64_t)C) ? (int)k_pad : C;
+    TORCH_CHECK(Kpad % 2 == 0, "group_norm_silu_quantize_pack_nhwc: k_pad must be even");
+    auto opts = torch::TensorOptions().dtype(torch::kInt8).device(x.device());
+    auto yqp = (Kpad == C) ? torch::empty({N, H, W, Kpad / 2}, opts)
+                           : torch::zeros({N, H, W, Kpad / 2}, opts);
 
     int block_size = 32;
     while (block_size < group_size && block_size < 1024) block_size <<= 1;
@@ -907,7 +922,7 @@ torch::Tensor group_norm_silu_quantize_pack_nhwc(
             has_mod ? mod_scale.data_ptr<float>() : nullptr,
             has_mod ? mod_shift.data_ptr<float>() : nullptr,
             scale.data_ptr<float>(), smooth_ptr,
-            C, HW, (int)num_groups, (float)eps, apply_silu
+            C, HW, (int)num_groups, (float)eps, apply_silu, Kpad
         );
     } else {
         group_norm_silu_quantize_pack_nhwc_vec2_kernel<__half><<<grid, block, shmem_bytes, stream>>>(
@@ -918,7 +933,7 @@ torch::Tensor group_norm_silu_quantize_pack_nhwc(
             has_mod ? reinterpret_cast<const __half*>(mod_scale.data_ptr<at::Half>()) : nullptr,
             has_mod ? reinterpret_cast<const __half*>(mod_shift.data_ptr<at::Half>()) : nullptr,
             scale.data_ptr<float>(), smooth_ptr,
-            C, HW, (int)num_groups, (float)eps, apply_silu
+            C, HW, (int)num_groups, (float)eps, apply_silu, Kpad
         );
     }
 

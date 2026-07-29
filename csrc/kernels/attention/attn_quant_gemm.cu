@@ -12,6 +12,9 @@
 #include <cuda_fp16.h>
 #include <cuda_pipeline_primitives.h>
 #include <torch/extension.h>
+#include <algorithm>   // std::min for the flat-kernel grid clamp
+#include <cstdlib>     // getenv/atoi for MODIFF_AQ_FLAT
+#include <cstdint>     // uintptr_t for the vector-load alignment check
 
 #include "common.cuh"
 
@@ -207,6 +210,95 @@ __global__ void aq_qtok_packed_static_qk_vec2_kernel(const __half* __restrict__ 
   }
 }
 
+// FLAT (fully-coalesced) counterpart of aq_qtok_packed_static_qk_vec2_kernel.
+//
+// The vec2 kernel above assigns ONE WARP PER TOKEN ROW and 2 output bytes per lane, so a warp's
+// store is only `hp` bytes wide. At hp=32 that also leaves lanes 16-31 idle
+// (`for (d0 = lane*2; d0 < 32; d0 += 64)` never fires for them), i.e. 32 bytes of store per warp
+// against a 128-byte cacheline. That shows up directly in measured bandwidth for the whole
+// quantize pass: 378-424 GB/s at hp=32 vs 485-503 GB/s at hp=64 (data/quant_bw_probe.json).
+//
+// The warp-per-row layout only exists because the DYNAMIC kernel needs a per-row absmax reduction.
+// The STATIC path has no reduction at all -- the scale is a caller-supplied constant and sq[r]/sk[r]
+// are just filled with it -- so the quantize is a pure elementwise map and can be laid out for
+// coalescing instead. Here each thread owns CH_PER_THREAD consecutive channels of one row, so
+// consecutive lanes write consecutive output bytes and a warp stores 32*CH_PER_THREAD contiguous
+// bytes regardless of hp.
+//
+// sq/sk are NOT written here; the host fills them with torch::full (they are constants).
+template <int BITS>
+__global__ void aq_qtok_packed_static_qk_flat_kernel(const __half* __restrict__ QKV,
+                                                     int8_t* __restrict__ qout, int8_t* __restrict__ kout,
+                                                     int nh, int T, int hd, int hp,
+                                                     float sq_scale, float sk_scale,
+                                                     long nchunks) {
+  // 8 channels per thread: at BITS=8 that is an 8-byte store, at BITS=4 a 4-byte store (2 ch/byte).
+  constexpr int CH = 8;
+  const int per_row = hp / CH;                       // chunks along the channel axis of one row
+  const float invq = 1.f / sq_scale, invk = 1.f / sk_scale;
+  const int owidth = (BITS == 8) ? hp : (hp / 2);    // output bytes per row
+  for (long c = (long)blockIdx.x * blockDim.x + threadIdx.x; c < nchunks;
+       c += (long)gridDim.x * blockDim.x) {
+    const int r = (int)(c / per_row);
+    const int d0 = (int)(c % per_row) * CH;
+    const __half* xq = QKV + pk_row_off(r, nh, T, hd, 0);
+    const __half* xk = QKV + pk_row_off(r, nh, T, hd, 1);
+    int8_t qb[CH], kb[CH];
+    // Read the whole CH-channel chunk as one 16-byte load when it is entirely real payload and
+    // aligned. Without this the loads are 8 scalar __half fetches per thread, which is NARROWER
+    // than the warp-per-row kernel's aq_ld2 (4-byte) reads -- the first version of this kernel
+    // widened the stores but narrowed the loads, and measured 0.93-0.99x at hd_pad=64 (where the
+    // old kernel's stores were already 64 B/warp) while winning 1.11-1.15x only at hd_pad=32.
+    // hd % 8 == 0 is required by the flash kernels and pk_row_off's stride is a multiple of hd, so
+    // a chunk is either all real or all padding; the alignment is still checked rather than assumed.
+    __half qh[CH], kh[CH];
+    const bool all_real = (d0 + CH <= hd);
+    const bool aligned = ((((uintptr_t)(xq + d0)) | ((uintptr_t)(xk + d0))) & 15) == 0;
+    if (all_real && aligned) {
+      *reinterpret_cast<float4*>(qh) = *reinterpret_cast<const float4*>(xq + d0);
+      *reinterpret_cast<float4*>(kh) = *reinterpret_cast<const float4*>(xk + d0);
+    } else {
+#pragma unroll
+      for (int i = 0; i < CH; ++i) {
+        const int d = d0 + i;
+        qh[i] = (d < hd) ? xq[d] : __float2half(0.f);
+        kh[i] = (d < hd) ? xk[d] : __float2half(0.f);
+      }
+    }
+#pragma unroll
+    for (int i = 0; i < CH; ++i) {
+      const float qv = __half2float(qh[i]);
+      const float kv = __half2float(kh[i]);
+      if (BITS == 8) {
+        int a = __float2int_rn(qv * invq), b = __float2int_rn(kv * invk);
+        qb[i] = (int8_t)(a > 127 ? 127 : (a < -127 ? -127 : a));
+        kb[i] = (int8_t)(b > 127 ? 127 : (b < -127 ? -127 : b));
+      } else {
+        int a = __float2int_rn(qv * invq), b = __float2int_rn(kv * invk);
+        qb[i] = (int8_t)(a > 7 ? 7 : (a < -7 ? -7 : a));
+        kb[i] = (int8_t)(b > 7 ? 7 : (b < -7 ? -7 : b));
+      }
+    }
+    if (BITS == 8) {   // one 8-byte store per tensor
+      int8_t* oq = qout + (size_t)r * owidth + d0;
+      int8_t* ok = kout + (size_t)r * owidth + d0;
+      *reinterpret_cast<int2*>(oq) = *reinterpret_cast<const int2*>(qb);
+      *reinterpret_cast<int2*>(ok) = *reinterpret_cast<const int2*>(kb);
+    } else {           // pack channel pairs: CH channels -> CH/2 bytes, one 4-byte store
+      int8_t pq[CH / 2], pk[CH / 2];
+#pragma unroll
+      for (int i = 0; i < CH / 2; ++i) {
+        pq[i] = (int8_t)((qb[2 * i] & 0xF) | ((qb[2 * i + 1] & 0xF) << 4));
+        pk[i] = (int8_t)((kb[2 * i] & 0xF) | ((kb[2 * i + 1] & 0xF) << 4));
+      }
+      int8_t* oq = qout + (size_t)r * owidth + d0 / 2;
+      int8_t* ok = kout + (size_t)r * owidth + d0 / 2;
+      *reinterpret_cast<int*>(oq) = *reinterpret_cast<const int*>(pq);
+      *reinterpret_cast<int*>(ok) = *reinterpret_cast<const int*>(pk);
+    }
+  }
+}
+
 // V per-channel (over T) absmax from packed qkv (sel=2). Mirrors aq_vscale_kernel.
 __global__ void aq_vscale_packed_kernel(const __half* __restrict__ QKV, float* __restrict__ sv,
                                         int nh, int T, int hd, int hp_av, float Qm) {
@@ -365,7 +457,33 @@ std::vector<torch::Tensor> quantize_attn_qkv_packed_static(torch::Tensor qkv, in
   int qkw = (qk_bits == 8) ? (int)hp_qk : (int)hp_qk / 2;
   auto qi = torch::empty({BH, (int)T, qkw}, oi), ki = torch::empty({BH, (int)T, qkw}, oi);
   auto vt = torch::empty({BH, (int)hp_av, (int)T}, oi);
-  auto sq = torch::empty({BH, (int)T}, of), sk = torch::empty({BH, (int)T}, of);
+  // sq/sk are the caller's constants in this (static) path. The flat kernel does not write them,
+  // so fill them here; the vec2 kernel writes them itself and gets torch::empty as before.
+  // Per-shape. The flat kernel only wins where the warp-per-row kernel's store is narrow AND half
+  // its warp is idle, which is exactly hp_av == 32: its loop `d0 = lane*2; d0 < hp; d0 += 64` never
+  // fires for lanes 16-31, so a warp stores 32 B against a 128 B cacheline. Measured, A40 b128:
+  //
+  //   hp_av  T     hd  bits   warp-per-row     flat    picked
+  //   32     1024  24   8         689.5       606.1    flat  1.14x
+  //   32     1024  24   4         689.0       600.2    flat  1.15x
+  //   64     1024  48   8        1045.5      1051.5    old   0.99x
+  //   64      256  48   8         264.8       272.3    old   0.97x
+  //   64       64  48   8          73.8        79.3    old   0.93x
+  //   64      256  48   4         232.5       236.9    old   0.98x
+  //
+  // hp_av, not hp_qk, is the discriminator: for int4 hp_qk is always 64 yet the int4 win/loss still
+  // splits on hp_av. Vectorizing the flat kernel's loads (one 16 B float4 instead of 8 scalar half
+  // fetches) was tried and did NOT close the hp_av=64 gap, so this is a selection, not a workaround
+  // for a missing optimization -- what remains there is the flat path's per-chunk index division
+  // plus the torch::full for sq/sk. In this model only the C=192 blocks (hd=24) are hp_av=32, and
+  // those are the 5 that dominate the layer.
+  const bool use_flat = [&] {
+    const char* e = getenv("MODIFF_AQ_FLAT");
+    if (e) return atoi(e) != 0;       // forced, for A/B
+    return hp_av <= 32;
+  }();
+  auto sq = use_flat ? torch::full({BH, (int)T}, sq_c, of) : torch::empty({BH, (int)T}, of);
+  auto sk = use_flat ? torch::full({BH, (int)T}, sk_c, of) : torch::empty({BH, (int)T}, of);
   auto sv = sv_vec.to(of).view({1, (int)hp_av}).expand({BH, (int)hp_av}).contiguous();
   cudaStream_t s = at::cuda::getCurrentCUDAStream();
   const __half* P = reinterpret_cast<const __half*>(qkv.data_ptr<at::Half>());
@@ -373,7 +491,16 @@ std::vector<torch::Tensor> quantize_attn_qkv_packed_static(torch::Tensor qkv, in
   const int nrows = BH * (int)T, qblk = (nrows + RPB - 1) / RPB;
   // Merged Q+K launch (was 2x aq_qtok_packed_static_kernel, sel=0 then sel=1): same row range,
   // Q and K read from the same row (offset by hd elements) -- one launch instead of two.
-  if (qk_bits == 8) {
+  if (use_flat) {
+    // 8 channels/thread -> consecutive lanes write consecutive output bytes (see the kernel note).
+    const long nchunks = (long)nrows * ((int)hp_qk / 8);
+    const int TPB = 256;
+    const int blocks = (int)std::min<long>((nchunks + TPB - 1) / TPB, 65535L * 4);
+    if (qk_bits == 8)
+      aq_qtok_packed_static_qk_flat_kernel<8><<<blocks, TPB, 0, s>>>(P, qi.data_ptr<int8_t>(), ki.data_ptr<int8_t>(), (int)nh, (int)T, (int)hd, (int)hp_qk, (float)sq_c, (float)sk_c, nchunks);
+    else
+      aq_qtok_packed_static_qk_flat_kernel<4><<<blocks, TPB, 0, s>>>(P, qi.data_ptr<int8_t>(), ki.data_ptr<int8_t>(), (int)nh, (int)T, (int)hd, (int)hp_qk, (float)sq_c, (float)sk_c, nchunks);
+  } else if (qk_bits == 8) {
     aq_qtok_packed_static_qk_vec2_kernel<8><<<qblk, RPB * 32, 0, s>>>(P, qi.data_ptr<int8_t>(), ki.data_ptr<int8_t>(), sq.data_ptr<float>(), sk.data_ptr<float>(), (int)nh, (int)T, (int)hd, (int)hp_qk, (float)sq_c, (float)sk_c, nrows);
   } else {
     aq_qtok_packed_static_qk_vec2_kernel<4><<<qblk, RPB * 32, 0, s>>>(P, qi.data_ptr<int8_t>(), ki.data_ptr<int8_t>(), sq.data_ptr<float>(), sk.data_ptr<float>(), (int)nh, (int)T, (int)hd, (int)hp_qk, (float)sq_c, (float)sk_c, nrows);

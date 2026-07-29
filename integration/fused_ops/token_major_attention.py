@@ -299,11 +299,20 @@ class TokenMajorAttentionBlock(nn.Module):
         directly (token-major, a free channels_last view), skipping the qkv Linear's own quantize
         pass; then gemm_w8a8_awq. Numerically equal to GN(fp16) + quantize_act_int8 up to one fp16
         rounding on the GN output. Falls back to the standard GN + qkv Linear otherwise (and during
-        calibration, so qkv.a_scale is captured)."""
+        calibration, so qkv.a_scale is captured).
+
+        int4 with a padded GEMM K (C=192 -> K_pad=256) used to be excluded here and fell back to
+        group_norm_silu_nhwc(fp16) + F.pad + a standalone quantize_act_int4_pack -- measured 920 us
+        against int8's fused 429 us on the C192/T1024 block, i.e. +491 us on each of the 5 blocks
+        that dominate this layer. group_norm_silu_quantize_pack_nhwc now takes k_pad and emits the
+        zero-padded row directly, so those blocks stay fused; int8 never needed it (C is always a
+        multiple of the W8A8 K tile)."""
         qkv = self.qkv
         if (self._fuse_qkv_quant and _QuantLinearWxAx is not None and isinstance(qkv, _QuantLinearWxAx)
                 and qkv.bits in (8, 4) and not qkv.modiff and qkv.a_scale is not None
-                and qkv._awqt_K == qkv.in_features   # int4: excludes C192 (needs K%128 pad) -> falls back
+                # int8 has no k_pad support in its GN kernel, so it still requires K == in_features;
+                # int4 handles K_pad in the pack kernel (k_pad arg below).
+                and (qkv.bits == 4 or qkv._awqt_K == qkv.in_features)
                 and x.dtype == torch.float16 and (c % self.norm.num_groups == 0)
                 and ((qkv.bits == 8 and _HAS_GN_QUANT) or (qkv.bits == 4 and _HAS_GN_PACK))):
             gw, gb = self._gn_params(x.dtype)
@@ -317,8 +326,11 @@ class TokenMajorAttentionBlock(nn.Module):
                     xq = xq_img.permute(0, 2, 3, 1).reshape(b * T, c)     # int8 [b*T, c] token-major (free view)
                     out = _mc.gemm_w8a8_awq_bias_res(xq, qkv.qweight, qkv.w_scale, qkv.a_scale, qkv.out_features, bias, empty)
                 else:               # GN -> int4-packed (one kernel, gemm_w4a4 layout) -> W4A4 GEMM, bias fused
-                    xq_img = _mc.group_norm_silu_quantize_pack_nhwc(x, gw, gb, ng, eps, False, self._qkv_inv_scale_t, empty, empty, empty)
-                    xq = xq_img.reshape(b * T, c // 2)                    # int4 packed [b*T, c/2] token-major (free view)
+                    # k_pad = the GEMM's padded K, so the kernel writes rows of K_pad/2 bytes with
+                    # channels c..K_pad-1 zeroed (no fp16 F.pad, no separate quantize pass).
+                    kp = qkv._awqt_K
+                    xq_img = _mc.group_norm_silu_quantize_pack_nhwc(x, gw, gb, ng, eps, False, self._qkv_inv_scale_t, empty, empty, empty, kp)
+                    xq = xq_img.reshape(b * T, kp // 2)                   # int4 packed [b*T, K_pad/2] token-major (free view)
                     out = _mc.gemm_w4a4_awq_bias_res(xq, qkv.qweight, qkv.w_scale, qkv.a_scale, qkv._awqt_K, qkv.out_features, bias, empty)
                 out = out.reshape(b, T, qkv.out_features)
                 return out.view(b, T, nh, 3, hd)
