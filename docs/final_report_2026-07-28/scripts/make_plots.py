@@ -412,7 +412,70 @@ def fig_icicle_all(tree):
 
 # Single entry point, kept at the very END of the file: every helper above must already be
 # defined when it runs (an earlier __main__ block here raised NameError on fig_icicle_all).
+def fig_fp16_baselines(bv, tree):
+    """fp16 baseline variants + dual-baseline speedups.
+
+    The repo's fp16 "baseline" is not vanilla PyTorch and is measurably slower than it, so a
+    single speedup number is ambiguous. Left panel: what each fp16 variant costs. Right
+    panel: every quantized mode's speedup against BOTH baselines, so the reader cannot
+    accidentally read one for the other.
+    """
+    if not bv or not tree:
+        return
+    order = ["vanilla_nchw", "vanilla", "repo_fp16", "vanilla_math"]
+    order = [v for v in order if v in bv and "ms_step" in bv[v]]
+    fig, axes = plt.subplots(1, 2, figsize=(15, 5.2))
+
+    ax = axes[0]
+    vals = [bv[v]["ms_step"] for v in order]
+    ours = [bv[v]["repo_kernel_ms_step"] for v in order]
+    x = np.arange(len(order))
+    ax.bar(x, vals, 0.6, color=["#1D9E75", "#5FB49C", "#E24B4A", "#888780"][:len(order)])
+    ax.bar(x, ours, 0.6, color="#000000", alpha=0.30,
+           label="of which: this repo's own kernels")
+    for i, (t_, o) in enumerate(zip(vals, ours)):
+        ax.text(i, t_ + 3, f"{t_:.1f} ms", ha="center", fontweight="bold", fontsize=10)
+        if o > 0.5:
+            ax.text(i, o / 2, f"{o:.0f}", ha="center", va="center", color="white", fontsize=8)
+    labels = {"vanilla_nchw": "vanilla_nchw\n(pure PyTorch)", "vanilla": "vanilla\n(+channels_last)",
+              "repo_fp16": "repo_fp16\n(repo baseline)", "vanilla_math": "vanilla_math\n(forced MATH)"}
+    ax.set_xticks(x); ax.set_xticklabels([labels.get(v, v) for v in order], fontsize=9)
+    ax.set_ylabel("ms / step")
+    ax.set_title("fp16 baseline variants -- one axis at a time (b128)", fontsize=11)
+    ax.legend(frameon=False, fontsize=9)
+    ax.set_ylim(0, max(vals) * 1.18)
+    ax.spines[["top", "right"]].set_visible(False)
+
+    ax = axes[1]
+    pure = bv["vanilla_nchw"]["ms_step"]
+    repo = tree["fp16"]["ms_step"]
+    modes = [m for m in ["int8_baseline", "int4_baseline", "int8_modiff", "int4_modiff"]
+             if m in tree]
+    x = np.arange(len(modes)); w = 0.38
+    sp_pure = [pure / tree[m]["ms_step"] for m in modes]
+    sp_repo = [repo / tree[m]["ms_step"] for m in modes]
+    ax.bar(x - w / 2, sp_pure, w, label=f"vs PURE PyTorch fp16 ({pure:.0f} ms)", color="#1D9E75")
+    ax.bar(x + w / 2, sp_repo, w, label=f"vs repo fp16 baseline ({repo:.0f} ms)", color="#E24B4A")
+    for i, (a, b) in enumerate(zip(sp_pure, sp_repo)):
+        ax.text(i - w / 2, a + 0.03, f"{a:.2f}×", ha="center", fontsize=9, fontweight="bold")
+        ax.text(i + w / 2, b + 0.03, f"{b:.2f}×", ha="center", fontsize=9)
+    ax.axhline(1.0, ls="--", color="#555", lw=1)
+    ax.set_xticks(x); ax.set_xticklabels([m.replace("_", "\n") for m in modes], fontsize=9)
+    ax.set_ylabel("speedup")
+    ax.set_title("Same measurements, two baselines -- speedups differ by ~39%", fontsize=11)
+    ax.legend(frameon=False, fontsize=9, loc="upper right")
+    ax.set_ylim(0, max(sp_repo) * 1.22)
+    ax.spines[["top", "right"]].set_visible(False)
+
+    fig.tight_layout()
+    fig.savefig(f"{HERE}/plots/fig_fp16_baselines.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print("wrote fig_fp16_baselines.png")
+
+
 if __name__ == "__main__":
     main_e2e()
     main_layers()
-    fig_icicle_all(load_tree()[0])
+    _t = load_tree()[0]
+    fig_icicle_all(_t)
+    fig_fp16_baselines(load("fp16_baseline_variants.json"), _t)

@@ -10,6 +10,46 @@
 > 本文件只含**数据与图**。分析与结论、代码清理说明见
 > [`REPORT_with_analysis.md`](REPORT_with_analysis.md)。
 
+> ## ⚠ 基线口径警告（已实测，决定所有加速比）
+>
+> **仓库的 fp16 "基线"不是原生 PyTorch，而且比原生 PyTorch 慢 1.39×。** 实测四个变体：
+>
+> | 变体 | ms/step | 自研 kernel 占比 | 说明 |
+> |---|--:|--:|---|
+> | **`vanilla_nchw`** | **150.89** | **0.0%** | **真正纯 PyTorch**：原生模块、NCHW、PyTorch 自选 SDPA（实际用 flash） |
+> | `vanilla` | 163.31 | 0.8% | 同上 + channels_last |
+> | `repo_fp16` | 211.00 | 14.2% | 当前基线（四项改造全开） |
+> | `vanilla_math` | 253.68 | 0.5% | 原生模块但强制 MATH SDPA |
+>
+> 根因是 attention 后端。纯 PyTorch 走 `pytorch_flash::flash_fwd_kernel`（**8.86 ms**/step）；
+> 仓库基线因 `MODIFF_FP16_MATERIALIZED=1` 强制物化 MATH，变成
+> `softmax_warp_forward` 39.28 + 两个 GEMM 20.59 + 19.47 = **79.3 ms**，是 flash 的 **9 倍**。
+> 强制 MATH 的目的是让 attention 可量化，代价就是这 70 ms。
+>
+> 次要因素：`channels_last` 反而让纯 PyTorch **慢 12.4 ms**（原生 NCHW 模块被迫做布局转换，
+> elementwise 从 23.7 涨到 48.6 ms）。它只对本仓库的 NHWC 自研 kernel 有利。
+>
+> 另一面：**给定 MATH 已被强制**，仓库的融合确实有效（253.68 → 211.00 ms，
+> 快 42.7 ms）——但那是在修补一个自己造成的问题。
+>
+> ### 双基线加速比（量化模式自身用融合 flash，故与纯 PyTorch flash 对比才公平）
+>
+> | mode | ms/step | **vs 纯 PyTorch fp16** | vs 仓库 fp16 基线 |
+> |---|--:|--:|--:|
+> | 纯 PyTorch fp16 (`vanilla_nchw`) | 150.89 | 1.00× | — |
+> | 仓库 fp16 基线 (`repo_fp16`) | 210.23 | 0.72× | 1.00× |
+> | int8_baseline | 117.82 | **1.28×** | 1.78× |
+> | **int4_baseline** | **106.43** | **1.42×** | 1.98× |
+> | int8_modiff | 125.42 | **1.20×** | 1.68× |
+> | int4_modiff | 127.26 | **1.19×** | 1.65× |
+>
+> **本报告 §1 起的所有 layer 级数字仍以 `repo_fp16` 为参照**（沿用仓库既有惯例，且 layer 分解只有
+> 该模式测了）。**引用加速比时必须说明基线**：相对纯 PyTorch 是 1.42×（int4 最佳），
+> 相对仓库基线是 1.98×。
+> 数据：`data/fp16_baseline_variants.json` · 脚本：`scripts/fp16_baseline_variants.py`
+
+![fp16 baselines](plots/fig_fp16_baselines.png)
+
 ---
 
 ## 口径（读数必需）
@@ -23,7 +63,7 @@
 | **launch/step** | 每步的 CUDA kernel 启动总次数 |
 
 - fp16 与 4 个量化模式**同进程内**测量，加速比同条件可比。
-- fp16 基线用默认 `MATH` SDPA 后端（本仓库既有惯例）；换成融合 `FLASH` 后端 fp16 约 116 ms/step，加速比会显著变化。
+- fp16 基线口径见顶部警告：仓库基线 210.23 ms/step（强制 MATH），纯 PyTorch 150.89 ms/step（flash）。
 - 同模式跨轮次有 ~0.1–0.3% 正常波动。§1/§3 同源 `data/profile_tree_by_caller.json`，§2 同源 `data/layer_pipeline_bench.json`，勿混算。
 - 不含回滚 A/B 测试；全部取自当前 HEAD 单一构建。
 
