@@ -20,154 +20,154 @@
           "mode": "fp16",
           "steps": "S1+S2",
           "label": "fused_gn_qkv (GN folded into qkv conv, 1 kernel)",
-          "us": 731.2000274658203,
+          "us": 733.6149215698242,
           "error": null
         },
         {
           "mode": "fp16",
           "steps": "S3",
           "label": "q/k/v transpose materialize (only if not read packed)",
-          "us": 239.16032791137695,
+          "us": 238.98496627807617,
           "error": null
         },
         {
           "mode": "fp16",
           "steps": "S4",
           "label": "PyTorch fp16 SDPA (flash)",
-          "us": 1840.0434875488281,
+          "us": 1852.0626831054688,
           "error": null
         },
         {
           "mode": "fp16",
           "steps": "S5a",
           "label": "attn-out transpose head->token major (copy)",
-          "us": 207.61472702026367,
+          "us": 207.9360008239746,
           "error": null
         },
         {
           "mode": "fp16",
           "steps": "S5b",
           "label": "proj GEMM fp16 (cuBLAS F.linear)",
-          "us": 192.53887176513672,
+          "us": 192.88448333740234,
           "error": null
         },
         {
           "mode": "fp16",
           "steps": "S6",
           "label": "residual add (separate elementwise)",
-          "us": 266.68800354003906,
+          "us": 266.7366409301758,
           "error": null
         },
         {
           "mode": "int8",
           "steps": "S1+quant",
           "label": "GN -> int8 in one kernel (quantize fused into GN)",
-          "us": 428.2986640930176,
+          "us": 428.4757296244303,
           "error": null
         },
         {
           "mode": "int8",
           "steps": "S2",
           "label": "qkv GEMM w8a8 (+bias in epilogue)",
-          "us": 371.34081522623694,
+          "us": 374.233595530192,
           "error": null
         },
         {
           "mode": "int8",
           "steps": "S3+quant",
           "label": "quantize_attn_qkv_packed_static (Q/K int8, V int8, +transpose)",
-          "us": 608.5994720458984,
+          "us": 608.567492167155,
           "error": null
         },
         {
           "mode": "int8",
           "steps": "S4",
           "label": "flash_attn_int8_vt (QK\u1d40+softmax+AV, scores in SRAM)",
-          "us": 1844.4058227539062,
+          "us": 1879.8118591308594,
           "error": null
         },
         {
           "mode": "int8",
           "steps": "S3+S4",
           "label": "flash_attn_int8_packed_vt (quantize folded into flash)",
-          "us": 5132.6666259765625,
+          "us": 5191.9921875,
           "error": null
         },
         {
           "mode": "int8",
           "steps": "S4+S5q",
           "label": "flash_attn_int8_vt_qout (emits proj-quantized int8 out)",
-          "us": 1913.5527038574219,
+          "us": 1896.9305419921875,
           "error": null
         },
         {
           "mode": "int8",
           "steps": "S5a+quant",
           "label": "quantize_attn_out_int8 (transpose + quantize, 1 kernel)",
-          "us": 279.5840072631836,
+          "us": 284.70144271850586,
           "error": null
         },
         {
           "mode": "int8",
           "steps": "S5b+S6",
           "label": "proj GEMM w8a8 (+bias +residual in epilogue)",
-          "us": 345.31455993652344,
+          "us": 347.00927734375,
           "error": null
         },
         {
           "mode": "int4",
           "steps": "S1+quant",
           "label": "GN -> int4 in one kernel, k_pad 192->256",
-          "us": 463.0634625752767,
+          "us": 462.7072016398112,
           "error": null
         },
         {
           "mode": "int4",
           "steps": "S2",
           "label": "qkv GEMM w4a4 (+bias in epilogue)",
-          "us": 333.077335357666,
+          "us": 329.3909390767416,
           "error": null
         },
         {
           "mode": "int4_old",
           "steps": "S1+quant",
           "label": "WAS: GN fp16 + F.pad + standalone quantize (3 kernels, pre-k_pad)",
-          "us": 937.8581364949545,
+          "us": 934.2079798380533,
           "error": null
         },
         {
           "mode": "int4",
           "steps": "S3+quant",
           "label": "quantize_attn_qkv_packed_static (Q/K int4, V int8, +transpose)",
-          "us": 599.3898391723633,
+          "us": 601.3823827107747,
           "error": null
         },
         {
           "mode": "int4",
           "steps": "S4",
           "label": "flash_attn_int4_vt (int4 Q/K, int8 V/P)",
-          "us": 1829.6806335449219,
+          "us": 1830.2642822265625,
           "error": null
         },
         {
           "mode": "int4",
           "steps": "S4+S5q",
           "label": "flash_attn_int4_vt_qout (emits proj-quantized int4 out)",
-          "us": 1867.2230529785156,
+          "us": 1849.5449829101562,
           "error": null
         },
         {
           "mode": "int4",
           "steps": "S5a+quant",
           "label": "quantize_attn_out_int4_pack (transpose + quantize + pack)",
-          "us": 229.8521614074707,
+          "us": 232.09600448608398,
           "error": null
         },
         {
           "mode": "int4",
           "steps": "S5b+S6",
           "label": "proj GEMM w4a4 (+bias +residual in epilogue)",
-          "us": 326.3385772705078,
+          "us": 333.1302261352539,
           "error": null
         }
       ]
@@ -189,147 +189,147 @@
           "mode": "fp16",
           "steps": "S1+S2",
           "label": "fused_gn_qkv (GN folded into qkv conv, 1 kernel)",
-          "us": 511.81014378865564,
+          "us": 510.5450630187989,
           "error": null
         },
         {
           "mode": "fp16",
           "steps": "S3",
           "label": "q/k/v transpose materialize (only if not read packed)",
-          "us": 107.72095680236816,
+          "us": 108.33919525146484,
           "error": null
         },
         {
           "mode": "fp16",
           "steps": "S4",
           "label": "PyTorch fp16 SDPA (flash)",
-          "us": 211.45727157592773,
+          "us": 210.9939193725586,
           "error": null
         },
         {
           "mode": "fp16",
           "steps": "S5a",
           "label": "attn-out transpose head->token major (copy)",
-          "us": 104.45183753967285,
+          "us": 104.3008041381836,
           "error": null
         },
         {
           "mode": "fp16",
           "steps": "S5b",
           "label": "proj GEMM fp16 (cuBLAS F.linear)",
-          "us": 134.15167808532715,
+          "us": 131.30240440368652,
           "error": null
         },
         {
           "mode": "fp16",
           "steps": "S6",
           "label": "residual add (separate elementwise)",
-          "us": 135.38432121276855,
+          "us": 135.5788803100586,
           "error": null
         },
         {
           "mode": "int8",
           "steps": "S1+quant",
           "label": "GN -> int8 in one kernel (quantize fused into GN)",
-          "us": 268.98345947265625,
+          "us": 270.6197420756022,
           "error": null
         },
         {
           "mode": "int8",
           "steps": "S2",
           "label": "qkv GEMM w8a8 (+bias in epilogue)",
-          "us": 245.469872156779,
+          "us": 247.4239985148112,
           "error": null
         },
         {
           "mode": "int8",
           "steps": "S3+quant",
           "label": "quantize_attn_qkv_packed_static (Q/K int8, V int8, +transpose)",
-          "us": 265.2117411295573,
+          "us": 265.5893325805664,
           "error": null
         },
         {
           "mode": "int8",
           "steps": "S4",
           "label": "flash_attn_int8_vt (QK\u1d40+softmax+AV, scores in SRAM)",
-          "us": 280.9087944030762,
+          "us": 281.0099220275879,
           "error": null
         },
         {
           "mode": "int8",
           "steps": "S3+S4",
           "label": "flash_attn_int8_packed_vt (quantize folded into flash)",
-          "us": 1038.2784271240234,
+          "us": 1035.6543731689453,
           "error": null
         },
         {
           "mode": "int8",
           "steps": "S4+S5q",
           "label": "flash_attn_int8_vt_qout (emits proj-quantized int8 out)",
-          "us": 295.73631286621094,
+          "us": 294.4601631164551,
           "error": null
         },
         {
           "mode": "int8",
           "steps": "S5a+quant",
           "label": "quantize_attn_out_int8 (transpose + quantize, 1 kernel)",
-          "us": 129.53344345092773,
+          "us": 128.6361598968506,
           "error": null
         },
         {
           "mode": "int8",
           "steps": "S5b+S6",
           "label": "proj GEMM w8a8 (+bias +residual in epilogue)",
-          "us": 190.60991287231445,
+          "us": 190.05184173583984,
           "error": null
         },
         {
           "mode": "int4",
           "steps": "S1+quant",
           "label": "GN -> int4 in one kernel, k_pad 384->384 (no pad needed)",
-          "us": 270.7584063212077,
+          "us": 266.81601206461585,
           "error": null
         },
         {
           "mode": "int4",
           "steps": "S2",
           "label": "qkv GEMM w4a4 (+bias in epilogue)",
-          "us": 179.15306091308594,
+          "us": 178.56213251749676,
           "error": null
         },
         {
           "mode": "int4",
           "steps": "S3+quant",
           "label": "quantize_attn_qkv_packed_static (Q/K int4, V int8, +transpose)",
-          "us": 232.4117342631022,
+          "us": 234.76266860961914,
           "error": null
         },
         {
           "mode": "int4",
           "steps": "S4",
           "label": "flash_attn_int4_vt (int4 Q/K, int8 V/P)",
-          "us": 218.69695663452148,
+          "us": 218.78656387329102,
           "error": null
         },
         {
           "mode": "int4",
           "steps": "S4+S5q",
           "label": "flash_attn_int4_vt_qout (emits proj-quantized int4 out)",
-          "us": 221.45919799804688,
+          "us": 219.56480026245117,
           "error": null
         },
         {
           "mode": "int4",
           "steps": "S5a+quant",
           "label": "quantize_attn_out_int4_pack (transpose + quantize + pack)",
-          "us": 97.30815887451172,
+          "us": 96.52992248535156,
           "error": null
         },
         {
           "mode": "int4",
           "steps": "S5b+S6",
           "label": "proj GEMM w4a4 (+bias +residual in epilogue)",
-          "us": 172.66687393188477,
+          "us": 172.60799407958984,
           "error": null
         }
       ]
@@ -351,154 +351,154 @@
           "mode": "fp16",
           "steps": "S1",
           "label": "group_norm_silu_nhwc (no SiLU)",
-          "us": 168.1386629740397,
+          "us": 166.70719782511392,
           "error": null
         },
         {
           "mode": "fp16",
           "steps": "S2",
           "label": "qkv GEMM fp16 (cuBLAS F.linear)",
-          "us": 87.4901294708252,
+          "us": 88.0682627360026,
           "error": null
         },
         {
           "mode": "fp16",
           "steps": "S3",
           "label": "q/k/v transpose materialize (only if not read packed)",
-          "us": 30.461440086364746,
+          "us": 30.655999183654785,
           "error": null
         },
         {
           "mode": "fp16",
           "steps": "S4",
           "label": "PyTorch fp16 SDPA (flash)",
-          "us": 66.53056144714355,
+          "us": 66.35776042938232,
           "error": null
         },
         {
           "mode": "fp16",
           "steps": "S5a",
           "label": "attn-out transpose head->token major (copy)",
-          "us": 29.02143955230713,
+          "us": 29.163520336151123,
           "error": null
         },
         {
           "mode": "fp16",
           "steps": "S5b",
           "label": "proj GEMM fp16 (cuBLAS F.linear)",
-          "us": 59.5033597946167,
+          "us": 59.75423812866211,
           "error": null
         },
         {
           "mode": "fp16",
           "steps": "S6",
           "label": "residual add (separate elementwise)",
-          "us": 35.146241188049316,
+          "us": 35.37152051925659,
           "error": null
         },
         {
           "mode": "int8",
           "steps": "S1+quant",
           "label": "GN -> int8 in one kernel (quantize fused into GN)",
-          "us": 162.990935643514,
+          "us": 164.2730712890625,
           "error": null
         },
         {
           "mode": "int8",
           "steps": "S2",
           "label": "qkv GEMM w8a8 (+bias in epilogue)",
-          "us": 75.71413516998291,
+          "us": 76.93866888682048,
           "error": null
         },
         {
           "mode": "int8",
           "steps": "S3+quant",
           "label": "quantize_attn_qkv_packed_static (Q/K int8, V int8, +transpose)",
-          "us": 74.47893619537354,
+          "us": 75.07839997609457,
           "error": null
         },
         {
           "mode": "int8",
           "steps": "S4",
           "label": "flash_attn_int8_vt (QK\u1d40+softmax+AV, scores in SRAM)",
-          "us": 46.89663887023926,
+          "us": 46.87488079071045,
           "error": null
         },
         {
           "mode": "int8",
           "steps": "S3+S4",
           "label": "flash_attn_int8_packed_vt (quantize folded into flash)",
-          "us": 110.16192436218262,
+          "us": 110.382080078125,
           "error": null
         },
         {
           "mode": "int8",
           "steps": "S4+S5q",
           "label": "flash_attn_int8_vt_qout (emits proj-quantized int8 out)",
-          "us": 49.25951957702637,
+          "us": 49.3836784362793,
           "error": null
         },
         {
           "mode": "int8",
           "steps": "S5a+quant",
           "label": "quantize_attn_out_int8 (transpose + quantize, 1 kernel)",
-          "us": 33.28768014907837,
+          "us": 33.3568000793457,
           "error": null
         },
         {
           "mode": "int8",
           "steps": "S5b+S6",
           "label": "proj GEMM w8a8 (+bias +residual in epilogue)",
-          "us": 68.13695907592773,
+          "us": 69.47455883026123,
           "error": null
         },
         {
           "mode": "int4",
           "steps": "S1+quant",
           "label": "GN -> int4 in one kernel, k_pad 384->384 (no pad needed)",
-          "us": 162.46186892191568,
+          "us": 162.40639686584473,
           "error": null
         },
         {
           "mode": "int4",
           "steps": "S2",
           "label": "qkv GEMM w4a4 (+bias in epilogue)",
-          "us": 57.6469341913859,
+          "us": 57.9584002494812,
           "error": null
         },
         {
           "mode": "int4",
           "steps": "S3+quant",
           "label": "quantize_attn_qkv_packed_static (Q/K int4, V int8, +transpose)",
-          "us": 66.19093418121338,
+          "us": 66.46186510721843,
           "error": null
         },
         {
           "mode": "int4",
           "steps": "S4",
           "label": "flash_attn_int4_vt (int4 Q/K, int8 V/P)",
-          "us": 38.246400356292725,
+          "us": 38.268160820007324,
           "error": null
         },
         {
           "mode": "int4",
           "steps": "S4+S5q",
           "label": "flash_attn_int4_vt_qout (emits proj-quantized int4 out)",
-          "us": 35.56607961654663,
+          "us": 35.70303916931152,
           "error": null
         },
         {
           "mode": "int4",
           "steps": "S5a+quant",
           "label": "quantize_attn_out_int4_pack (transpose + quantize + pack)",
-          "us": 24.75519895553589,
+          "us": 24.80639934539795,
           "error": null
         },
         {
           "mode": "int4",
           "steps": "S5b+S6",
           "label": "proj GEMM w4a4 (+bias +residual in epilogue)",
-          "us": 61.337599754333496,
+          "us": 60.51328182220459,
           "error": null
         }
       ]
@@ -520,70 +520,70 @@
           "mode": "fp16",
           "steps": "S1",
           "label": "group_norm_silu_nhwc (no SiLU)",
-          "us": 49.56373373667399,
+          "us": 49.60853258768717,
           "error": null
         },
         {
           "mode": "fp16",
           "steps": "S2",
           "label": "qkv GEMM fp16 (cuBLAS F.linear)",
-          "us": 78.02879810333252,
+          "us": 78.3786694208781,
           "error": null
         },
         {
           "mode": "fp16",
           "steps": "S3",
           "label": "q/k/v transpose materialize (only if not read packed)",
-          "us": 21.90592050552368,
+          "us": 22.24128007888794,
           "error": null
         },
         {
           "mode": "fp16",
           "steps": "S4",
           "label": "PyTorch fp16 SDPA (flash)",
-          "us": 43.16544055938721,
+          "us": 43.31520080566406,
           "error": null
         },
         {
           "mode": "fp16",
           "steps": "S5a",
           "label": "attn-out transpose head->token major (copy)",
-          "us": 13.678079843521118,
+          "us": 14.273279905319214,
           "error": null
         },
         {
           "mode": "fp16",
           "steps": "S5b",
           "label": "proj GEMM fp16 (cuBLAS F.linear)",
-          "us": 29.516799449920654,
+          "us": 30.18752098083496,
           "error": null
         },
         {
           "mode": "fp16",
           "steps": "S6",
           "label": "residual add (separate elementwise)",
-          "us": 17.224960327148438,
+          "us": 17.277439832687378,
           "error": null
         },
         {
           "mode": "int8",
           "steps": "S1+quant",
           "label": "GN -> int8 in one kernel (quantize fused into GN)",
-          "us": 48.65066607793172,
+          "us": 48.66346518198649,
           "error": null
         },
         {
           "mode": "int8",
           "steps": "S2",
           "label": "qkv GEMM w8a8 (+bias in epilogue)",
-          "us": 61.785598595937095,
+          "us": 61.76000038782756,
           "error": null
         },
         {
           "mode": "int8",
           "steps": "S4",
           "label": "INELIGIBLE for our flash (hd=96>48 or T=16%64!=0) -> falls back to fp16 SDPA",
-          "us": 43.16544055938721,
+          "us": 43.31520080566406,
           "error": null,
           "is_fp16_fallback": true
         },
@@ -591,35 +591,35 @@
           "mode": "int8",
           "steps": "S5a+quant",
           "label": "quantize_attn_out_int8 (transpose + quantize, 1 kernel)",
-          "us": 16.108800172805786,
+          "us": 16.15488052368164,
           "error": null
         },
         {
           "mode": "int8",
           "steps": "S5b+S6",
           "label": "proj GEMM w8a8 (+bias +residual in epilogue)",
-          "us": 44.702720642089844,
+          "us": 44.785919189453125,
           "error": null
         },
         {
           "mode": "int4",
           "steps": "S1+quant",
           "label": "GN -> int4 in one kernel, k_pad 768->768 (no pad needed)",
-          "us": 48.95360072453816,
+          "us": 49.07519817352295,
           "error": null
         },
         {
           "mode": "int4",
           "steps": "S2",
           "label": "qkv GEMM w4a4 (+bias in epilogue)",
-          "us": 42.23146835962931,
+          "us": 42.20373233159383,
           "error": null
         },
         {
           "mode": "int4",
           "steps": "S4",
           "label": "INELIGIBLE for our flash (hd=96>48 or T=16%64!=0) -> falls back to fp16 SDPA",
-          "us": 43.16544055938721,
+          "us": 43.31520080566406,
           "error": null,
           "is_fp16_fallback": true
         },
@@ -627,14 +627,14 @@
           "mode": "int4",
           "steps": "S5a+quant",
           "label": "quantize_attn_out_int4_pack (transpose + quantize + pack)",
-          "us": 12.737280130386353,
+          "us": 12.788480520248413,
           "error": null
         },
         {
           "mode": "int4",
           "steps": "S5b+S6",
           "label": "proj GEMM w4a4 (+bias +residual in epilogue)",
-          "us": 35.97311973571777,
+          "us": 36.180479526519775,
           "error": null
         }
       ]
@@ -656,70 +656,70 @@
           "mode": "fp16",
           "steps": "S1",
           "label": "group_norm_silu_nhwc (no SiLU)",
-          "us": 12.61013348897298,
+          "us": 12.67413298288981,
           "error": null
         },
         {
           "mode": "fp16",
           "steps": "S2",
           "label": "qkv GEMM fp16 (cuBLAS F.linear)",
-          "us": 27.498666445414223,
+          "us": 28.14933260281881,
           "error": null
         },
         {
           "mode": "fp16",
           "steps": "S3",
           "label": "q/k/v transpose materialize (only if not read packed)",
-          "us": 21.93023920059204,
+          "us": 21.466879844665527,
           "error": null
         },
         {
           "mode": "fp16",
           "steps": "S4",
           "label": "PyTorch fp16 SDPA (flash)",
-          "us": 39.60832118988037,
+          "us": 39.70560073852539,
           "error": null
         },
         {
           "mode": "fp16",
           "steps": "S5a",
           "label": "attn-out transpose head->token major (copy)",
-          "us": 13.574399948120117,
+          "us": 14.215680360794067,
           "error": null
         },
         {
           "mode": "fp16",
           "steps": "S5b",
           "label": "proj GEMM fp16 (cuBLAS F.linear)",
-          "us": 25.886719226837158,
+          "us": 25.411839485168457,
           "error": null
         },
         {
           "mode": "fp16",
           "steps": "S6",
           "label": "residual add (separate elementwise)",
-          "us": 7.800319790840149,
+          "us": 8.005120158195496,
           "error": null
         },
         {
           "mode": "int8",
           "steps": "S1+quant",
           "label": "GN -> int8 in one kernel (quantize fused into GN)",
-          "us": 13.107200463612875,
+          "us": 13.201066851615906,
           "error": null
         },
         {
           "mode": "int8",
           "steps": "S2",
           "label": "qkv GEMM w8a8 (+bias in epilogue)",
-          "us": 22.385066747665405,
+          "us": 22.579199075698853,
           "error": null
         },
         {
           "mode": "int8",
           "steps": "S4",
           "label": "INELIGIBLE for our flash (hd=96>48 or T=4%64!=0) -> falls back to fp16 SDPA",
-          "us": 39.60832118988037,
+          "us": 39.70560073852539,
           "error": null,
           "is_fp16_fallback": true
         },
@@ -727,35 +727,35 @@
           "mode": "int8",
           "steps": "S5a+quant",
           "label": "quantize_attn_out_int8 (transpose + quantize, 1 kernel)",
-          "us": 5.753600001335144,
+          "us": 5.820159912109375,
           "error": null
         },
         {
           "mode": "int8",
           "steps": "S5b+S6",
           "label": "proj GEMM w8a8 (+bias +residual in epilogue)",
-          "us": 27.235839366912842,
+          "us": 27.464959621429443,
           "error": null
         },
         {
           "mode": "int4",
           "steps": "S1+quant",
           "label": "GN -> int4 in one kernel, k_pad 768->768 (no pad needed)",
-          "us": 13.107200463612875,
+          "us": 13.115732868512472,
           "error": null
         },
         {
           "mode": "int4",
           "steps": "S2",
           "label": "qkv GEMM w4a4 (+bias in epilogue)",
-          "us": 14.967466394106546,
+          "us": 14.929067095120747,
           "error": null
         },
         {
           "mode": "int4",
           "steps": "S4",
           "label": "INELIGIBLE for our flash (hd=96>48 or T=4%64!=0) -> falls back to fp16 SDPA",
-          "us": 39.60832118988037,
+          "us": 39.70560073852539,
           "error": null,
           "is_fp16_fallback": true
         },
@@ -763,7 +763,7 @@
           "mode": "int4",
           "steps": "S5a+quant",
           "label": "quantize_attn_out_int4_pack (transpose + quantize + pack)",
-          "us": 5.850880146026611,
+          "us": 5.957120060920715,
           "error": null
         },
         {
