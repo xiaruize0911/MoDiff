@@ -835,6 +835,24 @@ __global__ void flash_attn_int8_packed_mma_kernel(
 // TRANSPOSED [N,H,hdp_v,T] (hdp_v=pad(hd,32)). Documented NEGATIVE result: at hd=24
 // the int4 K-pad (24->64, 62% waste) makes QKᵀ no faster than int8, so this loses to
 // fp16 flash like the int8 kernel. Same register-parallel softmax + cp.async as int8.
+//
+// DO NOT "switch to mma.m16n8k32.s4 to halve the K padding" -- measured and rejected
+// (data/attn_headroom.json). The padding is real (hd=24 -> hdp4=64 means 62% of the k-depth is
+// zeros, and it is why int4 measures 1.01x of int8 here instead of ~2x) but the k32 variant only
+// removes BYTES, not mma instructions, so it can only pay if this kernel is bandwidth-bound. It is
+// not, by a wide margin:
+//   * T=1024/hd=24 achieves 80.8 GB/s (perfect-L2 traffic model) to 332.3 GB/s (every CTA misses,
+//     K/V re-read grid.y=8x) against this card's 590 GB/s stream rate -- 56.3% of ceiling AT THE
+//     MOST FAVOURABLE assumption.
+//   * The unit-floor analysis (data/attn_theoretical_limit.json) puts t_hbm at 275 us against a
+//     measured 1868 us, i.e. 6.8x of headroom before HBM binds.
+//   * Halving the packed K row (32 -> 16 B) removes 134.2 MB of the pessimistic 620.8 MB, so the
+//     upper bound is 1.28x -- and only in the counterfactual where the kernel were bandwidth-bound.
+// The real reason int4 does not beat int8 at hd=24 is instruction count: m16n8k64.s4 and
+// m16n8k32.s8 both need exactly one mma for hd<=32/hd<=64 respectively, so int4 issues the same
+// number of mma ops while doing 2.67x the padded work. That is a k-granularity limit of the
+// instruction set, not something a byte-level change addresses. int4 DOES win at hd=48 (1.30x of
+// int8), where int8 needs two k-steps and int4 needs one.
 // =========================================================================
 // TEMPLATED on HDP_V (the V / output head dim, = pad(hd,32) -> 32 or 64) for the same reason
 // the int8 kernel is templated on HD_PAD: with hdp_v a runtime arg, Oreg[] was indexed by the
