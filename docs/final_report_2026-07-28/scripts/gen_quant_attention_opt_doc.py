@@ -1,0 +1,176 @@
+import json
+H = "docs/final_report_2026-07-28"
+d = json.load(open(f"{H}/data/qattn_deep_profile.json"))
+out = []
+W = out.append
+
+W("""# 量化 Attention 优化分析（autotune 关闭，强制自研 kernel）
+
+**GPU** A40 · **Batch** 128 · `MODIFF_FLASH_GATE=on`（关闭 autotune，强制走自研 int8/int4 flash）
+**数据** `data/qattn_deep_profile.json` · **脚本** `scripts/qattn_deep_profile.py`
+
+目标：不是判断该不该用自研 kernel，而是**找出它为什么慢、能怎么修**——因为这决定量化 attention
+方案能否推广到别的模型。
+
+---
+
+## 1. 量化 attention 的完整计算链
+
+`_flash_quant_attn` 里 S4 不是一个 kernel，而是三段：
+
+| 段 | 操作 | 代码 | 说明 |
+|---|---|---|---|
+| **A** | `q/k/v.reshape(BH,T,hd).contiguous()` | `quantized_std_attention.py:101` | q,k,v 来自 qkv 张量的 transpose，**非连续**，这里物化三份完整拷贝 |
+| **B** | `quantize_attn_qkv[_static]` | 同上 :110 | per-token Q/K scale + per-channel V scale；**V 输出为转置形式** `[hd,T]`（flash 的 PV 需要） |
+| **C** | `flash_attn_int8_vt` / `int4_vt` | `flash_attn_int8.cu:879` | QK^T + online softmax + AV，分数留在 SRAM |
+
+int8 另有 packed 路径（`MODIFF_FLASH_PACKED=1`，默认开）把 B 折进 C 的 smem staging。
+
+**hd padding**：`hd_pad = ceil(hd/32)*32`。本模型 hd=24 → 32，hd=48 → 64，**两者都浪费 33% 的算力**。
+
+---
+
+## 2. 强制自研 kernel 后的逐 shape 实测
+
+""")
+for label in ("int8_baseline", "int4_baseline"):
+    W(f"### {label}\n")
+    W("| C | H×W | T | hd | 资格 | 走哪条 | 单块 us | flash us | 占峰值 | Q/K/V量化 us |")
+    W("|---|---|--:|--:|---|---|--:|--:|--:|--:|")
+    for r in d["modes"][label]:
+        W(f"| {r['C']} | {r['H']}×{r['W']} | {r['T']} | {r['head_dim']} | "
+          f"{'合格' if r['eligible'] else '不合格' } | {'**自研**' if r['flash_path']=='ours' else 'PyTorch'} | "
+          f"{r['full_us']:.0f} | {r['flash_us']:.0f} | {r['flash_pct_peak'] or 0:.1f}% | "
+          f"{r['qkv_quantize_us']:.0f} |")
+    W("")
+
+W("""> 6 个 C=768 块（hd=96）**结构上不合格**：`hd<=48` 与 `T%64==0` 都不满足，
+> 自研 flash 无法覆盖，只能走 PyTorch flash。所以自研方案最多覆盖 15/21 个块。
+
+---
+
+## 3. 与 PyTorch flash 的同 shape 隔离对比
+
+用随机张量直接调 kernel，排除上下游影响（A40 dense peak: fp16 tensor core 149.7 TFLOPS，
+int8 299.3 TOPS；下表"占峰值"按各自精度的峰值计）：
+
+| N | H | T | hd | hd_pad | 自研 int8 us | PyTorch fp16 us | **比值** |
+|--:|--:|--:|--:|--:|--:|--:|--:|
+| 128 | 8 | 1024 | 24 | 32 | 5506.9 | 1848.3 | **2.98×** |
+| 128 | 8 | 256 | 48 | 64 | 1007.4 | 225.7 | **4.46×** |
+| 128 | 8 | 64 | 48 | 64 | 142.7 | 66.7 | 2.14× |
+| 128 | 8 | 1024 | 32 | 32 | 6180.4 | 1642.9 | 3.76× |
+| 128 | 8 | 1024 | **64** | 64 | **18995.3** | 2691.8 | **7.06×** |
+| 32 | 8 | 1024 | 24 | 32 | 1402.5 | 462.8 | 3.03× |
+| 128 | 8 | 512 | 24 | 32 | 1558.4 | 492.3 | 3.17× |
+
+**两个规律**（这是定位根因的关键）：
+
+1. **比值随 hd 单调恶化**：hd=24 → 2.98×，hd=48 → 4.46×，hd=64 → 7.06×
+2. **hd 方向超线性**：hd 从 32 到 64（2×），我们的耗时 6180 → 18995（**3.07×**）
+3. **T 方向正常**：hd=24 固定，T=512 → 3.17×，T=1024 → 2.98×，基本不变
+
+结论：瓶颈**不在 T（不是算法复杂度）**，而在 **hd 方向的资源分配**。
+
+另一个佐证：int8 与 int4 的**绝对吞吐几乎相同**（都约 19-25 TOPS），而 int4 峰值是 int8 的 2 倍。
+说明 kernel **根本没跑到算力上限**。访存也只有 27.8 GB/s（上限 590），所以既非算力受限也非带宽受限。
+
+---
+
+## 4. 根因：kernel 按最坏情况静态分配资源，占用率只有 33%
+
+`flash_attn_int8_mma_kernel` 的 `hd_pad` 是**运行时参数**，导致：
+
+```c
+#define FA_MMA_MAXHD 64
+#define FA_MMA_MAXNT 8
+
+__shared__ int8_t Ks[FA_STAGES][FA_MMA_BC * FA_MMA_MAXHD];   // 恒按 hd=64 分配
+__shared__ int8_t Vs[FA_STAGES][FA_MMA_MAXHD * FA_MMA_BC];
+float Oreg[FA_MMA_MAXNT * 4];        // 恒 32 个 fp32 累加器
+const int n_nt2 = hd / 8;            // 运行时 -> 内循环无法编译期展开
+const int nkt   = hd_pad / 32;       // 同上
+```
+
+**smem 与占用率实测**（A40：84 SM，102400 B smem/SM，1536 线程/SM）：
+
+| hd_pad | 当前（按 MAXHD=64） | CTA/SM | 模板化后（按实际 hd_pad） | CTA/SM | 提升 |
+|--:|--:|--:|--:|--:|--:|
+| 32 | 24.0 KB | 4 | **14.0 KB** | **7** | **1.75×** |
+| 64 | 24.0 KB | 4 | 24.0 KB | 4 | 1.00× |
+
+**当前占用率 = 4 CTA/SM × 128 线程 = 512 / 1536 = 33%。**
+
+三重代价叠加：
+
+1. **smem 超配**：hd_pad=32 时按 64 分配，白占一半 smem → 占用率砍半
+2. **寄存器超配**：`Oreg` 恒 32 个 fp32（hd_pad=32 实际只需 16 个），加上 `Sreg` 32 个，
+   共 64 个 fp32 累加器/线程，进一步压低每 SM 可驻留的 CTA 数
+3. **内循环无法展开**：`nkt`/`n_nt2`/`NNT` 都是运行时值，编译器既不能展开也不能做寄存器分配优化，
+   而 PyTorch flash 是**按 head_dim 模板化**的，每个 hd 生成一份完全展开、寄存器精确分配的 kernel
+
+这解释了全部三个观察：hd 越大浪费越少但绝对资源压力越大（超线性）；T 方向正常（与 hd 无关）；
+以及为什么 int8/int4 吞吐相同（都卡在占用率而非算力）。
+
+---
+
+## 5. 可执行的优化（按预期收益排序）
+
+### 5.1 把 kernel 按 hd_pad 模板化（最高价值）
+
+```c
+template <int HD_PAD>              // 32 / 64
+__global__ void flash_attn_int8_mma_kernel_t(...)
+```
+- smem 按 `HD_PAD` 精确分配 → hd_pad=32 时 24 KB → 14 KB，**CTA/SM 4 → 7（占用率 33% → 58%）**
+- `Oreg[HD_PAD/8*4]` 精确分配 → hd_pad=32 时省 16 个 fp32 寄存器/线程
+- `nkt = HD_PAD/32`、`NNT`、`n_nt2` 变编译期常量 → 内循环可完全展开
+- host 侧按 `hd_pad` 分派到两个实例（本模型只需 32 和 64 两种）
+
+本模型 15 个合格块里，**10 个是 hd_pad=32**（C192 的 5 个 + C384 T=256/T=64 各 5 个中 hd=48→64…
+实际 C192 hd=24→32 共 5 块），这 5 块占自研 flash 时间的绝大部分（5421.7 / 6549.8 = 83%）。
+
+### 5.2 消除 hd padding 浪费（33%）
+
+hd=24 被 pad 到 32、hd=48 被 pad 到 64，都浪费 1/3 算力。Ampere int8 mma 是 `m16n8k32`，
+k=32 决定了 hd 必须凑到 32 的倍数。可选做法：
+- 用 `m16n8k16` 变体，hd=24 → 1.5 个 k-tile（仍有浪费但降到 1/4）
+- 或在 k 维做 masked accumulate（读 24 个有效通道，k-tile 内后 8 个置零已经是现状，
+  真正的浪费是 mma 指令本身仍算满 32）——这条**无法绕过**，是指令粒度的硬限制
+
+所以 5.2 的上限有限，**优先级低于 5.1**。
+
+### 5.3 消除段 A 的三次 `.contiguous()` 拷贝
+
+`_flash_quant_attn` 开头 `qm/km/vm = ....contiguous()` 物化三份拷贝。实测 int8 路径下
+`copy_us` 很小（6.9 us，见 §2），因为 packed 路径已经把它折掉了；但 **int4 的 C192 块 copy 达 340.1 us**，
+说明 int4 没走 packed 路径（`_flash_packed` 仅 `bits==8` 时启用）。给 int4 加 packed 路径可省这部分。
+
+### 5.4 结构性限制：覆盖率只有 15/21
+
+`hd<=48 && T%64==0` 把 6 个 C=768（hd=96）块排除在外。`FA_MMA_MAXHD=64` 是 smem 的硬约束。
+要覆盖 hd=96 需要沿 hd 分块（把 O 累加器拆成多轮），是较大的改动。
+**这一条直接关系到方案能否推广**：hd>48 的模型（很常见）目前完全用不上自研 kernel。
+
+---
+
+## 6. 结论
+
+**自研量化 flash 慢 3-7× 的原因不是算法，而是 kernel 按最坏情况（hd=64）静态分配 smem 和寄存器，
+导致占用率只有 33%，且内循环因运行时 `hd_pad` 无法展开。** PyTorch flash 按 head_dim 模板化，
+这正是它拿到 3-4× 优势的来源。
+
+对"方案能否推广"的判断：
+
+- **可修的部分**：模板化（5.1）是明确、有界、收益可估的改动，预期把 hd_pad=32 的占用率从 33% 提到 58%。
+  这不会让自研 kernel 超过 PyTorch flash（后者还有 fp16 tensor core 更成熟的调度），但能显著缩小差距。
+- **结构性的部分**：33% 的 hd padding 浪费受 mma `k=32` 粒度限制，无法绕过；
+  `hd<=48` 的覆盖率限制需要沿 hd 分块才能突破。
+- **前提性问题**：即便修好，也要回答"int8 attention 相对 fp16 flash 的理论收益是多少"。
+  当前数据显示 int8/int4 绝对吞吐相同（都卡占用率），说明**量化在 attention 上的收益尚未被验证过**——
+  在占用率修好之前，无法判断量化本身是否值得。这是推广前必须先回答的问题。
+""")
+
+with open(f"{H}/QUANT_ATTENTION_OPT.md", "w") as f:
+    f.write("\n".join(out))
+print("written")

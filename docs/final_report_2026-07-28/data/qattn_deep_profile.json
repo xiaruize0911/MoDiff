@@ -1,0 +1,519 @@
+{
+  "batch": 128,
+  "modes": {
+    "int8_baseline": [
+      {
+        "C": 192,
+        "H": 32,
+        "W": 32,
+        "T": 1024,
+        "num_heads": 8,
+        "head_dim": 24,
+        "n_instances": 5,
+        "eligible": true,
+        "flash_path": "ours",
+        "full_us": 7417.6,
+        "attn_gflop": 103.08,
+        "flash_us": 5421.73,
+        "flash_tops": 19.0,
+        "flash_pct_peak": 12.7,
+        "qkv_quantize_us": 700.38,
+        "copy_us": 6.91,
+        "kernels": [
+          {
+            "kernel": "flash_attn_int8_mma_kernel",
+            "us": 5421.73,
+            "calls": 1.0
+          },
+          {
+            "kernel": "gemm_w8a8_kernel_awq",
+            "us": 724.3,
+            "calls": 2.0
+          },
+          {
+            "kernel": "aq_qtok_packed_static_qk_vec2_kernel",
+            "us": 472.81,
+            "calls": 1.0
+          },
+          {
+            "kernel": "group_norm_silu_quantize_nhwc_vec2_kernel",
+            "us": 446.11,
+            "calls": 1.0
+          },
+          {
+            "kernel": "aq_vquant_trans_packed_tiled_vec2_kernel",
+            "us": 227.57,
+            "calls": 1.0
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "us": 6.91,
+            "calls": 2.0
+          }
+        ]
+      },
+      {
+        "C": 384,
+        "H": 16,
+        "W": 16,
+        "T": 256,
+        "num_heads": 8,
+        "head_dim": 48,
+        "n_instances": 5,
+        "eligible": true,
+        "flash_path": "ours",
+        "full_us": 1951.39,
+        "attn_gflop": 12.88,
+        "flash_us": 986.22,
+        "flash_tops": 13.1,
+        "flash_pct_peak": 8.7,
+        "qkv_quantize_us": 261.33,
+        "copy_us": 7.23,
+        "kernels": [
+          {
+            "kernel": "flash_attn_int8_mma_kernel",
+            "us": 986.22,
+            "calls": 1.0
+          },
+          {
+            "kernel": "gemm_w8a8_kernel_awq",
+            "us": 430.45,
+            "calls": 2.0
+          },
+          {
+            "kernel": "group_norm_silu_quantize_nhwc_vec2_kernel",
+            "us": 268.16,
+            "calls": 1.0
+          },
+          {
+            "kernel": "aq_qtok_packed_static_qk_vec2_kernel",
+            "us": 158.22,
+            "calls": 1.0
+          },
+          {
+            "kernel": "aq_vquant_trans_packed_tiled_vec2_kernel",
+            "us": 103.11,
+            "calls": 1.0
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "us": 7.23,
+            "calls": 2.0
+          }
+        ]
+      },
+      {
+        "C": 384,
+        "H": 8,
+        "W": 8,
+        "T": 64,
+        "num_heads": 8,
+        "head_dim": 48,
+        "n_instances": 5,
+        "eligible": true,
+        "flash_path": "ours",
+        "full_us": 532.35,
+        "attn_gflop": 0.81,
+        "flash_us": 141.89,
+        "flash_tops": 5.7,
+        "flash_pct_peak": 3.8,
+        "qkv_quantize_us": 68.43,
+        "copy_us": 7.25,
+        "kernels": [
+          {
+            "kernel": "group_norm_silu_quantize_nhwc_vec2_kernel",
+            "us": 166.98,
+            "calls": 1.0
+          },
+          {
+            "kernel": "gemm_w8a8_kernel_awq",
+            "us": 148.19,
+            "calls": 2.0
+          },
+          {
+            "kernel": "flash_attn_int8_mma_kernel",
+            "us": 141.89,
+            "calls": 1.0
+          },
+          {
+            "kernel": "aq_qtok_packed_static_qk_vec2_kernel",
+            "us": 40.36,
+            "calls": 1.0
+          },
+          {
+            "kernel": "aq_vquant_trans_packed_tiled_vec2_kernel",
+            "us": 28.07,
+            "calls": 1.0
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "us": 7.25,
+            "calls": 2.0
+          }
+        ]
+      },
+      {
+        "C": 768,
+        "H": 4,
+        "W": 4,
+        "T": 16,
+        "num_heads": 8,
+        "head_dim": 96,
+        "n_instances": 5,
+        "eligible": false,
+        "flash_path": "pytorch",
+        "full_us": 229.63,
+        "attn_gflop": 0.1,
+        "flash_us": 42.07,
+        "flash_tops": 2.4,
+        "flash_pct_peak": 3.2,
+        "qkv_quantize_us": 0,
+        "copy_us": 13.04,
+        "kernels": [
+          {
+            "kernel": "gemm_w8a8_kernel_awq",
+            "us": 104.66,
+            "calls": 2.0
+          },
+          {
+            "kernel": "group_norm_silu_quantize_nhwc_vec2_kernel",
+            "us": 51.49,
+            "calls": 1.0
+          },
+          {
+            "kernel": "pytorch_flash::flash_fwd_kernel",
+            "us": 42.07,
+            "calls": 1.0
+          },
+          {
+            "kernel": "quant_attn_out_int8_kernel",
+            "us": 17.34,
+            "calls": 1.0
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "us": 13.04,
+            "calls": 1.0
+          }
+        ]
+      },
+      {
+        "C": 768,
+        "H": 2,
+        "W": 2,
+        "T": 4,
+        "num_heads": 8,
+        "head_dim": 96,
+        "n_instances": 1,
+        "eligible": false,
+        "flash_path": "pytorch",
+        "full_us": 172.83,
+        "attn_gflop": 0.01,
+        "flash_us": 38.56,
+        "flash_tops": 0.2,
+        "flash_pct_peak": 0.2,
+        "qkv_quantize_us": 0,
+        "copy_us": 3.7,
+        "kernels": [
+          {
+            "kernel": "gemm_w8a8_kernel_awq",
+            "us": 56.69,
+            "calls": 2.0
+          },
+          {
+            "kernel": "pytorch_flash::flash_fwd_kernel",
+            "us": 38.56,
+            "calls": 1.0
+          },
+          {
+            "kernel": "group_norm_silu_quantize_nhwc_vec2_kernel",
+            "us": 12.94,
+            "calls": 1.0
+          },
+          {
+            "kernel": "quant_attn_out_int8_kernel",
+            "us": 5.29,
+            "calls": 1.0
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "us": 3.7,
+            "calls": 1.0
+          }
+        ]
+      }
+    ],
+    "int4_baseline": [
+      {
+        "C": 192,
+        "H": 32,
+        "W": 32,
+        "T": 1024,
+        "num_heads": 8,
+        "head_dim": 24,
+        "n_instances": 5,
+        "eligible": true,
+        "flash_path": "ours",
+        "full_us": 7659.74,
+        "attn_gflop": 103.08,
+        "flash_us": 5301.8,
+        "flash_tops": 19.4,
+        "flash_pct_peak": 6.5,
+        "qkv_quantize_us": 699.14,
+        "copy_us": 340.14,
+        "kernels": [
+          {
+            "kernel": "flash_attn_int4_mma_kernel",
+            "us": 5301.8,
+            "calls": 1.0
+          },
+          {
+            "kernel": "gemm_w4a4_kernel_awq",
+            "us": 668.66,
+            "calls": 2.0
+          },
+          {
+            "kernel": "group_norm_silu_nhwc_kernel",
+            "us": 492.33,
+            "calls": 1.0
+          },
+          {
+            "kernel": "aq_qtok_packed_static_qk_vec2_kernel",
+            "us": 471.77,
+            "calls": 1.0
+          },
+          {
+            "kernel": "aq_vquant_trans_packed_tiled_vec2_kernel",
+            "us": 227.37,
+            "calls": 1.0
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "us": 188.18,
+            "calls": 1.0
+          },
+          {
+            "kernel": "quant_act_int4_pack_kernel",
+            "us": 147.5,
+            "calls": 1.0
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "us": 116.06,
+            "calls": 1.0
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "us": 28.88,
+            "calls": 1.0
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "us": 7.02,
+            "calls": 2.0
+          }
+        ]
+      },
+      {
+        "C": 384,
+        "H": 16,
+        "W": 16,
+        "T": 256,
+        "num_heads": 8,
+        "head_dim": 48,
+        "n_instances": 5,
+        "eligible": true,
+        "flash_path": "ours",
+        "full_us": 1875.3,
+        "attn_gflop": 12.88,
+        "flash_us": 1011.35,
+        "flash_tops": 12.7,
+        "flash_pct_peak": 4.3,
+        "qkv_quantize_us": 229.44,
+        "copy_us": 17.25,
+        "kernels": [
+          {
+            "kernel": "flash_attn_int4_mma_kernel",
+            "us": 1011.35,
+            "calls": 1.0
+          },
+          {
+            "kernel": "gemm_w4a4_kernel_awq",
+            "us": 345.87,
+            "calls": 2.0
+          },
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "us": 271.83,
+            "calls": 1.0
+          },
+          {
+            "kernel": "aq_qtok_packed_static_qk_vec2_kernel",
+            "us": 127.65,
+            "calls": 1.0
+          },
+          {
+            "kernel": "aq_vquant_trans_packed_tiled_vec2_kernel",
+            "us": 101.79,
+            "calls": 1.0
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "us": 10.06,
+            "calls": 1.0
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "us": 7.19,
+            "calls": 2.0
+          }
+        ]
+      },
+      {
+        "C": 384,
+        "H": 8,
+        "W": 8,
+        "T": 64,
+        "num_heads": 8,
+        "head_dim": 48,
+        "n_instances": 5,
+        "eligible": true,
+        "flash_path": "ours",
+        "full_us": 466.82,
+        "attn_gflop": 0.81,
+        "flash_us": 102.64,
+        "flash_tops": 7.8,
+        "flash_pct_peak": 2.6,
+        "qkv_quantize_us": 61.85,
+        "copy_us": 11.0,
+        "kernels": [
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "us": 176.2,
+            "calls": 1.0
+          },
+          {
+            "kernel": "gemm_w4a4_kernel_awq",
+            "us": 115.81,
+            "calls": 2.0
+          },
+          {
+            "kernel": "flash_attn_int4_mma_kernel",
+            "us": 102.64,
+            "calls": 1.0
+          },
+          {
+            "kernel": "aq_qtok_packed_static_qk_vec2_kernel",
+            "us": 35.19,
+            "calls": 1.0
+          },
+          {
+            "kernel": "aq_vquant_trans_packed_tiled_vec2_kernel",
+            "us": 26.66,
+            "calls": 1.0
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "us": 7.27,
+            "calls": 2.0
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "us": 3.73,
+            "calls": 1.0
+          }
+        ]
+      },
+      {
+        "C": 768,
+        "H": 4,
+        "W": 4,
+        "T": 16,
+        "num_heads": 8,
+        "head_dim": 96,
+        "n_instances": 5,
+        "eligible": false,
+        "flash_path": "pytorch",
+        "full_us": 195.36,
+        "attn_gflop": 0.1,
+        "flash_us": 41.79,
+        "flash_tops": 2.4,
+        "flash_pct_peak": 3.2,
+        "qkv_quantize_us": 0,
+        "copy_us": 12.8,
+        "kernels": [
+          {
+            "kernel": "gemm_w4a4_kernel_awq",
+            "us": 73.88,
+            "calls": 2.0
+          },
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "us": 52.59,
+            "calls": 1.0
+          },
+          {
+            "kernel": "pytorch_flash::flash_fwd_kernel",
+            "us": 41.79,
+            "calls": 1.0
+          },
+          {
+            "kernel": "quant_attn_out_int4_pack_kernel",
+            "us": 13.05,
+            "calls": 1.0
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "us": 12.8,
+            "calls": 1.0
+          }
+        ]
+      },
+      {
+        "C": 768,
+        "H": 2,
+        "W": 2,
+        "T": 4,
+        "num_heads": 8,
+        "head_dim": 96,
+        "n_instances": 1,
+        "eligible": false,
+        "flash_path": "pytorch",
+        "full_us": 162.66,
+        "attn_gflop": 0.01,
+        "flash_us": 38.17,
+        "flash_tops": 0.2,
+        "flash_pct_peak": 0.2,
+        "qkv_quantize_us": 0,
+        "copy_us": 3.51,
+        "kernels": [
+          {
+            "kernel": "gemm_w4a4_kernel_awq",
+            "us": 40.64,
+            "calls": 2.0
+          },
+          {
+            "kernel": "pytorch_flash::flash_fwd_kernel",
+            "us": 38.17,
+            "calls": 1.0
+          },
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "us": 12.59,
+            "calls": 1.0
+          },
+          {
+            "kernel": "quant_attn_out_int4_pack_kernel",
+            "us": 4.33,
+            "calls": 1.0
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "us": 3.51,
+            "calls": 1.0
+          }
+        ]
+      }
+    ]
+  }
+}
