@@ -374,7 +374,10 @@ class BenchmarkRunner:
             # intrinsically calibration-gated, so full-dynamic pays fp32-GN + separate quantize.)
             if not _sv and os.environ.get("MODIFF_CONVLIN_STATIC") != "1":
                 self.calibration_path = None             # -> conv/linear stay uncalibrated (dynamic)
-            if mode == "fp16":                           # both fp16 modes share the materialized path
+            if mode == "fp16":
+                # The static-vs-dynamic softmax study needs the materialized path (both fp16
+                # modes must share one code path and differ only in the softmax), so it is
+                # still enabled HERE, inside the static_/dynamic_ branch only.
                 os.environ["MODIFF_FP16_MATERIALIZED"] = "1"
                 if _sv:
                     os.environ["MODIFF_STATIC_SOFTMAX"] = "1"

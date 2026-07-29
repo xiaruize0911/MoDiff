@@ -1,0 +1,686 @@
+{
+  "batch": 128,
+  "modes": {
+    "fp16": [
+      {
+        "mode": "fp16",
+        "C": 192,
+        "H": 32,
+        "W": 32,
+        "T": 1024,
+        "num_heads": 8,
+        "head_dim": 24,
+        "n_instances": 5,
+        "full_us": 3130.82,
+        "gflop_qkv": 28.99,
+        "gflop_attn": 103.08,
+        "gflop_proj": 9.66,
+        "kernels": [
+          {
+            "kernel": "pytorch_flash::flash_fwd_kernel",
+            "us": 1832.64,
+            "calls": 1.0
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionFusionPerSample",
+            "us": 631.59,
+            "calls": 1.0
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "us": 266.21,
+            "calls": 1.0
+          },
+          {
+            "kernel": "ampere_fp16_s1688gemm_fp16_128x128_ldg8_relu_f2f_tn",
+            "us": 194.08,
+            "calls": 1.0
+          },
+          {
+            "kernel": "gn_accum_kernel",
+            "us": 108.53,
+            "calls": 1.0
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "us": 3.49,
+            "calls": 2.0
+          },
+          {
+            "kernel": "gn_finalize_kernel",
+            "us": 2.73,
+            "calls": 1.0
+          }
+        ],
+        "gflop_total": 141.73,
+        "achieved_tflops": 45.27
+      },
+      {
+        "mode": "fp16",
+        "C": 384,
+        "H": 16,
+        "W": 16,
+        "T": 256,
+        "num_heads": 8,
+        "head_dim": 48,
+        "n_instances": 5,
+        "full_us": 1072.61,
+        "gflop_qkv": 28.99,
+        "gflop_attn": 12.88,
+        "gflop_proj": 9.66,
+        "kernels": [
+          {
+            "kernel": "ImplicitGemmConvolutionFusionPerSample",
+            "us": 449.14,
+            "calls": 1.0
+          },
+          {
+            "kernel": "pytorch_flash::flash_fwd_kernel",
+            "us": 296.19,
+            "calls": 1.0
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "us": 134.82,
+            "calls": 1.0
+          },
+          {
+            "kernel": "cutlass::Kernel2",
+            "us": 126.64,
+            "calls": 1.0
+          },
+          {
+            "kernel": "gn_accum_kernel",
+            "us": 66.39,
+            "calls": 1.0
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "us": 3.6,
+            "calls": 2.0
+          },
+          {
+            "kernel": "gn_finalize_kernel",
+            "us": 3.37,
+            "calls": 1.0
+          }
+        ],
+        "gflop_total": 51.53,
+        "achieved_tflops": 48.04
+      },
+      {
+        "mode": "fp16",
+        "C": 384,
+        "H": 8,
+        "W": 8,
+        "T": 64,
+        "num_heads": 8,
+        "head_dim": 48,
+        "n_instances": 5,
+        "full_us": 413.79,
+        "gflop_qkv": 7.25,
+        "gflop_attn": 0.81,
+        "gflop_proj": 2.42,
+        "kernels": [
+          {
+            "kernel": "group_norm_silu_nhwc_kernel",
+            "us": 168.2,
+            "calls": 1.0
+          },
+          {
+            "kernel": "ampere_fp16_s1688gemm_fp16_128x128_ldg8_relu_f2f_tn",
+            "us": 83.0,
+            "calls": 1.0
+          },
+          {
+            "kernel": "pytorch_flash::flash_fwd_kernel",
+            "us": 75.01,
+            "calls": 1.0
+          },
+          {
+            "kernel": "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize96x128",
+            "us": 56.91,
+            "calls": 1.0
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "us": 32.22,
+            "calls": 1.0
+          }
+        ],
+        "gflop_total": 10.48,
+        "achieved_tflops": 25.33
+      },
+      {
+        "mode": "fp16",
+        "C": 768,
+        "H": 4,
+        "W": 4,
+        "T": 16,
+        "num_heads": 8,
+        "head_dim": 96,
+        "n_instances": 5,
+        "full_us": 216.03,
+        "gflop_qkv": 7.25,
+        "gflop_attn": 0.1,
+        "gflop_proj": 2.42,
+        "kernels": [
+          {
+            "kernel": "ampere_fp16_s16816gemm_fp16_256x128_ldg8_relu_f2f_st",
+            "us": 77.21,
+            "calls": 1.0
+          },
+          {
+            "kernel": "group_norm_silu_nhwc_kernel",
+            "us": 52.74,
+            "calls": 1.0
+          },
+          {
+            "kernel": "pytorch_flash::flash_fwd_kernel",
+            "us": 44.31,
+            "calls": 1.0
+          },
+          {
+            "kernel": "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize160x12",
+            "us": 26.85,
+            "calls": 1.0
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "us": 13.64,
+            "calls": 1.0
+          }
+        ],
+        "gflop_total": 9.77,
+        "achieved_tflops": 45.22
+      },
+      {
+        "mode": "fp16",
+        "C": 768,
+        "H": 2,
+        "W": 2,
+        "T": 4,
+        "num_heads": 8,
+        "head_dim": 96,
+        "n_instances": 1,
+        "full_us": 198.43,
+        "gflop_qkv": 1.81,
+        "gflop_attn": 0.01,
+        "gflop_proj": 0.6,
+        "kernels": [
+          {
+            "kernel": "pytorch_flash::flash_fwd_kernel",
+            "us": 39.83,
+            "calls": 1.0
+          },
+          {
+            "kernel": "cutlass::Kernel2",
+            "us": 22.04,
+            "calls": 1.0
+          },
+          {
+            "kernel": "group_norm_silu_nhwc_kernel",
+            "us": 12.61,
+            "calls": 1.0
+          },
+          {
+            "kernel": "ampere_fp16_s16816gemm_fp16_128x64_ldg8_relu_f2f_sta",
+            "us": 12.47,
+            "calls": 1.0
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "us": 4.8,
+            "calls": 1.0
+          }
+        ],
+        "gflop_total": 2.42,
+        "achieved_tflops": 12.2
+      }
+    ],
+    "int8_baseline": [
+      {
+        "mode": "int8_baseline",
+        "C": 192,
+        "H": 32,
+        "W": 32,
+        "T": 1024,
+        "num_heads": 8,
+        "head_dim": 24,
+        "n_instances": 5,
+        "full_us": 3623.81,
+        "gflop_qkv": 28.99,
+        "gflop_attn": 103.08,
+        "gflop_proj": 9.66,
+        "kernels": [
+          {
+            "kernel": "pytorch_flash::flash_fwd_kernel",
+            "us": 1907.76,
+            "calls": 1.0
+          },
+          {
+            "kernel": "gemm_w8a8_kernel_awq",
+            "us": 774.95,
+            "calls": 2.0
+          },
+          {
+            "kernel": "group_norm_silu_quantize_nhwc_vec2_kernel",
+            "us": 483.61,
+            "calls": 1.0
+          },
+          {
+            "kernel": "quant_attn_out_int8_kernel",
+            "us": 293.78,
+            "calls": 1.0
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "us": 200.1,
+            "calls": 1.0
+          }
+        ],
+        "gflop_total": 141.73,
+        "achieved_tflops": 39.11
+      },
+      {
+        "mode": "int8_baseline",
+        "C": 384,
+        "H": 16,
+        "W": 16,
+        "T": 256,
+        "num_heads": 8,
+        "head_dim": 48,
+        "n_instances": 5,
+        "full_us": 1234.05,
+        "gflop_qkv": 28.99,
+        "gflop_attn": 12.88,
+        "gflop_proj": 9.66,
+        "kernels": [
+          {
+            "kernel": "gemm_w8a8_kernel_awq",
+            "us": 440.86,
+            "calls": 2.0
+          },
+          {
+            "kernel": "pytorch_flash::flash_fwd_kernel",
+            "us": 293.66,
+            "calls": 1.0
+          },
+          {
+            "kernel": "group_norm_silu_quantize_nhwc_vec2_kernel",
+            "us": 278.79,
+            "calls": 1.0
+          },
+          {
+            "kernel": "quant_attn_out_int8_kernel",
+            "us": 137.18,
+            "calls": 1.0
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "us": 98.19,
+            "calls": 1.0
+          }
+        ],
+        "gflop_total": 51.53,
+        "achieved_tflops": 41.76
+      },
+      {
+        "mode": "int8_baseline",
+        "C": 384,
+        "H": 8,
+        "W": 8,
+        "T": 64,
+        "num_heads": 8,
+        "head_dim": 48,
+        "n_instances": 5,
+        "full_us": 439.52,
+        "gflop_qkv": 7.25,
+        "gflop_attn": 0.81,
+        "gflop_proj": 2.42,
+        "kernels": [
+          {
+            "kernel": "group_norm_silu_quantize_nhwc_vec2_kernel",
+            "us": 167.03,
+            "calls": 1.0
+          },
+          {
+            "kernel": "gemm_w8a8_kernel_awq",
+            "us": 142.52,
+            "calls": 2.0
+          },
+          {
+            "kernel": "pytorch_flash::flash_fwd_kernel",
+            "us": 73.71,
+            "calls": 1.0
+          },
+          {
+            "kernel": "quant_attn_out_int8_kernel",
+            "us": 35.02,
+            "calls": 1.0
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "us": 25.43,
+            "calls": 1.0
+          }
+        ],
+        "gflop_total": 10.48,
+        "achieved_tflops": 23.84
+      },
+      {
+        "mode": "int8_baseline",
+        "C": 768,
+        "H": 4,
+        "W": 4,
+        "T": 16,
+        "num_heads": 8,
+        "head_dim": 96,
+        "n_instances": 5,
+        "full_us": 228.8,
+        "gflop_qkv": 7.25,
+        "gflop_attn": 0.1,
+        "gflop_proj": 2.42,
+        "kernels": [
+          {
+            "kernel": "gemm_w8a8_kernel_awq",
+            "us": 104.49,
+            "calls": 2.0
+          },
+          {
+            "kernel": "group_norm_silu_quantize_nhwc_vec2_kernel",
+            "us": 51.64,
+            "calls": 1.0
+          },
+          {
+            "kernel": "pytorch_flash::flash_fwd_kernel",
+            "us": 42.27,
+            "calls": 1.0
+          },
+          {
+            "kernel": "quant_attn_out_int8_kernel",
+            "us": 17.45,
+            "calls": 1.0
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "us": 12.86,
+            "calls": 1.0
+          }
+        ],
+        "gflop_total": 9.77,
+        "achieved_tflops": 42.7
+      },
+      {
+        "mode": "int8_baseline",
+        "C": 768,
+        "H": 2,
+        "W": 2,
+        "T": 4,
+        "num_heads": 8,
+        "head_dim": 96,
+        "n_instances": 1,
+        "full_us": 170.14,
+        "gflop_qkv": 1.81,
+        "gflop_attn": 0.01,
+        "gflop_proj": 0.6,
+        "kernels": [
+          {
+            "kernel": "gemm_w8a8_kernel_awq",
+            "us": 57.19,
+            "calls": 2.0
+          },
+          {
+            "kernel": "pytorch_flash::flash_fwd_kernel",
+            "us": 38.52,
+            "calls": 1.0
+          },
+          {
+            "kernel": "group_norm_silu_quantize_nhwc_vec2_kernel",
+            "us": 12.96,
+            "calls": 1.0
+          },
+          {
+            "kernel": "quant_attn_out_int8_kernel",
+            "us": 5.28,
+            "calls": 1.0
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "us": 3.64,
+            "calls": 1.0
+          }
+        ],
+        "gflop_total": 2.42,
+        "achieved_tflops": 14.22
+      }
+    ],
+    "int4_baseline": [
+      {
+        "mode": "int4_baseline",
+        "C": 192,
+        "H": 32,
+        "W": 32,
+        "T": 1024,
+        "num_heads": 8,
+        "head_dim": 24,
+        "n_instances": 5,
+        "full_us": 3964.99,
+        "gflop_qkv": 28.99,
+        "gflop_attn": 103.08,
+        "gflop_proj": 9.66,
+        "kernels": [
+          {
+            "kernel": "pytorch_flash::flash_fwd_kernel",
+            "us": 1907.31,
+            "calls": 1.0
+          },
+          {
+            "kernel": "gemm_w4a4_kernel_awq",
+            "us": 711.16,
+            "calls": 2.0
+          },
+          {
+            "kernel": "group_norm_silu_nhwc_kernel",
+            "us": 526.98,
+            "calls": 1.0
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "us": 389.04,
+            "calls": 2.0
+          },
+          {
+            "kernel": "quant_attn_out_int4_pack_kernel",
+            "us": 240.5,
+            "calls": 1.0
+          },
+          {
+            "kernel": "quant_act_int4_pack_kernel",
+            "us": 151.11,
+            "calls": 1.0
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "us": 116.33,
+            "calls": 1.0
+          }
+        ],
+        "gflop_total": 141.73,
+        "achieved_tflops": 35.75
+      },
+      {
+        "mode": "int4_baseline",
+        "C": 384,
+        "H": 16,
+        "W": 16,
+        "T": 256,
+        "num_heads": 8,
+        "head_dim": 48,
+        "n_instances": 5,
+        "full_us": 1109.38,
+        "gflop_qkv": 28.99,
+        "gflop_attn": 12.88,
+        "gflop_proj": 9.66,
+        "kernels": [
+          {
+            "kernel": "gemm_w4a4_kernel_awq",
+            "us": 351.8,
+            "calls": 2.0
+          },
+          {
+            "kernel": "pytorch_flash::flash_fwd_kernel",
+            "us": 294.29,
+            "calls": 1.0
+          },
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "us": 281.11,
+            "calls": 1.0
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "us": 98.37,
+            "calls": 1.0
+          },
+          {
+            "kernel": "quant_attn_out_int4_pack_kernel",
+            "us": 95.79,
+            "calls": 1.0
+          }
+        ],
+        "gflop_total": 51.53,
+        "achieved_tflops": 46.45
+      },
+      {
+        "mode": "int4_baseline",
+        "C": 384,
+        "H": 8,
+        "W": 8,
+        "T": 64,
+        "num_heads": 8,
+        "head_dim": 48,
+        "n_instances": 5,
+        "full_us": 414.75,
+        "gflop_qkv": 7.25,
+        "gflop_attn": 0.81,
+        "gflop_proj": 2.42,
+        "kernels": [
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "us": 177.89,
+            "calls": 1.0
+          },
+          {
+            "kernel": "gemm_w4a4_kernel_awq",
+            "us": 113.47,
+            "calls": 2.0
+          },
+          {
+            "kernel": "pytorch_flash::flash_fwd_kernel",
+            "us": 75.43,
+            "calls": 1.0
+          },
+          {
+            "kernel": "quant_attn_out_int4_pack_kernel",
+            "us": 25.54,
+            "calls": 1.0
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "us": 25.53,
+            "calls": 1.0
+          }
+        ],
+        "gflop_total": 10.48,
+        "achieved_tflops": 25.27
+      },
+      {
+        "mode": "int4_baseline",
+        "C": 768,
+        "H": 4,
+        "W": 4,
+        "T": 16,
+        "num_heads": 8,
+        "head_dim": 96,
+        "n_instances": 5,
+        "full_us": 196.96,
+        "gflop_qkv": 7.25,
+        "gflop_attn": 0.1,
+        "gflop_proj": 2.42,
+        "kernels": [
+          {
+            "kernel": "gemm_w4a4_kernel_awq",
+            "us": 75.04,
+            "calls": 2.0
+          },
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "us": 52.97,
+            "calls": 1.0
+          },
+          {
+            "kernel": "pytorch_flash::flash_fwd_kernel",
+            "us": 41.91,
+            "calls": 1.0
+          },
+          {
+            "kernel": "quant_attn_out_int4_pack_kernel",
+            "us": 13.23,
+            "calls": 1.0
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "us": 12.96,
+            "calls": 1.0
+          }
+        ],
+        "gflop_total": 9.77,
+        "achieved_tflops": 49.6
+      },
+      {
+        "mode": "int4_baseline",
+        "C": 768,
+        "H": 2,
+        "W": 2,
+        "T": 4,
+        "num_heads": 8,
+        "head_dim": 96,
+        "n_instances": 1,
+        "full_us": 160.77,
+        "gflop_qkv": 1.81,
+        "gflop_attn": 0.01,
+        "gflop_proj": 0.6,
+        "kernels": [
+          {
+            "kernel": "gemm_w4a4_kernel_awq",
+            "us": 41.21,
+            "calls": 2.0
+          },
+          {
+            "kernel": "pytorch_flash::flash_fwd_kernel",
+            "us": 38.6,
+            "calls": 1.0
+          },
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "us": 13.07,
+            "calls": 1.0
+          },
+          {
+            "kernel": "quant_attn_out_int4_pack_kernel",
+            "us": 4.38,
+            "calls": 1.0
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "us": 3.67,
+            "calls": 1.0
+          }
+        ],
+        "gflop_total": 2.42,
+        "achieved_tflops": 15.05
+      }
+    ]
+  }
+}

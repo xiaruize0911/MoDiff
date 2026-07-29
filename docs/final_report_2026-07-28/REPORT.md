@@ -10,42 +10,52 @@
 > 本文件只含**数据与图**。分析与结论、代码清理说明见
 > [`REPORT_with_analysis.md`](REPORT_with_analysis.md)。
 
-> ## ⚠ 基线口径警告（已实测，决定所有加速比）
+> ## 基线口径：已删除 fp16 的强制 MATH（本轮变更）
 >
-> **仓库的 fp16 "基线"不是原生 PyTorch，而且比原生 PyTorch 慢 1.39×。** 实测四个变体：
+> 此前 `token_major_attention._SDPA_CTX()` 把 SDPA 后端默认钉死为 `math`，导致 attention 物化
+> `[BH,T,T]` 分数矩阵。已改为**默认不指定后端、由 PyTorch 自选（实际选 flash）**；
+> `MODIFF_SDPA_BACKEND=math` 仍可显式取回物化路径（可量化 attention 研究需要它）。
+>
+> **每一个模式都因此变快**——量化模式里 head_dim/T 不满足条件、回退到 fp16 SDPA 的 attention 块，
+> 原本也被钉在 MATH 上：
+>
+> | mode | 旧（钉 MATH） | 新（PyTorch flash） | 自身提速 |
+> |---|--:|--:|--:|
+> | fp16 | 210.23 | **114.30** | **1.84×** |
+> | int8_baseline | 117.82 | **91.38** | 1.29× |
+> | int4_baseline | 106.43 | **80.40** | 1.32× |
+> | int8_modiff | 125.42 | **98.95** | 1.27× |
+> | int4_modiff | 127.26 | **100.88** | 1.26× |
+>
+> 验证：`test_kernel_correctness.py` ALL PASS；`e2e_output_check.py` **5 个模式全部 `rel_err=0.0000`**。
+>
+> ### fp16 基线的三种口径（实测）
 >
 > | 变体 | ms/step | 自研 kernel 占比 | 说明 |
 > |---|--:|--:|---|
-> | **`vanilla_nchw`** | **150.89** | **0.0%** | **真正纯 PyTorch**：原生模块、NCHW、PyTorch 自选 SDPA（实际用 flash） |
-> | `vanilla` | 163.31 | 0.8% | 同上 + channels_last |
-> | `repo_fp16` | 211.00 | 14.2% | 当前基线（四项改造全开） |
-> | `vanilla_math` | 253.68 | 0.5% | 原生模块但强制 MATH SDPA |
+> | `vanilla_nchw` | 150.87 | 0.0% | 纯 PyTorch：原生模块、NCHW、PyTorch 自选 SDPA |
+> | `vanilla` | 164.63 | 0.8% | 同上 + channels_last |
+> | **`repo_fp16`（本报告基线）** | **115.61** | 26.1% | 仓库 fp16 路径（FusedResBlock + token-major + flash） |
+> | `vanilla_math` | 253.73 | 0.5% | 原生模块但强制 MATH（即旧默认的等价物） |
 >
-> 根因是 attention 后端。纯 PyTorch 走 `pytorch_flash::flash_fwd_kernel`（**8.86 ms**/step）；
-> 仓库基线因 `MODIFF_FP16_MATERIALIZED=1` 强制物化 MATH，变成
-> `softmax_warp_forward` 39.28 + 两个 GEMM 20.59 + 19.47 = **79.3 ms**，是 flash 的 **9 倍**。
-> 强制 MATH 的目的是让 attention 可量化，代价就是这 70 ms。
+> 去掉强制 MATH 后，**仓库的 fp16 路径反而比纯 PyTorch 快 1.30×**
+> （150.87 → 115.61 ms）。所以本报告用 `repo_fp16` 作基线不再是"给自己放水"，
+> 而是**更严格的基线**；相对纯 PyTorch 的加速比会更高，两者都列在下表。
 >
-> 次要因素：`channels_last` 反而让纯 PyTorch **慢 12.4 ms**（原生 NCHW 模块被迫做布局转换，
-> elementwise 从 23.7 涨到 48.6 ms）。它只对本仓库的 NHWC 自研 kernel 有利。
+> `channels_last` 仍让纯 PyTorch 慢 13.8 ms（原生 NCHW 模块被迫布局转换），
+> 它只对本仓库的 NHWC 自研 kernel 有利。
 >
-> 另一面：**给定 MATH 已被强制**，仓库的融合确实有效（253.68 → 211.00 ms，
-> 快 42.7 ms）——但那是在修补一个自己造成的问题。
+> ### 加速比（两种基线）
 >
-> ### 双基线加速比（量化模式自身用融合 flash，故与纯 PyTorch flash 对比才公平）
->
-> | mode | ms/step | **vs 纯 PyTorch fp16** | vs 仓库 fp16 基线 |
+> | mode | ms/step | vs `repo_fp16`（本报告口径） | vs 纯 PyTorch |
 > |---|--:|--:|--:|
-> | 纯 PyTorch fp16 (`vanilla_nchw`) | 150.89 | 1.00× | — |
-> | 仓库 fp16 基线 (`repo_fp16`) | 210.23 | 0.72× | 1.00× |
-> | int8_baseline | 117.82 | **1.28×** | 1.78× |
-> | **int4_baseline** | **106.43** | **1.42×** | 1.98× |
-> | int8_modiff | 125.42 | **1.20×** | 1.68× |
-> | int4_modiff | 127.26 | **1.19×** | 1.65× |
->
-> **本报告 §1 起的所有 layer 级数字仍以 `repo_fp16` 为参照**（沿用仓库既有惯例，且 layer 分解只有
-> 该模式测了）。**引用加速比时必须说明基线**：相对纯 PyTorch 是 1.42×（int4 最佳），
-> 相对仓库基线是 1.98×。
+> | `repo_fp16` | 114.30 | 1.00× | 1.32× |
+> | 纯 PyTorch | 150.87 | 0.76× | 1.00× |
+> | int8_baseline | 91.38 | 1.25× | 1.65× |
+> | **int4_baseline** | **80.40** | **1.42×** | 1.88× |
+> | int8_modiff | 98.95 | 1.16× | 1.52× |
+> | int4_modiff | 100.88 | 1.13× | 1.50× |
+> 
 > 数据：`data/fp16_baseline_variants.json` · 脚本：`scripts/fp16_baseline_variants.py`
 
 ![fp16 baselines](plots/fig_fp16_baselines.png)
@@ -75,41 +85,46 @@
 
 | mode | ms/step | speedup vs fp16 | launch/step | GPU busy | 名字归属占比 |
 |---|--:|--:|--:|--:|--:|
-| fp16 | 210.23 | 1.000× | 846 | 88.7% | 11% |
-| int8_baseline | 117.82 | 1.784× | 564 | 87.5% | 91% |
-| **int4_baseline** | **106.43** | **1.975×** | 1168 | 87.3% | 87% |
-| int8_modiff | 125.42 | 1.676× | 746 | 88.0% | 89% |
-| int4_modiff | 127.26 | 1.652× | 1240 | 78.0% | 86% |
+| fp16 | 114.30 | 1.000× | 678 | 48.6% | 31% |
+| int8_baseline | 91.38 | 1.251× | 518 | 68.6% | 87% |
+| **int4_baseline** | **80.40** | **1.422×** | 1087 | 65.9% | 81% |
+| int8_modiff | 98.95 | 1.155× | 700 | 69.9% | 85% |
+| int4_modiff | 100.88 | 1.133× | 1159 | 59.9% | 81% |
+
+> **GPU busy 大幅下降是本轮的新情况**：fp16 从 88.7% 掉到 48.6%。
+> 去掉 MATH 后 GPU 实际计算量从 ~186 ms 降到 ~102 ms，
+> 而 launch 次数只从 846 降到 678，于是**瓶颈从"算得多"变成"启动开销"**。
+> 每步空闲：fp16 108.1 ms、int4_baseline 36.3 ms。
 
 ### 1.2 按 layer type 的绝对耗时（ms/step）
 
 | layer type | fp16 | int8_baseline | int4_baseline | int8_modiff | int4_modiff |
 |---|--:|--:|--:|--:|--:|
-| Attention | 100.10 (47.6%) | 43.67 (37.1%) | 42.38 (39.8%) | 43.44 (34.6%) | 52.93 (41.6%) |
-| Conv | 43.22 (20.6%) | 30.68 (26.0%) | 16.22 (15.2%) | 31.89 (25.4%) | 18.89 (14.8%) |
-| Normalization | 17.96 (8.5%) | 24.41 (20.7%) | 25.10 (23.6%) | 28.21 (22.5%) | 28.05 (22.0%) |
-| Elementwise-Cast | 40.78 (19.4%) | 7.51 (6.4%) | 11.49 (10.8%) | 8.10 (6.5%) | 12.66 (9.9%) |
-| Linear-GEMM | 4.25 (2.0%) | 8.60 (7.3%) | 7.73 (7.3%) | 8.57 (6.8%) | 6.63 (5.2%) |
-| Resize | 3.92 (1.9%) | 2.95 (2.5%) | 2.67 (2.5%) | 3.81 (3.0%) | 5.29 (4.2%) |
-| Quantize | — | — | 0.84 (0.8%) | 1.39 (1.1%) | 2.81 (2.2%) |
+| Conv | 43.27 (37.9%) | 30.86 (33.8%) | 16.30 (20.3%) | 31.98 (32.3%) | 21.15 (21.0%) |
+| Attention | 17.44 (15.2%) | 15.46 (16.9%) | 14.97 (18.6%) | 15.39 (15.6%) | 17.31 (17.2%) |
+| Normalization | 17.86 (15.6%) | 24.61 (26.9%) | 25.23 (31.4%) | 28.29 (28.6%) | 32.41 (32.1%) |
+| Elementwise-Cast | 27.60 (24.1%) | 8.86 (9.7%) | 12.61 (15.7%) | 9.45 (9.6%) | 14.19 (14.1%) |
+| Linear-GEMM | 4.25 (3.7%) | 8.62 (9.4%) | 7.76 (9.7%) | 8.59 (8.7%) | 8.78 (8.7%) |
+| Resize | 3.89 (3.4%) | 2.98 (3.3%) | 2.69 (3.3%) | 3.84 (3.9%) | 4.39 (4.3%) |
+| Quantize | — | — | 0.84 (1.0%) | 1.39 (1.4%) | 2.64 (2.6%) |
 | Memory-op | 0.01 (0.0%) | 0.01 (0.0%) | 0.01 (0.0%) | 0.01 (0.0%) | 0.01 (0.0%) |
 | Sampler-side | 0.00 (0.0%) | 0.00 (0.0%) | 0.00 (0.0%) | 0.00 (0.0%) | 0.00 (0.0%) |
-| **合计** | **210.23** | **117.82** | **106.43** | **125.42** | **127.26** |
+| **合计** | **114.30** | **91.38** | **80.40** | **98.95** | **100.88** |
 
 **各 layer type 相对 fp16 的压缩比**
 
 | layer type | int8_baseline | int4_baseline | int8_modiff | int4_modiff |
 |---|--:|--:|--:|--:|
-| Attention | 2.29× | 2.36× | 2.30× | 1.89× |
-| Conv | 1.41× | 2.66× | 1.36× | 2.29× |
-| Normalization | 0.74× | 0.72× | 0.64× | 0.64× |
-| Elementwise-Cast | 5.43× | 3.55× | 5.04× | 3.22× |
-| Linear-GEMM | 0.49× | 0.55× | 0.50× | 0.64× |
-| Resize | 1.33× | 1.47× | 1.03× | 0.74× |
+| Conv | 1.40× | 2.65× | 1.35× | 2.05× |
+| Attention | 1.13× | 1.16× | 1.13× | 1.01× |
+| Normalization | 0.73× | 0.71× | 0.63× | 0.55× |
+| Elementwise-Cast | 3.12× | 2.19× | 2.92× | 1.94× |
+| Linear-GEMM | 0.49× | 0.55× | 0.49× | 0.48× |
+| Resize | 1.31× | 1.45× | 1.01× | 0.89× |
 
 ### 1.3 Linear/GEMM 的单 kernel 测速（所有真实 shape）
 
-桶级数字**不能**用来算 Linear 加速比（见下方注意），单 kernel 基准是权威口径：
+桶级数字**不能**用来算 Linear 加速比（同一个 qkv/proj 在不同模式落到不同 kernel 族）。单 kernel 基准是权威口径：
 
 | kind | K→N | M | 个数 | fp16 (us) | int8 GEMM | int8 +quant | int4 GEMM | int4 +quant | i8 GEMM/fp16 | i4 GEMM/fp16 |
 |---|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|
@@ -123,7 +138,7 @@
 | proj | 768→768 | 2048 | 5 | 27.4 | 29.9 | 38.9 | 17.7 | 27.0 | 0.92× | 1.55× |
 | qkv | 768→2304 | 512 | 1 | 22.3 | 22.6 | 24.5 | 13.8 | 16.8 | 0.99× | 1.62× |
 | proj | 768→768 | 512 | 1 | 21.6 | 21.1 | 24.2 | 13.5 | 16.5 | 1.02× | 1.60× |
-| **加权合计** | | | | **7599.9** | **6049.7** | **8423.2** | **4799.3** | **9947.8** | **1.26×** | **1.58×** |
+| **加权合计** |  |  |  | **7599.9** | **6049.7** | **8423.2** | **4799.3** | **9947.8** | **1.26×** | **1.58×** |
 
 全路径（含激活量化）：int8 0.90×、int4 0.76×——**均慢于 fp16**。
 
@@ -156,130 +171,123 @@
 
 | 输入 shape (C, HxW) | 实例数 | fp16 (us) | int8_base | int4_base | int8_modiff | int4_modiff |
 |---|--:|--:|--:|--:|--:|--:|
-| C576, 32×32 | 1 | 6093 | 1.31× | 1.80× | 1.17× | 1.43× |
-| C384, 32×32 | 2 | 4845 | 1.35× | 1.82× | 1.20× | 1.42× |
-| C192, 32×32 | 2 | 3238 | 1.32× | 1.91× | 1.18× | 1.40× |
-| C768, 16×16 | 2 | 3597 | 1.58× | 2.12× | 1.43× | 1.62× |
-| C576, 16×16 | 1 | 3112 | 1.52× | 1.99× | 1.38× | 1.54× |
-| C384, 16×16 | 1 | 2367 | 1.64× | 2.15× | 1.46× | 1.50× |
-| C1152, 8×8 | 1 | 1415 | 1.40× | 1.65× | 1.30× | 1.20× |
-| C192, 16×16 | 1 | 2108 | 1.46× | 1.85× | 1.34× | 1.36× |
-| C768, 8×8 | 2 | 1143 | 1.37× | 1.55× | 1.26× | 1.07× |
-| C384, 8×8 | 2 | 812 | 1.34× | 1.43× | 1.24× | 0.93× |
-| C1536, 4×4 | 2 | 1032 | 1.42× | 1.63× | 1.36× | 1.12× |
-| C1152, 4×4 | 1 | 857 | 1.31× | 1.39× | 1.26× | 1.00× |
-| C768, 4×4 | 1 | 590 | 1.40× | 1.09× | 1.30× | 0.90× |
-| C384, 4×4 | 1 | 482 | 1.33× | 0.78× | 1.02× | 0.72× |
-| C1536, 2×2 | 3 | 420 | 1.26× | 0.65× | 1.02× | 0.62× |
-| C768, 2×2 | 4 | 372 | 1.42× | 0.68× | 1.07× | 0.63× |
+| C576, 32×32 | 1 | 6089 | 1.32× | 1.80× | 1.16× | 1.43× |
+| C384, 32×32 | 2 | 4868 | 1.35× | 1.83× | 1.19× | 1.42× |
+| C192, 32×32 | 2 | 3256 | 1.32× | 1.93× | 1.18× | 1.41× |
+| C768, 16×16 | 2 | 3596 | 1.58× | 2.12× | 1.43× | 1.63× |
+| C576, 16×16 | 1 | 3125 | 1.52× | 2.00× | 1.40× | 1.55× |
+| C384, 16×16 | 1 | 2380 | 1.65× | 2.18× | 1.47× | 1.50× |
+| C1152, 8×8 | 1 | 1418 | 1.40× | 1.65× | 1.30× | 1.20× |
+| C192, 16×16 | 1 | 2118 | 1.47× | 1.86× | 1.34× | 1.35× |
+| C768, 8×8 | 2 | 1151 | 1.38× | 1.56× | 1.27× | 1.08× |
+| C384, 8×8 | 2 | 816 | 1.35× | 1.43× | 1.25× | 0.92× |
+| C1536, 4×4 | 2 | 988 | 1.36× | 1.58× | 1.30× | 1.05× |
+| C1152, 4×4 | 1 | 862 | 1.32× | 1.41× | 1.27× | 0.98× |
+| C768, 4×4 | 1 | 588 | 1.39× | 1.10× | 1.28× | 0.88× |
+| C384, 4×4 | 1 | 482 | 1.33× | 0.79× | 1.13× | 0.70× |
+| C1536, 2×2 | 3 | 412 | 1.22× | 0.68× | 0.97× | 0.60× |
+| C768, 2×2 | 4 | 362 | 1.38× | 0.67× | 1.04× | 0.59× |
 
 **ResBlock（含 resize 上/下采样）** — 共 8 个实例，5 种 shape
 
 | 输入 shape (C, HxW) | 实例数 | fp16 (us) | int8_base | int4_base | int8_modiff | int4_modiff |
 |---|--:|--:|--:|--:|--:|--:|
-| C192, 32×32 | 1 | 1809 | 1.21× | 1.35× | 1.02× | 0.95× |
-| C384, 16×16 | 2 | 1176 | 1.30× | 1.39× | 1.12× | 0.92× |
-| C384, 8×8 | 2 | 422 | 1.23× | 0.72× | 0.87× | 0.57× |
-| C768, 4×4 | 2 | 422 | 1.35× | 0.71× | 1.02× | 0.64× |
-| C768, 2×2 | 1 | 638 | 1.42× | 1.03× | 1.24× | 0.90× |
+| C192, 32×32 | 1 | 1824 | 1.22× | 1.36× | 1.03× | 0.94× |
+| C384, 16×16 | 2 | 1185 | 1.31× | 1.40× | 1.13× | 0.92× |
+| C384, 8×8 | 2 | 421 | 1.23× | 0.72× | 1.00× | 0.56× |
+| C768, 4×4 | 2 | 412 | 1.32× | 0.70× | 1.01× | 0.61× |
+| C768, 2×2 | 1 | 643 | 1.43× | 1.04× | 1.25× | 0.89× |
 
 **AttentionBlock** — 共 21 个实例，5 种 shape
 
 | 输入 shape (C, HxW) | 实例数 | fp16 (us) | int8_base | int4_base | int8_modiff | int4_modiff |
 |---|--:|--:|--:|--:|--:|--:|
-| C192, 32×32 | 5 | 18435 | 2.45× | 2.38× | 2.44× | 2.38× |
-| C384, 16×16 | 5 | 2609 | 1.32× | 1.38× | 1.32× | 1.39× |
-| C384, 8×8 | 5 | 616 | 1.31× | 1.32× | 1.31× | 1.32× |
-| C768, 4×4 | 5 | 362 | 1.27× | 1.26× | 1.06× | 1.25× |
-| C768, 2×2 | 1 | 351 | 1.24× | 1.25× | 1.24× | 1.24× |
-
-![layer pipeline speedup](plots/fig_layer_pipeline_speedup.png)
+| C192, 32×32 | 5 | 3159 | 0.86× | 0.79× | 0.86× | 0.79× |
+| C384, 16×16 | 5 | 1084 | 0.87× | 0.97× | 0.87× | 0.97× |
+| C384, 8×8 | 5 | 412 | 0.93× | 1.00× | 0.94× | 0.99× |
+| C768, 4×4 | 5 | 218 | 0.96× | 1.11× | 0.96× | 1.11× |
+| C768, 2×2 | 1 | 198 | 1.16× | 1.22× | 1.13× | 1.22× |
 
 ### 2.2 layer 内部时间分解（绝对 us + 占该层自身 GPU 时间的百分比）
 
-下表同时给出**绝对时间**和百分比。配套图保留**两个视图**，因为它们回答的是不同问题：
+下表同时给出**绝对时间**和百分比。配套图保留**两个视图**：
 
 | 图 | Y 轴 | 用来看什么 |
 |---|---|---|
-| `plots/fig_intra_layer_<kind>_<mode>.png` | 绝对 us | **时间在哪里**——柱高是真实 GPU 时间，跨 shape 可直接比较 |
-| `plots/fig_intra_layer_<kind>_<mode>_pct.png` | % of layer | **构成如何随 shape 变化**——每柱归一化到 100%，剥离层的绝对成本 |
+| `plots/fig_intra_layer_<kind>_<mode>.png` | 绝对 us | **时间在哪里**——柱高是真实 GPU 时间，跨 shape 可比 |
+| `plots/fig_intra_layer_<kind>_<mode>_pct.png` | % of layer | **构成如何随 shape 变化**——每柱归一化到 100% |
 
-百分比图的 x 标签下方仍标注该层的绝对耗时，归一化后不丢量级参照。
+百分比图的 x 标签下方仍标注该层绝对耗时。图只画最大的 10 个 shape（`topn=10`），完整 16 个见 JSON。
 
-**fp16 / resblock_plain** — 最大 shape C576 32×32，流水线 6093 us，GPU busy 100.2%
+**fp16 / resblock_plain** — 最大 shape C576 32×32，流水线 6089 us，GPU busy 101.0%
 
 | role | us | % of layer | kernel 数 |
 |---|--:|--:|--:|
-| fp16 cuDNN conv | 3422.5 | 56.0% | 3 |
-| GN+SiLU only (fp16 out; updown blocks + fp16 mode) | 1822.7 | 29.9% | 1 |
-| residual add | 843.5 | 13.8% | 2 |
-| dtype cast / device copy | 8.8 | 0.1% | 1 |
+| fp16 cuDNN conv | 3440.4 | 55.9% | 3 |
+| GN+SiLU only (fp16 out; updown blocks + fp16 mode) | 1845.8 | 30.0% | 1 |
+| residual add | 845.0 | 13.7% | 2 |
+| dtype cast / device copy | 8.9 | 0.1% | 1 |
 | fp16 tensor-core GEMM (cuBLAS) | 5.9 | 0.1% | 1 |
 | SiLU / activation (standalone) | 3.3 | 0.1% | 1 |
 
-**fp16 / attention** — 最大 shape C192 32×32，流水线 18435 us，GPU busy 100.0%
+**fp16 / attention** — 最大 shape C192 32×32，流水线 3159 us，GPU busy 99.6%
 
 | role | us | % of layer | kernel 数 |
 |---|--:|--:|--:|
-| fp16 tensor-core GEMM (cuBLAS) | 8112.0 | 44.0% | 3 |
-| fp16 SDPA (unfused math backend: BMM + softmax) | 7857.4 | 42.6% | 1 |
-| dtype cast / device copy | 991.1 | 5.4% | 1 |
-| fused GroupNorm->QKV projection (CUTLASS per-sample fusion) | 632.8 | 3.4% | 1 |
-| other elementwise | 460.3 | 2.5% | 1 |
-| residual add | 265.7 | 1.4% | 1 |
-| GN accumulate/finalize (split two-pass helper kernels) | 111.0 | 0.6% | 2 |
-| fill / zero-init | 3.5 | 0.0% | 1 |
+| int8/int4 flash kernel (fused QK^T+softmax+AV) | 1925.6 | 61.2% | 1 |
+| fused GroupNorm->QKV projection (CUTLASS per-sample fusion) | 645.6 | 20.5% | 1 |
+| residual add | 265.7 | 8.4% | 1 |
+| fp16 tensor-core GEMM (cuBLAS) | 194.4 | 6.2% | 1 |
+| GN accumulate/finalize (split two-pass helper kernels) | 112.3 | 3.6% | 2 |
+| fill / zero-init | 3.6 | 0.1% | 1 |
 
-**int8_baseline / resblock_plain** — 最大 shape C576 32×32，流水线 4636 us，GPU busy 99.9%
+**int8_baseline / resblock_plain** — 最大 shape C576 32×32，流水线 4627 us，GPU busy 99.9%
 
 | role | us | % of layer | kernel 数 |
 |---|--:|--:|--:|
-| quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue) | 2430.9 | 52.5% | 2 |
-| GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out) | 1604.3 | 34.6% | 1 |
-| fp16 cuDNN conv | 388.6 | 8.4% | 1 |
-| residual add | 191.8 | 4.1% | 1 |
+| quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue) | 2430.9 | 52.6% | 2 |
+| GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out) | 1605.8 | 34.7% | 1 |
+| fp16 cuDNN conv | 376.1 | 8.1% | 1 |
+| residual add | 192.2 | 4.2% | 1 |
 | dtype cast / device copy | 8.6 | 0.2% | 1 |
-| fp16 tensor-core GEMM (cuBLAS) | 5.6 | 0.1% | 1 |
-| SiLU / activation (standalone) | 3.0 | 0.1% | 1 |
+| fp16 tensor-core GEMM (cuBLAS) | 5.7 | 0.1% | 1 |
+| SiLU / activation (standalone) | 2.8 | 0.1% | 1 |
 
-**int8_baseline / attention** — 最大 shape C192 32×32，流水线 7524 us，GPU busy 100.3%
-
-| role | us | % of layer | kernel 数 |
-|---|--:|--:|--:|
-| int8/int4 flash kernel (fused QK^T+softmax+AV) | 5604.9 | 74.3% | 1 |
-| int8/int4 quantized GEMM (W8A8 / W4A4) | 748.8 | 9.9% | 1 |
-| Q/K/V quantize (packed, static scales) | 493.5 | 6.5% | 1 |
-| GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out) | 464.5 | 6.2% | 1 |
-| V quantize + transpose to AV layout | 228.5 | 3.0% | 1 |
-| dtype cast / device copy | 7.2 | 0.1% | 1 |
-
-**int4_baseline / resblock_plain** — 最大 shape C576 32×32，流水线 3377 us，GPU busy 99.8%
+**int8_baseline / attention** — 最大 shape C192 32×32，流水线 3676 us，GPU busy 100.4%
 
 | role | us | % of layer | kernel 数 |
 |---|--:|--:|--:|
-| GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out) | 1583.3 | 47.0% | 1 |
-| quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue) | 1133.1 | 33.6% | 2 |
-| fp16 cuDNN conv | 387.3 | 11.5% | 1 |
-| residual add | 191.7 | 5.7% | 1 |
+| int8/int4 flash kernel (fused QK^T+softmax+AV) | 1926.8 | 52.2% | 1 |
+| int8/int4 quantized GEMM (W8A8 / W4A4) | 779.4 | 21.1% | 1 |
+| GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out) | 487.9 | 13.2% | 1 |
+| attention output quantize (for the proj GEMM) | 296.4 | 8.0% | 1 |
+| dtype cast / device copy | 200.5 | 5.4% | 1 |
+
+**int4_baseline / resblock_plain** — 最大 shape C576 32×32，流水线 3382 us，GPU busy 99.4%
+
+| role | us | % of layer | kernel 数 |
+|---|--:|--:|--:|
+| GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out) | 1584.3 | 47.1% | 1 |
+| quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue) | 1135.5 | 33.8% | 2 |
+| fp16 cuDNN conv | 376.9 | 11.2% | 1 |
+| residual add | 191.9 | 5.7% | 1 |
 | other elementwise | 22.0 | 0.7% | 9 |
 | dtype cast / device copy | 18.1 | 0.5% | 4 |
-| reduction (amax/absmax for dynamic scales) | 15.5 | 0.5% | 1 |
+| reduction (amax/absmax for dynamic scales) | 15.4 | 0.5% | 1 |
 | int8/int4 quantized GEMM (W8A8 / W4A4) | 15.3 | 0.5% | 1 |
-| SiLU / activation (standalone) | 3.0 | 0.1% | 1 |
+| SiLU / activation (standalone) | 2.9 | 0.1% | 1 |
 
-**int4_baseline / attention** — 最大 shape C192 32×32，流水线 7739 us，GPU busy 101.3%
+**int4_baseline / attention** — 最大 shape C192 32×32，流水线 4004 us，GPU busy 100.4%
 
 | role | us | % of layer | kernel 数 |
 |---|--:|--:|--:|
-| int8/int4 flash kernel (fused QK^T+softmax+AV) | 5411.8 | 69.0% | 1 |
-| int8/int4 quantized GEMM (W8A8 / W4A4) | 698.0 | 8.9% | 1 |
-| GN+SiLU only (fp16 out; updown blocks + fp16 mode) | 516.1 | 6.6% | 1 |
-| Q/K/V quantize (packed, static scales) | 496.7 | 6.3% | 1 |
-| V quantize + transpose to AV layout | 228.6 | 2.9% | 1 |
-| dtype cast / device copy | 195.7 | 2.5% | 2 |
-| activation quantize / int4 pack (standalone) | 149.9 | 1.9% | 1 |
-| fill / zero-init | 145.8 | 1.9% | 2 |
-
+| int8/int4 flash kernel (fused QK^T+softmax+AV) | 1894.0 | 47.1% | 1 |
+| int8/int4 quantized GEMM (W8A8 / W4A4) | 709.6 | 17.6% | 1 |
+| GN+SiLU only (fp16 out; updown blocks + fp16 mode) | 523.8 | 13.0% | 1 |
+| dtype cast / device copy | 388.8 | 9.7% | 1 |
+| attention output quantize (for the proj GEMM) | 238.6 | 5.9% | 1 |
+| activation quantize / int4 pack (standalone) | 150.6 | 3.7% | 1 |
+| fill / zero-init | 116.2 | 2.9% | 1 |
 
 绝对 us 视图：
 

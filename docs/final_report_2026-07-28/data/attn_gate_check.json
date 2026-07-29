@@ -1,0 +1,100 @@
+{
+  "int8_baseline|auto": {
+    "ms_step": 80.54,
+    "attn": {
+      "pytorch_flash": {
+        "ms_step": 11.231,
+        "calls_per_step": 20.0
+      },
+      "our_attn_out_quantize": {
+        "ms_step": 2.338,
+        "calls_per_step": 20.0
+      },
+      "ours_int_flash": {
+        "ms_step": 0.173,
+        "calls_per_step": 1.0
+      }
+    }
+  },
+  "int8_baseline|on": {
+    "ms_step": 105.06,
+    "attn": {
+      "our_qkv_quantize": {
+        "ms_step": 4.9,
+        "calls_per_step": 20.0
+      },
+      "ours_int_flash": {
+        "ms_step": 33.887,
+        "calls_per_step": 15.0
+      },
+      "pytorch_flash": {
+        "ms_step": 0.271,
+        "calls_per_step": 6.0
+      },
+      "our_attn_out_quantize": {
+        "ms_step": 0.099,
+        "calls_per_step": 6.0
+      }
+    }
+  },
+  "int8_baseline|off": {
+    "ms_step": 81.83,
+    "attn": {
+      "pytorch_flash": {
+        "ms_step": 11.433,
+        "calls_per_step": 21.0
+      },
+      "our_attn_out_quantize": {
+        "ms_step": 2.414,
+        "calls_per_step": 21.0
+      }
+    }
+  },
+  "int4_baseline|auto": {
+    "ms_step": 72.0,
+    "attn": {
+      "pytorch_flash": {
+        "ms_step": 11.375,
+        "calls_per_step": 21.0
+      },
+      "our_attn_out_quantize": {
+        "ms_step": 1.841,
+        "calls_per_step": 21.0
+      }
+    }
+  },
+  "int4_baseline|on": {
+    "ms_step": 95.15,
+    "attn": {
+      "our_qkv_quantize": {
+        "ms_step": 5.014,
+        "calls_per_step": 30.0
+      },
+      "ours_int_flash": {
+        "ms_step": 32.304,
+        "calls_per_step": 15.0
+      },
+      "pytorch_flash": {
+        "ms_step": 0.27,
+        "calls_per_step": 6.0
+      },
+      "our_attn_out_quantize": {
+        "ms_step": 0.076,
+        "calls_per_step": 6.0
+      }
+    }
+  },
+  "int4_baseline|off": {
+    "ms_step": 72.0,
+    "attn": {
+      "pytorch_flash": {
+        "ms_step": 11.388,
+        "calls_per_step": 21.0
+      },
+      "our_attn_out_quantize": {
+        "ms_step": 1.841,
+        "calls_per_step": 21.0
+      }
+    }
+  }
+}

@@ -473,9 +473,97 @@ def fig_fp16_baselines(bv, tree):
     print("wrote fig_fp16_baselines.png")
 
 
+def fig_attn_stages(sp):
+    """Per-AttentionBlock kernel composition in absolute us, all shapes x 3 modes.
+
+    Absolute (not %) so bar heights compare across shapes -- the C192/32x32 block is ~20x
+    the cost of C768/2x2 and a normalized view would hide that.
+    """
+    if not sp:
+        return
+    import matplotlib.colors as mcolors
+    modes = [m for m in ("fp16", "int8_baseline", "int4_baseline") if m in sp["modes"]]
+    # stable color per kernel family across all panels
+    FAM = [("pytorch_flash", "PyTorch flash SDPA (S4)", "#E24B4A"),
+           ("ImplicitGemmConvolutionFusionPerSample", "fused GN->qkv (S1+S2)", "#1D9E75"),
+           ("group_norm_silu_quantize", "GN+quantize fused (S1+S2q)", "#1D9E75"),
+           ("group_norm_silu_nhwc", "GN only (S1, unfused)", "#7FCBB0"),
+           ("gemm_w8a8", "int GEMM qkv+proj (S2/S5)", "#378ADD"),
+           ("gemm_w4a4", "int GEMM qkv+proj (S2/S5)", "#378ADD"),
+           ("ampere_fp16", "fp16 GEMM (S2/S5)", "#7FB3E8"),
+           ("cutlass::Kernel2", "fp16 GEMM (S2/S5)", "#7FB3E8"),
+           ("sm80_xmma_gemm", "fp16 GEMM (S2/S5)", "#7FB3E8"),
+           ("quant_attn_out", "transpose+quantize (S5 prep)", "#BA7517"),
+           ("quant_act_int4_pack", "standalone int4 pack (unfused)", "#E8A33D"),
+           ("gn_accum", "GN stats helper", "#A8DCC8"),
+           ("gn_finalize", "GN stats helper", "#A8DCC8"),
+           ("elementwise", "elementwise / residual (S6)", "#B0ADA5"),
+    ]
+
+    def fam(name):
+        for pat, label, col in FAM:
+            if pat in name:
+                return label, col
+        return "other", "#D3D1C7"
+
+    fig, axes = plt.subplots(1, len(modes), figsize=(6.0 * len(modes), 6.0), squeeze=False)
+    seen = {}
+    for ax, mode in zip(axes[0], modes):
+        rows = sp["modes"][mode]
+        x = np.arange(len(rows))
+        bottom = np.zeros(len(rows))
+        # accumulate per family so one family = one stacked segment
+        per_row = []
+        for r in rows:
+            acc = {}
+            for k in r["kernels"]:
+                lab, col = fam(k["kernel"])
+                a = acc.setdefault(lab, [0.0, col])
+                a[0] += k["us"]
+            per_row.append(acc)
+        labels_order = []
+        for _, lab, _c in FAM:
+            if lab not in labels_order and any(lab in pr for pr in per_row):
+                labels_order.append(lab)
+        for lab in labels_order:
+            vals = np.array([pr.get(lab, [0.0, "#000"])[0] for pr in per_row])
+            col = next(pr[lab][1] for pr in per_row if lab in pr)
+            h = ax.bar(x, vals, bottom=bottom, width=0.66, color=col,
+                       label=lab if lab not in seen else None)
+            seen[lab] = True
+            for i, (v, b) in enumerate(zip(vals, bottom)):
+                if v >= max(1.0, 0.045 * float((bottom + vals).max())):
+                    ax.text(i, b + v / 2, f"{v:.0f}", ha="center", va="center",
+                            fontsize=7, color="white", fontweight="bold")
+            bottom += vals
+        for i, (r, tot) in enumerate(zip(rows, bottom)):
+            ax.text(i, tot + tot.max() * 0.01 if hasattr(tot, "max") else tot + 20,
+                    f"{r['full_us']:.0f}us", ha="center", fontsize=8, fontweight="bold")
+        ax.set_xticks(x)
+        ax.set_xticklabels([f"C{r['C']}\n{r['H']}x{r['W']}\nT={r['T']}\nx{r['n_instances']}"
+                            for r in rows], fontsize=7.5)
+        ax.set_ylabel("us per block call" if mode == modes[0] else "")
+        ax.set_title(f"{mode}", fontsize=11)
+        ax.spines[["top", "right"]].set_visible(False)
+    fig.suptitle(f"AttentionBlock: per-kernel time inside one block, every real shape "
+                 f"(b{sp['batch']}, absolute us)", fontsize=12)
+    handles, labs = [], []
+    for a in axes[0]:
+        for h, l in zip(*a.get_legend_handles_labels()):
+            if l not in labs:
+                handles.append(h); labs.append(l)
+    fig.legend(handles, labs, frameon=False, loc="lower center", ncol=4, fontsize=8.5,
+               bbox_to_anchor=(0.5, -0.05))
+    fig.tight_layout(rect=(0, 0.04, 1, 0.96))
+    fig.savefig(f"{HERE}/plots/fig_attn_stages.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print("wrote fig_attn_stages.png")
+
+
 if __name__ == "__main__":
     main_e2e()
     main_layers()
     _t = load_tree()[0]
     fig_icicle_all(_t)
     fig_fp16_baselines(load("fp16_baseline_variants.json"), _t)
+    fig_attn_stages(load("attn_stage_profile.json"))

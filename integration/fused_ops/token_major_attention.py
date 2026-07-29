@@ -14,10 +14,13 @@ token-major ([N, T, C]) makes copies (1) and (3)'s reshapes free views of the
 channels_last memory, and feeds SDPA strided views without `.contiguous()`.
 Only the post-attention transpose (SDPA output [N,H,T,hd] -> [N,T,C]) remains.
 
-Attention uses the **materialized MATH SDPA backend** (see `_SDPA_CTX`): the
-[BH,T,T] scores are computed in fp16 and are the quantizable-attention baseline
-the int8/int4 quantized paths are measured against. (Fused int8/int4 flash kernels
-exist in csrc but are intentionally NOT wired into this pipeline.)
+Attention lets **PyTorch choose the SDPA backend** (see `_SDPA_CTX`), which in practice
+selects the fused flash kernel. It used to pin MATH -- materializing the [BH,T,T] scores --
+which cost 79.3 ms/step against flash's 8.9 ms at b128 and, because fp16 is the baseline
+every quantized speedup is divided by, inflated all of those ratios. Set
+MODIFF_SDPA_BACKEND=math to get the materialized scores back (the quantizable-attention
+study needs them). (Fused int8/int4 flash kernels exist in csrc but are NOT wired into this
+fp16 pipeline.)
 
 Weights are copied bit-for-bit from the Conv1d layers, so the result is
 numerically identical up to GroupNorm-kernel / SDPA rounding (~1e-3 e2e).
@@ -31,15 +34,21 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# The fp16 attention SDPA backend: MATH (default) is the materialized, quantizable-
-# attention baseline. EXPERIMENTAL: MODIFF_SDPA_BACKEND=flash|efficient switches to
-# PyTorch's fused kernels -- measured on A40 (b128, real per-level shapes) 1.9-9.2x
-# faster than MATH (dominated by hd24/T1024 = L0's 9.2x) at ~4e-4 rel-L2 vs MATH,
-# an order of magnitude below the ~4e-3 rel-L2 the int8 quantized path already adds.
-# Not yet the default: MATH is the reference every quantized-mode accuracy number in
-# this repo has been measured against, so flipping the default would shift that
-# baseline (by ~4e-4, likely immaterial, but unverified end-to-end -- see
-# docs/benchmark_flash_packed_2026-07-27 for the isolated-op numbers this is based on).
+# The fp16 attention SDPA backend. DEFAULT: unpinned -- PyTorch picks, which is flash.
+# MODIFF_SDPA_BACKEND=math|flash|efficient forces a specific one.
+#
+# This default was flipped from MATH after measuring what MATH cost as a baseline. Isolated
+# ops had already shown flash 1.9-9.2x faster than MATH on this model's shapes (dominated by
+# hd24/T1024 = L0's 9.2x) at ~4e-4 rel-L2 -- an order of magnitude below the ~4e-3 rel-L2 the
+# int8 path already adds. End-to-end at b128 the gap is 79.3 ms/step (MATH: softmax 39.3 +
+# bmm 20.6 + bmm 19.5) vs 8.9 ms/step (flash). Because fp16 is the denominator of every
+# quantized speedup in this project, pinning MATH made the fp16 baseline 1.39x slower than
+# plain PyTorch and inflated every published ratio (int4 read 1.98x; against unpinned
+# PyTorch it is 1.42x). Keeping MATH as the default to preserve continuity with older
+# accuracy numbers was not worth systematically overstating the speed results.
+#
+# MATH remains available for the quantizable-attention study, which needs the materialized
+# [BH,T,T] scores that flash never forms.
 #
 # Reads the env var on every call (not cached at import time): this module is only
 # ever imported once per process, so a module-level `os.environ.get(...)` baked into
@@ -47,17 +56,38 @@ import torch.nn.functional as F
 # silently ignore any later os.environ["MODIFF_SDPA_BACKEND"] change in the same
 # process (e.g. a multi-mode benchmark loop that flips it per iteration).
 try:
+    from contextlib import nullcontext
     from torch.nn.attention import sdpa_kernel, SDPBackend
     _SDPA_BACKEND_MAP = {"math": SDPBackend.MATH, "flash": SDPBackend.FLASH_ATTENTION,
                          "efficient": SDPBackend.EFFICIENT_ATTENTION}
+
     def _SDPA_CTX():
-        backend = _SDPA_BACKEND_MAP.get(os.environ.get("MODIFF_SDPA_BACKEND", "math").lower(), SDPBackend.MATH)
-        return sdpa_kernel(backend)
+        """Do NOT pin a backend by default -- let PyTorch pick (it chooses flash).
+
+        This used to default to MATH, which was a large, hidden cost: MATH materializes the
+        [BH,T,T] score matrix, and measured at b128 that path costs softmax 39.3 ms + two
+        bmm GEMMs 20.6 + 19.5 = 79.3 ms/step against 8.9 ms/step for PyTorch's flash kernel
+        (9x). Since fp16 is the baseline every quantized speedup is divided by, pinning MATH
+        inflated every one of those ratios -- the fp16 baseline came out 1.39x slower than
+        plain PyTorch. MATH is still selectable with MODIFF_SDPA_BACKEND=math for the
+        quantizable-attention study that needs materialized scores.
+        """
+        env = os.environ.get("MODIFF_SDPA_BACKEND")
+        if not env:
+            return nullcontext()
+        backend = _SDPA_BACKEND_MAP.get(env.lower())
+        return sdpa_kernel(backend) if backend is not None else nullcontext()
 except Exception:  # pragma: no cover - older torch
-    from contextlib import contextmanager
+    from contextlib import contextmanager, nullcontext
+
     @contextmanager
     def _SDPA_CTX():
-        with torch.backends.cuda.sdp_kernel(enable_flash=False, enable_mem_efficient=False, enable_math=True):
+        env = (os.environ.get("MODIFF_SDPA_BACKEND") or "").lower()
+        if env == "math":
+            with torch.backends.cuda.sdp_kernel(enable_flash=False, enable_mem_efficient=False,
+                                                enable_math=True):
+                yield
+        else:
             yield
 
 from integration.fused_ops.fused_resblock import _group_norm_silu

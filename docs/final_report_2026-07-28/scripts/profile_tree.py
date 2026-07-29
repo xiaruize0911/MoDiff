@@ -39,8 +39,13 @@ VERS = [("fp16", "fp16"), ("int8_baseline", "int8_baseline"), ("int4_baseline", 
 # ---------------------------------------------------------------------------
 RULES = [
     # ---- Attention -------------------------------------------------------
-    ("Attention", "int8/int4 flash kernel (fused QK^T+softmax+AV)",
-     ["flash_attn_int8", "flash_attn_int4", "flash_fwd", "flash_attn"]),
+    # Keep PyTorch's flash separate from OURS. "flash_fwd" matches
+    # pytorch_flash::flash_fwd_kernel, so lumping it in mislabels the fp16 baseline as
+    # running an int8/int4 kernel it never touches.
+    ("Attention", "PyTorch fused flash SDPA (pytorch_flash)",
+     ["pytorch_flash", "flash_fwd"]),
+    ("Attention", "our int8/int4 flash kernel (fused QK^T+softmax+AV)",
+     ["flash_attn_int8", "flash_attn_int4", "flash_attn"]),
     ("Attention", "Q/K/V quantize (packed, static scales)",
      ["aq_qtok", "aq_kquant"]),
     ("Attention", "V quantize + transpose to AV layout",
