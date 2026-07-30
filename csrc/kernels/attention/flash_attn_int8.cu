@@ -33,6 +33,50 @@
 #define MODIFF_FA_MAX_HD 96      // max padded head_dim in the churches UNet (hd=96)
 #define MODIFF_FA_THREADS 128
 
+// Occupancy experiment knob. This kernel is latency-bound (see the BC heuristic note below:
+// BC=32 wins while costing +38% instructions per unit of work), so more resident warps to hide
+// the same latency is the lever -- and registers are what caps residency here, not smem, which
+// is 8 KB/CTA against SM86's 100 KB. At 256 threads/CTA the boundaries are:
+//
+//   CTAs/SM   regs/thread   threads/SM   occupancy
+//     4          <= 64         1024        66.7%    <- production hd24-exact sits here at 56
+//     5          <= 51         1280        83.3%
+//     6          <= 42         1536       100.0%
+//
+// Setting MODIFF_FA_MIN_CTA=5 (or 6) asks the compiler to fit that many CTAs, which caps
+// registers accordingly. 0 = compiler's choice, which is the production default and leaves
+// codegen bit-identical to before this knob existed.
+//
+// MEASURED AND REJECTED at 5 CTAs. Do not retry this without a plan that frees registers
+// WITHOUT spilling -- the occupancy is real and it still loses:
+//
+//   variant     REG  spill  CTA/SM  occupancy   T1024/hd24 kernel   vs baseline
+//   baseline     56    0 B     4       66.7%        1554.50 us         --
+//   MIN_CTA=5    48   16 B     5       83.3%        1753.44 us      0.886x  (12.8% SLOWER)
+//
+//   A40, batch 128, 20 warmups, 5 rounds x 60 iters; round spread 1.01% / 0.08%, so the
+//   regression is ~13x the noise. Output checksum is identical (31637291), i.e. pure codegen.
+//
+// Why it loses, from the SASS: the compiler overshoots to 48 registers and puts the spill
+// INSIDE the main KV-tile loop (backward branch 0x16d0..0x2770). That body holds 1 STL + 4 LDL
+// against 7 IMMA, and the four LDL sit between the QK^T IMMAs and the PV IMMAs -- squarely on
+// the dependency chain this kernel is latency-bound on. At T=1024/BC=32 the loop runs 32x, so
+// each thread eats ~160 local-memory accesses to buy 25% more warps. The warps cannot hide a
+// latency that the spill just added to the chain they were meant to hide.
+//
+// So the boundary at 51 registers (see the table above) is only worth chasing by freeing
+// registers outright -- fewer live values, not compiler-forced eviction. Note that the obvious
+// candidate, tiling the 16-register Sreg[BC/8][4], is separately measured and rejected at the
+// score-loop comment below.
+#ifndef MODIFF_FA_MIN_CTA
+#define MODIFF_FA_MIN_CTA 0
+#endif
+#if MODIFF_FA_MIN_CTA
+#define MODIFF_FA_LB(WARPS_) __launch_bounds__((WARPS_) * 32, MODIFF_FA_MIN_CTA)
+#else
+#define MODIFF_FA_LB(WARPS_)
+#endif
+
 // Tiled (flash) kernel tuning. int8 path runs only for T>=64 (head_dim<=48 ->
 // hd_pad<=64), so the K/V/S/O smem tiles fit under the 48 KB static limit.
 #define FA_BR 64
@@ -234,7 +278,7 @@ __global__ void flash_attn_int8_tiled_kernel(
 template <int HD_PAD, int WARPS, int BC, bool STATIC_QK = false, bool PACK_OUT4 = false,
           bool COMPACT_HD24 = false, bool REGISTER_P = false,
           int EXACT_HD = 0, int EXACT_T = 0>
-__global__ void flash_attn_int8_mma_kernel_t(
+__global__ MODIFF_FA_LB(WARPS) void flash_attn_int8_mma_kernel_t(
     const int8_t* __restrict__ q, const int8_t* __restrict__ k, const int8_t* __restrict__ v,
     const float* __restrict__ sq, const float* __restrict__ sk, const float* __restrict__ sv,
     __half* __restrict__ out, int N, int H, int T, int hd, int hd_pad_rt, float softmax_scale,
