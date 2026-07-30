@@ -12,43 +12,34 @@
         "n_instances": 5,
         "eligible": true,
         "flash_path": "ours",
-        "full_us": 7417.6,
+        "tensor_core_peak_kind": "int8",
+        "full_us": 2970.27,
         "attn_gflop": 103.08,
-        "flash_us": 5421.73,
-        "flash_tops": 19.0,
-        "flash_pct_peak": 12.7,
-        "qkv_quantize_us": 700.38,
-        "copy_us": 6.91,
+        "flash_us": 1456.88,
+        "flash_tops": 70.8,
+        "flash_pct_peak": 47.3,
+        "qkv_quantize_us": 0,
+        "copy_us": 0,
         "kernels": [
           {
-            "kernel": "flash_attn_int8_mma_kernel",
-            "us": 5421.73,
+            "kernel": "flash_attn_int8_mma_kernel_t",
+            "us": 1456.88,
             "calls": 1.0
           },
           {
             "kernel": "gemm_w8a8_kernel_awq",
-            "us": 724.3,
+            "us": 730.83,
             "calls": 2.0
           },
           {
-            "kernel": "aq_qtok_packed_static_qk_vec2_kernel",
-            "us": 472.81,
+            "kernel": "aq_kv_packed_static_tiled_vec2_kernel",
+            "us": 371.13,
             "calls": 1.0
           },
           {
             "kernel": "group_norm_silu_quantize_nhwc_vec2_kernel",
-            "us": 446.11,
+            "us": 258.83,
             "calls": 1.0
-          },
-          {
-            "kernel": "aq_vquant_trans_packed_tiled_vec2_kernel",
-            "us": 227.57,
-            "calls": 1.0
-          },
-          {
-            "kernel": "elementwise_kernel",
-            "us": 6.91,
-            "calls": 2.0
           }
         ]
       },
@@ -62,43 +53,34 @@
         "n_instances": 5,
         "eligible": true,
         "flash_path": "ours",
-        "full_us": 1951.39,
+        "tensor_core_peak_kind": "int8",
+        "full_us": 980.99,
         "attn_gflop": 12.88,
-        "flash_us": 986.22,
-        "flash_tops": 13.1,
-        "flash_pct_peak": 8.7,
-        "qkv_quantize_us": 261.33,
-        "copy_us": 7.23,
+        "flash_us": 268.99,
+        "flash_tops": 47.9,
+        "flash_pct_peak": 32.0,
+        "qkv_quantize_us": 0,
+        "copy_us": 0,
         "kernels": [
           {
-            "kernel": "flash_attn_int8_mma_kernel",
-            "us": 986.22,
+            "kernel": "gemm_w8a8_kernel_awq",
+            "us": 442.84,
+            "calls": 2.0
+          },
+          {
+            "kernel": "flash_attn_int8_mma_kernel_t",
+            "us": 268.99,
             "calls": 1.0
           },
           {
-            "kernel": "gemm_w8a8_kernel_awq",
-            "us": 430.45,
-            "calls": 2.0
+            "kernel": "aq_kv_packed_static_tiled_vec2_kernel",
+            "us": 171.06,
+            "calls": 1.0
           },
           {
             "kernel": "group_norm_silu_quantize_nhwc_vec2_kernel",
-            "us": 268.16,
-            "calls": 1.0
-          },
-          {
-            "kernel": "aq_qtok_packed_static_qk_vec2_kernel",
-            "us": 158.22,
-            "calls": 1.0
-          },
-          {
-            "kernel": "aq_vquant_trans_packed_tiled_vec2_kernel",
             "us": 103.11,
             "calls": 1.0
-          },
-          {
-            "kernel": "elementwise_kernel",
-            "us": 7.23,
-            "calls": 2.0
           }
         ]
       },
@@ -112,43 +94,34 @@
         "n_instances": 5,
         "eligible": true,
         "flash_path": "ours",
-        "full_us": 532.35,
+        "tensor_core_peak_kind": "int8",
+        "full_us": 262.69,
         "attn_gflop": 0.81,
-        "flash_us": 141.89,
-        "flash_tops": 5.7,
-        "flash_pct_peak": 3.8,
-        "qkv_quantize_us": 68.43,
-        "copy_us": 7.25,
+        "flash_us": 45.76,
+        "flash_tops": 17.6,
+        "flash_pct_peak": 11.8,
+        "qkv_quantize_us": 0,
+        "copy_us": 0,
         "kernels": [
           {
-            "kernel": "group_norm_silu_quantize_nhwc_vec2_kernel",
-            "us": 166.98,
-            "calls": 1.0
-          },
-          {
             "kernel": "gemm_w8a8_kernel_awq",
-            "us": 148.19,
+            "us": 143.12,
             "calls": 2.0
           },
           {
-            "kernel": "flash_attn_int8_mma_kernel",
-            "us": 141.89,
+            "kernel": "flash_attn_int8_mma_kernel_t",
+            "us": 45.76,
             "calls": 1.0
           },
           {
-            "kernel": "aq_qtok_packed_static_qk_vec2_kernel",
-            "us": 40.36,
+            "kernel": "aq_kv_packed_static_tiled_vec2_kernel",
+            "us": 41.87,
             "calls": 1.0
           },
           {
-            "kernel": "aq_vquant_trans_packed_tiled_vec2_kernel",
-            "us": 28.07,
+            "kernel": "group_norm_silu_quantize_nhwc_vec2_kernel",
+            "us": 27.57,
             "calls": 1.0
-          },
-          {
-            "kernel": "elementwise_kernel",
-            "us": 7.25,
-            "calls": 2.0
           }
         ]
       },
@@ -162,37 +135,38 @@
         "n_instances": 5,
         "eligible": false,
         "flash_path": "pytorch",
-        "full_us": 229.63,
+        "tensor_core_peak_kind": "fp16",
+        "full_us": 195.26,
         "attn_gflop": 0.1,
-        "flash_us": 42.07,
+        "flash_us": 42.0,
         "flash_tops": 2.4,
         "flash_pct_peak": 3.2,
         "qkv_quantize_us": 0,
-        "copy_us": 13.04,
+        "copy_us": 12.97,
         "kernels": [
           {
             "kernel": "gemm_w8a8_kernel_awq",
-            "us": 104.66,
+            "us": 104.34,
             "calls": 2.0
           },
           {
-            "kernel": "group_norm_silu_quantize_nhwc_vec2_kernel",
-            "us": 51.49,
-            "calls": 1.0
-          },
-          {
             "kernel": "pytorch_flash::flash_fwd_kernel",
-            "us": 42.07,
+            "us": 42.0,
             "calls": 1.0
           },
           {
             "kernel": "quant_attn_out_int8_kernel",
-            "us": 17.34,
+            "us": 17.41,
+            "calls": 1.0
+          },
+          {
+            "kernel": "group_norm_silu_quantize_nhwc_vec2_kernel",
+            "us": 16.72,
             "calls": 1.0
           },
           {
             "kernel": "elementwise_kernel",
-            "us": 13.04,
+            "us": 12.97,
             "calls": 1.0
           }
         ]
@@ -207,37 +181,38 @@
         "n_instances": 1,
         "eligible": false,
         "flash_path": "pytorch",
-        "full_us": 172.83,
+        "tensor_core_peak_kind": "fp16",
+        "full_us": 172.67,
         "attn_gflop": 0.01,
-        "flash_us": 38.56,
+        "flash_us": 38.27,
         "flash_tops": 0.2,
         "flash_pct_peak": 0.2,
         "qkv_quantize_us": 0,
-        "copy_us": 3.7,
+        "copy_us": 3.94,
         "kernels": [
           {
             "kernel": "gemm_w8a8_kernel_awq",
-            "us": 56.69,
+            "us": 56.6,
             "calls": 2.0
           },
           {
             "kernel": "pytorch_flash::flash_fwd_kernel",
-            "us": 38.56,
+            "us": 38.27,
             "calls": 1.0
           },
           {
             "kernel": "group_norm_silu_quantize_nhwc_vec2_kernel",
-            "us": 12.94,
+            "us": 10.61,
             "calls": 1.0
           },
           {
             "kernel": "quant_attn_out_int8_kernel",
-            "us": 5.29,
+            "us": 5.3,
             "calls": 1.0
           },
           {
             "kernel": "elementwise_kernel",
-            "us": 3.7,
+            "us": 3.94,
             "calls": 1.0
           }
         ]
@@ -254,63 +229,39 @@
         "n_instances": 5,
         "eligible": true,
         "flash_path": "ours",
-        "full_us": 7659.74,
+        "tensor_core_peak_kind": "int8",
+        "full_us": 3090.5,
         "attn_gflop": 103.08,
-        "flash_us": 5301.8,
-        "flash_tops": 19.4,
-        "flash_pct_peak": 6.5,
-        "qkv_quantize_us": 699.14,
-        "copy_us": 340.14,
+        "flash_us": 1505.65,
+        "flash_tops": 68.5,
+        "flash_pct_peak": 45.7,
+        "qkv_quantize_us": 0,
+        "copy_us": 29.34,
         "kernels": [
           {
-            "kernel": "flash_attn_int4_mma_kernel",
-            "us": 5301.8,
+            "kernel": "flash_attn_int8_mma_kernel_t",
+            "us": 1505.65,
             "calls": 1.0
           },
           {
             "kernel": "gemm_w4a4_kernel_awq",
-            "us": 668.66,
+            "us": 700.52,
             "calls": 2.0
           },
           {
-            "kernel": "group_norm_silu_nhwc_kernel",
-            "us": 492.33,
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "us": 481.87,
             "calls": 1.0
           },
           {
-            "kernel": "aq_qtok_packed_static_qk_vec2_kernel",
-            "us": 471.77,
-            "calls": 1.0
-          },
-          {
-            "kernel": "aq_vquant_trans_packed_tiled_vec2_kernel",
-            "us": 227.37,
-            "calls": 1.0
-          },
-          {
-            "kernel": "elementwise_kernel",
-            "us": 188.18,
-            "calls": 1.0
-          },
-          {
-            "kernel": "quant_act_int4_pack_kernel",
-            "us": 147.5,
+            "kernel": "aq_kv_packed_static_tiled_vec2_kernel",
+            "us": 373.22,
             "calls": 1.0
           },
           {
             "kernel": "vectorized_elementwise_kernel",
-            "us": 116.06,
+            "us": 29.34,
             "calls": 1.0
-          },
-          {
-            "kernel": "vectorized_elementwise_kernel",
-            "us": 28.88,
-            "calls": 1.0
-          },
-          {
-            "kernel": "elementwise_kernel",
-            "us": 7.02,
-            "calls": 2.0
           }
         ]
       },
@@ -324,47 +275,48 @@
         "n_instances": 5,
         "eligible": true,
         "flash_path": "ours",
-        "full_us": 1875.3,
+        "tensor_core_peak_kind": "int4",
+        "full_us": 1046.69,
         "attn_gflop": 12.88,
-        "flash_us": 1011.35,
-        "flash_tops": 12.7,
-        "flash_pct_peak": 4.3,
-        "qkv_quantize_us": 229.44,
-        "copy_us": 17.25,
+        "flash_us": 187.58,
+        "flash_tops": 68.7,
+        "flash_pct_peak": 23.0,
+        "qkv_quantize_us": 229.24,
+        "copy_us": 17.7,
         "kernels": [
           {
-            "kernel": "flash_attn_int4_mma_kernel",
-            "us": 1011.35,
-            "calls": 1.0
-          },
-          {
             "kernel": "gemm_w4a4_kernel_awq",
-            "us": 345.87,
+            "us": 341.42,
             "calls": 2.0
           },
           {
             "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
-            "us": 271.83,
+            "us": 273.84,
+            "calls": 1.0
+          },
+          {
+            "kernel": "flash_attn_int4_mma_kernel_t",
+            "us": 187.58,
             "calls": 1.0
           },
           {
             "kernel": "aq_qtok_packed_static_qk_vec2_kernel",
-            "us": 127.65,
+            "us": 128.55,
             "calls": 1.0
           },
           {
             "kernel": "aq_vquant_trans_packed_tiled_vec2_kernel",
-            "us": 101.79,
+            "us": 100.69,
             "calls": 1.0
           },
           {
             "kernel": "vectorized_elementwise_kernel",
-            "us": 10.06,
+            "us": 10.35,
             "calls": 1.0
           },
           {
             "kernel": "elementwise_kernel",
-            "us": 7.19,
+            "us": 7.35,
             "calls": 2.0
           }
         ]
@@ -379,47 +331,48 @@
         "n_instances": 5,
         "eligible": true,
         "flash_path": "ours",
-        "full_us": 466.82,
+        "tensor_core_peak_kind": "int4",
+        "full_us": 382.3,
         "attn_gflop": 0.81,
-        "flash_us": 102.64,
-        "flash_tops": 7.8,
-        "flash_pct_peak": 2.6,
-        "qkv_quantize_us": 61.85,
-        "copy_us": 11.0,
+        "flash_us": 30.57,
+        "flash_tops": 26.3,
+        "flash_pct_peak": 8.8,
+        "qkv_quantize_us": 60.64,
+        "copy_us": 10.91,
         "kernels": [
           {
             "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
-            "us": 176.2,
+            "us": 167.71,
             "calls": 1.0
           },
           {
             "kernel": "gemm_w4a4_kernel_awq",
-            "us": 115.81,
+            "us": 113.84,
             "calls": 2.0
           },
           {
-            "kernel": "flash_attn_int4_mma_kernel",
-            "us": 102.64,
+            "kernel": "aq_qtok_packed_static_qk_vec2_kernel",
+            "us": 35.01,
             "calls": 1.0
           },
           {
-            "kernel": "aq_qtok_packed_static_qk_vec2_kernel",
-            "us": 35.19,
+            "kernel": "flash_attn_int4_mma_kernel_t",
+            "us": 30.57,
             "calls": 1.0
           },
           {
             "kernel": "aq_vquant_trans_packed_tiled_vec2_kernel",
-            "us": 26.66,
+            "us": 25.63,
             "calls": 1.0
           },
           {
             "kernel": "elementwise_kernel",
-            "us": 7.27,
+            "us": 7.17,
             "calls": 2.0
           },
           {
             "kernel": "vectorized_elementwise_kernel",
-            "us": 3.73,
+            "us": 3.74,
             "calls": 1.0
           }
         ]
@@ -434,37 +387,38 @@
         "n_instances": 5,
         "eligible": false,
         "flash_path": "pytorch",
-        "full_us": 195.36,
+        "tensor_core_peak_kind": "fp16",
+        "full_us": 199.55,
         "attn_gflop": 0.1,
-        "flash_us": 41.79,
+        "flash_us": 41.81,
         "flash_tops": 2.4,
         "flash_pct_peak": 3.2,
         "qkv_quantize_us": 0,
-        "copy_us": 12.8,
+        "copy_us": 12.99,
         "kernels": [
           {
             "kernel": "gemm_w4a4_kernel_awq",
-            "us": 73.88,
+            "us": 75.19,
             "calls": 2.0
           },
           {
             "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
-            "us": 52.59,
+            "us": 51.17,
             "calls": 1.0
           },
           {
             "kernel": "pytorch_flash::flash_fwd_kernel",
-            "us": 41.79,
+            "us": 41.81,
             "calls": 1.0
           },
           {
             "kernel": "quant_attn_out_int4_pack_kernel",
-            "us": 13.05,
+            "us": 13.03,
             "calls": 1.0
           },
           {
             "kernel": "elementwise_kernel",
-            "us": 12.8,
+            "us": 12.99,
             "calls": 1.0
           }
         ]
@@ -479,37 +433,38 @@
         "n_instances": 1,
         "eligible": false,
         "flash_path": "pytorch",
-        "full_us": 162.66,
+        "tensor_core_peak_kind": "fp16",
+        "full_us": 187.2,
         "attn_gflop": 0.01,
-        "flash_us": 38.17,
+        "flash_us": 38.66,
         "flash_tops": 0.2,
         "flash_pct_peak": 0.2,
         "qkv_quantize_us": 0,
-        "copy_us": 3.51,
+        "copy_us": 3.48,
         "kernels": [
           {
             "kernel": "gemm_w4a4_kernel_awq",
-            "us": 40.64,
+            "us": 41.4,
             "calls": 2.0
           },
           {
             "kernel": "pytorch_flash::flash_fwd_kernel",
-            "us": 38.17,
+            "us": 38.66,
             "calls": 1.0
           },
           {
             "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
-            "us": 12.59,
+            "us": 12.97,
             "calls": 1.0
           },
           {
             "kernel": "quant_attn_out_int4_pack_kernel",
-            "us": 4.33,
+            "us": 4.41,
             "calls": 1.0
           },
           {
             "kernel": "elementwise_kernel",
-            "us": 3.51,
+            "us": 3.48,
             "calls": 1.0
           }
         ]

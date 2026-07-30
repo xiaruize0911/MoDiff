@@ -19,6 +19,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+_QK_I8 = 8
+_QK_I4_PACKED = 4
+_QK_I4_VALUES_I8_MMA = 84
+
 from integration.fused_ops.token_major_attention import (
     TokenMajorAttentionBlock, _group_norm_silu,
     _HAS_FUSED_ATTN_OUT, _HAS_ATTN_OUT_I4, _QuantLinearWxAx)
@@ -68,29 +72,75 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         # _calib_steps forwards then freezes to a static single-pass quantize.
         self.static = bool(static)
         self._calib_steps = int(os.environ.get("MODIFF_ATTN_CALIB_STEPS", "8"))
-        # Flash-vs-fp16 gate. The int flash kernel only pays off on large-enough blocks. Measured
-        # on the production packed path (A40, b128, quantize_attn_qkv_packed -> flash_attn_int8_vt
-        # vs fp16 MATH SDPA): hd24/T1024 2.34x, hd24/T256 1.37x, hd48/T512 1.13x, hd48/T256 1.01x
-        # (break-even), hd48/T128 0.86x, hd48/T64 0.64x. So the old head_dim<=48 & T%64==0 gate
-        # dragged the small-T blocks (esp. T=64) into a net LOSS. The crossover is 2D in
-        # (head_dim, T) and GPU-dependent -- fp16 SDPA's own efficiency also rises with head_dim,
-        # so no static T threshold separates winners from losers (hd24/T256 wins 1.37x while
-        # hd48/T256 is only break-even). "auto" (default) therefore MEASURES flash vs fp16 SDPA
-        # once per block, right after the quantize scales freeze, and caches the winner.
-        # MODIFF_FLASH_GATE=on forces flash on every eligible block (old behaviour); =off keeps
-        # eligible blocks on fp16 SDPA.
-        self._flash_gate = os.environ.get("MODIFF_FLASH_GATE", "auto")
+        # INT8 production routing is deterministic: quantized attention is on unless an explicit
+        # rollback requests "off". In particular, "auto" is no longer a supported INT8 mode.
+        # INT4 retains its independent experimental gate.
+        flash_gate = os.environ.get("MODIFF_FLASH_GATE", "on").lower()
+        if bits == 8:
+            if flash_gate not in ("0", "1", "off", "on", "false", "true"):
+                raise ValueError(
+                    "INT8 MODIFF_FLASH_GATE accepts only on/off; auto was removed")
+            self._flash_gate = (
+                "off" if flash_gate in ("0", "off", "false") else "on")
+        else:
+            self._flash_gate = flash_gate
         self._flash_choice = None    # None = undecided; True/False = frozen decision
-        # Packed-input flash (default ON; MODIFF_FLASH_PACKED=0 to disable): flash reads the
+        # Packed-input flash is an explicit diagnostic route: flash reads the
         # interleaved qkv directly, folding the Q/K/V quantize + V-transpose into its smem staging
-        # (no separate aq_qtok/aq_vquant + qi/ki/vt HBM round-trip). Wins the smaller blocks (hd48:
-        # measured 1.54x vs quantize+flash, 1.03x vs fp16 SDPA at hd48/T64 on A40) but LOSES the
-        # large hd24/T1024 (the original flash is already efficient), so it's AUTOTUNED per block vs
-        # quantize+flash, once the static scales freeze. Bit-identical to the current path either way.
-        self._flash_packed = (bits == 8 and os.environ.get("MODIFF_FLASH_PACKED", "1") != "0"
-                              and hasattr(_mc, "flash_attn_int8_packed_vt"))
-        self._packed_choice = None       # score path (flash_attn_int8_packed_vt vs quantize+flash_vt)
-        self._packed_qout_choice = None  # fused proj path (packed_vt_qout vs quantize+flash_vt_qout)
+        # (no separate aq_qtok/aq_vquant + qi/ki/vt HBM round-trip). It loses at T1024, so the
+        # production default is off. There is no per-layer autotune; =1 always selects it.
+        flash_packed = os.environ.get("MODIFF_FLASH_PACKED", "0").lower()
+        int8_persistent = os.environ.get(
+            "MODIFF_INT8_PACKED_PERSISTENT", "0").lower()
+        int8_flash_preg = os.environ.get(
+            "MODIFF_INT8_FLASH_PREG", "0").lower()
+        int8_flash_hd24_exact = os.environ.get(
+            "MODIFF_INT8_FLASH_HD24_EXACT", "1").lower()
+        int8_layout_epilogue = os.environ.get(
+            "MODIFF_INT8_QKV_LAYOUT_EPILOGUE", "1").lower()
+        int8_compact_epilogue = os.environ.get(
+            "MODIFF_INT8_QKV_COMPACT_EPILOGUE", "1").lower()
+        int8_qkv_epilogue = os.environ.get(
+            "MODIFF_INT8_QKV_EPILOGUE", "1").lower()
+        if bits == 8:
+            valid_switches = ("0", "1", "off", "on", "false", "true")
+            for name, value in (
+                    ("MODIFF_FLASH_PACKED", flash_packed),
+                    ("MODIFF_INT8_PACKED_PERSISTENT", int8_persistent),
+                    ("MODIFF_INT8_FLASH_PREG", int8_flash_preg),
+                    ("MODIFF_INT8_FLASH_HD24_EXACT", int8_flash_hd24_exact),
+                    ("MODIFF_INT8_QKV_LAYOUT_EPILOGUE", int8_layout_epilogue),
+                    ("MODIFF_INT8_QKV_COMPACT_EPILOGUE", int8_compact_epilogue),
+                    ("MODIFF_INT8_QKV_EPILOGUE", int8_qkv_epilogue)):
+                if value not in valid_switches:
+                    raise ValueError(
+                        f"INT8 {name} accepts only on/off; auto was removed")
+        self._flash_packed = (
+            bits == 8 and flash_packed in ("1", "on", "true")
+            and hasattr(_mc, "flash_attn_int8_packed_vt"))
+        self._int8_persistent = int8_persistent in ("1", "on", "true")
+        self._int8_flash_preg = int8_flash_preg in ("1", "on", "true")
+        self._int8_flash_hd24_exact = (
+            int8_flash_hd24_exact in ("1", "on", "true"))
+        self._int8_layout_epilogue = int8_layout_epilogue in ("1", "on", "true")
+        self._int8_compact_epilogue = int8_compact_epilogue in ("1", "on", "true")
+        self._int8_qkv_epilogue = int8_qkv_epilogue in ("1", "on", "true")
+        self._int8_qkv_inv_out = None
+        self._int8_layout_qweight = None
+        self._int8_layout_wscale = None
+        self._int8_layout_inv_out = None
+        self._int8_layout_bias = None
+        self._int4_qin_mode = os.environ.get("MODIFF_INT4_Q_IN_FLASH", "auto").lower()
+        if self._int4_qin_mode not in ("auto", "on", "off"):
+            self._int4_qin_mode = "auto"
+        self._int4_qin_choice = None
+        self._int4_qkv_epilogue_mode = os.environ.get(
+            "MODIFF_INT4_QKV_EPILOGUE", "0").lower()
+        if self._int4_qkv_epilogue_mode not in ("0", "1", "auto", "off", "on"):
+            self._int4_qkv_epilogue_mode = "0"
+        # The prototype is intentionally not selected by auto until it clears both the full-layer
+        # performance gate and the three-seed quality gate. It remains directly runnable with =1.
+        self._int4_qkv_epilogue_choice = False
 
     def _flash_quant_attn(self, q, k, v):
         """FUSED int8/int4 flash attention. q,k,v: [b,nh,T,hd] fp16 -> [b,nh,T,hd] fp16.
@@ -123,7 +173,10 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
             vt = vt.view(b, nh, hd_pad, T)                    # already transposed -> pass directly (no copy)
             sq = sq.view(b, nh, T).contiguous(); sk = sk.view(b, nh, T).contiguous()
             sv = sv[..., :hd].contiguous().view(b, nh, hd)
-            return _mc.flash_attn_int8_vt(qi, ki, vt, sq, sk, sv, self.scale)   # [b,nh,T,hd], V pre-transposed
+            if getattr(self, "_fq_frozen2", False) and hasattr(_mc, "flash_attn_int8_vt_static"):
+                return _mc.flash_attn_int8_vt_static(
+                    qi, ki, vt, sv, self._fq_sqc, self._fq_skc, self.scale)
+            return _mc.flash_attn_int8_vt(qi, ki, vt, sq, sk, sv, self.scale)
         # Task 2: int4 fused. ONE-PASS mixed quantize (quantize_attn_qkv_i4qk_i8v): int4-packed Q/K
         # (matches the flash kernel) + int8 transposed V (flash uses int8 PV) in a single sweep of q/k/v
         # -> no eager nibble-pack, no wasted int4-V, no double V quantize. Feeds flash_attn_int4_vt directly.
@@ -156,16 +209,19 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         vt = vt.view(b, nh, hdp_v, T)                          # int8 V, already transposed
         sq4 = sq4.view(b, nh, T).contiguous(); sk4 = sk4.view(b, nh, T).contiguous()
         sv = sv[..., :hd].contiguous().view(b, nh, hd)
-        return _mc.flash_attn_int4_vt(q4, k4, vt, sq4, sk4, sv, hdp4, self.scale)  # [b,nh,T,hd]
+        if getattr(self, "_fq4_frozen", False) and hasattr(_mc, "flash_attn_int4_vt_static"):
+            return _mc.flash_attn_int4_vt_static(
+                q4, k4, vt, sv, hdp4, self._fq4_sqc, self._fq4_skc, self.scale)
+        return _mc.flash_attn_int4_vt(q4, k4, vt, sq4, sk4, sv, hdp4, self.scale)
 
-    def _autotune_ab(self, new_fn, cur_fn, warm=3, iters=10):
+    def _autotune_ab(self, new_fn, cur_fn, warm=3, iters=10, margin=0.0):
         """Time two numerically-equivalent kernels once; True iff new_fn is faster (caller caches)."""
         def t(fn):
             for _ in range(warm): fn()
             torch.cuda.synchronize(); s = torch.cuda.Event(True); e = torch.cuda.Event(True); s.record()
             for _ in range(iters): fn()
             e.record(); torch.cuda.synchronize(); return s.elapsed_time(e)
-        return t(new_fn) < t(cur_fn)
+        return t(new_fn) <= t(cur_fn) * (1.0 - margin)
 
     def _packed_ref_vt(self, qkv, b, nh, T, hd, hd_pad):
         """Current path (quantize_attn_qkv_packed_static -> flash_attn_int8_vt), frozen scales.
@@ -175,7 +231,8 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         qi = qi.view(b, nh, T, hd_pad); ki = ki.view(b, nh, T, hd_pad); vt = vt.view(b, nh, hd_pad, T)
         sq = sq.view(b, nh, T).contiguous(); sk = sk.view(b, nh, T).contiguous()
         sv = sv[..., :hd].contiguous().view(b, nh, hd)
-        return _mc.flash_attn_int8_vt(qi, ki, vt, sq, sk, sv, self.scale)
+        return _mc.flash_attn_int8_vt_static(
+            qi, ki, vt, sv, self._fq_sqc, self._fq_skc, self.scale)
 
     def _packed_ref_vt_qout(self, qkv, b, nh, T, hd, hd_pad, proj_a):
         """Current fused-proj path (quantize -> flash_attn_int8_vt_qout). Autotune reference."""
@@ -184,7 +241,8 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         qi = qi.view(b, nh, T, hd_pad); ki = ki.view(b, nh, T, hd_pad); vt = vt.view(b, nh, hd_pad, T)
         sq = sq.view(b, nh, T).contiguous(); sk = sk.view(b, nh, T).contiguous()
         sv = sv[..., :hd].contiguous().view(b, nh, hd)
-        return _mc.flash_attn_int8_vt_qout(qi, ki, vt, sq, sk, sv, self.scale, proj_a)
+        return _mc.flash_attn_int8_vt_static_qout(
+            qi, ki, vt, sv, self._fq_sqc, self._fq_skc, self.scale, proj_a)
 
     def _flash_quant_attn_packed(self, qkv):
         """Same as _flash_quant_attn but reads the interleaved qkv [b,T,nh,3,hd] DIRECTLY via the
@@ -195,16 +253,12 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         qv, kv, vv = qkv[:, :, :, 0, :], qkv[:, :, :, 1, :], qkv[:, :, :, 2, :]  # strided views (no copy)
         if self.bits == 8:
             hd_pad = ((hd + 31) // 32) * 32
-            # Packed flash (autotuned per block): read qkv directly, fold the quantize into flash's
-            # staging. Only when frozen; falls back to quantize+flash_vt where that's faster (hd24/T1024).
+            # Explicit packed diagnostic path: read qkv directly and fold quantization into flash
+            # staging. Production leaves this disabled because it loses at hd24/T1024.
             if self._flash_packed and getattr(self, "_fq_frozen2", False):
                 sv_hd = self._fq_svv[:hd].contiguous()
-                if self._packed_choice is None:
-                    self._packed_choice = self._autotune_ab(
-                        lambda: _mc.flash_attn_int8_packed_vt(qkv, sv_hd, hd_pad, self._fq_sqc, self._fq_skc, self.scale),
-                        lambda: self._packed_ref_vt(qkv, b, nh, T, hd, hd_pad))
-                if self._packed_choice:
-                    return _mc.flash_attn_int8_packed_vt(qkv, sv_hd, hd_pad, self._fq_sqc, self._fq_skc, self.scale)
+                return _mc.flash_attn_int8_packed_vt(
+                    qkv, sv_hd, hd_pad, self._fq_sqc, self._fq_skc, self.scale)
             if getattr(self, "_fq_frozen2", False):
                 qi, ki, vt, sq, sk, sv = _mc.quantize_attn_qkv_packed_static(
                     qkv, nh, T, hd, hd_pad, hd_pad, 8, self._fq_sqc, self._fq_skc, self._fq_svv)
@@ -221,6 +275,9 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
                     self._fq_svv = svv.contiguous(); self._fq_frozen2 = True
             qi = qi.view(b, nh, T, hd_pad); ki = ki.view(b, nh, T, hd_pad); vt = vt.view(b, nh, hd_pad, T)
             sq = sq.view(b, nh, T); sk = sk.view(b, nh, T); sv = sv[..., :hd].contiguous().view(b, nh, hd)
+            if getattr(self, "_fq_frozen2", False) and hasattr(_mc, "flash_attn_int8_vt_static"):
+                return _mc.flash_attn_int8_vt_static(
+                    qi, ki, vt, sv, self._fq_sqc, self._fq_skc, self.scale)
             return _mc.flash_attn_int8_vt(qi, ki, vt, sq, sk, sv, self.scale)
         # int4 (int4 Q/K + int8 V), packed
         hdp4, hdp_v = 64, ((hd + 31) // 32) * 32
@@ -240,12 +297,36 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
                 self._fq4_svv = svv.contiguous(); self._fq4_frozen = True
         q4 = q4.view(b, nh, T, -1); k4 = k4.view(b, nh, T, -1); vt = vt.view(b, nh, hdp_v, T)
         sq4 = sq4.view(b, nh, T); sk4 = sk4.view(b, nh, T); sv = sv[..., :hd].contiguous().view(b, nh, hd)
+        if getattr(self, "_fq4_frozen", False) and hasattr(_mc, "flash_attn_int4_vt_static"):
+            return _mc.flash_attn_int4_vt_static(
+                q4, k4, vt, sv, hdp4, self._fq4_sqc, self._fq4_skc, self.scale)
         return _mc.flash_attn_int4_vt(q4, k4, vt, sq4, sk4, sv, hdp4, self.scale)
 
     def _scores_scales_frozen(self):
         """True once the per-block Q/K/V quantize scales have self-calibrated and frozen to
         the static single-pass path (so a flash timing reflects steady state, not calibration)."""
         return getattr(self, "_fq_frozen2" if self.bits == 8 else "_fq4_frozen", False)
+
+    def _observe_small_int8_scales(self, qkv):
+        """Calibrate T16/T4 static Q/K/V scales while their warmup uses FP16 SDPA."""
+        if self.bits != 8 or getattr(self, "_fq_frozen2", False):
+            return
+        _, _, _, _, hd = qkv.shape
+        qv, kv, vv = qkv[:, :, :, 0, :], qkv[:, :, :, 1, :], qkv[:, :, :, 2, :]
+        self._fq_aq = max(getattr(self, "_fq_aq", 0.0), qv.abs().max().item())
+        self._fq_ak = max(getattr(self, "_fq_ak", 0.0), kv.abs().max().item())
+        avc = vv.abs().amax(dim=(0, 1, 2)).float()
+        self._fq_av = (avc if getattr(self, "_fq_av", None) is None
+                       else torch.maximum(self._fq_av, avc))
+        self._fq_n = getattr(self, "_fq_n", 0) + 1
+        if self._fq_n >= self._calib_steps:
+            self._fq_sqc = self._fq_aq / 127.0
+            self._fq_skc = self._fq_ak / 127.0
+            hd_pad = ((hd + 31) // 32) * 32
+            svv = torch.ones(hd_pad, device=qkv.device)
+            svv[:hd] = (self._fq_av / 127.0).clamp_min(1e-8)
+            self._fq_svv = svv.contiguous()
+            self._fq_frozen2 = True
 
     def _score_path(self, qkv, use_flash):
         """Attention score path -> a=[b,nh,T,hd]. Flash (fused int8/int4) when use_flash, else
@@ -278,9 +359,8 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
 
     def _resolve_flash(self, qkv, T):
         """Decide whether this block runs the fused flash score path. Base eligibility is the
-        flash kernel's constraint (head_dim<=48, T%64==0). Then per MODIFF_FLASH_GATE:
-        on -> always flash when eligible (old behaviour); off -> never; auto (default) -> flash
-        during scale calibration to capture the scales, then autotune-and-freeze once frozen."""
+        flash kernel's constraint (head_dim<=48, T%64==0). INT8 is deterministic: on (default)
+        always selects quantized flash when eligible, while off is an explicit rollback."""
         eligible = (_HAS_FLASH and self.head_dim <= 48 and (T % 64) == 0)
         if not eligible or self._flash_gate == "off":
             return False
@@ -326,10 +406,224 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         qkv_pk = qkv_i8.permute(0, 2, 3, 1).reshape(b, T, nh, 3, hd).contiguous()     # [b,T,nh,3,hd]
         qi, ki, vt = _mc.quantize_attn_qkv_from_i8(qkv_pk, nh, T, hd, hd_pad, hd_pad)
         qi = qi.view(b, nh, T, hd_pad); ki = ki.view(b, nh, T, hd_pad); vt = vt.view(b, nh, hd_pad, T)
-        sq = torch.full((b, nh, T), float(self._fq_sqc), device=x.device, dtype=torch.float32)
-        sk = torch.full((b, nh, T), float(self._fq_skc), device=x.device, dtype=torch.float32)
         sv = self._fq_svv[:hd].float().view(1, 1, hd).expand(b, nh, hd).contiguous()
-        return _mc.flash_attn_int8_vt(qi, ki, vt, sq, sk, sv, self.scale)             # [b,nh,T,hd]
+        return _mc.flash_attn_int8_vt_static(
+            qi, ki, vt, sv, self._fq_sqc, self._fq_skc, self.scale)                  # [b,nh,T,hd]
+
+    def _route1_qout(self, x, b, T, nh, hd, SHIFT, proj_a_scale):
+        """Route-1 without the three post-GEMM conversion kernels.
+
+        Q stays in packed INT8 QKV and is loaded by its consuming Flash CTA. A
+        single tiled producer gathers K and transposes V, while Flash writes the
+        calibrated INT8 projection input directly.
+        """
+        self._ensure_route1(x.device, SHIFT)
+        hd_pad = ((hd + 31) // 32) * 32
+        qkv_i8 = _mc.fused_gn_qkv_i8evt(
+            x, self._r1_w, self._r1_bias,
+            self.norm.num_groups, self.norm.eps, SHIFT)
+        qkv_pk = qkv_i8.permute(0, 2, 3, 1).reshape(
+            b, T, nh, 3, hd).contiguous()
+        ki, vt = _mc.quantize_attn_kv_from_i8(
+            qkv_pk, nh, T, hd, hd_pad, hd_pad)
+        sv = self._fq_svv[:hd].contiguous()
+        return _mc.flash_attn_int8_qi8packed_kv_static_qout(
+            qkv_pk, ki.view(b, nh, T, hd_pad),
+            vt.view(b, nh, hd_pad, T), sv, hd_pad,
+            self._fq_sqc, self._fq_skc, self.scale, proj_a_scale)
+
+    def _int4_qkv_epilogue_forward(self, x, x_in_tok, b, T, c, nh, hd):
+        """Opt-in experimental GN-pack -> W4A4 QKV quantizing epilogue -> flash -> W4 proj.
+
+        Returns None unless every frozen static-scale/shape requirement is satisfied. The GEMM
+        epilogue emits signed-I4 Q/K codes plus I8 V, avoiding the FP16 QKV tensor entirely.
+        """
+        enabled = self._int4_qkv_epilogue_mode in ("1", "on")
+        if not enabled or self.bits != 4 or not hasattr(
+                _mc, "gemm_w4a4_awq_qkv_i4qk_i8v"):
+            return None
+        qkv, proj = self.qkv, self.proj
+        if not (self._qout_eligible() and _QuantLinearWxAx is not None
+                and isinstance(qkv, _QuantLinearWxAx) and qkv.bits == 4
+                and qkv.a_scale is not None and not qkv.modiff
+                and hasattr(_mc, "group_norm_silu_quantize_pack_nhwc_fast")):
+            return None
+        mixed = T == 1024 and hd == 24
+        native = T in (64, 256) and hd == 48
+        if not (mixed or native):
+            return None
+        gw, gb = self._gn_params(x.dtype)
+        if gw is None or gb is None:
+            return None
+        if self._qkv_inv_scale_t is None:
+            self._qkv_inv_scale_t = torch.tensor(
+                [1.0 / qkv.a_scale], device=x.device, dtype=torch.float32)
+        empty = x.new_empty(0)
+        xq_img = _mc.group_norm_silu_quantize_pack_nhwc_fast(
+            x, gw, gb, self.norm.num_groups, self.norm.eps, False,
+            self._qkv_inv_scale_t, empty, empty, empty, qkv._awqt_K)
+        xq = xq_img.reshape(b * T, qkv._awqt_K // 2)
+        storage = _QK_I4_VALUES_I8_MMA if mixed else _QK_I4_PACKED
+        hp_qk = 32 if mixed else 64
+        hp_v = ((hd + 31) // 32) * 32
+        q, k, vt, sv = _mc.gemm_w4a4_awq_qkv_i4qk_i8v(
+            xq, qkv.qweight, qkv.w_scale, qkv.a_scale, qkv._awqt_K,
+            qkv.out_features, qkv.bias, nh, T, hd, hp_qk, hp_v, storage,
+            self._fq4_sqc, self._fq4_skc, self._fq4_svv)
+        q = q.view(b, nh, T, -1); k = k.view(b, nh, T, -1)
+        vt = vt.view(b, nh, hp_v, T); sv = sv[:hd].contiguous()
+        if mixed:
+            xattn = _mc.flash_attn_i4values_i8mma_vt_static_qout(
+                q, k, vt, sv, hp_qk, self._fq4_sqc, self._fq4_skc,
+                self.scale, proj.a_scale, proj._awqt_K)
+        else:
+            xattn = _mc.flash_attn_int4_vt_static_qout(
+                q, k, vt, sv, hp_qk, self._fq4_sqc, self._fq4_skc,
+                self.scale, proj.a_scale, proj._awqt_K)
+        res = x_in_tok.reshape(b * T, c).contiguous()
+        pbias = proj.bias if proj.bias is not None else empty
+        out = _mc.gemm_w4a4_awq_bias_res(
+            xattn, proj.qweight, proj.w_scale, proj.a_scale,
+            proj._awqt_K, proj.out_features, pbias, res)
+        return out.reshape(b, T, c)
+
+    def _int8_qkv_epilogue_forward(self, x, x_in_tok, b, T, c, nh, hd):
+        """Production GN->W8A8 QKV INT8 epilogue feeding direct-Q quantized attention."""
+        if (not self._int8_qkv_epilogue or self.bits != 8
+                or not getattr(self, "_fq_frozen2", False)
+                or not self._qout_eligible()
+                or not hasattr(_mc, "gemm_w8a8_awq_out_i8_bias_nout")
+                or not hasattr(_mc, "quantize_attn_kv_from_i8")
+                or not hasattr(_mc, "flash_attn_int8_qi8packed_kv_static_qout")
+                or (T < 64 and not hasattr(
+                    _mc, "flash_attn_int8_qi8packed_small_qout"))):
+            return None
+        qkv, proj = self.qkv, self.proj
+        if not (_QuantLinearWxAx is not None
+                and isinstance(qkv, _QuantLinearWxAx) and qkv.bits == 8
+                and qkv.a_scale is not None and not qkv.modiff
+                and qkv._awqt_K == qkv.in_features):
+            return None
+        gw, gb = self._gn_params(x.dtype)
+        if gw is None or gb is None:
+            return None
+        if self._qkv_inv_scale_t is None:
+            self._qkv_inv_scale_t = torch.tensor(
+                [1.0 / qkv.a_scale], device=x.device, dtype=torch.float32)
+        empty = x.new_empty(0)
+        gnq = getattr(_mc, "group_norm_silu_quantize_nhwc_fast",
+                      _mc.group_norm_silu_quantize_nhwc)
+        xq_img = gnq(
+            x, gw, gb, self.norm.num_groups, self.norm.eps, False,
+            self._qkv_inv_scale_t, empty, empty, empty)
+        xq = xq_img.permute(0, 2, 3, 1).reshape(b * T, c)
+
+        n_pad = qkv.qweight.size(0)
+        if (self._int8_qkv_inv_out is None
+                or self._int8_qkv_inv_out.numel() != n_pad):
+            inv = torch.zeros(n_pad, device=x.device, dtype=torch.float32)
+            j = torch.arange(qkv.out_features, device=x.device)
+            sel, d = (j // hd) % 3, j % hd
+            inv[:qkv.out_features] = torch.where(
+                sel == 0,
+                torch.tensor(1.0 / float(self._fq_sqc), device=x.device),
+                torch.where(
+                    sel == 1,
+                    torch.tensor(1.0 / float(self._fq_skc), device=x.device),
+                    1.0 / self._fq_svv[d].float()))
+            self._int8_qkv_inv_out = inv.contiguous()
+        qbias = qkv.bias
+        if qbias is None:
+            qbias = torch.zeros(
+                qkv.out_features, device=x.device, dtype=torch.float16)
+        sv = self._fq_svv[:hd].contiguous()
+        use_layout = (
+            self._int8_layout_epilogue and T == 1024 and hd == 24
+            and hasattr(_mc, "gemm_w8a8_awq_qkv_i8_layouts")
+            and hasattr(_mc, "flash_attn_int8_qi8_kv_static_qout"))
+        use_compact_layout = (
+            self._int8_compact_epilogue and T == 256 and hd == 48
+            and hasattr(_mc, "gemm_w8a8_awq_qkv_i8_layouts_compact")
+            and hasattr(_mc, "flash_attn_int8_qi8_kv_static_qout"))
+        if use_compact_layout:
+            hd_pad = 64
+            q_i8, ki, vt = _mc.gemm_w8a8_awq_qkv_i8_layouts_compact(
+                xq, qkv.qweight, qkv.w_scale, qkv.a_scale,
+                self._int8_qkv_inv_out, qbias, nh, T, hd, hd_pad)
+            xattn = _mc.flash_attn_int8_qi8_kv_static_qout(
+                q_i8, ki.view(b, nh, T, hd_pad),
+                vt.view(b, nh, hd_pad, T), sv, hd_pad,
+                self._fq_sqc, self._fq_skc, self.scale, proj.a_scale)
+        elif use_layout:
+            hd_pad = ((hd + 31) // 32) * 32
+            layout_n = nh * 3 * hd_pad
+            if (self._int8_layout_qweight is None
+                    or self._int8_layout_qweight.size(0) != layout_n):
+                # One-time, deterministic offline channel layout. Padding each
+                # head/QKV segment to hd_pad aligns every epilogue segment with
+                # the Flash MMA operand and makes its tail values true zeros.
+                lw = torch.zeros(
+                    layout_n, qkv.qweight.size(1), device=x.device,
+                    dtype=qkv.qweight.dtype)
+                ls = torch.zeros(layout_n, device=x.device, dtype=torch.float32)
+                li = torch.zeros(layout_n, device=x.device, dtype=torch.float32)
+                lb = torch.zeros(layout_n, device=x.device, dtype=torch.float16)
+                for h in range(nh):
+                    for sel in range(3):
+                        src = (h * 3 + sel) * hd
+                        dst = (h * 3 + sel) * hd_pad
+                        lw[dst:dst + hd].copy_(qkv.qweight[src:src + hd])
+                        ls[dst:dst + hd].copy_(qkv.w_scale[src:src + hd])
+                        li[dst:dst + hd].copy_(
+                            self._int8_qkv_inv_out[src:src + hd])
+                        lb[dst:dst + hd].copy_(qbias[src:src + hd])
+                self._int8_layout_qweight = lw.contiguous()
+                self._int8_layout_wscale = ls.contiguous()
+                self._int8_layout_inv_out = li.contiguous()
+                self._int8_layout_bias = lb.contiguous()
+            q_i8, ki, vt = _mc.gemm_w8a8_awq_qkv_i8_layouts(
+                xq, self._int8_layout_qweight,
+                self._int8_layout_wscale, qkv.a_scale,
+                self._int8_layout_inv_out, self._int8_layout_bias,
+                nh, T, hd, hd_pad)
+            flash_layout_fn = _mc.flash_attn_int8_qi8_kv_static_qout
+            if (self._int8_flash_hd24_exact
+                    and hasattr(
+                        _mc, "flash_attn_int8_qi8_kv_static_qout_hd24")):
+                flash_layout_fn = (
+                    _mc.flash_attn_int8_qi8_kv_static_qout_hd24)
+            xattn = flash_layout_fn(
+                q_i8, ki.view(b, nh, T, hd_pad),
+                vt.view(b, nh, hd_pad, T), sv, hd_pad,
+                self._fq_sqc, self._fq_skc, self.scale, proj.a_scale)
+        else:
+            qkv_i8 = _mc.gemm_w8a8_awq_out_i8_bias_nout(
+                xq, qkv.qweight, qkv.w_scale, qkv.a_scale,
+                self._int8_qkv_inv_out, qbias, qkv.out_features)
+            qkv_pk = qkv_i8.view(b, T, nh, 3, hd)
+        if not use_layout and not use_compact_layout and T in (4, 16) and hd == 96:
+            xattn = _mc.flash_attn_int8_qi8packed_small_qout(
+                qkv_pk, sv, self._fq_sqc, self._fq_skc,
+                self.scale, proj.a_scale)
+        elif not use_layout and not use_compact_layout:
+            hd_pad = ((hd + 31) // 32) * 32
+            ki, vt = _mc.quantize_attn_kv_from_i8(
+                qkv_pk, nh, T, hd, hd_pad, hd_pad)
+            flash_fn = _mc.flash_attn_int8_qi8packed_kv_static_qout
+            if (self._int8_flash_preg and T == 1024 and hd == 24
+                    and hasattr(
+                        _mc, "flash_attn_int8_qi8packed_kv_static_qout_preg")):
+                flash_fn = _mc.flash_attn_int8_qi8packed_kv_static_qout_preg
+            xattn = flash_fn(
+                qkv_pk, ki.view(b, nh, T, hd_pad),
+                vt.view(b, nh, hd_pad, T), sv, hd_pad,
+                self._fq_sqc, self._fq_skc, self.scale, proj.a_scale)
+        res = x_in_tok.reshape(b * T, c).contiguous()
+        pbias = proj.bias if proj.bias is not None else empty
+        out = _mc.gemm_w8a8_awq_bias_res(
+            xattn, proj.qweight, proj.w_scale, proj.a_scale,
+            proj.out_features, pbias, res)
+        return out.reshape(b, T, c)
 
     def forward(self, x):
         b, c, H, W = x.shape
@@ -337,12 +631,32 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         nh, hd = self.num_heads, self.head_dim
         x_in_tok = x.permute(0, 2, 3, 1).reshape(b, T, c)
         from integration.fused_ops.token_major_attention import _HAS_FUSED_GN_QKV, _FUSE_TILE_M, _FUSE_SHIFT
+        qkv_epi_out = self._int4_qkv_epilogue_forward(x, x_in_tok, b, T, c, nh, hd)
+        if qkv_epi_out is not None:
+            return qkv_epi_out.reshape(b, H, W, c).permute(0, 3, 1, 2)
+        int8_qkv_epi_out = self._int8_qkv_epilogue_forward(
+            x, x_in_tok, b, T, c, nh, hd)
+        if int8_qkv_epi_out is not None:
+            return int8_qkv_epi_out.reshape(b, H, W, c).permute(0, 3, 1, 2)
         # ---- Route 1 (opt-in): int8-emitting fused GN->qkv + int8 reshuffle -> flash, skipping the
         # fp16 qkv round-trip AND the separate flash quantize. Only after flash + scales have frozen
         # (calibration used the normal path below); eligible int8 blocks with T%128==0, c%8==0. ----
         if (self._route1 and _HAS_FUSED_GN_QKV and x.dtype == torch.float16
-                and self._flash_choice is True and getattr(self, "_fq_frozen2", False)
+                and (self._flash_gate == "on" or self._flash_choice is True)
+                and getattr(self, "_fq_frozen2", False)
                 and (T % _FUSE_TILE_M) == 0 and (c % 8) == 0):
+            if (self._qout_eligible()
+                    and hasattr(_mc, "quantize_attn_kv_from_i8")
+                    and hasattr(_mc, "flash_attn_int8_qi8packed_kv_static_qout")):
+                proj = self.proj
+                xq = self._route1_qout(
+                    x, b, T, nh, hd, _FUSE_SHIFT, proj.a_scale)
+                res = x_in_tok.reshape(b * T, c).contiguous()
+                pbias = proj.bias if proj.bias is not None else x.new_empty(0)
+                out = _mc.gemm_w8a8_awq_bias_res(
+                    xq, proj.qweight, proj.w_scale, proj.a_scale,
+                    proj.out_features, pbias, res)
+                return out.reshape(b, H, W, c).permute(0, 3, 1, 2)
             a = self._route1_score(x, b, T, nh, hd, _FUSE_SHIFT)
             out_tok = self._proj_with_residual(a, x_in_tok, b, T, c)
             return out_tok.reshape(b, H, W, c).permute(0, 3, 1, 2)
@@ -361,10 +675,11 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
             # blocks the fp16 fused_gn_qkv branch above doesn't cover (T%128!=0 or c%8!=0, e.g.
             # hd48/T64) and during the qkv scale calibration window.
             qkv = self._qkv_from_gn(x, b, T, c, nh, hd)
+        if self.bits == 8 and T < 64:
+            self._observe_small_int8_scales(qkv)
         # ---- Score path (QKᵀ + softmax + AV): fused int8/int4 flash (scores in SRAM) when the
-        # gate says it's a win for this block; else fp16 MATH SDPA. The flash kernel needs
-        # head_dim<=48 and T%64==0; among eligible blocks the small-T ones lose to fp16, so the
-        # gate autotunes per block (see _resolve_flash). ----
+        # fixed route selects it; else fp16 MATH SDPA. INT8 always selects quantized flash when
+        # eligible; any remaining automatic selection here belongs only to the INT4 experiment. ----
         use_flash = self._resolve_flash(qkv, T)
         if use_flash and self._qout_eligible():
             # Fused flash+proj: flash emits the proj-quantized token-major output directly (no fp16
@@ -401,35 +716,155 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         bias = proj.bias if proj.bias is not None else qkv.new_empty(0)
         if self.bits == 8:
             hd_pad = ((hd + 31) // 32) * 32
-            # Packed flash+proj (autotuned): emit proj-quantized int8 straight from the packed qkv.
+            def int8_qin_xq():
+                compact_hd24 = (
+                    T == 1024 and hd == 24
+                    and os.environ.get("MODIFF_INT8_KV_COMPACT24", "0") != "0")
+                k_storage_hd = hd_pad
+                v_storage_hd = hd if compact_hd24 else hd_pad
+                ki_, vt_, sv_ = _mc.quantize_attn_kv_packed_static(
+                    qkv, nh, T, hd, k_storage_hd, v_storage_hd, 8,
+                    self._fq_skc, self._fq_svv[:v_storage_hd].contiguous())
+                return _mc.flash_attn_int8_qpacked_kv_static_qout(
+                    qkv, ki_.view(b, nh, T, k_storage_hd),
+                    vt_.view(b, nh, v_storage_hd, T), sv_[:hd].contiguous(),
+                    hd_pad, self._fq_sqc, self._fq_skc,
+                    self.scale, proj.a_scale)
+
+            # Optional packed diagnostic route. There is no runtime autotune: selecting its
+            # environment flag means always using it for a supported shape.
             if self._flash_packed:
                 sv_hd = self._fq_svv[:hd].contiguous()
-                if self._packed_qout_choice is None:
-                    self._packed_qout_choice = self._autotune_ab(
-                        lambda: _mc.flash_attn_int8_packed_vt_qout(qkv, sv_hd, hd_pad, self._fq_sqc, self._fq_skc, self.scale, proj.a_scale),
-                        lambda: self._packed_ref_vt_qout(qkv, b, nh, T, hd, hd_pad, proj.a_scale))
-                if self._packed_qout_choice:
-                    xq = _mc.flash_attn_int8_packed_vt_qout(qkv, sv_hd, hd_pad, self._fq_sqc, self._fq_skc, self.scale, proj.a_scale)
-                    out = _mc.gemm_w8a8_awq_bias_res(xq, proj.qweight, proj.w_scale, proj.a_scale,
-                                                     proj.out_features, bias, res)
-                    return out.reshape(b, T, c)
+                persistent_supported = (
+                    hasattr(_mc, "flash_attn_int8_packed_persistent_qout")
+                    and ((T == 1024 and hd == 24)
+                         or (T in (64, 256) and hd == 48)))
+                persistent_ok = persistent_supported and self._int8_persistent
+                packed_fn = (
+                    (lambda: _mc.flash_attn_int8_packed_persistent_qout(
+                        qkv, sv_hd, hd_pad, self._fq_sqc, self._fq_skc,
+                        self.scale, proj.a_scale))
+                    if persistent_ok else
+                    (lambda: _mc.flash_attn_int8_packed_vt_qout(
+                        qkv, sv_hd, hd_pad, self._fq_sqc, self._fq_skc,
+                        self.scale, proj.a_scale)))
+                xq = packed_fn()
+                out = _mc.gemm_w8a8_awq_bias_res(
+                    xq, proj.qweight, proj.w_scale, proj.a_scale,
+                    proj.out_features, bias, res)
+                return out.reshape(b, T, c)
+            # With the qout store fused, quantizing Q once in each consuming CTA wins at every
+            # production flash shape: 1024, 256, and 64 tokens. This removes the Q tensor allocation
+            # and half of the Q/K preparation pass while retaining prequantized K/V.
+            if T >= 64 and hasattr(_mc, "flash_attn_int8_qpacked_kv_static_qout"):
+                xq = int8_qin_xq()
+                out = _mc.gemm_w8a8_awq_bias_res(
+                    xq, proj.qweight, proj.w_scale, proj.a_scale,
+                    proj.out_features, bias, res)
+                return out.reshape(b, T, c)
             qi, ki, vt, sq, sk, sv = _mc.quantize_attn_qkv_packed_static(
                 qkv, nh, T, hd, hd_pad, hd_pad, 8, self._fq_sqc, self._fq_skc, self._fq_svv)
             qi = qi.view(b, nh, T, hd_pad); ki = ki.view(b, nh, T, hd_pad); vt = vt.view(b, nh, hd_pad, T)
             sq = sq.view(b, nh, T).contiguous(); sk = sk.view(b, nh, T).contiguous()
             sv = sv[..., :hd].contiguous().view(b, nh, hd)
-            xq = _mc.flash_attn_int8_vt_qout(qi, ki, vt, sq, sk, sv, self.scale, proj.a_scale)  # int8 [b*T,c]
+            if hasattr(_mc, "flash_attn_int8_vt_static_qout"):
+                xq = _mc.flash_attn_int8_vt_static_qout(
+                    qi, ki, vt, sv, self._fq_sqc, self._fq_skc, self.scale, proj.a_scale)
+            else:
+                xq = _mc.flash_attn_int8_vt_qout(
+                    qi, ki, vt, sq, sk, sv, self.scale, proj.a_scale)
             out = _mc.gemm_w8a8_awq_bias_res(xq, proj.qweight, proj.w_scale, proj.a_scale,
                                              proj.out_features, bias, res)
         else:
             hdp4, hdp_v = 64, ((hd + 31) // 32) * 32
-            q4, k4, vt, sq4, sk4, sv = _mc.quantize_attn_qkv_packed_static(
-                qkv, nh, T, hd, hdp4, hdp_v, 4, self._fq4_sqc, self._fq4_skc, self._fq4_svv)
+            use_compact_i4 = (os.environ.get("MODIFF_INT4_COMPACT_STATIC", "1") != "0"
+                              and hasattr(_mc, "quantize_attn_qkv_packed_static_compact"))
+            # hd=24 is a poor fit for native m16n8k64.s4: 62.5% of QK lanes are padding.
+            # Keep the exact signed-int4 Q/K grid but store it unpacked and use m16n8k32.s8;
+            # the attention output remains packed int4 for the W4 projection.
+            if (T == 1024 and hd == 24
+                    and hasattr(_mc, "flash_attn_i4values_i8mma_qpacked_kv_static_qout")):
+                hdpi8 = 32
+                ki, vt, sv = _mc.quantize_attn_kv_packed_static(
+                    qkv, nh, T, hd, hdpi8, hdpi8, _QK_I4_VALUES_I8_MMA,
+                    self._fq4_skc, self._fq4_svv[:hdpi8])
+                ki = ki.view(b, nh, T, hdpi8)
+                vt = vt.view(b, nh, hdpi8, T)
+                sv = sv[:hd].contiguous()
+                xq = _mc.flash_attn_i4values_i8mma_qpacked_kv_static_qout(
+                    qkv, ki, vt, sv, hdpi8, self._fq4_sqc, self._fq4_skc,
+                    self.scale, proj.a_scale, proj._awqt_K)
+                out = _mc.gemm_w4a4_awq_bias_res(
+                    xq, proj.qweight, proj.w_scale, proj.a_scale,
+                    proj._awqt_K, proj.out_features, bias, res)
+                return out.reshape(b, T, c)
+            def i4_qin_xq():
+                k4_, vt_, sv_ = _mc.quantize_attn_kv_packed_static(
+                    qkv, nh, T, hd, hdp4, hdp_v, _QK_I4_PACKED,
+                    self._fq4_skc, self._fq4_svv)
+                return _mc.flash_attn_int4_qpacked_kv_static_qout(
+                    qkv, k4_.view(b, nh, T, -1), vt_.view(b, nh, hdp_v, T),
+                    sv_[:hd].contiguous(), hdp4, self._fq4_sqc, self._fq4_skc,
+                    self.scale, proj.a_scale, proj._awqt_K)
+
+            def i4_ref_xq():
+                if use_compact_i4:
+                    q4_, k4_, vt_, sv_ = _mc.quantize_attn_qkv_packed_static_compact(
+                        qkv, nh, T, hd, hdp4, hdp_v, _QK_I4_PACKED,
+                        self._fq4_sqc, self._fq4_skc, self._fq4_svv)
+                else:
+                    q4_, k4_, vt_, _sq4, _sk4, sv_ = _mc.quantize_attn_qkv_packed_static(
+                        qkv, nh, T, hd, hdp4, hdp_v, _QK_I4_PACKED,
+                        self._fq4_sqc, self._fq4_skc, self._fq4_svv)
+                sv_arg = sv_[..., :hd].contiguous()
+                if sv_arg.dim() != 1:
+                    sv_arg = sv_arg.view(b, nh, hd)
+                return _mc.flash_attn_int4_vt_static_qout(
+                    q4_.view(b, nh, T, -1), k4_.view(b, nh, T, -1),
+                    vt_.view(b, nh, hdp_v, T),
+                    sv_arg,
+                    hdp4, self._fq4_sqc, self._fq4_skc, self.scale,
+                    proj.a_scale, proj._awqt_K)
+
+            qin_available = (T >= 64
+                             and hasattr(_mc, "flash_attn_int4_qpacked_kv_static_qout"))
+            use_qin = qin_available and self._int4_qin_mode == "on"
+            if qin_available and self._int4_qin_mode == "auto":
+                if self._int4_qin_choice is None:
+                    # Require a 1% win to keep noise from selecting a fragile route.
+                    self._int4_qin_choice = self._autotune_ab(
+                        i4_qin_xq, i4_ref_xq, margin=0.01)
+                use_qin = self._int4_qin_choice
+            if use_qin:
+                xq = i4_qin_xq()
+                out = _mc.gemm_w4a4_awq_bias_res(
+                    xq, proj.qweight, proj.w_scale, proj.a_scale,
+                    proj._awqt_K, proj.out_features, bias, res)
+                return out.reshape(b, T, c)
+            if use_compact_i4:
+                q4, k4, vt, sv = _mc.quantize_attn_qkv_packed_static_compact(
+                    qkv, nh, T, hd, hdp4, hdp_v, _QK_I4_PACKED,
+                    self._fq4_sqc, self._fq4_skc, self._fq4_svv)
+                sq4 = sk4 = None
+            else:
+                q4, k4, vt, sq4, sk4, sv = _mc.quantize_attn_qkv_packed_static(
+                    qkv, nh, T, hd, hdp4, hdp_v, _QK_I4_PACKED,
+                    self._fq4_sqc, self._fq4_skc, self._fq4_svv)
             q4 = q4.view(b, nh, T, -1); k4 = k4.view(b, nh, T, -1); vt = vt.view(b, nh, hdp_v, T)
-            sq4 = sq4.view(b, nh, T).contiguous(); sk4 = sk4.view(b, nh, T).contiguous()
-            sv = sv[..., :hd].contiguous().view(b, nh, hd)
-            xq = _mc.flash_attn_int4_vt_qout(q4, k4, vt, sq4, sk4, sv, hdp4, self.scale,
-                                             proj.a_scale, proj._awqt_K)   # packed int4 [b*T,K_pad/2]
+            sv = sv[..., :hd].contiguous()
+            if sv.dim() != 1:
+                sv = sv.view(b, nh, hd)
+            if hasattr(_mc, "flash_attn_int4_vt_static_qout"):
+                xq = _mc.flash_attn_int4_vt_static_qout(
+                    q4, k4, vt, sv, hdp4, self._fq4_sqc, self._fq4_skc, self.scale,
+                    proj.a_scale, proj._awqt_K)
+            else:
+                sq4 = sq4.view(b, nh, T).contiguous()
+                sk4 = sk4.view(b, nh, T).contiguous()
+                sv = sv.view(b, nh, hd)
+                xq = _mc.flash_attn_int4_vt_qout(
+                    q4, k4, vt, sq4, sk4, sv, hdp4, self.scale,
+                    proj.a_scale, proj._awqt_K)   # packed int4 [b*T,K_pad/2]
             out = _mc.gemm_w4a4_awq_bias_res(xq, proj.qweight, proj.w_scale, proj.a_scale,
                                              proj._awqt_K, proj.out_features, bias, res)
         return out.reshape(b, T, c)

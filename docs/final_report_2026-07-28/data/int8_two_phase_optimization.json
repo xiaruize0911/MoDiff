@@ -1,0 +1,68 @@
+{
+  "date": "2026-07-30",
+  "gpu": "NVIDIA A40",
+  "batch": 128,
+  "protocol": {
+    "warmups": 20,
+    "rounds": 5,
+    "iterations_per_round": 60,
+    "complete_runs": 2
+  },
+  "phase1": {
+    "candidate": "register-P T1024 FlashAttention",
+    "correctness": "bit-exact",
+    "resources": {"registers": 64, "stack_bytes": 0, "local_bytes": 0},
+    "shared_p_us": 1645.04,
+    "register_p_us": 1768.23,
+    "speedup": 0.930,
+    "accepted": false,
+    "production_default": false
+  },
+  "phase2_microbenchmark": [
+    {"tokens": 1024, "old_gemm_plus_producer_us": 650.93, "layout_gemm_us": 576.48, "speedup": 1.129, "selected": true},
+    {"tokens": 256, "old_gemm_plus_producer_us": 372.29, "layout_gemm_us": 378.22, "compact_layout_gemm_us": 315.14, "speedup": 1.181, "selected": true},
+    {"tokens": 64, "old_gemm_plus_producer_us": 95.77, "layout_gemm_us": 105.43, "speedup": 0.908, "selected": false}
+  ],
+  "two_run_median": {
+    "fp16": [
+      {"tokens": 1024, "instances": 5, "us": 3118.59},
+      {"tokens": 256, "instances": 5, "us": 1078.00},
+      {"tokens": 64, "instances": 5, "us": 411.76},
+      {"tokens": 16, "instances": 5, "us": 215.02},
+      {"tokens": 4, "instances": 1, "us": 196.91}
+    ],
+    "int8_before": [
+      {"tokens": 1024, "instances": 5, "us": 2785.70},
+      {"tokens": 256, "instances": 5, "us": 916.91},
+      {"tokens": 64, "instances": 5, "us": 232.61},
+      {"tokens": 16, "instances": 5, "us": 179.06},
+      {"tokens": 4, "instances": 1, "us": 105.28}
+    ],
+    "int8_after": [
+      {"tokens": 1024, "instances": 5, "us": 2772.99},
+      {"tokens": 256, "instances": 5, "us": 861.58},
+      {"tokens": 64, "instances": 5, "us": 231.36},
+      {"tokens": 16, "instances": 5, "us": 179.60},
+      {"tokens": 4, "instances": 1, "us": 105.30}
+    ],
+    "weighted_fp16_ms": 24.314,
+    "weighted_int8_before_ms": 20.677,
+    "weighted_int8_after_ms": 20.333,
+    "speedup_before_vs_fp16": 1.176,
+    "speedup_after_vs_fp16": 1.196,
+    "finetune_weighted_speedup": 1.017,
+    "cumulative_speedup_vs_original_int8": 1.028
+  },
+  "validation": {
+    "layout_qkv_bit_exact": true,
+    "flash_qout_bit_exact": true,
+    "padding_zero": true,
+    "nondefault_stream_deterministic": true,
+    "nine_shape_attention_passed": true,
+    "int8_relative_l2_range": [0.0076, 0.0160],
+    "quality_seeds": [1234, 5678, 9012],
+    "quality_latent_relative_l2": [0.0, 0.0, 0.0],
+    "quality_threshold": 0.02,
+    "quality_passed": true
+  }
+}

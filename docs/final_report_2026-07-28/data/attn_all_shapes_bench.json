@@ -4,9 +4,9 @@
   "blocks": [
     {
       "eligible": true,
-      "pt_fp16_us": 1830.9989929199219,
-      "int8_us": 2031.2998962402341,
-      "int4_us": 2220.2394104003906,
+      "pt_fp16_us": 1851.7132568359375,
+      "int8_us": 1867.4636840820312,
+      "int4_us": 1902.1682739257812,
       "C": 192,
       "HW": "32x32",
       "T": 1024,
@@ -15,9 +15,9 @@
     },
     {
       "eligible": true,
-      "pt_fp16_us": 229.95328903198242,
-      "int8_us": 293.75999450683594,
-      "int4_us": 261.53087615966797,
+      "pt_fp16_us": 231.11040115356445,
+      "int8_us": 262.13504791259766,
+      "int4_us": 219.26015853881836,
       "C": 384,
       "HW": "16x16",
       "T": 256,
@@ -26,9 +26,9 @@
     },
     {
       "eligible": true,
-      "pt_fp16_us": 69.39263820648193,
-      "int8_us": 52.46848106384277,
-      "int4_us": 40.314879417419434,
+      "pt_fp16_us": 69.96863842010498,
+      "int8_us": 44.57087993621826,
+      "int4_us": 39.40351963043213,
       "C": 384,
       "HW": "8x8",
       "T": 64,
@@ -37,7 +37,7 @@
     },
     {
       "eligible": false,
-      "pt_fp16_us": 44.197120666503906,
+      "pt_fp16_us": 45.45919895172119,
       "int8_us": null,
       "int4_us": null,
       "C": 768,
@@ -48,7 +48,7 @@
     },
     {
       "eligible": false,
-      "pt_fp16_us": 39.96031999588013,
+      "pt_fp16_us": 41.19552135467529,
       "int8_us": null,
       "int4_us": null,
       "C": 768,
@@ -60,64 +60,64 @@
   ],
   "layer": {
     "C192_32x32": {
-      "gn+qkv (unfused: GN + fp16 GEMM)": 1736.2730662027993,
+      "gn+qkv (unfused: GN + fp16 GEMM)": 1739.6245320638022,
       "_gn_qkv_fusable": true,
-      "score: PyTorch fp16 flash": 1847.9244995117188,
-      "quantize q/k/v (int8, standalone)": 729.3994903564453,
-      "score: ours int8 flash": 2031.8925476074216,
-      "score: ours int4 flash": 2252.0140075683594,
-      "score: ours int8 packed (quantize folded in)": 8494.014892578125,
-      "transpose attn out (head->token major)": 204.7987174987793,
-      "proj GEMM + bias (fp16)": 192.20735549926758,
-      "residual add": 266.6815948486328
+      "score: PyTorch fp16 flash": 1848.1304931640625,
+      "quantize q/k/v (int8, standalone)": 611.6970698038738,
+      "score: ours int8 flash": 1868.0653381347656,
+      "score: ours int4 flash": 1882.8160095214844,
+      "score: ours int8 packed (quantize folded in)": 5158.81103515625,
+      "transpose attn out (head->token major)": 206.74943923950195,
+      "proj GEMM + bias (fp16)": 192.67839431762695,
+      "residual add": 266.48319244384766
     },
     "C384_16x16": {
-      "gn+qkv (unfused: GN + fp16 GEMM)": 978.651746114095,
+      "gn+qkv (unfused: GN + fp16 GEMM)": 976.85120900472,
       "_gn_qkv_fusable": true,
-      "score: PyTorch fp16 flash": 217.7356719970703,
-      "quantize q/k/v (int8, standalone)": 265.5999978383382,
-      "score: ours int8 flash": 292.30207443237305,
-      "score: ours int4 flash": 261.53472900390625,
-      "score: ours int8 packed (quantize folded in)": 1642.7456665039062,
-      "transpose attn out (head->token major)": 103.02720069885254,
-      "proj GEMM + bias (fp16)": 124.93696212768555,
-      "residual add": 135.32032012939453
+      "score: PyTorch fp16 flash": 215.9052848815918,
+      "quantize q/k/v (int8, standalone)": 265.84320068359375,
+      "score: ours int8 flash": 261.844482421875,
+      "score: ours int4 flash": 222.51903533935547,
+      "score: ours int8 packed (quantize folded in)": 1037.31201171875,
+      "transpose attn out (head->token major)": 102.97216415405273,
+      "proj GEMM + bias (fp16)": 124.53760147094727,
+      "residual add": 135.0937557220459
     },
     "C384_8x8": {
-      "gn+qkv (unfused: GN + fp16 GEMM)": 423.94240697224933,
+      "gn+qkv (unfused: GN + fp16 GEMM)": 419.3429311116537,
       "_gn_qkv_fusable": false,
-      "score: PyTorch fp16 flash": 67.22432136535645,
-      "quantize q/k/v (int8, standalone)": 74.76692994435628,
-      "score: ours int8 flash": 51.0975980758667,
-      "score: ours int4 flash": 39.17311906814575,
-      "score: ours int8 packed (quantize folded in)": 205.4003143310547,
-      "transpose attn out (head->token major)": 29.136641025543213,
-      "proj GEMM + bias (fp16)": 59.10016059875488,
-      "residual add": 35.16416072845459
+      "score: PyTorch fp16 flash": 66.75072193145752,
+      "quantize q/k/v (int8, standalone)": 74.02453422546387,
+      "score: ours int8 flash": 42.88383960723877,
+      "score: ours int4 flash": 38.35263967514038,
+      "score: ours int8 packed (quantize folded in)": 111.39840126037598,
+      "transpose attn out (head->token major)": 29.04320001602173,
+      "proj GEMM + bias (fp16)": 58.97088050842285,
+      "residual add": 35.1859188079834
     },
     "C768_4x4": {
-      "gn+qkv (unfused: GN + fp16 GEMM)": 426.05012257893884,
+      "gn+qkv (unfused: GN + fp16 GEMM)": 426.68161392211914,
       "_gn_qkv_fusable": false,
-      "score: PyTorch fp16 flash": 43.98719787597656,
+      "score: PyTorch fp16 flash": 43.49055767059326,
       "_flash_ineligible": "hd=96 > 48 or T=16 % 64 != 0",
-      "transpose attn out (head->token major)": 14.311679601669312,
-      "proj GEMM + bias (fp16)": 26.126079559326172,
-      "residual add": 17.660160064697266
+      "transpose attn out (head->token major)": 14.580479860305786,
+      "proj GEMM + bias (fp16)": 25.803520679473877,
+      "residual add": 17.57696032524109
     },
     "C768_2x2": {
-      "gn+qkv (unfused: GN + fp16 GEMM)": 428.6314646402995,
+      "gn+qkv (unfused: GN + fp16 GEMM)": 425.1328150431315,
       "_gn_qkv_fusable": false,
-      "score: PyTorch fp16 flash": 39.56736087799072,
+      "score: PyTorch fp16 flash": 39.536640644073486,
       "_flash_ineligible": "hd=96 > 48 or T=4 % 64 != 0",
-      "transpose attn out (head->token major)": 13.999359607696533,
-      "proj GEMM + bias (fp16)": 18.117120265960693,
-      "residual add": 7.0182400941848755
+      "transpose attn out (head->token major)": 14.725120067596436,
+      "proj GEMM + bias (fp16)": 18.840320110321045,
+      "residual add": 7.726079821586609
     }
   },
   "totals_score_kernel": {
-    "pt": 10651.724600791931,
-    "i8": 11887.641859054564,
-    "i4": 12610.42582988739,
-    "pt_all": 10912.67052412033
+    "pt": 10763.961482048035,
+    "i8": 10870.848059654236,
+    "i4": 10804.159760475159,
+    "pt_all": 11032.452998161316
   }
 }

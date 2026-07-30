@@ -260,11 +260,21 @@ torch::Tensor group_norm_silu_quantize_nhwc(
     int64_t num_groups, double eps, bool apply_silu,
     torch::Tensor scale, torch::Tensor smooth_inv,
     torch::Tensor mod_scale, torch::Tensor mod_shift);
+torch::Tensor group_norm_silu_quantize_nhwc_fast(
+    torch::Tensor x, torch::Tensor weight, torch::Tensor bias,
+    int64_t num_groups, double eps, bool apply_silu,
+    torch::Tensor scale, torch::Tensor smooth_inv,
+    torch::Tensor mod_scale, torch::Tensor mod_shift);
 
 // k_pad: padded row width in channels for the int4 GEMM's K alignment (<=C -> no padding). Lets a
 // block whose C is not a multiple of the GEMM's K tile (C=192 -> K_pad 256) keep the fused
 // GN->quantize->pack path instead of GN + F.pad + a standalone quantize_act_int4_pack.
 torch::Tensor group_norm_silu_quantize_pack_nhwc(
+    torch::Tensor x, torch::Tensor weight, torch::Tensor bias,
+    int64_t num_groups, double eps, bool apply_silu,
+    torch::Tensor scale, torch::Tensor smooth_inv,
+    torch::Tensor mod_scale, torch::Tensor mod_shift, int64_t k_pad = 0);
+torch::Tensor group_norm_silu_quantize_pack_nhwc_fast(
     torch::Tensor x, torch::Tensor weight, torch::Tensor bias,
     int64_t num_groups, double eps, bool apply_silu,
     torch::Tensor scale, torch::Tensor smooth_inv,
@@ -317,8 +327,24 @@ torch::Tensor gemm_w4a4_awq_nout(torch::Tensor A, torch::Tensor B, torch::Tensor
 torch::Tensor gemm_w8a8_awq_bias_res(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale, int64_t n_out, torch::Tensor bias, torch::Tensor residual);
 torch::Tensor gemm_w4a4_awq_bias_res(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale, int64_t K, int64_t n_out, torch::Tensor bias, torch::Tensor residual);
 torch::Tensor gemm_w8a8_awq_out_i8(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale, torch::Tensor inv_out_scale);
+torch::Tensor gemm_w8a8_awq_out_i8_bias_nout(
+    torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale,
+    torch::Tensor inv_out_scale, torch::Tensor bias, int64_t n_out);
+std::vector<torch::Tensor> gemm_w8a8_awq_qkv_i8_layouts(
+    torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale,
+    torch::Tensor inv_out_scale, torch::Tensor bias, int64_t nh,
+    int64_t T, int64_t hd, int64_t hp);
+std::vector<torch::Tensor> gemm_w8a8_awq_qkv_i8_layouts_compact(
+    torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale,
+    torch::Tensor inv_out_scale, torch::Tensor bias, int64_t nh,
+    int64_t T, int64_t hd, int64_t hp);
 torch::Tensor gemm_w4a4_awq(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale, int64_t K);
 torch::Tensor gemm_w4a4_awq_out_i8(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale, int64_t K, torch::Tensor inv_out_scale);
+std::vector<torch::Tensor> gemm_w4a4_awq_qkv_i4qk_i8v(
+    torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale, int64_t K,
+    int64_t n_out, torch::Tensor bias, int64_t nh, int64_t T, int64_t hd,
+    int64_t hp_qk, int64_t hp_v, int64_t storage_mode,
+    double sq, double sk, torch::Tensor sv);
 torch::Tensor quantize_act_int8(torch::Tensor x, double a_scale);
 torch::Tensor quantize_act_int4_pack(torch::Tensor x, double a_scale);
 
@@ -327,19 +353,70 @@ torch::Tensor flash_attn_int8(torch::Tensor q, torch::Tensor k, torch::Tensor v,
                               torch::Tensor sq, torch::Tensor sk, torch::Tensor sv, double softmax_scale);
 torch::Tensor flash_attn_int8_vt(torch::Tensor q, torch::Tensor k, torch::Tensor vt,
                                  torch::Tensor sq, torch::Tensor sk, torch::Tensor sv, double softmax_scale);
+torch::Tensor flash_attn_int8_vt_static(torch::Tensor q, torch::Tensor k, torch::Tensor vt,
+                                        torch::Tensor sv, double sq, double sk, double softmax_scale);
+torch::Tensor flash_attn_int8_qpacked_kv_static(
+    torch::Tensor qkv, torch::Tensor k, torch::Tensor vt, torch::Tensor sv,
+    int64_t hd_pad, double sq, double sk, double softmax_scale);
+torch::Tensor flash_attn_int8_qpacked_kv_static_qout(
+    torch::Tensor qkv, torch::Tensor k, torch::Tensor vt, torch::Tensor sv,
+    int64_t hd_pad, double sq, double sk, double softmax_scale, double proj_a_scale);
+torch::Tensor flash_attn_int8_qi8packed_kv_static_qout(
+    torch::Tensor qkv_i8, torch::Tensor k, torch::Tensor vt, torch::Tensor sv,
+    int64_t hd_pad, double sq, double sk, double softmax_scale, double proj_a_scale);
+torch::Tensor flash_attn_int8_qi8packed_kv_static_qout_preg(
+    torch::Tensor qkv_i8, torch::Tensor k, torch::Tensor vt, torch::Tensor sv,
+    int64_t hd_pad, double sq, double sk, double softmax_scale, double proj_a_scale);
+torch::Tensor flash_attn_int8_qi8_kv_static_qout(
+    torch::Tensor q_i8, torch::Tensor k, torch::Tensor vt, torch::Tensor sv,
+    int64_t hd_pad, double sq, double sk, double softmax_scale, double proj_a_scale);
+torch::Tensor flash_attn_int8_qi8_kv_static_qout_hd24(
+    torch::Tensor q_i8, torch::Tensor k, torch::Tensor vt, torch::Tensor sv,
+    int64_t hd_pad, double sq, double sk, double softmax_scale, double proj_a_scale);
+torch::Tensor flash_attn_int8_qi8packed_small_qout(
+    torch::Tensor qkv_i8, torch::Tensor sv, double sq, double sk,
+    double softmax_scale, double proj_a_scale);
+torch::Tensor flash_attn_int8_qpacked_kv_static_qout_w16(
+    torch::Tensor qkv, torch::Tensor k, torch::Tensor vt, torch::Tensor sv,
+    int64_t hd_pad, double sq, double sk, double softmax_scale, double proj_a_scale);
+torch::Tensor flash_attn_i4values_i8mma_qpacked_kv_static_qout(
+    torch::Tensor qkv, torch::Tensor k, torch::Tensor vt, torch::Tensor sv,
+    int64_t hd_pad, double sq, double sk, double softmax_scale,
+    double proj_a_scale, int64_t k_pad);
+torch::Tensor flash_attn_i4values_i8mma_vt_static_qout(
+    torch::Tensor q, torch::Tensor k, torch::Tensor vt, torch::Tensor sv,
+    int64_t hd_pad, double sq, double sk, double softmax_scale,
+    double proj_a_scale, int64_t k_pad);
 torch::Tensor flash_attn_int4(torch::Tensor q4, torch::Tensor k4, torch::Tensor v,
                               torch::Tensor sq, torch::Tensor sk, torch::Tensor sv, int64_t hdp4, double softmax_scale);
 torch::Tensor flash_attn_int4_vt(torch::Tensor q4, torch::Tensor k4, torch::Tensor vt,
                                  torch::Tensor sq, torch::Tensor sk, torch::Tensor sv, int64_t hdp4, double softmax_scale);
+torch::Tensor flash_attn_int4_vt_static(torch::Tensor q4, torch::Tensor k4, torch::Tensor vt,
+                                        torch::Tensor sv, int64_t hdp4, double sq, double sk,
+                                        double softmax_scale);
+torch::Tensor flash_attn_int4_qpacked_kv_static(
+    torch::Tensor qkv, torch::Tensor k4, torch::Tensor vt, torch::Tensor sv,
+    int64_t hdp4, double sq, double sk, double softmax_scale);
+torch::Tensor flash_attn_int4_qpacked_kv_static_qout(
+    torch::Tensor qkv, torch::Tensor k4, torch::Tensor vt, torch::Tensor sv,
+    int64_t hdp4, double sq, double sk, double softmax_scale,
+    double proj_a_scale, int64_t k_pad);
 // Fused proj-quantize flash variants: emit the attention output already quantized token-major
 // (int8 [b*T,C] / packed-int4 [b*T,k_pad/2]) by the calibrated proj scale, so the separate
 // quantize_attn_out_int{8,4} pass + fp16 attn-output round-trip are eliminated.
 torch::Tensor flash_attn_int8_vt_qout(torch::Tensor q, torch::Tensor k, torch::Tensor vt,
                                       torch::Tensor sq, torch::Tensor sk, torch::Tensor sv,
                                       double softmax_scale, double proj_a_scale);
+torch::Tensor flash_attn_int8_vt_static_qout(
+    torch::Tensor q, torch::Tensor k, torch::Tensor vt, torch::Tensor sv,
+    double sq, double sk, double softmax_scale, double proj_a_scale);
 torch::Tensor flash_attn_int4_vt_qout(torch::Tensor q4, torch::Tensor k4, torch::Tensor vt,
                                       torch::Tensor sq, torch::Tensor sk, torch::Tensor sv,
                                       int64_t hdp4, double softmax_scale, double proj_a_scale, int64_t k_pad);
+torch::Tensor flash_attn_int4_vt_static_qout(
+    torch::Tensor q4, torch::Tensor k4, torch::Tensor vt, torch::Tensor sv,
+    int64_t hdp4, double sq, double sk, double softmax_scale,
+    double proj_a_scale, int64_t k_pad);
 // PACKED-input int8 flash: read interleaved qkv [b,T,nh,3,hd] directly (fp16 -> quantize on load with
 // frozen per-tensor sq_c/sk_c + per-channel sv[hd]; int8 -> plain gather), doing hd->hd_pad pad + the
 // V-transpose in smem. Replaces the aq_qtok/aq_vquant (or Route-1 from_i8) reshuffle + qi/ki/vt HBM
@@ -349,6 +426,9 @@ torch::Tensor flash_attn_int8_packed_vt(torch::Tensor qkv, torch::Tensor sv, int
 torch::Tensor flash_attn_int8_packed_vt_qout(torch::Tensor qkv, torch::Tensor sv, int64_t hd_pad,
                                              double sq_c, double sk_c, double softmax_scale,
                                              double proj_a_scale);
+torch::Tensor flash_attn_int8_packed_persistent_qout(
+    torch::Tensor qkv, torch::Tensor sv, int64_t hd_pad,
+    double sq_c, double sk_c, double softmax_scale, double proj_a_scale);
 torch::Tensor mma_smoke(torch::Tensor A, torch::Tensor B);
 
 // ---- csrc/kernels/attention/attn_quant_gemm.cu (quantize prologue for FUSED flash attention) ----
@@ -362,7 +442,12 @@ std::vector<torch::Tensor> quantize_attn_qkv_static(torch::Tensor Q, torch::Tens
 // PACKED-qkv quantize (reads interleaved [b,T,nh,3,hd], no transpose copy). QK int8/int4, V int8.
 std::vector<torch::Tensor> quantize_attn_qkv_packed(torch::Tensor qkv, int64_t nh, int64_t T, int64_t hd, int64_t hp_qk, int64_t hp_av, int64_t qk_bits);
 std::vector<torch::Tensor> quantize_attn_qkv_packed_static(torch::Tensor qkv, int64_t nh, int64_t T, int64_t hd, int64_t hp_qk, int64_t hp_av, int64_t qk_bits, double sq_c, double sk_c, torch::Tensor sv_vec);
+// Production static API: omits dead per-token sq/sk tensors and returns a broadcast [hp_av]
+// V-scale vector: {qi, ki, vt, sv}.
+std::vector<torch::Tensor> quantize_attn_qkv_packed_static_compact(torch::Tensor qkv, int64_t nh, int64_t T, int64_t hd, int64_t hp_qk, int64_t hp_av, int64_t qk_bits, double sq_c, double sk_c, torch::Tensor sv_vec);
+std::vector<torch::Tensor> quantize_attn_kv_packed_static(torch::Tensor qkv, int64_t nh, int64_t T, int64_t hd, int64_t hp_qk, int64_t hp_av, int64_t qk_bits, double sk_c, torch::Tensor sv_vec);
 // int8 reshuffle consumer for fused_gn_qkv_i8evt: gather Q/K + transpose V (int8->int8, no requant).
 std::vector<torch::Tensor> quantize_attn_qkv_from_i8(torch::Tensor qkv_i8, int64_t nh, int64_t T, int64_t hd, int64_t hp_qk, int64_t hp_av);
+std::vector<torch::Tensor> quantize_attn_kv_from_i8(torch::Tensor qkv_i8, int64_t nh, int64_t T, int64_t hd, int64_t hp_qk, int64_t hp_av);
 // fp16 (reference) materialized softmax — used by the fp16-materialized attention path (not int8/int4)
 std::vector<torch::Tensor> attn_softmax_fp16(torch::Tensor S, bool static_c, double c);

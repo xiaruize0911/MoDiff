@@ -1,0 +1,31 @@
+{
+  "date": "2026-07-30",
+  "gpu": "NVIDIA A40",
+  "batch": 128,
+  "protocol": {
+    "warmups": 20,
+    "rounds": 5,
+    "iterations_per_round": 60,
+    "statistic": "median"
+  },
+  "attention_layers": [
+    {"tokens": 1024, "channels": 192, "head_dim": 24, "instances": 5, "fp16_us": 3101.73, "int8_us": 2837.12, "speedup": 1.093},
+    {"tokens": 256, "channels": 384, "head_dim": 48, "instances": 5, "fp16_us": 1078.75, "int8_us": 918.94, "speedup": 1.174},
+    {"tokens": 64, "channels": 384, "head_dim": 48, "instances": 5, "fp16_us": 411.39, "int8_us": 234.59, "speedup": 1.754},
+    {"tokens": 16, "channels": 768, "head_dim": 96, "instances": 5, "fp16_us": 216.26, "int8_us": 179.87, "speedup": 1.202},
+    {"tokens": 4, "channels": 768, "head_dim": 96, "instances": 1, "fp16_us": 199.23, "int8_us": 103.23, "speedup": 1.930}
+  ],
+  "weighted": {
+    "fp16_ms": 24.240,
+    "int8_ms": 20.956,
+    "speedup": 1.157
+  },
+  "quality": {
+    "seeds": [1234, 5678, 9012],
+    "steps": 50,
+    "batch": 4,
+    "latent_relative_l2": [0.0, 0.0, 0.0],
+    "threshold": 0.02,
+    "passed": true
+  }
+}

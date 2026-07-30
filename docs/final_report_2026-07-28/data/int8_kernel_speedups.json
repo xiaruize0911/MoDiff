@@ -1,0 +1,388 @@
+{
+  "gpu": "NVIDIA A40 (SM86)",
+  "batch": 128,
+  "timing_protocol": "layer: 20 warmups, median 5x60; kernels: 30-call CUDA profile",
+  "rows": [
+    {
+      "C": 192,
+      "T": 1024,
+      "count": 5,
+      "fp16_layer_us": 3117.5360679626465,
+      "int8_layer_us": 2993.8559532165527,
+      "layer_speedup": 1.0413113111247767,
+      "stages": {
+        "GN(+INT8 quantize)": {
+          "fp16_us": 114.99,
+          "int8_us": 278.42,
+          "speedup": 0.41300912290783703,
+          "note": null
+        },
+        "QKV GEMM": {
+          "fp16_us": 643.89,
+          "int8_us": 416.6645203667986,
+          "speedup": 1.5453439602516912,
+          "note": null
+        },
+        "K/V preparation": {
+          "fp16_us": 0.0,
+          "int8_us": 373.1,
+          "speedup": null,
+          "note": "INT8-only overhead"
+        },
+        "Attention kernel": {
+          "fp16_us": 1899.62,
+          "int8_us": 1554.32,
+          "speedup": 1.2221550259920737,
+          "note": null
+        },
+        "Output quantize/copy": {
+          "fp16_us": 0.0,
+          "int8_us": 0,
+          "speedup": null,
+          "note": null
+        },
+        "Projection + residual": {
+          "fp16_us": 460.34999999999997,
+          "int8_us": 358.0754796332014,
+          "speedup": 1.2856227979407153,
+          "note": null
+        },
+        "GN + QKV combined": {
+          "fp16_us": 758.88,
+          "int8_us": 695.0845203667986,
+          "speedup": 1.091780895364403,
+          "note": null
+        },
+        "Score route combined": {
+          "fp16_us": 1899.62,
+          "int8_us": 1927.42,
+          "speedup": 0.9855765738655818,
+          "note": null
+        },
+        "Output route combined": {
+          "fp16_us": 460.34999999999997,
+          "int8_us": 358.0754796332014,
+          "speedup": 1.2856227979407153,
+          "note": null
+        }
+      }
+    },
+    {
+      "C": 384,
+      "T": 256,
+      "count": 5,
+      "fp16_layer_us": 1073.5679864883423,
+      "int8_layer_us": 993.5359954833984,
+      "layer_speedup": 1.0805526839176116,
+      "stages": {
+        "GN(+INT8 quantize)": {
+          "fp16_us": 73.27999999999999,
+          "int8_us": 101.22,
+          "speedup": 0.7239675953368898,
+          "note": null
+        },
+        "QKV GEMM": {
+          "fp16_us": 442.49,
+          "int8_us": 256.60680656676124,
+          "speedup": 1.724389177045768,
+          "note": null
+        },
+        "K/V preparation": {
+          "fp16_us": 0.0,
+          "int8_us": 170.9,
+          "speedup": null,
+          "note": "INT8-only overhead"
+        },
+        "Attention kernel": {
+          "fp16_us": 295.93,
+          "int8_us": 270.03,
+          "speedup": 1.0959152686738511,
+          "note": null
+        },
+        "Output quantize/copy": {
+          "fp16_us": 0.0,
+          "int8_us": 0,
+          "speedup": null,
+          "note": null
+        },
+        "Projection + residual": {
+          "fp16_us": 259.65,
+          "int8_us": 192.56319343323878,
+          "speedup": 1.348388523116283,
+          "note": null
+        },
+        "GN + QKV combined": {
+          "fp16_us": 515.77,
+          "int8_us": 357.8268065667612,
+          "speedup": 1.4413956431846329,
+          "note": null
+        },
+        "Score route combined": {
+          "fp16_us": 295.93,
+          "int8_us": 440.92999999999995,
+          "speedup": 0.6711496155852403,
+          "note": null
+        },
+        "Output route combined": {
+          "fp16_us": 259.65,
+          "int8_us": 192.56319343323878,
+          "speedup": 1.348388523116283,
+          "note": null
+        }
+      }
+    },
+    {
+      "C": 384,
+      "T": 64,
+      "count": 5,
+      "fp16_layer_us": 411.52000427246094,
+      "int8_layer_us": 278.84799242019653,
+      "layer_speedup": 1.4757861467847353,
+      "stages": {
+        "GN(+INT8 quantize)": {
+          "fp16_us": 166.74,
+          "int8_us": 27.32,
+          "speedup": 6.103221083455344,
+          "note": null
+        },
+        "QKV GEMM": {
+          "fp16_us": 82.83,
+          "int8_us": 77.67241280536877,
+          "speedup": 1.0664017893657443,
+          "note": null
+        },
+        "K/V preparation": {
+          "fp16_us": 0.0,
+          "int8_us": 0,
+          "speedup": null,
+          "note": null
+        },
+        "Attention kernel": {
+          "fp16_us": 75.21,
+          "int8_us": 105.94,
+          "speedup": 0.7099301491410231,
+          "note": null
+        },
+        "Output quantize/copy": {
+          "fp16_us": 0.0,
+          "int8_us": 0,
+          "speedup": null,
+          "note": null
+        },
+        "Projection + residual": {
+          "fp16_us": 89.21000000000001,
+          "int8_us": 66.00758719463124,
+          "speedup": 1.351511300313912,
+          "note": null
+        },
+        "GN + QKV combined": {
+          "fp16_us": 249.57,
+          "int8_us": 104.99241280536876,
+          "speedup": 2.3770289045804107,
+          "note": null
+        },
+        "Score route combined": {
+          "fp16_us": 75.21,
+          "int8_us": 105.94,
+          "speedup": 0.7099301491410231,
+          "note": null
+        },
+        "Output route combined": {
+          "fp16_us": 89.21000000000001,
+          "int8_us": 66.00758719463124,
+          "speedup": 1.351511300313912,
+          "note": null
+        }
+      }
+    },
+    {
+      "C": 768,
+      "T": 16,
+      "count": 5,
+      "fp16_layer_us": 220.09600698947906,
+      "int8_layer_us": 194.39999759197235,
+      "layer_speedup": 1.1321811199372558,
+      "stages": {
+        "GN(+INT8 quantize)": {
+          "fp16_us": 52.59,
+          "int8_us": 16.66,
+          "speedup": 3.1566626650660266,
+          "note": null
+        },
+        "QKV GEMM": {
+          "fp16_us": 76.87,
+          "int8_us": 59.81782178217821,
+          "speedup": 1.285068524894068,
+          "note": null
+        },
+        "K/V preparation": {
+          "fp16_us": 0.0,
+          "int8_us": 0,
+          "speedup": null,
+          "note": null
+        },
+        "Attention kernel": {
+          "fp16_us": 43.98,
+          "int8_us": 41.71,
+          "speedup": 1.054423399664349,
+          "note": null
+        },
+        "Output quantize/copy": {
+          "fp16_us": 0.0,
+          "int8_us": 30.119999999999997,
+          "speedup": null,
+          "note": "INT8-only overhead"
+        },
+        "Projection + residual": {
+          "fp16_us": 40.129999999999995,
+          "int8_us": 44.022178217821796,
+          "speedup": 0.9115859692684152,
+          "note": null
+        },
+        "GN + QKV combined": {
+          "fp16_us": 129.46,
+          "int8_us": 76.47782178217821,
+          "speedup": 1.6927783373423477,
+          "note": null
+        },
+        "Score route combined": {
+          "fp16_us": 43.98,
+          "int8_us": 41.71,
+          "speedup": 1.054423399664349,
+          "note": null
+        },
+        "Output route combined": {
+          "fp16_us": 40.129999999999995,
+          "int8_us": 74.1421782178218,
+          "speedup": 0.5412573647634461,
+          "note": null
+        }
+      }
+    },
+    {
+      "C": 768,
+      "T": 4,
+      "count": 1,
+      "fp16_layer_us": 199.8399943113327,
+      "int8_layer_us": 171.64799571037292,
+      "layer_speedup": 1.1642430981165024,
+      "stages": {
+        "GN(+INT8 quantize)": {
+          "fp16_us": 12.39,
+          "int8_us": 10.57,
+          "speedup": 1.1721854304635762,
+          "note": null
+        },
+        "QKV GEMM": {
+          "fp16_us": 22.0,
+          "int8_us": 22.707679866146123,
+          "speedup": 0.9688352191717671,
+          "note": null
+        },
+        "K/V preparation": {
+          "fp16_us": 0.0,
+          "int8_us": 0,
+          "speedup": null,
+          "note": null
+        },
+        "Attention kernel": {
+          "fp16_us": 39.43,
+          "int8_us": 38.03,
+          "speedup": 1.0368130423349986,
+          "note": null
+        },
+        "Output quantize/copy": {
+          "fp16_us": 0.0,
+          "int8_us": 9.07,
+          "speedup": null,
+          "note": "INT8-only overhead"
+        },
+        "Projection + residual": {
+          "fp16_us": 17.18,
+          "int8_us": 33.762320133853876,
+          "speedup": 0.5088512854533777,
+          "note": null
+        },
+        "GN + QKV combined": {
+          "fp16_us": 34.39,
+          "int8_us": 33.27767986614612,
+          "speedup": 1.033425411216407,
+          "note": null
+        },
+        "Score route combined": {
+          "fp16_us": 39.43,
+          "int8_us": 38.03,
+          "speedup": 1.0368130423349986,
+          "note": null
+        },
+        "Output route combined": {
+          "fp16_us": 17.18,
+          "int8_us": 42.83232013385388,
+          "speedup": 0.4010989819442735,
+          "note": null
+        }
+      }
+    }
+  ],
+  "weighted_stages": {
+    "GN(+INT8 quantize)": {
+      "fp16_ms": 2.0503899999999997,
+      "int8_ms": 2.1286700000000005,
+      "speedup": 0.9632258640371685
+    },
+    "QKV GEMM": {
+      "fp16_ms": 6.2524,
+      "int8_ms": 4.07651548747168,
+      "speedup": 1.5337608845631636
+    },
+    "K/V preparation": {
+      "fp16_ms": 0.0,
+      "int8_ms": 2.72,
+      "speedup": null
+    },
+    "Attention kernel": {
+      "fp16_ms": 11.613129999999998,
+      "int8_ms": 9.89803,
+      "speedup": 1.1732769045961668
+    },
+    "Output quantize/copy": {
+      "fp16_ms": 0.0,
+      "int8_ms": 0.15966999999999998,
+      "speedup": null
+    },
+    "Projection + residual": {
+      "fp16_ms": 4.26388,
+      "int8_ms": 3.33710451252832,
+      "speedup": 1.277718448431068
+    },
+    "GN + QKV combined": {
+      "fp16_ms": 8.30279,
+      "int8_ms": 6.20518548747168,
+      "speedup": 1.3380405818268284
+    },
+    "Score route combined": {
+      "fp16_ms": 11.613129999999998,
+      "int8_ms": 12.618030000000001,
+      "speedup": 0.9203599928039478
+    },
+    "Output route combined": {
+      "fp16_ms": 4.26388,
+      "int8_ms": 3.49677451252832,
+      "speedup": 1.2193751655199034
+    }
+  },
+  "ordered_w8a8_gemm_qkv_fraction": {
+    "C192_T1024": 0.5378120664568741,
+    "C384_T256": 0.571291062552622,
+    "C384_T64": 0.5405930735340253,
+    "C768_T16": 0.576057605760576,
+    "C768_T4": 0.4021193530395984
+  },
+  "gemm_split_method": "The stable 30-call profile merges the two W8A8 kernels. An ordered CUDA trace identifies the first call as QKV and the second as projection; its ratio splits the stable aggregate.",
+  "weighted_overall": {
+    "fp16_ms": 24.313440322875977,
+    "int8_ms": 22.474847689270973,
+    "speedup": 1.0818066782487121,
+    "latency_reduction_pct": 7.5620422662896924
+  }
+}

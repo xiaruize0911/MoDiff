@@ -1,0 +1,62 @@
+{
+  "date": "2026-07-30",
+  "gpu": "NVIDIA A40 (SM86)",
+  "batch": 128,
+  "method": {
+    "scope": "complete production attention-module forward",
+    "custom_attention": "forced with MODIFF_FLASH_GATE=on",
+    "timing": "CUDA events; 20 warmups, 60 iterations, 5 rounds; median within each round then median of rounds",
+    "weighting": "five C192/T1024 blocks, five C384/T256, five C384/T64, five C768/T16, one C768/T4",
+    "process_isolation": "FP16, INT8 baseline, and INT4 baseline measured in separate fresh processes"
+  },
+  "per_block_us": {
+    "fp16": {
+      "C192_T1024": 3120.10,
+      "C384_T256": 1068.61,
+      "C384_T64": 410.05,
+      "C768_T16": 215.26,
+      "C768_T4": 197.57
+    },
+    "int8_baseline": {
+      "C192_T1024": 3021.76,
+      "C384_T256": 994.72,
+      "C384_T64": 280.10,
+      "C768_T16": 209.82,
+      "C768_T4": 201.38
+    },
+    "int4_baseline": {
+      "C192_T1024": 3115.94,
+      "C384_T256": 1061.41,
+      "C384_T64": 383.49,
+      "C768_T16": 194.56,
+      "C768_T4": 192.96
+    }
+  },
+  "weighted_total_ms": {
+    "fp16": 24.2676,
+    "int8_baseline": 22.7334,
+    "int4_baseline": 23.9699
+  },
+  "speedup_vs_fp16": {
+    "int8_baseline": 1.06749,
+    "int4_baseline": 1.01242
+  },
+  "corroborating_profile": {
+    "method": "12 warmups, 30 iterations, 5 rounds in qattn_deep_profile.py",
+    "weighted_total_ms": {
+      "fp16_reference": 24.3191,
+      "int8_baseline": 22.2617,
+      "int4_baseline": 23.6674
+    },
+    "speedup_vs_fp16": {
+      "int8_baseline": 1.09242,
+      "int4_baseline": 1.02754
+    }
+  },
+  "correctness": {
+    "qattn_correctness": "ALL PASS (9 shapes, including batch=128 production shapes)",
+    "int4_mixed_mma": "exact packed projection input versus native INT4 route",
+    "integration_kernel_correctness": "ALL PASS",
+    "fast_groupnorm_quantization": "maximum code difference 1; changed-element fraction <= 6.36e-7"
+  }
+}

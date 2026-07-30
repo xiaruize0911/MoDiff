@@ -38,8 +38,11 @@ PROF_ITERS = 30
 # AttentionBlock gets swapped for one of these wrappers by the mode conversion, so all
 # three names must be matched or the quantized modes report zero attention layers.
 ATTN_CLASSES = ("AttentionBlock", "TokenMajorAttentionBlock", "QuantizedStandardAttentionBlock")
-MODES = [("fp16", "fp16"), ("int8_baseline", "int8_baseline"), ("int4_baseline", "int4_baseline"),
-         ("int8_modiff", "int8"), ("int4_modiff", "int4")]
+_ALL_MODES = [("fp16", "fp16"), ("int8_baseline", "int8_baseline"),
+              ("int4_baseline", "int4_baseline"), ("int8_modiff", "int8"),
+              ("int4_modiff", "int4")]
+_MODE_FILTER = {x.strip() for x in os.environ.get("LBENCH_MODES", "").split(",") if x.strip()}
+MODES = [m for m in _ALL_MODES if not _MODE_FILTER or m[0] in _MODE_FILTER]
 
 
 def cuda_bench(fn, warm=WARM, iters=ITERS, rounds=ROUNDS):
@@ -162,9 +165,12 @@ def collect_layers(mode_key):
 
 
 def main():
-    bn = torch.randn(4096, 4096, device="cuda", dtype=torch.float16)
-    for _ in range(60):
-        bn = bn @ bn * 1e-4 + 1.0
+    # Wake the CUDA context without driving the board into its power cap before the
+    # first (FP16) mode.  Each measured layer already gets WARM dedicated iterations;
+    # the former 60 x 4096^3 GEMM burn made results depend strongly on mode order.
+    bn = torch.randn(1024, 1024, device="cuda", dtype=torch.float16)
+    for _ in range(8):
+        bn = bn @ bn
     torch.cuda.synchronize(); del bn; torch.cuda.empty_cache()
 
     out = {"batch": BATCH, "modes": {}}
@@ -207,18 +213,20 @@ def main():
 
     # Attach fp16-relative speedups per (kind, shape)
     base = {}
-    for r in out["modes"]["fp16"]:
+    for r in out["modes"].get("fp16", []):
         base[(r["kind"], tuple(r["x_shape"]))] = r["pipeline_us"]
-    for label, rows in out["modes"].items():
-        for r in rows:
-            b = base.get((r["kind"], tuple(r["x_shape"])))
-            r["fp16_us"] = b
-            r["speedup_vs_fp16"] = (round(b / r["pipeline_us"], 3)
-                                    if b and r.get("pipeline_us") else None)
+    if base:
+        for label, rows in out["modes"].items():
+            for r in rows:
+                b = base.get((r["kind"], tuple(r["x_shape"])))
+                r["fp16_us"] = b
+                r["speedup_vs_fp16"] = (round(b / r["pipeline_us"], 3)
+                                        if b and r.get("pipeline_us") else None)
 
-    with open(f"{HERE}/data/layer_pipeline_bench.json", "w") as f:
+    out_path = os.environ.get("LBENCH_OUT", f"{HERE}/data/layer_pipeline_bench.json")
+    with open(out_path, "w") as f:
         json.dump(out, f, indent=2)
-    print(f"\nWROTE {HERE}/data/layer_pipeline_bench.json")
+    print(f"\nWROTE {out_path}")
 
 
 if __name__ == "__main__":

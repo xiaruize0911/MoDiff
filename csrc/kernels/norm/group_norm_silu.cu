@@ -30,6 +30,7 @@
 
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAException.h>
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 #include <cstdlib>
@@ -199,7 +200,6 @@ torch::Tensor group_norm_silu_nhwc(
 
     int block_size = 32;
     while (block_size < group_size && block_size < 1024) block_size <<= 1;
-
     dim3 grid((unsigned int)(N * num_groups));
     dim3 block((unsigned int)block_size);
     size_t shmem_bytes = 2 * (size_t)block_size * sizeof(float);
@@ -328,7 +328,7 @@ __global__ void group_norm_silu_quantize_nhwc_kernel(
 // group_norm_silu_quantize_pack_nhwc_vec2_kernel's pass 2 already uses. Caller (the host
 // wrapper) only dispatches here when CPG is even, so a channel pair never straddles a
 // group boundary and shares one mean/inv_std.
-template <typename TIn>
+template <typename TIn, bool VEC_REDUCE = false>
 __global__ void group_norm_silu_quantize_nhwc_vec2_kernel(
     const TIn* __restrict__ X,
     int8_t* __restrict__ Yq,          // [N, H, W, C] physical int8, same layout as X
@@ -358,37 +358,84 @@ __global__ void group_norm_silu_quantize_nhwc_vec2_kernel(
     float* s_sum = sdata;
     float* s_sumsq = sdata + blockDim.x;
 
-    // Pass 1: identical to the scalar kernel (kept scalar deliberately -- Cycle 3
-    // attempted a pair-major vectorized version here, but it changes fp32 summation
-    // order vs the reference group_norm_silu_nhwc_kernel and failed
-    // gn_modiff_verify_realinput.py's zero-tolerance gate (max_code_diff=1), so it was
-    // reverted; see docs/benchmark_flash_packed_2026-07-27 for the investigation).
     float local_sum = 0.0f, local_sumsq = 0.0f;
-    for (long idx = threadIdx.x; idx < group_size; idx += blockDim.x) {
-        int c_local = idx % CPG;
-        long hw = idx / CPG;
-        long mem_idx = hw * C + c_start + c_local;
-        float v = gn_load(x_base, mem_idx);
-        local_sum += v;
-        local_sumsq += v * v;
-    }
-    s_sum[threadIdx.x] = local_sum;
-    s_sumsq[threadIdx.x] = local_sumsq;
-    __syncthreads();
-    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
-        if (threadIdx.x < s) {
-            s_sum[threadIdx.x] += s_sum[threadIdx.x + s];
-            s_sumsq[threadIdx.x] += s_sumsq[threadIdx.x + s];
+    if constexpr (VEC_REDUCE) {
+        // Attention's static-quantized QKV producer tolerates the normal one-code rounding
+        // freedom of INT8 quantization. Pair-major reduction halves address/loop/load work;
+        // CPG is even, so no pair crosses a GroupNorm group boundary.
+        const int HALF_CPG = CPG / 2;
+        const long pairs = group_size / 2;
+        for (long pidx = threadIdx.x; pidx < pairs; pidx += blockDim.x) {
+            const int cpair = pidx % HALF_CPG;
+            const long hw = pidx / HALF_CPG;
+            const long mem_idx0 = hw * C + c_start + 2 * cpair;
+            const float2 v = gn_load2(x_base, mem_idx0);
+            local_sum += v.x + v.y;
+            local_sumsq += v.x * v.x + v.y * v.y;
         }
-        __syncthreads();
+    } else {
+        // Compatibility path: preserve the scalar reference's summation partition exactly.
+        for (long idx = threadIdx.x; idx < group_size; idx += blockDim.x) {
+            int c_local = idx % CPG;
+            long hw = idx / CPG;
+            long mem_idx = hw * C + c_start + c_local;
+            float v = gn_load(x_base, mem_idx);
+            local_sum += v;
+            local_sumsq += v * v;
+        }
     }
     __shared__ float mean_s, inv_std_s;
-    if (threadIdx.x == 0) {
-        float mean = s_sum[0] / (float)group_size;
-        float var = s_sumsq[0] / (float)group_size - mean * mean;
-        var = fmaxf(var, 0.0f);
-        mean_s = mean;
-        inv_std_s = rsqrtf(var + eps);
+    if constexpr (VEC_REDUCE) {
+        // The fast attention-only path already permits reduction-order freedom. Reduce within
+        // each warp in registers, then reduce the at-most-32 warp partials with one warp. The
+        // generic shared-memory tree needs log2(blockDim) full-CTA barriers (10 at the production
+        // 1024-thread blocks); this needs two.
+        const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
+#pragma unroll
+        for (int off = 16; off > 0; off >>= 1) {
+            local_sum += __shfl_down_sync(0xffffffff, local_sum, off);
+            local_sumsq += __shfl_down_sync(0xffffffff, local_sumsq, off);
+        }
+        if (lane == 0) {
+            s_sum[warp] = local_sum;
+            s_sumsq[warp] = local_sumsq;
+        }
+        __syncthreads();
+        if (warp == 0) {
+            const int nwarp = (blockDim.x + 31) >> 5;
+            float block_sum = lane < nwarp ? s_sum[lane] : 0.0f;
+            float block_sumsq = lane < nwarp ? s_sumsq[lane] : 0.0f;
+#pragma unroll
+            for (int off = 16; off > 0; off >>= 1) {
+                block_sum += __shfl_down_sync(0xffffffff, block_sum, off);
+                block_sumsq += __shfl_down_sync(0xffffffff, block_sumsq, off);
+            }
+            if (lane == 0) {
+                float mean = block_sum / (float)group_size;
+                float var = block_sumsq / (float)group_size - mean * mean;
+                var = fmaxf(var, 0.0f);
+                mean_s = mean;
+                inv_std_s = rsqrtf(var + eps);
+            }
+        }
+    } else {
+        s_sum[threadIdx.x] = local_sum;
+        s_sumsq[threadIdx.x] = local_sumsq;
+        __syncthreads();
+        for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+            if (threadIdx.x < s) {
+                s_sum[threadIdx.x] += s_sum[threadIdx.x + s];
+                s_sumsq[threadIdx.x] += s_sumsq[threadIdx.x + s];
+            }
+            __syncthreads();
+        }
+        if (threadIdx.x == 0) {
+            float mean = s_sum[0] / (float)group_size;
+            float var = s_sumsq[0] / (float)group_size - mean * mean;
+            var = fmaxf(var, 0.0f);
+            mean_s = mean;
+            inv_std_s = rsqrtf(var + eps);
+        }
     }
     __syncthreads();
     const float mean = mean_s;
@@ -455,7 +502,7 @@ __global__ void group_norm_silu_quantize_nhwc_vec2_kernel(
 // Host wrapper for the INT8-emitting GroupNorm+SiLU. Returns an int8 tensor with
 // the same NHWC (channels_last) layout as x. `scale` is a 1-element device tensor
 // (127/absmax); `smooth_inv` is [C] or an empty tensor for identity.
-torch::Tensor group_norm_silu_quantize_nhwc(
+static torch::Tensor group_norm_silu_quantize_nhwc_impl(
     torch::Tensor x,
     torch::Tensor weight,
     torch::Tensor bias,
@@ -465,7 +512,8 @@ torch::Tensor group_norm_silu_quantize_nhwc(
     torch::Tensor scale,
     torch::Tensor smooth_inv,
     torch::Tensor mod_scale,   // [N, C] scale-shift modulation, or empty for none
-    torch::Tensor mod_shift
+    torch::Tensor mod_shift,
+    bool fast_reduce
 ) {
     CHECK_CUDA(x);
     CHECK_CONTIGUOUS(x);
@@ -491,6 +539,19 @@ torch::Tensor group_norm_silu_quantize_nhwc(
 
     int block_size = 32;
     while (block_size < group_size && block_size < 1024) block_size <<= 1;
+    if (fast_reduce) {
+        // Pair-major pass 1 has group_size/2 elements. About six pairs/thread gives the best
+        // latency/occupancy balance on A40: 512 threads at group_size=6144 (T=1024),
+        // 256 at 3072 (T=256), and 128 for the smaller attention blocks. The old generic
+        // heuristic launched 1024 threads and was 1.27-4.3x slower after warp reductions.
+        block_size = 128;
+        while ((long)block_size * 12 < group_size && block_size < 512) block_size <<= 1;
+        const char* ft = getenv("MODIFF_GN_FAST_THREADS");
+        if (ft) {
+            const int v = atoi(ft);
+            if (v == 128 || v == 256 || v == 512 || v == 1024) block_size = v;
+        }
+    }
 
     dim3 grid((unsigned int)(N * num_groups));
     dim3 block((unsigned int)block_size);
@@ -506,14 +567,22 @@ torch::Tensor group_norm_silu_quantize_nhwc(
 
     if (x.scalar_type() == torch::kFloat32) {
         if (use_vec2) {
-            group_norm_silu_quantize_nhwc_vec2_kernel<float><<<grid, block, shmem_bytes, stream>>>(
-                x.data_ptr<float>(), reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
-                weight.data_ptr<float>(), bias.data_ptr<float>(),
-                has_mod ? mod_scale.data_ptr<float>() : nullptr,
-                has_mod ? mod_shift.data_ptr<float>() : nullptr,
-                scale.data_ptr<float>(), smooth_ptr,
-                C, HW, (int)num_groups, (float)eps, apply_silu
-            );
+            if (fast_reduce)
+                group_norm_silu_quantize_nhwc_vec2_kernel<float, true><<<grid, block, shmem_bytes, stream>>>(
+                    x.data_ptr<float>(), reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
+                    weight.data_ptr<float>(), bias.data_ptr<float>(),
+                    has_mod ? mod_scale.data_ptr<float>() : nullptr,
+                    has_mod ? mod_shift.data_ptr<float>() : nullptr,
+                    scale.data_ptr<float>(), smooth_ptr,
+                    C, HW, (int)num_groups, (float)eps, apply_silu);
+            else
+                group_norm_silu_quantize_nhwc_vec2_kernel<float, false><<<grid, block, shmem_bytes, stream>>>(
+                    x.data_ptr<float>(), reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
+                    weight.data_ptr<float>(), bias.data_ptr<float>(),
+                    has_mod ? mod_scale.data_ptr<float>() : nullptr,
+                    has_mod ? mod_shift.data_ptr<float>() : nullptr,
+                    scale.data_ptr<float>(), smooth_ptr,
+                    C, HW, (int)num_groups, (float)eps, apply_silu);
         } else {
             group_norm_silu_quantize_nhwc_kernel<float><<<grid, block, shmem_bytes, stream>>>(
                 x.data_ptr<float>(), reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
@@ -526,16 +595,26 @@ torch::Tensor group_norm_silu_quantize_nhwc(
         }
     } else {
         if (use_vec2) {
-            group_norm_silu_quantize_nhwc_vec2_kernel<__half><<<grid, block, shmem_bytes, stream>>>(
-                reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
-                reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
-                reinterpret_cast<const __half*>(weight.data_ptr<at::Half>()),
-                reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
-                has_mod ? reinterpret_cast<const __half*>(mod_scale.data_ptr<at::Half>()) : nullptr,
-                has_mod ? reinterpret_cast<const __half*>(mod_shift.data_ptr<at::Half>()) : nullptr,
-                scale.data_ptr<float>(), smooth_ptr,
-                C, HW, (int)num_groups, (float)eps, apply_silu
-            );
+            if (fast_reduce)
+                group_norm_silu_quantize_nhwc_vec2_kernel<__half, true><<<grid, block, shmem_bytes, stream>>>(
+                    reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
+                    reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
+                    reinterpret_cast<const __half*>(weight.data_ptr<at::Half>()),
+                    reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
+                    has_mod ? reinterpret_cast<const __half*>(mod_scale.data_ptr<at::Half>()) : nullptr,
+                    has_mod ? reinterpret_cast<const __half*>(mod_shift.data_ptr<at::Half>()) : nullptr,
+                    scale.data_ptr<float>(), smooth_ptr,
+                    C, HW, (int)num_groups, (float)eps, apply_silu);
+            else
+                group_norm_silu_quantize_nhwc_vec2_kernel<__half, false><<<grid, block, shmem_bytes, stream>>>(
+                    reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
+                    reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
+                    reinterpret_cast<const __half*>(weight.data_ptr<at::Half>()),
+                    reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
+                    has_mod ? reinterpret_cast<const __half*>(mod_scale.data_ptr<at::Half>()) : nullptr,
+                    has_mod ? reinterpret_cast<const __half*>(mod_shift.data_ptr<at::Half>()) : nullptr,
+                    scale.data_ptr<float>(), smooth_ptr,
+                    C, HW, (int)num_groups, (float)eps, apply_silu);
         } else {
             group_norm_silu_quantize_nhwc_kernel<__half><<<grid, block, shmem_bytes, stream>>>(
                 reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
@@ -551,6 +630,24 @@ torch::Tensor group_norm_silu_quantize_nhwc(
     }
 
     return yq;
+}
+
+torch::Tensor group_norm_silu_quantize_nhwc(
+    torch::Tensor x, torch::Tensor weight, torch::Tensor bias, int64_t num_groups,
+    double eps, bool apply_silu, torch::Tensor scale, torch::Tensor smooth_inv,
+    torch::Tensor mod_scale, torch::Tensor mod_shift) {
+    return group_norm_silu_quantize_nhwc_impl(
+        x, weight, bias, num_groups, eps, apply_silu, scale, smooth_inv,
+        mod_scale, mod_shift, false);
+}
+
+torch::Tensor group_norm_silu_quantize_nhwc_fast(
+    torch::Tensor x, torch::Tensor weight, torch::Tensor bias, int64_t num_groups,
+    double eps, bool apply_silu, torch::Tensor scale, torch::Tensor smooth_inv,
+    torch::Tensor mod_scale, torch::Tensor mod_shift) {
+    return group_norm_silu_quantize_nhwc_impl(
+        x, weight, bias, num_groups, eps, apply_silu, scale, smooth_inv,
+        mod_scale, mod_shift, true);
 }
 
 // ============================================================================
@@ -727,7 +824,7 @@ torch::Tensor group_norm_silu_dequant_quantize_nhwc(
 // needed no loop restructuring -- just gn_load2 in place of per-element loads. Pass 1 (the
 // stats reduction) is deliberately NOT vectorized: see the Cycle-3 note on
 // gn_group_stats_vec2_kernel below.
-template <typename TIn>
+template <typename TIn, bool FAST_REDUCE = false>
 __global__ void group_norm_silu_quantize_pack_nhwc_vec2_kernel(
     const TIn* __restrict__ X,
     int8_t* __restrict__ Yqp,         // [N, H, W, C/2] packed int4, channels_last-flat
@@ -759,35 +856,74 @@ __global__ void group_norm_silu_quantize_pack_nhwc_vec2_kernel(
     float* s_sum = sdata;
     float* s_sumsq = sdata + blockDim.x;
 
-    // Pass 1: identical to the scalar kernel (Cycle 3's pair-major vectorization was
-    // reverted here too -- same gn_modiff_verify_realinput.py failure as the non-pack
-    // sibling above).
     float local_sum = 0.0f, local_sumsq = 0.0f;
-    for (long idx = threadIdx.x; idx < group_size; idx += blockDim.x) {
-        int c_local = idx % CPG;
-        long hw = idx / CPG;
-        long mem_idx = hw * C + c_start + c_local;
-        float v = gn_load(x_base, mem_idx);
-        local_sum += v;
-        local_sumsq += v * v;
-    }
-    s_sum[threadIdx.x] = local_sum;
-    s_sumsq[threadIdx.x] = local_sumsq;
-    __syncthreads();
-    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
-        if (threadIdx.x < s) {
-            s_sum[threadIdx.x] += s_sum[threadIdx.x + s];
-            s_sumsq[threadIdx.x] += s_sumsq[threadIdx.x + s];
+    if constexpr (FAST_REDUCE) {
+        const int HALF_CPG = CPG / 2;
+        const long pairs = group_size / 2;
+        for (long pidx = threadIdx.x; pidx < pairs; pidx += blockDim.x) {
+            const int cpair = pidx % HALF_CPG;
+            const long hw = pidx / HALF_CPG;
+            const long mem_idx0 = hw * C + c_start + 2 * cpair;
+            const float2 v = gn_load2(x_base, mem_idx0);
+            local_sum += v.x + v.y;
+            local_sumsq += v.x * v.x + v.y * v.y;
         }
-        __syncthreads();
+    } else {
+        for (long idx = threadIdx.x; idx < group_size; idx += blockDim.x) {
+            int c_local = idx % CPG;
+            long hw = idx / CPG;
+            long mem_idx = hw * C + c_start + c_local;
+            float v = gn_load(x_base, mem_idx);
+            local_sum += v;
+            local_sumsq += v * v;
+        }
     }
     __shared__ float mean_s, inv_std_s;
-    if (threadIdx.x == 0) {
-        float mean = s_sum[0] / (float)group_size;
-        float var = s_sumsq[0] / (float)group_size - mean * mean;
-        var = fmaxf(var, 0.0f);
-        mean_s = mean;
-        inv_std_s = rsqrtf(var + eps);
+    if constexpr (FAST_REDUCE) {
+        const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
+#pragma unroll
+        for (int off = 16; off > 0; off >>= 1) {
+            local_sum += __shfl_down_sync(0xffffffff, local_sum, off);
+            local_sumsq += __shfl_down_sync(0xffffffff, local_sumsq, off);
+        }
+        if (lane == 0) {
+            s_sum[warp] = local_sum;
+            s_sumsq[warp] = local_sumsq;
+        }
+        __syncthreads();
+        if (warp == 0) {
+            const int nwarp = (blockDim.x + 31) >> 5;
+            float block_sum = lane < nwarp ? s_sum[lane] : 0.0f;
+            float block_sumsq = lane < nwarp ? s_sumsq[lane] : 0.0f;
+#pragma unroll
+            for (int off = 16; off > 0; off >>= 1) {
+                block_sum += __shfl_down_sync(0xffffffff, block_sum, off);
+                block_sumsq += __shfl_down_sync(0xffffffff, block_sumsq, off);
+            }
+            if (lane == 0) {
+                float mean = block_sum / (float)group_size;
+                float var = block_sumsq / (float)group_size - mean * mean;
+                mean_s = mean;
+                inv_std_s = rsqrtf(fmaxf(var, 0.0f) + eps);
+            }
+        }
+    } else {
+        s_sum[threadIdx.x] = local_sum;
+        s_sumsq[threadIdx.x] = local_sumsq;
+        __syncthreads();
+        for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+            if (threadIdx.x < s) {
+                s_sum[threadIdx.x] += s_sum[threadIdx.x + s];
+                s_sumsq[threadIdx.x] += s_sumsq[threadIdx.x + s];
+            }
+            __syncthreads();
+        }
+        if (threadIdx.x == 0) {
+            float mean = s_sum[0] / (float)group_size;
+            float var = s_sumsq[0] / (float)group_size - mean * mean;
+            mean_s = mean;
+            inv_std_s = rsqrtf(fmaxf(var, 0.0f) + eps);
+        }
     }
     __syncthreads();
     const float mean = mean_s;
@@ -828,6 +964,16 @@ __global__ void group_norm_silu_quantize_pack_nhwc_vec2_kernel(
         // host pre-filled them with.
         yqp_base[hw * (long)KpadH + (c_global0 >> 1)] = (int8_t)((i0 & 0x0F) | ((i1 & 0x0F) << 4));
     }
+    // Only group zero clears the padded tail. This replaces a full-output torch::zeros
+    // initialization with writes to the bytes that actually require zeroing.
+    if (g == 0 && Kpad > C) {
+        const int tail_bytes = KpadH - C / 2;
+        for (long idx = threadIdx.x; idx < HW * (long)tail_bytes; idx += blockDim.x) {
+            const long hw = idx / tail_bytes;
+            const int pb = idx % tail_bytes;
+            yqp_base[hw * (long)KpadH + C / 2 + pb] = 0;
+        }
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -856,7 +1002,7 @@ __global__ void group_norm_silu_quantize_pack_nhwc_vec2_kernel(
 // Host wrapper for the INT4-packed GroupNorm+SiLU. Returns a [N, H, W, C/2] int8
 // tensor holding packed int4 codes, matching scale_quantize_and_pack's layout.
 // Requires C and channels-per-group both even.
-torch::Tensor group_norm_silu_quantize_pack_nhwc(
+static torch::Tensor group_norm_silu_quantize_pack_nhwc_impl(
     torch::Tensor x,
     torch::Tensor weight,
     torch::Tensor bias,
@@ -867,7 +1013,8 @@ torch::Tensor group_norm_silu_quantize_pack_nhwc(
     torch::Tensor smooth_inv,
     torch::Tensor mod_scale,   // [N, C] scale-shift modulation, or empty for none
     torch::Tensor mod_shift,
-    int64_t k_pad              // padded row width in channels for the int4 GEMM; <=0 or ==C -> no pad
+    int64_t k_pad,             // padded row width in channels for the int4 GEMM; <=0 or ==C -> no pad
+    bool fast_reduce
 ) {
     CHECK_CUDA(x);
     CHECK_CONTIGUOUS(x);
@@ -896,16 +1043,19 @@ torch::Tensor group_norm_silu_quantize_pack_nhwc(
     // scale_quantize_and_pack (the historical behaviour). With Kpad > C the extra channels are the
     // int4 GEMM's K zero-padding, which lets the C=192 attention blocks (K 192 -> 256) stay on the
     // fused GN->pack path instead of paying group_norm_silu_nhwc + F.pad + a standalone
-    // quantize_act_int4_pack -- mirrors quantize_attn_out_int4_pack's k_pad. The kernel writes only
-    // real channels, so the pad bytes must already be zero: allocate zeroed when padding.
+    // quantize_act_int4_pack -- mirrors quantize_attn_out_int4_pack's k_pad. The g==0 CTA clears
+    // only the padded tail of every row, so a full-output zero fill is unnecessary.
     const int Kpad = (k_pad > (int64_t)C) ? (int)k_pad : C;
     TORCH_CHECK(Kpad % 2 == 0, "group_norm_silu_quantize_pack_nhwc: k_pad must be even");
     auto opts = torch::TensorOptions().dtype(torch::kInt8).device(x.device());
-    auto yqp = (Kpad == C) ? torch::empty({N, H, W, Kpad / 2}, opts)
-                           : torch::zeros({N, H, W, Kpad / 2}, opts);
+    auto yqp = torch::empty({N, H, W, Kpad / 2}, opts);
 
     int block_size = 32;
     while (block_size < group_size && block_size < 1024) block_size <<= 1;
+    if (fast_reduce) {
+        block_size = 128;
+        while ((long)block_size * 12 < group_size && block_size < 512) block_size <<= 1;
+    }
 
     dim3 grid((unsigned int)(N * num_groups));
     dim3 block((unsigned int)block_size);
@@ -916,7 +1066,16 @@ torch::Tensor group_norm_silu_quantize_pack_nhwc(
     // C%2==0 && CPG%2==0 already TORCH_CHECK'd above -> always safe to use the
     // vectorized kernel here (unlike the non-pack sibling, no scalar fallback needed).
     if (x.scalar_type() == torch::kFloat32) {
-        group_norm_silu_quantize_pack_nhwc_vec2_kernel<float><<<grid, block, shmem_bytes, stream>>>(
+        if (fast_reduce)
+          group_norm_silu_quantize_pack_nhwc_vec2_kernel<float, true><<<grid, block, shmem_bytes, stream>>>(
+            x.data_ptr<float>(), reinterpret_cast<int8_t*>(yqp.data_ptr<int8_t>()),
+            weight.data_ptr<float>(), bias.data_ptr<float>(),
+            has_mod ? mod_scale.data_ptr<float>() : nullptr,
+            has_mod ? mod_shift.data_ptr<float>() : nullptr,
+            scale.data_ptr<float>(), smooth_ptr,
+            C, HW, (int)num_groups, (float)eps, apply_silu, Kpad);
+        else
+          group_norm_silu_quantize_pack_nhwc_vec2_kernel<float, false><<<grid, block, shmem_bytes, stream>>>(
             x.data_ptr<float>(), reinterpret_cast<int8_t*>(yqp.data_ptr<int8_t>()),
             weight.data_ptr<float>(), bias.data_ptr<float>(),
             has_mod ? mod_scale.data_ptr<float>() : nullptr,
@@ -925,7 +1084,18 @@ torch::Tensor group_norm_silu_quantize_pack_nhwc(
             C, HW, (int)num_groups, (float)eps, apply_silu, Kpad
         );
     } else {
-        group_norm_silu_quantize_pack_nhwc_vec2_kernel<__half><<<grid, block, shmem_bytes, stream>>>(
+        if (fast_reduce)
+          group_norm_silu_quantize_pack_nhwc_vec2_kernel<__half, true><<<grid, block, shmem_bytes, stream>>>(
+            reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
+            reinterpret_cast<int8_t*>(yqp.data_ptr<int8_t>()),
+            reinterpret_cast<const __half*>(weight.data_ptr<at::Half>()),
+            reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
+            has_mod ? reinterpret_cast<const __half*>(mod_scale.data_ptr<at::Half>()) : nullptr,
+            has_mod ? reinterpret_cast<const __half*>(mod_shift.data_ptr<at::Half>()) : nullptr,
+            scale.data_ptr<float>(), smooth_ptr,
+            C, HW, (int)num_groups, (float)eps, apply_silu, Kpad);
+        else
+          group_norm_silu_quantize_pack_nhwc_vec2_kernel<__half, false><<<grid, block, shmem_bytes, stream>>>(
             reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
             reinterpret_cast<int8_t*>(yqp.data_ptr<int8_t>()),
             reinterpret_cast<const __half*>(weight.data_ptr<at::Half>()),
@@ -937,7 +1107,26 @@ torch::Tensor group_norm_silu_quantize_pack_nhwc(
         );
     }
 
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
     return yqp;
+}
+
+torch::Tensor group_norm_silu_quantize_pack_nhwc(
+    torch::Tensor x, torch::Tensor weight, torch::Tensor bias, int64_t num_groups,
+    double eps, bool apply_silu, torch::Tensor scale, torch::Tensor smooth_inv,
+    torch::Tensor mod_scale, torch::Tensor mod_shift, int64_t k_pad) {
+    return group_norm_silu_quantize_pack_nhwc_impl(
+        x, weight, bias, num_groups, eps, apply_silu, scale, smooth_inv,
+        mod_scale, mod_shift, k_pad, false);
+}
+
+torch::Tensor group_norm_silu_quantize_pack_nhwc_fast(
+    torch::Tensor x, torch::Tensor weight, torch::Tensor bias, int64_t num_groups,
+    double eps, bool apply_silu, torch::Tensor scale, torch::Tensor smooth_inv,
+    torch::Tensor mod_scale, torch::Tensor mod_shift, int64_t k_pad) {
+    return group_norm_silu_quantize_pack_nhwc_impl(
+        x, weight, bias, num_groups, eps, apply_silu, scale, smooth_inv,
+        mod_scale, mod_shift, k_pad, true);
 }
 
 // =========================================================================

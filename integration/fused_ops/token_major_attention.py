@@ -322,14 +322,24 @@ class TokenMajorAttentionBlock(nn.Module):
                 empty = x.new_empty(0); ng, eps = self.norm.num_groups, self.norm.eps
                 bias = qkv.bias if qkv.bias is not None else empty
                 if qkv.bits == 8:   # GN -> int8 (one kernel) -> W8A8 GEMM, bias fused into the epilogue
-                    xq_img = _mc.group_norm_silu_quantize_nhwc(x, gw, gb, ng, eps, False, self._qkv_inv_scale_t, empty, empty, empty)
+                    # The warp-register reduction wins at every production attention shape
+                    # (T=4..1024); keep getattr fallback for older extensions.
+                    gnq = getattr(_mc, "group_norm_silu_quantize_nhwc_fast",
+                                  _mc.group_norm_silu_quantize_nhwc)
+                    xq_img = gnq(x, gw, gb, ng, eps, False,
+                                 self._qkv_inv_scale_t, empty, empty, empty)
                     xq = xq_img.permute(0, 2, 3, 1).reshape(b * T, c)     # int8 [b*T, c] token-major (free view)
                     out = _mc.gemm_w8a8_awq_bias_res(xq, qkv.qweight, qkv.w_scale, qkv.a_scale, qkv.out_features, bias, empty)
                 else:               # GN -> int4-packed (one kernel, gemm_w4a4 layout) -> W4A4 GEMM, bias fused
                     # k_pad = the GEMM's padded K, so the kernel writes rows of K_pad/2 bytes with
                     # channels c..K_pad-1 zeroed (no fp16 F.pad, no separate quantize pass).
                     kp = qkv._awqt_K
-                    xq_img = _mc.group_norm_silu_quantize_pack_nhwc(x, gw, gb, ng, eps, False, self._qkv_inv_scale_t, empty, empty, empty, kp)
+                    use_fast_i4 = (os.environ.get("MODIFF_INT4_GN_FAST", "1") != "0"
+                                   and hasattr(_mc, "group_norm_silu_quantize_pack_nhwc_fast"))
+                    gnq4 = (_mc.group_norm_silu_quantize_pack_nhwc_fast if use_fast_i4
+                            else _mc.group_norm_silu_quantize_pack_nhwc)
+                    xq_img = gnq4(x, gw, gb, ng, eps, False, self._qkv_inv_scale_t,
+                                  empty, empty, empty, kp)
                     xq = xq_img.reshape(b * T, kp // 2)                   # int4 packed [b*T, K_pad/2] token-major (free view)
                     out = _mc.gemm_w4a4_awq_bias_res(xq, qkv.qweight, qkv.w_scale, qkv.a_scale, qkv._awqt_K, qkv.out_features, bias, empty)
                 out = out.reshape(b, T, qkv.out_features)

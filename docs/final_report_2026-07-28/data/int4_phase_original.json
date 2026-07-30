@@ -1,0 +1,5357 @@
+{
+  "batch": 128,
+  "modes": {
+    "int4_baseline": [
+      {
+        "kind": "resblock_plain",
+        "x_shape": [
+          128,
+          192,
+          32,
+          32
+        ],
+        "emb_shape": [
+          128,
+          768
+        ],
+        "n_instances": 2,
+        "example": "input_blocks.1.0",
+        "pipeline_us": 1694.9119567871094,
+        "error": null,
+        "kernels": [
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "layer_type": "Normalization",
+            "role": "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)",
+            "us_per_layer_call": 942.75,
+            "calls": 2.0,
+            "pct_of_layer": 56.9
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 329.28,
+            "calls": 1.0,
+            "pct_of_layer": 19.87
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 319.01,
+            "calls": 1.0,
+            "pct_of_layer": 19.25
+          },
+          {
+            "kernel": "_gemm_w4a4_kernel",
+            "layer_type": "Linear-GEMM",
+            "role": "int8/int4 quantized GEMM (W8A8 / W4A4)",
+            "us_per_layer_call": 14.35,
+            "calls": 1.0,
+            "pct_of_layer": 0.87
+          },
+          {
+            "kernel": "reduce_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "reduction (amax/absmax for dynamic scales)",
+            "us_per_layer_call": 14.23,
+            "calls": 1.0,
+            "pct_of_layer": 0.86
+          },
+          {
+            "kernel": "elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 4.92,
+            "calls": 2.0,
+            "pct_of_layer": 0.3
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 4.85,
+            "calls": 2.0,
+            "pct_of_layer": 0.29
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.32,
+            "calls": 1.0,
+            "pct_of_layer": 0.2
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.28,
+            "calls": 1.0,
+            "pct_of_layer": 0.2
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.21,
+            "calls": 2.0,
+            "pct_of_layer": 0.19
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.18,
+            "calls": 1.0,
+            "pct_of_layer": 0.19
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "SiLU / activation (standalone)",
+            "us_per_layer_call": 2.89,
+            "calls": 1.0,
+            "pct_of_layer": 0.17
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 2.49,
+            "calls": 1.0,
+            "pct_of_layer": 0.15
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.88,
+            "calls": 1.0,
+            "pct_of_layer": 0.11
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.51,
+            "calls": 1.0,
+            "pct_of_layer": 0.09
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.49,
+            "calls": 1.0,
+            "pct_of_layer": 0.09
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.49,
+            "calls": 1.0,
+            "pct_of_layer": 0.09
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.41,
+            "calls": 1.0,
+            "pct_of_layer": 0.09
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.41,
+            "calls": 1.0,
+            "pct_of_layer": 0.09
+          }
+        ],
+        "roles": {
+          "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": {
+            "us": 942.75,
+            "pct_of_layer": 56.9,
+            "n_kernels": 1
+          },
+          "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)": {
+            "us": 648.29,
+            "pct_of_layer": 39.12,
+            "n_kernels": 2
+          },
+          "other elementwise": {
+            "us": 20.53,
+            "pct_of_layer": 1.24,
+            "n_kernels": 9
+          },
+          "int8/int4 quantized GEMM (W8A8 / W4A4)": {
+            "us": 14.35,
+            "pct_of_layer": 0.87,
+            "n_kernels": 1
+          },
+          "reduction (amax/absmax for dynamic scales)": {
+            "us": 14.23,
+            "pct_of_layer": 0.86,
+            "n_kernels": 1
+          },
+          "dtype cast / device copy": {
+            "us": 13.91,
+            "pct_of_layer": 0.84,
+            "n_kernels": 4
+          },
+          "SiLU / activation (standalone)": {
+            "us": 2.89,
+            "pct_of_layer": 0.17,
+            "n_kernels": 1
+          }
+        },
+        "gpu_us_sum": 1656.95,
+        "gpu_busy_frac": 0.978
+      },
+      {
+        "kind": "attention",
+        "x_shape": [
+          128,
+          192,
+          32,
+          32
+        ],
+        "emb_shape": null,
+        "n_instances": 5,
+        "example": "input_blocks.1.1",
+        "pipeline_us": 3132.607936859131,
+        "error": null,
+        "kernels": [
+          {
+            "kernel": "flash_attn_int8_mma_kernel_t",
+            "layer_type": "Attention",
+            "role": "our int8/int4 flash kernel (fused QK^T+softmax+AV)",
+            "us_per_layer_call": 1547.73,
+            "calls": 1.0,
+            "pct_of_layer": 49.54
+          },
+          {
+            "kernel": "gemm_w4a4_kernel_awq",
+            "layer_type": "Linear-GEMM",
+            "role": "int8/int4 quantized GEMM (W8A8 / W4A4)",
+            "us_per_layer_call": 698.43,
+            "calls": 2.0,
+            "pct_of_layer": 22.36
+          },
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "layer_type": "Normalization",
+            "role": "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)",
+            "us_per_layer_call": 504.01,
+            "calls": 1.0,
+            "pct_of_layer": 16.13
+          },
+          {
+            "kernel": "aq_kv_packed_static_tiled_vec2_kernel",
+            "layer_type": "Other / unclassified",
+            "role": "unclassified (investigate)",
+            "us_per_layer_call": 373.96,
+            "calls": 1.0,
+            "pct_of_layer": 11.97
+          }
+        ],
+        "roles": {
+          "our int8/int4 flash kernel (fused QK^T+softmax+AV)": {
+            "us": 1547.73,
+            "pct_of_layer": 49.54,
+            "n_kernels": 1
+          },
+          "int8/int4 quantized GEMM (W8A8 / W4A4)": {
+            "us": 698.43,
+            "pct_of_layer": 22.36,
+            "n_kernels": 1
+          },
+          "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": {
+            "us": 504.01,
+            "pct_of_layer": 16.13,
+            "n_kernels": 1
+          },
+          "unclassified (investigate)": {
+            "us": 373.96,
+            "pct_of_layer": 11.97,
+            "n_kernels": 1
+          }
+        },
+        "gpu_us_sum": 3124.13,
+        "gpu_busy_frac": 0.997
+      },
+      {
+        "kind": "resblock_updown",
+        "x_shape": [
+          128,
+          192,
+          32,
+          32
+        ],
+        "emb_shape": [
+          128,
+          768
+        ],
+        "n_instances": 1,
+        "example": "input_blocks.3.0",
+        "pipeline_us": 1337.3440504074097,
+        "error": null,
+        "kernels": [
+          {
+            "kernel": "group_norm_silu_nhwc_kernel",
+            "layer_type": "Normalization",
+            "role": "GN+SiLU only (fp16 out; updown blocks + fp16 mode)",
+            "us_per_layer_call": 485.91,
+            "calls": 1.0,
+            "pct_of_layer": 36.46
+          },
+          {
+            "kernel": "avg_pool2d_out_cuda_frame_nhwc",
+            "layer_type": "Resize",
+            "role": "avg_pool 2x2 (unfused; x_upd path)",
+            "us_per_layer_call": 249.7,
+            "calls": 1.0,
+            "pct_of_layer": 18.74
+          },
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "layer_type": "Normalization",
+            "role": "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)",
+            "us_per_layer_call": 242.47,
+            "calls": 1.0,
+            "pct_of_layer": 18.19
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 99.51,
+            "calls": 1.0,
+            "pct_of_layer": 7.47
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 95.67,
+            "calls": 1.0,
+            "pct_of_layer": 7.18
+          },
+          {
+            "kernel": "avgpool2x_quantize_pack_noahat_kernel",
+            "layer_type": "Resize",
+            "role": "avg_pool(2x2)+quantize FUSED",
+            "us_per_layer_call": 94.43,
+            "calls": 1.0,
+            "pct_of_layer": 7.08
+          },
+          {
+            "kernel": "_gemm_w4a4_kernel",
+            "layer_type": "Linear-GEMM",
+            "role": "int8/int4 quantized GEMM (W8A8 / W4A4)",
+            "us_per_layer_call": 14.22,
+            "calls": 1.0,
+            "pct_of_layer": 1.07
+          },
+          {
+            "kernel": "reduce_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "reduction (amax/absmax for dynamic scales)",
+            "us_per_layer_call": 14.08,
+            "calls": 1.0,
+            "pct_of_layer": 1.06
+          },
+          {
+            "kernel": "elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 4.85,
+            "calls": 2.0,
+            "pct_of_layer": 0.36
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 4.8,
+            "calls": 2.0,
+            "pct_of_layer": 0.36
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.28,
+            "calls": 1.0,
+            "pct_of_layer": 0.25
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.25,
+            "calls": 1.0,
+            "pct_of_layer": 0.24
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.23,
+            "calls": 2.0,
+            "pct_of_layer": 0.24
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.13,
+            "calls": 1.0,
+            "pct_of_layer": 0.24
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "SiLU / activation (standalone)",
+            "us_per_layer_call": 2.72,
+            "calls": 1.0,
+            "pct_of_layer": 0.2
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 2.45,
+            "calls": 1.0,
+            "pct_of_layer": 0.18
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.87,
+            "calls": 1.0,
+            "pct_of_layer": 0.14
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.49,
+            "calls": 1.0,
+            "pct_of_layer": 0.11
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.48,
+            "calls": 1.0,
+            "pct_of_layer": 0.11
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.47,
+            "calls": 1.0,
+            "pct_of_layer": 0.11
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.4,
+            "calls": 1.0,
+            "pct_of_layer": 0.1
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.39,
+            "calls": 1.0,
+            "pct_of_layer": 0.1
+          }
+        ],
+        "roles": {
+          "GN+SiLU only (fp16 out; updown blocks + fp16 mode)": {
+            "us": 485.91,
+            "pct_of_layer": 36.46,
+            "n_kernels": 1
+          },
+          "avg_pool 2x2 (unfused; x_upd path)": {
+            "us": 249.7,
+            "pct_of_layer": 18.74,
+            "n_kernels": 1
+          },
+          "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": {
+            "us": 242.47,
+            "pct_of_layer": 18.19,
+            "n_kernels": 1
+          },
+          "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)": {
+            "us": 195.18,
+            "pct_of_layer": 14.65,
+            "n_kernels": 2
+          },
+          "avg_pool(2x2)+quantize FUSED": {
+            "us": 94.43,
+            "pct_of_layer": 7.08,
+            "n_kernels": 1
+          },
+          "other elementwise": {
+            "us": 20.38,
+            "pct_of_layer": 1.51,
+            "n_kernels": 9
+          },
+          "int8/int4 quantized GEMM (W8A8 / W4A4)": {
+            "us": 14.22,
+            "pct_of_layer": 1.07,
+            "n_kernels": 1
+          },
+          "reduction (amax/absmax for dynamic scales)": {
+            "us": 14.08,
+            "pct_of_layer": 1.06,
+            "n_kernels": 1
+          },
+          "dtype cast / device copy": {
+            "us": 13.71,
+            "pct_of_layer": 1.03,
+            "n_kernels": 4
+          },
+          "SiLU / activation (standalone)": {
+            "us": 2.72,
+            "pct_of_layer": 0.2,
+            "n_kernels": 1
+          }
+        },
+        "gpu_us_sum": 1332.8,
+        "gpu_busy_frac": 0.997
+      },
+      {
+        "kind": "resblock_plain",
+        "x_shape": [
+          128,
+          192,
+          16,
+          16
+        ],
+        "emb_shape": [
+          128,
+          768
+        ],
+        "n_instances": 1,
+        "example": "input_blocks.4.0",
+        "pipeline_us": 1147.871971130371,
+        "error": null,
+        "kernels": [
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "layer_type": "Normalization",
+            "role": "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)",
+            "us_per_layer_call": 545.01,
+            "calls": 2.0,
+            "pct_of_layer": 47.74
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 209.79,
+            "calls": 1.0,
+            "pct_of_layer": 18.38
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 140.04,
+            "calls": 1.0,
+            "pct_of_layer": 12.27
+          },
+          {
+            "kernel": "elementwise_kernel[CUDAFunctor_add]",
+            "layer_type": "Elementwise-Cast",
+            "role": "residual add",
+            "us_per_layer_call": 97.41,
+            "calls": 1.0,
+            "pct_of_layer": 8.53
+          },
+          {
+            "kernel": "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_n",
+            "layer_type": "Conv",
+            "role": "fp16 cuDNN conv",
+            "us_per_layer_call": 80.38,
+            "calls": 1.0,
+            "pct_of_layer": 7.04
+          },
+          {
+            "kernel": "_gemm_w4a4_kernel",
+            "layer_type": "Linear-GEMM",
+            "role": "int8/int4 quantized GEMM (W8A8 / W4A4)",
+            "us_per_layer_call": 14.47,
+            "calls": 1.0,
+            "pct_of_layer": 1.27
+          },
+          {
+            "kernel": "reduce_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "reduction (amax/absmax for dynamic scales)",
+            "us_per_layer_call": 14.06,
+            "calls": 1.0,
+            "pct_of_layer": 1.23
+          },
+          {
+            "kernel": "elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 8.3,
+            "calls": 2.0,
+            "pct_of_layer": 0.73
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 4.79,
+            "calls": 2.0,
+            "pct_of_layer": 0.42
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.29,
+            "calls": 1.0,
+            "pct_of_layer": 0.29
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.25,
+            "calls": 1.0,
+            "pct_of_layer": 0.28
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.22,
+            "calls": 2.0,
+            "pct_of_layer": 0.28
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.16,
+            "calls": 1.0,
+            "pct_of_layer": 0.28
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "SiLU / activation (standalone)",
+            "us_per_layer_call": 2.95,
+            "calls": 1.0,
+            "pct_of_layer": 0.26
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 2.46,
+            "calls": 1.0,
+            "pct_of_layer": 0.22
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.86,
+            "calls": 1.0,
+            "pct_of_layer": 0.16
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.49,
+            "calls": 1.0,
+            "pct_of_layer": 0.13
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.48,
+            "calls": 1.0,
+            "pct_of_layer": 0.13
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.47,
+            "calls": 1.0,
+            "pct_of_layer": 0.13
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.4,
+            "calls": 1.0,
+            "pct_of_layer": 0.12
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.39,
+            "calls": 1.0,
+            "pct_of_layer": 0.12
+          }
+        ],
+        "roles": {
+          "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": {
+            "us": 545.01,
+            "pct_of_layer": 47.74,
+            "n_kernels": 1
+          },
+          "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)": {
+            "us": 349.83,
+            "pct_of_layer": 30.65,
+            "n_kernels": 2
+          },
+          "residual add": {
+            "us": 97.41,
+            "pct_of_layer": 8.53,
+            "n_kernels": 1
+          },
+          "fp16 cuDNN conv": {
+            "us": 80.38,
+            "pct_of_layer": 7.04,
+            "n_kernels": 1
+          },
+          "other elementwise": {
+            "us": 20.35,
+            "pct_of_layer": 1.77,
+            "n_kernels": 9
+          },
+          "dtype cast / device copy": {
+            "us": 17.21,
+            "pct_of_layer": 1.52,
+            "n_kernels": 4
+          },
+          "int8/int4 quantized GEMM (W8A8 / W4A4)": {
+            "us": 14.47,
+            "pct_of_layer": 1.27,
+            "n_kernels": 1
+          },
+          "reduction (amax/absmax for dynamic scales)": {
+            "us": 14.06,
+            "pct_of_layer": 1.23,
+            "n_kernels": 1
+          },
+          "SiLU / activation (standalone)": {
+            "us": 2.95,
+            "pct_of_layer": 0.26,
+            "n_kernels": 1
+          }
+        },
+        "gpu_us_sum": 1141.65,
+        "gpu_busy_frac": 0.995
+      },
+      {
+        "kind": "attention",
+        "x_shape": [
+          128,
+          384,
+          16,
+          16
+        ],
+        "emb_shape": null,
+        "n_instances": 5,
+        "example": "input_blocks.4.1",
+        "pipeline_us": 1057.2479963302612,
+        "error": null,
+        "kernels": [
+          {
+            "kernel": "gemm_w4a4_kernel_awq",
+            "layer_type": "Linear-GEMM",
+            "role": "int8/int4 quantized GEMM (W8A8 / W4A4)",
+            "us_per_layer_call": 347.18,
+            "calls": 2.0,
+            "pct_of_layer": 32.87
+          },
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "layer_type": "Normalization",
+            "role": "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)",
+            "us_per_layer_call": 283.25,
+            "calls": 1.0,
+            "pct_of_layer": 26.82
+          },
+          {
+            "kernel": "flash_attn_int4_mma_kernel_t",
+            "layer_type": "Attention",
+            "role": "our int8/int4 flash kernel (fused QK^T+softmax+AV)",
+            "us_per_layer_call": 187.67,
+            "calls": 1.0,
+            "pct_of_layer": 17.77
+          },
+          {
+            "kernel": "aq_qtok_packed_static_qk_vec2_kernel",
+            "layer_type": "Attention",
+            "role": "Q/K/V quantize (packed, static scales)",
+            "us_per_layer_call": 128.4,
+            "calls": 1.0,
+            "pct_of_layer": 12.16
+          },
+          {
+            "kernel": "aq_vquant_trans_packed_tiled_vec2_kernel",
+            "layer_type": "Attention",
+            "role": "V quantize + transpose to AV layout",
+            "us_per_layer_call": 102.48,
+            "calls": 1.0,
+            "pct_of_layer": 9.7
+          },
+          {
+            "kernel": "elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 7.3,
+            "calls": 2.0,
+            "pct_of_layer": 0.69
+          }
+        ],
+        "roles": {
+          "int8/int4 quantized GEMM (W8A8 / W4A4)": {
+            "us": 347.18,
+            "pct_of_layer": 32.87,
+            "n_kernels": 1
+          },
+          "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": {
+            "us": 283.25,
+            "pct_of_layer": 26.82,
+            "n_kernels": 1
+          },
+          "our int8/int4 flash kernel (fused QK^T+softmax+AV)": {
+            "us": 187.67,
+            "pct_of_layer": 17.77,
+            "n_kernels": 1
+          },
+          "Q/K/V quantize (packed, static scales)": {
+            "us": 128.4,
+            "pct_of_layer": 12.16,
+            "n_kernels": 1
+          },
+          "V quantize + transpose to AV layout": {
+            "us": 102.48,
+            "pct_of_layer": 9.7,
+            "n_kernels": 1
+          },
+          "dtype cast / device copy": {
+            "us": 7.3,
+            "pct_of_layer": 0.69,
+            "n_kernels": 1
+          }
+        },
+        "gpu_us_sum": 1056.28,
+        "gpu_busy_frac": 0.999
+      },
+      {
+        "kind": "resblock_plain",
+        "x_shape": [
+          128,
+          384,
+          16,
+          16
+        ],
+        "emb_shape": [
+          128,
+          768
+        ],
+        "n_instances": 1,
+        "example": "input_blocks.5.0",
+        "pipeline_us": 1098.1119871139526,
+        "error": null,
+        "kernels": [
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "layer_type": "Normalization",
+            "role": "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)",
+            "us_per_layer_call": 607.14,
+            "calls": 2.0,
+            "pct_of_layer": 55.97
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 209.6,
+            "calls": 1.0,
+            "pct_of_layer": 19.32
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 202.15,
+            "calls": 1.0,
+            "pct_of_layer": 18.64
+          },
+          {
+            "kernel": "_gemm_w4a4_kernel",
+            "layer_type": "Linear-GEMM",
+            "role": "int8/int4 quantized GEMM (W8A8 / W4A4)",
+            "us_per_layer_call": 14.48,
+            "calls": 1.0,
+            "pct_of_layer": 1.34
+          },
+          {
+            "kernel": "reduce_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "reduction (amax/absmax for dynamic scales)",
+            "us_per_layer_call": 14.16,
+            "calls": 1.0,
+            "pct_of_layer": 1.31
+          },
+          {
+            "kernel": "elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 5.0,
+            "calls": 2.0,
+            "pct_of_layer": 0.46
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 4.81,
+            "calls": 2.0,
+            "pct_of_layer": 0.44
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.29,
+            "calls": 1.0,
+            "pct_of_layer": 0.3
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.24,
+            "calls": 2.0,
+            "pct_of_layer": 0.3
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.22,
+            "calls": 1.0,
+            "pct_of_layer": 0.3
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.16,
+            "calls": 1.0,
+            "pct_of_layer": 0.29
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "SiLU / activation (standalone)",
+            "us_per_layer_call": 2.88,
+            "calls": 1.0,
+            "pct_of_layer": 0.27
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 2.45,
+            "calls": 1.0,
+            "pct_of_layer": 0.23
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.86,
+            "calls": 1.0,
+            "pct_of_layer": 0.17
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.53,
+            "calls": 1.0,
+            "pct_of_layer": 0.14
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.5,
+            "calls": 1.0,
+            "pct_of_layer": 0.14
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.48,
+            "calls": 1.0,
+            "pct_of_layer": 0.14
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.4,
+            "calls": 1.0,
+            "pct_of_layer": 0.13
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.39,
+            "calls": 1.0,
+            "pct_of_layer": 0.13
+          }
+        ],
+        "roles": {
+          "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": {
+            "us": 607.14,
+            "pct_of_layer": 55.97,
+            "n_kernels": 1
+          },
+          "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)": {
+            "us": 411.75,
+            "pct_of_layer": 37.96,
+            "n_kernels": 2
+          },
+          "other elementwise": {
+            "us": 20.43,
+            "pct_of_layer": 1.89,
+            "n_kernels": 9
+          },
+          "int8/int4 quantized GEMM (W8A8 / W4A4)": {
+            "us": 14.48,
+            "pct_of_layer": 1.34,
+            "n_kernels": 1
+          },
+          "reduction (amax/absmax for dynamic scales)": {
+            "us": 14.16,
+            "pct_of_layer": 1.31,
+            "n_kernels": 1
+          },
+          "dtype cast / device copy": {
+            "us": 13.9,
+            "pct_of_layer": 1.28,
+            "n_kernels": 4
+          },
+          "SiLU / activation (standalone)": {
+            "us": 2.88,
+            "pct_of_layer": 0.27,
+            "n_kernels": 1
+          }
+        },
+        "gpu_us_sum": 1084.74,
+        "gpu_busy_frac": 0.988
+      },
+      {
+        "kind": "resblock_updown",
+        "x_shape": [
+          128,
+          384,
+          16,
+          16
+        ],
+        "emb_shape": [
+          128,
+          768
+        ],
+        "n_instances": 2,
+        "example": "input_blocks.6.0",
+        "pipeline_us": 849.5039939880371,
+        "error": null,
+        "kernels": [
+          {
+            "kernel": "group_norm_silu_nhwc_kernel",
+            "layer_type": "Normalization",
+            "role": "GN+SiLU only (fp16 out; updown blocks + fp16 mode)",
+            "us_per_layer_call": 289.29,
+            "calls": 1.0,
+            "pct_of_layer": 34.06
+          },
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "layer_type": "Normalization",
+            "role": "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)",
+            "us_per_layer_call": 193.23,
+            "calls": 1.0,
+            "pct_of_layer": 22.75
+          },
+          {
+            "kernel": "avg_pool2d_out_cuda_frame_nhwc",
+            "layer_type": "Resize",
+            "role": "avg_pool 2x2 (unfused; x_upd path)",
+            "us_per_layer_call": 127.33,
+            "calls": 1.0,
+            "pct_of_layer": 14.99
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 63.88,
+            "calls": 1.0,
+            "pct_of_layer": 7.52
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 58.79,
+            "calls": 1.0,
+            "pct_of_layer": 6.92
+          },
+          {
+            "kernel": "avgpool2x_quantize_pack_noahat_kernel",
+            "layer_type": "Resize",
+            "role": "avg_pool(2x2)+quantize FUSED",
+            "us_per_layer_call": 51.29,
+            "calls": 1.0,
+            "pct_of_layer": 6.04
+          },
+          {
+            "kernel": "_gemm_w4a4_kernel",
+            "layer_type": "Linear-GEMM",
+            "role": "int8/int4 quantized GEMM (W8A8 / W4A4)",
+            "us_per_layer_call": 14.56,
+            "calls": 1.0,
+            "pct_of_layer": 1.71
+          },
+          {
+            "kernel": "reduce_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "reduction (amax/absmax for dynamic scales)",
+            "us_per_layer_call": 14.12,
+            "calls": 1.0,
+            "pct_of_layer": 1.66
+          },
+          {
+            "kernel": "elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 5.0,
+            "calls": 2.0,
+            "pct_of_layer": 0.59
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 4.8,
+            "calls": 2.0,
+            "pct_of_layer": 0.57
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.26,
+            "calls": 1.0,
+            "pct_of_layer": 0.38
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.23,
+            "calls": 2.0,
+            "pct_of_layer": 0.38
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.22,
+            "calls": 1.0,
+            "pct_of_layer": 0.38
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.13,
+            "calls": 1.0,
+            "pct_of_layer": 0.37
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "SiLU / activation (standalone)",
+            "us_per_layer_call": 2.71,
+            "calls": 1.0,
+            "pct_of_layer": 0.32
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 2.43,
+            "calls": 1.0,
+            "pct_of_layer": 0.29
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.86,
+            "calls": 1.0,
+            "pct_of_layer": 0.22
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.52,
+            "calls": 1.0,
+            "pct_of_layer": 0.18
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.49,
+            "calls": 1.0,
+            "pct_of_layer": 0.18
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.48,
+            "calls": 1.0,
+            "pct_of_layer": 0.17
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.39,
+            "calls": 1.0,
+            "pct_of_layer": 0.16
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.39,
+            "calls": 1.0,
+            "pct_of_layer": 0.16
+          }
+        ],
+        "roles": {
+          "GN+SiLU only (fp16 out; updown blocks + fp16 mode)": {
+            "us": 289.29,
+            "pct_of_layer": 34.06,
+            "n_kernels": 1
+          },
+          "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": {
+            "us": 193.23,
+            "pct_of_layer": 22.75,
+            "n_kernels": 1
+          },
+          "avg_pool 2x2 (unfused; x_upd path)": {
+            "us": 127.33,
+            "pct_of_layer": 14.99,
+            "n_kernels": 1
+          },
+          "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)": {
+            "us": 122.67,
+            "pct_of_layer": 14.44,
+            "n_kernels": 2
+          },
+          "avg_pool(2x2)+quantize FUSED": {
+            "us": 51.29,
+            "pct_of_layer": 6.04,
+            "n_kernels": 1
+          },
+          "other elementwise": {
+            "us": 20.38,
+            "pct_of_layer": 2.4,
+            "n_kernels": 9
+          },
+          "int8/int4 quantized GEMM (W8A8 / W4A4)": {
+            "us": 14.56,
+            "pct_of_layer": 1.71,
+            "n_kernels": 1
+          },
+          "reduction (amax/absmax for dynamic scales)": {
+            "us": 14.12,
+            "pct_of_layer": 1.66,
+            "n_kernels": 1
+          },
+          "dtype cast / device copy": {
+            "us": 13.82,
+            "pct_of_layer": 1.63,
+            "n_kernels": 4
+          },
+          "SiLU / activation (standalone)": {
+            "us": 2.71,
+            "pct_of_layer": 0.32,
+            "n_kernels": 1
+          }
+        },
+        "gpu_us_sum": 849.39,
+        "gpu_busy_frac": 1.0
+      },
+      {
+        "kind": "resblock_plain",
+        "x_shape": [
+          128,
+          384,
+          8,
+          8
+        ],
+        "emb_shape": [
+          128,
+          768
+        ],
+        "n_instances": 2,
+        "example": "input_blocks.7.0",
+        "pipeline_us": 576.4480233192444,
+        "error": null,
+        "kernels": [
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "layer_type": "Normalization",
+            "role": "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)",
+            "us_per_layer_call": 381.83,
+            "calls": 2.0,
+            "pct_of_layer": 66.98
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 63.45,
+            "calls": 1.0,
+            "pct_of_layer": 11.13
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 58.94,
+            "calls": 1.0,
+            "pct_of_layer": 10.34
+          },
+          {
+            "kernel": "_gemm_w4a4_kernel",
+            "layer_type": "Linear-GEMM",
+            "role": "int8/int4 quantized GEMM (W8A8 / W4A4)",
+            "us_per_layer_call": 14.48,
+            "calls": 1.0,
+            "pct_of_layer": 2.54
+          },
+          {
+            "kernel": "reduce_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "reduction (amax/absmax for dynamic scales)",
+            "us_per_layer_call": 14.11,
+            "calls": 1.0,
+            "pct_of_layer": 2.48
+          },
+          {
+            "kernel": "elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 5.0,
+            "calls": 2.0,
+            "pct_of_layer": 0.88
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 4.8,
+            "calls": 2.0,
+            "pct_of_layer": 0.84
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.3,
+            "calls": 1.0,
+            "pct_of_layer": 0.58
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.23,
+            "calls": 2.0,
+            "pct_of_layer": 0.57
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.21,
+            "calls": 1.0,
+            "pct_of_layer": 0.56
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.15,
+            "calls": 1.0,
+            "pct_of_layer": 0.55
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "SiLU / activation (standalone)",
+            "us_per_layer_call": 2.94,
+            "calls": 1.0,
+            "pct_of_layer": 0.52
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 2.46,
+            "calls": 1.0,
+            "pct_of_layer": 0.43
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.87,
+            "calls": 1.0,
+            "pct_of_layer": 0.33
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.52,
+            "calls": 1.0,
+            "pct_of_layer": 0.27
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.49,
+            "calls": 1.0,
+            "pct_of_layer": 0.26
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.48,
+            "calls": 1.0,
+            "pct_of_layer": 0.26
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.4,
+            "calls": 1.0,
+            "pct_of_layer": 0.25
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.39,
+            "calls": 1.0,
+            "pct_of_layer": 0.24
+          }
+        ],
+        "roles": {
+          "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": {
+            "us": 381.83,
+            "pct_of_layer": 66.98,
+            "n_kernels": 1
+          },
+          "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)": {
+            "us": 122.39,
+            "pct_of_layer": 21.47,
+            "n_kernels": 2
+          },
+          "other elementwise": {
+            "us": 20.39,
+            "pct_of_layer": 3.58,
+            "n_kernels": 9
+          },
+          "int8/int4 quantized GEMM (W8A8 / W4A4)": {
+            "us": 14.48,
+            "pct_of_layer": 2.54,
+            "n_kernels": 1
+          },
+          "reduction (amax/absmax for dynamic scales)": {
+            "us": 14.11,
+            "pct_of_layer": 2.48,
+            "n_kernels": 1
+          },
+          "dtype cast / device copy": {
+            "us": 13.91,
+            "pct_of_layer": 2.44,
+            "n_kernels": 4
+          },
+          "SiLU / activation (standalone)": {
+            "us": 2.94,
+            "pct_of_layer": 0.52,
+            "n_kernels": 1
+          }
+        },
+        "gpu_us_sum": 570.04,
+        "gpu_busy_frac": 0.989
+      },
+      {
+        "kind": "attention",
+        "x_shape": [
+          128,
+          384,
+          8,
+          8
+        ],
+        "emb_shape": null,
+        "n_instances": 5,
+        "example": "input_blocks.7.1",
+        "pipeline_us": 391.9999897480011,
+        "error": null,
+        "kernels": [
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "layer_type": "Normalization",
+            "role": "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)",
+            "us_per_layer_call": 177.42,
+            "calls": 1.0,
+            "pct_of_layer": 45.28
+          },
+          {
+            "kernel": "gemm_w4a4_kernel_awq",
+            "layer_type": "Linear-GEMM",
+            "role": "int8/int4 quantized GEMM (W8A8 / W4A4)",
+            "us_per_layer_call": 116.71,
+            "calls": 2.0,
+            "pct_of_layer": 29.79
+          },
+          {
+            "kernel": "aq_qtok_packed_static_qk_vec2_kernel",
+            "layer_type": "Attention",
+            "role": "Q/K/V quantize (packed, static scales)",
+            "us_per_layer_call": 34.72,
+            "calls": 1.0,
+            "pct_of_layer": 8.86
+          },
+          {
+            "kernel": "flash_attn_int4_mma_kernel_t",
+            "layer_type": "Attention",
+            "role": "our int8/int4 flash kernel (fused QK^T+softmax+AV)",
+            "us_per_layer_call": 30.06,
+            "calls": 1.0,
+            "pct_of_layer": 7.67
+          },
+          {
+            "kernel": "aq_vquant_trans_packed_tiled_vec2_kernel",
+            "layer_type": "Attention",
+            "role": "V quantize + transpose to AV layout",
+            "us_per_layer_call": 25.64,
+            "calls": 1.0,
+            "pct_of_layer": 6.54
+          },
+          {
+            "kernel": "elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 7.27,
+            "calls": 2.0,
+            "pct_of_layer": 1.85
+          }
+        ],
+        "roles": {
+          "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": {
+            "us": 177.42,
+            "pct_of_layer": 45.28,
+            "n_kernels": 1
+          },
+          "int8/int4 quantized GEMM (W8A8 / W4A4)": {
+            "us": 116.71,
+            "pct_of_layer": 29.79,
+            "n_kernels": 1
+          },
+          "Q/K/V quantize (packed, static scales)": {
+            "us": 34.72,
+            "pct_of_layer": 8.86,
+            "n_kernels": 1
+          },
+          "our int8/int4 flash kernel (fused QK^T+softmax+AV)": {
+            "us": 30.06,
+            "pct_of_layer": 7.67,
+            "n_kernels": 1
+          },
+          "V quantize + transpose to AV layout": {
+            "us": 25.64,
+            "pct_of_layer": 6.54,
+            "n_kernels": 1
+          },
+          "dtype cast / device copy": {
+            "us": 7.27,
+            "pct_of_layer": 1.85,
+            "n_kernels": 1
+          }
+        },
+        "gpu_us_sum": 391.81,
+        "gpu_busy_frac": 1.0
+      },
+      {
+        "kind": "resblock_updown",
+        "x_shape": [
+          128,
+          384,
+          8,
+          8
+        ],
+        "emb_shape": [
+          128,
+          768
+        ],
+        "n_instances": 2,
+        "example": "input_blocks.9.0",
+        "pipeline_us": 587.4879956245422,
+        "error": null,
+        "kernels": [
+          {
+            "kernel": "group_norm_silu_nhwc_kernel",
+            "layer_type": "Normalization",
+            "role": "GN+SiLU only (fp16 out; updown blocks + fp16 mode)",
+            "us_per_layer_call": 169.9,
+            "calls": 1.0,
+            "pct_of_layer": 47.12
+          },
+          {
+            "kernel": "avg_pool2d_out_cuda_frame_nhwc",
+            "layer_type": "Resize",
+            "role": "avg_pool 2x2 (unfused; x_upd path)",
+            "us_per_layer_call": 35.66,
+            "calls": 1.0,
+            "pct_of_layer": 9.89
+          },
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "layer_type": "Normalization",
+            "role": "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)",
+            "us_per_layer_call": 28.94,
+            "calls": 1.0,
+            "pct_of_layer": 8.03
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 24.95,
+            "calls": 1.0,
+            "pct_of_layer": 6.92
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 22.2,
+            "calls": 1.0,
+            "pct_of_layer": 6.16
+          },
+          {
+            "kernel": "_gemm_w4a4_kernel",
+            "layer_type": "Linear-GEMM",
+            "role": "int8/int4 quantized GEMM (W8A8 / W4A4)",
+            "us_per_layer_call": 14.66,
+            "calls": 1.0,
+            "pct_of_layer": 4.07
+          },
+          {
+            "kernel": "reduce_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "reduction (amax/absmax for dynamic scales)",
+            "us_per_layer_call": 14.12,
+            "calls": 1.0,
+            "pct_of_layer": 3.92
+          },
+          {
+            "kernel": "avgpool2x_quantize_pack_noahat_kernel",
+            "layer_type": "Resize",
+            "role": "avg_pool(2x2)+quantize FUSED",
+            "us_per_layer_call": 13.23,
+            "calls": 1.0,
+            "pct_of_layer": 3.67
+          },
+          {
+            "kernel": "elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 5.01,
+            "calls": 2.0,
+            "pct_of_layer": 1.39
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 4.8,
+            "calls": 2.0,
+            "pct_of_layer": 1.33
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.3,
+            "calls": 1.0,
+            "pct_of_layer": 0.92
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.23,
+            "calls": 1.0,
+            "pct_of_layer": 0.89
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.18,
+            "calls": 2.0,
+            "pct_of_layer": 0.88
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.12,
+            "calls": 1.0,
+            "pct_of_layer": 0.87
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "SiLU / activation (standalone)",
+            "us_per_layer_call": 2.72,
+            "calls": 1.0,
+            "pct_of_layer": 0.75
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 2.42,
+            "calls": 1.0,
+            "pct_of_layer": 0.67
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.86,
+            "calls": 1.0,
+            "pct_of_layer": 0.52
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.52,
+            "calls": 1.0,
+            "pct_of_layer": 0.42
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.49,
+            "calls": 1.0,
+            "pct_of_layer": 0.41
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.47,
+            "calls": 1.0,
+            "pct_of_layer": 0.41
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.4,
+            "calls": 1.0,
+            "pct_of_layer": 0.39
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.39,
+            "calls": 1.0,
+            "pct_of_layer": 0.39
+          }
+        ],
+        "roles": {
+          "GN+SiLU only (fp16 out; updown blocks + fp16 mode)": {
+            "us": 169.9,
+            "pct_of_layer": 47.12,
+            "n_kernels": 1
+          },
+          "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)": {
+            "us": 47.15,
+            "pct_of_layer": 13.08,
+            "n_kernels": 2
+          },
+          "avg_pool 2x2 (unfused; x_upd path)": {
+            "us": 35.66,
+            "pct_of_layer": 9.89,
+            "n_kernels": 1
+          },
+          "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": {
+            "us": 28.94,
+            "pct_of_layer": 8.03,
+            "n_kernels": 1
+          },
+          "other elementwise": {
+            "us": 20.34,
+            "pct_of_layer": 5.64,
+            "n_kernels": 9
+          },
+          "int8/int4 quantized GEMM (W8A8 / W4A4)": {
+            "us": 14.66,
+            "pct_of_layer": 4.07,
+            "n_kernels": 1
+          },
+          "reduction (amax/absmax for dynamic scales)": {
+            "us": 14.12,
+            "pct_of_layer": 3.92,
+            "n_kernels": 1
+          },
+          "dtype cast / device copy": {
+            "us": 13.85,
+            "pct_of_layer": 3.85,
+            "n_kernels": 4
+          },
+          "avg_pool(2x2)+quantize FUSED": {
+            "us": 13.23,
+            "pct_of_layer": 3.67,
+            "n_kernels": 1
+          },
+          "SiLU / activation (standalone)": {
+            "us": 2.72,
+            "pct_of_layer": 0.75,
+            "n_kernels": 1
+          }
+        },
+        "gpu_us_sum": 360.59,
+        "gpu_busy_frac": 0.614
+      },
+      {
+        "kind": "resblock_plain",
+        "x_shape": [
+          128,
+          384,
+          4,
+          4
+        ],
+        "emb_shape": [
+          128,
+          768
+        ],
+        "n_instances": 1,
+        "example": "input_blocks.10.0",
+        "pipeline_us": 616.5120005607605,
+        "error": null,
+        "kernels": [
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "layer_type": "Normalization",
+            "role": "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)",
+            "us_per_layer_call": 89.62,
+            "calls": 2.0,
+            "pct_of_layer": 29.48
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 73.6,
+            "calls": 1.0,
+            "pct_of_layer": 24.21
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 39.23,
+            "calls": 1.0,
+            "pct_of_layer": 12.9
+          },
+          {
+            "kernel": "ampere_fp16_s16816gemm_fp16_256x128_ldg8_f2f_stages_32x3_t",
+            "layer_type": "Linear-GEMM",
+            "role": "fp16 tensor-core GEMM (cuBLAS)",
+            "us_per_layer_call": 21.42,
+            "calls": 1.0,
+            "pct_of_layer": 7.05
+          },
+          {
+            "kernel": "_gemm_w4a4_kernel",
+            "layer_type": "Linear-GEMM",
+            "role": "int8/int4 quantized GEMM (W8A8 / W4A4)",
+            "us_per_layer_call": 17.18,
+            "calls": 1.0,
+            "pct_of_layer": 5.65
+          },
+          {
+            "kernel": "reduce_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "reduction (amax/absmax for dynamic scales)",
+            "us_per_layer_call": 14.09,
+            "calls": 1.0,
+            "pct_of_layer": 4.63
+          },
+          {
+            "kernel": "elementwise_kernel[CUDAFunctor_add]",
+            "layer_type": "Elementwise-Cast",
+            "role": "residual add",
+            "us_per_layer_call": 11.51,
+            "calls": 1.0,
+            "pct_of_layer": 3.79
+          },
+          {
+            "kernel": "elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 6.11,
+            "calls": 2.0,
+            "pct_of_layer": 2.01
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 4.81,
+            "calls": 2.0,
+            "pct_of_layer": 1.58
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.34,
+            "calls": 1.0,
+            "pct_of_layer": 1.1
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.2,
+            "calls": 1.0,
+            "pct_of_layer": 1.05
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.19,
+            "calls": 2.0,
+            "pct_of_layer": 1.05
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.16,
+            "calls": 1.0,
+            "pct_of_layer": 1.04
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 2.46,
+            "calls": 1.0,
+            "pct_of_layer": 0.81
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "SiLU / activation (standalone)",
+            "us_per_layer_call": 2.4,
+            "calls": 1.0,
+            "pct_of_layer": 0.79
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.52,
+            "calls": 1.0,
+            "pct_of_layer": 0.5
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.49,
+            "calls": 1.0,
+            "pct_of_layer": 0.49
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.48,
+            "calls": 1.0,
+            "pct_of_layer": 0.49
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.47,
+            "calls": 1.0,
+            "pct_of_layer": 0.48
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.4,
+            "calls": 1.0,
+            "pct_of_layer": 0.46
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.39,
+            "calls": 1.0,
+            "pct_of_layer": 0.46
+          }
+        ],
+        "roles": {
+          "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)": {
+            "us": 112.83,
+            "pct_of_layer": 37.11,
+            "n_kernels": 2
+          },
+          "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": {
+            "us": 89.62,
+            "pct_of_layer": 29.48,
+            "n_kernels": 1
+          },
+          "fp16 tensor-core GEMM (cuBLAS)": {
+            "us": 21.42,
+            "pct_of_layer": 7.05,
+            "n_kernels": 1
+          },
+          "other elementwise": {
+            "us": 19.95,
+            "pct_of_layer": 6.56,
+            "n_kernels": 9
+          },
+          "int8/int4 quantized GEMM (W8A8 / W4A4)": {
+            "us": 17.18,
+            "pct_of_layer": 5.65,
+            "n_kernels": 1
+          },
+          "dtype cast / device copy": {
+            "us": 15.07,
+            "pct_of_layer": 4.96,
+            "n_kernels": 4
+          },
+          "reduction (amax/absmax for dynamic scales)": {
+            "us": 14.09,
+            "pct_of_layer": 4.63,
+            "n_kernels": 1
+          },
+          "residual add": {
+            "us": 11.51,
+            "pct_of_layer": 3.79,
+            "n_kernels": 1
+          },
+          "SiLU / activation (standalone)": {
+            "us": 2.4,
+            "pct_of_layer": 0.79,
+            "n_kernels": 1
+          }
+        },
+        "gpu_us_sum": 304.04,
+        "gpu_busy_frac": 0.493
+      },
+      {
+        "kind": "attention",
+        "x_shape": [
+          128,
+          768,
+          4,
+          4
+        ],
+        "emb_shape": null,
+        "n_instances": 5,
+        "example": "input_blocks.10.1",
+        "pipeline_us": 197.66399264335632,
+        "error": null,
+        "kernels": [
+          {
+            "kernel": "gemm_w4a4_kernel_awq",
+            "layer_type": "Linear-GEMM",
+            "role": "int8/int4 quantized GEMM (W8A8 / W4A4)",
+            "us_per_layer_call": 74.41,
+            "calls": 2.0,
+            "pct_of_layer": 37.85
+          },
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "layer_type": "Normalization",
+            "role": "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)",
+            "us_per_layer_call": 54.34,
+            "calls": 1.0,
+            "pct_of_layer": 27.64
+          },
+          {
+            "kernel": "pytorch_flash::flash_fwd_kernel",
+            "layer_type": "Attention",
+            "role": "PyTorch fused flash SDPA (pytorch_flash)",
+            "us_per_layer_call": 41.54,
+            "calls": 1.0,
+            "pct_of_layer": 21.13
+          },
+          {
+            "kernel": "elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 13.15,
+            "calls": 1.0,
+            "pct_of_layer": 6.69
+          },
+          {
+            "kernel": "quant_attn_out_int4_pack_kernel",
+            "layer_type": "Attention",
+            "role": "attention output quantize (for the proj GEMM)",
+            "us_per_layer_call": 13.15,
+            "calls": 1.0,
+            "pct_of_layer": 6.69
+          }
+        ],
+        "roles": {
+          "int8/int4 quantized GEMM (W8A8 / W4A4)": {
+            "us": 74.41,
+            "pct_of_layer": 37.85,
+            "n_kernels": 1
+          },
+          "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": {
+            "us": 54.34,
+            "pct_of_layer": 27.64,
+            "n_kernels": 1
+          },
+          "PyTorch fused flash SDPA (pytorch_flash)": {
+            "us": 41.54,
+            "pct_of_layer": 21.13,
+            "n_kernels": 1
+          },
+          "dtype cast / device copy": {
+            "us": 13.15,
+            "pct_of_layer": 6.69,
+            "n_kernels": 1
+          },
+          "attention output quantize (for the proj GEMM)": {
+            "us": 13.15,
+            "pct_of_layer": 6.69,
+            "n_kernels": 1
+          }
+        },
+        "gpu_us_sum": 196.58,
+        "gpu_busy_frac": 0.995
+      },
+      {
+        "kind": "resblock_plain",
+        "x_shape": [
+          128,
+          768,
+          4,
+          4
+        ],
+        "emb_shape": [
+          128,
+          768
+        ],
+        "n_instances": 1,
+        "example": "input_blocks.11.0",
+        "pipeline_us": 541.6319966316223,
+        "error": null,
+        "kernels": [
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "layer_type": "Normalization",
+            "role": "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)",
+            "us_per_layer_call": 117.67,
+            "calls": 2.0,
+            "pct_of_layer": 35.46
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 73.73,
+            "calls": 1.0,
+            "pct_of_layer": 22.22
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 71.84,
+            "calls": 1.0,
+            "pct_of_layer": 21.65
+          },
+          {
+            "kernel": "_gemm_w4a4_kernel",
+            "layer_type": "Linear-GEMM",
+            "role": "int8/int4 quantized GEMM (W8A8 / W4A4)",
+            "us_per_layer_call": 17.19,
+            "calls": 1.0,
+            "pct_of_layer": 5.18
+          },
+          {
+            "kernel": "reduce_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "reduction (amax/absmax for dynamic scales)",
+            "us_per_layer_call": 14.1,
+            "calls": 1.0,
+            "pct_of_layer": 4.25
+          },
+          {
+            "kernel": "elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 5.11,
+            "calls": 2.0,
+            "pct_of_layer": 1.54
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 4.8,
+            "calls": 2.0,
+            "pct_of_layer": 1.45
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.34,
+            "calls": 1.0,
+            "pct_of_layer": 1.01
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.21,
+            "calls": 1.0,
+            "pct_of_layer": 0.97
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.18,
+            "calls": 2.0,
+            "pct_of_layer": 0.96
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.16,
+            "calls": 1.0,
+            "pct_of_layer": 0.95
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "SiLU / activation (standalone)",
+            "us_per_layer_call": 2.92,
+            "calls": 1.0,
+            "pct_of_layer": 0.88
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 2.46,
+            "calls": 1.0,
+            "pct_of_layer": 0.74
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.86,
+            "calls": 1.0,
+            "pct_of_layer": 0.56
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.52,
+            "calls": 1.0,
+            "pct_of_layer": 0.46
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.49,
+            "calls": 1.0,
+            "pct_of_layer": 0.45
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.47,
+            "calls": 1.0,
+            "pct_of_layer": 0.44
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.4,
+            "calls": 1.0,
+            "pct_of_layer": 0.42
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.39,
+            "calls": 1.0,
+            "pct_of_layer": 0.42
+          }
+        ],
+        "roles": {
+          "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)": {
+            "us": 145.57,
+            "pct_of_layer": 43.87,
+            "n_kernels": 2
+          },
+          "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": {
+            "us": 117.67,
+            "pct_of_layer": 35.46,
+            "n_kernels": 1
+          },
+          "other elementwise": {
+            "us": 20.32,
+            "pct_of_layer": 6.13,
+            "n_kernels": 9
+          },
+          "int8/int4 quantized GEMM (W8A8 / W4A4)": {
+            "us": 17.19,
+            "pct_of_layer": 5.18,
+            "n_kernels": 1
+          },
+          "reduction (amax/absmax for dynamic scales)": {
+            "us": 14.1,
+            "pct_of_layer": 4.25,
+            "n_kernels": 1
+          },
+          "dtype cast / device copy": {
+            "us": 14.07,
+            "pct_of_layer": 4.24,
+            "n_kernels": 4
+          },
+          "SiLU / activation (standalone)": {
+            "us": 2.92,
+            "pct_of_layer": 0.88,
+            "n_kernels": 1
+          }
+        },
+        "gpu_us_sum": 331.84,
+        "gpu_busy_frac": 0.613
+      },
+      {
+        "kind": "resblock_updown",
+        "x_shape": [
+          128,
+          768,
+          4,
+          4
+        ],
+        "emb_shape": [
+          128,
+          768
+        ],
+        "n_instances": 2,
+        "example": "input_blocks.12.0",
+        "pipeline_us": 595.5520272254944,
+        "error": null,
+        "kernels": [
+          {
+            "kernel": "group_norm_silu_nhwc_kernel",
+            "layer_type": "Normalization",
+            "role": "GN+SiLU only (fp16 out; updown blocks + fp16 mode)",
+            "us_per_layer_call": 53.43,
+            "calls": 1.0,
+            "pct_of_layer": 22.16
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 40.66,
+            "calls": 1.0,
+            "pct_of_layer": 16.86
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 37.9,
+            "calls": 1.0,
+            "pct_of_layer": 15.72
+          },
+          {
+            "kernel": "avg_pool2d_out_cuda_frame_nhwc",
+            "layer_type": "Resize",
+            "role": "avg_pool 2x2 (unfused; x_upd path)",
+            "us_per_layer_call": 20.05,
+            "calls": 1.0,
+            "pct_of_layer": 8.31
+          },
+          {
+            "kernel": "_gemm_w4a4_kernel",
+            "layer_type": "Linear-GEMM",
+            "role": "int8/int4 quantized GEMM (W8A8 / W4A4)",
+            "us_per_layer_call": 17.35,
+            "calls": 1.0,
+            "pct_of_layer": 7.19
+          },
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "layer_type": "Normalization",
+            "role": "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)",
+            "us_per_layer_call": 15.85,
+            "calls": 1.0,
+            "pct_of_layer": 6.57
+          },
+          {
+            "kernel": "reduce_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "reduction (amax/absmax for dynamic scales)",
+            "us_per_layer_call": 14.08,
+            "calls": 1.0,
+            "pct_of_layer": 5.84
+          },
+          {
+            "kernel": "avgpool2x_quantize_pack_noahat_kernel",
+            "layer_type": "Resize",
+            "role": "avg_pool(2x2)+quantize FUSED",
+            "us_per_layer_call": 5.68,
+            "calls": 1.0,
+            "pct_of_layer": 2.36
+          },
+          {
+            "kernel": "elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 5.1,
+            "calls": 2.0,
+            "pct_of_layer": 2.12
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 4.79,
+            "calls": 2.0,
+            "pct_of_layer": 1.99
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.37,
+            "calls": 1.0,
+            "pct_of_layer": 1.4
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.18,
+            "calls": 1.0,
+            "pct_of_layer": 1.32
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.17,
+            "calls": 2.0,
+            "pct_of_layer": 1.32
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.1,
+            "calls": 1.0,
+            "pct_of_layer": 1.29
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 2.35,
+            "calls": 1.0,
+            "pct_of_layer": 0.97
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "SiLU / activation (standalone)",
+            "us_per_layer_call": 2.31,
+            "calls": 1.0,
+            "pct_of_layer": 0.96
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.52,
+            "calls": 1.0,
+            "pct_of_layer": 0.63
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.49,
+            "calls": 1.0,
+            "pct_of_layer": 0.62
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.48,
+            "calls": 1.0,
+            "pct_of_layer": 0.61
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.47,
+            "calls": 1.0,
+            "pct_of_layer": 0.61
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.4,
+            "calls": 1.0,
+            "pct_of_layer": 0.58
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.39,
+            "calls": 1.0,
+            "pct_of_layer": 0.58
+          }
+        ],
+        "roles": {
+          "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)": {
+            "us": 78.56,
+            "pct_of_layer": 32.58,
+            "n_kernels": 2
+          },
+          "GN+SiLU only (fp16 out; updown blocks + fp16 mode)": {
+            "us": 53.43,
+            "pct_of_layer": 22.16,
+            "n_kernels": 1
+          },
+          "avg_pool 2x2 (unfused; x_upd path)": {
+            "us": 20.05,
+            "pct_of_layer": 8.31,
+            "n_kernels": 1
+          },
+          "other elementwise": {
+            "us": 19.89,
+            "pct_of_layer": 8.26,
+            "n_kernels": 9
+          },
+          "int8/int4 quantized GEMM (W8A8 / W4A4)": {
+            "us": 17.35,
+            "pct_of_layer": 7.19,
+            "n_kernels": 1
+          },
+          "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": {
+            "us": 15.85,
+            "pct_of_layer": 6.57,
+            "n_kernels": 1
+          },
+          "reduction (amax/absmax for dynamic scales)": {
+            "us": 14.08,
+            "pct_of_layer": 5.84,
+            "n_kernels": 1
+          },
+          "dtype cast / device copy": {
+            "us": 13.92,
+            "pct_of_layer": 5.78,
+            "n_kernels": 4
+          },
+          "avg_pool(2x2)+quantize FUSED": {
+            "us": 5.68,
+            "pct_of_layer": 2.36,
+            "n_kernels": 1
+          },
+          "SiLU / activation (standalone)": {
+            "us": 2.31,
+            "pct_of_layer": 0.96,
+            "n_kernels": 1
+          }
+        },
+        "gpu_us_sum": 241.13,
+        "gpu_busy_frac": 0.405
+      },
+      {
+        "kind": "resblock_plain",
+        "x_shape": [
+          128,
+          768,
+          2,
+          2
+        ],
+        "emb_shape": [
+          128,
+          768
+        ],
+        "n_instances": 4,
+        "example": "input_blocks.13.0",
+        "pipeline_us": 545.7280278205872,
+        "error": null,
+        "kernels": [
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 40.73,
+            "calls": 1.0,
+            "pct_of_layer": 23.18
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 38.02,
+            "calls": 1.0,
+            "pct_of_layer": 21.64
+          },
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "layer_type": "Normalization",
+            "role": "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)",
+            "us_per_layer_call": 29.64,
+            "calls": 2.0,
+            "pct_of_layer": 16.87
+          },
+          {
+            "kernel": "_gemm_w4a4_kernel",
+            "layer_type": "Linear-GEMM",
+            "role": "int8/int4 quantized GEMM (W8A8 / W4A4)",
+            "us_per_layer_call": 17.29,
+            "calls": 1.0,
+            "pct_of_layer": 9.84
+          },
+          {
+            "kernel": "reduce_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "reduction (amax/absmax for dynamic scales)",
+            "us_per_layer_call": 14.1,
+            "calls": 1.0,
+            "pct_of_layer": 8.02
+          },
+          {
+            "kernel": "elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 5.1,
+            "calls": 2.0,
+            "pct_of_layer": 2.9
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 4.79,
+            "calls": 2.0,
+            "pct_of_layer": 2.73
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.33,
+            "calls": 1.0,
+            "pct_of_layer": 1.89
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.19,
+            "calls": 1.0,
+            "pct_of_layer": 1.81
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.17,
+            "calls": 2.0,
+            "pct_of_layer": 1.8
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.14,
+            "calls": 1.0,
+            "pct_of_layer": 1.79
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 2.36,
+            "calls": 1.0,
+            "pct_of_layer": 1.34
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "SiLU / activation (standalone)",
+            "us_per_layer_call": 2.14,
+            "calls": 1.0,
+            "pct_of_layer": 1.22
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.52,
+            "calls": 1.0,
+            "pct_of_layer": 0.86
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.49,
+            "calls": 1.0,
+            "pct_of_layer": 0.85
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.48,
+            "calls": 1.0,
+            "pct_of_layer": 0.84
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.47,
+            "calls": 1.0,
+            "pct_of_layer": 0.84
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.4,
+            "calls": 1.0,
+            "pct_of_layer": 0.79
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.39,
+            "calls": 1.0,
+            "pct_of_layer": 0.79
+          }
+        ],
+        "roles": {
+          "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)": {
+            "us": 78.75,
+            "pct_of_layer": 44.82,
+            "n_kernels": 2
+          },
+          "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": {
+            "us": 29.64,
+            "pct_of_layer": 16.87,
+            "n_kernels": 1
+          },
+          "other elementwise": {
+            "us": 19.9,
+            "pct_of_layer": 11.31,
+            "n_kernels": 9
+          },
+          "int8/int4 quantized GEMM (W8A8 / W4A4)": {
+            "us": 17.29,
+            "pct_of_layer": 9.84,
+            "n_kernels": 1
+          },
+          "reduction (amax/absmax for dynamic scales)": {
+            "us": 14.1,
+            "pct_of_layer": 8.02,
+            "n_kernels": 1
+          },
+          "dtype cast / device copy": {
+            "us": 13.93,
+            "pct_of_layer": 7.92,
+            "n_kernels": 4
+          },
+          "SiLU / activation (standalone)": {
+            "us": 2.14,
+            "pct_of_layer": 1.22,
+            "n_kernels": 1
+          }
+        },
+        "gpu_us_sum": 175.73,
+        "gpu_busy_frac": 0.322
+      },
+      {
+        "kind": "attention",
+        "x_shape": [
+          128,
+          768,
+          2,
+          2
+        ],
+        "emb_shape": null,
+        "n_instances": 1,
+        "example": "middle_block.1",
+        "pipeline_us": 164.32000696659088,
+        "error": null,
+        "kernels": [
+          {
+            "kernel": "gemm_w4a4_kernel_awq",
+            "layer_type": "Linear-GEMM",
+            "role": "int8/int4 quantized GEMM (W8A8 / W4A4)",
+            "us_per_layer_call": 40.13,
+            "calls": 2.0,
+            "pct_of_layer": 40.11
+          },
+          {
+            "kernel": "pytorch_flash::flash_fwd_kernel",
+            "layer_type": "Attention",
+            "role": "PyTorch fused flash SDPA (pytorch_flash)",
+            "us_per_layer_call": 38.47,
+            "calls": 1.0,
+            "pct_of_layer": 38.44
+          },
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "layer_type": "Normalization",
+            "role": "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)",
+            "us_per_layer_call": 13.45,
+            "calls": 1.0,
+            "pct_of_layer": 13.44
+          },
+          {
+            "kernel": "quant_attn_out_int4_pack_kernel",
+            "layer_type": "Attention",
+            "role": "attention output quantize (for the proj GEMM)",
+            "us_per_layer_call": 4.35,
+            "calls": 1.0,
+            "pct_of_layer": 4.35
+          },
+          {
+            "kernel": "elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.66,
+            "calls": 1.0,
+            "pct_of_layer": 3.66
+          }
+        ],
+        "roles": {
+          "int8/int4 quantized GEMM (W8A8 / W4A4)": {
+            "us": 40.13,
+            "pct_of_layer": 40.11,
+            "n_kernels": 1
+          },
+          "PyTorch fused flash SDPA (pytorch_flash)": {
+            "us": 38.47,
+            "pct_of_layer": 38.44,
+            "n_kernels": 1
+          },
+          "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": {
+            "us": 13.45,
+            "pct_of_layer": 13.44,
+            "n_kernels": 1
+          },
+          "attention output quantize (for the proj GEMM)": {
+            "us": 4.35,
+            "pct_of_layer": 4.35,
+            "n_kernels": 1
+          },
+          "dtype cast / device copy": {
+            "us": 3.66,
+            "pct_of_layer": 3.66,
+            "n_kernels": 1
+          }
+        },
+        "gpu_us_sum": 100.06,
+        "gpu_busy_frac": 0.609
+      },
+      {
+        "kind": "resblock_plain",
+        "x_shape": [
+          128,
+          1536,
+          2,
+          2
+        ],
+        "emb_shape": [
+          128,
+          768
+        ],
+        "n_instances": 3,
+        "example": "output_blocks.0.0",
+        "pipeline_us": 624.8319745063782,
+        "error": null,
+        "kernels": [
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 69.83,
+            "calls": 1.0,
+            "pct_of_layer": 28.47
+          },
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "layer_type": "Normalization",
+            "role": "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)",
+            "us_per_layer_call": 43.76,
+            "calls": 2.0,
+            "pct_of_layer": 17.84
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 39.33,
+            "calls": 1.0,
+            "pct_of_layer": 16.03
+          },
+          {
+            "kernel": "ampere_fp16_s16816gemm_fp16_128x64_ldg8_f2f_stages_32x6_tn",
+            "layer_type": "Linear-GEMM",
+            "role": "fp16 tensor-core GEMM (cuBLAS)",
+            "us_per_layer_call": 19.75,
+            "calls": 1.0,
+            "pct_of_layer": 8.05
+          },
+          {
+            "kernel": "_gemm_w4a4_kernel",
+            "layer_type": "Linear-GEMM",
+            "role": "int8/int4 quantized GEMM (W8A8 / W4A4)",
+            "us_per_layer_call": 17.23,
+            "calls": 1.0,
+            "pct_of_layer": 7.02
+          },
+          {
+            "kernel": "reduce_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "reduction (amax/absmax for dynamic scales)",
+            "us_per_layer_call": 14.14,
+            "calls": 1.0,
+            "pct_of_layer": 5.76
+          },
+          {
+            "kernel": "elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 6.05,
+            "calls": 2.0,
+            "pct_of_layer": 2.47
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 4.8,
+            "calls": 2.0,
+            "pct_of_layer": 1.96
+          },
+          {
+            "kernel": "elementwise_kernel[CUDAFunctor_add]",
+            "layer_type": "Elementwise-Cast",
+            "role": "residual add",
+            "us_per_layer_call": 3.8,
+            "calls": 1.0,
+            "pct_of_layer": 1.55
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.36,
+            "calls": 1.0,
+            "pct_of_layer": 1.37
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.17,
+            "calls": 2.0,
+            "pct_of_layer": 1.29
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.17,
+            "calls": 1.0,
+            "pct_of_layer": 1.29
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.15,
+            "calls": 1.0,
+            "pct_of_layer": 1.29
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 2.45,
+            "calls": 1.0,
+            "pct_of_layer": 1.0
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "SiLU / activation (standalone)",
+            "us_per_layer_call": 2.3,
+            "calls": 1.0,
+            "pct_of_layer": 0.94
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.75,
+            "calls": 1.0,
+            "pct_of_layer": 0.71
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.52,
+            "calls": 1.0,
+            "pct_of_layer": 0.62
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.49,
+            "calls": 1.0,
+            "pct_of_layer": 0.61
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.47,
+            "calls": 1.0,
+            "pct_of_layer": 0.6
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.4,
+            "calls": 1.0,
+            "pct_of_layer": 0.57
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.39,
+            "calls": 1.0,
+            "pct_of_layer": 0.57
+          }
+        ],
+        "roles": {
+          "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)": {
+            "us": 109.16,
+            "pct_of_layer": 44.5,
+            "n_kernels": 2
+          },
+          "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": {
+            "us": 43.76,
+            "pct_of_layer": 17.84,
+            "n_kernels": 1
+          },
+          "other elementwise": {
+            "us": 20.16,
+            "pct_of_layer": 8.22,
+            "n_kernels": 9
+          },
+          "fp16 tensor-core GEMM (cuBLAS)": {
+            "us": 19.75,
+            "pct_of_layer": 8.05,
+            "n_kernels": 1
+          },
+          "int8/int4 quantized GEMM (W8A8 / W4A4)": {
+            "us": 17.23,
+            "pct_of_layer": 7.02,
+            "n_kernels": 1
+          },
+          "dtype cast / device copy": {
+            "us": 15.01,
+            "pct_of_layer": 6.13,
+            "n_kernels": 4
+          },
+          "reduction (amax/absmax for dynamic scales)": {
+            "us": 14.14,
+            "pct_of_layer": 5.76,
+            "n_kernels": 1
+          },
+          "residual add": {
+            "us": 3.8,
+            "pct_of_layer": 1.55,
+            "n_kernels": 1
+          },
+          "SiLU / activation (standalone)": {
+            "us": 2.3,
+            "pct_of_layer": 0.94,
+            "n_kernels": 1
+          }
+        },
+        "gpu_us_sum": 245.33,
+        "gpu_busy_frac": 0.393
+      },
+      {
+        "kind": "resblock_updown",
+        "x_shape": [
+          128,
+          768,
+          2,
+          2
+        ],
+        "emb_shape": [
+          128,
+          768
+        ],
+        "n_instances": 1,
+        "example": "output_blocks.2.1",
+        "pipeline_us": 620.5120086669922,
+        "error": null,
+        "kernels": [
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 73.68,
+            "calls": 1.0,
+            "pct_of_layer": 20.78
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 71.54,
+            "calls": 1.0,
+            "pct_of_layer": 20.17
+          },
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "layer_type": "Normalization",
+            "role": "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)",
+            "us_per_layer_call": 60.99,
+            "calls": 1.0,
+            "pct_of_layer": 17.2
+          },
+          {
+            "kernel": "upsample_nearest2d_nhwc_out_frame",
+            "layer_type": "Resize",
+            "role": "nearest upsample (unfused; x_upd path)",
+            "us_per_layer_call": 26.19,
+            "calls": 1.0,
+            "pct_of_layer": 7.39
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 21.72,
+            "calls": 2.0,
+            "pct_of_layer": 6.13
+          },
+          {
+            "kernel": "_gemm_w4a4_kernel",
+            "layer_type": "Linear-GEMM",
+            "role": "int8/int4 quantized GEMM (W8A8 / W4A4)",
+            "us_per_layer_call": 17.19,
+            "calls": 1.0,
+            "pct_of_layer": 4.85
+          },
+          {
+            "kernel": "group_norm_silu_nhwc_kernel",
+            "layer_type": "Normalization",
+            "role": "GN+SiLU only (fp16 out; updown blocks + fp16 mode)",
+            "us_per_layer_call": 14.26,
+            "calls": 1.0,
+            "pct_of_layer": 4.02
+          },
+          {
+            "kernel": "reduce_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "reduction (amax/absmax for dynamic scales)",
+            "us_per_layer_call": 14.1,
+            "calls": 1.0,
+            "pct_of_layer": 3.98
+          },
+          {
+            "kernel": "upsample2x_quantize_pack_noahat_kernel",
+            "layer_type": "Resize",
+            "role": "upsample(nearest,2x)+quantize FUSED",
+            "us_per_layer_call": 12.78,
+            "calls": 1.0,
+            "pct_of_layer": 3.6
+          },
+          {
+            "kernel": "elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 7.38,
+            "calls": 2.0,
+            "pct_of_layer": 2.08
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 5.86,
+            "calls": 1.0,
+            "pct_of_layer": 1.65
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 4.8,
+            "calls": 2.0,
+            "pct_of_layer": 1.35
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.22,
+            "calls": 1.0,
+            "pct_of_layer": 0.91
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.18,
+            "calls": 2.0,
+            "pct_of_layer": 0.9
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.15,
+            "calls": 1.0,
+            "pct_of_layer": 0.89
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "SiLU / activation (standalone)",
+            "us_per_layer_call": 2.99,
+            "calls": 1.0,
+            "pct_of_layer": 0.84
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 2.46,
+            "calls": 1.0,
+            "pct_of_layer": 0.69
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.87,
+            "calls": 1.0,
+            "pct_of_layer": 0.53
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.52,
+            "calls": 1.0,
+            "pct_of_layer": 0.43
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.5,
+            "calls": 1.0,
+            "pct_of_layer": 0.42
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.48,
+            "calls": 1.0,
+            "pct_of_layer": 0.42
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.4,
+            "calls": 1.0,
+            "pct_of_layer": 0.39
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.39,
+            "calls": 1.0,
+            "pct_of_layer": 0.39
+          }
+        ],
+        "roles": {
+          "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)": {
+            "us": 145.22,
+            "pct_of_layer": 40.95,
+            "n_kernels": 2
+          },
+          "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": {
+            "us": 60.99,
+            "pct_of_layer": 17.2,
+            "n_kernels": 1
+          },
+          "dtype cast / device copy": {
+            "us": 40.57,
+            "pct_of_layer": 11.44,
+            "n_kernels": 5
+          },
+          "nearest upsample (unfused; x_upd path)": {
+            "us": 26.19,
+            "pct_of_layer": 7.39,
+            "n_kernels": 1
+          },
+          "other elementwise": {
+            "us": 20.36,
+            "pct_of_layer": 5.74,
+            "n_kernels": 9
+          },
+          "int8/int4 quantized GEMM (W8A8 / W4A4)": {
+            "us": 17.19,
+            "pct_of_layer": 4.85,
+            "n_kernels": 1
+          },
+          "GN+SiLU only (fp16 out; updown blocks + fp16 mode)": {
+            "us": 14.26,
+            "pct_of_layer": 4.02,
+            "n_kernels": 1
+          },
+          "reduction (amax/absmax for dynamic scales)": {
+            "us": 14.1,
+            "pct_of_layer": 3.98,
+            "n_kernels": 1
+          },
+          "upsample(nearest,2x)+quantize FUSED": {
+            "us": 12.78,
+            "pct_of_layer": 3.6,
+            "n_kernels": 1
+          },
+          "SiLU / activation (standalone)": {
+            "us": 2.99,
+            "pct_of_layer": 0.84,
+            "n_kernels": 1
+          }
+        },
+        "gpu_us_sum": 354.64,
+        "gpu_busy_frac": 0.572
+      },
+      {
+        "kind": "resblock_plain",
+        "x_shape": [
+          128,
+          1536,
+          4,
+          4
+        ],
+        "emb_shape": [
+          128,
+          768
+        ],
+        "n_instances": 2,
+        "example": "output_blocks.3.0",
+        "pipeline_us": 637.0559930801392,
+        "error": null,
+        "kernels": [
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "layer_type": "Normalization",
+            "role": "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)",
+            "us_per_layer_call": 248.08,
+            "calls": 2.0,
+            "pct_of_layer": 42.09
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 137.15,
+            "calls": 1.0,
+            "pct_of_layer": 23.27
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 73.58,
+            "calls": 1.0,
+            "pct_of_layer": 12.48
+          },
+          {
+            "kernel": "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize192x128x32_s",
+            "layer_type": "Linear-GEMM",
+            "role": "fp16 tensor-core GEMM (cuBLAS)",
+            "us_per_layer_call": 51.01,
+            "calls": 1.0,
+            "pct_of_layer": 8.65
+          },
+          {
+            "kernel": "_gemm_w4a4_kernel",
+            "layer_type": "Linear-GEMM",
+            "role": "int8/int4 quantized GEMM (W8A8 / W4A4)",
+            "us_per_layer_call": 17.33,
+            "calls": 1.0,
+            "pct_of_layer": 2.94
+          },
+          {
+            "kernel": "reduce_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "reduction (amax/absmax for dynamic scales)",
+            "us_per_layer_call": 14.14,
+            "calls": 1.0,
+            "pct_of_layer": 2.4
+          },
+          {
+            "kernel": "elementwise_kernel[CUDAFunctor_add]",
+            "layer_type": "Elementwise-Cast",
+            "role": "residual add",
+            "us_per_layer_call": 8.77,
+            "calls": 1.0,
+            "pct_of_layer": 1.49
+          },
+          {
+            "kernel": "elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 7.33,
+            "calls": 2.0,
+            "pct_of_layer": 1.24
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 4.8,
+            "calls": 2.0,
+            "pct_of_layer": 0.82
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.34,
+            "calls": 1.0,
+            "pct_of_layer": 0.57
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.21,
+            "calls": 1.0,
+            "pct_of_layer": 0.54
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.18,
+            "calls": 2.0,
+            "pct_of_layer": 0.54
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.14,
+            "calls": 1.0,
+            "pct_of_layer": 0.53
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "SiLU / activation (standalone)",
+            "us_per_layer_call": 2.77,
+            "calls": 1.0,
+            "pct_of_layer": 0.47
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 2.46,
+            "calls": 1.0,
+            "pct_of_layer": 0.42
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.87,
+            "calls": 1.0,
+            "pct_of_layer": 0.32
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.51,
+            "calls": 1.0,
+            "pct_of_layer": 0.26
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.49,
+            "calls": 1.0,
+            "pct_of_layer": 0.25
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.47,
+            "calls": 1.0,
+            "pct_of_layer": 0.25
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.4,
+            "calls": 1.0,
+            "pct_of_layer": 0.24
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.4,
+            "calls": 1.0,
+            "pct_of_layer": 0.24
+          }
+        ],
+        "roles": {
+          "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": {
+            "us": 248.08,
+            "pct_of_layer": 42.09,
+            "n_kernels": 1
+          },
+          "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)": {
+            "us": 210.73,
+            "pct_of_layer": 35.75,
+            "n_kernels": 2
+          },
+          "fp16 tensor-core GEMM (cuBLAS)": {
+            "us": 51.01,
+            "pct_of_layer": 8.65,
+            "n_kernels": 1
+          },
+          "other elementwise": {
+            "us": 20.33,
+            "pct_of_layer": 3.46,
+            "n_kernels": 9
+          },
+          "int8/int4 quantized GEMM (W8A8 / W4A4)": {
+            "us": 17.33,
+            "pct_of_layer": 2.94,
+            "n_kernels": 1
+          },
+          "dtype cast / device copy": {
+            "us": 16.27,
+            "pct_of_layer": 2.76,
+            "n_kernels": 4
+          },
+          "reduction (amax/absmax for dynamic scales)": {
+            "us": 14.14,
+            "pct_of_layer": 2.4,
+            "n_kernels": 1
+          },
+          "residual add": {
+            "us": 8.77,
+            "pct_of_layer": 1.49,
+            "n_kernels": 1
+          },
+          "SiLU / activation (standalone)": {
+            "us": 2.77,
+            "pct_of_layer": 0.47,
+            "n_kernels": 1
+          }
+        },
+        "gpu_us_sum": 589.43,
+        "gpu_busy_frac": 0.925
+      },
+      {
+        "kind": "resblock_plain",
+        "x_shape": [
+          128,
+          1152,
+          4,
+          4
+        ],
+        "emb_shape": [
+          128,
+          768
+        ],
+        "n_instances": 1,
+        "example": "output_blocks.5.0",
+        "pipeline_us": 626.36798620224,
+        "error": null,
+        "kernels": [
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "layer_type": "Normalization",
+            "role": "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)",
+            "us_per_layer_call": 245.12,
+            "calls": 2.0,
+            "pct_of_layer": 44.67
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 104.5,
+            "calls": 1.0,
+            "pct_of_layer": 19.04
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 73.53,
+            "calls": 1.0,
+            "pct_of_layer": 13.4
+          },
+          {
+            "kernel": "ampere_fp16_s1688gemm_fp16_128x128_ldg8_f2f_stages_32x1_tn",
+            "layer_type": "Linear-GEMM",
+            "role": "fp16 tensor-core GEMM (cuBLAS)",
+            "us_per_layer_call": 45.23,
+            "calls": 1.0,
+            "pct_of_layer": 8.24
+          },
+          {
+            "kernel": "_gemm_w4a4_kernel",
+            "layer_type": "Linear-GEMM",
+            "role": "int8/int4 quantized GEMM (W8A8 / W4A4)",
+            "us_per_layer_call": 17.2,
+            "calls": 1.0,
+            "pct_of_layer": 3.13
+          },
+          {
+            "kernel": "reduce_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "reduction (amax/absmax for dynamic scales)",
+            "us_per_layer_call": 14.1,
+            "calls": 1.0,
+            "pct_of_layer": 2.57
+          },
+          {
+            "kernel": "elementwise_kernel[CUDAFunctor_add]",
+            "layer_type": "Elementwise-Cast",
+            "role": "residual add",
+            "us_per_layer_call": 9.04,
+            "calls": 1.0,
+            "pct_of_layer": 1.65
+          },
+          {
+            "kernel": "elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 7.34,
+            "calls": 2.0,
+            "pct_of_layer": 1.34
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 4.8,
+            "calls": 2.0,
+            "pct_of_layer": 0.88
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.33,
+            "calls": 1.0,
+            "pct_of_layer": 0.61
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.21,
+            "calls": 1.0,
+            "pct_of_layer": 0.59
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.18,
+            "calls": 2.0,
+            "pct_of_layer": 0.58
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.15,
+            "calls": 1.0,
+            "pct_of_layer": 0.57
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "SiLU / activation (standalone)",
+            "us_per_layer_call": 2.86,
+            "calls": 1.0,
+            "pct_of_layer": 0.52
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 2.45,
+            "calls": 1.0,
+            "pct_of_layer": 0.45
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.86,
+            "calls": 1.0,
+            "pct_of_layer": 0.34
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.52,
+            "calls": 1.0,
+            "pct_of_layer": 0.28
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.49,
+            "calls": 1.0,
+            "pct_of_layer": 0.27
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.48,
+            "calls": 1.0,
+            "pct_of_layer": 0.27
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.4,
+            "calls": 1.0,
+            "pct_of_layer": 0.25
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.4,
+            "calls": 1.0,
+            "pct_of_layer": 0.26
+          },
+          {
+            "kernel": "Memset",
+            "layer_type": "Memory-op",
+            "role": "memset / memcpy",
+            "us_per_layer_call": 0.54,
+            "calls": 1.0,
+            "pct_of_layer": 0.1
+          }
+        ],
+        "roles": {
+          "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": {
+            "us": 245.12,
+            "pct_of_layer": 44.67,
+            "n_kernels": 1
+          },
+          "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)": {
+            "us": 178.03,
+            "pct_of_layer": 32.44,
+            "n_kernels": 2
+          },
+          "fp16 tensor-core GEMM (cuBLAS)": {
+            "us": 45.23,
+            "pct_of_layer": 8.24,
+            "n_kernels": 1
+          },
+          "other elementwise": {
+            "us": 20.34,
+            "pct_of_layer": 3.72,
+            "n_kernels": 9
+          },
+          "int8/int4 quantized GEMM (W8A8 / W4A4)": {
+            "us": 17.2,
+            "pct_of_layer": 3.13,
+            "n_kernels": 1
+          },
+          "dtype cast / device copy": {
+            "us": 16.27,
+            "pct_of_layer": 2.97,
+            "n_kernels": 4
+          },
+          "reduction (amax/absmax for dynamic scales)": {
+            "us": 14.1,
+            "pct_of_layer": 2.57,
+            "n_kernels": 1
+          },
+          "residual add": {
+            "us": 9.04,
+            "pct_of_layer": 1.65,
+            "n_kernels": 1
+          },
+          "SiLU / activation (standalone)": {
+            "us": 2.86,
+            "pct_of_layer": 0.52,
+            "n_kernels": 1
+          },
+          "memset / memcpy": {
+            "us": 0.54,
+            "pct_of_layer": 0.1,
+            "n_kernels": 1
+          }
+        },
+        "gpu_us_sum": 548.74,
+        "gpu_busy_frac": 0.876
+      },
+      {
+        "kind": "resblock_plain",
+        "x_shape": [
+          128,
+          1152,
+          8,
+          8
+        ],
+        "emb_shape": [
+          128,
+          768
+        ],
+        "n_instances": 1,
+        "example": "output_blocks.6.0",
+        "pipeline_us": 870.8159923553467,
+        "error": null,
+        "kernels": [
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "layer_type": "Normalization",
+            "role": "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)",
+            "us_per_layer_call": 468.02,
+            "calls": 2.0,
+            "pct_of_layer": 54.4
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 156.51,
+            "calls": 1.0,
+            "pct_of_layer": 18.19
+          },
+          {
+            "kernel": "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_n",
+            "layer_type": "Conv",
+            "role": "fp16 cuDNN conv",
+            "us_per_layer_call": 77.98,
+            "calls": 1.0,
+            "pct_of_layer": 9.06
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 63.4,
+            "calls": 1.0,
+            "pct_of_layer": 7.37
+          },
+          {
+            "kernel": "elementwise_kernel[CUDAFunctor_add]",
+            "layer_type": "Elementwise-Cast",
+            "role": "residual add",
+            "us_per_layer_call": 25.56,
+            "calls": 1.0,
+            "pct_of_layer": 2.97
+          },
+          {
+            "kernel": "_gemm_w4a4_kernel",
+            "layer_type": "Linear-GEMM",
+            "role": "int8/int4 quantized GEMM (W8A8 / W4A4)",
+            "us_per_layer_call": 14.6,
+            "calls": 1.0,
+            "pct_of_layer": 1.7
+          },
+          {
+            "kernel": "reduce_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "reduction (amax/absmax for dynamic scales)",
+            "us_per_layer_call": 14.07,
+            "calls": 1.0,
+            "pct_of_layer": 1.64
+          },
+          {
+            "kernel": "elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 8.22,
+            "calls": 2.0,
+            "pct_of_layer": 0.96
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 4.79,
+            "calls": 2.0,
+            "pct_of_layer": 0.56
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.3,
+            "calls": 1.0,
+            "pct_of_layer": 0.38
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.19,
+            "calls": 1.0,
+            "pct_of_layer": 0.37
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.16,
+            "calls": 2.0,
+            "pct_of_layer": 0.37
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.13,
+            "calls": 1.0,
+            "pct_of_layer": 0.36
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "SiLU / activation (standalone)",
+            "us_per_layer_call": 2.92,
+            "calls": 1.0,
+            "pct_of_layer": 0.34
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 2.45,
+            "calls": 1.0,
+            "pct_of_layer": 0.28
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.85,
+            "calls": 1.0,
+            "pct_of_layer": 0.22
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.52,
+            "calls": 1.0,
+            "pct_of_layer": 0.18
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.49,
+            "calls": 1.0,
+            "pct_of_layer": 0.17
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.47,
+            "calls": 1.0,
+            "pct_of_layer": 0.17
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.4,
+            "calls": 1.0,
+            "pct_of_layer": 0.16
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.39,
+            "calls": 1.0,
+            "pct_of_layer": 0.16
+          }
+        ],
+        "roles": {
+          "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": {
+            "us": 468.02,
+            "pct_of_layer": 54.4,
+            "n_kernels": 1
+          },
+          "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)": {
+            "us": 219.91,
+            "pct_of_layer": 25.56,
+            "n_kernels": 2
+          },
+          "fp16 cuDNN conv": {
+            "us": 77.98,
+            "pct_of_layer": 9.06,
+            "n_kernels": 1
+          },
+          "residual add": {
+            "us": 25.56,
+            "pct_of_layer": 2.97,
+            "n_kernels": 1
+          },
+          "other elementwise": {
+            "us": 20.26,
+            "pct_of_layer": 2.36,
+            "n_kernels": 9
+          },
+          "dtype cast / device copy": {
+            "us": 17.1,
+            "pct_of_layer": 1.98,
+            "n_kernels": 4
+          },
+          "int8/int4 quantized GEMM (W8A8 / W4A4)": {
+            "us": 14.6,
+            "pct_of_layer": 1.7,
+            "n_kernels": 1
+          },
+          "reduction (amax/absmax for dynamic scales)": {
+            "us": 14.07,
+            "pct_of_layer": 1.64,
+            "n_kernels": 1
+          },
+          "SiLU / activation (standalone)": {
+            "us": 2.92,
+            "pct_of_layer": 0.34,
+            "n_kernels": 1
+          }
+        },
+        "gpu_us_sum": 860.41,
+        "gpu_busy_frac": 0.988
+      },
+      {
+        "kind": "resblock_plain",
+        "x_shape": [
+          128,
+          768,
+          8,
+          8
+        ],
+        "emb_shape": [
+          128,
+          768
+        ],
+        "n_instances": 2,
+        "example": "output_blocks.7.0",
+        "pipeline_us": 749.1840124130249,
+        "error": null,
+        "kernels": [
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "layer_type": "Normalization",
+            "role": "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)",
+            "us_per_layer_call": 419.34,
+            "calls": 2.0,
+            "pct_of_layer": 56.55
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 107.68,
+            "calls": 1.0,
+            "pct_of_layer": 14.52
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 63.29,
+            "calls": 1.0,
+            "pct_of_layer": 8.53
+          },
+          {
+            "kernel": "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_n",
+            "layer_type": "Conv",
+            "role": "fp16 cuDNN conv",
+            "us_per_layer_call": 56.96,
+            "calls": 1.0,
+            "pct_of_layer": 7.68
+          },
+          {
+            "kernel": "elementwise_kernel[CUDAFunctor_add]",
+            "layer_type": "Elementwise-Cast",
+            "role": "residual add",
+            "us_per_layer_call": 25.12,
+            "calls": 1.0,
+            "pct_of_layer": 3.39
+          },
+          {
+            "kernel": "_gemm_w4a4_kernel",
+            "layer_type": "Linear-GEMM",
+            "role": "int8/int4 quantized GEMM (W8A8 / W4A4)",
+            "us_per_layer_call": 14.56,
+            "calls": 1.0,
+            "pct_of_layer": 1.96
+          },
+          {
+            "kernel": "reduce_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "reduction (amax/absmax for dynamic scales)",
+            "us_per_layer_call": 14.14,
+            "calls": 1.0,
+            "pct_of_layer": 1.91
+          },
+          {
+            "kernel": "elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 8.18,
+            "calls": 2.0,
+            "pct_of_layer": 1.1
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 4.78,
+            "calls": 2.0,
+            "pct_of_layer": 0.65
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.29,
+            "calls": 1.0,
+            "pct_of_layer": 0.44
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.29,
+            "calls": 1.0,
+            "pct_of_layer": 0.44
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.19,
+            "calls": 2.0,
+            "pct_of_layer": 0.43
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.14,
+            "calls": 1.0,
+            "pct_of_layer": 0.42
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "SiLU / activation (standalone)",
+            "us_per_layer_call": 3.0,
+            "calls": 1.0,
+            "pct_of_layer": 0.4
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 2.45,
+            "calls": 1.0,
+            "pct_of_layer": 0.33
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.86,
+            "calls": 1.0,
+            "pct_of_layer": 0.25
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.53,
+            "calls": 1.0,
+            "pct_of_layer": 0.21
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.49,
+            "calls": 1.0,
+            "pct_of_layer": 0.2
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.48,
+            "calls": 1.0,
+            "pct_of_layer": 0.2
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.4,
+            "calls": 1.0,
+            "pct_of_layer": 0.19
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.39,
+            "calls": 1.0,
+            "pct_of_layer": 0.19
+          }
+        ],
+        "roles": {
+          "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": {
+            "us": 419.34,
+            "pct_of_layer": 56.55,
+            "n_kernels": 1
+          },
+          "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)": {
+            "us": 170.97,
+            "pct_of_layer": 23.05,
+            "n_kernels": 2
+          },
+          "fp16 cuDNN conv": {
+            "us": 56.96,
+            "pct_of_layer": 7.68,
+            "n_kernels": 1
+          },
+          "residual add": {
+            "us": 25.12,
+            "pct_of_layer": 3.39,
+            "n_kernels": 1
+          },
+          "other elementwise": {
+            "us": 20.41,
+            "pct_of_layer": 2.76,
+            "n_kernels": 9
+          },
+          "dtype cast / device copy": {
+            "us": 17.06,
+            "pct_of_layer": 2.29,
+            "n_kernels": 4
+          },
+          "int8/int4 quantized GEMM (W8A8 / W4A4)": {
+            "us": 14.56,
+            "pct_of_layer": 1.96,
+            "n_kernels": 1
+          },
+          "reduction (amax/absmax for dynamic scales)": {
+            "us": 14.14,
+            "pct_of_layer": 1.91,
+            "n_kernels": 1
+          },
+          "SiLU / activation (standalone)": {
+            "us": 3.0,
+            "pct_of_layer": 0.4,
+            "n_kernels": 1
+          }
+        },
+        "gpu_us_sum": 741.54,
+        "gpu_busy_frac": 0.99
+      },
+      {
+        "kind": "resblock_plain",
+        "x_shape": [
+          128,
+          768,
+          16,
+          16
+        ],
+        "emb_shape": [
+          128,
+          768
+        ],
+        "n_instances": 2,
+        "example": "output_blocks.9.0",
+        "pipeline_us": 1695.1680183410645,
+        "error": null,
+        "kernels": [
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "layer_type": "Normalization",
+            "role": "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)",
+            "us_per_layer_call": 764.14,
+            "calls": 2.0,
+            "pct_of_layer": 45.33
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 360.9,
+            "calls": 1.0,
+            "pct_of_layer": 21.41
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 213.53,
+            "calls": 1.0,
+            "pct_of_layer": 12.67
+          },
+          {
+            "kernel": "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_n",
+            "layer_type": "Conv",
+            "role": "fp16 cuDNN conv",
+            "us_per_layer_call": 177.65,
+            "calls": 1.0,
+            "pct_of_layer": 10.54
+          },
+          {
+            "kernel": "elementwise_kernel[CUDAFunctor_add]",
+            "layer_type": "Elementwise-Cast",
+            "role": "residual add",
+            "us_per_layer_call": 97.87,
+            "calls": 1.0,
+            "pct_of_layer": 5.81
+          },
+          {
+            "kernel": "_gemm_w4a4_kernel",
+            "layer_type": "Linear-GEMM",
+            "role": "int8/int4 quantized GEMM (W8A8 / W4A4)",
+            "us_per_layer_call": 15.01,
+            "calls": 1.0,
+            "pct_of_layer": 0.89
+          },
+          {
+            "kernel": "reduce_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "reduction (amax/absmax for dynamic scales)",
+            "us_per_layer_call": 14.81,
+            "calls": 1.0,
+            "pct_of_layer": 0.88
+          },
+          {
+            "kernel": "elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 8.46,
+            "calls": 2.0,
+            "pct_of_layer": 0.5
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 4.99,
+            "calls": 2.0,
+            "pct_of_layer": 0.3
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.43,
+            "calls": 1.0,
+            "pct_of_layer": 0.2
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.36,
+            "calls": 1.0,
+            "pct_of_layer": 0.2
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.33,
+            "calls": 2.0,
+            "pct_of_layer": 0.2
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.28,
+            "calls": 1.0,
+            "pct_of_layer": 0.19
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "SiLU / activation (standalone)",
+            "us_per_layer_call": 2.89,
+            "calls": 1.0,
+            "pct_of_layer": 0.17
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 2.57,
+            "calls": 1.0,
+            "pct_of_layer": 0.15
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.95,
+            "calls": 1.0,
+            "pct_of_layer": 0.12
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.58,
+            "calls": 1.0,
+            "pct_of_layer": 0.09
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.55,
+            "calls": 1.0,
+            "pct_of_layer": 0.09
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.54,
+            "calls": 1.0,
+            "pct_of_layer": 0.09
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.46,
+            "calls": 1.0,
+            "pct_of_layer": 0.09
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.45,
+            "calls": 1.0,
+            "pct_of_layer": 0.09
+          }
+        ],
+        "roles": {
+          "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": {
+            "us": 764.14,
+            "pct_of_layer": 45.33,
+            "n_kernels": 1
+          },
+          "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)": {
+            "us": 574.43,
+            "pct_of_layer": 34.08,
+            "n_kernels": 2
+          },
+          "fp16 cuDNN conv": {
+            "us": 177.65,
+            "pct_of_layer": 10.54,
+            "n_kernels": 1
+          },
+          "residual add": {
+            "us": 97.87,
+            "pct_of_layer": 5.81,
+            "n_kernels": 1
+          },
+          "other elementwise": {
+            "us": 21.21,
+            "pct_of_layer": 1.27,
+            "n_kernels": 9
+          },
+          "dtype cast / device copy": {
+            "us": 17.74,
+            "pct_of_layer": 1.04,
+            "n_kernels": 4
+          },
+          "int8/int4 quantized GEMM (W8A8 / W4A4)": {
+            "us": 15.01,
+            "pct_of_layer": 0.89,
+            "n_kernels": 1
+          },
+          "reduction (amax/absmax for dynamic scales)": {
+            "us": 14.81,
+            "pct_of_layer": 0.88,
+            "n_kernels": 1
+          },
+          "SiLU / activation (standalone)": {
+            "us": 2.89,
+            "pct_of_layer": 0.17,
+            "n_kernels": 1
+          }
+        },
+        "gpu_us_sum": 1685.74,
+        "gpu_busy_frac": 0.994
+      },
+      {
+        "kind": "resblock_plain",
+        "x_shape": [
+          128,
+          576,
+          16,
+          16
+        ],
+        "emb_shape": [
+          128,
+          768
+        ],
+        "n_instances": 1,
+        "example": "output_blocks.11.0",
+        "pipeline_us": 1555.9040307998657,
+        "error": null,
+        "kernels": [
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "layer_type": "Normalization",
+            "role": "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)",
+            "us_per_layer_call": 706.99,
+            "calls": 2.0,
+            "pct_of_layer": 45.83
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 310.68,
+            "calls": 1.0,
+            "pct_of_layer": 20.14
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 212.39,
+            "calls": 1.0,
+            "pct_of_layer": 13.77
+          },
+          {
+            "kernel": "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_n",
+            "layer_type": "Conv",
+            "role": "fp16 cuDNN conv",
+            "us_per_layer_call": 144.12,
+            "calls": 1.0,
+            "pct_of_layer": 9.34
+          },
+          {
+            "kernel": "elementwise_kernel[CUDAFunctor_add]",
+            "layer_type": "Elementwise-Cast",
+            "role": "residual add",
+            "us_per_layer_call": 97.72,
+            "calls": 1.0,
+            "pct_of_layer": 6.33
+          },
+          {
+            "kernel": "_gemm_w4a4_kernel",
+            "layer_type": "Linear-GEMM",
+            "role": "int8/int4 quantized GEMM (W8A8 / W4A4)",
+            "us_per_layer_call": 14.79,
+            "calls": 1.0,
+            "pct_of_layer": 0.96
+          },
+          {
+            "kernel": "reduce_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "reduction (amax/absmax for dynamic scales)",
+            "us_per_layer_call": 14.62,
+            "calls": 1.0,
+            "pct_of_layer": 0.95
+          },
+          {
+            "kernel": "elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 8.38,
+            "calls": 2.0,
+            "pct_of_layer": 0.54
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 4.9,
+            "calls": 2.0,
+            "pct_of_layer": 0.32
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.38,
+            "calls": 1.0,
+            "pct_of_layer": 0.22
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.3,
+            "calls": 1.0,
+            "pct_of_layer": 0.21
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.29,
+            "calls": 2.0,
+            "pct_of_layer": 0.21
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.24,
+            "calls": 1.0,
+            "pct_of_layer": 0.21
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "SiLU / activation (standalone)",
+            "us_per_layer_call": 2.94,
+            "calls": 1.0,
+            "pct_of_layer": 0.19
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 2.52,
+            "calls": 1.0,
+            "pct_of_layer": 0.16
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.91,
+            "calls": 1.0,
+            "pct_of_layer": 0.12
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.56,
+            "calls": 1.0,
+            "pct_of_layer": 0.1
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.53,
+            "calls": 1.0,
+            "pct_of_layer": 0.1
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.51,
+            "calls": 1.0,
+            "pct_of_layer": 0.1
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.43,
+            "calls": 1.0,
+            "pct_of_layer": 0.09
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.42,
+            "calls": 1.0,
+            "pct_of_layer": 0.09
+          }
+        ],
+        "roles": {
+          "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": {
+            "us": 706.99,
+            "pct_of_layer": 45.83,
+            "n_kernels": 1
+          },
+          "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)": {
+            "us": 523.07,
+            "pct_of_layer": 33.91,
+            "n_kernels": 2
+          },
+          "fp16 cuDNN conv": {
+            "us": 144.12,
+            "pct_of_layer": 9.34,
+            "n_kernels": 1
+          },
+          "residual add": {
+            "us": 97.72,
+            "pct_of_layer": 6.33,
+            "n_kernels": 1
+          },
+          "other elementwise": {
+            "us": 20.85,
+            "pct_of_layer": 1.34,
+            "n_kernels": 9
+          },
+          "dtype cast / device copy": {
+            "us": 17.52,
+            "pct_of_layer": 1.13,
+            "n_kernels": 4
+          },
+          "int8/int4 quantized GEMM (W8A8 / W4A4)": {
+            "us": 14.79,
+            "pct_of_layer": 0.96,
+            "n_kernels": 1
+          },
+          "reduction (amax/absmax for dynamic scales)": {
+            "us": 14.62,
+            "pct_of_layer": 0.95,
+            "n_kernels": 1
+          },
+          "SiLU / activation (standalone)": {
+            "us": 2.94,
+            "pct_of_layer": 0.19,
+            "n_kernels": 1
+          }
+        },
+        "gpu_us_sum": 1542.63,
+        "gpu_busy_frac": 0.991
+      },
+      {
+        "kind": "resblock_plain",
+        "x_shape": [
+          128,
+          576,
+          32,
+          32
+        ],
+        "emb_shape": [
+          128,
+          768
+        ],
+        "n_instances": 1,
+        "example": "output_blocks.12.0",
+        "pipeline_us": 3358.9119911193848,
+        "error": null,
+        "kernels": [
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "layer_type": "Normalization",
+            "role": "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)",
+            "us_per_layer_call": 1588.8,
+            "calls": 2.0,
+            "pct_of_layer": 47.5
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 773.23,
+            "calls": 1.0,
+            "pct_of_layer": 23.12
+          },
+          {
+            "kernel": "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_n",
+            "layer_type": "Conv",
+            "role": "fp16 cuDNN conv",
+            "us_per_layer_call": 376.31,
+            "calls": 1.0,
+            "pct_of_layer": 11.25
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 342.43,
+            "calls": 1.0,
+            "pct_of_layer": 10.24
+          },
+          {
+            "kernel": "elementwise_kernel[CUDAFunctor_add]",
+            "layer_type": "Elementwise-Cast",
+            "role": "residual add",
+            "us_per_layer_call": 191.48,
+            "calls": 1.0,
+            "pct_of_layer": 5.72
+          },
+          {
+            "kernel": "_gemm_w4a4_kernel",
+            "layer_type": "Linear-GEMM",
+            "role": "int8/int4 quantized GEMM (W8A8 / W4A4)",
+            "us_per_layer_call": 15.04,
+            "calls": 1.0,
+            "pct_of_layer": 0.45
+          },
+          {
+            "kernel": "reduce_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "reduction (amax/absmax for dynamic scales)",
+            "us_per_layer_call": 15.03,
+            "calls": 1.0,
+            "pct_of_layer": 0.45
+          },
+          {
+            "kernel": "elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 8.36,
+            "calls": 2.0,
+            "pct_of_layer": 0.25
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 5.13,
+            "calls": 2.0,
+            "pct_of_layer": 0.15
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.54,
+            "calls": 1.0,
+            "pct_of_layer": 0.11
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.42,
+            "calls": 2.0,
+            "pct_of_layer": 0.1
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.42,
+            "calls": 1.0,
+            "pct_of_layer": 0.1
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.38,
+            "calls": 1.0,
+            "pct_of_layer": 0.1
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "SiLU / activation (standalone)",
+            "us_per_layer_call": 2.92,
+            "calls": 1.0,
+            "pct_of_layer": 0.09
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 2.65,
+            "calls": 1.0,
+            "pct_of_layer": 0.08
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.98,
+            "calls": 1.0,
+            "pct_of_layer": 0.06
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.6,
+            "calls": 1.0,
+            "pct_of_layer": 0.05
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.58,
+            "calls": 1.0,
+            "pct_of_layer": 0.05
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.58,
+            "calls": 1.0,
+            "pct_of_layer": 0.05
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.5,
+            "calls": 1.0,
+            "pct_of_layer": 0.04
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.49,
+            "calls": 1.0,
+            "pct_of_layer": 0.04
+          }
+        ],
+        "roles": {
+          "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": {
+            "us": 1588.8,
+            "pct_of_layer": 47.5,
+            "n_kernels": 1
+          },
+          "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)": {
+            "us": 1115.66,
+            "pct_of_layer": 33.36,
+            "n_kernels": 2
+          },
+          "fp16 cuDNN conv": {
+            "us": 376.31,
+            "pct_of_layer": 11.25,
+            "n_kernels": 1
+          },
+          "residual add": {
+            "us": 191.48,
+            "pct_of_layer": 5.72,
+            "n_kernels": 1
+          },
+          "other elementwise": {
+            "us": 21.7,
+            "pct_of_layer": 0.64,
+            "n_kernels": 9
+          },
+          "dtype cast / device copy": {
+            "us": 17.93,
+            "pct_of_layer": 0.54,
+            "n_kernels": 4
+          },
+          "int8/int4 quantized GEMM (W8A8 / W4A4)": {
+            "us": 15.04,
+            "pct_of_layer": 0.45,
+            "n_kernels": 1
+          },
+          "reduction (amax/absmax for dynamic scales)": {
+            "us": 15.03,
+            "pct_of_layer": 0.45,
+            "n_kernels": 1
+          },
+          "SiLU / activation (standalone)": {
+            "us": 2.92,
+            "pct_of_layer": 0.09,
+            "n_kernels": 1
+          }
+        },
+        "gpu_us_sum": 3344.87,
+        "gpu_busy_frac": 0.996
+      },
+      {
+        "kind": "resblock_plain",
+        "x_shape": [
+          128,
+          384,
+          32,
+          32
+        ],
+        "emb_shape": [
+          128,
+          768
+        ],
+        "n_instances": 2,
+        "example": "output_blocks.13.0",
+        "pipeline_us": 2653.5680294036865,
+        "error": null,
+        "kernels": [
+          {
+            "kernel": "group_norm_silu_quantize_pack_nhwc_vec2_kernel",
+            "layer_type": "Normalization",
+            "role": "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)",
+            "us_per_layer_call": 1326.99,
+            "calls": 2.0,
+            "pct_of_layer": 48.32
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 510.67,
+            "calls": 1.0,
+            "pct_of_layer": 18.6
+          },
+          {
+            "kernel": "ImplicitGemmConvolutionEVT",
+            "layer_type": "Conv",
+            "role": "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)",
+            "us_per_layer_call": 353.93,
+            "calls": 1.0,
+            "pct_of_layer": 12.89
+          },
+          {
+            "kernel": "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_n",
+            "layer_type": "Conv",
+            "role": "fp16 cuDNN conv",
+            "us_per_layer_call": 285.88,
+            "calls": 1.0,
+            "pct_of_layer": 10.41
+          },
+          {
+            "kernel": "elementwise_kernel[CUDAFunctor_add]",
+            "layer_type": "Elementwise-Cast",
+            "role": "residual add",
+            "us_per_layer_call": 192.91,
+            "calls": 1.0,
+            "pct_of_layer": 7.02
+          },
+          {
+            "kernel": "reduce_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "reduction (amax/absmax for dynamic scales)",
+            "us_per_layer_call": 15.78,
+            "calls": 1.0,
+            "pct_of_layer": 0.57
+          },
+          {
+            "kernel": "_gemm_w4a4_kernel",
+            "layer_type": "Linear-GEMM",
+            "role": "int8/int4 quantized GEMM (W8A8 / W4A4)",
+            "us_per_layer_call": 15.61,
+            "calls": 1.0,
+            "pct_of_layer": 0.57
+          },
+          {
+            "kernel": "elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 8.61,
+            "calls": 2.0,
+            "pct_of_layer": 0.31
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 5.36,
+            "calls": 2.0,
+            "pct_of_layer": 0.2
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.69,
+            "calls": 1.0,
+            "pct_of_layer": 0.13
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.59,
+            "calls": 2.0,
+            "pct_of_layer": 0.13
+          },
+          {
+            "kernel": "elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 3.56,
+            "calls": 1.0,
+            "pct_of_layer": 0.13
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 3.53,
+            "calls": 1.0,
+            "pct_of_layer": 0.13
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "SiLU / activation (standalone)",
+            "us_per_layer_call": 3.07,
+            "calls": 1.0,
+            "pct_of_layer": 0.11
+          },
+          {
+            "kernel": "unrolled_elementwise_kernel[direct_copy_kernel_cuda]",
+            "layer_type": "Elementwise-Cast",
+            "role": "dtype cast / device copy",
+            "us_per_layer_call": 2.77,
+            "calls": 1.0,
+            "pct_of_layer": 0.1
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 2.05,
+            "calls": 1.0,
+            "pct_of_layer": 0.07
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.68,
+            "calls": 1.0,
+            "pct_of_layer": 0.06
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.66,
+            "calls": 1.0,
+            "pct_of_layer": 0.06
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.65,
+            "calls": 1.0,
+            "pct_of_layer": 0.06
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.57,
+            "calls": 1.0,
+            "pct_of_layer": 0.06
+          },
+          {
+            "kernel": "vectorized_elementwise_kernel",
+            "layer_type": "Elementwise-Cast",
+            "role": "other elementwise",
+            "us_per_layer_call": 1.57,
+            "calls": 1.0,
+            "pct_of_layer": 0.06
+          }
+        ],
+        "roles": {
+          "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": {
+            "us": 1326.99,
+            "pct_of_layer": 48.32,
+            "n_kernels": 1
+          },
+          "quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)": {
+            "us": 864.6,
+            "pct_of_layer": 31.49,
+            "n_kernels": 2
+          },
+          "fp16 cuDNN conv": {
+            "us": 285.88,
+            "pct_of_layer": 10.41,
+            "n_kernels": 1
+          },
+          "residual add": {
+            "us": 192.91,
+            "pct_of_layer": 7.02,
+            "n_kernels": 1
+          },
+          "other elementwise": {
+            "us": 22.69,
+            "pct_of_layer": 0.83,
+            "n_kernels": 9
+          },
+          "dtype cast / device copy": {
+            "us": 18.6,
+            "pct_of_layer": 0.67,
+            "n_kernels": 4
+          },
+          "reduction (amax/absmax for dynamic scales)": {
+            "us": 15.78,
+            "pct_of_layer": 0.57,
+            "n_kernels": 1
+          },
+          "int8/int4 quantized GEMM (W8A8 / W4A4)": {
+            "us": 15.61,
+            "pct_of_layer": 0.57,
+            "n_kernels": 1
+          },
+          "SiLU / activation (standalone)": {
+            "us": 3.07,
+            "pct_of_layer": 0.11,
+            "n_kernels": 1
+          }
+        },
+        "gpu_us_sum": 2746.14,
+        "gpu_busy_frac": 1.035
+      }
+    ]
+  }
+}

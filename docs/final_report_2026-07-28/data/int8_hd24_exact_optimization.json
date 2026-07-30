@@ -1,0 +1,99 @@
+{
+  "gpu": "NVIDIA A40",
+  "shape": {
+    "batch": 128,
+    "tokens": 1024,
+    "heads": 8,
+    "head_dim": 24,
+    "head_dim_pad": 32,
+    "bc": 32,
+    "warps": 8,
+    "instances": 5
+  },
+  "protocol": {
+    "warmups": 20,
+    "rounds": 5,
+    "iterations": 60,
+    "complete_runs": 2,
+    "same_process_alternating": true
+  },
+  "kernel_benchmark_us": {
+    "reference": 1650.496,
+    "candidate": 1586.312,
+    "speedup": 1.0405,
+    "saving": 64.184
+  },
+  "layer_benchmark_us": {
+    "reference": 2785.208,
+    "candidate": 2748.568,
+    "speedup": 1.0133,
+    "saving": 36.64
+  },
+  "weighted_estimate_ms": {
+    "fp16": 24.314,
+    "int8_before": 20.333,
+    "int8_after": 20.15,
+    "speedup_vs_fp16": 1.207,
+    "target_1_5x": 16.209,
+    "remaining_gap": 3.941
+  },
+  "resources": {
+    "reference": {
+      "registers": 64,
+      "stack_bytes": 0,
+      "local_bytes": 0,
+      "shared_bytes": 8192,
+      "cta_per_sm": 4,
+      "occupancy_pct": 66.7
+    },
+    "candidate": {
+      "registers": 56,
+      "stack_bytes": 0,
+      "local_bytes": 0,
+      "shared_bytes": 8192,
+      "cta_per_sm": 4,
+      "occupancy_pct": 66.7
+    }
+  },
+  "sass": {
+    "reference": {
+      "instructions": 1016,
+      "imma": 8,
+      "fmul": 68,
+      "ffma": 47,
+      "f2i": 22,
+      "global_stores": 24
+    },
+    "candidate": {
+      "instructions": 888,
+      "imma": 7,
+      "fmul": 48,
+      "ffma": 43,
+      "f2i": 14,
+      "global_stores": 18
+    }
+  },
+  "validation": {
+    "batch_1_4_128_bit_exact": true,
+    "repeat_20_deterministic": true,
+    "nondefault_stream_exact": true,
+    "full_layer_bit_exact": true,
+    "nine_shape_correctness": "PASS",
+    "kernel_correctness_suite": "PASS",
+    "quality": {
+      "1234": {"latent_relative_l2": 0.0, "max_abs": 0.0, "pass": true},
+      "5678": {"latent_relative_l2": 0.0, "max_abs": 0.0, "pass": true},
+      "9012": {"latent_relative_l2": 0.0, "max_abs": 0.0, "pass": true}
+    }
+  },
+  "ncu": {
+    "available": true,
+    "counters_collected": false,
+    "reason": "ERR_NVGPUCTRPERM"
+  },
+  "routing": {
+    "switch": "MODIFF_INT8_FLASH_HD24_EXACT",
+    "default": 1,
+    "auto_supported": false
+  }
+}

@@ -114,6 +114,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("group_norm_silu_quantize_nhwc", &group_norm_silu_quantize_nhwc,
           "GroupNorm (+ optional SiLU) that quantizes its output to INT8 inline (out*scale, "
           "clamp/round; optional per-channel smooth_inv), fusing away the separate quantize kernel");
+    m.def("group_norm_silu_quantize_nhwc_fast", &group_norm_silu_quantize_nhwc_fast,
+          "Attention GroupNorm+INT8 quantize with pair-vectorized reduction");
     // k_pad is the only optional arg in this module: taking &f drops the C++ default, and every
     // existing caller (fused_resblock.py, token_major_attention.py, the docs/ scripts) passes 10
     // args, so the default has to be declared here for them to keep working.
@@ -121,6 +123,13 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "GroupNorm (+ optional SiLU) that quantizes to INT4 and packs channel pairs inline "
           "([N,H,W,k_pad/2] byte layout matching scale_quantize_and_pack); requires even CPG. "
           "k_pad (default 0 = no padding) zero-pads the row to the int4 GEMM's K alignment.",
+          pybind11::arg("x"), pybind11::arg("weight"), pybind11::arg("bias"),
+          pybind11::arg("num_groups"), pybind11::arg("eps"), pybind11::arg("apply_silu"),
+          pybind11::arg("scale"), pybind11::arg("smooth_inv"),
+          pybind11::arg("mod_scale"), pybind11::arg("mod_shift"),
+          pybind11::arg("k_pad") = 0);
+    m.def("group_norm_silu_quantize_pack_nhwc_fast", &group_norm_silu_quantize_pack_nhwc_fast,
+          "Attention-only INT4 GroupNorm+pack with pair-vectorized warp reduction.",
           pybind11::arg("x"), pybind11::arg("weight"), pybind11::arg("bias"),
           pybind11::arg("num_groups"), pybind11::arg("eps"), pybind11::arg("apply_silu"),
           pybind11::arg("scale"), pybind11::arg("smooth_inv"),
@@ -144,18 +153,61 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "Fused int8 flash attention: q,k,v int8 [N,H,T,hd_pad], sq,sk [N,H,T], sv [N,H,hd] -> out fp16 [N,H,T,hd]");
     m.def("flash_attn_int8_vt", &flash_attn_int8_vt,
           "Fused int8 flash attention, V PRE-TRANSPOSED [N,H,hd_pad,T] (skips internal transpose; mma path only)");
+    m.def("flash_attn_int8_vt_static", &flash_attn_int8_vt_static,
+          "Steady-state int8 flash with frozen scalar Q/K scales folded into the kernel");
+    m.def("flash_attn_int8_qpacked_kv_static", &flash_attn_int8_qpacked_kv_static,
+          "Hybrid int8 flash: packed fp16 Q quantized once in its consuming CTA; prequantized K/V");
+    m.def("flash_attn_int8_qpacked_kv_static_qout", &flash_attn_int8_qpacked_kv_static_qout,
+          "Hybrid int8 flash with fused calibrated int8 projection input");
+    m.def("flash_attn_int8_qi8packed_kv_static_qout",
+          &flash_attn_int8_qi8packed_kv_static_qout,
+          "Hybrid int8 flash reading Q directly from a pre-quantized packed-int8 QKV tensor");
+    m.def("flash_attn_int8_qi8packed_kv_static_qout_preg",
+          &flash_attn_int8_qi8packed_kv_static_qout_preg,
+          "T1024/hd24 register-P int8 flash specialization");
+    m.def("flash_attn_int8_qi8_kv_static_qout",
+          &flash_attn_int8_qi8_kv_static_qout,
+          "INT8 flash reading compact Q plus head-major padded K and transposed V");
+    m.def("flash_attn_int8_qi8_kv_static_qout_hd24",
+          &flash_attn_int8_qi8_kv_static_qout_hd24,
+          "Exact T1024/hd24 INT8 shared-P FlashAttention specialization");
+    m.def("flash_attn_int8_qi8packed_small_qout",
+          &flash_attn_int8_qi8packed_small_qout,
+          "Packed-int8 small-sequence attention with fused calibrated projection quantization");
+    m.def("flash_attn_int8_qpacked_kv_static_qout_w16",
+          &flash_attn_int8_qpacked_kv_static_qout_w16,
+          "Experimental 16-warp hybrid int8 flash for large production shapes");
+    m.def("flash_attn_i4values_i8mma_qpacked_kv_static_qout",
+          &flash_attn_i4values_i8mma_qpacked_kv_static_qout,
+          "Signed-int4 Q/K values executed by the K=32 int8 MMA path; packed-int4 projection input");
+    m.def("flash_attn_i4values_i8mma_vt_static_qout",
+          &flash_attn_i4values_i8mma_vt_static_qout,
+          "Materialized signed-int4 Q/K values through int8 MMA; packed-int4 projection input");
     m.def("flash_attn_int4", &flash_attn_int4,
           "Fused int4 flash attention (int4 QKᵀ, int8 PV): q4,k4 packed [N,H,T,hdp4/2], v int8 [N,H,T,hdp_v] -> fp16");
     m.def("flash_attn_int4_vt", &flash_attn_int4_vt,
           "Fused int4 flash attention, V PRE-TRANSPOSED int8 [N,H,hdp_v,T] (skips internal transpose)");
+    m.def("flash_attn_int4_vt_static", &flash_attn_int4_vt_static,
+          "Steady-state int4 flash with frozen scalar Q/K scales folded into the kernel");
+    m.def("flash_attn_int4_qpacked_kv_static", &flash_attn_int4_qpacked_kv_static,
+          "Hybrid int4 flash: packed fp16 Q quantized once in its consuming CTA; prequantized K/V");
+    m.def("flash_attn_int4_qpacked_kv_static_qout", &flash_attn_int4_qpacked_kv_static_qout,
+          "Hybrid int4 flash with fused calibrated packed-int4 projection input");
     m.def("flash_attn_int8_vt_qout", &flash_attn_int8_vt_qout,
           "int8 flash attention emitting proj-quantized int8 token-major [b*T,C] (fuses quantize_attn_out_int8)");
+    m.def("flash_attn_int8_vt_static_qout", &flash_attn_int8_vt_static_qout,
+          "Static-scale int8 flash emitting proj-quantized int8 token-major");
     m.def("flash_attn_int4_vt_qout", &flash_attn_int4_vt_qout,
           "int4 flash attention emitting proj-quantized packed-int4 token-major [b*T,k_pad/2] (fuses quantize_attn_out_int4_pack)");
+    m.def("flash_attn_int4_vt_static_qout", &flash_attn_int4_vt_static_qout,
+          "Static-scale int4 flash emitting proj-quantized packed-int4 token-major");
     m.def("flash_attn_int8_packed_vt", &flash_attn_int8_packed_vt,
           "int8 flash reading packed qkv [b,T,nh,3,hd] directly (fp16->quantize/int8->gather on load); sv f32 [hd] -> fp16 [N,H,T,hd]");
     m.def("flash_attn_int8_packed_vt_qout", &flash_attn_int8_packed_vt_qout,
           "packed-qkv int8 flash emitting proj-quantized int8 token-major [b*T,C] (fuses the flash Q/K/V quantize + attn-out quantize)");
+    m.def("flash_attn_int8_packed_persistent_qout",
+          &flash_attn_int8_packed_persistent_qout,
+          "shape-specialized persistent packed-qkv int8 flash with qout");
     m.def("quantize_attn_qkv_i4qk_i8v", &quantize_attn_qkv_i4qk_i8v,
           "One-pass quantize for int4 flash: Q/K packed int4 + V int8-transposed -> {q4,k4,vt,sq,sk,sv}");
     m.def("quantize_attn_qkv_i4qk_i8v_static", &quantize_attn_qkv_i4qk_i8v_static,
@@ -182,11 +234,23 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("gemm_w8a8_awq_out_i8", &gemm_w8a8_awq_out_i8,
           "W8A8 Linear, INT8 output (output-fusion): same mainloop, epilogue requantizes to int8 with "
           "inv_out_scale[N]=127/absmax_col -> C[M,N] int8; halves the output write");
+    m.def("gemm_w8a8_awq_out_i8_bias_nout",
+          &gemm_w8a8_awq_out_i8_bias_nout,
+          "W8A8 Linear with bias and per-column INT8 requantization, writing unpadded n_out");
+    m.def("gemm_w8a8_awq_qkv_i8_layouts",
+          &gemm_w8a8_awq_qkv_i8_layouts,
+          "W8A8 QKV GEMM with direct compact-Q, padded-K and transposed-V INT8 epilogue");
+    m.def("gemm_w8a8_awq_qkv_i8_layouts_compact",
+          &gemm_w8a8_awq_qkv_i8_layouts_compact,
+          "W8A8 compact-column QKV GEMM with direct Q, padded-K and transposed-V epilogue");
     m.def("gemm_w4a4_awq", &gemm_w4a4_awq,
           "W4A4 Linear (production): AWQ-tiling-scheme int4 port (CTA_M/N=128, ldmatrix+swizzle) -- "
           "packed int4 A/B; requires N%128==0, K%128==0");
     m.def("gemm_w4a4_awq_out_i8", &gemm_w4a4_awq_out_i8,
           "W4A4 Linear, INT8 output (output-fusion): int4 GEMM, epilogue requantizes to int8; halves the output write");
+    m.def("gemm_w4a4_awq_qkv_i4qk_i8v", &gemm_w4a4_awq_qkv_i4qk_i8v,
+          "Experimental W4A4 QKV epilogue: bias/dequant + static signed-I4 Q/K and I8 V, "
+          "with packed/native or unpacked-I4-value output layouts");
     m.def("quantize_act_int8", &quantize_act_int8, "Fused fp16->int8 activation quantize (static scale)");
     m.def("quantize_act_int4_pack", &quantize_act_int4_pack, "Fused fp16->packed-int4 activation quantize (static scale)");
 
@@ -202,8 +266,15 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "packed-qkv dynamic quantize (reads interleaved [b,T,nh,3,hd], no transpose copy; QK int8/int4, V int8)");
     m.def("quantize_attn_qkv_packed_static", &quantize_attn_qkv_packed_static,
           "packed-qkv static quantize (calibrated; reads interleaved qkv, no transpose copy)");
+    m.def("quantize_attn_qkv_packed_static_compact",
+          &quantize_attn_qkv_packed_static_compact,
+          "compact packed-qkv static quantize -> {qi,ki,vt,broadcast sv}; omits dead sq/sk");
+    m.def("quantize_attn_kv_packed_static", &quantize_attn_kv_packed_static,
+          "packed-qkv static K/V-only quantize for the hybrid Q-in-flash path");
     m.def("quantize_attn_qkv_from_i8", &quantize_attn_qkv_from_i8,
           "reshuffle a pre-quantized int8 qkv (fused_gn_qkv_i8evt output) into flash qi/ki/vt (int8->int8, no requant)");
+    m.def("quantize_attn_kv_from_i8", &quantize_attn_kv_from_i8,
+          "fused K gather and V transpose for pre-quantized packed qkv int8");
     // fp16 (reference) materialized softmax — used by the fp16-materialized attention path
     // (token_major_attention, MODIFF_FP16_MATERIALIZED; the static-vs-dynamic study). Not int8/int4.
     m.def("attn_softmax_fp16", &attn_softmax_fp16,

@@ -72,6 +72,29 @@ def check_int4(N, H, T, hd):
     return rel_err(out.float(), ref_attn(qd, kd, vd, sc))
 
 
+def check_i4values_i8mma():
+    """The hd=24 specialization must preserve the native int4 projection-input codes exactly."""
+    N, H, T, hd, hp = 2, 8, 1024, 24, 32
+    torch.manual_seed(7)
+    qkv = (torch.randn(N, T, H, 3, hd, device=DEV, dtype=torch.float16) * 0.25).contiguous()
+    sq = sk = 0.04
+    sv = torch.full((hp,), 0.004, device=DEV, dtype=torch.float32)
+    proj_scale, k_pad = 0.001, 256
+
+    k4, vt4, sv4 = mc.quantize_attn_kv_packed_static(qkv, H, T, hd, 64, hp, 4, sk, sv)
+    k4 = k4.view(N, H, T, 32)
+    vt4 = vt4.view(N, H, hp, T)
+    native = mc.flash_attn_int4_qpacked_kv_static_qout(
+        qkv, k4, vt4, sv4[:hd].contiguous(), 64, sq, sk, hd ** -0.5, proj_scale, k_pad)
+
+    k8, vt8, sv8 = mc.quantize_attn_kv_packed_static(qkv, H, T, hd, hp, hp, 84, sk, sv)
+    k8 = k8.view(N, H, T, hp)
+    vt8 = vt8.view(N, H, hp, T)
+    mixed = mc.flash_attn_i4values_i8mma_qpacked_kv_static_qout(
+        qkv, k8, vt8, sv8[:hd].contiguous(), hp, sq, sk, hd ** -0.5, proj_scale, k_pad)
+    return torch.equal(native[:, :H * hd // 2], mixed[:, :H * hd // 2])
+
+
 def main():
     # T must be a multiple of WARPS*BR; include a T=128 case so the WARPS=8 instantiation is
     # covered as well as the WARPS=4 fallback (T=64).
@@ -103,6 +126,9 @@ def main():
             s4 = f"{e4:.4f}" + ("" if e4 < TOL else "  FAIL")
             bad += e4 >= TOL
         print(f"{N:3d} {H:3d} {T:5d} {hd:3d} | {s8:>12s} {s4:>12s}")
+    mixed_exact = check_i4values_i8mma()
+    print(f"\nint4 values on K=32 int8 MMA: {'EXACT' if mixed_exact else 'FAIL'}")
+    bad += not mixed_exact
     print("\nALL PASS" if bad == 0 else f"\n{bad} FAILURES")
     return 1 if bad else 0
 

@@ -83,9 +83,11 @@ def kernels(fn, iters=20):
 
 
 def main():
-    bn = torch.randn(4096, 4096, device="cuda", dtype=torch.float16)
-    for _ in range(60):
-        bn = bn @ bn * 1e-4 + 1.0
+    # Wake the CUDA context without power-capping the board before INT8 (the first
+    # measured mode). Each block receives its own WARM iterations in bench().
+    bn = torch.randn(1024, 1024, device="cuda", dtype=torch.float16)
+    for _ in range(8):
+        bn = bn @ bn
     torch.cuda.synchronize(); del bn; torch.cuda.empty_cache()
 
     import integration.benchmarks.benchmark_ldm as B
@@ -144,9 +146,17 @@ def main():
                               if "elementwise" in k["kernel"] or "direct_copy" in k["kernel"])
                 which = "ours" if flash_us > 0 else ("pytorch" if pyflash_us > 0 else "?")
                 used = flash_us if flash_us > 0 else pyflash_us
-                peak = PEAK["int8" if bits == 8 else "int4"] if flash_us > 0 else PEAK["fp16"]
+                # The hd=24 INT4-value specialization deliberately executes on K=32 INT8
+                # MMA to avoid the 62.5% K-padding waste of native K=64 INT4 MMA.
+                mixed_i4_i8mma = bits == 4 and T == 1024 and hd == 24 and flash_us > 0
+                if flash_us > 0:
+                    peak_kind = "int8" if bits == 8 or mixed_i4_i8mma else "int4"
+                else:
+                    peak_kind = "fp16"
+                peak = PEAK[peak_kind]
                 rows.append(dict(C=C, H=H, W=Wd, T=T, num_heads=nh, head_dim=hd,
                                  n_instances=n_inst, eligible=eligible, flash_path=which,
+                                 tensor_core_peak_kind=peak_kind,
                                  full_us=round(full, 2),
                                  attn_gflop=round(attn_flops / 1e9, 2),
                                  flash_us=round(used, 2),

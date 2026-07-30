@@ -22,6 +22,7 @@
 // measurements that justified consolidating on the ports.
 // =========================================================================
 #include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAException.h>
 #include <cuda_fp16.h>
 #include <cuda_pipeline_primitives.h>
 #include <torch/extension.h>
@@ -242,10 +243,20 @@ __global__ void gemm_w8a8_kernel_awq(const int8_t* __restrict__ A, const int8_t*
 // 21-68% of the fp16-output roofline. `inv_out_scale[N]` = 127/per-column-absmax (calibrated); the
 // downstream op dequants with out_scale = 1/inv_out_scale (or consumes int8 directly). Stores are
 // packed to 16-bit (two adjacent int8 columns per store) so the write stays coalesced.
+// QKV_LAYOUT: 0=ordinary contiguous output, 1=per-head padded direct layouts,
+// 2=compact QKV columns with padded K/VT only in the destination.
+template <int QKV_LAYOUT = 0>
 __global__ void gemm_w8a8_kernel_awq_out_i8(const int8_t* __restrict__ A, const int8_t* __restrict__ B,
                                             const float* __restrict__ w_scale, float a_scale,
                                             const float* __restrict__ inv_out_scale,
-                                            int8_t* __restrict__ C, int M, int N, int K) {
+                                            const __half* __restrict__ bias,
+                                            int8_t* __restrict__ C,
+                                            int M, int N, int K, int n_out,
+                                            int8_t* __restrict__ qout = nullptr,
+                                            int8_t* __restrict__ kout = nullptr,
+                                            int8_t* __restrict__ vtout = nullptr,
+                                            int nh = 0, int T = 0, int hd = 0,
+                                            int hp = 0) {
   const int t = threadIdx.x, warp = t >> 5, lane = t & 31, gid = lane >> 2, tig = lane & 3;
   const int m0 = blockIdx.y * GWQ_CTA_M, n0 = blockIdx.x * GWQ_CTA_N;
   const int warp_offset_n = warp * GWQ_WARP_N;
@@ -315,18 +326,178 @@ __global__ void gemm_w8a8_kernel_awq_out_i8(const int8_t* __restrict__ A, const 
       int gc0 = n0 + c0, gc1 = n0 + c1;                                   // global cols (for scales)
       float s00 = a_scale * w_scale[gc0] * inv_out_scale[gc0], s01 = a_scale * w_scale[gc0 + 1] * inv_out_scale[gc0 + 1];
       float s10 = a_scale * w_scale[gc1] * inv_out_scale[gc1], s11 = a_scale * w_scale[gc1 + 1] * inv_out_scale[gc1 + 1];
+      float b00 = bias && gc0 < n_out ? __half2float(bias[gc0]) * inv_out_scale[gc0] : 0.f;
+      float b01 = bias && gc0 + 1 < n_out ? __half2float(bias[gc0 + 1]) * inv_out_scale[gc0 + 1] : 0.f;
+      float b10 = bias && gc1 < n_out ? __half2float(bias[gc1]) * inv_out_scale[gc1] : 0.f;
+      float b11 = bias && gc1 + 1 < n_out ? __half2float(bias[gc1 + 1]) * inv_out_scale[gc1 + 1] : 0.f;
       int* accv = acc[i][j];
-      Cs[r0 * GWQ_CTA_N + c0] = q8(accv[0] * s00); Cs[r0 * GWQ_CTA_N + c0 + 1] = q8(accv[1] * s01);
-      Cs[r0 * GWQ_CTA_N + c1] = q8(accv[4] * s10); Cs[r0 * GWQ_CTA_N + c1 + 1] = q8(accv[5] * s11);
-      Cs[r1 * GWQ_CTA_N + c0] = q8(accv[2] * s00); Cs[r1 * GWQ_CTA_N + c0 + 1] = q8(accv[3] * s01);
-      Cs[r1 * GWQ_CTA_N + c1] = q8(accv[6] * s10); Cs[r1 * GWQ_CTA_N + c1 + 1] = q8(accv[7] * s11);
+      Cs[r0 * GWQ_CTA_N + c0] = q8(accv[0] * s00 + b00); Cs[r0 * GWQ_CTA_N + c0 + 1] = q8(accv[1] * s01 + b01);
+      Cs[r0 * GWQ_CTA_N + c1] = q8(accv[4] * s10 + b10); Cs[r0 * GWQ_CTA_N + c1 + 1] = q8(accv[5] * s11 + b11);
+      Cs[r1 * GWQ_CTA_N + c0] = q8(accv[2] * s00 + b00); Cs[r1 * GWQ_CTA_N + c0 + 1] = q8(accv[3] * s01 + b01);
+      Cs[r1 * GWQ_CTA_N + c1] = q8(accv[6] * s10 + b10); Cs[r1 * GWQ_CTA_N + c1 + 1] = q8(accv[7] * s11 + b11);
     }
   }
   __syncthreads();
-  for (int idx = t; idx < GWQ_CTA_M * GWQ_CTA_N / 16; idx += blockDim.x) {
-    int rc = idx * 16, row = rc / GWQ_CTA_N, col = rc % GWQ_CTA_N;
-    if (m0 + row < M)
-      *(uint4*)&C[(size_t)(m0 + row) * N + n0 + col] = *(const uint4*)&Cs[row * GWQ_CTA_N + col];
+  if constexpr (QKV_LAYOUT == 0) {
+    for (int idx = t; idx < GWQ_CTA_M * GWQ_CTA_N / 16; idx += blockDim.x) {
+      int rc = idx * 16, row = rc / GWQ_CTA_N, col = rc % GWQ_CTA_N;
+      if (m0 + row < M && n0 + col + 15 < n_out)
+        *(uint4*)&C[(size_t)(m0 + row) * n_out + n0 + col] =
+            *(const uint4*)&Cs[row * GWQ_CTA_N + col];
+    }
+  } else if constexpr (QKV_LAYOUT == 1) {
+    // The offline weight layout pads every (head,Q/K/V) segment to hp=32/64.
+    // A 128-column CTA therefore contains exactly 4/2 aligned segments.
+    const int nseg = GWQ_CTA_N / hp, chunks_d = hp / 16;
+    const int seg0 = n0 / hp;
+    // Q/K: full-width coalesced 16-byte copies from each row/segment.
+    const int qk_work = GWQ_CTA_M * nseg * chunks_d;
+    for (int idx = t; idx < qk_work; idx += blockDim.x) {
+      const int row = idx / (nseg * chunks_d);
+      const int r = idx % (nseg * chunks_d);
+      const int sl = r / chunks_d, dc = r % chunks_d;
+      const int seg = seg0 + sl, h = seg / 3, sel = seg % 3;
+      const int gm = m0 + row, d0 = dc * 16;
+      if (gm < M && sel != 2) {
+        const uint4 val =
+            *reinterpret_cast<const uint4*>(&Cs[row * GWQ_CTA_N + sl * hp + d0]);
+        if (sel == 0) {
+          *reinterpret_cast<uint4*>(
+              &qout[((size_t)gm * nh + h) * hp + d0]) = val;
+        } else {
+          const int b = gm / T, tok = gm - b * T;
+          *reinterpret_cast<uint4*>(
+              &kout[((size_t)(b * nh + h) * T + tok) * hp + d0]) = val;
+        }
+      }
+    }
+    // V: gather a 16-token shared-memory column into one coalesced uint4
+    // global store. T is a multiple of 64 for every eligible shape.
+    const int token_chunks = GWQ_CTA_M / 16;
+    const int v_work = nseg * hp * token_chunks;
+    for (int idx = t; idx < v_work; idx += blockDim.x) {
+      const int sl = idx / (hp * token_chunks);
+      const int r = idx % (hp * token_chunks);
+      const int d = r / token_chunks, tc = r % token_chunks;
+      const int seg = seg0 + sl, h = seg / 3, sel = seg % 3;
+      const int row0 = tc * 16, gm = m0 + row0;
+      if (sel == 2 && gm < M) {
+        const int b = gm / T, tok = gm - b * T;
+        const int col = sl * hp + d;
+        uint32_t p[4];
+#pragma unroll
+        for (int g = 0; g < 4; ++g) {
+          const int rr = row0 + g * 4;
+          p[g] = (uint8_t)Cs[(rr + 0) * GWQ_CTA_N + col]
+               | ((uint32_t)(uint8_t)Cs[(rr + 1) * GWQ_CTA_N + col] << 8)
+               | ((uint32_t)(uint8_t)Cs[(rr + 2) * GWQ_CTA_N + col] << 16)
+               | ((uint32_t)(uint8_t)Cs[(rr + 3) * GWQ_CTA_N + col] << 24);
+        }
+        if (tok + 15 < T && gm + 15 < M) {
+          *reinterpret_cast<uint4*>(
+              &vtout[((size_t)(b * nh + h) * hp + d) * T + tok]) =
+                  make_uint4(p[0], p[1], p[2], p[3]);
+        } else {
+#pragma unroll
+          for (int i = 0; i < 16; ++i)
+            if (gm + i < M && tok + i < T)
+              vtout[((size_t)(b * nh + h) * hp + d) * T + tok + i] =
+                  Cs[(row0 + i) * GWQ_CTA_N + col];
+        }
+      }
+    }
+  } else {
+    // Compact physical QKV columns: hd=24 uses aligned 8-byte chunks and
+    // hd=48 uses aligned 16-byte chunks. Segment boundaries and CTA boundaries
+    // are multiples of this unit, so no vector crosses a Q/K/V segment.
+    const int unit = (hd % 16 == 0) ? 16 : 8;
+    const int chunks = GWQ_CTA_N / unit;
+    const int qk_work = GWQ_CTA_M * chunks;
+    for (int idx = t; idx < qk_work; idx += blockDim.x) {
+      const int row = idx / chunks, ch = idx % chunks;
+      const int gm = m0 + row, gc = n0 + ch * unit;
+      if (gm < M && gc < n_out) {
+        const int seg = gc / hd, h = seg / 3, sel = seg % 3;
+        const int d = gc - seg * hd;
+        const int b = gm / T, tok = gm - b * T;
+        if (sel == 0) {
+          if (unit == 16)
+            *reinterpret_cast<uint4*>(&qout[((size_t)gm * nh + h) * hd + d]) =
+                *reinterpret_cast<const uint4*>(&Cs[row * GWQ_CTA_N + ch * unit]);
+          else
+            *reinterpret_cast<int2*>(&qout[((size_t)gm * nh + h) * hd + d]) =
+                *reinterpret_cast<const int2*>(&Cs[row * GWQ_CTA_N + ch * unit]);
+        } else if (sel == 1) {
+          if (unit == 16)
+            *reinterpret_cast<uint4*>(
+                &kout[((size_t)(b * nh + h) * T + tok) * hp + d]) =
+                    *reinterpret_cast<const uint4*>(
+                        &Cs[row * GWQ_CTA_N + ch * unit]);
+          else
+            *reinterpret_cast<int2*>(
+                &kout[((size_t)(b * nh + h) * T + tok) * hp + d]) =
+                    *reinterpret_cast<const int2*>(
+                        &Cs[row * GWQ_CTA_N + ch * unit]);
+        }
+      }
+    }
+    // V transpose: one uint4 global store per 16-token column fragment.
+    constexpr int TOKEN_CHUNKS = GWQ_CTA_M / 16;
+    const int v_work = GWQ_CTA_N * TOKEN_CHUNKS;
+    for (int idx = t; idx < v_work; idx += blockDim.x) {
+      const int col = idx / TOKEN_CHUNKS, tc = idx % TOKEN_CHUNKS;
+      const int gc = n0 + col, row0 = tc * 16, gm = m0 + row0;
+      if (gc < n_out && gm < M) {
+        const int seg = gc / hd, h = seg / 3, sel = seg % 3;
+        const int d = gc - seg * hd;
+        if (sel == 2) {
+          const int b = gm / T, tok = gm - b * T;
+          uint32_t p[4];
+#pragma unroll
+          for (int g = 0; g < 4; ++g) {
+            const int rr = row0 + g * 4;
+            p[g] = (uint8_t)Cs[(rr + 0) * GWQ_CTA_N + col]
+                 | ((uint32_t)(uint8_t)Cs[(rr + 1) * GWQ_CTA_N + col] << 8)
+                 | ((uint32_t)(uint8_t)Cs[(rr + 2) * GWQ_CTA_N + col] << 16)
+                 | ((uint32_t)(uint8_t)Cs[(rr + 3) * GWQ_CTA_N + col] << 24);
+          }
+          if (tok + 15 < T && gm + 15 < M)
+            *reinterpret_cast<uint4*>(
+                &vtout[((size_t)(b * nh + h) * hp + d) * T + tok]) =
+                    make_uint4(p[0], p[1], p[2], p[3]);
+        }
+      }
+    }
+    // Clear only K/VT destination tails; compact Q has no padding.
+    if (blockIdx.x == 0 && hp > hd) {
+      const int pad = hp - hd, pad_chunks = pad / 8;
+      for (int idx = t; idx < GWQ_CTA_M * nh * pad_chunks;
+           idx += blockDim.x) {
+        const int row = idx / (nh * pad_chunks);
+        const int r = idx % (nh * pad_chunks), h = r / pad_chunks;
+        const int pc = r % pad_chunks, gm = m0 + row;
+        if (gm < M) {
+          const int b = gm / T, tok = gm - b * T;
+          *reinterpret_cast<int2*>(
+              &kout[((size_t)(b * nh + h) * T + tok) * hp + hd + pc * 8]) =
+                  make_int2(0, 0);
+        }
+      }
+      const int zwork = nh * pad * TOKEN_CHUNKS;
+      for (int idx = t; idx < zwork; idx += blockDim.x) {
+        const int h = idx / (pad * TOKEN_CHUNKS);
+        const int r = idx % (pad * TOKEN_CHUNKS);
+        const int pd = r / TOKEN_CHUNKS, tc = r % TOKEN_CHUNKS;
+        const int gm = m0 + tc * 16;
+        if (gm < M) {
+          const int b = gm / T, tok = gm - b * T;
+          if (tok + 15 < T && gm + 15 < M)
+            *reinterpret_cast<uint4*>(
+                &vtout[((size_t)(b * nh + h) * hp + hd + pd) * T + tok]) =
+                    make_uint4(0, 0, 0, 0);
+        }
+      }
+    }
   }
 }
 
@@ -354,10 +525,115 @@ torch::Tensor gemm_w8a8_awq_out_i8(torch::Tensor A, torch::Tensor B, torch::Tens
   auto C = torch::empty({M, N}, torch::TensorOptions().dtype(torch::kChar).device(A.device()));
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
   dim3 grid(N / GWQ_CTA_N, (M + GWQ_CTA_M - 1) / GWQ_CTA_M);
-  gemm_w8a8_kernel_awq_out_i8<<<grid, GWQ_NUM_WARPS * 32, 0, stream>>>(
+  gemm_w8a8_kernel_awq_out_i8<0><<<grid, GWQ_NUM_WARPS * 32, 0, stream>>>(
       A.data_ptr<int8_t>(), B.data_ptr<int8_t>(), w_scale.contiguous().data_ptr<float>(),
-      (float)a_scale, inv_out_scale.contiguous().data_ptr<float>(), C.data_ptr<int8_t>(), M, N, K);
+      (float)a_scale, inv_out_scale.contiguous().data_ptr<float>(), (const __half*)nullptr,
+      C.data_ptr<int8_t>(), M, N, K, N);
   return C;
+}
+
+torch::Tensor gemm_w8a8_awq_out_i8_bias_nout(
+    torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale,
+    torch::Tensor inv_out_scale, torch::Tensor bias, int64_t n_out_) {
+  TORCH_CHECK(A.is_cuda() && A.dtype() == torch::kChar
+              && B.dtype() == torch::kChar && bias.dtype() == torch::kHalf,
+              "A/B int8 CUDA and bias fp16 required");
+  A = A.contiguous(); B = B.contiguous();
+  w_scale = w_scale.contiguous(); inv_out_scale = inv_out_scale.contiguous();
+  bias = bias.contiguous();
+  const int M = A.size(0), K = A.size(1), N = B.size(0), n_out = (int)n_out_;
+  TORCH_CHECK(B.size(1) == K && N % GWQ_CTA_N == 0 && K % GWQ_CTA_K == 0
+              && n_out > 0 && n_out <= N && n_out % 16 == 0
+              && inv_out_scale.numel() == N && bias.numel() >= n_out,
+              "invalid W8A8 int8-output bias/n_out shape");
+  auto C = torch::empty({M, n_out},
+      torch::TensorOptions().dtype(torch::kChar).device(A.device()));
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  dim3 grid(N / GWQ_CTA_N, (M + GWQ_CTA_M - 1) / GWQ_CTA_M);
+  gemm_w8a8_kernel_awq_out_i8<0><<<grid, GWQ_NUM_WARPS * 32, 0, stream>>>(
+      A.data_ptr<int8_t>(), B.data_ptr<int8_t>(), w_scale.data_ptr<float>(),
+      (float)a_scale, inv_out_scale.data_ptr<float>(),
+      reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
+      C.data_ptr<int8_t>(), M, N, K, n_out);
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  return C;
+}
+
+std::vector<torch::Tensor> gemm_w8a8_awq_qkv_i8_layouts(
+    torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale,
+    torch::Tensor inv_out_scale, torch::Tensor bias, int64_t nh_,
+    int64_t T_, int64_t hd_, int64_t hp_) {
+  TORCH_CHECK(A.is_cuda() && A.dtype() == torch::kChar
+              && B.is_cuda() && B.dtype() == torch::kChar
+              && w_scale.is_cuda() && w_scale.dtype() == torch::kFloat32
+              && inv_out_scale.is_cuda() && inv_out_scale.dtype() == torch::kFloat32
+              && bias.is_cuda() && bias.dtype() == torch::kHalf,
+              "direct-layout QKV requires CUDA int8 A/B, fp32 scales and fp16 bias");
+  A = A.contiguous(); B = B.contiguous(); w_scale = w_scale.contiguous();
+  inv_out_scale = inv_out_scale.contiguous(); bias = bias.contiguous();
+  const int M = A.size(0), K = A.size(1), N = B.size(0);
+  const int nh = (int)nh_, T = (int)T_, hd = (int)hd_, hp = (int)hp_;
+  const int n_out = 3 * nh * hp;
+  TORCH_CHECK(B.size(1) == K && N % GWQ_CTA_N == 0 && K % GWQ_CTA_K == 0
+              && M % T == 0 && nh > 0 && T >= 64 && hd > 0 && hd % 8 == 0
+              && hp >= hd && (hp == 32 || hp == 64)
+              && n_out == N && n_out % 128 == 0
+              && inv_out_scale.numel() == N && w_scale.numel() == N
+              && bias.numel() == N,
+              "invalid direct-layout W8A8 QKV shape");
+  const int batch = M / T, BH = batch * nh;
+  auto oi = torch::TensorOptions().dtype(torch::kChar).device(A.device());
+  auto q = torch::empty({batch, T, nh, hp}, oi);
+  auto k = torch::empty({BH, T, hp}, oi);
+  auto vt = torch::empty({BH, hp, T}, oi);
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  dim3 grid(N / GWQ_CTA_N, (M + GWQ_CTA_M - 1) / GWQ_CTA_M);
+  gemm_w8a8_kernel_awq_out_i8<1><<<grid, GWQ_NUM_WARPS * 32, 0, stream>>>(
+      A.data_ptr<int8_t>(), B.data_ptr<int8_t>(), w_scale.data_ptr<float>(),
+      (float)a_scale, inv_out_scale.data_ptr<float>(),
+      reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
+      (int8_t*)nullptr, M, N, K, n_out, q.data_ptr<int8_t>(),
+      k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(), nh, T, hd, hp);
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  return {q, k, vt};
+}
+
+std::vector<torch::Tensor> gemm_w8a8_awq_qkv_i8_layouts_compact(
+    torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale,
+    torch::Tensor inv_out_scale, torch::Tensor bias, int64_t nh_,
+    int64_t T_, int64_t hd_, int64_t hp_) {
+  TORCH_CHECK(A.is_cuda() && A.dtype() == torch::kChar
+              && B.is_cuda() && B.dtype() == torch::kChar
+              && w_scale.is_cuda() && w_scale.dtype() == torch::kFloat32
+              && inv_out_scale.is_cuda() && inv_out_scale.dtype() == torch::kFloat32
+              && bias.is_cuda() && bias.dtype() == torch::kHalf,
+              "compact-layout QKV requires CUDA int8 A/B, fp32 scales and fp16 bias");
+  A = A.contiguous(); B = B.contiguous(); w_scale = w_scale.contiguous();
+  inv_out_scale = inv_out_scale.contiguous(); bias = bias.contiguous();
+  const int M = A.size(0), K = A.size(1), N = B.size(0);
+  const int nh = (int)nh_, T = (int)T_, hd = (int)hd_, hp = (int)hp_;
+  const int n_out = 3 * nh * hd;
+  TORCH_CHECK(B.size(1) == K && N % GWQ_CTA_N == 0 && K % GWQ_CTA_K == 0
+              && M % T == 0 && nh > 0 && T >= 64
+              && (hd == 24 || hd == 48) && hp == (hd == 24 ? 32 : 64)
+              && n_out <= N && inv_out_scale.numel() == N
+              && w_scale.numel() == N && bias.numel() >= n_out,
+              "invalid compact-layout W8A8 QKV shape");
+  const int batch = M / T, BH = batch * nh;
+  auto oi = torch::TensorOptions().dtype(torch::kChar).device(A.device());
+  auto q = torch::empty({batch, T, nh, hd}, oi);
+  auto k = torch::empty({BH, T, hp}, oi);
+  auto vt = torch::empty({BH, hp, T}, oi);
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  dim3 grid(N / GWQ_CTA_N, (M + GWQ_CTA_M - 1) / GWQ_CTA_M);
+  gemm_w8a8_kernel_awq_out_i8<2><<<grid, GWQ_NUM_WARPS * 32, 0, stream>>>(
+      A.data_ptr<int8_t>(), B.data_ptr<int8_t>(), w_scale.data_ptr<float>(),
+      (float)a_scale, inv_out_scale.data_ptr<float>(),
+      reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
+      (int8_t*)nullptr, M, N, K, n_out, q.data_ptr<int8_t>(),
+      k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(), nh, T, hd, hp);
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  return {q, k, vt};
 }
 
 //   Op:       Linear W8A8 GEMM (production int8 Linear entry point)
@@ -629,10 +905,14 @@ torch::Tensor gemm_w4a4_awq_bias_res(torch::Tensor A, torch::Tensor B, torch::Te
 }
 
 // ---- int4 GEMM, INT8-OUTPUT variant (same output-fusion fix as gemm_w8a8_awq_out_i8) ----
+template <bool QKV_EPILOGUE = false>
 __global__ void gemm_w4a4_kernel_awq_out_i8(const int8_t* __restrict__ A, const int8_t* __restrict__ B,
                                             const float* __restrict__ w_scale, float a_scale,
                                             const float* __restrict__ inv_out_scale,
-                                            int8_t* __restrict__ C, int M, int N, int Kb) {
+                                            int8_t* __restrict__ C, int M, int N, int Kb,
+                                            const __half* __restrict__ bias, int n_out,
+                                            int nh = 0, int hd = 0, float q_inv = 0.f,
+                                            float k_inv = 0.f, const float* __restrict__ sv = nullptr) {
   const int t = threadIdx.x, warp = t >> 5, lane = t & 31, gid = lane >> 2, tig = lane & 3;
   const int m0 = blockIdx.y * GWQ_CTA_M, n0 = blockIdx.x * GWQ_CTA_N;
   const int warp_offset_n = warp * GWQ_WARP_N;
@@ -686,7 +966,6 @@ __global__ void gemm_w4a4_kernel_awq_out_i8(const int8_t* __restrict__ A, const 
     __syncthreads();
   }
 #undef GWQ4O_LOAD
-  auto q8 = [](float v) -> int { int x = __float2int_rn(v); return x > 127 ? 127 : (x < -127 ? -127 : x); };
   __syncthreads();
   int8_t* Cs = &As[0][0];
 #pragma unroll
@@ -696,20 +975,40 @@ __global__ void gemm_w4a4_kernel_awq_out_i8(const int8_t* __restrict__ A, const 
     for (int j = 0; j < NJ; ++j) {
       int c0 = warp_offset_n + j * GWQ_INTRIN_N + tig * 2, c1 = c0 + 8;
       int gc0 = n0 + c0, gc1 = n0 + c1;
-      float s00 = a_scale * w_scale[gc0] * inv_out_scale[gc0], s01 = a_scale * w_scale[gc0 + 1] * inv_out_scale[gc0 + 1];
-      float s10 = a_scale * w_scale[gc1] * inv_out_scale[gc1], s11 = a_scale * w_scale[gc1 + 1] * inv_out_scale[gc1 + 1];
       int* accv = acc[i][j];
-      Cs[r0 * GWQ_CTA_N + c0] = q8(accv[0] * s00); Cs[r0 * GWQ_CTA_N + c0 + 1] = q8(accv[1] * s01);
-      Cs[r0 * GWQ_CTA_N + c1] = q8(accv[4] * s10); Cs[r0 * GWQ_CTA_N + c1 + 1] = q8(accv[5] * s11);
-      Cs[r1 * GWQ_CTA_N + c0] = q8(accv[2] * s00); Cs[r1 * GWQ_CTA_N + c0 + 1] = q8(accv[3] * s01);
-      Cs[r1 * GWQ_CTA_N + c1] = q8(accv[6] * s10); Cs[r1 * GWQ_CTA_N + c1 + 1] = q8(accv[7] * s11);
+#define GWQ_QCODE(ACC, COL) ([&]() {                                                        \
+        const int gc_ = (COL);                                                               \
+        if (gc_ >= n_out) return 0;                                                          \
+        float v_ = (ACC) * (a_scale * w_scale[gc_]);                                         \
+        if constexpr (QKV_EPILOGUE) {                                                        \
+          if (bias) v_ += __half2float(bias[gc_]);                                           \
+          const int local_ = gc_ % (3 * hd), sel_ = local_ / hd, d_ = local_ % hd;           \
+          const float inv_ = sel_ == 0 ? q_inv : (sel_ == 1 ? k_inv : 1.f / sv[d_]);         \
+          int x_ = __float2int_rn(v_ * inv_);                                                \
+          const int lim_ = sel_ < 2 ? 7 : 127;                                               \
+          return x_ > lim_ ? lim_ : (x_ < -lim_ ? -lim_ : x_);                              \
+        } else {                                                                             \
+          int x_ = __float2int_rn(v_ * inv_out_scale[gc_]);                                  \
+          return x_ > 127 ? 127 : (x_ < -127 ? -127 : x_);                                  \
+        }                                                                                    \
+      }())
+      Cs[r0 * GWQ_CTA_N + c0] = GWQ_QCODE(accv[0], gc0);
+      Cs[r0 * GWQ_CTA_N + c0 + 1] = GWQ_QCODE(accv[1], gc0 + 1);
+      Cs[r0 * GWQ_CTA_N + c1] = GWQ_QCODE(accv[4], gc1);
+      Cs[r0 * GWQ_CTA_N + c1 + 1] = GWQ_QCODE(accv[5], gc1 + 1);
+      Cs[r1 * GWQ_CTA_N + c0] = GWQ_QCODE(accv[2], gc0);
+      Cs[r1 * GWQ_CTA_N + c0 + 1] = GWQ_QCODE(accv[3], gc0 + 1);
+      Cs[r1 * GWQ_CTA_N + c1] = GWQ_QCODE(accv[6], gc1);
+      Cs[r1 * GWQ_CTA_N + c1 + 1] = GWQ_QCODE(accv[7], gc1 + 1);
+#undef GWQ_QCODE
     }
   }
   __syncthreads();
   for (int idx = t; idx < GWQ_CTA_M * GWQ_CTA_N / 16; idx += blockDim.x) {
     int rc = idx * 16, row = rc / GWQ_CTA_N, col = rc % GWQ_CTA_N;
-    if (m0 + row < M)
-      *(uint4*)&C[(size_t)(m0 + row) * N + n0 + col] = *(const uint4*)&Cs[row * GWQ_CTA_N + col];
+    if (m0 + row < M && n0 + col + 15 < n_out)
+      *(uint4*)&C[(size_t)(m0 + row) * n_out + n0 + col] =
+          *(const uint4*)&Cs[row * GWQ_CTA_N + col];
   }
 }
 
@@ -738,8 +1037,108 @@ torch::Tensor gemm_w4a4_awq_out_i8(torch::Tensor A, torch::Tensor B, torch::Tens
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
   int Kb = (int)K / 2;
   dim3 grid(N / GWQ_CTA_N, (M + GWQ_CTA_M - 1) / GWQ_CTA_M);
-  gemm_w4a4_kernel_awq_out_i8<<<grid, GWQ_NUM_WARPS * 32, 0, stream>>>(
+  gemm_w4a4_kernel_awq_out_i8<false><<<grid, GWQ_NUM_WARPS * 32, 0, stream>>>(
       A.data_ptr<int8_t>(), B.data_ptr<int8_t>(), w_scale.contiguous().data_ptr<float>(),
-      (float)a_scale, inv_out_scale.contiguous().data_ptr<float>(), C.data_ptr<int8_t>(), M, N, Kb);
+      (float)a_scale, inv_out_scale.contiguous().data_ptr<float>(), C.data_ptr<int8_t>(), M, N, Kb,
+      nullptr, N);
   return C;
+}
+
+// Shape-specialized rearrange for the experimental QKV epilogue. The GEMM writes one compact
+// token-major INT8 code matrix (Q/K are already restricted to the signed INT4 grid); this pass
+// packs Q/K as requested and transposes V in 64-token shared-memory tiles.
+template <int TILE_T>
+__global__ void qkv_i4codes_i8v_rearrange_kernel(
+    const int8_t* __restrict__ qkv, int8_t* __restrict__ q, int8_t* __restrict__ k,
+    int8_t* __restrict__ vt, int nh, int T, int hd, int hp_qk, int hp_v,
+    bool packed_qk) {
+  const int bh = blockIdx.x, h = bh % nh, b = bh / nh;
+  const int t0 = blockIdx.y * TILE_T, tt = min(TILE_T, T - t0);
+  extern __shared__ int8_t vs[];
+  const int qwidth = packed_qk ? hp_qk / 2 : hp_qk;
+
+  if (packed_qk) {
+    const int plane = tt * (hp_qk / 2);
+    for (int idx = threadIdx.x; idx < 2 * plane; idx += blockDim.x) {
+      const int sel = idx / plane, rem = idx - sel * plane;
+      const int tl = rem / (hp_qk / 2), dp = rem % (hp_qk / 2), d0 = dp * 2;
+      int v0 = 0, v1 = 0;
+      if (d0 < hd) {
+        const size_t base = (size_t)(b * T + t0 + tl) * (nh * 3 * hd)
+                            + h * 3 * hd + sel * hd + d0;
+        v0 = qkv[base];
+        if (d0 + 1 < hd) v1 = qkv[base + 1];
+      }
+      int8_t* dst = sel == 0 ? q : k;
+      dst[((size_t)bh * T + t0 + tl) * qwidth + dp] =
+          (int8_t)((v0 & 0xf) | ((v1 & 0xf) << 4));
+    }
+  } else {
+    const int plane = tt * hp_qk;
+    for (int idx = threadIdx.x; idx < 2 * plane; idx += blockDim.x) {
+      const int sel = idx / plane, rem = idx - sel * plane;
+      const int tl = rem / hp_qk, d = rem % hp_qk;
+      int8_t v = 0;
+      if (d < hd)
+        v = qkv[(size_t)(b * T + t0 + tl) * (nh * 3 * hd)
+                + h * 3 * hd + sel * hd + d];
+      (sel == 0 ? q : k)[((size_t)bh * T + t0 + tl) * qwidth + d] = v;
+    }
+  }
+
+  for (int idx = threadIdx.x; idx < tt * hd; idx += blockDim.x) {
+    const int tl = idx / hd, d = idx % hd;
+    vs[idx] = qkv[(size_t)(b * T + t0 + tl) * (nh * 3 * hd)
+                  + h * 3 * hd + 2 * hd + d];
+  }
+  __syncthreads();
+  for (int idx = threadIdx.x; idx < hp_v * tt; idx += blockDim.x) {
+    const int d = idx / tt, tl = idx % tt;
+    vt[((size_t)bh * hp_v + d) * T + t0 + tl] = d < hd ? vs[tl * hd + d] : 0;
+  }
+}
+
+// Experimental W4A4 QKV GEMM epilogue. Bias/dequantization and static Q/K/V requantization happen
+// in the GEMM epilogue, so no FP16 QKV tensor is materialized. storage_mode is named at the Python
+// call site: 4 = packed native INT4 Q/K, 84 = unpacked signed-INT4 values for the INT8 MMA route.
+std::vector<torch::Tensor> gemm_w4a4_awq_qkv_i4qk_i8v(
+    torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale, int64_t K,
+    int64_t n_out, torch::Tensor bias, int64_t nh, int64_t T, int64_t hd,
+    int64_t hp_qk, int64_t hp_v, int64_t storage_mode,
+    double sq, double sk, torch::Tensor sv) {
+  constexpr int QK_I4_PACKED = 4, QK_I4_VALUES_I8_MMA = 84;
+  TORCH_CHECK(A.is_cuda() && A.dtype() == torch::kChar && B.dtype() == torch::kChar,
+              "experimental QKV epilogue: A/B must be packed INT4 CUDA");
+  A = A.contiguous(); B = B.contiguous(); w_scale = w_scale.contiguous();
+  bias = bias.contiguous(); sv = sv.to(torch::kFloat32).contiguous();
+  const int M = A.size(0), N = B.size(0), Kb = (int)K / 2;
+  TORCH_CHECK(A.size(1) == Kb && B.size(1) == Kb && N % GWQ_CTA_N == 0
+              && K % (GWQ_CTA_K * 2) == 0 && M % T == 0
+              && n_out == nh * 3 * hd && n_out <= N && n_out % 16 == 0
+              && bias.numel() == n_out && bias.dtype() == torch::kHalf
+              && sv.numel() >= hd && hp_qk >= hd && hp_v >= hd
+              && (storage_mode == QK_I4_PACKED || storage_mode == QK_I4_VALUES_I8_MMA),
+              "experimental QKV epilogue: invalid shape/storage mode");
+  const int b = M / (int)T, BH = b * (int)nh;
+  auto oi = torch::TensorOptions().dtype(torch::kChar).device(A.device());
+  auto raw = torch::empty({M, (int)n_out}, oi);
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  dim3 grid(N / GWQ_CTA_N, (M + GWQ_CTA_M - 1) / GWQ_CTA_M);
+  gemm_w4a4_kernel_awq_out_i8<true><<<grid, GWQ_NUM_WARPS * 32, 0, stream>>>(
+      A.data_ptr<int8_t>(), B.data_ptr<int8_t>(), w_scale.data_ptr<float>(),
+      (float)a_scale, nullptr, raw.data_ptr<int8_t>(), M, N, Kb,
+      reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()), (int)n_out,
+      (int)nh, (int)hd, 1.f / (float)sq, 1.f / (float)sk, sv.data_ptr<float>());
+  const bool packed = storage_mode == QK_I4_PACKED;
+  const int qwidth = packed ? (int)hp_qk / 2 : (int)hp_qk;
+  auto q = torch::empty({BH, (int)T, qwidth}, oi);
+  auto k = torch::empty({BH, (int)T, qwidth}, oi);
+  auto vt = torch::empty({BH, (int)hp_v, (int)T}, oi);
+  constexpr int TILE_T = 64;
+  dim3 rgrid(BH, ((int)T + TILE_T - 1) / TILE_T);
+  qkv_i4codes_i8v_rearrange_kernel<TILE_T><<<rgrid, 256, TILE_T * (int)hd, stream>>>(
+      raw.data_ptr<int8_t>(), q.data_ptr<int8_t>(), k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
+      (int)nh, (int)T, (int)hd, (int)hp_qk, (int)hp_v, packed);
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  return {q, k, vt, sv};
 }

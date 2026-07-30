@@ -21,6 +21,7 @@
 //   softmax_scale = 1/sqrt(hd)
 // =========================================================================
 #include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAException.h>
 #include <cuda_fp16.h>
 #include <cstdlib>   // getenv/atoi for MODIFF_FA_BC
 #include <cuda_pipeline_primitives.h>
@@ -230,13 +231,31 @@ __global__ void flash_attn_int8_tiled_kernel(
 // WARPS=4 gives grid.y=16 (K/V read 16x, ~1.11 GB, measured 365 GB/s of the ~590 GB/s this
 // card sustains, i.e. memory-bound); WARPS=8 halves that to 0.57 GB at the same thread-level
 // occupancy (3 CTA x 256 thr == 6 CTA x 128 thr == 768 thr/SM).
-template <int HD_PAD, int WARPS, int BC>
+template <int HD_PAD, int WARPS, int BC, bool STATIC_QK = false, bool PACK_OUT4 = false,
+          bool COMPACT_HD24 = false, bool REGISTER_P = false,
+          int EXACT_HD = 0, int EXACT_T = 0>
 __global__ void flash_attn_int8_mma_kernel_t(
     const int8_t* __restrict__ q, const int8_t* __restrict__ k, const int8_t* __restrict__ v,
     const float* __restrict__ sq, const float* __restrict__ sk, const float* __restrict__ sv,
     __half* __restrict__ out, int N, int H, int T, int hd, int hd_pad_rt, float softmax_scale,
-    int8_t* __restrict__ out_q, float proj_inv_scale, int qout_stride) {
+    int8_t* __restrict__ out_q, float proj_inv_scale, int qout_stride,
+    float static_qk_scale = 0.f, const __half* packed_q = nullptr,
+    int packed_hd = 0, float q_inv = 0.f,
+    const int8_t* packed_q_i8 = nullptr, int packed_q_groups = 3) {
   constexpr int hd_pad = HD_PAD;
+  constexpr int k_storage_hd = HD_PAD;
+  constexpr int v_storage_hd = COMPACT_HD24 ? 24 : HD_PAD;
+  static_assert(!COMPACT_HD24 || HD_PAD == 32,
+                "compact hd24 storage is padded to HD_PAD=32 in shared memory");
+  static_assert(!REGISTER_P || (HD_PAD == 32 && BC == 32),
+                "register-P specialization is defined only for hd_pad=32/BC=32");
+  static_assert(EXACT_HD == 0 || (EXACT_HD % 8 == 0 && EXACT_HD <= HD_PAD),
+                "exact head dimension must be an 8-channel multiple within HD_PAD");
+  static_assert(EXACT_T == 0 || EXACT_T % (WARPS * FA_MMA_BR) == 0,
+                "exact token count must divide the CTA query tile");
+  constexpr bool exact_hd24 = EXACT_HD == 24 && HD_PAD == 32;
+  const int token_count = EXACT_T ? EXACT_T : T;
+  const int real_hd = EXACT_HD ? EXACT_HD : hd;
   (void)hd_pad_rt;
   // out_q != nullptr => fused proj-quantize store: emit int8 token-major [b*T, qout_stride]
   // (qout_stride = C = H*hd), quantized by proj_inv_scale, instead of the fp16 head-major `out`.
@@ -245,11 +264,13 @@ __global__ void flash_attn_int8_mma_kernel_t(
   const int lane = threadIdx.x & 31, gid = lane >> 2, tig = lane & 3;
   const int q0 = (blockIdx.y * WARPS + w) * FA_MMA_BR;   // this warp's query tile
 
-  const int8_t* kb = k + (size_t)nh * T * hd_pad;
-  const int8_t* vb = v + (size_t)nh * T * hd_pad;
-  const float*  sqb = sq + (size_t)nh * T;
-  const float*  skb = sk + (size_t)nh * T;
-  const float*  svb = sv + (size_t)nh * hd;
+  const int8_t* kb = k + (size_t)nh * token_count * k_storage_hd;
+  const int8_t* vb = v + (size_t)nh * token_count * v_storage_hd;
+  const float*  sqb = STATIC_QK ? nullptr : sq + (size_t)nh * token_count;
+  const float*  skb = STATIC_QK ? nullptr : sk + (size_t)nh * token_count;
+  // Hybrid Q-in-flash uses one frozen V-scale vector shared by every batch/head.
+  const float*  svb = (packed_q != nullptr || packed_q_i8 != nullptr)
+      ? sv : sv + (size_t)nh * hd;
 
   // Double-buffered cp.async tiles (FA_STAGES-deep pipeline). V is taken PRE-TRANSPOSED
   // [N,H,hd_pad,T] so both K ([BC,hd_pad]) and V ([hd_pad,BC]) tiles are HBM-contiguous.
@@ -276,20 +297,63 @@ __global__ void flash_attn_int8_mma_kernel_t(
   constexpr int FA_STAGES = 2;
   __shared__ int8_t Ks[FA_STAGES][BC * HD_PAD];
   __shared__ int8_t Vs[FA_STAGES][HD_PAD * BC];  // Vs[buf][d*BC+j] = V[kt+j][d]
-  __shared__ int8_t Qs[WARPS * FA_MMA_BR * HD_PAD];
-  __shared__ int8_t Ps[WARPS * FA_MMA_BR * BC];
+  // Q is hoisted into Qa registers before the first score tile, after which its shared
+  // storage is dead. Reuse the same per-warp region for P instead of keeping two disjoint
+  // buffers. This saves WARPS*BR*min(HD_PAD,BC) bytes and makes W16/BC64 fit on SM86.
+  constexpr int QP_STRIDE = HD_PAD > BC ? HD_PAD : BC;
+  __shared__ int8_t QPs[WARPS * FA_MMA_BR * QP_STRIDE];
   // Per-key K scales for the current tile, staged once per CTA (512 B). They used to be read
   // straight from HBM inside the score loop -- 24 LDG per lane PER KEY TILE in the SASS census.
+  // Keep the shared layout identical between the dynamic and static specializations. Besides
+  // making A/B output comparisons exact, this avoids changing the compiler-selected offsets of
+  // the cp.async K/V buffers when scale staging is compiled out.
   __shared__ float SKs[FA_STAGES][BC];
 
-  int8_t* Qsw = &Qs[w * FA_MMA_BR * hd_pad];
-  int8_t* Psw = &Ps[w * FA_MMA_BR * BC];
+  int8_t* Qsw = &QPs[w * FA_MMA_BR * QP_STRIDE];
+  int8_t* Psw = Qsw;
 
   // No bounds mask: grid.y == T/(WARPS*BR) and the host enforces T % (FA_MMA_WARPS*FA_MMA_BR) == 0,
   // so q0 + FA_MMA_BR <= T always. Same reasoning kills the kt + c < T masks in the score loop.
-  for (int idx = lane; idx < FA_MMA_BR * hd_pad; idx += 32) {
-    int row = idx / hd_pad, col = idx % hd_pad;
-    Qsw[idx] = q[(size_t)nh * T * hd_pad + (size_t)(q0 + row) * hd_pad + col];
+  if (packed_q != nullptr || packed_q_i8 != nullptr) {
+    const int hq = nh % H, nq = nh / H;
+    if constexpr (exact_hd24) {
+      // Production direct-layout Q is padded [N,T,H,32]. Load only the three
+      // real 8-byte channel groups and clear the final padded group explicitly.
+      for (int g = lane; g < FA_MMA_BR * 3; g += 32) {
+        const int row = g / 3, col = (g - row * 3) * 8;
+        const size_t off =
+            (((size_t)nq * token_count + q0 + row) * H + hq) * 32 + col;
+        *reinterpret_cast<uint2*>(&Qsw[row * HD_PAD + col]) =
+            *reinterpret_cast<const uint2*>(packed_q_i8 + off);
+      }
+      if (lane < FA_MMA_BR)
+        *reinterpret_cast<uint2*>(&Qsw[lane * HD_PAD + 24]) = make_uint2(0, 0);
+    } else {
+      // Four channels/thread and one 32-bit store. This keeps the packed-input conversion's
+      // instruction count proportional to real Q payload rather than padded bytes.
+      for (int g = lane; g < FA_MMA_BR * (hd_pad / 4); g += 32) {
+        const int row = g / (hd_pad / 4), col = (g % (hd_pad / 4)) * 4;
+        int8_t qv[4] = {0, 0, 0, 0};
+#pragma unroll
+        for (int i = 0; i < 4; ++i) if (col + i < packed_hd) {
+          size_t off = ((((size_t)nq * token_count + q0 + row) * H + hq)
+                        * packed_q_groups) * packed_hd + col + i;
+          if (packed_q_i8 != nullptr) {
+            qv[i] = packed_q_i8[off];
+          } else {
+            int qi = __float2int_rn(__half2float(packed_q[off]) * q_inv);
+            constexpr int QMAX = PACK_OUT4 ? 7 : 127;
+            qv[i] = (int8_t)(qi > QMAX ? QMAX : (qi < -QMAX ? -QMAX : qi));
+          }
+        }
+        *reinterpret_cast<int*>(&Qsw[row * hd_pad + col]) = *reinterpret_cast<int*>(qv);
+      }
+    }
+  } else {
+    for (int idx = lane; idx < FA_MMA_BR * hd_pad; idx += 32) {
+      int row = idx / hd_pad, col = idx % hd_pad;
+      Qsw[idx] = q[(size_t)nh * T * hd_pad + (size_t)(q0 + row) * hd_pad + col];
+    }
   }
 
   // Per-lane running softmax state (registers, no smem). Each lane owns rows gid & gid+8;
@@ -297,14 +361,14 @@ __global__ void flash_attn_int8_mma_kernel_t(
   float m_run0 = -INFINITY, m_run1 = -INFINITY, l_run0 = 0.f, l_run1 = 0.f;
   // Exactly the accumulators this HD_PAD needs, and a compile-time count so they stay in
   // registers instead of spilling (the whole point of templating -- see the header note).
-  constexpr int NT_MAX = HD_PAD / 8;
+  constexpr int NT_MAX = EXACT_HD ? EXACT_HD / 8 : HD_PAD / 8;
   float Oreg[NT_MAX * 4];
 #pragma unroll
   for (int i = 0; i < NT_MAX * 4; ++i) Oreg[i] = 0.f;
-  const int n_nt2 = hd / 8;                      // <= NT_MAX; hd may be < HD_PAD (padding)
+  const int n_nt2 = EXACT_HD ? NT_MAX : hd / 8;  // <= NT_MAX; generic hd may be padded
   constexpr int nkt = HD_PAD / 32;
   constexpr int NNT = BC / 8;             // QKᵀ N-tiles
-  const int NKV = T / BC;                  // key tiles (T % BC == 0 on the mma path)
+  const int NKV = token_count / BC;        // key tiles (T % BC == 0 on the mma path)
   const int KV16 = (BC * hd_pad) / 16;     // 16B chunks per K tile (== per V tile)
 
   // ---- fold every loop-invariant scalar into per-lane constants, in log2 units ----
@@ -319,15 +383,24 @@ __global__ void flash_attn_int8_mma_kernel_t(
   //     so the PV epilogue's "* (1/127)" disappears too.
   constexpr float FA_LOG2E   = 1.4426950408889634f;
   constexpr float FA_LOG2_127 = 6.98868468677217f;      // log2(127)
-  const float sqs0 = sqb[q0 + gid]     * softmax_scale * FA_LOG2E;
-  const float sqs1 = sqb[q0 + gid + 8] * softmax_scale * FA_LOG2E;
+  const float sqs0 = STATIC_QK
+      ? static_qk_scale * softmax_scale * FA_LOG2E
+      : sqb[q0 + gid] * softmax_scale * FA_LOG2E;
+  const float sqs1 = STATIC_QK
+      ? static_qk_scale * softmax_scale * FA_LOG2E
+      : sqb[q0 + gid + 8] * softmax_scale * FA_LOG2E;
   // This lane's V scales, hoisted out of the key loop (they depend only on nt2 and tig).
   float svr[NT_MAX][2];
 #pragma unroll
   for (int i = 0; i < NT_MAX; ++i) {
     const int d0 = i * 8 + tig * 2;
-    svr[i][0] = (d0     < hd) ? svb[d0]     : 0.f;
-    svr[i][1] = (d0 + 1 < hd) ? svb[d0 + 1] : 0.f;
+    if constexpr (EXACT_HD) {
+      svr[i][0] = svb[d0];
+      svr[i][1] = svb[d0 + 1];
+    } else {
+      svr[i][0] = (d0     < hd) ? svb[d0]     : 0.f;
+      svr[i][1] = (d0 + 1 < hd) ? svb[d0 + 1] : 0.f;
+    }
   }
 
   // ---- hoist the Q A-fragment into registers, ONCE, outside the key loop ----
@@ -351,20 +424,42 @@ __global__ void flash_attn_int8_mma_kernel_t(
 
   // cp.async a K tile ([BC,hd_pad] from k[nh]) and V tile ([hd_pad,BC] from pre-T v[nh]) into buf.
   auto load_kv = [&](int buf, int kt) {
-    for (int c = threadIdx.x; c < KV16; c += blockDim.x) {
-      int off = c * 16;
-      // K: row-major [BC,hd_pad], HBM kb[(kt+j)*hd_pad + d]
-      modiff_cp_async_cg(modiff_smem_ptr(&Ks[buf][off]),
-                         (const uint4*)(kb + (size_t)kt * hd_pad + off), true);
-      // V (pre-transposed [hd_pad,T]): row-major [hd_pad,BC], HBM vb[d*T + kt+j]
-      int d = off / BC, j = off % BC;
-      modiff_cp_async_cg(modiff_smem_ptr(&Vs[buf][off]),
-                         (const uint4*)(vb + (size_t)d * T + kt + j), true);
+    if constexpr (COMPACT_HD24) {
+      // K keeps its 32-byte aligned global rows so every transfer remains a
+      // 16-byte cp.async. Only V drops the eight padded channel rows; those
+      // zeros are cheap shared stores and avoid rereading them for every CTA.
+      for (int c = threadIdx.x; c < KV16; c += blockDim.x) {
+        const int off = c * 16;
+        modiff_cp_async_cg(modiff_smem_ptr(&Ks[buf][off]),
+                           (const uint4*)(kb + (size_t)kt * HD_PAD + off), true);
+      }
+      constexpr int VREAL16 = 24 * BC / 16;
+      for (int c = threadIdx.x; c < VREAL16; c += blockDim.x) {
+        const int off = c * 16, d = off / BC, j = off % BC;
+        modiff_cp_async_cg(modiff_smem_ptr(&Vs[buf][off]),
+                           (const uint4*)(vb + (size_t)d * T + kt + j), true);
+      }
+      constexpr int VPAD16 = (HD_PAD - 24) * BC / 16;
+      for (int c = threadIdx.x; c < VPAD16; c += blockDim.x)
+        *reinterpret_cast<uint4*>(&Vs[buf][24 * BC + c * 16]) = make_uint4(0, 0, 0, 0);
+    } else {
+      for (int c = threadIdx.x; c < KV16; c += blockDim.x) {
+        int off = c * 16;
+        // K: row-major [BC,hd_pad], HBM kb[(kt+j)*hd_pad + d]
+        modiff_cp_async_cg(modiff_smem_ptr(&Ks[buf][off]),
+                           (const uint4*)(kb + (size_t)kt * hd_pad + off), true);
+        // V (pre-transposed [hd_pad,T]): row-major [hd_pad,BC], HBM vb[d*T + kt+j]
+        int d = off / BC, j = off % BC;
+        modiff_cp_async_cg(modiff_smem_ptr(&Vs[buf][off]),
+                           (const uint4*)(vb + (size_t)d * T + kt + j), true);
+      }
     }
     // K scales for this tile: 64 floats = 16 chunks of 16 B, same pipeline as K/V.
-    for (int c = threadIdx.x; c < BC / 4; c += blockDim.x)
-      modiff_cp_async_cg(modiff_smem_ptr(&SKs[buf][c * 4]),
-                         (const uint4*)(skb + kt + c * 4), true);
+    if constexpr (!STATIC_QK) {
+      for (int c = threadIdx.x; c < BC / 4; c += blockDim.x)
+        modiff_cp_async_cg(modiff_smem_ptr(&SKs[buf][c * 4]),
+                           (const uint4*)(skb + kt + c * 4), true);
+    }
     __pipeline_commit();
   };
 
@@ -414,11 +509,18 @@ __global__ void flash_attn_int8_mma_kernel_t(
       // 2 multiplies per element (sqs*sk, then acc*that) plus the later (S - m) subtract into
       // 1 multiply plus 1 FFMA -- 4 fewer instructions per N-tile. No bounds mask (see above).
       const int c0 = nt * 8 + tig * 2;
-      const float sk0 = SKs[buf][c0], sk1 = SKs[buf][c0 + 1];
-      Sreg[nt][0] = acc[0] * sk0;
-      Sreg[nt][1] = acc[1] * sk1;
-      Sreg[nt][2] = acc[2] * sk0;
-      Sreg[nt][3] = acc[3] * sk1;
+      if constexpr (STATIC_QK) {
+        Sreg[nt][0] = (float)acc[0];
+        Sreg[nt][1] = (float)acc[1];
+        Sreg[nt][2] = (float)acc[2];
+        Sreg[nt][3] = (float)acc[3];
+      } else {
+        const float sk0 = SKs[buf][c0], sk1 = SKs[buf][c0 + 1];
+        Sreg[nt][0] = acc[0] * sk0;
+        Sreg[nt][1] = acc[1] * sk1;
+        Sreg[nt][2] = acc[2] * sk0;
+        Sreg[nt][3] = acc[3] * sk1;
+      }
     }
 
     // ---- register-parallel online softmax (all 32 lanes active) ----
@@ -448,6 +550,11 @@ __global__ void flash_attn_int8_mma_kernel_t(
     // which cancels in the final Oreg/l_run.
     const float nb0 = FA_LOG2_127 - sqs0 * mcur0, nb1 = FA_LOG2_127 - sqs1 * mcur1;
     float ls0 = 0.f, ls1 = 0.f;
+    // REGISTER_P keeps the rounded probability pairs in registers. The generic
+    // path retains the shared-P exchange because its BC=64 mapping would need
+    // twice as many live packed values and exceeds the SM86 register gate.
+    unsigned pr00 = 0, pr01 = 0, pr02 = 0, pr03 = 0;
+    unsigned pr10 = 0, pr11 = 0, pr12 = 0, pr13 = 0;
 #pragma unroll
     for (int nt = 0; nt < NNT; ++nt) {
       const int c0 = nt * 8 + tig * 2;
@@ -464,34 +571,65 @@ __global__ void flash_attn_int8_mma_kernel_t(
       // saturates on the way, so no clamp select is needed either.
       unsigned r0 = modiff_pack2_s8(__float2int_rn(p00), __float2int_rn(p01));
       unsigned r1 = modiff_pack2_s8(__float2int_rn(p10), __float2int_rn(p11));
-      *(short*)&Psw[gid       * BC + c0] = (short)r0;
-      *(short*)&Psw[(gid + 8) * BC + c0] = (short)r1;
+      if constexpr (REGISTER_P) {
+        if (nt == 0) { pr00 = r0; pr10 = r1; }
+        else if (nt == 1) { pr01 = r0; pr11 = r1; }
+        else if (nt == 2) { pr02 = r0; pr12 = r1; }
+        else { pr03 = r0; pr13 = r1; }
+      } else {
+        *(short*)&Psw[gid       * BC + c0] = (short)r0;
+        *(short*)&Psw[(gid + 8) * BC + c0] = (short)r1;
+      }
     }
     // reduce partial sums across the tig-group, combine with running sum (rescaled)
     ls0 += __shfl_xor_sync(0xffffffff, ls0, 1); ls0 += __shfl_xor_sync(0xffffffff, ls0, 2);
     ls1 += __shfl_xor_sync(0xffffffff, ls1, 1); ls1 += __shfl_xor_sync(0xffffffff, ls1, 2);
     l_run0 = l_run0 * a_g + ls0; l_run1 = l_run1 * a_g8 + ls1;
     m_run0 = mcur0; m_run1 = mcur1;
-    __syncwarp();
+    if constexpr (!REGISTER_P) __syncwarp();
 
     // Hoist the P A-fragment: it depends only on (ks, gid, tig), NOT on nt2, yet the PV loop
     // re-read it from Psw once per output tile -- n_nt2 * (BC/32) * 4 = up to 64 smem loads per
     // lane per key tile where 8 suffice. Together with the Q hoist above this cuts inner-loop
     // smem traffic ~2.6x (hd=48: 168 -> 64 loads/lane/tile).
     unsigned Pa[BC / 32][4];
+    if constexpr (REGISTER_P) {
+      // Each producer lane owns two adjacent columns. Assemble the four-byte
+      // m16n8k32 A fragments with shuffles inside each four-lane gid group:
+      // tig 0/1 select cols 0..7 and tig 2/3 select cols 8..15; the second
+      // fragment repeats the mapping at +16 columns.
+      const int src0 = (lane & ~3) + ((tig & 1) << 1);
+      const int src1 = src0 + 1;
+      auto gather4 = [&](unsigned v) {
+        const unsigned lo = __shfl_sync(0xffffffff, v, src0) & 0xffffu;
+        const unsigned hi = __shfl_sync(0xffffffff, v, src1) & 0xffffu;
+        return lo | (hi << 16);
+      };
+      const unsigned pa00 = gather4(pr00), pa01 = gather4(pr01);
+      const unsigned pa10 = gather4(pr10), pa11 = gather4(pr11);
+      const unsigned pa02 = gather4(pr02), pa03 = gather4(pr03);
+      const unsigned pa12 = gather4(pr12), pa13 = gather4(pr13);
+      Pa[0][0] = tig < 2 ? pa00 : pa01;
+      Pa[0][1] = tig < 2 ? pa10 : pa11;
+      Pa[0][2] = tig < 2 ? pa02 : pa03;
+      Pa[0][3] = tig < 2 ? pa12 : pa13;
+    } else {
 #pragma unroll
-    for (int ks = 0; ks < BC / 32; ++ks) {
-      const int koff = ks * 32;
-      Pa[ks][0] = *(const unsigned*)&Psw[(gid)     * BC + koff + tig * 4];
-      Pa[ks][1] = *(const unsigned*)&Psw[(gid + 8) * BC + koff + tig * 4];
-      Pa[ks][2] = *(const unsigned*)&Psw[(gid)     * BC + koff + tig * 4 + 16];
-      Pa[ks][3] = *(const unsigned*)&Psw[(gid + 8) * BC + koff + tig * 4 + 16];
+      for (int ks = 0; ks < BC / 32; ++ks) {
+        const int koff = ks * 32;
+        Pa[ks][0] = *(const unsigned*)&Psw[(gid)     * BC + koff + tig * 4];
+        Pa[ks][1] = *(const unsigned*)&Psw[(gid + 8) * BC + koff + tig * 4];
+        Pa[ks][2] = *(const unsigned*)&Psw[(gid)     * BC + koff + tig * 4 + 16];
+        Pa[ks][3] = *(const unsigned*)&Psw[(gid + 8) * BC + koff + tig * 4 + 16];
+      }
     }
 
     // ---- rescale O (registers) by per-row alpha, then PV accumulate ----
 #pragma unroll
     for (int nt2 = 0; nt2 < NT_MAX; ++nt2) {
-      if (nt2 >= n_nt2) break;                   // NT_MAX is compile-time; n_nt2 <= NT_MAX
+      if constexpr (!EXACT_HD) {
+        if (nt2 >= n_nt2) break;                 // generic hd may be smaller than HD_PAD
+      }
       Oreg[nt2 * 4 + 0] *= a_g;  Oreg[nt2 * 4 + 1] *= a_g;
       Oreg[nt2 * 4 + 2] *= a_g8; Oreg[nt2 * 4 + 3] *= a_g8;
       int acc[4] = {0, 0, 0, 0};
@@ -518,28 +656,51 @@ __global__ void flash_attn_int8_mma_kernel_t(
   const int h = nh % H, n = nh / H;           // (n,h) for the token-major fused-quant store
 #pragma unroll
   for (int nt2 = 0; nt2 < NT_MAX; ++nt2) {
-    if (nt2 >= n_nt2) break;
+    if constexpr (!EXACT_HD) {
+      if (nt2 >= n_nt2) break;
+    }
     int d0 = nt2 * 8 + tig * 2, d1 = d0 + 1;
     int gi0 = q0 + gid, gi8 = q0 + gid + 8;
     float o00 = Oreg[nt2*4+0]*invl_g,  o01 = Oreg[nt2*4+1]*invl_g;
     float o10 = Oreg[nt2*4+2]*invl_g8, o11 = Oreg[nt2*4+3]*invl_g8;
     if (out_q == nullptr) {                    // default: fp16 head-major [N,H,T,hd]
-      out[(size_t)(nh * T + gi0) * hd + d0] = __float2half(o00);
-      out[(size_t)(nh * T + gi0) * hd + d1] = __float2half(o01);
-      out[(size_t)(nh * T + gi8) * hd + d0] = __float2half(o10);
-      out[(size_t)(nh * T + gi8) * hd + d1] = __float2half(o11);
+      out[(size_t)(nh * token_count + gi0) * real_hd + d0] = __float2half(o00);
+      out[(size_t)(nh * token_count + gi0) * real_hd + d1] = __float2half(o01);
+      out[(size_t)(nh * token_count + gi8) * real_hd + d0] = __float2half(o10);
+      out[(size_t)(nh * token_count + gi8) * real_hd + d1] = __float2half(o11);
+    } else if constexpr (PACK_OUT4) {           // int4 values, packed token-major for W4 projection
+      int c0 = h * real_hd + d0;               // even: low nibble is the even channel
+      int q00 = __float2int_rn(o00 * proj_inv_scale);
+      int q01 = __float2int_rn(o01 * proj_inv_scale);
+      int q10 = __float2int_rn(o10 * proj_inv_scale);
+      int q11 = __float2int_rn(o11 * proj_inv_scale);
+      q00 = q00>7?7:(q00<-7?-7:q00); q01 = q01>7?7:(q01<-7?-7:q01);
+      q10 = q10>7?7:(q10<-7?-7:q10); q11 = q11>7?7:(q11<-7?-7:q11);
+      out_q[(size_t)(n * T + gi0) * qout_stride + c0/2] =
+          (int8_t)((q00 & 0x0f) | ((q01 & 0x0f) << 4));
+      out_q[(size_t)(n * T + gi8) * qout_stride + c0/2] =
+          (int8_t)((q10 & 0x0f) | ((q11 & 0x0f) << 4));
     } else {                                   // fused: int8 token-major, quantized by proj scale
-      int c0 = h * hd + d0, c1 = h * hd + d1;  // round through fp16 first -> bit-matches
-      int q00 = __float2int_rn(__half2float(__float2half(o00)) * proj_inv_scale);  // quantize_attn_out_int8
-      int q01 = __float2int_rn(__half2float(__float2half(o01)) * proj_inv_scale);
-      int q10 = __float2int_rn(__half2float(__float2half(o10)) * proj_inv_scale);
-      int q11 = __float2int_rn(__half2float(__float2half(o11)) * proj_inv_scale);
+      int c0 = h * real_hd + d0;               // even: store adjacent channels as one aligned int16
+      int q00 = __float2int_rn(o00 * proj_inv_scale);
+      int q01 = __float2int_rn(o01 * proj_inv_scale);
+      int q10 = __float2int_rn(o10 * proj_inv_scale);
+      int q11 = __float2int_rn(o11 * proj_inv_scale);
       q00 = q00>127?127:(q00<-127?-127:q00); q01 = q01>127?127:(q01<-127?-127:q01);
       q10 = q10>127?127:(q10<-127?-127:q10); q11 = q11>127?127:(q11<-127?-127:q11);
-      out_q[(size_t)(n * T + gi0) * qout_stride + c0] = (int8_t)q00;
-      out_q[(size_t)(n * T + gi0) * qout_stride + c1] = (int8_t)q01;
-      out_q[(size_t)(n * T + gi8) * qout_stride + c0] = (int8_t)q10;
-      out_q[(size_t)(n * T + gi8) * qout_stride + c1] = (int8_t)q11;
+      uint16_t p0 = (uint8_t)q00 | ((uint16_t)(uint8_t)q01 << 8);
+      uint16_t p1 = (uint8_t)q10 | ((uint16_t)(uint8_t)q11 << 8);
+      *reinterpret_cast<uint16_t*>(&out_q[(size_t)(n * T + gi0) * qout_stride + c0]) = p0;
+      *reinterpret_cast<uint16_t*>(&out_q[(size_t)(n * T + gi8) * qout_stride + c0]) = p1;
+    }
+  }
+  if constexpr (PACK_OUT4) {
+    if (out_q != nullptr && h == 0) {
+      const int real_bytes = (H * real_hd) / 2, tail_bytes = qout_stride - real_bytes;
+      for (int idx = lane; idx < FA_MMA_BR * tail_bytes; idx += 32) {
+        const int row = idx / tail_bytes, col = idx - row * tail_bytes;
+        out_q[(size_t)(n * T + q0 + row) * qout_stride + real_bytes + col] = 0;
+      }
     }
   }
 }
@@ -814,18 +975,220 @@ __global__ void flash_attn_int8_packed_mma_kernel(
       out[(size_t)(nh * T + gi8) * hd + d0] = __float2half(o10);
       out[(size_t)(nh * T + gi8) * hd + d1] = __float2half(o11);
     } else {
-      int c0 = h * hd + d0, c1 = h * hd + d1;   // round through fp16 first -> bit-matches
-      int q00 = __float2int_rn(__half2float(__float2half(o00)) * proj_inv_scale);
-      int q01 = __float2int_rn(__half2float(__float2half(o01)) * proj_inv_scale);
-      int q10 = __float2int_rn(__half2float(__float2half(o10)) * proj_inv_scale);
-      int q11 = __float2int_rn(__half2float(__float2half(o11)) * proj_inv_scale);
+      int c0 = h * hd + d0;                     // even: store adjacent channels as one aligned int16
+      int q00 = __float2int_rn(o00 * proj_inv_scale);
+      int q01 = __float2int_rn(o01 * proj_inv_scale);
+      int q10 = __float2int_rn(o10 * proj_inv_scale);
+      int q11 = __float2int_rn(o11 * proj_inv_scale);
       q00 = q00>127?127:(q00<-127?-127:q00); q01 = q01>127?127:(q01<-127?-127:q01);
       q10 = q10>127?127:(q10<-127?-127:q10); q11 = q11>127?127:(q11<-127?-127:q11);
-      out_q[(size_t)(n * T + gi0) * qout_stride + c0] = (int8_t)q00;
-      out_q[(size_t)(n * T + gi0) * qout_stride + c1] = (int8_t)q01;
-      out_q[(size_t)(n * T + gi8) * qout_stride + c0] = (int8_t)q10;
-      out_q[(size_t)(n * T + gi8) * qout_stride + c1] = (int8_t)q11;
+      uint16_t p0 = (uint8_t)q00 | ((uint16_t)(uint8_t)q01 << 8);
+      uint16_t p1 = (uint8_t)q10 | ((uint16_t)(uint8_t)q11 << 8);
+      *reinterpret_cast<uint16_t*>(&out_q[(size_t)(n * T + gi0) * qout_stride + c0]) = p0;
+      *reinterpret_cast<uint16_t*>(&out_q[(size_t)(n * T + gi8) * qout_stride + c0]) = p1;
     }
+  }
+}
+
+// Shape-specialized persistent packed-input attention. The generic packed kernel
+// launches one CTA per WARPS*16 query rows, so every CTA reloads and requantizes
+// the complete K/V sequence. Production batch 128 already provides 1024
+// independent (sample,head) units: one persistent CTA per unit has enough
+// parallelism and can reuse one shared-memory K/V copy for every query group.
+template <int TT, int HD, int HD_PAD, int WARPS = 8, int BC = 64>
+__global__ void flash_attn_int8_packed_persistent_qout_kernel(
+    const __half* __restrict__ qkv, const float* __restrict__ sv,
+    int8_t* __restrict__ out_q, int N, int H,
+    float sq_c, float sk_c, float softmax_scale,
+    float q_inv, float k_inv, float proj_inv_scale, int qout_stride) {
+  static_assert(TT % (WARPS * FA_MMA_BR) == 0, "query groups must divide T");
+  static_assert(TT % BC == 0, "key tiles must divide T");
+  constexpr int VSTRIDE = TT + 4;
+  constexpr int NT_MAX = HD_PAD / 8;
+  constexpr int NKT = HD_PAD / 32;
+  constexpr int NNT = BC / 8;
+  constexpr int NQG = TT / (WARPS * FA_MMA_BR);
+  constexpr int NKV = TT / BC;
+
+  const int nh = blockIdx.x;
+  const int h = nh % H, n = nh / H;
+  const int w = threadIdx.x >> 5;
+  const int lane = threadIdx.x & 31, gid = lane >> 2, tig = lane & 3;
+  const size_t pkT = (size_t)H * 3 * HD;
+  const __half* qh = qkv + (size_t)n * TT * pkT + (size_t)(h * 3 + 0) * HD;
+  const __half* kh = qkv + (size_t)n * TT * pkT + (size_t)(h * 3 + 1) * HD;
+  const __half* vh = qkv + (size_t)n * TT * pkT + (size_t)(h * 3 + 2) * HD;
+
+  extern __shared__ int8_t smem_i8[];
+  int8_t* Kall = smem_i8;
+  int8_t* Vall = Kall + TT * HD_PAD;
+  // Q is hoisted into registers before P is produced.  Their lifetimes do not
+  // overlap, so one max(HD_PAD,BC)-stride buffer serves both roles.
+  constexpr int QP_STRIDE = HD_PAD > BC ? HD_PAD : BC;
+  int8_t* QPs = Vall + HD_PAD * VSTRIDE;
+  int8_t* Qsw = QPs + w * FA_MMA_BR * QP_STRIDE;
+  int8_t* Psw = Qsw;
+
+  for (int idx = threadIdx.x; idx < TT * HD_PAD; idx += blockDim.x) {
+    const int t = idx / HD_PAD, d = idx - t * HD_PAD;
+    int8_t kq = 0, vq = 0;
+    if (d < HD) {
+      kq = mfp_stage(kh[(size_t)t * pkT + d], k_inv);
+      vq = mfp_stage(vh[(size_t)t * pkT + d], 1.f / sv[d]);
+    }
+    Kall[t * HD_PAD + d] = kq;
+    Vall[d * VSTRIDE + t] = vq;
+  }
+  __syncthreads();
+
+  constexpr float LOG2E = 1.4426950408889634f;
+  constexpr float LOG2_127 = 6.98868468677217f;
+  const float sqk = sq_c * sk_c * softmax_scale * LOG2E;
+  float svr[NT_MAX][2];
+#pragma unroll
+  for (int i = 0; i < NT_MAX; ++i) {
+    const int d0 = i * 8 + tig * 2;
+    svr[i][0] = d0 < HD ? sv[d0] : 0.f;
+    svr[i][1] = d0 + 1 < HD ? sv[d0 + 1] : 0.f;
+  }
+
+#pragma unroll 1
+  for (int qg = 0; qg < NQG; ++qg) {
+    const int q0 = (qg * WARPS + w) * FA_MMA_BR;
+    for (int idx = lane; idx < FA_MMA_BR * HD_PAD; idx += 32) {
+      const int row = idx / HD_PAD, d = idx - row * HD_PAD;
+      Qsw[idx] = d < HD ? mfp_stage(qh[(size_t)(q0 + row) * pkT + d], q_inv) : 0;
+    }
+    __syncwarp();
+
+    unsigned Qa[NKT][4];
+#pragma unroll
+    for (int ks = 0; ks < NKT; ++ks) {
+      const int base = ks * 32;
+      Qa[ks][0] = *(const unsigned*)&Qsw[gid * HD_PAD + base + tig * 4];
+      Qa[ks][1] = *(const unsigned*)&Qsw[(gid + 8) * HD_PAD + base + tig * 4];
+      Qa[ks][2] = *(const unsigned*)&Qsw[gid * HD_PAD + base + tig * 4 + 16];
+      Qa[ks][3] = *(const unsigned*)&Qsw[(gid + 8) * HD_PAD + base + tig * 4 + 16];
+    }
+
+    float m_run0 = -INFINITY, m_run1 = -INFINITY;
+    float l_run0 = 0.f, l_run1 = 0.f;
+    float Oreg[NT_MAX * 4];
+#pragma unroll
+    for (int i = 0; i < NT_MAX * 4; ++i) Oreg[i] = 0.f;
+
+#pragma unroll
+    for (int ktile = 0; ktile < NKV; ++ktile) {
+      const int kt = ktile * BC;
+      float Sreg[NNT][4];
+#pragma unroll
+      for (int nt = 0; nt < NNT; ++nt) {
+        int acc[4] = {0, 0, 0, 0};
+#pragma unroll
+        for (int ks = 0; ks < NKT; ++ks) {
+          const int base = ks * 32;
+          const int8_t* Ksb = Kall + (kt + nt * 8 + gid) * HD_PAD;
+          unsigned b[2];
+          b[0] = *(const int*)&Ksb[base + tig * 4];
+          b[1] = *(const int*)&Ksb[base + tig * 4 + 16];
+          modiff_mma_m16n8k32(acc, Qa[ks], b);
+        }
+        Sreg[nt][0] = acc[0] * sqk;
+        Sreg[nt][1] = acc[1] * sqk;
+        Sreg[nt][2] = acc[2] * sqk;
+        Sreg[nt][3] = acc[3] * sqk;
+      }
+
+      float lm0 = -INFINITY, lm1 = -INFINITY;
+#pragma unroll
+      for (int nt = 0; nt < NNT; ++nt) {
+        lm0 = fmaxf(lm0, fmaxf(Sreg[nt][0], Sreg[nt][1]));
+        lm1 = fmaxf(lm1, fmaxf(Sreg[nt][2], Sreg[nt][3]));
+      }
+      lm0 = fmaxf(lm0, __shfl_xor_sync(0xffffffff, lm0, 1));
+      lm0 = fmaxf(lm0, __shfl_xor_sync(0xffffffff, lm0, 2));
+      lm1 = fmaxf(lm1, __shfl_xor_sync(0xffffffff, lm1, 1));
+      lm1 = fmaxf(lm1, __shfl_xor_sync(0xffffffff, lm1, 2));
+      const float mcur0 = fmaxf(m_run0, lm0), mcur1 = fmaxf(m_run1, lm1);
+      const float a0 = modiff_ex2(m_run0 - mcur0);
+      const float a1 = modiff_ex2(m_run1 - mcur1);
+      const float mq0 = mcur0 - LOG2_127, mq1 = mcur1 - LOG2_127;
+      float ls0 = 0.f, ls1 = 0.f;
+#pragma unroll
+      for (int nt = 0; nt < NNT; ++nt) {
+        const int c0 = nt * 8 + tig * 2;
+        const float p00 = modiff_ex2(Sreg[nt][0] - mq0);
+        const float p01 = modiff_ex2(Sreg[nt][1] - mq0);
+        const float p10 = modiff_ex2(Sreg[nt][2] - mq1);
+        const float p11 = modiff_ex2(Sreg[nt][3] - mq1);
+        ls0 += p00 + p01; ls1 += p10 + p11;
+        const unsigned r0 = modiff_pack2_s8(__float2int_rn(p00), __float2int_rn(p01));
+        const unsigned r1 = modiff_pack2_s8(__float2int_rn(p10), __float2int_rn(p11));
+        *(short*)&Psw[gid * BC + c0] = (short)r0;
+        *(short*)&Psw[(gid + 8) * BC + c0] = (short)r1;
+      }
+      ls0 += __shfl_xor_sync(0xffffffff, ls0, 1);
+      ls0 += __shfl_xor_sync(0xffffffff, ls0, 2);
+      ls1 += __shfl_xor_sync(0xffffffff, ls1, 1);
+      ls1 += __shfl_xor_sync(0xffffffff, ls1, 2);
+      l_run0 = l_run0 * a0 + ls0; l_run1 = l_run1 * a1 + ls1;
+      m_run0 = mcur0; m_run1 = mcur1;
+      __syncwarp();
+
+      unsigned Pa[BC / 32][4];
+#pragma unroll
+      for (int ks = 0; ks < BC / 32; ++ks) {
+        const int koff = ks * 32;
+        Pa[ks][0] = *(const unsigned*)&Psw[gid * BC + koff + tig * 4];
+        Pa[ks][1] = *(const unsigned*)&Psw[(gid + 8) * BC + koff + tig * 4];
+        Pa[ks][2] = *(const unsigned*)&Psw[gid * BC + koff + tig * 4 + 16];
+        Pa[ks][3] = *(const unsigned*)&Psw[(gid + 8) * BC + koff + tig * 4 + 16];
+      }
+
+#pragma unroll
+      for (int nt2 = 0; nt2 < NT_MAX; ++nt2) {
+        if (nt2 >= HD / 8) break;
+        Oreg[nt2 * 4 + 0] *= a0; Oreg[nt2 * 4 + 1] *= a0;
+        Oreg[nt2 * 4 + 2] *= a1; Oreg[nt2 * 4 + 3] *= a1;
+        int acc[4] = {0, 0, 0, 0};
+#pragma unroll
+        for (int ks = 0; ks < BC / 32; ++ks) {
+          const int koff = kt + ks * 32;
+          const int8_t* Vsb = Vall + (nt2 * 8 + gid) * VSTRIDE;
+          unsigned b[2];
+          b[0] = *(const int*)&Vsb[koff + tig * 4];
+          b[1] = *(const int*)&Vsb[koff + tig * 4 + 16];
+          modiff_mma_m16n8k32(acc, Pa[ks], b);
+        }
+        Oreg[nt2 * 4 + 0] += svr[nt2][0] * acc[0];
+        Oreg[nt2 * 4 + 1] += svr[nt2][1] * acc[1];
+        Oreg[nt2 * 4 + 2] += svr[nt2][0] * acc[2];
+        Oreg[nt2 * 4 + 3] += svr[nt2][1] * acc[3];
+      }
+    }
+
+    const float il0 = l_run0 > 0.f ? 1.f / l_run0 : 0.f;
+    const float il1 = l_run1 > 0.f ? 1.f / l_run1 : 0.f;
+#pragma unroll
+    for (int nt2 = 0; nt2 < NT_MAX; ++nt2) {
+      if (nt2 >= HD / 8) break;
+      const int d0 = nt2 * 8 + tig * 2, d1 = d0 + 1;
+      const int gi0 = q0 + gid, gi8 = q0 + gid + 8;
+      int q00 = __float2int_rn(Oreg[nt2 * 4 + 0] * il0 * proj_inv_scale);
+      int q01 = __float2int_rn(Oreg[nt2 * 4 + 1] * il0 * proj_inv_scale);
+      int q10 = __float2int_rn(Oreg[nt2 * 4 + 2] * il1 * proj_inv_scale);
+      int q11 = __float2int_rn(Oreg[nt2 * 4 + 3] * il1 * proj_inv_scale);
+      q00 = q00 > 127 ? 127 : (q00 < -127 ? -127 : q00);
+      q01 = q01 > 127 ? 127 : (q01 < -127 ? -127 : q01);
+      q10 = q10 > 127 ? 127 : (q10 < -127 ? -127 : q10);
+      q11 = q11 > 127 ? 127 : (q11 < -127 ? -127 : q11);
+      const int c0 = h * HD + d0;
+      *reinterpret_cast<uint16_t*>(&out_q[(size_t)(n * TT + gi0) * qout_stride + c0]) =
+          (uint8_t)q00 | ((uint16_t)(uint8_t)q01 << 8);
+      *reinterpret_cast<uint16_t*>(&out_q[(size_t)(n * TT + gi8) * qout_stride + c0]) =
+          (uint8_t)q10 | ((uint16_t)(uint8_t)q11 << 8);
+    }
+    __syncthreads();
   }
 }
 
@@ -866,17 +1229,19 @@ __global__ void flash_attn_int8_packed_mma_kernel(
 // proportionally. Nothing about that mechanism is int8-specific; the int4 kernel has the same
 // per-CTA K/V streaming, and the sweep confirmed int4 was pinned flat (2264 vs 2263 us) purely
 // because MODIFF_FA_MMA4_DISPATCH ignored the knob.
-template <int HDP_V, int BC, int WARPS>
+template <int HDP_V, int BC, int WARPS, bool STATIC_QK = false>
 __global__ void flash_attn_int4_mma_kernel_t(
     const int8_t* __restrict__ q4, const int8_t* __restrict__ k4, const int8_t* __restrict__ v,
     const float* __restrict__ sq, const float* __restrict__ sk, const float* __restrict__ sv,
     __half* __restrict__ out, int N, int H, int T, int hd, int hdp4, int hdp_v_rt, float softmax_scale,
-    int8_t* __restrict__ out_q, float proj_inv_scale, int qout_bstride) {
+    int8_t* __restrict__ out_q, float proj_inv_scale, int qout_bstride,
+    float static_qk_scale = 0.f, const __half* packed_q = nullptr,
+    int packed_hd = 0, float q_inv = 0.f, bool broadcast_sv = false) {
   const int hdp_v = HDP_V;
   (void)hdp_v_rt;
   // out_q != nullptr => fused proj-quantize store: emit packed int4 token-major [b*T, qout_bstride]
-  // (qout_bstride = K_pad/2 bytes/row), quantized by proj_inv_scale. K-pad tail bytes are pre-zeroed
-  // by the caller (torch::zeros), so this only writes the real channel-pair bytes.
+  // (qout_bstride = K_pad/2 bytes/row), quantized by proj_inv_scale. The h==0 CTA clears only
+  // the K-pad tail for its query rows after the real channel-pair bytes have been written.
   const int nh = blockIdx.x;
   const int w = threadIdx.x >> 5;
   const int lane = threadIdx.x & 31, gid = lane >> 2, tig = lane & 3;
@@ -886,9 +1251,10 @@ __global__ void flash_attn_int4_mma_kernel_t(
 
   const int8_t* kb = k4 + (size_t)nh * T * rowb4;
   const int8_t* vb = v + (size_t)nh * hdp_v * T;       // pre-transposed [hdp_v, T]
-  const float*  sqb = sq + (size_t)nh * T;
-  const float*  skb = sk + (size_t)nh * T;
-  const float*  svb = sv + (size_t)nh * hd;
+  const float*  sqb = STATIC_QK ? nullptr : sq + (size_t)nh * T;
+  const float*  skb = STATIC_QK ? nullptr : sk + (size_t)nh * T;
+  // Compact static producers and hybrid Q-in-flash share one frozen V-scale vector across BH.
+  const float*  svb = (broadcast_sv || packed_q != nullptr) ? sv : sv + (size_t)nh * hd;
 
   __shared__ int8_t Ks[2][BC * 32];             // packed int4 rows (<=32 bytes, hdp4<=64)
   __shared__ int8_t Vs[2][HDP_V * BC];          // int8 transposed Vs[buf][d*BC+j], exact size
@@ -900,9 +1266,28 @@ __global__ void flash_attn_int4_mma_kernel_t(
   int8_t* Psw = &Ps[w * FA_MMA_BR * BC];
 
   // host enforces T % (WARPS*FA_MMA_BR) == 0 and grid.y == T/(WARPS*BR), so q0+BR <= T
-  for (int idx = lane; idx < FA_MMA_BR * rowb4; idx += 32) {
-    int row = idx / rowb4, col = idx % rowb4;
-    Qsw[idx] = q4[(size_t)nh * kb_stride + (size_t)(q0 + row) * rowb4 + col];
+  if (packed_q != nullptr) {
+    const int hq = nh % H, nq = nh / H;
+    // Four channels (two packed bytes) per thread. The previous byte-at-a-time form executed
+    // twice as many loop/address instructions and made hybrid INT4 Q staging cost ~100 us.
+    for (int g = lane; g < FA_MMA_BR * (rowb4 / 2); g += 32) {
+      const int row = g / (rowb4 / 2), byte0 = (g % (rowb4 / 2)) * 2, d0 = byte0 * 2;
+      int qv[4] = {0, 0, 0, 0};
+#pragma unroll
+      for (int i = 0; i < 4; ++i) if (d0 + i < packed_hd) {
+        size_t off = ((((size_t)nq * T + q0 + row) * H + hq) * 3) * packed_hd + d0 + i;
+        int qi = __float2int_rn(__half2float(packed_q[off]) * q_inv);
+        qv[i] = qi > 7 ? 7 : (qi < -7 ? -7 : qi);
+      }
+      short p = (short)((qv[0] & 0xF) | ((qv[1] & 0xF) << 4)
+                        | ((qv[2] & 0xF) << 8) | ((qv[3] & 0xF) << 12));
+      *reinterpret_cast<short*>(&Qsw[row * rowb4 + byte0]) = p;
+    }
+  } else {
+    for (int idx = lane; idx < FA_MMA_BR * rowb4; idx += 32) {
+      int row = idx / rowb4, col = idx % rowb4;
+      Qsw[idx] = q4[(size_t)nh * kb_stride + (size_t)(q0 + row) * rowb4 + col];
+    }
   }
 
   float m_run0 = -INFINITY, m_run1 = -INFINITY, l_run0 = 0.f, l_run1 = 0.f;
@@ -921,8 +1306,12 @@ __global__ void flash_attn_int4_mma_kernel_t(
   // showed this kernel spends ~98% of its issue slots on this fp32 epilogue, not on the mma.
   constexpr float FA4_LOG2E    = 1.4426950408889634f;
   constexpr float FA4_LOG2_127 = 6.98868468677217f;
-  const float sqs0 = sqb[q0 + gid]     * softmax_scale * FA4_LOG2E;
-  const float sqs1 = sqb[q0 + gid + 8] * softmax_scale * FA4_LOG2E;
+  const float sqs0 = STATIC_QK
+      ? static_qk_scale * softmax_scale * FA4_LOG2E
+      : sqb[q0 + gid] * softmax_scale * FA4_LOG2E;
+  const float sqs1 = STATIC_QK
+      ? static_qk_scale * softmax_scale * FA4_LOG2E
+      : sqb[q0 + gid + 8] * softmax_scale * FA4_LOG2E;
   float svr[NT_MAX][2];
 #pragma unroll
   for (int i = 0; i < NT_MAX; ++i) {
@@ -958,9 +1347,11 @@ __global__ void flash_attn_int4_mma_kernel_t(
       modiff_cp_async_cg(modiff_smem_ptr(&Vs[buf][off]),
                          (const uint4*)(vb + (size_t)d * T + kt + j), true);
     }
-    for (int c = threadIdx.x; c < BC / 4; c += blockDim.x)   // 64 K scales = 16 chunks
-      modiff_cp_async_cg(modiff_smem_ptr(&SKs[buf][c * 4]),
-                         (const uint4*)(skb + kt + c * 4), true);
+    if constexpr (!STATIC_QK) {
+      for (int c = threadIdx.x; c < BC / 4; c += blockDim.x)   // 64 K scales = 16 chunks
+        modiff_cp_async_cg(modiff_smem_ptr(&SKs[buf][c * 4]),
+                           (const uint4*)(skb + kt + c * 4), true);
+    }
     __pipeline_commit();
   };
 
@@ -990,11 +1381,18 @@ __global__ void flash_attn_int4_mma_kernel_t(
       // Only the per-key scale here; the per-row Q scale is applied inside the exp argument
       // below (exact because all scales are positive -- see the int8 kernel's note).
       const int c0 = nt * 8 + tig * 2;
-      const float sk0 = SKs[buf][c0], sk1 = SKs[buf][c0 + 1];   // smem, not HBM
-      Sreg[nt][0] = acc[0] * sk0;
-      Sreg[nt][1] = acc[1] * sk1;
-      Sreg[nt][2] = acc[2] * sk0;
-      Sreg[nt][3] = acc[3] * sk1;
+      if constexpr (STATIC_QK) {
+        Sreg[nt][0] = (float)acc[0];
+        Sreg[nt][1] = (float)acc[1];
+        Sreg[nt][2] = (float)acc[2];
+        Sreg[nt][3] = (float)acc[3];
+      } else {
+        const float sk0 = SKs[buf][c0], sk1 = SKs[buf][c0 + 1];   // smem, not HBM
+        Sreg[nt][0] = acc[0] * sk0;
+        Sreg[nt][1] = acc[1] * sk1;
+        Sreg[nt][2] = acc[2] * sk0;
+        Sreg[nt][3] = acc[3] * sk1;
+      }
     }
 
     // ---- register-parallel online softmax (identical to int8) ----
@@ -1093,13 +1491,23 @@ __global__ void flash_attn_int4_mma_kernel_t(
       out[(size_t)(nh * T + gi8) * hd + d1] = __float2half(o11);
     } else {                                   // fused: packed int4 token-major, quantized by proj scale
       int c0 = h * hd + d0;                    // even (hd, d0 even) -> packed byte index = c0/2
-      // round through fp16 first -> bit-matches quantize_attn_out_int4_pack (low nibble=even ch)
-      int q00 = __float2int_rn(__half2float(__float2half(o00)) * proj_inv_scale); q00 = q00>7?7:(q00<-7?-7:q00);
-      int q01 = __float2int_rn(__half2float(__float2half(o01)) * proj_inv_scale); q01 = q01>7?7:(q01<-7?-7:q01);
-      int q10 = __float2int_rn(__half2float(__float2half(o10)) * proj_inv_scale); q10 = q10>7?7:(q10<-7?-7:q10);
-      int q11 = __float2int_rn(__half2float(__float2half(o11)) * proj_inv_scale); q11 = q11>7?7:(q11<-7?-7:q11);
+      int q00 = __float2int_rn(o00 * proj_inv_scale); q00 = q00>7?7:(q00<-7?-7:q00);
+      int q01 = __float2int_rn(o01 * proj_inv_scale); q01 = q01>7?7:(q01<-7?-7:q01);
+      int q10 = __float2int_rn(o10 * proj_inv_scale); q10 = q10>7?7:(q10<-7?-7:q10);
+      int q11 = __float2int_rn(o11 * proj_inv_scale); q11 = q11>7?7:(q11<-7?-7:q11);
       out_q[(size_t)(n * T + gi0) * qout_bstride + c0/2] = (int8_t)((q00 & 0x0F) | ((q01 & 0x0F) << 4));
       out_q[(size_t)(n * T + gi8) * qout_bstride + c0/2] = (int8_t)((q10 & 0x0F) | ((q11 & 0x0F) << 4));
+    }
+  }
+  // Every warp owns FA_MMA_BR query rows. Head zero clears only the padded projection bytes for
+  // those rows, avoiding a full-output memset while making the padded-weight contract explicit.
+  if (out_q != nullptr && h == 0) {
+    const int real_bytes = (H * hd) / 2;
+    const int tail_bytes = qout_bstride - real_bytes;
+    for (int idx = lane; idx < FA_MMA_BR * tail_bytes; idx += 32) {
+      const int row = idx / tail_bytes;
+      const int col = idx - row * tail_bytes;
+      out_q[(size_t)(n * T + q0 + row) * qout_bstride + real_bytes + col] = 0;
     }
   }
 }
@@ -1236,27 +1644,27 @@ static inline int modiff_fa_warps(int T) {
   return (T % (w * FA_MMA_BR) == 0) ? w : FA_MMA_WARPS;   // grid.y must divide exactly
 }
 
-#define MODIFF_FA_MMA_LAUNCH(HD, W, BC, GRID, STREAM, ...)                                       \
-  flash_attn_int8_mma_kernel_t<HD, W, BC><<<(GRID), (W)*32, 0, (STREAM)>>>(__VA_ARGS__)
+#define MODIFF_FA_MMA_LAUNCH(HD, W, BC, STATIC_QK, GRID, STREAM, ...)                            \
+  flash_attn_int8_mma_kernel_t<HD, W, BC, STATIC_QK><<<(GRID), (W)*32, 0, (STREAM)>>>(__VA_ARGS__)
 
-#define MODIFF_FA_MMA_DISPATCH(GRID, W, STREAM, HDPAD, T_, ...)                                   \
+#define MODIFF_FA_MMA_DISPATCH(GRID, W, STREAM, HDPAD, T_, STATIC_QK, ...)                        \
   do {                                                                                           \
     const int bc_ = modiff_fa_bc((HDPAD), (T_));                                                  \
     if ((HDPAD) <= 32) {                                                                          \
       if ((W) == 8) {                                                                              \
-        if (bc_ == 32) MODIFF_FA_MMA_LAUNCH(32, 8, 32, GRID, STREAM, __VA_ARGS__);                  \
-        else           MODIFF_FA_MMA_LAUNCH(32, 8, 64, GRID, STREAM, __VA_ARGS__);                  \
+        if (bc_ == 32) MODIFF_FA_MMA_LAUNCH(32, 8, 32, STATIC_QK, GRID, STREAM, __VA_ARGS__);       \
+        else           MODIFF_FA_MMA_LAUNCH(32, 8, 64, STATIC_QK, GRID, STREAM, __VA_ARGS__);       \
       } else {                                                                                     \
-        if (bc_ == 32) MODIFF_FA_MMA_LAUNCH(32, 4, 32, GRID, STREAM, __VA_ARGS__);                  \
-        else           MODIFF_FA_MMA_LAUNCH(32, 4, 64, GRID, STREAM, __VA_ARGS__);                  \
+        if (bc_ == 32) MODIFF_FA_MMA_LAUNCH(32, 4, 32, STATIC_QK, GRID, STREAM, __VA_ARGS__);       \
+        else           MODIFF_FA_MMA_LAUNCH(32, 4, 64, STATIC_QK, GRID, STREAM, __VA_ARGS__);       \
       }                                                                                            \
     } else {                                                                                       \
       if ((W) == 8) {                                                                              \
-        if (bc_ == 32) MODIFF_FA_MMA_LAUNCH(64, 8, 32, GRID, STREAM, __VA_ARGS__);                  \
-        else           MODIFF_FA_MMA_LAUNCH(64, 8, 64, GRID, STREAM, __VA_ARGS__);                  \
+        if (bc_ == 32) MODIFF_FA_MMA_LAUNCH(64, 8, 32, STATIC_QK, GRID, STREAM, __VA_ARGS__);       \
+        else           MODIFF_FA_MMA_LAUNCH(64, 8, 64, STATIC_QK, GRID, STREAM, __VA_ARGS__);       \
       } else {                                                                                     \
-        if (bc_ == 32) MODIFF_FA_MMA_LAUNCH(64, 4, 32, GRID, STREAM, __VA_ARGS__);                  \
-        else           MODIFF_FA_MMA_LAUNCH(64, 4, 64, GRID, STREAM, __VA_ARGS__);                  \
+        if (bc_ == 32) MODIFF_FA_MMA_LAUNCH(64, 4, 32, STATIC_QK, GRID, STREAM, __VA_ARGS__);       \
+        else           MODIFF_FA_MMA_LAUNCH(64, 4, 64, STATIC_QK, GRID, STREAM, __VA_ARGS__);       \
       }                                                                                            \
     }                                                                                              \
   } while (0)
@@ -1264,33 +1672,51 @@ static inline int modiff_fa_warps(int T) {
 // int4 counterpart: same three template axes as the int8 path (HDP_V, BC, WARPS). WARPS used to be
 // pinned to FA_MMA_WARPS here; see the kernel's header comment for the measurement that overturned
 // that. Both paths now share modiff_fa_bc / modiff_fa_warps, so a heuristic change applies to both.
-#define MODIFF_FA_MMA4_LAUNCH(HDPV, BC, W, GRID, STREAM, ...)                                     \
-  flash_attn_int4_mma_kernel_t<HDPV, BC, W><<<(GRID), (W)*32, 0, (STREAM)>>>(__VA_ARGS__)
+#define MODIFF_FA_MMA4_LAUNCH(HDPV, BC, W, STATIC_QK, GRID, STREAM, ...)                          \
+  flash_attn_int4_mma_kernel_t<HDPV, BC, W, STATIC_QK><<<(GRID), (W)*32, 0, (STREAM)>>>(__VA_ARGS__)
 
 // Same per-shape BC choice as the int8 path. The int4 kernel's V/output dim is hdp_v, so that is
 // what feeds the heuristic (hdp4 is always 64 -- the m16n8k64.s4 minimum -- and says nothing about
 // the score-tile register footprint).
-#define MODIFF_FA_MMA4_DISPATCH(GRID, W, STREAM, HDPV, T_, ...)                                    \
+#define MODIFF_FA_MMA4_DISPATCH(GRID, W, STREAM, HDPV, T_, STATIC_QK, ...)                         \
   do {                                                                                            \
     const int bc4_ = modiff_fa_bc((HDPV), (T_));                                                     \
     if ((HDPV) <= 32) {                                                                             \
       if ((W) == 8) {                                                                               \
-        if (bc4_ == 32) MODIFF_FA_MMA4_LAUNCH(32, 32, 8, GRID, STREAM, __VA_ARGS__);                 \
-        else            MODIFF_FA_MMA4_LAUNCH(32, 64, 8, GRID, STREAM, __VA_ARGS__);                 \
+        if (bc4_ == 32) MODIFF_FA_MMA4_LAUNCH(32, 32, 8, STATIC_QK, GRID, STREAM, __VA_ARGS__);      \
+        else            MODIFF_FA_MMA4_LAUNCH(32, 64, 8, STATIC_QK, GRID, STREAM, __VA_ARGS__);      \
       } else {                                                                                      \
-        if (bc4_ == 32) MODIFF_FA_MMA4_LAUNCH(32, 32, 4, GRID, STREAM, __VA_ARGS__);                 \
-        else            MODIFF_FA_MMA4_LAUNCH(32, 64, 4, GRID, STREAM, __VA_ARGS__);                 \
+        if (bc4_ == 32) MODIFF_FA_MMA4_LAUNCH(32, 32, 4, STATIC_QK, GRID, STREAM, __VA_ARGS__);      \
+        else            MODIFF_FA_MMA4_LAUNCH(32, 64, 4, STATIC_QK, GRID, STREAM, __VA_ARGS__);      \
       }                                                                                             \
     } else {                                                                                        \
       if ((W) == 8) {                                                                               \
-        if (bc4_ == 32) MODIFF_FA_MMA4_LAUNCH(64, 32, 8, GRID, STREAM, __VA_ARGS__);                 \
-        else            MODIFF_FA_MMA4_LAUNCH(64, 64, 8, GRID, STREAM, __VA_ARGS__);                 \
+        if (bc4_ == 32) MODIFF_FA_MMA4_LAUNCH(64, 32, 8, STATIC_QK, GRID, STREAM, __VA_ARGS__);      \
+        else            MODIFF_FA_MMA4_LAUNCH(64, 64, 8, STATIC_QK, GRID, STREAM, __VA_ARGS__);      \
       } else {                                                                                      \
-        if (bc4_ == 32) MODIFF_FA_MMA4_LAUNCH(64, 32, 4, GRID, STREAM, __VA_ARGS__);                 \
-        else            MODIFF_FA_MMA4_LAUNCH(64, 64, 4, GRID, STREAM, __VA_ARGS__);                 \
+        if (bc4_ == 32) MODIFF_FA_MMA4_LAUNCH(64, 32, 4, STATIC_QK, GRID, STREAM, __VA_ARGS__);      \
+        else            MODIFF_FA_MMA4_LAUNCH(64, 64, 4, STATIC_QK, GRID, STREAM, __VA_ARGS__);      \
       }                                                                                             \
     }                                                                                               \
   } while (0)
+
+static inline void check_flash_sv_head_major(
+    const torch::Tensor& sv, int N, int H, int hd, const char* op) {
+  TORCH_CHECK(sv.is_cuda() && sv.dtype() == torch::kFloat32 && sv.is_contiguous()
+              && sv.dim() == 3 && sv.size(0) == N && sv.size(1) == H && sv.size(2) == hd,
+              op, ": sv must be contiguous float32 [N,H,hd]");
+}
+
+static inline bool check_flash_sv_static(
+    const torch::Tensor& sv, int N, int H, int hd, const char* op) {
+  const bool broadcast = sv.dim() == 1 && sv.size(0) == hd;
+  const bool head_major = sv.dim() == 3 && sv.size(0) == N
+                          && sv.size(1) == H && sv.size(2) == hd;
+  TORCH_CHECK(sv.is_cuda() && sv.dtype() == torch::kFloat32 && sv.is_contiguous()
+              && (broadcast || head_major),
+              op, ": sv must be contiguous float32 [hd] or [N,H,hd]");
+  return broadcast;
+}
 
 torch::Tensor flash_attn_int8_vt(torch::Tensor q, torch::Tensor k, torch::Tensor vt,
                                  torch::Tensor sq, torch::Tensor sk, torch::Tensor sv,
@@ -1304,11 +1730,12 @@ torch::Tensor flash_attn_int8_vt(torch::Tensor q, torch::Tensor k, torch::Tensor
               && (32 * hd_pad) % 16 == 0,   // 32 = smallest instantiated BC
               "flash_attn_int8_vt: mma-eligible shapes only");
   TORCH_CHECK(vt.size(2) == hd_pad && vt.size(3) == T, "vt must be [N,H,hd_pad,T]");
+  check_flash_sv_head_major(sv, N, H, hd, "flash_attn_int8_vt");
   auto out = torch::empty({N, H, T, hd}, torch::TensorOptions().dtype(torch::kFloat16).device(q.device()));
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
   const int fa_w = modiff_fa_warps(T);
   dim3 grid(N * H, T / (fa_w * FA_MMA_BR));
-  MODIFF_FA_MMA_DISPATCH(grid, fa_w, stream, hd_pad, T,
+  MODIFF_FA_MMA_DISPATCH(grid, fa_w, stream, hd_pad, T, false,
       q.data_ptr<int8_t>(), k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
       sq.data_ptr<float>(), sk.data_ptr<float>(), sv.data_ptr<float>(),
       reinterpret_cast<__half*>(out.data_ptr<at::Half>()),
@@ -1316,10 +1743,361 @@ torch::Tensor flash_attn_int8_vt(torch::Tensor q, torch::Tensor k, torch::Tensor
   return out;
 }
 
+// Production steady-state specialization: Q/K use one frozen calibrated scale each. Folding
+// sq*sk into the row scale removes both scale tensors, their cp.async staging, and one FP32
+// multiply per score element from the hot loop.
+torch::Tensor flash_attn_int8_vt_static(torch::Tensor q, torch::Tensor k, torch::Tensor vt,
+                                        torch::Tensor sv, double sq, double sk,
+                                        double softmax_scale) {
+  TORCH_CHECK(q.is_cuda() && k.is_cuda() && vt.is_cuda(), "flash_attn_int8_vt_static: q/k/vt CUDA");
+  TORCH_CHECK(q.dim() == 4 && vt.dim() == 4 && q.is_contiguous() && k.is_contiguous()
+              && vt.is_contiguous(), "q/k/vt contiguous");
+  const int N = q.size(0), H = q.size(1), T = q.size(2), hd_pad = q.size(3);
+  const int hd = sv.size(-1);
+  TORCH_CHECK(hd_pad <= FA_MMA_MAXHD && (T % (FA_MMA_WARPS * FA_MMA_BR)) == 0
+              && (hd % 8) == 0, "flash_attn_int8_vt_static: mma-eligible shapes only");
+  TORCH_CHECK(vt.size(2) == hd_pad && vt.size(3) == T, "vt must be [N,H,hd_pad,T]");
+  check_flash_sv_head_major(sv, N, H, hd, "flash_attn_int8_vt_static");
+  auto out = torch::empty({N, H, T, hd},
+      torch::TensorOptions().dtype(torch::kFloat16).device(q.device()));
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  const int fa_w = modiff_fa_warps(T);
+  dim3 grid(N * H, T / (fa_w * FA_MMA_BR));
+  MODIFF_FA_MMA_DISPATCH(grid, fa_w, stream, hd_pad, T, true,
+      q.data_ptr<int8_t>(), k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
+      (const float*)nullptr, (const float*)nullptr, sv.data_ptr<float>(),
+      reinterpret_cast<__half*>(out.data_ptr<at::Half>()),
+      N, H, T, hd, hd_pad, (float)softmax_scale, (int8_t*)nullptr, 0.f, 0,
+      (float)(sq * sk));
+  return out;
+}
+
+torch::Tensor flash_attn_int8_qpacked_kv_static(
+    torch::Tensor qkv, torch::Tensor k, torch::Tensor vt, torch::Tensor sv,
+    int64_t hd_pad, double sq, double sk, double softmax_scale) {
+  TORCH_CHECK(qkv.is_cuda() && qkv.dtype() == torch::kHalf && qkv.dim() == 5
+              && qkv.is_contiguous(), "qkv must be contiguous fp16 [N,T,H,3,hd]");
+  TORCH_CHECK(k.is_cuda() && k.is_contiguous() && vt.is_contiguous() && k.dim() == 4,
+              "k/vt must be contiguous CUDA tensors");
+  const int N = k.size(0), H = k.size(1), T = k.size(2), hd = qkv.size(4);
+  TORCH_CHECK(qkv.size(0) == N && qkv.size(1) == T && qkv.size(2) == H
+              && qkv.size(3) == 3 && k.size(3) == hd_pad
+              && vt.size(2) == hd_pad && vt.size(3) == T && sv.size(-1) == hd,
+              "hybrid int8 flash shape mismatch");
+  auto out = torch::empty({N, H, T, hd},
+      torch::TensorOptions().dtype(torch::kFloat16).device(k.device()));
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  const int fa_w = modiff_fa_warps(T);
+  dim3 grid(N * H, T / (fa_w * FA_MMA_BR));
+  MODIFF_FA_MMA_DISPATCH(grid, fa_w, stream, (int)hd_pad, T, true,
+      (const int8_t*)nullptr, k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
+      (const float*)nullptr, (const float*)nullptr, sv.data_ptr<float>(),
+      reinterpret_cast<__half*>(out.data_ptr<at::Half>()),
+      N, H, T, hd, (int)hd_pad, (float)softmax_scale, (int8_t*)nullptr, 0.f, 0,
+      (float)(sq * sk), reinterpret_cast<const __half*>(qkv.data_ptr<at::Half>()),
+      hd, 1.f / (float)sq);
+  return out;
+}
+
+torch::Tensor flash_attn_int8_qpacked_kv_static_qout(
+    torch::Tensor qkv, torch::Tensor k, torch::Tensor vt, torch::Tensor sv,
+    int64_t hd_pad, double sq, double sk, double softmax_scale, double proj_a_scale) {
+  TORCH_CHECK(qkv.is_cuda() && qkv.dtype() == torch::kHalf && qkv.dim() == 5
+              && qkv.is_contiguous(), "qkv must be contiguous fp16 [N,T,H,3,hd]");
+  TORCH_CHECK(k.is_cuda() && k.is_contiguous() && vt.is_contiguous() && k.dim() == 4,
+              "k/vt must be contiguous CUDA tensors");
+  const int N = k.size(0), H = k.size(1), T = k.size(2), hd = qkv.size(4);
+  const bool compact_hd24 = (T == 1024 && hd == 24 && hd_pad == 32
+                             && k.size(3) == 32 && vt.size(2) == 24);
+  TORCH_CHECK(qkv.size(0) == N && qkv.size(1) == T && qkv.size(2) == H
+              && qkv.size(3) == 3
+              && ((k.size(3) == hd_pad && vt.size(2) == hd_pad) || compact_hd24)
+              && vt.size(3) == T && sv.size(-1) == hd,
+              "hybrid int8 flash shape mismatch");
+  const int C = H * hd;
+  auto out_q = torch::empty({(long)N * T, C},
+      torch::TensorOptions().dtype(torch::kChar).device(k.device()));
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  const int fa_w = modiff_fa_warps(T);
+  dim3 grid(N * H, T / (fa_w * FA_MMA_BR));
+  if (compact_hd24) {
+    TORCH_CHECK(fa_w == 8 && modiff_fa_bc((int)hd_pad, T) == 32,
+                "compact hd24 path requires the production W8/BC32 configuration");
+    flash_attn_int8_mma_kernel_t<32, 8, 32, true, false, true>
+        <<<grid, 8 * 32, 0, stream>>>(
+            (const int8_t*)nullptr, k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
+            (const float*)nullptr, (const float*)nullptr, sv.data_ptr<float>(),
+            (__half*)nullptr, N, H, T, hd, 32, (float)softmax_scale,
+            out_q.data_ptr<int8_t>(), 1.f / (float)proj_a_scale, C,
+            (float)(sq * sk), reinterpret_cast<const __half*>(qkv.data_ptr<at::Half>()),
+            hd, 1.f / (float)sq);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+    return out_q;
+  }
+  MODIFF_FA_MMA_DISPATCH(grid, fa_w, stream, (int)hd_pad, T, true,
+      (const int8_t*)nullptr, k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
+      (const float*)nullptr, (const float*)nullptr, sv.data_ptr<float>(), (__half*)nullptr,
+      N, H, T, hd, (int)hd_pad, (float)softmax_scale, out_q.data_ptr<int8_t>(),
+      1.f / (float)proj_a_scale, C, (float)(sq * sk),
+      reinterpret_cast<const __half*>(qkv.data_ptr<at::Half>()), hd, 1.f / (float)sq);
+  return out_q;
+}
+
+torch::Tensor flash_attn_int8_qi8packed_kv_static_qout(
+    torch::Tensor qkv_i8, torch::Tensor k, torch::Tensor vt, torch::Tensor sv,
+    int64_t hd_pad, double sq, double sk, double softmax_scale,
+    double proj_a_scale) {
+  TORCH_CHECK(qkv_i8.is_cuda() && qkv_i8.dtype() == torch::kChar
+              && qkv_i8.dim() == 5 && qkv_i8.is_contiguous(),
+              "qkv_i8 must be contiguous int8 [N,T,H,3,hd]");
+  TORCH_CHECK(k.is_cuda() && k.is_contiguous() && vt.is_contiguous()
+              && k.dim() == 4, "k/vt must be contiguous CUDA tensors");
+  const int N = k.size(0), H = k.size(1), T = k.size(2), hd = qkv_i8.size(4);
+  TORCH_CHECK(qkv_i8.size(0) == N && qkv_i8.size(1) == T
+              && qkv_i8.size(2) == H && qkv_i8.size(3) == 3
+              && k.size(3) == hd_pad && vt.size(2) == hd_pad
+              && vt.size(3) == T && sv.size(-1) == hd,
+              "packed-int8-Q hybrid flash shape mismatch");
+  const int C = H * hd;
+  auto out_q = torch::empty({(long)N * T, C},
+      torch::TensorOptions().dtype(torch::kChar).device(k.device()));
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  const int fa_w = modiff_fa_warps(T);
+  dim3 grid(N * H, T / (fa_w * FA_MMA_BR));
+  MODIFF_FA_MMA_DISPATCH(grid, fa_w, stream, (int)hd_pad, T, true,
+      (const int8_t*)nullptr, k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
+      (const float*)nullptr, (const float*)nullptr, sv.data_ptr<float>(),
+      (__half*)nullptr, N, H, T, hd, (int)hd_pad, (float)softmax_scale,
+      out_q.data_ptr<int8_t>(), 1.f / (float)proj_a_scale, C,
+      (float)(sq * sk), (const __half*)nullptr, hd, 0.f,
+      qkv_i8.data_ptr<int8_t>());
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  return out_q;
+}
+
+// T1024/hd24 production experiment: identical arithmetic and launch geometry
+// to the BC32/W8 static kernel, but probability fragments travel through warp
+// shuffles instead of shared memory.
+torch::Tensor flash_attn_int8_qi8packed_kv_static_qout_preg(
+    torch::Tensor qkv_i8, torch::Tensor k, torch::Tensor vt, torch::Tensor sv,
+    int64_t hd_pad, double sq, double sk, double softmax_scale,
+    double proj_a_scale) {
+  TORCH_CHECK(qkv_i8.is_cuda() && qkv_i8.dtype() == torch::kChar
+              && qkv_i8.dim() == 5 && qkv_i8.is_contiguous(),
+              "register-P flash requires contiguous int8 [N,T,H,3,hd]");
+  TORCH_CHECK(k.is_cuda() && k.dtype() == torch::kChar && k.is_contiguous()
+              && vt.is_cuda() && vt.dtype() == torch::kChar && vt.is_contiguous(),
+              "register-P flash requires contiguous int8 K/VT");
+  const int N = k.size(0), H = k.size(1), T = k.size(2);
+  const int hd = qkv_i8.size(4), C = H * hd;
+  TORCH_CHECK(T == 1024 && hd == 24 && hd_pad == 32
+              && qkv_i8.size(0) == N && qkv_i8.size(1) == T
+              && qkv_i8.size(2) == H && qkv_i8.size(3) == 3
+              && k.size(3) == 32 && vt.size(0) == N && vt.size(1) == H
+              && vt.size(2) == 32 && vt.size(3) == T
+              && sv.is_cuda() && sv.dtype() == torch::kFloat32
+              && sv.is_contiguous() && sv.dim() == 1 && sv.size(0) == hd,
+              "register-P flash supports only T1024/hd24/hd_pad32 with broadcast sv");
+  auto out_q = torch::empty({(long)N * T, C},
+      torch::TensorOptions().dtype(torch::kChar).device(k.device()));
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  dim3 grid(N * H, T / (8 * FA_MMA_BR));
+  flash_attn_int8_mma_kernel_t<32, 8, 32, true, false, false, true>
+      <<<grid, 8 * 32, 0, stream>>>(
+          (const int8_t*)nullptr, k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
+          (const float*)nullptr, (const float*)nullptr, sv.data_ptr<float>(),
+          (__half*)nullptr, N, H, T, hd, 32, (float)softmax_scale,
+          out_q.data_ptr<int8_t>(), 1.f / (float)proj_a_scale, C,
+          (float)(sq * sk), (const __half*)nullptr, hd, 0.f,
+          qkv_i8.data_ptr<int8_t>());
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  return out_q;
+}
+
+torch::Tensor flash_attn_int8_qi8_kv_static_qout(
+    torch::Tensor q_i8, torch::Tensor k, torch::Tensor vt, torch::Tensor sv,
+    int64_t hd_pad, double sq, double sk, double softmax_scale,
+    double proj_a_scale) {
+  TORCH_CHECK(q_i8.is_cuda() && q_i8.dtype() == torch::kChar
+              && q_i8.dim() == 4 && q_i8.is_contiguous(),
+              "compact-Q flash requires contiguous int8 Q [N,T,H,hd]");
+  TORCH_CHECK(k.is_cuda() && k.dtype() == torch::kChar && k.is_contiguous()
+              && k.dim() == 4 && vt.is_cuda() && vt.dtype() == torch::kChar
+              && vt.is_contiguous() && vt.dim() == 4,
+              "compact-Q flash requires contiguous int8 K/VT");
+  const int N = q_i8.size(0), T = q_i8.size(1), H = q_i8.size(2);
+  const int q_storage_hd = q_i8.size(3), hd = sv.size(0), C = H * hd;
+  TORCH_CHECK(T >= 64 && hd_pad <= FA_MMA_MAXHD && hd % 8 == 0
+              && T % (FA_MMA_WARPS * FA_MMA_BR) == 0
+              && (q_storage_hd == hd || q_storage_hd == hd_pad)
+              && k.size(0) == N && k.size(1) == H && k.size(2) == T
+              && k.size(3) == hd_pad && vt.size(0) == N && vt.size(1) == H
+              && vt.size(2) == hd_pad && vt.size(3) == T
+              && sv.is_cuda() && sv.dtype() == torch::kFloat32
+              && sv.is_contiguous() && sv.dim() == 1 && sv.size(0) == hd,
+              "invalid compact-Q FlashAttention shape");
+  auto out_q = torch::empty({(long)N * T, C},
+      torch::TensorOptions().dtype(torch::kChar).device(q_i8.device()));
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  const int fa_w = modiff_fa_warps(T);
+  dim3 grid(N * H, T / (fa_w * FA_MMA_BR));
+  MODIFF_FA_MMA_DISPATCH(grid, fa_w, stream, (int)hd_pad, T, true,
+      (const int8_t*)nullptr, k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
+      (const float*)nullptr, (const float*)nullptr, sv.data_ptr<float>(),
+      (__half*)nullptr, N, H, T, hd, (int)hd_pad, (float)softmax_scale,
+      out_q.data_ptr<int8_t>(), 1.f / (float)proj_a_scale, C,
+      (float)(sq * sk), (const __half*)nullptr, q_storage_hd, 0.f,
+      q_i8.data_ptr<int8_t>(), 1);
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  return out_q;
+}
+
+// Exact production specialization for the dominant T1024/hd24 route. Unlike
+// the HD_PAD=32 generic kernel, this instantiation has only three PV/output
+// fragments and uses vectorized 24-byte compact-Q staging.
+torch::Tensor flash_attn_int8_qi8_kv_static_qout_hd24(
+    torch::Tensor q_i8, torch::Tensor k, torch::Tensor vt, torch::Tensor sv,
+    int64_t hd_pad, double sq, double sk, double softmax_scale,
+    double proj_a_scale) {
+  TORCH_CHECK(q_i8.is_cuda() && q_i8.dtype() == torch::kChar
+              && q_i8.dim() == 4 && q_i8.is_contiguous(),
+              "exact hd24 flash requires contiguous int8 Q [N,1024,H,32]");
+  TORCH_CHECK(k.is_cuda() && k.dtype() == torch::kChar && k.is_contiguous()
+              && k.dim() == 4 && vt.is_cuda() && vt.dtype() == torch::kChar
+              && vt.is_contiguous() && vt.dim() == 4,
+              "exact hd24 flash requires contiguous int8 K/VT");
+  const int N = q_i8.size(0), T = q_i8.size(1), H = q_i8.size(2);
+  constexpr int HD = 24, HP = 32, TT = 1024, W = 8, BC = 32;
+  const int C = H * HD;
+  TORCH_CHECK(T == TT && q_i8.size(3) == HP && hd_pad == HP
+              && k.size(0) == N && k.size(1) == H && k.size(2) == TT
+              && k.size(3) == HP && vt.size(0) == N && vt.size(1) == H
+              && vt.size(2) == HP && vt.size(3) == TT
+              && sv.is_cuda() && sv.dtype() == torch::kFloat32
+              && sv.is_contiguous() && sv.dim() == 1 && sv.size(0) == HD,
+              "exact hd24 FlashAttention supports only T1024/hd24/hd_pad32");
+  auto out_q = torch::empty({(long)N * TT, C},
+      torch::TensorOptions().dtype(torch::kChar).device(q_i8.device()));
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  dim3 grid(N * H, TT / (W * FA_MMA_BR));
+  flash_attn_int8_mma_kernel_t<
+      HP, W, BC, true, false, false, false, HD, TT>
+      <<<grid, W * 32, 0, stream>>>(
+          (const int8_t*)nullptr, k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
+          (const float*)nullptr, (const float*)nullptr, sv.data_ptr<float>(),
+          (__half*)nullptr, N, H, TT, HD, HP, (float)softmax_scale,
+          out_q.data_ptr<int8_t>(), 1.f / (float)proj_a_scale, C,
+          (float)(sq * sk), (const __half*)nullptr, HD, 0.f,
+          q_i8.data_ptr<int8_t>(), 1);
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  return out_q;
+}
+
+// Experimental 16-warp specialization for the two large production shapes.
+// BC=32 keeps shared memory and registers within the SM86 one-CTA resource limit.
+torch::Tensor flash_attn_int8_qpacked_kv_static_qout_w16(
+    torch::Tensor qkv, torch::Tensor k, torch::Tensor vt, torch::Tensor sv,
+    int64_t hd_pad, double sq, double sk, double softmax_scale, double proj_a_scale) {
+  TORCH_CHECK(qkv.is_cuda() && qkv.dtype() == torch::kHalf && qkv.dim() == 5
+              && qkv.is_contiguous(), "qkv must be contiguous fp16 [N,T,H,3,hd]");
+  TORCH_CHECK(k.is_cuda() && k.is_contiguous() && vt.is_contiguous() && k.dim() == 4,
+              "k/vt must be contiguous CUDA tensors");
+  const int N = k.size(0), H = k.size(1), T = k.size(2), hd = qkv.size(4);
+  TORCH_CHECK(qkv.size(0) == N && qkv.size(1) == T && qkv.size(2) == H
+              && qkv.size(3) == 3 && k.size(3) == hd_pad
+              && vt.size(2) == hd_pad && vt.size(3) == T && sv.size(-1) == hd
+              && ((T == 1024 && hd == 24 && hd_pad == 32)
+                  || (T == 256 && hd == 48 && hd_pad == 64)),
+              "W16 hybrid int8 flash supports T1024/hd24 or T256/hd48 only");
+  const int C = H * hd;
+  auto out_q = torch::empty({(long)N * T, C},
+      torch::TensorOptions().dtype(torch::kChar).device(k.device()));
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  dim3 grid(N * H, T / (16 * FA_MMA_BR));
+  if (hd_pad == 32) {
+    flash_attn_int8_mma_kernel_t<32, 16, 32, true><<<grid, 16 * 32, 0, stream>>>(
+        (const int8_t*)nullptr, k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
+        (const float*)nullptr, (const float*)nullptr, sv.data_ptr<float>(), (__half*)nullptr,
+        N, H, T, hd, 32, (float)softmax_scale, out_q.data_ptr<int8_t>(),
+        1.f / (float)proj_a_scale, C, (float)(sq * sk),
+        reinterpret_cast<const __half*>(qkv.data_ptr<at::Half>()), hd, 1.f / (float)sq);
+  } else {
+    flash_attn_int8_mma_kernel_t<64, 16, 64, true><<<grid, 16 * 32, 0, stream>>>(
+        (const int8_t*)nullptr, k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
+        (const float*)nullptr, (const float*)nullptr, sv.data_ptr<float>(), (__half*)nullptr,
+        N, H, T, hd, 64, (float)softmax_scale, out_q.data_ptr<int8_t>(),
+        1.f / (float)proj_a_scale, C, (float)(sq * sk),
+        reinterpret_cast<const __half*>(qkv.data_ptr<at::Half>()), hd, 1.f / (float)sq);
+  }
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  return out_q;
+}
+
+// The native s4 MMA has K=64, so hd=24 wastes 40/64 of every QK dot product. This route keeps
+// exactly the same signed-int4 Q/K values and scales, but stores them unpacked and executes QK
+// through m16n8k32.s8. PV remains int8 as in the native int4 kernel, and the final store is still
+// packed int4 for the W4A4 projection. It is intentionally specialized to the production
+// hd=24/T=1024 shape where avoiding the K=64 padding is profitable.
+torch::Tensor flash_attn_i4values_i8mma_qpacked_kv_static_qout(
+    torch::Tensor qkv, torch::Tensor k, torch::Tensor vt, torch::Tensor sv,
+    int64_t hd_pad, double sq, double sk, double softmax_scale,
+    double proj_a_scale, int64_t k_pad) {
+  TORCH_CHECK(qkv.is_cuda() && qkv.dtype() == torch::kHalf && qkv.dim() == 5
+              && qkv.is_contiguous(), "qkv must be contiguous fp16 [N,T,H,3,hd]");
+  TORCH_CHECK(k.is_cuda() && k.is_contiguous() && vt.is_contiguous() && k.dim() == 4,
+              "k/vt must be contiguous CUDA tensors");
+  const int N = k.size(0), H = k.size(1), T = k.size(2), hd = qkv.size(4);
+  const int C = H * hd, Kpad = k_pad > 0 ? (int)k_pad : C, bstride = Kpad / 2;
+  TORCH_CHECK(hd == 24 && hd_pad == 32 && T == 1024 && qkv.size(0) == N
+              && qkv.size(1) == T && qkv.size(2) == H && qkv.size(3) == 3
+              && k.size(3) == hd_pad && vt.size(2) == hd_pad && vt.size(3) == T
+              && sv.size(-1) == hd && Kpad >= C && (Kpad % 2) == 0,
+              "mixed int4-values/int8-MMA route requires hd=24,T=1024,hd_pad=32");
+  auto out_q = torch::empty({(long)N * T, bstride},
+      torch::TensorOptions().dtype(torch::kChar).device(k.device()));
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  dim3 grid(N * H, T / (8 * FA_MMA_BR));
+  flash_attn_int8_mma_kernel_t<32, 8, 32, true, true><<<grid, 8 * 32, 0, stream>>>(
+      (const int8_t*)nullptr, k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
+      (const float*)nullptr, (const float*)nullptr, sv.data_ptr<float>(), (__half*)nullptr,
+      N, H, T, hd, 32, (float)softmax_scale, out_q.data_ptr<int8_t>(),
+      1.f / (float)proj_a_scale, bstride, (float)(sq * sk),
+      reinterpret_cast<const __half*>(qkv.data_ptr<at::Half>()), hd, 1.f / (float)sq);
+  return out_q;
+}
+
+torch::Tensor flash_attn_i4values_i8mma_vt_static_qout(
+    torch::Tensor q, torch::Tensor k, torch::Tensor vt, torch::Tensor sv,
+    int64_t hd_pad, double sq, double sk, double softmax_scale,
+    double proj_a_scale, int64_t k_pad) {
+  TORCH_CHECK(q.is_cuda() && q.dtype() == torch::kChar && q.dim() == 4
+              && q.is_contiguous() && k.is_contiguous() && vt.is_contiguous(),
+              "materialized mixed Q/K/V must be contiguous int8 CUDA");
+  const int N = q.size(0), H = q.size(1), T = q.size(2), hd = sv.size(-1);
+  const int C = H * hd, Kpad = k_pad > 0 ? (int)k_pad : C, bstride = Kpad / 2;
+  TORCH_CHECK(hd == 24 && hd_pad == 32 && T == 1024 && q.size(3) == hd_pad
+              && k.sizes() == q.sizes() && vt.size(0) == N && vt.size(1) == H
+              && vt.size(2) == hd_pad && vt.size(3) == T && sv.dim() == 1
+              && sv.size(0) == hd && Kpad >= C && (Kpad % 2) == 0,
+              "materialized mixed route requires hd=24,T=1024,hd_pad=32,broadcast sv");
+  auto out_q = torch::empty({(long)N * T, bstride},
+      torch::TensorOptions().dtype(torch::kChar).device(q.device()));
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  dim3 grid(N * H, T / (8 * FA_MMA_BR));
+  flash_attn_int8_mma_kernel_t<32, 8, 32, true, true><<<grid, 8 * 32, 0, stream>>>(
+      q.data_ptr<int8_t>(), k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
+      (const float*)nullptr, (const float*)nullptr, sv.data_ptr<float>(), (__half*)nullptr,
+      N, H, T, hd, 32, (float)softmax_scale, out_q.data_ptr<int8_t>(),
+      1.f / (float)proj_a_scale, bstride, (float)(sq * sk));
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  return out_q;
+}
+
 // Fused proj-quantize variant: same mma flash attention, but the final store emits the attention
 // output as INT8 token-major [b*T, C] (C = H*hd) quantized by the calibrated proj scale, instead of
 // the fp16 head-major tensor + a separate quantize_attn_out_int8 pass. Bit-identical to
-// quantize_attn_out_int8(flash_attn_int8_vt(...), proj_a_scale) (rounds through fp16 first).
+// quantize_attn_out_int8(flash_attn_int8_vt(...), proj_a_scale), except the fused path
+// requantizes the FP32 accumulator directly instead of adding a redundant FP16 round-trip.
 torch::Tensor flash_attn_int8_vt_qout(torch::Tensor q, torch::Tensor k, torch::Tensor vt,
                                       torch::Tensor sq, torch::Tensor sk, torch::Tensor sv,
                                       double softmax_scale, double proj_a_scale) {
@@ -1331,18 +2109,44 @@ torch::Tensor flash_attn_int8_vt_qout(torch::Tensor q, torch::Tensor k, torch::T
   TORCH_CHECK(hd_pad <= FA_MMA_MAXHD && (T % (FA_MMA_WARPS * FA_MMA_BR)) == 0 && (hd % 8) == 0
               && (FA_MMA_BC * hd_pad) % 16 == 0, "flash_attn_int8_vt_qout: mma-eligible shapes only");
   TORCH_CHECK(vt.size(2) == hd_pad && vt.size(3) == T, "vt must be [N,H,hd_pad,T]");
+  check_flash_sv_head_major(sv, N, H, hd, "flash_attn_int8_vt_qout");
   const int C = H * hd;   // int8 proj K == C (C % 64 == 0), no K-pad needed
   auto out_q = torch::empty({(long)N * T, C}, torch::TensorOptions().dtype(torch::kChar).device(q.device()));
   const float proj_inv_scale = 1.f / (float)proj_a_scale;
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
   const int fa_w = modiff_fa_warps(T);
   dim3 grid(N * H, T / (fa_w * FA_MMA_BR));
-  MODIFF_FA_MMA_DISPATCH(grid, fa_w, stream, hd_pad, T,
+  MODIFF_FA_MMA_DISPATCH(grid, fa_w, stream, hd_pad, T, false,
       q.data_ptr<int8_t>(), k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
       sq.data_ptr<float>(), sk.data_ptr<float>(), sv.data_ptr<float>(),
       (__half*)nullptr, N, H, T, hd, hd_pad, (float)softmax_scale,
       out_q.data_ptr<int8_t>(), proj_inv_scale, C);
   return out_q;   // int8 [b*T, C] token-major (ready for gemm_w8a8_awq_bias_res)
+}
+
+torch::Tensor flash_attn_int8_vt_static_qout(
+    torch::Tensor q, torch::Tensor k, torch::Tensor vt, torch::Tensor sv,
+    double sq, double sk, double softmax_scale, double proj_a_scale) {
+  TORCH_CHECK(q.is_cuda() && k.is_cuda() && vt.is_cuda() && q.dim() == 4 && vt.dim() == 4,
+              "flash_attn_int8_vt_static_qout: invalid CUDA inputs");
+  TORCH_CHECK(q.is_contiguous() && k.is_contiguous() && vt.is_contiguous(), "q/k/vt contiguous");
+  const int N = q.size(0), H = q.size(1), T = q.size(2), hd_pad = q.size(3), hd = sv.size(-1);
+  TORCH_CHECK(hd_pad <= FA_MMA_MAXHD && (T % (FA_MMA_WARPS * FA_MMA_BR)) == 0
+              && (hd % 8) == 0 && vt.size(2) == hd_pad && vt.size(3) == T,
+              "flash_attn_int8_vt_static_qout: mma-eligible shapes only");
+  check_flash_sv_head_major(sv, N, H, hd, "flash_attn_int8_vt_static_qout");
+  const int C = H * hd;
+  auto out_q = torch::empty({(long)N * T, C},
+      torch::TensorOptions().dtype(torch::kChar).device(q.device()));
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  const int fa_w = modiff_fa_warps(T);
+  dim3 grid(N * H, T / (fa_w * FA_MMA_BR));
+  MODIFF_FA_MMA_DISPATCH(grid, fa_w, stream, hd_pad, T, true,
+      q.data_ptr<int8_t>(), k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
+      (const float*)nullptr, (const float*)nullptr, sv.data_ptr<float>(), (__half*)nullptr,
+      N, H, T, hd, hd_pad, (float)softmax_scale, out_q.data_ptr<int8_t>(),
+      1.f / (float)proj_a_scale, C, (float)(sq * sk));
+  return out_q;
 }
 
 // ---- PACKED-input flash host entries. Read interleaved qkv [b,T,nh,3,hd] directly (fp16 ->
@@ -1462,6 +2266,144 @@ torch::Tensor flash_attn_int8_packed_vt_qout(torch::Tensor qkv, torch::Tensor sv
   return out_q;   // int8 [b*T, C] token-major
 }
 
+torch::Tensor flash_attn_int8_packed_persistent_qout(
+    torch::Tensor qkv, torch::Tensor sv, int64_t hd_pad,
+    double sq_c, double sk_c, double softmax_scale, double proj_a_scale) {
+  int N, T, H, hd;
+  check_packed(qkv, sv, hd_pad, N, T, H, hd);
+  TORCH_CHECK(qkv.dtype() == torch::kHalf,
+              "persistent packed attention currently requires fp16 qkv");
+  TORCH_CHECK((T == 64 && hd == 48 && hd_pad == 64)
+              || (T == 256 && hd == 48 && hd_pad == 64)
+              || (T == 1024 && hd == 24 && hd_pad == 32),
+              "persistent packed attention supports only production T64/hd48, "
+              "T256/hd48, and T1024/hd24");
+  const int C = H * hd;
+  auto out_q = torch::empty({(long)N * T, C},
+      torch::TensorOptions().dtype(torch::kChar).device(qkv.device()));
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  const __half* qp = reinterpret_cast<const __half*>(qkv.data_ptr<at::Half>());
+  const float* svp = sv.data_ptr<float>();
+  int8_t* op = out_q.data_ptr<int8_t>();
+  const float sqf = (float)sq_c, skf = (float)sk_c;
+  const float qinv = 1.f / sqf, kinv = 1.f / skf;
+  const float pinv = 1.f / (float)proj_a_scale;
+  dim3 grid(N * H);
+
+#define LAUNCH_PERSISTENT(TT_, HD_, HP_, WP_) do {                                 \
+    constexpr int VS_ = (TT_) + 4;                                                 \
+    constexpr int QPS_ = (HP_) > 64 ? (HP_) : 64;                                  \
+    size_t smem_ = ((size_t)(TT_) * (HP_) + (size_t)(HP_) * VS_                    \
+                  + (size_t)(WP_) * FA_MMA_BR * QPS_) * sizeof(int8_t);             \
+    const void* fn_ = reinterpret_cast<const void*>(                                \
+        &flash_attn_int8_packed_persistent_qout_kernel<(TT_), (HD_), (HP_),         \
+                                                        (WP_), 64>);                \
+    if (smem_ > 48 * 1024) {                                                        \
+      C10_CUDA_CHECK(cudaFuncSetAttribute(fn_,                                      \
+          cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem_));                \
+    }                                                                                \
+    flash_attn_int8_packed_persistent_qout_kernel<(TT_), (HD_), (HP_), (WP_), 64>   \
+        <<<grid, (WP_) * 32, smem_, stream>>>(                                       \
+            qp, svp, op, N, H, sqf, skf, (float)softmax_scale,                      \
+            qinv, kinv, pinv, C);                                                    \
+  } while (0)
+
+  if (T == 64) LAUNCH_PERSISTENT(64, 48, 64, 4);
+  else if (T == 256) LAUNCH_PERSISTENT(256, 48, 64, 8);
+  else LAUNCH_PERSISTENT(1024, 24, 32, 8);
+#undef LAUNCH_PERSISTENT
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  return out_q;
+}
+
+// Small production shapes (T=16/4, hd=96): one warp owns one query row.
+// Q/K/V stay in the packed INT8 QKV tensor, softmax probabilities are shared
+// within the warp, and lanes split the 96 output channels. This avoids routing
+// the score path back through FP16 merely because hd exceeds the MMA kernel's
+// hd_pad<=64 constraint.
+template <int TT, int HD, int WARPS = 4>
+__global__ void flash_attn_int8_qi8packed_small_qout_kernel(
+    const int8_t* __restrict__ qkv, const float* __restrict__ sv,
+    int8_t* __restrict__ out_q, int N, int H,
+    float qk_scale, float softmax_scale, float proj_inv_scale) {
+  const int nh = blockIdx.x, w = threadIdx.x >> 5, lane = threadIdx.x & 31;
+  const int qi = blockIdx.y * WARPS + w;
+  if (qi >= TT) return;
+  const int h = nh % H, n = nh / H, C = H * HD;
+  const size_t token_stride = (size_t)H * 3 * HD;
+  const int8_t* qrow =
+      qkv + ((size_t)n * TT + qi) * token_stride + (size_t)(h * 3) * HD;
+
+  float score = -INFINITY;
+  if (lane < TT) {
+    const int8_t* krow =
+        qkv + ((size_t)n * TT + lane) * token_stride
+        + (size_t)(h * 3 + 1) * HD;
+    score = (float)dp4a_i8(qrow, krow, HD) * qk_scale * softmax_scale;
+  }
+  float mx = score;
+#pragma unroll
+  for (int off = 16; off > 0; off >>= 1)
+    mx = fmaxf(mx, __shfl_down_sync(0xffffffff, mx, off));
+  mx = __shfl_sync(0xffffffff, mx, 0);
+  const float p = lane < TT ? modiff_ex2((score - mx) * 1.4426950408889634f) : 0.f;
+  float psum = p;
+#pragma unroll
+  for (int off = 16; off > 0; off >>= 1)
+    psum += __shfl_down_sync(0xffffffff, psum, off);
+  psum = __shfl_sync(0xffffffff, psum, 0);
+  __shared__ float probs[WARPS][TT];
+  if (lane < TT) probs[w][lane] = p / fmaxf(psum, 1e-20f);
+  __syncwarp();
+
+  for (int d = lane; d < HD; d += 32) {
+    float acc = 0.f;
+#pragma unroll
+    for (int j = 0; j < TT; ++j) {
+      const int8_t* vrow =
+          qkv + ((size_t)n * TT + j) * token_stride
+          + (size_t)(h * 3 + 2) * HD;
+      acc += probs[w][j] * (float)vrow[d];
+    }
+    int oq = __float2int_rn(acc * sv[d] * proj_inv_scale);
+    oq = oq > 127 ? 127 : (oq < -127 ? -127 : oq);
+    out_q[((size_t)n * TT + qi) * C + h * HD + d] = (int8_t)oq;
+  }
+}
+
+torch::Tensor flash_attn_int8_qi8packed_small_qout(
+    torch::Tensor qkv_i8, torch::Tensor sv, double sq, double sk,
+    double softmax_scale, double proj_a_scale) {
+  TORCH_CHECK(qkv_i8.is_cuda() && qkv_i8.dtype() == torch::kChar
+              && qkv_i8.dim() == 5 && qkv_i8.is_contiguous()
+              && sv.is_cuda() && sv.dtype() == torch::kFloat32
+              && sv.is_contiguous(),
+              "small packed attention requires contiguous CUDA int8 QKV and fp32 sv");
+  const int N = qkv_i8.size(0), T = qkv_i8.size(1);
+  const int H = qkv_i8.size(2), hd = qkv_i8.size(4), C = H * hd;
+  TORCH_CHECK(qkv_i8.size(3) == 3 && hd == 96 && (T == 4 || T == 16)
+              && sv.numel() == hd,
+              "small packed attention supports only T4/T16, hd96, broadcast sv");
+  auto out_q = torch::empty({(long)N * T, C},
+      torch::TensorOptions().dtype(torch::kChar).device(qkv_i8.device()));
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  dim3 grid(N * H, (T + 3) / 4);
+  if (T == 16)
+    flash_attn_int8_qi8packed_small_qout_kernel<16, 96>
+        <<<grid, 4 * 32, 0, stream>>>(
+            qkv_i8.data_ptr<int8_t>(), sv.data_ptr<float>(),
+            out_q.data_ptr<int8_t>(), N, H, (float)(sq * sk),
+            (float)softmax_scale, 1.f / (float)proj_a_scale);
+  else
+    flash_attn_int8_qi8packed_small_qout_kernel<4, 96>
+        <<<grid, 4 * 32, 0, stream>>>(
+            qkv_i8.data_ptr<int8_t>(), sv.data_ptr<float>(),
+            out_q.data_ptr<int8_t>(), N, H, (float)(sq * sk),
+            (float)softmax_scale, 1.f / (float)proj_a_scale);
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  return out_q;
+}
+
 torch::Tensor flash_attn_int8(torch::Tensor q, torch::Tensor k, torch::Tensor v,
                               torch::Tensor sq, torch::Tensor sk, torch::Tensor sv,
                               double softmax_scale) {
@@ -1485,7 +2427,7 @@ torch::Tensor flash_attn_int8(torch::Tensor q, torch::Tensor k, torch::Tensor v,
     auto vt = v.transpose(2, 3).contiguous();       // [N,H,hd_pad,T]
     const int fa_w = modiff_fa_warps(T);
     dim3 grid(N * H, T / (fa_w * FA_MMA_BR));
-    MODIFF_FA_MMA_DISPATCH(grid, fa_w, stream, hd_pad, T,
+    MODIFF_FA_MMA_DISPATCH(grid, fa_w, stream, hd_pad, T, false,
         q.data_ptr<int8_t>(), k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
         sq.data_ptr<float>(), sk.data_ptr<float>(), sv.data_ptr<float>(),
         reinterpret_cast<__half*>(out.data_ptr<at::Half>()),
@@ -1544,11 +2486,12 @@ torch::Tensor flash_attn_int4_vt(torch::Tensor q4, torch::Tensor k4, torch::Tens
   TORCH_CHECK(hdp4 % 64 == 0 && hdp4 <= FA_MMA_MAXHD, "hdp4 mult of 64 and <= 64");
   TORCH_CHECK((T % (FA_MMA_WARPS * FA_MMA_BR)) == 0 && (hd % 8) == 0, "int4 flash: T%64==0, hd%8==0");
   TORCH_CHECK(vt.size(2) == hdp_v && vt.size(3) == T, "vt must be [N,H,hdp_v,T]");
+  check_flash_sv_head_major(sv, N, H, hd, "flash_attn_int4_vt");
   auto out = torch::empty({N, H, T, hd}, torch::TensorOptions().dtype(torch::kFloat16).device(q4.device()));
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
   const int fa_w4 = modiff_fa_warps(T);                // must match grid.y (see the int8 path)
   dim3 grid(N * H, T / (fa_w4 * FA_MMA_BR));
-  MODIFF_FA_MMA4_DISPATCH(grid, fa_w4, stream, hdp_v, T,
+  MODIFF_FA_MMA4_DISPATCH(grid, fa_w4, stream, hdp_v, T, false,
       q4.data_ptr<int8_t>(), k4.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
       sq.data_ptr<float>(), sk.data_ptr<float>(), sv.data_ptr<float>(),
       reinterpret_cast<__half*>(out.data_ptr<at::Half>()),
@@ -1556,9 +2499,100 @@ torch::Tensor flash_attn_int4_vt(torch::Tensor q4, torch::Tensor k4, torch::Tens
   return out;
 }
 
+torch::Tensor flash_attn_int4_vt_static(torch::Tensor q4, torch::Tensor k4, torch::Tensor vt,
+                                        torch::Tensor sv, int64_t hdp4, double sq, double sk,
+                                        double softmax_scale) {
+  TORCH_CHECK(q4.is_cuda() && k4.is_cuda() && vt.is_cuda(), "flash_attn_int4_vt_static: CUDA inputs");
+  TORCH_CHECK(q4.dim() == 4 && vt.dim() == 4 && q4.is_contiguous() && k4.is_contiguous()
+              && vt.is_contiguous(), "q4/k4/vt contiguous");
+  const int N = q4.size(0), H = q4.size(1), T = q4.size(2);
+  const int hd = sv.size(-1), hdp_v = ((hd + 31) / 32) * 32;
+  TORCH_CHECK(hdp4 % 64 == 0 && hdp4 <= FA_MMA_MAXHD && (hd % 8) == 0
+              && (T % (FA_MMA_WARPS * FA_MMA_BR)) == 0,
+              "flash_attn_int4_vt_static: mma-eligible shapes only");
+  TORCH_CHECK(vt.size(2) == hdp_v && vt.size(3) == T, "vt must be [N,H,hdp_v,T]");
+  const bool broadcast_sv = check_flash_sv_static(sv, N, H, hd, "flash_attn_int4_vt_static");
+  auto out = torch::empty({N, H, T, hd},
+      torch::TensorOptions().dtype(torch::kFloat16).device(q4.device()));
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  const int fa_w = modiff_fa_warps(T);
+  dim3 grid(N * H, T / (fa_w * FA_MMA_BR));
+  MODIFF_FA_MMA4_DISPATCH(grid, fa_w, stream, hdp_v, T, true,
+      q4.data_ptr<int8_t>(), k4.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
+      (const float*)nullptr, (const float*)nullptr, sv.data_ptr<float>(),
+      reinterpret_cast<__half*>(out.data_ptr<at::Half>()),
+      N, H, T, hd, (int)hdp4, hdp_v, (float)softmax_scale,
+      (int8_t*)nullptr, 0.f, 0, (float)(sq * sk), (const __half*)nullptr, 0, 0.f,
+      broadcast_sv);
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  return out;
+}
+
+torch::Tensor flash_attn_int4_qpacked_kv_static(
+    torch::Tensor qkv, torch::Tensor k4, torch::Tensor vt, torch::Tensor sv,
+    int64_t hdp4, double sq, double sk, double softmax_scale) {
+  TORCH_CHECK(qkv.is_cuda() && qkv.dtype() == torch::kHalf && qkv.dim() == 5
+              && qkv.is_contiguous(), "qkv must be contiguous fp16 [N,T,H,3,hd]");
+  TORCH_CHECK(k4.is_cuda() && k4.is_contiguous() && vt.is_contiguous() && k4.dim() == 4,
+              "k4/vt must be contiguous CUDA tensors");
+  const int N = k4.size(0), H = k4.size(1), T = k4.size(2), hd = qkv.size(4);
+  const int hdp_v = ((hd + 31) / 32) * 32;
+  TORCH_CHECK(qkv.size(0) == N && qkv.size(1) == T && qkv.size(2) == H
+              && qkv.size(3) == 3 && k4.size(3) == hdp4 / 2
+              && vt.size(2) == hdp_v && vt.size(3) == T && sv.size(-1) == hd,
+              "hybrid int4 flash shape mismatch");
+  auto out = torch::empty({N, H, T, hd},
+      torch::TensorOptions().dtype(torch::kFloat16).device(k4.device()));
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  const int fa_w = modiff_fa_warps(T);
+  dim3 grid(N * H, T / (fa_w * FA_MMA_BR));
+  MODIFF_FA_MMA4_DISPATCH(grid, fa_w, stream, hdp_v, T, true,
+      (const int8_t*)nullptr, k4.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
+      (const float*)nullptr, (const float*)nullptr, sv.data_ptr<float>(),
+      reinterpret_cast<__half*>(out.data_ptr<at::Half>()),
+      N, H, T, hd, (int)hdp4, hdp_v, (float)softmax_scale, (int8_t*)nullptr, 0.f, 0,
+      (float)(sq * sk), reinterpret_cast<const __half*>(qkv.data_ptr<at::Half>()),
+      hd, 1.f / (float)sq);
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  return out;
+}
+
+torch::Tensor flash_attn_int4_qpacked_kv_static_qout(
+    torch::Tensor qkv, torch::Tensor k4, torch::Tensor vt, torch::Tensor sv,
+    int64_t hdp4, double sq, double sk, double softmax_scale,
+    double proj_a_scale, int64_t k_pad) {
+  TORCH_CHECK(qkv.is_cuda() && qkv.dtype() == torch::kHalf && qkv.dim() == 5
+              && qkv.is_contiguous(), "qkv must be contiguous fp16 [N,T,H,3,hd]");
+  TORCH_CHECK(k4.is_cuda() && k4.is_contiguous() && vt.is_contiguous() && k4.dim() == 4,
+              "k4/vt must be contiguous CUDA tensors");
+  const int N = k4.size(0), H = k4.size(1), T = k4.size(2), hd = qkv.size(4);
+  const int hdp_v = ((hd + 31) / 32) * 32, C = H * hd;
+  const int Kpad = k_pad > 0 ? (int)k_pad : C, bstride = Kpad / 2;
+  TORCH_CHECK(qkv.size(0) == N && qkv.size(1) == T && qkv.size(2) == H
+              && qkv.size(3) == 3 && k4.size(3) == hdp4 / 2
+              && vt.size(2) == hdp_v && vt.size(3) == T && sv.size(-1) == hd
+              && Kpad >= C && (Kpad % 2) == 0,
+              "hybrid int4 flash shape mismatch");
+  // The h==0 flash CTA clears C..Kpad for its own query rows, avoiding the full output memset
+  // while keeping padded activation nibbles explicitly zero.
+  auto out_q = torch::empty({(long)N * T, bstride},
+      torch::TensorOptions().dtype(torch::kChar).device(k4.device()));
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  const int fa_w = modiff_fa_warps(T);
+  dim3 grid(N * H, T / (fa_w * FA_MMA_BR));
+  MODIFF_FA_MMA4_DISPATCH(grid, fa_w, stream, hdp_v, T, true,
+      (const int8_t*)nullptr, k4.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
+      (const float*)nullptr, (const float*)nullptr, sv.data_ptr<float>(), (__half*)nullptr,
+      N, H, T, hd, (int)hdp4, hdp_v, (float)softmax_scale, out_q.data_ptr<int8_t>(),
+      1.f / (float)proj_a_scale, bstride, (float)(sq * sk),
+      reinterpret_cast<const __half*>(qkv.data_ptr<at::Half>()), hd, 1.f / (float)sq);
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  return out_q;
+}
+
 // Fused proj-quantize variant of flash_attn_int4_vt: the store emits the attention output as
-// packed int4 token-major [b*T, k_pad/2] (real channels 0..C-1 packed, C..k_pad-1 pre-zeroed by the
-// torch::zeros alloc) quantized by the calibrated proj scale — bit-identical to
+// packed int4 token-major [b*T, k_pad/2] (real channels 0..C-1 packed, C..k_pad-1 cleared by the
+// h==0 CTA) quantized by the calibrated proj scale — bit-identical to
 // quantize_attn_out_int4_pack(flash_attn_int4_vt(...), proj_a_scale, k_pad).
 torch::Tensor flash_attn_int4_vt_qout(torch::Tensor q4, torch::Tensor k4, torch::Tensor vt,
                                       torch::Tensor sq, torch::Tensor sk, torch::Tensor sv,
@@ -1572,21 +2606,54 @@ torch::Tensor flash_attn_int4_vt_qout(torch::Tensor q4, torch::Tensor k4, torch:
   TORCH_CHECK(hdp4 % 64 == 0 && hdp4 <= FA_MMA_MAXHD, "hdp4 mult of 64 and <= 64");
   TORCH_CHECK((T % (FA_MMA_WARPS * FA_MMA_BR)) == 0 && (hd % 8) == 0, "int4 flash: T%64==0, hd%8==0");
   TORCH_CHECK(vt.size(2) == hdp_v && vt.size(3) == T, "vt must be [N,H,hdp_v,T]");
+  check_flash_sv_head_major(sv, N, H, hd, "flash_attn_int4_vt_qout");
   const int C = H * hd;
   int Kpad = (k_pad > 0) ? (int)k_pad : C;
   TORCH_CHECK(Kpad % 2 == 0 && Kpad >= C, "flash_attn_int4_vt_qout: k_pad must be even and >= C=H*hd");
   const int bstride = Kpad / 2;   // packed bytes per token row
-  auto out_q = torch::zeros({(long)N * T, bstride}, torch::TensorOptions().dtype(torch::kChar).device(q4.device()));
+  auto out_q = torch::empty({(long)N * T, bstride}, torch::TensorOptions().dtype(torch::kChar).device(q4.device()));
   const float proj_inv_scale = 1.f / (float)proj_a_scale;
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
   const int fa_w4 = modiff_fa_warps(T);                // must match grid.y (see the int8 path)
   dim3 grid(N * H, T / (fa_w4 * FA_MMA_BR));
-  MODIFF_FA_MMA4_DISPATCH(grid, fa_w4, stream, hdp_v, T,
+  MODIFF_FA_MMA4_DISPATCH(grid, fa_w4, stream, hdp_v, T, false,
       q4.data_ptr<int8_t>(), k4.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
       sq.data_ptr<float>(), sk.data_ptr<float>(), sv.data_ptr<float>(),
       (__half*)nullptr, N, H, T, hd, (int)hdp4, hdp_v, (float)softmax_scale,
       out_q.data_ptr<int8_t>(), proj_inv_scale, bstride);
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
   return out_q;   // packed int4 [b*T, k_pad/2] token-major (ready for gemm_w4a4_awq_bias_res)
+}
+
+torch::Tensor flash_attn_int4_vt_static_qout(
+    torch::Tensor q4, torch::Tensor k4, torch::Tensor vt, torch::Tensor sv,
+    int64_t hdp4, double sq, double sk, double softmax_scale,
+    double proj_a_scale, int64_t k_pad) {
+  TORCH_CHECK(q4.is_cuda() && k4.is_cuda() && vt.is_cuda() && q4.dim() == 4 && vt.dim() == 4,
+              "flash_attn_int4_vt_static_qout: invalid CUDA inputs");
+  TORCH_CHECK(q4.is_contiguous() && k4.is_contiguous() && vt.is_contiguous(), "q4/k4/vt contiguous");
+  const int N = q4.size(0), H = q4.size(1), T = q4.size(2), hd = sv.size(-1);
+  const int hdp_v = ((hd + 31) / 32) * 32, C = H * hd;
+  const int Kpad = k_pad > 0 ? (int)k_pad : C, bstride = Kpad / 2;
+  TORCH_CHECK(hdp4 % 64 == 0 && hdp4 <= FA_MMA_MAXHD && (hd % 8) == 0
+              && (T % (FA_MMA_WARPS * FA_MMA_BR)) == 0 && Kpad >= C && (Kpad % 2) == 0
+              && vt.size(2) == hdp_v && vt.size(3) == T,
+              "flash_attn_int4_vt_static_qout: mma-eligible shapes only");
+  const bool broadcast_sv =
+      check_flash_sv_static(sv, N, H, hd, "flash_attn_int4_vt_static_qout");
+  auto out_q = torch::empty({(long)N * T, bstride},
+      torch::TensorOptions().dtype(torch::kChar).device(q4.device()));
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  const int fa_w = modiff_fa_warps(T);
+  dim3 grid(N * H, T / (fa_w * FA_MMA_BR));
+  MODIFF_FA_MMA4_DISPATCH(grid, fa_w, stream, hdp_v, T, true,
+      q4.data_ptr<int8_t>(), k4.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
+      (const float*)nullptr, (const float*)nullptr, sv.data_ptr<float>(), (__half*)nullptr,
+      N, H, T, hd, (int)hdp4, hdp_v, (float)softmax_scale, out_q.data_ptr<int8_t>(),
+      1.f / (float)proj_a_scale, bstride, (float)(sq * sk),
+      (const __half*)nullptr, 0, 0.f, broadcast_sv);
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  return out_q;
 }
 
 torch::Tensor flash_attn_int4(torch::Tensor q4, torch::Tensor k4, torch::Tensor v,
@@ -1604,7 +2671,7 @@ torch::Tensor flash_attn_int4(torch::Tensor q4, torch::Tensor k4, torch::Tensor 
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
   const int fa_w4 = modiff_fa_warps(T);                // must match grid.y (see the int8 path)
   dim3 grid(N * H, T / (fa_w4 * FA_MMA_BR));
-  MODIFF_FA_MMA4_DISPATCH(grid, fa_w4, stream, hdp_v, T,
+  MODIFF_FA_MMA4_DISPATCH(grid, fa_w4, stream, hdp_v, T, false,
       q4.data_ptr<int8_t>(), k4.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
       sq.data_ptr<float>(), sk.data_ptr<float>(), sv.data_ptr<float>(),
       reinterpret_cast<__half*>(out.data_ptr<at::Half>()),

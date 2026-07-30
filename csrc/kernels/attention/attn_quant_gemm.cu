@@ -9,6 +9,7 @@
 //  flash is the sole quantized-attention path.)
 // =========================================================================
 #include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAException.h>
 #include <cuda_fp16.h>
 #include <cuda_pipeline_primitives.h>
 #include <torch/extension.h>
@@ -165,7 +166,7 @@ __global__ void aq_qtok_packed_kernel(const __half* __restrict__ QKV, int8_t* __
 // guarantees a pair (d0, d0+1) never straddles the [0,hd) / [hd,hp) padding boundary: if d0
 // is even and d0 < hd <= d0+1, then hd == d0+1 is odd, contradicting hd even. So what would
 // be two per-element `d<hd` ternaries collapse into one per-pair branch below.
-template <int BITS>
+template <int BITS, bool WRITE_SCALES = true>
 __global__ void aq_qtok_packed_static_qk_vec2_kernel(const __half* __restrict__ QKV,
                                                       int8_t* __restrict__ qout, int8_t* __restrict__ kout,
                                                       float* __restrict__ sq, float* __restrict__ sk,
@@ -177,7 +178,9 @@ __global__ void aq_qtok_packed_static_qk_vec2_kernel(const __half* __restrict__ 
   const __half* xq = QKV + pk_row_off(r, nh, T, hd, 0);
   const __half* xk = QKV + pk_row_off(r, nh, T, hd, 1);
   const float invq = 1.f / sq_scale, invk = 1.f / sk_scale;
-  if (lane == 0) { sq[r] = sq_scale; sk[r] = sk_scale; }
+  if constexpr (WRITE_SCALES) {
+    if (lane == 0) { sq[r] = sq_scale; sk[r] = sk_scale; }
+  }
   if (BITS == 8) {
     int8_t* oq = qout + (size_t)r * hp;
     int8_t* ok = kout + (size_t)r * hp;
@@ -226,7 +229,7 @@ __global__ void aq_qtok_packed_static_qk_vec2_kernel(const __half* __restrict__ 
 // bytes regardless of hp.
 //
 // sq/sk are NOT written here; the host fills them with torch::full (they are constants).
-template <int BITS>
+template <int BITS, bool WRITE_Q = true>
 __global__ void aq_qtok_packed_static_qk_flat_kernel(const __half* __restrict__ QKV,
                                                      int8_t* __restrict__ qout, int8_t* __restrict__ kout,
                                                      int nh, int T, int hd, int hp,
@@ -241,7 +244,7 @@ __global__ void aq_qtok_packed_static_qk_flat_kernel(const __half* __restrict__ 
        c += (long)gridDim.x * blockDim.x) {
     const int r = (int)(c / per_row);
     const int d0 = (int)(c % per_row) * CH;
-    const __half* xq = QKV + pk_row_off(r, nh, T, hd, 0);
+    const __half* xq = WRITE_Q ? QKV + pk_row_off(r, nh, T, hd, 0) : nullptr;
     const __half* xk = QKV + pk_row_off(r, nh, T, hd, 1);
     int8_t qb[CH], kb[CH];
     // Read the whole CH-channel chunk as one 16-byte load when it is entirely real payload and
@@ -253,47 +256,60 @@ __global__ void aq_qtok_packed_static_qk_flat_kernel(const __half* __restrict__ 
     // a chunk is either all real or all padding; the alignment is still checked rather than assumed.
     __half qh[CH], kh[CH];
     const bool all_real = (d0 + CH <= hd);
-    const bool aligned = ((((uintptr_t)(xq + d0)) | ((uintptr_t)(xk + d0))) & 15) == 0;
+    const bool aligned = WRITE_Q
+        ? (((uintptr_t)(xq + d0) | (uintptr_t)(xk + d0)) & 15) == 0
+        : (((uintptr_t)(xk + d0)) & 15) == 0;
     if (all_real && aligned) {
-      *reinterpret_cast<float4*>(qh) = *reinterpret_cast<const float4*>(xq + d0);
+      if constexpr (WRITE_Q)
+        *reinterpret_cast<float4*>(qh) = *reinterpret_cast<const float4*>(xq + d0);
       *reinterpret_cast<float4*>(kh) = *reinterpret_cast<const float4*>(xk + d0);
     } else {
 #pragma unroll
       for (int i = 0; i < CH; ++i) {
         const int d = d0 + i;
-        qh[i] = (d < hd) ? xq[d] : __float2half(0.f);
+        if constexpr (WRITE_Q) qh[i] = (d < hd) ? xq[d] : __float2half(0.f);
         kh[i] = (d < hd) ? xk[d] : __float2half(0.f);
       }
     }
 #pragma unroll
     for (int i = 0; i < CH; ++i) {
-      const float qv = __half2float(qh[i]);
       const float kv = __half2float(kh[i]);
       if (BITS == 8) {
-        int a = __float2int_rn(qv * invq), b = __float2int_rn(kv * invk);
-        qb[i] = (int8_t)(a > 127 ? 127 : (a < -127 ? -127 : a));
+        int b = __float2int_rn(kv * invk);
+        if constexpr (WRITE_Q) {
+          int a = __float2int_rn(__half2float(qh[i]) * invq);
+          qb[i] = (int8_t)(a > 127 ? 127 : (a < -127 ? -127 : a));
+        }
         kb[i] = (int8_t)(b > 127 ? 127 : (b < -127 ? -127 : b));
       } else {
-        int a = __float2int_rn(qv * invq), b = __float2int_rn(kv * invk);
-        qb[i] = (int8_t)(a > 7 ? 7 : (a < -7 ? -7 : a));
+        int b = __float2int_rn(kv * invk);
+        if constexpr (WRITE_Q) {
+          int a = __float2int_rn(__half2float(qh[i]) * invq);
+          qb[i] = (int8_t)(a > 7 ? 7 : (a < -7 ? -7 : a));
+        }
         kb[i] = (int8_t)(b > 7 ? 7 : (b < -7 ? -7 : b));
       }
     }
     if (BITS == 8) {   // one 8-byte store per tensor
-      int8_t* oq = qout + (size_t)r * owidth + d0;
       int8_t* ok = kout + (size_t)r * owidth + d0;
-      *reinterpret_cast<int2*>(oq) = *reinterpret_cast<const int2*>(qb);
+      if constexpr (WRITE_Q) {
+        int8_t* oq = qout + (size_t)r * owidth + d0;
+        *reinterpret_cast<int2*>(oq) = *reinterpret_cast<const int2*>(qb);
+      }
       *reinterpret_cast<int2*>(ok) = *reinterpret_cast<const int2*>(kb);
     } else {           // pack channel pairs: CH channels -> CH/2 bytes, one 4-byte store
       int8_t pq[CH / 2], pk[CH / 2];
 #pragma unroll
       for (int i = 0; i < CH / 2; ++i) {
-        pq[i] = (int8_t)((qb[2 * i] & 0xF) | ((qb[2 * i + 1] & 0xF) << 4));
+        if constexpr (WRITE_Q)
+          pq[i] = (int8_t)((qb[2 * i] & 0xF) | ((qb[2 * i + 1] & 0xF) << 4));
         pk[i] = (int8_t)((kb[2 * i] & 0xF) | ((kb[2 * i + 1] & 0xF) << 4));
       }
-      int8_t* oq = qout + (size_t)r * owidth + d0 / 2;
       int8_t* ok = kout + (size_t)r * owidth + d0 / 2;
-      *reinterpret_cast<int*>(oq) = *reinterpret_cast<const int*>(pq);
+      if constexpr (WRITE_Q) {
+        int8_t* oq = qout + (size_t)r * owidth + d0 / 2;
+        *reinterpret_cast<int*>(oq) = *reinterpret_cast<const int*>(pq);
+      }
       *reinterpret_cast<int*>(ok) = *reinterpret_cast<const int*>(pk);
     }
   }
@@ -328,19 +344,25 @@ __global__ void aq_vscale_packed_kernel(const __half* __restrict__ QKV, float* _
 // scalar tail for the tile's last `tt % 4` tokens (VQ_TILE_T=64 keeps every FULL tile's tt
 // a multiple of 4, but the last, possibly-ragged tile for an arbitrary T is not
 // guaranteed to be).
+template <bool BROADCAST_SV = false>
 __global__ void aq_vquant_trans_packed_tiled_vec2_kernel(const __half* __restrict__ QKV, const float* __restrict__ sv,
                                                          int8_t* __restrict__ vt, int nh, int T, int hd, int hp_av) {
   const int bh = blockIdx.x, t0 = blockIdx.y * VQ_TILE_T;
   const int h = bh % nh, b = bh / nh;
   const int tt = min(VQ_TILE_T, T - t0);
   extern __shared__ int8_t vs[];
+  __shared__ float sv_inv_s[128];
+  const size_t sv_base = BROADCAST_SV ? 0 : (size_t)bh * hp_av;
+  for (int d = threadIdx.x; d < hd; d += blockDim.x)
+    sv_inv_s[d] = 1.f / sv[sv_base + d];
+  __syncthreads();
   // read + quantize: coalesced over d, half2-vectorized (hd is always even in every real shape).
   for (int idx = threadIdx.x; idx < tt * (hd / 2); idx += blockDim.x) {
     int tl = idx / (hd / 2), dp = idx % (hd / 2);
     int d = dp * 2;
     size_t off = ((((size_t)b * T + (t0 + tl)) * nh + h) * 3 + 2) * (size_t)hd + d;
     float2 vals = aq_ld2(QKV + off);
-    float2 inv = make_float2(1.f / sv[(size_t)bh * hp_av + d], 1.f / sv[(size_t)bh * hp_av + d + 1]);
+    float2 inv = make_float2(sv_inv_s[d], sv_inv_s[d + 1]);
     int q0 = __float2int_rn(vals.x * inv.x), q1 = __float2int_rn(vals.y * inv.y);
     vs[tl * hd + d]     = (int8_t)(q0 > 127 ? 127 : (q0 < -127 ? -127 : q0));
     vs[tl * hd + d + 1] = (int8_t)(q1 > 127 ? 127 : (q1 < -127 ? -127 : q1));
@@ -400,6 +422,81 @@ __global__ void aq_vquant_trans_packed_tiled_vec2_kernel(const __half* __restric
   }
 }
 
+// Static INT8 K/V producer for the hybrid Q-in-flash path. One CTA owns a 64-token tile of one
+// (batch,head), so K quantization shares the V transpose grid and avoids the flat K kernel's
+// quotient/remainder for every 8-channel chunk.
+template <int TILE_T, bool PACK_K4 = false>
+__global__ void aq_kv_packed_static_tiled_vec2_kernel(
+    const __half* __restrict__ QKV, const float* __restrict__ sv,
+    int8_t* __restrict__ kout, int8_t* __restrict__ vt,
+    int nh, int T, int hd, int hp_qk, int hp_av, float invk, int qmax) {
+  const int bh = blockIdx.x, t0 = blockIdx.y * TILE_T;
+  const int h = bh % nh, b = bh / nh, tt = min(TILE_T, T - t0);
+  extern __shared__ int8_t vs[];
+  __shared__ float sv_inv_s[128];
+  for (int d = threadIdx.x; d < hd; d += blockDim.x)
+    sv_inv_s[d] = 1.f / sv[d];
+  __syncthreads();
+
+  // K and V share the same (token, channel-pair) traversal. The previous implementation
+  // walked that index space twice (K over hp_qk/2 pairs, then V over hd/2 pairs), repeating
+  // division/modulo and loop control. hp_qk >= hd, so one K-sized pass can produce both:
+  // padded pairs write only K=0, while real pairs load adjacent K and V half2 values.
+  for (int idx = threadIdx.x; idx < tt * (hp_qk / 2); idx += blockDim.x) {
+    const int tl = idx / (hp_qk / 2), d = (idx % (hp_qk / 2)) * 2;
+    int q0 = 0, q1 = 0;
+    if (d < hd) {
+      const size_t koff = ((((size_t)b * T + (t0 + tl)) * nh + h) * 3 + 1) * (size_t)hd + d;
+      const float2 kv = aq_ld2(QKV + koff);
+      q0 = __float2int_rn(kv.x * invk); q1 = __float2int_rn(kv.y * invk);
+      q0 = q0 > qmax ? qmax : (q0 < -qmax ? -qmax : q0);
+      q1 = q1 > qmax ? qmax : (q1 < -qmax ? -qmax : q1);
+
+      const float2 vv = aq_ld2(QKV + koff + hd);
+      int v0 = __float2int_rn(vv.x * sv_inv_s[d]);
+      int v1 = __float2int_rn(vv.y * sv_inv_s[d + 1]);
+      vs[tl * hd + d] = (int8_t)(v0 > 127 ? 127 : (v0 < -127 ? -127 : v0));
+      vs[tl * hd + d + 1] = (int8_t)(v1 > 127 ? 127 : (v1 < -127 ? -127 : v1));
+    }
+    if constexpr (PACK_K4) {
+      const size_t ko = ((size_t)bh * T + t0 + tl) * (hp_qk / 2) + d / 2;
+      kout[ko] = (int8_t)((q0 & 0x0f) | ((q1 & 0x0f) << 4));
+    } else {
+      const size_t ko = ((size_t)bh * T + t0 + tl) * hp_qk + d;
+      *reinterpret_cast<int16_t*>(kout + ko) =
+          (int16_t)((uint8_t)q0 | ((uint16_t)(uint8_t)q1 << 8));
+    }
+  }
+  __syncthreads();
+
+  const int tt4 = tt / 4, tail = tt - tt4 * 4, pad = hp_av - hd;
+  if (T % 4 == 0) {
+    for (int idx = threadIdx.x; idx < hd * tt4; idx += blockDim.x) {
+      const int d = idx / tt4, tl0 = (idx % tt4) * 4;
+      const uint32_t packed = (uint8_t)vs[tl0 * hd + d]
+          | ((uint32_t)(uint8_t)vs[(tl0 + 1) * hd + d] << 8)
+          | ((uint32_t)(uint8_t)vs[(tl0 + 2) * hd + d] << 16)
+          | ((uint32_t)(uint8_t)vs[(tl0 + 3) * hd + d] << 24);
+      *reinterpret_cast<uint32_t*>(&vt[((size_t)bh * hp_av + d) * T + t0 + tl0]) = packed;
+    }
+    for (int idx = threadIdx.x; idx < pad * tt4; idx += blockDim.x) {
+      const int d = hd + idx / tt4, tl0 = (idx % tt4) * 4;
+      *reinterpret_cast<uint32_t*>(&vt[((size_t)bh * hp_av + d) * T + t0 + tl0]) = 0;
+    }
+    if (tail) {
+      for (int idx = threadIdx.x; idx < hp_av * tail; idx += blockDim.x) {
+        const int d = idx / tail, tl = tt4 * 4 + idx % tail;
+        vt[((size_t)bh * hp_av + d) * T + t0 + tl] = d < hd ? vs[tl * hd + d] : 0;
+      }
+    }
+  } else {
+    for (int idx = threadIdx.x; idx < hp_av * tt; idx += blockDim.x) {
+      const int d = idx / tt, tl = idx % tt;
+      vt[((size_t)bh * hp_av + d) * T + t0 + tl] = d < hd ? vs[tl * hd + d] : 0;
+    }
+  }
+}
+
 // ---- ENTRYPOINT (packed dynamic). QK int8 or int4 (qk_bits), V always int8 (flash PV). Reads the
 //      interleaved qkv [b,T,nh,3,hd] directly -> no transpose copy. Serves both int8 & int4 flash. ----
 //   Inputs:   qkv fp16 [b,T,nh,3,hd] (contiguous, channel order (nh,3,hd)); nh,T,hd; hp_qk,hp_av;
@@ -433,15 +530,16 @@ std::vector<torch::Tensor> quantize_attn_qkv_packed(torch::Tensor qkv, int64_t n
   }
   aq_vscale_packed_kernel<<<BH * (int)hd, 256, 0, s>>>(P, sv.data_ptr<float>(), (int)nh, (int)T, (int)hd, (int)hp_av, 127.f);
   { dim3 vg(BH, ((int)T + VQ_TILE_T - 1) / VQ_TILE_T); size_t vsm = (size_t)VQ_TILE_T * (int)hd;
-    aq_vquant_trans_packed_tiled_vec2_kernel<<<vg, 256, vsm, s>>>(P, sv.data_ptr<float>(), vt.data_ptr<int8_t>(), (int)nh, (int)T, (int)hd, (int)hp_av); }
+    aq_vquant_trans_packed_tiled_vec2_kernel<false><<<vg, 256, vsm, s>>>(P, sv.data_ptr<float>(), vt.data_ptr<int8_t>(), (int)nh, (int)T, (int)hd, (int)hp_av); }
   return {qi, ki, vt, sq, sk, sv};
 }
 
 // ---- ENTRYPOINT (packed static). Same as above but calibrated per-tensor sq_c/sk_c + per-channel
 //      sv_vec [hp_av], no runtime amax. Serves int8 & int4 flash static paths. ----
-std::vector<torch::Tensor> quantize_attn_qkv_packed_static(torch::Tensor qkv, int64_t nh, int64_t T, int64_t hd,
-                                                           int64_t hp_qk, int64_t hp_av, int64_t qk_bits,
-                                                           double sq_c, double sk_c, torch::Tensor sv_vec) {
+static std::vector<torch::Tensor> quantize_attn_qkv_packed_static_impl(
+    torch::Tensor qkv, int64_t nh, int64_t T, int64_t hd,
+    int64_t hp_qk, int64_t hp_av, int64_t qk_bits,
+    double sq_c, double sk_c, torch::Tensor sv_vec, bool compact) {
   TORCH_CHECK(qkv.is_cuda() && qkv.dtype() == torch::kHalf, "qkv fp16 CUDA");
   TORCH_CHECK(sv_vec.numel() == hp_av, "sv_vec must be [hp_av]");
   // The vectorized (half2) qtok kernel collapses each pair's two padding-boundary
@@ -482,9 +580,14 @@ std::vector<torch::Tensor> quantize_attn_qkv_packed_static(torch::Tensor qkv, in
     if (e) return atoi(e) != 0;       // forced, for A/B
     return hp_av <= 32;
   }();
-  auto sq = use_flat ? torch::full({BH, (int)T}, sq_c, of) : torch::empty({BH, (int)T}, of);
-  auto sk = use_flat ? torch::full({BH, (int)T}, sk_c, of) : torch::empty({BH, (int)T}, of);
-  auto sv = sv_vec.to(of).view({1, (int)hp_av}).expand({BH, (int)hp_av}).contiguous();
+  auto sq = compact ? torch::empty({0}, of)
+                    : (use_flat ? torch::full({BH, (int)T}, sq_c, of)
+                                : torch::empty({BH, (int)T}, of));
+  auto sk = compact ? torch::empty({0}, of)
+                    : (use_flat ? torch::full({BH, (int)T}, sk_c, of)
+                                : torch::empty({BH, (int)T}, of));
+  auto sv = compact ? sv_vec.to(of).contiguous()
+                    : sv_vec.to(of).view({1, (int)hp_av}).expand({BH, (int)hp_av}).contiguous();
   cudaStream_t s = at::cuda::getCurrentCUDAStream();
   const __half* P = reinterpret_cast<const __half*>(qkv.data_ptr<at::Half>());
   const int RPB = 8;                       // rows (warps) per block
@@ -501,13 +604,105 @@ std::vector<torch::Tensor> quantize_attn_qkv_packed_static(torch::Tensor qkv, in
     else
       aq_qtok_packed_static_qk_flat_kernel<4><<<blocks, TPB, 0, s>>>(P, qi.data_ptr<int8_t>(), ki.data_ptr<int8_t>(), (int)nh, (int)T, (int)hd, (int)hp_qk, (float)sq_c, (float)sk_c, nchunks);
   } else if (qk_bits == 8) {
-    aq_qtok_packed_static_qk_vec2_kernel<8><<<qblk, RPB * 32, 0, s>>>(P, qi.data_ptr<int8_t>(), ki.data_ptr<int8_t>(), sq.data_ptr<float>(), sk.data_ptr<float>(), (int)nh, (int)T, (int)hd, (int)hp_qk, (float)sq_c, (float)sk_c, nrows);
+    if (compact)
+      aq_qtok_packed_static_qk_vec2_kernel<8, false><<<qblk, RPB * 32, 0, s>>>(P, qi.data_ptr<int8_t>(), ki.data_ptr<int8_t>(), nullptr, nullptr, (int)nh, (int)T, (int)hd, (int)hp_qk, (float)sq_c, (float)sk_c, nrows);
+    else
+      aq_qtok_packed_static_qk_vec2_kernel<8, true><<<qblk, RPB * 32, 0, s>>>(P, qi.data_ptr<int8_t>(), ki.data_ptr<int8_t>(), sq.data_ptr<float>(), sk.data_ptr<float>(), (int)nh, (int)T, (int)hd, (int)hp_qk, (float)sq_c, (float)sk_c, nrows);
   } else {
-    aq_qtok_packed_static_qk_vec2_kernel<4><<<qblk, RPB * 32, 0, s>>>(P, qi.data_ptr<int8_t>(), ki.data_ptr<int8_t>(), sq.data_ptr<float>(), sk.data_ptr<float>(), (int)nh, (int)T, (int)hd, (int)hp_qk, (float)sq_c, (float)sk_c, nrows);
+    if (compact)
+      aq_qtok_packed_static_qk_vec2_kernel<4, false><<<qblk, RPB * 32, 0, s>>>(P, qi.data_ptr<int8_t>(), ki.data_ptr<int8_t>(), nullptr, nullptr, (int)nh, (int)T, (int)hd, (int)hp_qk, (float)sq_c, (float)sk_c, nrows);
+    else
+      aq_qtok_packed_static_qk_vec2_kernel<4, true><<<qblk, RPB * 32, 0, s>>>(P, qi.data_ptr<int8_t>(), ki.data_ptr<int8_t>(), sq.data_ptr<float>(), sk.data_ptr<float>(), (int)nh, (int)T, (int)hd, (int)hp_qk, (float)sq_c, (float)sk_c, nrows);
   }
   { dim3 vg(BH, ((int)T + VQ_TILE_T - 1) / VQ_TILE_T); size_t vsm = (size_t)VQ_TILE_T * (int)hd;
-    aq_vquant_trans_packed_tiled_vec2_kernel<<<vg, 256, vsm, s>>>(P, sv.data_ptr<float>(), vt.data_ptr<int8_t>(), (int)nh, (int)T, (int)hd, (int)hp_av); }
-  return {qi, ki, vt, sq, sk, sv};
+    if (compact)
+      aq_vquant_trans_packed_tiled_vec2_kernel<true><<<vg, 256, vsm, s>>>(P, sv.data_ptr<float>(), vt.data_ptr<int8_t>(), (int)nh, (int)T, (int)hd, (int)hp_av);
+    else
+      aq_vquant_trans_packed_tiled_vec2_kernel<false><<<vg, 256, vsm, s>>>(P, sv.data_ptr<float>(), vt.data_ptr<int8_t>(), (int)nh, (int)T, (int)hd, (int)hp_av); }
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  return compact ? std::vector<torch::Tensor>{qi, ki, vt, sv}
+                 : std::vector<torch::Tensor>{qi, ki, vt, sq, sk, sv};
+}
+
+std::vector<torch::Tensor> quantize_attn_qkv_packed_static(
+    torch::Tensor qkv, int64_t nh, int64_t T, int64_t hd,
+    int64_t hp_qk, int64_t hp_av, int64_t qk_bits,
+    double sq_c, double sk_c, torch::Tensor sv_vec) {
+  return quantize_attn_qkv_packed_static_impl(
+      qkv, nh, T, hd, hp_qk, hp_av, qk_bits, sq_c, sk_c, sv_vec, false);
+}
+
+std::vector<torch::Tensor> quantize_attn_qkv_packed_static_compact(
+    torch::Tensor qkv, int64_t nh, int64_t T, int64_t hd,
+    int64_t hp_qk, int64_t hp_av, int64_t qk_bits,
+    double sq_c, double sk_c, torch::Tensor sv_vec) {
+  return quantize_attn_qkv_packed_static_impl(
+      qkv, nh, T, hd, hp_qk, hp_av, qk_bits, sq_c, sk_c, sv_vec, true);
+}
+
+// Steady-state hybrid preparation: quantize only K and V. Q is quantized exactly once by the
+// consuming flash CTA, eliminating its temporary tensor and half of the merged Q/K pass without
+// repeating K/V work across query CTAs.
+std::vector<torch::Tensor> quantize_attn_kv_packed_static(
+    torch::Tensor qkv, int64_t nh, int64_t T, int64_t hd,
+    int64_t hp_qk, int64_t hp_av, int64_t qk_bits,
+    double sk_c, torch::Tensor sv_vec) {
+  TORCH_CHECK(qkv.is_cuda() && qkv.dtype() == torch::kHalf && qkv.is_contiguous(),
+              "qkv must be contiguous fp16 CUDA");
+  constexpr int QK_I8 = 8, QK_I4_PACKED = 4, QK_I4_VALUES_I8_MMA = 84;
+  // QK_I4_VALUES_I8_MMA is an internal mixed-storage mode: preserve the signed int4 grid [-7,7],
+  // but store K unpacked so the hd=24 path can use m16n8k32.s8 without padding QK to 64.
+  TORCH_CHECK(hd % 2 == 0 && sv_vec.numel() == hp_av
+              && (qk_bits == QK_I8 || qk_bits == QK_I4_PACKED
+                  || qk_bits == QK_I4_VALUES_I8_MMA),
+              "invalid hybrid K/V quantize shape");
+  const int b = qkv.numel() / ((int)nh * 3 * (int)hd * (int)T);
+  const int BH = b * (int)nh;
+  const int qkw = qk_bits == QK_I4_PACKED ? (int)hp_qk / 2 : (int)hp_qk;
+  auto oi = torch::TensorOptions().dtype(torch::kChar).device(qkv.device());
+  auto of = torch::TensorOptions().dtype(torch::kFloat32).device(qkv.device());
+  auto ki = torch::empty({BH, (int)T, qkw}, oi);
+  auto vt = torch::empty({BH, (int)hp_av, (int)T}, oi);
+  auto sv = sv_vec.to(of).contiguous();
+  cudaStream_t s = at::cuda::getCurrentCUDAStream();
+  const __half* P = reinterpret_cast<const __half*>(qkv.data_ptr<at::Half>());
+  const long nchunks = (long)BH * (int)T * ((int)hp_qk / 8);
+  const int TPB = 256;
+  const int blocks = (int)std::min<long>((nchunks + TPB - 1) / TPB, 65535L * 4);
+  // 64 tokens wins over a 128-token tile on A40 despite the larger grid: the smaller
+  // block working set schedules better at both hd=24/T=1024 and hd=48/T=256.
+  constexpr int KV_TILE_T = 64;
+  dim3 vg(BH, ((int)T + KV_TILE_T - 1) / KV_TILE_T);
+  size_t vsm = (size_t)KV_TILE_T * (int)hd;
+  if (qk_bits == QK_I8 || qk_bits == QK_I4_VALUES_I8_MMA) {
+    const char* kt = getenv("MODIFF_KV_THREADS");
+    const int kv_threads = kt && atoi(kt) == 128 ? 128 : (kt && atoi(kt) == 256 ? 256 : 512);
+    aq_kv_packed_static_tiled_vec2_kernel<KV_TILE_T><<<vg, kv_threads, vsm, s>>>(
+        P, sv.data_ptr<float>(), ki.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
+        (int)nh, (int)T, (int)hd, (int)hp_qk, (int)hp_av,
+        1.f / (float)sk_c, qk_bits == QK_I4_VALUES_I8_MMA ? 7 : 127);
+  } else {
+    const char* fused_env = getenv("MODIFF_INT4_KV_FUSED");
+    const bool fused = !fused_env || atoi(fused_env) != 0;
+    if (fused) {
+      // Native INT4 QK: fuse packed K production with INT8 V quantize+transpose.
+      aq_kv_packed_static_tiled_vec2_kernel<KV_TILE_T, true><<<vg, 256, vsm, s>>>(
+          P, sv.data_ptr<float>(), ki.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
+          (int)nh, (int)T, (int)hd, (int)hp_qk, (int)hp_av,
+          1.f / (float)sk_c, 7);
+    } else {
+      // Reference/fallback: independent flat packed-K pass followed by the established tiled V
+      // quantize+transpose pass. Retained for correctness and same-process performance A/B.
+      aq_qtok_packed_static_qk_flat_kernel<4, false><<<blocks, TPB, 0, s>>>(
+          P, nullptr, ki.data_ptr<int8_t>(), (int)nh, (int)T, (int)hd, (int)hp_qk,
+          1.f, (float)sk_c, nchunks);
+      aq_vquant_trans_packed_tiled_vec2_kernel<true><<<vg, 256, vsm, s>>>(
+          P, sv.data_ptr<float>(), vt.data_ptr<int8_t>(),
+          (int)nh, (int)T, (int)hd, (int)hp_av);
+    }
+  }
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  return {ki, vt, sv};
 }
 
 // ---- int8 reshuffle consumer for the fused int8 GN->qkv (fused_gn_qkv_i8evt). The int8 qkv is
@@ -515,25 +710,158 @@ std::vector<torch::Tensor> quantize_attn_qkv_packed_static(torch::Tensor qkv, in
 // [b,T,nh,3,hd]), so this only gathers Q/K (hd->hp pad) and transposes V to channel-major -- NO
 // requant (int8->int8 copy). Output layout == quantize_attn_qkv_packed_static's qi/ki/vt; the scales
 // sq/sk/sv are the calibrated constants, supplied by the caller. int8 Q/K only. ----
-__global__ void from_i8_qtok_kernel(const int8_t* __restrict__ QKV, int8_t* __restrict__ out,
-                                    int nh, int T, int hd, int hp, int sel) {
-  const int r = blockIdx.x, lane = threadIdx.x;
-  const int8_t* xr = QKV + pk_row_off(r, nh, T, hd, sel);
-  int8_t* o8 = out + (size_t)r * hp;
-  for (int d = lane; d < hp; d += 32) o8[d] = (d < hd) ? xr[d] : (int8_t)0;
+__global__ void from_i8_qk_vec_kernel(
+    const int8_t* __restrict__ QKV, int8_t* __restrict__ qout, int8_t* __restrict__ kout,
+    int nh, int T, int hd, int hp, int nrows) {
+  const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
+  const int threads_per_row = hp / 8;                 // hp is 32 or 64
+  const int rows_per_warp = 32 / threads_per_row;
+  const int rows_per_block = (blockDim.x / 32) * rows_per_warp;
+  const int row = blockIdx.x * rows_per_block + warp * rows_per_warp + lane / threads_per_row;
+  if (row >= nrows) return;
+  const int d0 = (lane % threads_per_row) * 8;
+  const int8_t* q = QKV + pk_row_off(row, nh, T, hd, 0);
+  const int8_t* k = q + hd;
+  int2 qv = make_int2(0, 0), kv = make_int2(0, 0);
+  if (d0 + 8 <= hd) {
+    qv = *reinterpret_cast<const int2*>(q + d0);
+    kv = *reinterpret_cast<const int2*>(k + d0);
+  } else if (d0 < hd) {
+    int8_t qb[8] = {0}, kb[8] = {0};
+#pragma unroll
+    for (int i = 0; i < 8; ++i)
+      if (d0 + i < hd) { qb[i] = q[d0 + i]; kb[i] = k[d0 + i]; }
+    qv = *reinterpret_cast<const int2*>(qb);
+    kv = *reinterpret_cast<const int2*>(kb);
+  }
+  *reinterpret_cast<int2*>(qout + (size_t)row * hp + d0) = qv;
+  *reinterpret_cast<int2*>(kout + (size_t)row * hp + d0) = kv;
 }
-__global__ void from_i8_vtrans_kernel(const int8_t* __restrict__ QKV, int8_t* __restrict__ vt,
-                                      int nh, int T, int hd, int hp_av) {
-  const int rd = blockIdx.x, bh = rd / hp_av, d = rd % hp_av;
-  const int h = bh % nh, b = bh / nh;
-  const int tid = threadIdx.x, nt = blockDim.x;
-  int8_t* o = vt + (size_t)rd * T;
-  for (int t = tid; t < T; t += nt) {
-    int8_t val = 0;
-    if (d < hd) { size_t off = ((((size_t)b * T + t) * nh + h) * 3 + 2) * (size_t)hd + d; val = QKV[off]; }
-    o[t] = val;
+
+template <bool COMPACT = false>
+__global__ void from_i8_vtrans_tiled_kernel(
+    const int8_t* __restrict__ QKV, int8_t* __restrict__ vt,
+    int nh, int T, int hd, int hp_av) {
+  const int bh = blockIdx.x, t0 = blockIdx.y * VQ_TILE_T;
+  const int h = bh % nh, b = bh / nh, tt = min(VQ_TILE_T, T - t0);
+  extern __shared__ int8_t vs[];
+  for (int idx = threadIdx.x; idx < tt * hd; idx += blockDim.x) {
+    const int tl = idx / hd, d = idx % hd;
+    const size_t off = COMPACT
+        ? ((size_t)bh * T + t0 + tl) * hd + d
+        : ((((size_t)b * T + (t0 + tl)) * nh + h) * 3 + 2) * (size_t)hd + d;
+    vs[tl * hd + d] = QKV[off];
+  }
+  __syncthreads();
+  const int pad = hp_av - hd;
+  if (T % 4 == 0) {
+    const int tt4 = tt / 4, tail = tt - tt4 * 4;
+    for (int idx = threadIdx.x; idx < hd * tt4; idx += blockDim.x) {
+      const int d = idx / tt4, tl0 = (idx % tt4) * 4;
+      const uint32_t packed = (uint8_t)vs[tl0 * hd + d]
+          | ((uint32_t)(uint8_t)vs[(tl0 + 1) * hd + d] << 8)
+          | ((uint32_t)(uint8_t)vs[(tl0 + 2) * hd + d] << 16)
+          | ((uint32_t)(uint8_t)vs[(tl0 + 3) * hd + d] << 24);
+      *reinterpret_cast<uint32_t*>(&vt[((size_t)bh * hp_av + d) * T + t0 + tl0]) = packed;
+    }
+    for (int idx = threadIdx.x; idx < pad * tt4; idx += blockDim.x) {
+      const int d = hd + idx / tt4, tl0 = (idx % tt4) * 4;
+      *reinterpret_cast<uint32_t*>(&vt[((size_t)bh * hp_av + d) * T + t0 + tl0]) = 0;
+    }
+    if (tail) {
+      for (int idx = threadIdx.x; idx < hp_av * tail; idx += blockDim.x) {
+        const int d = idx / tail, tl = tt4 * 4 + idx % tail;
+        vt[((size_t)bh * hp_av + d) * T + t0 + tl] = d < hd ? vs[tl * hd + d] : 0;
+      }
+    }
+  } else {
+    for (int idx = threadIdx.x; idx < hp_av * tt; idx += blockDim.x) {
+      const int d = idx / tt, tl = idx % tt;
+      vt[((size_t)bh * hp_av + d) * T + t0 + tl] = d < hd ? vs[tl * hd + d] : 0;
+    }
   }
 }
+
+// Route-1 steady-state producer: Q remains in the packed INT8 QKV tensor and is
+// consumed directly by FlashAttention. This single tiled pass gathers padded K
+// and transposes V, replacing the separate Q/K gather plus V-transpose launches.
+template <int TILE_T>
+__global__ void from_i8_kv_tiled_kernel(
+    const int8_t* __restrict__ QKV, int8_t* __restrict__ kout,
+    int8_t* __restrict__ vt, int nh, int T, int hd, int hp_qk, int hp_av) {
+  const int bh = blockIdx.x, t0 = blockIdx.y * TILE_T;
+  const int h = bh % nh, b = bh / nh, tt = min(TILE_T, T - t0);
+  extern __shared__ int8_t vs[];
+
+  for (int idx = threadIdx.x; idx < tt * (hp_qk / 8); idx += blockDim.x) {
+    const int tl = idx / (hp_qk / 8), d = (idx % (hp_qk / 8)) * 8;
+    int2 kval = make_int2(0, 0), vval = make_int2(0, 0);
+    if (d < hd) {
+      const size_t koff =
+          ((((size_t)b * T + t0 + tl) * nh + h) * 3 + 1) * (size_t)hd + d;
+      kval = *reinterpret_cast<const int2*>(QKV + koff);
+      vval = *reinterpret_cast<const int2*>(QKV + koff + hd);
+      *reinterpret_cast<int2*>(vs + tl * hd + d) = vval;
+    }
+    *reinterpret_cast<int2*>(
+        kout + ((size_t)bh * T + t0 + tl) * hp_qk + d) = kval;
+  }
+  __syncthreads();
+
+  const int tt4 = tt / 4, tail = tt - tt4 * 4, pad = hp_av - hd;
+  if (T % 4 == 0) {
+    for (int idx = threadIdx.x; idx < hd * tt4; idx += blockDim.x) {
+      const int d = idx / tt4, tl0 = (idx % tt4) * 4;
+      const uint32_t packed = (uint8_t)vs[tl0 * hd + d]
+          | ((uint32_t)(uint8_t)vs[(tl0 + 1) * hd + d] << 8)
+          | ((uint32_t)(uint8_t)vs[(tl0 + 2) * hd + d] << 16)
+          | ((uint32_t)(uint8_t)vs[(tl0 + 3) * hd + d] << 24);
+      *reinterpret_cast<uint32_t*>(
+          &vt[((size_t)bh * hp_av + d) * T + t0 + tl0]) = packed;
+    }
+    for (int idx = threadIdx.x; idx < pad * tt4; idx += blockDim.x) {
+      const int d = hd + idx / tt4, tl0 = (idx % tt4) * 4;
+      *reinterpret_cast<uint32_t*>(
+          &vt[((size_t)bh * hp_av + d) * T + t0 + tl0]) = 0;
+    }
+    if (tail) {
+      for (int idx = threadIdx.x; idx < hp_av * tail; idx += blockDim.x) {
+        const int d = idx / tail, tl = tt4 * 4 + idx % tail;
+        vt[((size_t)bh * hp_av + d) * T + t0 + tl] =
+            d < hd ? vs[tl * hd + d] : 0;
+      }
+    }
+  } else {
+    for (int idx = threadIdx.x; idx < hp_av * tt; idx += blockDim.x) {
+      const int d = idx / tt, tl = idx % tt;
+      vt[((size_t)bh * hp_av + d) * T + t0 + tl] =
+          d < hd ? vs[tl * hd + d] : 0;
+    }
+  }
+}
+
+std::vector<torch::Tensor> quantize_attn_kv_from_i8(
+    torch::Tensor qkv_i8, int64_t nh, int64_t T, int64_t hd,
+    int64_t hp_qk, int64_t hp_av) {
+  TORCH_CHECK(qkv_i8.is_cuda() && qkv_i8.dtype() == torch::kChar
+              && qkv_i8.is_contiguous(), "qkv_i8 must be contiguous int8 CUDA");
+  TORCH_CHECK(hd % 8 == 0 && hp_qk >= hd && hp_av >= hd,
+              "from-i8 fused K/V producer requires hd%8==0 and padded outputs");
+  const int b = qkv_i8.numel() / ((int)nh * 3 * (int)hd * (int)T);
+  const int BH = b * (int)nh;
+  auto oi = torch::TensorOptions().dtype(torch::kChar).device(qkv_i8.device());
+  auto ki = torch::empty({BH, (int)T, (int)hp_qk}, oi);
+  auto vt = torch::empty({BH, (int)hp_av, (int)T}, oi);
+  constexpr int TILE_T = 64;
+  dim3 grid(BH, ((int)T + TILE_T - 1) / TILE_T);
+  cudaStream_t s = at::cuda::getCurrentCUDAStream();
+  from_i8_kv_tiled_kernel<TILE_T><<<grid, 512, (size_t)TILE_T * (int)hd, s>>>(
+      qkv_i8.data_ptr<int8_t>(), ki.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
+      (int)nh, (int)T, (int)hd, (int)hp_qk, (int)hp_av);
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  return {ki, vt};
+}
+
 std::vector<torch::Tensor> quantize_attn_qkv_from_i8(torch::Tensor qkv_i8, int64_t nh, int64_t T,
                                                      int64_t hd, int64_t hp_qk, int64_t hp_av) {
   TORCH_CHECK(qkv_i8.is_cuda() && qkv_i8.dtype() == torch::kChar, "qkv_i8 int8 CUDA");
@@ -545,9 +873,14 @@ std::vector<torch::Tensor> quantize_attn_qkv_from_i8(torch::Tensor qkv_i8, int64
   auto vt = torch::empty({BH, (int)hp_av, (int)T}, oi);
   cudaStream_t s = at::cuda::getCurrentCUDAStream();
   const int8_t* P = qkv_i8.data_ptr<int8_t>();
-  from_i8_qtok_kernel<<<BH * (int)T, 32, 0, s>>>(P, qi.data_ptr<int8_t>(), (int)nh, (int)T, (int)hd, (int)hp_qk, 0);
-  from_i8_qtok_kernel<<<BH * (int)T, 32, 0, s>>>(P, ki.data_ptr<int8_t>(), (int)nh, (int)T, (int)hd, (int)hp_qk, 1);
-  from_i8_vtrans_kernel<<<BH * (int)hp_av, 256, 0, s>>>(P, vt.data_ptr<int8_t>(), (int)nh, (int)T, (int)hd, (int)hp_av);
+  const int nrows = BH * (int)T, threads = 256;
+  const int rows_per_block = (threads / 32) * (32 / ((int)hp_qk / 8));
+  from_i8_qk_vec_kernel<<<(nrows + rows_per_block - 1) / rows_per_block, threads, 0, s>>>(
+      P, qi.data_ptr<int8_t>(), ki.data_ptr<int8_t>(),
+      (int)nh, (int)T, (int)hd, (int)hp_qk, nrows);
+  dim3 vg(BH, ((int)T + VQ_TILE_T - 1) / VQ_TILE_T);
+  from_i8_vtrans_tiled_kernel<false><<<vg, 256, (size_t)VQ_TILE_T * (int)hd, s>>>(
+      P, vt.data_ptr<int8_t>(), (int)nh, (int)T, (int)hd, (int)hp_av);
   return {qi, ki, vt};
 }
 
