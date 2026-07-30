@@ -30,8 +30,16 @@ from torch.profiler import profile, ProfilerActivity, DeviceType
 HERE = "docs/final_report_2026-07-28"
 BATCH = int(os.environ.get("QDP_BATCH", "128"))
 WARM, ITERS, ROUNDS = 12, 30, 5
-# A40 dense tensor-core peaks (no sparsity)
-PEAK = {"fp16": 74.8, "int8": 149.7, "int4": 299.3}
+# A40 (GA102, 84 SMs @ 1.74 GHz boost) dense tensor-core peaks -- NOT the sparsity column.
+# Cross-check: 10752 cores x 2 x 1.74e9 = 37.4 TFLOPS FP32, and FP16/INT8/INT4 tensor are
+# 4x / 8x / 16x that, matching the datasheet's dense column exactly.
+#
+# These were previously 74.8 / 149.7 / 299.3 -- each entry was read one row too high in the
+# datasheet table (fp16 got TF32's number, int8 got FP16's, int4 got INT8's), so every peak
+# was exactly 2x too low and every flash_pct_peak this script emitted was 2x too optimistic.
+# The T1024 int8 flash kernel was reported at 47.3% of peak when it is actually at 23.7%.
+# No measured latency was affected -- only the efficiency denominator.
+PEAK = {"fp16": 149.7, "int8": 299.3, "int4": 598.7}
 
 
 def bench(fn):
