@@ -59,18 +59,39 @@ Panel C of the figure, profiler self-time scaled to the measured wall time (ms p
 | attention core | 160.2 | 117.6 | 126.4 | +8.8 |
 | GEMM / projection | 71.7 | 146.2 | 144.7 | −1.5 |
 | K/V prep + out quantize | 0.0 | 1.5 | 15.1 | +13.6 |
-| elementwise / copies | 330.9 | 134.6 | 148.1 | +13.5 |
+| elementwise / upsample / concat / pool | 330.9 | 134.6 | 148.1 | +13.5 |
 | **total** | **1435.0** | **1104.2** | **997.5** | **−106.7** |
 
 **Convolution dominates, not attention.** That is the single most important framing in this
 report: the attention core is **11.2%** of FP16's whole-model time, and INT4's 106.7 ms e2e win
 over INT8 is entirely convolution (−181.3 ms) partly given back everywhere else.
 
+Reading the rows that are easy to misread:
+
+- **"elementwise / upsample / concat / pool"** is not one thing. FP16's 330.9 splits into 268.4 ms
+  of elementwise and 62.6 ms of upsample/concat/avg-pool. The 3.7x elementwise drop in the
+  quantized modes is fusion: residual+bias fold into the GEMM epilogue and SiLU folds into
+  GroupNorm, taking launch counts from ~8400 to ~5200. The upsample/concat/pool part is ~63 ms in
+  ALL THREE modes -- none of it is quantized, so it is a fixed floor no quantization work touches.
+- **"K/V prep + out quantize"** is INT4 paying for the two shapes that were deliberately not
+  ported: `aq_kv_packed_static_tiled` runs 500x per sample (50 steps x the 10 T256/T64 blocks,
+  which use nibble-packed Q/K and still need the producer) and `quant_attn_out_int4_pack` runs
+  300x (the 6 hd=96 blocks packing their FP16-SDPA output). INT8 needs only `from_i8_kv_tiled` at
+  T64 because its T1024 and T256 both emit Flash-ready layouts from the GEMM. 13.6 ms, ~1.4% of
+  INT4's total, and entirely attributable to known open items 4 and 5.
+
 Two things worth noting against the headline:
 
 - **INT4's attention core is 8.8 ms SLOWER than INT8's** end to end (126.4 vs 117.6), even though
-  INT4 wins the attention *layer* comparison. The six hd=96 blocks running FP16 SDPA account for
-  this — they are attention-core time that INT8 serves with a quantized kernel and INT4 does not.
+  INT4 wins the attention *layer* comparison. Both modes run the same specialized kernel
+  (`flash_attn_int8_mma_kernel_t<32,8,32,true,*,false,false,24,1024>`) and the new INT4 layout
+  epilogue is confirmed active, so this is not a stale route. The difference is `PACK_OUT4`:
+  INT4's packed-int4 output store costs 403.3 us/call against INT8's 363.0, plus the six hd=96
+  blocks that INT8 serves with a quantized kernel and INT4 runs on FP16 SDPA.
+
+  **Unresolved:** at the layer level (batch 128) INT4's T1024 flash is FASTER than INT8's
+  (1474.2 vs 1538.7 us), but end to end (batch 32) the ordering inverts. Same kernel, same
+  specialization. This needs a same-batch comparison to explain and is not accounted for here.
 - **GroupNorm+quantize is INT4's largest non-conv stage and exceeds FP16's** (279.2 vs 254.4). The
   packed-int4 GN costs more than the fp16 one it replaces.
 
