@@ -1,7 +1,7 @@
 # Checkpoint report — FP16 / INT8 / INT4, end-to-end and per layer
 
 **Hardware:** NVIDIA A40 (SM86) · **Model:** LSUN-churches LDM, 21 attention blocks + 21 ResBlocks
-**Measured:** 2026-07-31, at commit `e0bded2` plus the INT4 layout-epilogue work
+**Measured:** 2026-07-31, at commit `a72cde6` (all INT4 attention shapes fused)
 
 All three modes were measured **in one process per experiment**, so every column in every table
 below is directly comparable. Earlier reports in this directory mix measurement sessions; those
@@ -23,7 +23,7 @@ INT4 is **18.1% faster than INT8** end to end.
 
 **Measurement configuration is not a detail here — it changed both the numbers and a
 conclusion.** An earlier pass at batch 32 / 50 steps gave 1.300× and 1.439×, and inverted the
-INT4-vs-INT8 attention comparison (see §1.3). Two separate problems:
+INT4-vs-INT8 attention comparison (see the attention-core note below). Two separate problems:
 
 - *Sample length.* A 50-step batch-32 sample is short enough for one scheduler hiccup to move the
   median: a 3-repeat run put INT4 at 1064 ms with 9.77% spread, 6.7% off the 997 ms that 9 repeats
@@ -89,22 +89,20 @@ net gain is the difference plus the attention-core improvement, which is why a c
 deleted a whole kernel pass moved e2e by only ~62 ms.
 
 **Convolution dominates, not attention.** That is the single most important framing in this
-report: the attention core is **11.1%** of FP16's whole-model time, and INT4's 2196 ms e2e win
-over INT8 is overwhelmingly convolution (−2594 ms), partly given back in GroupNorm, K/V prep and
+report: the attention core is **11.1%** of FP16's whole-model time, and INT4's 2249 ms e2e win
+over INT8 is overwhelmingly convolution (−2596 ms), partly given back in GroupNorm and
 elementwise.
 
 Reading the rows that are easy to misread:
 
-- **"elementwise / upsample / concat / pool"** is not one thing. FP16's 4823.7 splits into 3848.6 ms
-  of elementwise and 975.1 ms of upsample/concat/avg-pool. The 4.2x elementwise drop in INT8 (3848.6 -> 926.1) is fusion: residual+bias fold into the GEMM epilogue and SiLU folds into
+- **"elementwise / upsample / concat / pool"** is not one thing. FP16's 4816.6 splits into ~3.85 s
+  of elementwise and ~0.97 s of upsample/concat/avg-pool. The ~4x elementwise drop in INT8 is fusion: residual+bias fold into the GEMM epilogue and SiLU folds into
   GroupNorm, taking launch counts from ~8400 to ~5200. The upsample/concat/pool part is comparable in
   ALL THREE modes -- none of it is quantized, so it is a fixed floor no quantization work touches.
-- **"K/V prep + out quantize"** is INT4 paying for the two shapes that were deliberately not
-  ported: `aq_kv_packed_static_tiled` runs 2000x per sample (200 steps x the 10 T256/T64 blocks,
-  which use nibble-packed Q/K and still need the producer) and `quant_attn_out_int4_pack` runs
-  1200x (200 steps x the 6 hd=96 blocks packing their FP16-SDPA output). INT8 needs only `from_i8_kv_tiled` at
-  T64 because its T1024 and T256 both emit Flash-ready layouts from the GEMM. 187.9 ms, ~1.5% of
-  INT4's total, and entirely attributable to known open items 4 and 5.
+- **"K/V prep + out quantize"** was 220.7 ms for INT4 before this round and is now **14.2 ms** —
+  all of it `quant_attn_out_int4_pack` for the five T16 blocks, the only shape still electing FP16
+  SDPA. The `aq_kv_packed_static_tiled` producer that ran 2000× per sample over the T256/T64 blocks
+  is gone, folded into the GEMM epilogue. INT8's 32.9 ms is `from_i8_kv_tiled` at T64.
 
 Two things worth noting against the headline:
 
@@ -183,25 +181,19 @@ These five are the clearest remaining INT4 work item, and they are entirely outs
 
 ![attention stages](final_report_2026-07-28/plots/fig_ck_attn_stages.png)
 
-| shape | FP16 | INT8 | INT4 | best |
-|---|---:|---:|---:|---|
-| C192/T1024 ×5 | 3099 | 2749 | **2696** | INT4 1.15× |
-| C384/T256 ×5 | 1069 | 866 | **815** | INT4 1.31× |
-| C384/T64 ×5 | 411 | 230 | **225** | INT4 1.83× |
-| C768/T16 ×5 | 217 | 180 | **167** | INT4 1.30× |
-| C768/T4 ×1 | 191 | **103** | 161 | INT8 1.86× |
+Per-shape totals are in the table above; what the stage split adds:
 
-Reading the stages:
-
-- **T1024 is attention-core-bound in every mode** (1870 / 1460 / 1450 µs). Quantizing the score
-  path barely moves it; the quantized wins there come from removing FP16's residual/copy traffic
-  and shrinking the projections.
-- **T64's 1.8× is a GroupNorm story.** FP16 spends more time in GN than in the score path at that
-  shape — the largest relative win in the table has nothing to do with the attention kernel.
-- **T256 still shows INT4 carrying a K/V-prep block** (the purple segment). That shape kept the
-  nibble-packed producer route deliberately; it is remaining headroom, not a regression.
-- **T4 is the one attention shape INT8 clearly wins**, because INT4 falls back to FP16 SDPA there
-  (hd=96 > the int4 kernel's hd≤64) and additionally pays a separate output quantize.
+- **T1024 is attention-core-bound in every mode** — 1869.8 / 1487.4 / 1485.8 µs for
+  FP16 / INT8 / INT4. Quantizing the score path barely moves it (INT8 and INT4 are within 0.1% of
+  each other), so the quantized wins at the shape carrying 67% of the weight come from removing
+  FP16's residual/copy traffic and shrinking the projections, not from faster attention.
+- **T64's 1.99× is a GroupNorm story.** FP16 spends more time in GN than in the score path at that
+  shape — one of the largest relative wins in the table has nothing to do with the attention kernel.
+- **T256 no longer carries a K/V-prep block.** It now runs GEMM (322.7) → flash (183.7) →
+  projection (164.3) → GN (95.5), with the producer gone. The figure below predates this and still
+  shows the purple segment; the numbers in §2's table are current.
+- **T4 is now INT4's second-best shape** (1.95×), having been the one attention shape INT8 held
+  for most of this work. The dp4a int4 kernel costs 8.1 µs there against PyTorch flash's 38.4.
 
 ---
 
@@ -210,10 +202,10 @@ Reading the stages:
 | file | contents |
 |---|---|
 | `final_report_2026-07-28/data/e2e_three_mode.json` | e2e latency, spreads, `route_check`, full per-kernel profile per mode |
-| `final_report_2026-07-28/data/attn_three_mode_final.json` | all 26 layer entries × 3 modes, with per-kernel profiles |
+| `final_report_2026-07-28/data/attn_three_mode_final.json` | all 26 layer entries × 3 modes (FP16/INT8 columns; INT4 superseded by the file below) |
 | `final_report_2026-07-28/data/int4_layout_epilogue.json` | INT4 layout-epilogue bit-exactness + SASS census + A/B |
 | `final_report_2026-07-28/data/int4_fused_routes.json` | packed hd=48 byte-exactness + hd=96 small-kernel check |
-| `final_report_2026-07-28/data/attn_int4_m4.json` | INT4 layer benchmark after all fusions |
+| `final_report_2026-07-28/data/attn_int4_m4.json` | **INT4 layer column** — re-measured after all fusions |
 | `final_report_2026-07-28/data/int4_step0_same_session.json` | the same-session baseline that scoped the INT4 work |
 | `final_report_2026-07-28/scripts/e2e_three_mode_bench.py` | e2e driver (asserts the route before timing) |
 | `final_report_2026-07-28/scripts/layer_pipeline_bench.py` | layer driver |
