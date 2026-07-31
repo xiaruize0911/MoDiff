@@ -99,10 +99,22 @@ Reading the rows that are easy to misread:
   of elementwise and ~0.97 s of upsample/concat/avg-pool. The ~4x elementwise drop in INT8 is fusion: residual+bias fold into the GEMM epilogue and SiLU folds into
   GroupNorm, taking launch counts from ~8400 to ~5200. The upsample/concat/pool part is comparable in
   ALL THREE modes -- none of it is quantized, so it is a fixed floor no quantization work touches.
-- **"K/V prep + out quantize"** was 220.7 ms for INT4 before this round and is now **14.2 ms** —
-  all of it `quant_attn_out_int4_pack` for the five T16 blocks, the only shape still electing FP16
-  SDPA. The `aq_kv_packed_static_tiled` producer that ran 2000× per sample over the T256/T64 blocks
-  is gone, folded into the GEMM epilogue. INT8's 32.9 ms is `from_i8_kv_tiled` at T64.
+- **"K/V prep + out quantize"** is small enough to be invisible in the figure, but it is not zero,
+  and what remains is a different kernel from what was removed:
+
+  | mode | left | kernel | why |
+  |---|---:|---|---|
+  | INT8 | 32.9 ms | `from_i8_kv_tiled` ×5 blocks | T64 has no layout epilogue — INT8 only ever got one for T1024 and T256. An unclosed gap. |
+  | INT4 | 14.2 ms | `quant_attn_out_int4_pack` ×5 blocks | T16 deliberately runs FP16 SDPA, so its fp16 output must be packed to int4 for the projection. |
+
+  The INT4 K/V *producer* (`aq_kv_packed_static_tiled`, 205.5 ms over 10 blocks) is gone entirely,
+  folded into the GEMM epilogue. The 14.2 ms is not residue from that — it is output packing, a
+  separate kernel that exists only because one shape is not quantized. Removing it needs an INT4
+  small-shape kernel that beats PyTorch flash at T=16; the current dp4a one does not (63.7 vs
+  41.7 µs), and forcing it anyway was measured at +100 µs/layer and reverted.
+
+  Note the direction: **INT4 is now more completely fused than INT8** here, because INT4's T64 got
+  the packed epilogue and INT8's T64 never did.
 
 Two things worth noting against the headline:
 
