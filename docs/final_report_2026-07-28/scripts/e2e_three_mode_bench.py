@@ -86,9 +86,15 @@ def kernel_table(prof, wall_us):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--batch", type=int, default=32)
-    ap.add_argument("--steps", type=int, default=50)
-    ap.add_argument("--repeats", type=int, default=3)
+    # Defaults chosen for robustness, not speed. A 50-step batch-32 sample is short enough that a
+    # single scheduler hiccup moves the median: an early 3-repeat run put INT4 at 1064 ms with a
+    # 9.77% spread, 6.7% off the 997 ms that 9 repeats converged on. 200 steps at batch 128
+    # averages ~16x more work into each individual measurement, which suppresses that noise
+    # inside the sample rather than relying on the median to reject it afterwards.
+    ap.add_argument("--batch", type=int, default=128)
+    ap.add_argument("--steps", type=int, default=200)
+    ap.add_argument("--repeats", type=int, default=5)
+    ap.add_argument("--warmups", type=int, default=3)
     ap.add_argument("--output", default="docs/final_report_2026-07-28/data/e2e_three_mode.json")
     a = ap.parse_args()
 
@@ -115,8 +121,11 @@ def main():
                 sampler.sample(S=a.steps, batch_size=a.batch, shape=runner.shape,
                                eta=0.0, verbose=False, **cond)
 
-        # warm up, and for the quantized modes let the static attention scales freeze
-        for _ in range(2):
+        # warm up: settles clocks/caches and, for the quantized modes, lets the static attention
+        # scales freeze (that needs MODIFF_ATTN_CALIB_STEPS=8 forwards; one 200-step sample is
+        # already far past it, but extra warmups also let the GPU reach a steady thermal/clock
+        # state, which is what the first-sample outliers were mostly about).
+        for _ in range(a.warmups):
             sample()
         torch.cuda.synchronize()
 
@@ -161,6 +170,8 @@ def main():
             torch.cuda.synchronize()
             times.append(s.elapsed_time(e) * 1e3)     # us for the whole batch
         wall_us = statistics.median(times)
+        mean_us = statistics.mean(times)
+        sd_us = statistics.stdev(times) if len(times) > 1 else 0.0
 
         with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
             sample()
@@ -168,6 +179,12 @@ def main():
 
         out["modes"][mode] = {
             "wall_us_per_batch": wall_us,
+            "wall_mean_us": mean_us,
+            "wall_stdev_us": sd_us,
+            "wall_cv_pct": sd_us / mean_us * 100 if mean_us else 0.0,
+            "wall_min_us": min(times),
+            "wall_max_us": max(times),
+            "wall_all_us": [round(t, 1) for t in times],
             "wall_spread_pct": (max(times) - min(times)) / min(times) * 100,
             "per_sample_ms": wall_us / 1e3 / a.batch,
             "per_step_ms": wall_us / 1e3 / a.steps,
@@ -176,10 +193,11 @@ def main():
             "route_check": route,
             "kernels": rows,
         }
-        print(f"  wall  {wall_us/1e3:9.1f} ms/batch   "
-              f"{wall_us/1e3/a.batch:6.3f} ms/sample   "
-              f"{wall_us/1e3/a.steps:6.2f} ms/step   spread "
-              f"{out['modes'][mode]['wall_spread_pct']:.2f}%")
+        print(f"  wall  median {wall_us/1e3:9.1f} ms/batch   "
+              f"{wall_us/1e3/a.batch:6.3f} ms/sample   {wall_us/1e3/a.steps:6.2f} ms/step")
+        print(f"        mean {mean_us/1e3:.1f}  sd {sd_us/1e3:.1f}  CV {sd_us/mean_us*100:.2f}%  "
+              f"min {min(times)/1e3:.1f}  max {max(times)/1e3:.1f}  "
+              f"spread {out['modes'][mode]['wall_spread_pct']:.2f}%")
         print(f"  top kernels:")
         for r in rows[:8]:
             print(f"    {r['kernel'][:58]:<60}{r['us']/1e3:>9.2f} ms  {r['pct']:>5.1f}%")
@@ -194,11 +212,13 @@ def main():
     with open(a.output, "w") as f:
         json.dump(out, f, indent=1)
     print(f"\nWROTE {a.output}")
-    print(f"\n{'mode':<16}{'ms/batch':>12}{'ms/sample':>12}{'ms/step':>10}{'vs fp16':>10}")
+    print(f"\n{'mode':<16}{'ms/batch':>11}{'ms/sample':>11}{'ms/step':>9}"
+          f"{'vs fp16':>9}{'CV':>8}{'spread':>8}")
     for m in MODES:
         d = out["modes"][m]
-        print(f"{m:<16}{d['wall_us_per_batch']/1e3:>12.1f}{d['per_sample_ms']:>12.3f}"
-              f"{d['per_step_ms']:>10.2f}{d['speedup_vs_fp16']:>9.3f}x")
+        print(f"{m:<16}{d['wall_us_per_batch']/1e3:>11.1f}{d['per_sample_ms']:>11.3f}"
+              f"{d['per_step_ms']:>9.2f}{d['speedup_vs_fp16']:>8.3f}x"
+              f"{d['wall_cv_pct']:>7.2f}%{d['wall_spread_pct']:>7.2f}%")
 
 
 if __name__ == "__main__":

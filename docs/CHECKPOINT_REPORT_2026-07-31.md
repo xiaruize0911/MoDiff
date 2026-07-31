@@ -11,19 +11,30 @@ comparisons are not reliable and are superseded here.
 
 ## 1. End to end
 
-50-step DDIM, batch 32, median of 9 repeats after 2 warmup samples.
+200-step DDIM, **batch 128**, median of 5 repeats after 3 warmup samples.
 
-| mode | ms / batch | ms / sample | ms / step | vs FP16 | run spread |
-|---|---:|---:|---:|---:|---:|
-| FP16 | 1435.0 | 44.843 | 28.70 | 1.000× | 2.26% |
-| INT8 | 1104.2 | 34.505 | 22.08 | **1.300×** | 0.20% |
-| **INT4** | **997.5** | **31.173** | **19.95** | **1.439×** | 0.79% |
+| mode | ms / batch | ms / sample | ms / step | vs FP16 | CV | spread |
+|---|---:|---:|---:|---:|---:|---:|
+| FP16 | 20487.7 | 160.060 | 102.44 | 1.000× | 0.50% | 1.21% |
+| INT8 | 14679.9 | 114.686 | 73.40 | **1.396×** | 0.29% | 0.81% |
+| **INT4** | **12483.7** | **97.529** | **62.42** | **1.641×** | 0.38% | 1.04% |
 
-INT4 is **9.7% faster than INT8** end to end.
+INT4 is **17.6% faster than INT8** end to end.
 
-**Repeat count mattered here.** A 3-repeat run of the same configuration put INT4 at 1064.2 ms
-(1.348×) with a 9.77% spread — the median was unstable and understated it by 6.7%. Nine repeats
-bring the spread to 0.79%. Do not quote e2e numbers from fewer than ~9 repeats.
+**Measurement configuration is not a detail here — it changed both the numbers and a
+conclusion.** An earlier pass at batch 32 / 50 steps gave 1.300× and 1.439×, and inverted the
+INT4-vs-INT8 attention comparison (see §1.3). Two separate problems:
+
+- *Sample length.* A 50-step batch-32 sample is short enough for one scheduler hiccup to move the
+  median: a 3-repeat run put INT4 at 1064 ms with 9.77% spread, 6.7% off the 997 ms that 9 repeats
+  converged on. At 200 steps / batch 128 each measurement averages ~16× more work, and all three
+  modes now sit at **CV < 0.5%** — noise suppressed inside the sample rather than rejected after.
+- *Operating point.* Batch 32 understates quantization. At batch 128 the speedups rise from
+  1.300×/1.439× to 1.396×/1.641×, because the quantized kernels' arithmetic advantage is realised
+  once the model is compute-bound rather than launch-overhead-bound.
+
+Batch 128 also matches the layer benchmark, so the two halves of this report are now measured at
+the same operating point.
 
 ![e2e](final_report_2026-07-28/plots/fig_ck_e2e.png)
 
@@ -54,44 +65,46 @@ Panel C of the figure, profiler self-time scaled to the measured wall time (ms p
 
 | stage | FP16 | INT8 | INT4 | INT4 − INT8 |
 |---|---:|---:|---:|---:|
-| convolution | 617.8 | 465.4 | 284.1 | **−181.3** |
-| GroupNorm + quantize | 254.4 | 239.0 | 279.2 | +40.2 |
-| attention core | 160.2 | 117.6 | 126.4 | +8.8 |
-| GEMM / projection | 71.7 | 146.2 | 144.7 | −1.5 |
-| K/V prep + out quantize | 0.0 | 1.5 | 15.1 | +13.6 |
-| elementwise / upsample / concat / pool | 330.9 | 134.6 | 148.1 | +13.5 |
-| **total** | **1435.0** | **1104.2** | **997.5** | **−106.7** |
+| convolution | 8662.7 | 5447.3 | 2852.8 | **−2594.5** |
+| GroupNorm + quantize | 4021.6 | 3660.6 | 3798.2 | +137.6 |
+| attention core | 2276.8 | 1797.6 | **1731.0** | **−66.6** |
+| GEMM / projection | 703.0 | 1849.1 | 1666.0 | −183.1 |
+| K/V prep + out quantize | 0.0 | 32.8 | 220.7 | +187.9 |
+| elementwise / upsample / concat / pool | 4823.7 | 1892.5 | 2214.9 | +322.4 |
+| **total** | **20487.7** | **14679.9** | **12483.7** | **−2196.2** |
 
 **Convolution dominates, not attention.** That is the single most important framing in this
-report: the attention core is **11.2%** of FP16's whole-model time, and INT4's 106.7 ms e2e win
-over INT8 is entirely convolution (−181.3 ms) partly given back everywhere else.
+report: the attention core is **11.1%** of FP16's whole-model time, and INT4's 2196 ms e2e win
+over INT8 is overwhelmingly convolution (−2594 ms), partly given back in GroupNorm, K/V prep and
+elementwise.
 
 Reading the rows that are easy to misread:
 
-- **"elementwise / upsample / concat / pool"** is not one thing. FP16's 330.9 splits into 268.4 ms
-  of elementwise and 62.6 ms of upsample/concat/avg-pool. The 3.7x elementwise drop in the
-  quantized modes is fusion: residual+bias fold into the GEMM epilogue and SiLU folds into
-  GroupNorm, taking launch counts from ~8400 to ~5200. The upsample/concat/pool part is ~63 ms in
+- **"elementwise / upsample / concat / pool"** is not one thing. FP16's 4823.7 splits into 3848.6 ms
+  of elementwise and 975.1 ms of upsample/concat/avg-pool. The 4.2x elementwise drop in INT8 (3848.6 -> 926.1) is fusion: residual+bias fold into the GEMM epilogue and SiLU folds into
+  GroupNorm, taking launch counts from ~8400 to ~5200. The upsample/concat/pool part is comparable in
   ALL THREE modes -- none of it is quantized, so it is a fixed floor no quantization work touches.
 - **"K/V prep + out quantize"** is INT4 paying for the two shapes that were deliberately not
   ported: `aq_kv_packed_static_tiled` runs 500x per sample (50 steps x the 10 T256/T64 blocks,
   which use nibble-packed Q/K and still need the producer) and `quant_attn_out_int4_pack` runs
-  300x (the 6 hd=96 blocks packing their FP16-SDPA output). INT8 needs only `from_i8_kv_tiled` at
-  T64 because its T1024 and T256 both emit Flash-ready layouts from the GEMM. 13.6 ms, ~1.4% of
+  1200x (200 steps x the 6 hd=96 blocks packing their FP16-SDPA output). INT8 needs only `from_i8_kv_tiled` at
+  T64 because its T1024 and T256 both emit Flash-ready layouts from the GEMM. 187.9 ms, ~1.5% of
   INT4's total, and entirely attributable to known open items 4 and 5.
 
 Two things worth noting against the headline:
 
-- **INT4's attention core is 8.8 ms SLOWER than INT8's** end to end (126.4 vs 117.6), even though
-  INT4 wins the attention *layer* comparison. Both modes run the same specialized kernel
-  (`flash_attn_int8_mma_kernel_t<32,8,32,true,*,false,false,24,1024>`) and the new INT4 layout
-  epilogue is confirmed active, so this is not a stale route. The difference is `PACK_OUT4`:
-  INT4's packed-int4 output store costs 403.3 us/call against INT8's 363.0, plus the six hd=96
-  blocks that INT8 serves with a quantized kernel and INT4 runs on FP16 SDPA.
+- **INT4's attention core is 66.6 ms FASTER than INT8's** (1731.0 vs 1797.6), consistent with the
+  layer-level result. Both modes run the same specialized kernel
+  (`flash_attn_int8_mma_kernel_t<32,8,32,true,*,false,false,24,1024>`, differing only in
+  `PACK_OUT4`), and the new INT4 layout epilogue `gemm_w4a4_kernel_awq_out_i8<1>` is confirmed
+  present in the trace.
 
-  **Unresolved:** at the layer level (batch 128) INT4's T1024 flash is FASTER than INT8's
-  (1474.2 vs 1538.7 us), but end to end (batch 32) the ordering inverts. Same kernel, same
-  specialization. This needs a same-batch comparison to explain and is not accounted for here.
+  *A batch-32 measurement of this same quantity said the opposite* — INT4 8.8 ms slower, with the
+  T1024 flash at 403.3 vs 363.0 us/call. At batch 128 the two kernels are within 0.3%
+  (1424.6 vs 1419.9 us/call). The packed-int4 output store carries a fixed cost that is material
+  at small batch and amortises away at large batch. **Conclusion: report attention-core
+  comparisons at the production batch size; the batch-32 inversion was an artefact of the
+  operating point, not a property of the kernels.**
 - **GroupNorm+quantize is INT4's largest non-conv stage and exceeds FP16's** (279.2 vs 254.4). The
   packed-int4 GN costs more than the fp16 one it replaces.
 
@@ -173,7 +186,7 @@ Reading the stages:
 | `final_report_2026-07-28/scripts/make_checkpoint_report_plots.py` | all four figures |
 
 ```bash
-python3 docs/final_report_2026-07-28/scripts/e2e_three_mode_bench.py --batch 32 --steps 50 --repeats 9
+python3 docs/final_report_2026-07-28/scripts/e2e_three_mode_bench.py --batch 128 --steps 200 --repeats 5 --warmups 3
 LBENCH_BATCH=128 LBENCH_MODES=fp16,int8_baseline,int4_baseline \
   LBENCH_OUT=docs/final_report_2026-07-28/data/attn_three_mode_final.json \
   python3 docs/final_report_2026-07-28/scripts/layer_pipeline_bench.py
