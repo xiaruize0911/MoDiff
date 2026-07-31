@@ -33,18 +33,31 @@ STAGES = [
     ("attn", "attention core", "#c0392b",
      ("flash_attn_int8_mma", "flash_attn_int4_mma", "pytorch_flash", "flash_fwd",
       "qi8packed_small", "bmm", "softmax")),
+    # conv vs GEMM is decided by NAME TOKENS, and the names are adversarial: CUTLASS calls a
+    # convolution "..._s16816fprop_..." and a matmul "..._s16816gemm_...", while the fused
+    # GN->QKV projection is called "ImplicitGemmConvolutionFusionPerSample" -- a projection with
+    # "Convolution" in its name. Matching loosely on "cutlass" or "ImplicitGemm" puts the wrong
+    # kernels in the wrong bucket, which made FP16's attention bars show phantom convolution.
+    # So: GEMM is matched on gemm-specific tokens FIRST, conv on fprop/convolve tokens after.
+    ("gemm", "QKV / output projection", "#2f6fb2",
+     ("ImplicitGemmConvolutionFusionPerSample",   # fused GN->QKV; attention-only, verified
+      "s16816gemm", "s1688gemm", "xmma_gemm", "gemm_w8a8_kernel", "gemm_w4a4_kernel",
+      "gemm_w4a4_awq", "gemv")),
     ("conv", "convolution", "#1b7f79",
-     ("implicit_gemm", "ImplicitGemmConvolution", "conv2d", "cudnn", "Kernel_conv",
-      "implicit_convolve", "wgrad", "dgrad", "xmma_conv")),
-    ("gemm", "GEMM / projection", "#2f6fb2",
-     ("gemm_w8a8_kernel", "gemm_w4a4_kernel", "ampere_fp16_s1688gemm",
-      "ampere_fp16_s16816gemm", "sm80_xmma_gemm", "gemm_w4a4_awq", "cutlass",
-      "ampere_s16816gemm", "gemv")),
+     ("ImplicitGemmConvolution", "fprop", "implicit_convolve", "conv2d", "cudnn",
+      "Kernel_conv", "wgrad", "dgrad", "xmma_conv")),
     ("norm", "GroupNorm + quantize", "#e6a020",
      ("group_norm", "gn_accum", "gn_finalize", "quantize_act", "quant_act")),
-    ("prep", "K/V prep + out quantize", "#7d5ba6",
-     ("aq_kv_packed", "quant_attn_out", "quantize_attn", "qkv_i4codes", "from_i8_kv_tiled",
-      "layout_transform", "modiff_delta")),
+    # Split from a single "K/V prep + out quantize" bucket. They are different operations with
+    # different causes: the K/V producer is what the layout epilogues removed, while the output
+    # quantize exists only where attention itself is not quantized. Lumping them made INT4's
+    # residual look like leftover producer work when no producer remains -- INT4's K/V prep is
+    # now exactly 0.0 ms and its 14.2 ms is entirely output quantize for the FP16-SDPA T16 blocks.
+    ("kvprep", "K/V gather + transpose", "#7d5ba6",
+     ("aq_kv_packed", "qkv_i4codes", "from_i8_kv_tiled", "quantize_attn_kv", "layout_transform",
+      "modiff_delta")),
+    ("outq", "attention output quantize", "#c98bdb",
+     ("quant_attn_out", "quantize_attn_out")),
     ("misc", "elementwise / copies / other", "#b9c2cc", ()),
 ]
 

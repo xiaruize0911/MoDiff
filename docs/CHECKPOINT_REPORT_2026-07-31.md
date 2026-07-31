@@ -77,7 +77,8 @@ Panel C of the figure, profiler self-time scaled to the measured wall time (ms p
 | GroupNorm + quantize | 4018.8 | 3660.4 | 3793.3 | +132.9 |
 | attention core | 2277.3 | 1794.6 | **1703.7** | **−90.9** |
 | GEMM / projection | 702.6 | 1850.8 | 1856.1 | +5.3 |
-| K/V prep + out quantize | 0.0 | 32.9 | **14.2** | −18.7 |
+| K/V gather + transpose | 0.0 | **32.9** | **0.0** | −32.9 |
+| attention output quantize | 0.0 | 0.0 | 14.2 | +14.2 |
 | elementwise / upsample / concat / pool | 4816.6 | 1891.6 | 2209.6 | +318.0 |
 | **total** | **20473.4** | **14670.3** | **12421.4** | **−2248.9** |
 
@@ -99,22 +100,26 @@ Reading the rows that are easy to misread:
   of elementwise and ~0.97 s of upsample/concat/avg-pool. The ~4x elementwise drop in INT8 is fusion: residual+bias fold into the GEMM epilogue and SiLU folds into
   GroupNorm, taking launch counts from ~8400 to ~5200. The upsample/concat/pool part is comparable in
   ALL THREE modes -- none of it is quantized, so it is a fixed floor no quantization work touches.
-- **"K/V prep + out quantize"** is small enough to be invisible in the figure, but it is not zero,
-  and what remains is a different kernel from what was removed:
+- **The two attention-plumbing rows were one bucket until now, and splitting them changes the
+  reading.** "K/V prep + out quantize" mixed the producer that the layout epilogues remove with the
+  output packing that exists only where attention is unquantized:
 
-  | mode | left | kernel | why |
-  |---|---:|---|---|
-  | INT8 | 32.9 ms | `from_i8_kv_tiled` ×5 blocks | T64 has no layout epilogue — INT8 only ever got one for T1024 and T256. An unclosed gap. |
-  | INT4 | 14.2 ms | `quant_attn_out_int4_pack` ×5 blocks | T16 deliberately runs FP16 SDPA, so its fp16 output must be packed to int4 for the projection. |
+  | mode | K/V gather + transpose | attention output quantize |
+  |---|---:|---:|
+  | FP16 | 0.0 | 0.0 |
+  | INT8 | **32.9** — `from_i8_kv_tiled` ×5 | 0.0 |
+  | INT4 | **0.0** | 14.2 — `quant_attn_out_int4_pack` ×5 |
 
-  The INT4 K/V *producer* (`aq_kv_packed_static_tiled`, 205.5 ms over 10 blocks) is gone entirely,
-  folded into the GEMM epilogue. The 14.2 ms is not residue from that — it is output packing, a
-  separate kernel that exists only because one shape is not quantized. Removing it needs an INT4
-  small-shape kernel that beats PyTorch flash at T=16; the current dp4a one does not (63.7 vs
-  41.7 µs), and forcing it anyway was measured at +100 µs/layer and reverted.
+  **INT4's K/V prep is exactly zero.** The producer (`aq_kv_packed_static_tiled`, 205.5 ms over 10
+  blocks) is gone entirely, folded into the GEMM epilogue — nothing is left over from it. INT4's
+  14.2 ms is output packing for the five T16 blocks, which run FP16 SDPA by measurement and so must
+  convert their fp16 output for the int4 projection. Removing it needs a small-shape INT4 kernel
+  that beats PyTorch flash at T=16; the dp4a one does not (63.7 vs 41.7 µs) and forcing it was
+  measured at +100 µs/layer and reverted.
 
-  Note the direction: **INT4 is now more completely fused than INT8** here, because INT4's T64 got
-  the packed epilogue and INT8's T64 never did.
+  INT8's 32.9 ms is the genuinely unclosed one: T64 has no layout epilogue, because INT8 only ever
+  got one for T1024 and T256. **INT4 is now more completely fused than INT8 here** — INT4's T64
+  received the packed epilogue this round and INT8's never did.
 
 Two things worth noting against the headline:
 
