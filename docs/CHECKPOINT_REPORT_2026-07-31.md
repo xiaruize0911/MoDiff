@@ -34,8 +34,8 @@ INT4-vs-INT8 attention comparison (see the attention-core note below). Two separ
 - *Operating point.* Batch 32 understates quantization. The same build measured 1.300×/1.439× at
   batch 32 and 1.396×/1.641× at batch 128, because the quantized kernels' arithmetic advantage is
   realised once the model is compute-bound rather than launch-overhead-bound. (Those two figures
-  are a clean batch-only comparison from before the INT4 fusion round; the headline table above is
-  the current build, where batch 128 gives 1.396×/1.648×.)
+  are a clean batch-only comparison from an earlier build, isolating the batch effect; the headline
+  table above is the current build, where batch 128 gives 1.400×/1.653×.)
 
 Batch 128 also matches the layer benchmark, so the two halves of this report are now measured at
 the same operating point.
