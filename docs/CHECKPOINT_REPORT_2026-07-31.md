@@ -25,7 +25,7 @@ INT4 is **9.7% faster than INT8** end to end.
 (1.348×) with a 9.77% spread — the median was unstable and understated it by 6.7%. Nine repeats
 bring the spread to 0.79%. Do not quote e2e numbers from fewer than ~9 repeats.
 
-![e2e](plots/fig_ck_e2e.png)
+![e2e](final_report_2026-07-28/plots/fig_ck_e2e.png)
 
 ### Configuration is load-bearing — check it, do not assume it
 
@@ -92,11 +92,11 @@ Every layer instance in the UNet, batch 128, 20 warmups, median of 5 rounds × 6
 Attention is **31% of FP16 layer time**. INT4's 4.7 ms lead over INT8 is 5.0 ms of ResBlock win
 minus a 0.86 ms ResBlock-updown loss, with attention contributing only 0.55 ms.
 
-![layers](plots/fig_ck_layers.png)
+![layers](final_report_2026-07-28/plots/fig_ck_layers.png)
 
 ### ⚠ INT4 is SLOWER THAN FP16 on five layers
 
-![speedup matrix](plots/fig_ck_speedup_matrix.png)
+![speedup matrix](final_report_2026-07-28/plots/fig_ck_speedup_matrix.png)
 
 The heatmap is the most actionable figure here. **INT8 is never below 1.0× on any layer**
 (range 1.13–1.86×). INT4 reaches 2.12× at its best but drops below FP16 on five:
@@ -115,7 +115,7 @@ These five are the clearest remaining INT4 work item, and they are entirely outs
 
 ### Attention layers by stage
 
-![attention stages](plots/fig_ck_attn_stages.png)
+![attention stages](final_report_2026-07-28/plots/fig_ck_attn_stages.png)
 
 | shape | FP16 | INT8 | INT4 | best |
 |---|---:|---:|---:|---|
@@ -143,13 +143,13 @@ Reading the stages:
 
 | file | contents |
 |---|---|
-| `data/e2e_three_mode.json` | e2e latency, spreads, `route_check`, full per-kernel profile per mode |
-| `data/attn_three_mode_final.json` | all 26 layer entries × 3 modes, with per-kernel profiles |
-| `data/int4_layout_epilogue.json` | INT4 layout-epilogue bit-exactness + SASS census + A/B |
-| `data/int4_step0_same_session.json` | the same-session baseline that scoped the INT4 work |
-| `scripts/e2e_three_mode_bench.py` | e2e driver (asserts the route before timing) |
-| `scripts/layer_pipeline_bench.py` | layer driver |
-| `scripts/make_checkpoint_report_plots.py` | all four figures |
+| `final_report_2026-07-28/data/e2e_three_mode.json` | e2e latency, spreads, `route_check`, full per-kernel profile per mode |
+| `final_report_2026-07-28/data/attn_three_mode_final.json` | all 26 layer entries × 3 modes, with per-kernel profiles |
+| `final_report_2026-07-28/data/int4_layout_epilogue.json` | INT4 layout-epilogue bit-exactness + SASS census + A/B |
+| `final_report_2026-07-28/data/int4_step0_same_session.json` | the same-session baseline that scoped the INT4 work |
+| `final_report_2026-07-28/scripts/e2e_three_mode_bench.py` | e2e driver (asserts the route before timing) |
+| `final_report_2026-07-28/scripts/layer_pipeline_bench.py` | layer driver |
+| `final_report_2026-07-28/scripts/make_checkpoint_report_plots.py` | all four figures |
 
 ```bash
 python3 docs/final_report_2026-07-28/scripts/e2e_three_mode_bench.py --batch 32 --steps 50 --repeats 9
@@ -194,6 +194,6 @@ is CUDA-event timing plus profiler self-time, never hardware counters.
 5. **T256 INT4 K/V producer** — the last fused-epilogue gap in attention.
 
 The INT8 attention target of 1.5× weighted remains unmet at 1.20×; the analysis in
-`ATTENTION_SLOWER_THAN_FP16.md` and the occupancy rejection pinned in `flash_attn_int8.cu`
+`final_report_2026-07-28/ATTENTION_SLOWER_THAN_FP16.md` and the occupancy rejection pinned in `flash_attn_int8.cu`
 indicate the remaining gap is stall-bound rather than throughput-bound, which needs Nsight
 counters to localise.
