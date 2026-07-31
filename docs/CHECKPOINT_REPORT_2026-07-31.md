@@ -15,11 +15,11 @@ comparisons are not reliable and are superseded here.
 
 | mode | ms / batch | ms / sample | ms / step | vs FP16 | CV | spread |
 |---|---:|---:|---:|---:|---:|---:|
-| FP16 | 20487.7 | 160.060 | 102.44 | 1.000× | 0.50% | 1.21% |
-| INT8 | 14679.9 | 114.686 | 73.40 | **1.396×** | 0.29% | 0.81% |
-| **INT4** | **12483.7** | **97.529** | **62.42** | **1.641×** | 0.38% | 1.04% |
+| FP16 | 20473.4 | 159.948 | 102.37 | 1.000× | 0.37% | 0.92% |
+| INT8 | 14670.3 | 114.612 | 73.35 | **1.396×** | 0.31% | 0.78% |
+| **INT4** | **12421.4** | **97.042** | **62.11** | **1.648×** | 0.24% | 0.58% |
 
-INT4 is **17.6% faster than INT8** end to end.
+INT4 is **18.1% faster than INT8** end to end.
 
 **Measurement configuration is not a detail here — it changed both the numbers and a
 conclusion.** An earlier pass at batch 32 / 50 steps gave 1.300× and 1.439×, and inverted the
@@ -29,9 +29,11 @@ INT4-vs-INT8 attention comparison (see §1.3). Two separate problems:
   median: a 3-repeat run put INT4 at 1064 ms with 9.77% spread, 6.7% off the 997 ms that 9 repeats
   converged on. At 200 steps / batch 128 each measurement averages ~16× more work, and all three
   modes now sit at **CV < 0.5%** — noise suppressed inside the sample rather than rejected after.
-- *Operating point.* Batch 32 understates quantization. At batch 128 the speedups rise from
-  1.300×/1.439× to 1.396×/1.641×, because the quantized kernels' arithmetic advantage is realised
-  once the model is compute-bound rather than launch-overhead-bound.
+- *Operating point.* Batch 32 understates quantization. The same build measured 1.300×/1.439× at
+  batch 32 and 1.396×/1.641× at batch 128, because the quantized kernels' arithmetic advantage is
+  realised once the model is compute-bound rather than launch-overhead-bound. (Those two figures
+  are a clean batch-only comparison from before the INT4 fusion round; the headline table above is
+  the current build, where batch 128 gives 1.396×/1.648×.)
 
 Batch 128 also matches the layer benchmark, so the two halves of this report are now measured at
 the same operating point.
@@ -57,11 +59,13 @@ of `gemm_w4a4_kernel_awq_out_i8`.
 | mode | attention blocks | qout-eligible | expected | qkv / proj type |
 |---|---:|---:|---:|---|
 | INT8 | 21 | 21 | 21 | `QuantLinearWxAx` |
-| INT4 | 21 | **15** | 15 | `QuantLinearWxAx` |
+| INT4 | 21 | 21 | 21 | `QuantLinearWxAx` |
 
-INT4's 15/21 is **correct, not a defect**: the six hd=96 blocks have no INT4 route (the int4
-kernel caps at hd≤64, and the small-shape kernel and its scale observer are INT8-only, so
-`_fq4_frozen` is never reached there). Those six run FP16 SDPA.
+INT4 reached 21/21 only after this round: it previously showed 15/21, because the six hd=96
+blocks had no INT4 route at all (the int4 MMA kernel caps at hd≤64, and the small-shape kernel
+plus its scale observer were INT8-only, so `_fq4_frozen` was never reached). Both were fixed —
+the observer is un-gated and an INT4 dp4a small kernel exists — so all 21 are now eligible even
+though T16 still elects FP16 SDPA on measured grounds.
 
 ### Where the whole model's time goes
 
@@ -69,13 +73,20 @@ Panel C of the figure, profiler self-time scaled to the measured wall time (ms p
 
 | stage | FP16 | INT8 | INT4 | INT4 − INT8 |
 |---|---:|---:|---:|---:|
-| convolution | 8662.7 | 5447.3 | 2852.8 | **−2594.5** |
-| GroupNorm + quantize | 4021.6 | 3660.6 | 3798.2 | +137.6 |
-| attention core | 2276.8 | 1797.6 | **1731.0** | **−66.6** |
-| GEMM / projection | 703.0 | 1849.1 | 1666.0 | −183.1 |
-| K/V prep + out quantize | 0.0 | 32.8 | 220.7 | +187.9 |
-| elementwise / upsample / concat / pool | 4823.7 | 1892.5 | 2214.9 | +322.4 |
-| **total** | **20487.7** | **14679.9** | **12483.7** | **−2196.2** |
+| convolution | 8658.1 | 5440.1 | 2844.4 | **−2595.7** |
+| GroupNorm + quantize | 4018.8 | 3660.4 | 3793.3 | +132.9 |
+| attention core | 2277.3 | 1794.6 | **1703.7** | **−90.9** |
+| GEMM / projection | 702.6 | 1850.8 | 1856.1 | +5.3 |
+| K/V prep + out quantize | 0.0 | 32.9 | **14.2** | −18.7 |
+| elementwise / upsample / concat / pool | 4816.6 | 1891.6 | 2209.6 | +318.0 |
+| **total** | **20473.4** | **14670.3** | **12421.4** | **−2248.9** |
+
+**The K/V-prep row is where the fusion work shows up, and it did not simply vanish.** INT4's
+prep went 220.7 → 14.2 ms (all the remaining 14.2 is T16's output pack, the one shape still on
+FP16 SDPA), but its GEMM stage rose 1666.0 → 1856.1 over the same change. The producer pass was
+absorbed into the GEMM epilogue rather than eliminated: −206.5 out of prep, +190.1 into GEMM. The
+net gain is the difference plus the attention-core improvement, which is why a change that
+deleted a whole kernel pass moved e2e by only ~62 ms.
 
 **Convolution dominates, not attention.** That is the single most important framing in this
 report: the attention core is **11.1%** of FP16's whole-model time, and INT4's 2196 ms e2e win
@@ -97,7 +108,7 @@ Reading the rows that are easy to misread:
 
 Two things worth noting against the headline:
 
-- **INT4's attention core is 66.6 ms FASTER than INT8's** (1731.0 vs 1797.6), consistent with the
+- **INT4's attention core is 90.9 ms FASTER than INT8's** (1703.7 vs 1794.6), consistent with the
   layer-level result. Both modes run the same specialized kernel
   (`flash_attn_int8_mma_kernel_t<32,8,32,true,*,false,false,24,1024>`, differing only in
   `PACK_OUT4`), and the new INT4 layout epilogue `gemm_w4a4_kernel_awq_out_i8<1>` is confirmed
@@ -109,8 +120,9 @@ Two things worth noting against the headline:
   at small batch and amortises away at large batch. **Conclusion: report attention-core
   comparisons at the production batch size; the batch-32 inversion was an artefact of the
   operating point, not a property of the kernels.**
-- **GroupNorm+quantize is INT4's largest non-conv stage and exceeds FP16's** (279.2 vs 254.4). The
-  packed-int4 GN costs more than the fp16 one it replaces.
+- **GroupNorm+quantize is INT4's largest non-conv stage** (3793.3) and is 132.9 ms worse than
+  INT8's, barely improving on FP16's 4018.8 — the packed-int4 GN is the weakest quantized kernel
+  in the model.
 
 ---
 
@@ -125,10 +137,26 @@ Every layer instance in the UNet, batch 128, 20 warmups, median of 5 rounds × 6
 |---|---:|---:|---:|---:|
 | FP16 | 24.17 ms | 48.05 ms | 6.41 ms | 78.63 ms |
 | INT8 | 20.23 ms | 34.47 ms | 5.03 ms | 59.73 ms (1.32×) |
-| INT4 | **19.68 ms** | **29.47 ms** | 5.89 ms | **55.04 ms (1.43×)** |
+| INT4 | **19.05 ms** | **29.54 ms** | 5.95 ms | **54.54 ms (1.44×)** |
 
-Attention is **31% of FP16 layer time**. INT4's 4.7 ms lead over INT8 is 5.0 ms of ResBlock win
-minus a 0.86 ms ResBlock-updown loss, with attention contributing only 0.55 ms.
+Attention is **31% of FP16 layer time**. INT4's 5.2 ms lead over INT8 is 4.9 ms of ResBlock win
+plus 1.18 ms of attention, minus a 0.92 ms ResBlock-updown loss.
+
+Per attention shape (µs per layer):
+
+| shape | FP16 | INT8 | INT4 | INT8 × | INT4 × |
+|---|---:|---:|---:|---:|---:|
+| C192/T1024 ×5 | 3098.8 | 2748.9 | **2648.6** | 1.13× | **1.17×** |
+| C384/T256 ×5 | 1069.1 | 866.3 | **765.9** | 1.23× | **1.40×** |
+| C384/T64 ×5 | 411.0 | 230.3 | **206.3** | 1.78× | **1.99×** |
+| C768/T16 ×5 | 216.9 | 179.6 | **170.0** | 1.21× | **1.28×** |
+| C768/T4 ×1 | 191.1 | 102.6 | **98.1** | 1.86× | **1.95×** |
+| **weighted** | **24.170** | **20.228** | **19.052** | **1.195×** | **1.269×** |
+
+INT4 now wins every attention shape, including T4, which INT8 had held throughout. Every block
+runs a fused quantized route; the FP16 SDPA fallback survives only at T16, where it is measurably
+faster than the INT4 dp4a kernel (41.7 vs 63.7 µs) because that kernel's cost grows with T² while
+PyTorch's flash is launch-bound and flat at these sizes.
 
 ![layers](final_report_2026-07-28/plots/fig_ck_layers.png)
 
@@ -141,11 +169,11 @@ The heatmap is the most actionable figure here. **INT8 is never below 1.0× on a
 
 | layer | INT4 vs FP16 | INT8 vs FP16 |
 |---|---:|---:|
-| resblk C768/2² | **0.63×** | 1.29× |
-| resblk C768/2² (updown) | **0.66×** | 1.39× |
-| resblk C1536/2² | **0.67×** | 1.22× |
-| resblk↕ C384/8² | **0.77×** | 1.27× |
-| resblk C384/4² | **0.80×** | 1.31× |
+| resblk C768/2² | **0.61×** | 1.29× |
+| resblk↕ C768/4² | **0.64×** | 1.24× |
+| resblk C1536/2² | **0.64×** | 1.22× |
+| resblk↕ C384/8² | **0.76×** | 1.27× |
+| resblk C384/4² | **0.79×** | 1.31× |
 
 Every one is a **small-spatial** block (2², 4², 8²). The pattern is consistent: INT4's advantage
 scales with problem size and inverts once the layer is small enough that fixed overhead dominates.
@@ -184,10 +212,13 @@ Reading the stages:
 | `final_report_2026-07-28/data/e2e_three_mode.json` | e2e latency, spreads, `route_check`, full per-kernel profile per mode |
 | `final_report_2026-07-28/data/attn_three_mode_final.json` | all 26 layer entries × 3 modes, with per-kernel profiles |
 | `final_report_2026-07-28/data/int4_layout_epilogue.json` | INT4 layout-epilogue bit-exactness + SASS census + A/B |
+| `final_report_2026-07-28/data/int4_fused_routes.json` | packed hd=48 byte-exactness + hd=96 small-kernel check |
+| `final_report_2026-07-28/data/attn_int4_m4.json` | INT4 layer benchmark after all fusions |
 | `final_report_2026-07-28/data/int4_step0_same_session.json` | the same-session baseline that scoped the INT4 work |
 | `final_report_2026-07-28/scripts/e2e_three_mode_bench.py` | e2e driver (asserts the route before timing) |
 | `final_report_2026-07-28/scripts/layer_pipeline_bench.py` | layer driver |
 | `final_report_2026-07-28/scripts/make_checkpoint_report_plots.py` | all four figures |
+| `final_report_2026-07-28/scripts/int4_fused_routes_check.py` | validation for the two new INT4 routes |
 
 ```bash
 python3 docs/final_report_2026-07-28/scripts/e2e_three_mode_bench.py --batch 128 --steps 200 --repeats 5 --warmups 3
@@ -222,14 +253,20 @@ is CUDA-event timing plus profiler self-time, never hardware counters.
 
 ## 5. Open items, in priority order
 
-1. **INT4's five sub-FP16 layers** (0.63–0.80×), all small-spatial ResBlocks. Largest correctness-
-   of-story problem: INT4 is presented as the fastest mode while being slower than FP16 on part of
-   the model.
-2. **Real weights + recalibration**, to convert every timing claim here into a supportable
-   end-to-end claim.
-3. **INT4 GroupNorm** is now its largest non-conv stage and exceeds FP16's.
-4. **T4/hd96 INT4** — the only attention shape where INT8 wins, worth ~0.06 ms weighted.
-5. **T256 INT4 K/V producer** — the last fused-epilogue gap in attention.
+1. **Real weights + recalibration.** Gates every other claim here, and now also covers the
+   newly-enabled hd=96 INT4 scales.
+2. **INT4's five sub-FP16 layers** (0.61–0.79×), all small-spatial ResBlocks. Untouched by this
+   round, which was entirely attention. Largest correctness-of-story problem: INT4 is presented as
+   the fastest mode while being slower than FP16 on part of the model.
+3. **INT4 GroupNorm** (3793.3 ms) is its largest non-conv stage and is 132.9 ms worse than
+   INT8's, having barely improved on FP16's 4018.8 despite the packed-int4 path doing strictly
+   less output work. The packed GN is the weakest quantized kernel in the model.
+4. **The e2e/layer transfer gap.** The attention work is worth 0.624 ms/step at the layer level,
+   which over 200 steps predicts ~125 ms, but e2e moved ~62 ms. Both measurements are tight
+   (CV < 0.4%), so isolated-layer gains are genuinely not transferring in full and the reason is
+   not understood.
+5. **T16 hd=96** stays on FP16 SDPA. Closing it needs a small-shape INT4 kernel whose cost does
+   not grow with T², not the current dp4a one.
 
 The INT8 attention target of 1.5× weighted remains unmet at 1.20×; the analysis in
 `final_report_2026-07-28/ATTENTION_SLOWER_THAN_FP16.md` and the occupancy rejection pinned in `flash_attn_int8.cu`
