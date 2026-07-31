@@ -38,7 +38,11 @@ the same operating point.
 
 ![e2e](final_report_2026-07-28/plots/fig_ck_e2e.png)
 
-### Configuration is load-bearing — check it, do not assume it
+### One environment variable decides which code path runs — the harness verifies it
+
+`MODIFF_QUANT_LINEAR` is not a tuning knob. It selects which attention implementation executes,
+so getting it wrong does not perturb a measurement, it measures something else entirely — and it
+does so without any error, warning, or implausible number.
 
 An earlier attempt at this same benchmark produced clean-looking numbers (INT8 1.162×,
 INT4 1.239×) for a configuration in which **no fused attention epilogue was active at all**.
@@ -61,7 +65,7 @@ kernel caps at hd≤64, and the small-shape kernel and its scale observer are IN
 
 ### Where the whole model's time goes
 
-Panel C of the figure, profiler self-time scaled to the measured wall time (ms per batch of 32):
+Panel C of the figure, profiler self-time scaled to the measured wall time (ms per batch of 128):
 
 | stage | FP16 | INT8 | INT4 | INT4 − INT8 |
 |---|---:|---:|---:|---:|
@@ -85,7 +89,7 @@ Reading the rows that are easy to misread:
   GroupNorm, taking launch counts from ~8400 to ~5200. The upsample/concat/pool part is comparable in
   ALL THREE modes -- none of it is quantized, so it is a fixed floor no quantization work touches.
 - **"K/V prep + out quantize"** is INT4 paying for the two shapes that were deliberately not
-  ported: `aq_kv_packed_static_tiled` runs 500x per sample (50 steps x the 10 T256/T64 blocks,
+  ported: `aq_kv_packed_static_tiled` runs 2000x per sample (200 steps x the 10 T256/T64 blocks,
   which use nibble-packed Q/K and still need the producer) and `quant_attn_out_int4_pack` runs
   1200x (200 steps x the 6 hd=96 blocks packing their FP16-SDPA output). INT8 needs only `from_i8_kv_tiled` at
   T64 because its T1024 and T256 both emit Flash-ready layouts from the GEMM. 187.9 ms, ~1.5% of
