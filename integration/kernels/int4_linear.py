@@ -30,6 +30,11 @@ except ImportError:
     HAS_CUTLASS = False
 
 
+# Contraction-dim (in_features) below which the W4A4 GEMM path defers to fp16 cuBLAS.
+# Mirrors K_INT8_GATE in int8_linear.py; see _int4_gemm_linear for the measurements.
+K_INT4_GATE = 2048
+
+
 class OptimizedInt4Linear(nn.Module):
     """
     FP16-accelerated Linear layer with MoDiff temporal caching (INT4 quantisation).
@@ -123,15 +128,45 @@ class OptimizedInt4Linear(nn.Module):
 
     def _int4_gemm_linear(self, x: torch.Tensor, with_bias: bool = True,
                           input_scale: Optional[float | torch.Tensor] = None) -> torch.Tensor:
-        """True W4A4 GEMM path: pack activation, int4 GEMM, dequantize."""
+        """True W4A4 GEMM path: pack activation, int4 GEMM, dequantize.
+
+        K-gated exactly like `OptimizedInt8Linear._int8_gemm_linear` (K_INT8_GATE):
+        below the crossover the fp16 cuBLAS GEMM is faster, so route there and keep
+        the int_gemm backend from ever being a regression. Every OptimizedInt4Linear
+        in the churches UNet is a ResBlock emb projection with K=768, i.e. entirely
+        below the gate -- measured A40, M=128, fp16-relative:
+
+            K=768   11.1x slower   K=1024  10.8x   K=2048   9.3x
+            K=4096   2.8x slower   K=8192   1.7x   K=16384  1.5x
+
+        Two costs stack up. `quantize_symmetric_int4` is eager PyTorch despite living
+        under modiff_triton/ -- div, round, 2x clamp, +8, cast, two strided slices,
+        two masks, shift, or, cast -- so ~13 launches per call, which at K=768 is 13
+        of a ResBlock's 23 launches and ~36us of GPU around a 17.5us GEMM. On top of
+        that the Triton gemm_w4a4 itself never reaches cuBLAS fp16 here, which is why
+        the ratio is still 1.5x at K=16384 where the quantize chain is amortised.
+        The sweep found no crossover at any K tested; the gate is set to INT8's 2048
+        for parity rather than to "always fp16" because K>=2048 does not occur in
+        this model and has not been validated beyond the microbenchmark above.
+        """
         x_2d = x.reshape(-1, self.in_features)
-        if x_2d.shape[0] < self.int_gemm_min_m or not x_2d.is_cuda:
+        if (x_2d.shape[0] < self.int_gemm_min_m or not x_2d.is_cuda
+                or self.in_features < K_INT4_GATE):
             return self._fp16_linear(x, with_bias=with_bias)
 
         from modiff_triton.kernels.quantize import quantize_symmetric_int4
         from modiff_triton.kernels.gemm_w4a4 import gemm_w4a4
 
         if input_scale is None:
+            # Dynamic per-tensor absmax. NOTE: it is tempting to substitute
+            # `static_input_scale` here since `is_calibrated` is True on these layers,
+            # which would delete this whole reduction -- do not. As shipped, every
+            # OptimizedInt4Linear in the churches model carries the *same* placeholder
+            # scale (34.6463), ~21x larger than the true per-layer activation absmax,
+            # so the static path clips almost everything to +-7: measured rel-L2 vs the
+            # fp16 reference is 0.80 static vs 0.33 dynamic across all 21 layers. The
+            # substitution only becomes correct once a real per-layer calibration is
+            # recorded.
             abs_max = x_2d.abs().amax()
             act_dequant_scale = torch.clamp(abs_max / 7.0, min=1e-8)
         else:
