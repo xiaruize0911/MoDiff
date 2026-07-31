@@ -131,25 +131,20 @@ fig.tight_layout()
 fig.savefig(f"{OUT}/fig_ck_e2e.png", dpi=150, facecolor="w")
 
 # =============================================================== layer-level data
-# attn_three_mode_final.json holds all three modes, but its INT4 column predates the fusion
-# round. attn_int4_m4.json is the re-measured INT4. Overlay it where present, and say which
-# entries came from where -- reading the older file alone silently reproduces stale INT4 numbers,
-# which is exactly the mistake this overlay exists to prevent.
-lay = json.load(open(f"{D}/attn_three_mode_final.json"))
+# attn_uniform.json holds all three modes measured together on the current routing. An earlier
+# revision read the INT4 column from a separate file and overlaid it, because the three-mode file
+# had a stale INT4 column; that is no longer needed and the overlay was itself a hazard (it would
+# silently mask a future mismatch). One file, one measurement session.
+lay = json.load(open(f"{D}/attn_uniform.json"))
 L = {}
 for m, _ in MODES:
     for e in lay["modes"][m]:
         key = (e["kind"], tuple(e["x_shape"]))
         L.setdefault(key, {})[m] = e
-_i4_path = f"{D}/attn_int4_m4.json"
-_overlaid = 0
-if os.path.exists(_i4_path):
-    for e in json.load(open(_i4_path))["modes"]["int4_baseline"]:
-        key = (e["kind"], tuple(e["x_shape"]))
-        if key in L:
-            L[key]["int4_baseline"] = e
-            _overlaid += 1
-    print(f"INT4 layer column: {_overlaid}/{len(L)} entries overlaid from attn_int4_m4.json")
+_missing = [k for k in L if len(L[k]) != len(MODES)]
+assert not _missing, f"incomplete mode coverage for {_missing[:3]}"
+print(f"layer data: {len(L)} (kind, shape) entries x {len(MODES)} modes, all from attn_uniform.json")
+
 # order: attention by descending T, then resblocks by descending pixels
 keys = sorted(L.keys(), key=lambda k: (k[0], -(k[1][2] * k[1][3]), -k[1][1]))
 

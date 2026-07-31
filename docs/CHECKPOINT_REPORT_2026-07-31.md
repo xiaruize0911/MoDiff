@@ -15,11 +15,13 @@ comparisons are not reliable and are superseded here.
 
 | mode | ms / batch | ms / sample | ms / step | vs FP16 | CV | spread |
 |---|---:|---:|---:|---:|---:|---:|
-| FP16 | 20473.4 | 159.948 | 102.37 | 1.000× | 0.37% | 0.92% |
-| INT8 | 14670.3 | 114.612 | 73.35 | **1.396×** | 0.31% | 0.78% |
-| **INT4** | **12421.4** | **97.042** | **62.11** | **1.648×** | 0.24% | 0.58% |
+| FP16 | 20525.4 | 160.355 | 102.63 | 1.000× | 0.22% | 0.51% |
+| INT8 | 14659.6 | 114.528 | 73.30 | **1.400×** | 0.23% | 0.61% |
+| **INT4** | **12413.7** | **96.982** | **62.07** | **1.653×** | 0.19% | 0.51% |
 
-INT4 is **18.1% faster than INT8** end to end.
+INT4 is **18.1% faster than INT8** end to end. Every attention block in both quantized modes runs
+the same fused route for its head dim — there are no shape-dependent exceptions left, and the
+K/V-gather and output-quantize stages are **0.0 ms in both modes**.
 
 **Measurement configuration is not a detail here — it changed both the numbers and a
 conclusion.** An earlier pass at batch 32 / 50 steps gave 1.300× and 1.439×, and inverted the
@@ -73,14 +75,14 @@ Panel C of the figure, profiler self-time scaled to the measured wall time (ms p
 
 | stage | FP16 | INT8 | INT4 | INT4 − INT8 |
 |---|---:|---:|---:|---:|
-| convolution | 8658.1 | 5440.1 | 2844.4 | **−2595.7** |
-| GroupNorm + quantize | 4018.8 | 3660.4 | 3793.3 | +132.9 |
-| attention core | 2277.3 | 1794.6 | **1703.7** | **−90.9** |
-| GEMM / projection | 702.6 | 1850.8 | 1856.1 | +5.3 |
-| K/V gather + transpose | 0.0 | **32.9** | **0.0** | −32.9 |
-| attention output quantize | 0.0 | 0.0 | 14.2 | +14.2 |
-| elementwise / upsample / concat / pool | 4816.6 | 1891.6 | 2209.6 | +318.0 |
-| **total** | **20473.4** | **14670.3** | **12421.4** | **−2248.9** |
+| convolution | 7591.1 | 5440.0 | 2846.0 | -2594.0 |
+| GroupNorm + quantize | 4025.3 | 3656.4 | 3788.7 | +132.3 |
+| attention core | 2285.1 | 1795.8 | 1725.3 | -70.5 |
+| QKV / output projection | 1790.4 | 1874.6 | 1852.6 | -22.0 |
+| K/V gather + transpose | 0.0 | 0.0 | 0.0 | +0.0 |
+| attention output quantize | 0.0 | 0.0 | 0.0 | +0.0 |
+| elementwise / upsample / concat / pool | 4833.5 | 1892.7 | 2201.1 | +308.4 |
+| **total** | **20525.4** | **14659.6** | **12413.7** | **-2245.9** |
 
 **The K/V-prep row is where the fusion work shows up, and it did not simply vanish.** INT4's
 prep went 220.7 → 14.2 ms (all the remaining 14.2 is T16's output pack, the one shape still on
@@ -90,8 +92,8 @@ net gain is the difference plus the attention-core improvement, which is why a c
 deleted a whole kernel pass moved e2e by only ~62 ms.
 
 **Convolution dominates, not attention.** That is the single most important framing in this
-report: the attention core is **11.1%** of FP16's whole-model time, and INT4's 2249 ms e2e win
-over INT8 is overwhelmingly convolution (−2596 ms), partly given back in GroupNorm and
+report: the attention core is **11.1%** of FP16's whole-model time, and INT4's 2246 ms e2e win
+over INT8 is overwhelmingly convolution (−2594 ms), partly given back in GroupNorm and
 elementwise.
 
 Reading the rows that are easy to misread:
@@ -100,26 +102,9 @@ Reading the rows that are easy to misread:
   of elementwise and ~0.97 s of upsample/concat/avg-pool. The ~4x elementwise drop in INT8 is fusion: residual+bias fold into the GEMM epilogue and SiLU folds into
   GroupNorm, taking launch counts from ~8400 to ~5200. The upsample/concat/pool part is comparable in
   ALL THREE modes -- none of it is quantized, so it is a fixed floor no quantization work touches.
-- **The two attention-plumbing rows were one bucket until now, and splitting them changes the
-  reading.** "K/V prep + out quantize" mixed the producer that the layout epilogues remove with the
-  output packing that exists only where attention is unquantized:
-
-  | mode | K/V gather + transpose | attention output quantize |
-  |---|---:|---:|
-  | FP16 | 0.0 | 0.0 |
-  | INT8 | **32.9** — `from_i8_kv_tiled` ×5 | 0.0 |
-  | INT4 | **0.0** | 14.2 — `quant_attn_out_int4_pack` ×5 |
-
-  **INT4's K/V prep is exactly zero.** The producer (`aq_kv_packed_static_tiled`, 205.5 ms over 10
-  blocks) is gone entirely, folded into the GEMM epilogue — nothing is left over from it. INT4's
-  14.2 ms is output packing for the five T16 blocks, which run FP16 SDPA by measurement and so must
-  convert their fp16 output for the int4 projection. Removing it needs a small-shape INT4 kernel
-  that beats PyTorch flash at T=16; the dp4a one does not (63.7 vs 41.7 µs) and forcing it was
-  measured at +100 µs/layer and reverted.
-
-  INT8's 32.9 ms is the genuinely unclosed one: T64 has no layout epilogue, because INT8 only ever
-  got one for T1024 and T256. **INT4 is now more completely fused than INT8 here** — INT4's T64
-  received the packed epilogue this round and INT8's never did.
+- **Both attention-plumbing rows are now 0.0 ms in every mode.** They exist as separate stages
+  because they used to be non-zero and used to be confused with each other; keeping them visible
+  (at zero) is the point. See §2.1.
 
 Two things worth noting against the headline:
 
@@ -157,9 +142,9 @@ answers "which module", that one answers "which kernel".
 
 | mode | attention | resblock_plain | resblock_updown | total |
 |---|---:|---:|---:|---:|
-| FP16 | 24.17 ms | 48.05 ms | 6.41 ms | 78.63 ms |
-| INT8 | 20.23 ms | 34.47 ms | 5.03 ms | 59.73 ms (1.32×) |
-| INT4 | **19.05 ms** | **29.54 ms** | 5.95 ms | **54.54 ms (1.44×)** |
+| FP16 | 24.20 ms | 48.24 ms | 6.45 ms | 78.89 ms |
+| INT8 | 20.13 ms | 34.46 ms | 5.05 ms | 59.64 ms (1.32×) |
+| INT4 | **19.11 ms** | **29.67 ms** | 5.98 ms | **54.75 ms (1.44×)** |
 
 Attention is **31% of FP16 layer time**. INT4's 5.2 ms lead over INT8 is 4.9 ms of ResBlock win
 plus 1.18 ms of attention, minus a 0.92 ms ResBlock-updown loss.
@@ -168,19 +153,51 @@ Per attention shape (µs per layer):
 
 | shape | FP16 | INT8 | INT4 | INT8 × | INT4 × |
 |---|---:|---:|---:|---:|---:|
-| C192/T1024 ×5 | 3098.8 | 2748.9 | **2648.6** | 1.13× | **1.17×** |
-| C384/T256 ×5 | 1069.1 | 866.3 | **765.9** | 1.23× | **1.40×** |
-| C384/T64 ×5 | 411.0 | 230.3 | **206.3** | 1.78× | **1.99×** |
-| C768/T16 ×5 | 216.9 | 179.6 | **170.0** | 1.21× | **1.28×** |
-| C768/T4 ×1 | 191.1 | 102.6 | **98.1** | 1.86× | **1.95×** |
-| **weighted** | **24.170** | **20.228** | **19.052** | **1.195×** | **1.269×** |
+| C192/T1024 ×5 | 3100.0 | 2748.0 | **2670.6** | 1.13× | **1.16×** |
+| C384/T256 ×5 | 1071.6 | 855.5 | **768.1** | 1.25× | **1.40×** |
+| C384/T64 ×5 | 411.0 | 222.2 | **207.0** | 1.85× | **1.99×** |
+| C768/T16 ×5 | 216.8 | 180.3 | **156.2** | 1.20× | **1.39×** |
+| C768/T4 ×1 | 197.8 | 102.0 | **97.8** | 1.94× | **2.02×** |
+| **weighted** | **24.195** | **20.132** | **19.107** | **1.202×** | **1.266×** |
 
-INT4 now wins every attention shape, including T4, which INT8 had held throughout. Every block
-runs a fused quantized route; the FP16 SDPA fallback survives only at T16, where it is measurably
-faster than the INT4 dp4a kernel (41.7 vs 63.7 µs) because that kernel's cost grows with T² while
-PyTorch's flash is launch-bound and flat at these sizes.
+INT4 wins every attention shape. **Every block in both quantized modes now runs the same fused
+route for its head dim** — no FP16 SDPA fallback, no K/V producer, no separate output quantize
+anywhere. See §2.1 for why the two shape-specific exceptions that used to exist were removed.
 
 ![layers](final_report_2026-07-28/plots/fig_ck_layers.png)
+
+### 2.1 Removing the two routing exceptions — uniformity turned out to be free
+
+Until this revision each quantized mode carried one shape that took a different route, each
+justified by a measurement:
+
+| | exception | the measurement that justified it |
+|---|---|---|
+| INT8 | T64 used a plain GEMM + `quantize_attn_kv_from_i8` producer instead of the compact layout epilogue | the epilogue measured **0.908×** there |
+| INT4 | T16 used FP16 SDPA + `quant_attn_out_int4_pack` instead of the dp4a kernel | the kernel measured **63.7 µs against PyTorch's 41.7** |
+
+Both were removed in favour of one route per head dim. The expectation was a small performance
+loss for a simpler dataflow. **Both measurements turned out to be stale, and uniformity was
+faster:**
+
+| | before | after | |
+|---|---:|---:|---|
+| INT8 T64 | 230.3 | **222.2** | −8.1 µs |
+| INT4 T16 | 170.0 | **156.2** | −13.8 µs |
+| INT8 weighted | 20.228 | **20.132** | −0.096 ms |
+| INT4 weighted | 19.052 | 19.107 | +0.055 ms (T1024 run-to-run; T1024's route did not change) |
+| INT8 e2e | 1.396× | **1.400×** | |
+| INT4 e2e | 1.648× | **1.653×** | |
+
+The INT4 case is a process failure worth recording. The 63.7-vs-41.7 comparison that justified
+keeping T16 on FP16 SDPA was measured while the codes GEMM still ran through `QKV_LAYOUT` mode 2,
+whose per-element epilogue cost 145.3 µs. Mode 4 replaced that in the same round — invalidating
+the comparison — and the routing decision was not re-tested against the new GEMM. The exception
+survived on the strength of a measurement its own fix had obsoleted.
+
+The general lesson, which applies to the INT8 case too: **a routing decision is only as current as
+the components it was measured against.** Changing a shared component invalidates every per-shape
+choice downstream of it.
 
 ### ⚠ INT4 is SLOWER THAN FP16 on five layers
 
@@ -215,8 +232,9 @@ Per-shape totals are in the table above; what the stage split adds:
   shape — one of the largest relative wins in the table has nothing to do with the attention kernel.
 - **T256 no longer carries a K/V-prep block.** It now runs GEMM (322.7) → flash (183.7) →
   projection (164.3) → GN (95.5), with the producer gone.
-- **T4 is now INT4's second-best shape** (1.95×), having been the one attention shape INT8 held
-  for most of this work. The dp4a int4 kernel costs 8.1 µs there against PyTorch flash's 38.4.
+- **T4 is INT4's second-best shape** (1.99×). The dp4a int4 kernel costs 8.1 µs there against
+  PyTorch flash's 38.4 — the same kernel that is slower than PyTorch at T16, where it nonetheless
+  now wins on the layer total because the surrounding GEMM got cheaper.
 
 ---
 
@@ -225,10 +243,11 @@ Per-shape totals are in the table above; what the stage split adds:
 | file | contents |
 |---|---|
 | `final_report_2026-07-28/data/e2e_three_mode.json` | e2e latency, spreads, `route_check`, full per-kernel profile per mode |
-| `final_report_2026-07-28/data/attn_three_mode_final.json` | all 26 layer entries × 3 modes (FP16/INT8 columns; INT4 superseded by the file below) |
+| `final_report_2026-07-28/data/attn_uniform.json` | **current** — all 26 layer entries × 3 modes, uniform routing |
+| `final_report_2026-07-28/data/attn_three_mode_final.json` | superseded; kept for the before/after in §2.1 |
 | `final_report_2026-07-28/data/int4_layout_epilogue.json` | INT4 layout-epilogue bit-exactness + SASS census + A/B |
 | `final_report_2026-07-28/data/int4_fused_routes.json` | packed hd=48 byte-exactness + hd=96 small-kernel check |
-| `final_report_2026-07-28/data/attn_int4_m4.json` | **INT4 layer column** — re-measured after all fusions |
+| `final_report_2026-07-28/data/attn_int4_m4.json` | superseded; the INT4 "before" column in §2.1 |
 | `final_report_2026-07-28/data/int4_step0_same_session.json` | the same-session baseline that scoped the INT4 work |
 | `final_report_2026-07-28/scripts/e2e_three_mode_bench.py` | e2e driver (asserts the route before timing) |
 | `final_report_2026-07-28/scripts/layer_pipeline_bench.py` | layer driver |
@@ -238,7 +257,7 @@ Per-shape totals are in the table above; what the stage split adds:
 ```bash
 python3 docs/final_report_2026-07-28/scripts/e2e_three_mode_bench.py --batch 128 --steps 200 --repeats 5 --warmups 3
 LBENCH_BATCH=128 LBENCH_MODES=fp16,int8_baseline,int4_baseline \
-  LBENCH_OUT=docs/final_report_2026-07-28/data/attn_three_mode_final.json \
+  LBENCH_OUT=docs/final_report_2026-07-28/data/attn_uniform.json \
   python3 docs/final_report_2026-07-28/scripts/layer_pipeline_bench.py
 python3 docs/final_report_2026-07-28/scripts/make_checkpoint_report_plots.py
 ```

@@ -452,10 +452,13 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         """
         mixed = (T == 1024 and hd == 24)          # unpacked int4 values through the int8 MMA
         packed = (T in (256, 64) and hd == 48)     # native int4 MMA, nibble-packed Q/K
-        # T4 only. The dp4a kernel costs ~T^2 while PyTorch's flash is launch-bound and nearly
-        # flat at these sizes, so measured per-layer: T4 8.1us vs 38.4 (take it), T16 63.7 vs
-        # 41.7 (leave it). Routing "all hd=96" would have made T16 60us/layer worse.
-        small = (T == 4 and hd == 96)
+        # Both hd=96 shapes, so every attention block in the model runs a quantized route and the
+        # FP16 SDPA fallback disappears entirely. T16 is a KNOWN performance loss: the dp4a kernel
+        # costs ~T^2 while PyTorch's flash is launch-bound and flat, measured 63.7us against 41.7
+        # per layer (T4 is the other way round, 8.1 vs 38.4). Taken deliberately for structural
+        # uniformity -- one INT4 dataflow, no shape-dependent fallback to reason about. It also
+        # removes the separate quant_attn_out_int4_pack pass those blocks needed.
+        small = (T in (16, 4) and hd == 96)
         if (not self._int4_layout_epilogue or self.bits != 4
                 or not (mixed or packed or small)
                 or (not small and not hasattr(_mc, "gemm_w4a4_awq_qkv_i4qk_i8v_layouts"))
@@ -698,8 +701,13 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
             self._int8_layout_epilogue and T == 1024 and hd == 24
             and hasattr(_mc, "gemm_w8a8_awq_qkv_i8_layouts")
             and hasattr(_mc, "flash_attn_int8_qi8_kv_static_qout"))
+        # T64 is included even though the layout epilogue measured 0.908x there (slower than the
+        # plain GEMM + quantize_attn_kv_from_i8 producer it replaces). Structural uniformity is
+        # the priority: every hd=48 shape now takes the same route, so there is one INT8 dataflow
+        # to reason about instead of two with a shape-dependent exception. Set
+        # MODIFF_INT8_QKV_COMPACT_EPILOGUE=0 to fall the whole hd=48 family back.
         use_compact_layout = (
-            self._int8_compact_epilogue and T == 256 and hd == 48
+            self._int8_compact_epilogue and T in (256, 64) and hd == 48
             and hasattr(_mc, "gemm_w8a8_awq_qkv_i8_layouts_compact")
             and hasattr(_mc, "flash_attn_int8_qi8_kv_static_qout"))
         if use_compact_layout:
