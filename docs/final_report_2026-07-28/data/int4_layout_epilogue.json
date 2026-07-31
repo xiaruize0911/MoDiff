@@ -1,0 +1,72 @@
+{
+ "gpu": "NVIDIA A40",
+ "shape": {
+  "T": 1024,
+  "hd": 24,
+  "hp": 32,
+  "nh": 8,
+  "batch": 128
+ },
+ "sass_instruction_counts": {
+  "w4a4<2>": 4096,
+  "w4a4<1>": 2264,
+  "w4a4<0>": 2104,
+  "w8a8<2>": 2248,
+  "w8a8<1>": 2000,
+  "w8a8<0>": 1640
+ },
+ "validation": [
+  {
+   "batch": 1,
+   "q_bit_exact": true,
+   "k_bit_exact": true,
+   "vt_bit_exact": true,
+   "q_max_abs_diff": 0,
+   "k_max_abs_diff": 0,
+   "vt_max_abs_diff": 0,
+   "q_within_i4_grid": true,
+   "k_within_i4_grid": true,
+   "vt_within_i8": true,
+   "q_pad_zero": true,
+   "k_pad_zero": true,
+   "vt_pad_zero": true
+  },
+  {
+   "batch": 4,
+   "q_bit_exact": true,
+   "k_bit_exact": true,
+   "vt_bit_exact": true,
+   "q_max_abs_diff": 0,
+   "k_max_abs_diff": 0,
+   "vt_max_abs_diff": 0,
+   "q_within_i4_grid": true,
+   "k_within_i4_grid": true,
+   "vt_within_i8": true,
+   "q_pad_zero": true,
+   "k_pad_zero": true,
+   "vt_pad_zero": true,
+   "repeat20_deterministic": true,
+   "nondefault_stream_exact": true
+  },
+  {
+   "batch": 128,
+   "q_bit_exact": true,
+   "k_bit_exact": true,
+   "vt_bit_exact": true,
+   "q_max_abs_diff": 0,
+   "k_max_abs_diff": 0,
+   "vt_max_abs_diff": 0,
+   "q_within_i4_grid": true,
+   "k_within_i4_grid": true,
+   "vt_within_i8": true,
+   "q_pad_zero": true,
+   "k_pad_zero": true,
+   "vt_pad_zero": true
+  }
+ ],
+ "bench_us": {
+  "reference_two_kernel": 2067.1359300613403,
+  "candidate_one_kernel": 553.5680055618286,
+  "speedup": 3.7342041254052565
+ }
+}

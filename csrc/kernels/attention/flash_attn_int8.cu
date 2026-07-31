@@ -2107,6 +2107,7 @@ torch::Tensor flash_attn_i4values_i8mma_qpacked_kv_static_qout(
       N, H, T, hd, 32, (float)softmax_scale, out_q.data_ptr<int8_t>(),
       1.f / (float)proj_a_scale, bstride, (float)(sq * sk),
       reinterpret_cast<const __half*>(qkv.data_ptr<at::Half>()), hd, 1.f / (float)sq);
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
   return out_q;
 }
 
@@ -2133,6 +2134,55 @@ torch::Tensor flash_attn_i4values_i8mma_vt_static_qout(
       (const float*)nullptr, (const float*)nullptr, sv.data_ptr<float>(), (__half*)nullptr,
       N, H, T, hd, 32, (float)softmax_scale, out_q.data_ptr<int8_t>(),
       1.f / (float)proj_a_scale, bstride, (float)(sq * sk));
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  return out_q;
+}
+
+// Direct-layout counterpart of the two wrappers above: Q arrives TOKEN-major [N,T,H,hd_pad]
+// straight out of the W4A4 QKV layout epilogue (gemm_w4a4_awq_qkv_i4qk_i8v_layouts), so nothing
+// has to gather it into head-major first. This is the int4 analogue of
+// flash_attn_int8_qi8_kv_static_qout_hd24 and it carries the same EXACT_HD/EXACT_T compile-time
+// specialization: T is fixed at 1024, exactly three 8-channel PV/output fragments, and only the
+// 24 real Q channels are read out of the padded direct-layout Q. On the int8 side that
+// specialization measured 1650.50 -> 1586.31 us (1.040x) with REG 64 -> 56 and SASS 1016 -> 888;
+// it is available here for free because this route already runs the int8 kernel template
+// (int4 VALUES stored unpacked, executed through m16n8k32.s8 -- see the header note above).
+torch::Tensor flash_attn_i4values_i8mma_qi8_kv_static_qout_hd24(
+    torch::Tensor q_i8, torch::Tensor k, torch::Tensor vt, torch::Tensor sv,
+    int64_t hd_pad, double sq, double sk, double softmax_scale,
+    double proj_a_scale, int64_t k_pad) {
+  TORCH_CHECK(q_i8.is_cuda() && q_i8.dtype() == torch::kChar
+              && q_i8.dim() == 4 && q_i8.is_contiguous(),
+              "exact i4values hd24 flash requires contiguous int8 Q [N,1024,H,32]");
+  TORCH_CHECK(k.is_cuda() && k.dtype() == torch::kChar && k.is_contiguous()
+              && k.dim() == 4 && vt.is_cuda() && vt.dtype() == torch::kChar
+              && vt.is_contiguous() && vt.dim() == 4,
+              "exact i4values hd24 flash requires contiguous int8 K/VT");
+  const int N = q_i8.size(0), T = q_i8.size(1), H = q_i8.size(2);
+  constexpr int HD = 24, HP = 32, TT = 1024, W = 8, BC = 32;
+  const int C = H * HD;
+  const int Kpad = k_pad > 0 ? (int)k_pad : C, bstride = Kpad / 2;
+  TORCH_CHECK(T == TT && q_i8.size(3) == HP && hd_pad == HP
+              && k.size(0) == N && k.size(1) == H && k.size(2) == TT
+              && k.size(3) == HP && vt.size(0) == N && vt.size(1) == H
+              && vt.size(2) == HP && vt.size(3) == TT
+              && sv.is_cuda() && sv.dtype() == torch::kFloat32
+              && sv.is_contiguous() && sv.dim() == 1 && sv.size(0) == HD
+              && Kpad >= C && (Kpad % 2) == 0,
+              "exact i4values route supports only T1024/hd24/hd_pad32");
+  auto out_q = torch::empty({(long)N * TT, bstride},
+      torch::TensorOptions().dtype(torch::kChar).device(q_i8.device()));
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  dim3 grid(N * H, TT / (W * FA_MMA_BR));
+  flash_attn_int8_mma_kernel_t<
+      HP, W, BC, true, /*PACK_OUT4=*/true, false, false, HD, TT>
+      <<<grid, W * 32, 0, stream>>>(
+          (const int8_t*)nullptr, k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
+          (const float*)nullptr, (const float*)nullptr, sv.data_ptr<float>(),
+          (__half*)nullptr, N, H, TT, HD, HP, (float)softmax_scale,
+          out_q.data_ptr<int8_t>(), 1.f / (float)proj_a_scale, bstride,
+          (float)(sq * sk), (const __half*)nullptr, HD, 0.f,
+          q_i8.data_ptr<int8_t>(), 1);
   C10_CUDA_KERNEL_LAUNCH_CHECK();
   return out_q;
 }

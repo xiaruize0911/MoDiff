@@ -905,14 +905,33 @@ torch::Tensor gemm_w4a4_awq_bias_res(torch::Tensor A, torch::Tensor B, torch::Te
 }
 
 // ---- int4 GEMM, INT8-OUTPUT variant (same output-fusion fix as gemm_w8a8_awq_out_i8) ----
-template <bool QKV_EPILOGUE = false>
+// QKV_LAYOUT mirrors the w8a8 kernel's modes:
+//   0 = ordinary contiguous int8 output (plain per-column inv_out_scale).
+//   1 = per-head padded direct layouts -- emits Flash-ready Q/K/Vt from this one launch, the
+//       way gemm_w8a8_kernel_awq_out_i8<1> does. Requires the offline hp-padded weight layout.
+//   2 = compact token-major QKV codes, decoded per element, feeding
+//       qkv_i4codes_i8v_rearrange_kernel. This was the original `QKV_EPILOGUE = true`.
+//
+// Mode 1 exists because mode 2 was measured at 2164.8 us for the T1024/hd24 QKV stage
+// (GEMM 1561.6 + rearrange 603.2) against the w8a8 fused equivalent's ~637 us. Two separate
+// causes, and mode 1 removes both: the second pass disappears, AND the per-element role decode
+// (`gc % (3*hd)` then `/hd` and `%hd`, plus a `1.f/sv[d]` reciprocal, eight times per
+// accumulator pair) collapses into the offline per-column vectors. As in the w8a8 kernel, the
+// combined scale is hoisted once per column pair rather than recomputed per store, and every
+// Q/K/V role decision has already been folded into inv_out_scale[] and lim[] host-side.
+template <int QKV_LAYOUT = 0>
 __global__ void gemm_w4a4_kernel_awq_out_i8(const int8_t* __restrict__ A, const int8_t* __restrict__ B,
                                             const float* __restrict__ w_scale, float a_scale,
                                             const float* __restrict__ inv_out_scale,
                                             int8_t* __restrict__ C, int M, int N, int Kb,
                                             const __half* __restrict__ bias, int n_out,
                                             int nh = 0, int hd = 0, float q_inv = 0.f,
-                                            float k_inv = 0.f, const float* __restrict__ sv = nullptr) {
+                                            float k_inv = 0.f, const float* __restrict__ sv = nullptr,
+                                            const float* __restrict__ lim = nullptr,
+                                            int8_t* __restrict__ qout = nullptr,
+                                            int8_t* __restrict__ kout = nullptr,
+                                            int8_t* __restrict__ vtout = nullptr,
+                                            int T = 0, int hp = 0) {
   const int t = threadIdx.x, warp = t >> 5, lane = t & 31, gid = lane >> 2, tig = lane & 3;
   const int m0 = blockIdx.y * GWQ_CTA_M, n0 = blockIdx.x * GWQ_CTA_N;
   const int warp_offset_n = warp * GWQ_WARP_N;
@@ -976,11 +995,50 @@ __global__ void gemm_w4a4_kernel_awq_out_i8(const int8_t* __restrict__ A, const 
       int c0 = warp_offset_n + j * GWQ_INTRIN_N + tig * 2, c1 = c0 + 8;
       int gc0 = n0 + c0, gc1 = n0 + c1;
       int* accv = acc[i][j];
+      if constexpr (QKV_LAYOUT == 1) {
+        // Padded direct layouts. Every Q/K/V role decision has already been folded offline into
+        // inv_out_scale[] (1/sq on Q columns, 1/sk on K, 1/sv[d] on V) and lim[] (7 on Q/K, 127
+        // on V), so there is no per-element decode at all -- the combined scale and the bias
+        // term are hoisted once per column, exactly as gemm_w8a8_kernel_awq_out_i8 does. The
+        // hp-padded lanes carry zero weight/scale/bias, so they compute an exact zero and no
+        // separate tail-clear is needed.
+        // The arithmetic is kept in mode 2's EXACT statement order -- v = acc*(a_scale*w_scale);
+        // v += bias; rn(v * inv) -- rather than folded into one FFMA the way the w8a8 kernel can
+        // afford to. Only the loads and the products that do not depend on acc are hoisted. That
+        // costs one extra FMUL per element and buys a real gate: mode 1 is then bit-identical to
+        // mode 2, so the port can be validated by byte equality instead of a tolerance. (It can
+        // NOT be validated against the fp16-QKV production route, which rounds Q/K/V through
+        // __half before quantizing and so legitimately differs by +-1 code.)
+        const float aw00 = a_scale * w_scale[gc0], aw01 = a_scale * w_scale[gc0 + 1];
+        const float aw10 = a_scale * w_scale[gc1], aw11 = a_scale * w_scale[gc1 + 1];
+        const float bh00 = bias ? __half2float(bias[gc0]) : 0.f;
+        const float bh01 = bias ? __half2float(bias[gc0 + 1]) : 0.f;
+        const float bh10 = bias ? __half2float(bias[gc1]) : 0.f;
+        const float bh11 = bias ? __half2float(bias[gc1 + 1]) : 0.f;
+        const float iv00 = inv_out_scale[gc0], iv01 = inv_out_scale[gc0 + 1];
+        const float iv10 = inv_out_scale[gc1], iv11 = inv_out_scale[gc1 + 1];
+        const float l00 = lim[gc0], l01 = lim[gc0 + 1], l10 = lim[gc1], l11 = lim[gc1 + 1];
+        auto qc = [](int a, float aw, float bh, float iv, float l) -> int8_t {
+          float v = a * aw;
+          v += bh;
+          int x = __float2int_rn(v * iv);
+          const int li = (int)l;
+          return (int8_t)(x > li ? li : (x < -li ? -li : x));
+        };
+        Cs[r0 * GWQ_CTA_N + c0] = qc(accv[0], aw00, bh00, iv00, l00);
+        Cs[r0 * GWQ_CTA_N + c0 + 1] = qc(accv[1], aw01, bh01, iv01, l01);
+        Cs[r0 * GWQ_CTA_N + c1] = qc(accv[4], aw10, bh10, iv10, l10);
+        Cs[r0 * GWQ_CTA_N + c1 + 1] = qc(accv[5], aw11, bh11, iv11, l11);
+        Cs[r1 * GWQ_CTA_N + c0] = qc(accv[2], aw00, bh00, iv00, l00);
+        Cs[r1 * GWQ_CTA_N + c0 + 1] = qc(accv[3], aw01, bh01, iv01, l01);
+        Cs[r1 * GWQ_CTA_N + c1] = qc(accv[6], aw10, bh10, iv10, l10);
+        Cs[r1 * GWQ_CTA_N + c1 + 1] = qc(accv[7], aw11, bh11, iv11, l11);
+      } else {
 #define GWQ_QCODE(ACC, COL) ([&]() {                                                        \
         const int gc_ = (COL);                                                               \
         if (gc_ >= n_out) return 0;                                                          \
         float v_ = (ACC) * (a_scale * w_scale[gc_]);                                         \
-        if constexpr (QKV_EPILOGUE) {                                                        \
+        if constexpr (QKV_LAYOUT == 2) {                                                     \
           if (bias) v_ += __half2float(bias[gc_]);                                           \
           const int local_ = gc_ % (3 * hd), sel_ = local_ / hd, d_ = local_ % hd;           \
           const float inv_ = sel_ == 0 ? q_inv : (sel_ == 1 ? k_inv : 1.f / sv[d_]);         \
@@ -992,23 +1050,89 @@ __global__ void gemm_w4a4_kernel_awq_out_i8(const int8_t* __restrict__ A, const 
           return x_ > 127 ? 127 : (x_ < -127 ? -127 : x_);                                  \
         }                                                                                    \
       }())
-      Cs[r0 * GWQ_CTA_N + c0] = GWQ_QCODE(accv[0], gc0);
-      Cs[r0 * GWQ_CTA_N + c0 + 1] = GWQ_QCODE(accv[1], gc0 + 1);
-      Cs[r0 * GWQ_CTA_N + c1] = GWQ_QCODE(accv[4], gc1);
-      Cs[r0 * GWQ_CTA_N + c1 + 1] = GWQ_QCODE(accv[5], gc1 + 1);
-      Cs[r1 * GWQ_CTA_N + c0] = GWQ_QCODE(accv[2], gc0);
-      Cs[r1 * GWQ_CTA_N + c0 + 1] = GWQ_QCODE(accv[3], gc0 + 1);
-      Cs[r1 * GWQ_CTA_N + c1] = GWQ_QCODE(accv[6], gc1);
-      Cs[r1 * GWQ_CTA_N + c1 + 1] = GWQ_QCODE(accv[7], gc1 + 1);
+        Cs[r0 * GWQ_CTA_N + c0] = GWQ_QCODE(accv[0], gc0);
+        Cs[r0 * GWQ_CTA_N + c0 + 1] = GWQ_QCODE(accv[1], gc0 + 1);
+        Cs[r0 * GWQ_CTA_N + c1] = GWQ_QCODE(accv[4], gc1);
+        Cs[r0 * GWQ_CTA_N + c1 + 1] = GWQ_QCODE(accv[5], gc1 + 1);
+        Cs[r1 * GWQ_CTA_N + c0] = GWQ_QCODE(accv[2], gc0);
+        Cs[r1 * GWQ_CTA_N + c0 + 1] = GWQ_QCODE(accv[3], gc0 + 1);
+        Cs[r1 * GWQ_CTA_N + c1] = GWQ_QCODE(accv[6], gc1);
+        Cs[r1 * GWQ_CTA_N + c1 + 1] = GWQ_QCODE(accv[7], gc1 + 1);
 #undef GWQ_QCODE
+      }
     }
   }
   __syncthreads();
-  for (int idx = t; idx < GWQ_CTA_M * GWQ_CTA_N / 16; idx += blockDim.x) {
-    int rc = idx * 16, row = rc / GWQ_CTA_N, col = rc % GWQ_CTA_N;
-    if (m0 + row < M && n0 + col + 15 < n_out)
-      *(uint4*)&C[(size_t)(m0 + row) * n_out + n0 + col] =
-          *(const uint4*)&Cs[row * GWQ_CTA_N + col];
+  if constexpr (QKV_LAYOUT == 1) {
+    // Transplanted from gemm_w8a8_kernel_awq_out_i8<1>. Valid verbatim here because at this
+    // shape the int4 codes are stored UNPACKED (storage mode _QK_I4_VALUES_I8_MMA: signed int4
+    // VALUES in one int8 byte each, so the s8 MMA can run at k=32 instead of padding to the
+    // s4 MMA's k=64) and V is plain int8. Both are therefore byte-per-value, exactly as in
+    // w8a8. The hd=48 shapes use nibble-packed Q/K and still need the rearrange kernel.
+    const int nseg = GWQ_CTA_N / hp, chunks_d = hp / 16;
+    const int seg0 = n0 / hp;
+    // Q/K: full-width coalesced 16-byte copies from each row/segment.
+    const int qk_work = GWQ_CTA_M * nseg * chunks_d;
+    for (int idx = t; idx < qk_work; idx += blockDim.x) {
+      const int row = idx / (nseg * chunks_d);
+      const int r = idx % (nseg * chunks_d);
+      const int sl = r / chunks_d, dc = r % chunks_d;
+      const int seg = seg0 + sl, h = seg / 3, sel = seg % 3;
+      const int gm = m0 + row, d0 = dc * 16;
+      if (gm < M && sel != 2) {
+        const uint4 val =
+            *reinterpret_cast<const uint4*>(&Cs[row * GWQ_CTA_N + sl * hp + d0]);
+        if (sel == 0) {
+          *reinterpret_cast<uint4*>(&qout[((size_t)gm * nh + h) * hp + d0]) = val;
+        } else {
+          const int b = gm / T, tok = gm - b * T;
+          *reinterpret_cast<uint4*>(
+              &kout[((size_t)(b * nh + h) * T + tok) * hp + d0]) = val;
+        }
+      }
+    }
+    // V: gather a 16-token shared-memory column into one coalesced uint4 global store. The smem
+    // reads are strided, which is free; the global write is what has to stay 128-bit.
+    const int token_chunks = GWQ_CTA_M / 16;
+    const int v_work = nseg * hp * token_chunks;
+    for (int idx = t; idx < v_work; idx += blockDim.x) {
+      const int sl = idx / (hp * token_chunks);
+      const int r = idx % (hp * token_chunks);
+      const int d = r / token_chunks, tc = r % token_chunks;
+      const int seg = seg0 + sl, h = seg / 3, sel = seg % 3;
+      const int row0 = tc * 16, gm = m0 + row0;
+      if (sel == 2 && gm < M) {
+        const int b = gm / T, tok = gm - b * T;
+        const int col = sl * hp + d;
+        uint32_t p[4];
+#pragma unroll
+        for (int g = 0; g < 4; ++g) {
+          const int rr = row0 + g * 4;
+          p[g] = (uint8_t)Cs[(rr + 0) * GWQ_CTA_N + col]
+               | ((uint32_t)(uint8_t)Cs[(rr + 1) * GWQ_CTA_N + col] << 8)
+               | ((uint32_t)(uint8_t)Cs[(rr + 2) * GWQ_CTA_N + col] << 16)
+               | ((uint32_t)(uint8_t)Cs[(rr + 3) * GWQ_CTA_N + col] << 24);
+        }
+        if (tok + 15 < T && gm + 15 < M) {
+          *reinterpret_cast<uint4*>(
+              &vtout[((size_t)(b * nh + h) * hp + d) * T + tok]) =
+                  make_uint4(p[0], p[1], p[2], p[3]);
+        } else {
+#pragma unroll
+          for (int i2 = 0; i2 < 16; ++i2)
+            if (gm + i2 < M && tok + i2 < T)
+              vtout[((size_t)(b * nh + h) * hp + d) * T + tok + i2] =
+                  Cs[(row0 + i2) * GWQ_CTA_N + col];
+        }
+      }
+    }
+  } else {
+    for (int idx = t; idx < GWQ_CTA_M * GWQ_CTA_N / 16; idx += blockDim.x) {
+      int rc = idx * 16, row = rc / GWQ_CTA_N, col = rc % GWQ_CTA_N;
+      if (m0 + row < M && n0 + col + 15 < n_out)
+        *(uint4*)&C[(size_t)(m0 + row) * n_out + n0 + col] =
+            *(const uint4*)&Cs[row * GWQ_CTA_N + col];
+    }
   }
 }
 
@@ -1037,7 +1161,7 @@ torch::Tensor gemm_w4a4_awq_out_i8(torch::Tensor A, torch::Tensor B, torch::Tens
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
   int Kb = (int)K / 2;
   dim3 grid(N / GWQ_CTA_N, (M + GWQ_CTA_M - 1) / GWQ_CTA_M);
-  gemm_w4a4_kernel_awq_out_i8<false><<<grid, GWQ_NUM_WARPS * 32, 0, stream>>>(
+  gemm_w4a4_kernel_awq_out_i8<0><<<grid, GWQ_NUM_WARPS * 32, 0, stream>>>(
       A.data_ptr<int8_t>(), B.data_ptr<int8_t>(), w_scale.contiguous().data_ptr<float>(),
       (float)a_scale, inv_out_scale.contiguous().data_ptr<float>(), C.data_ptr<int8_t>(), M, N, Kb,
       nullptr, N);
@@ -1098,6 +1222,56 @@ __global__ void qkv_i4codes_i8v_rearrange_kernel(
   }
 }
 
+// Direct-layout W4A4 QKV epilogue: ONE launch emits the three Flash-ready tensors, the way
+// gemm_w8a8_awq_qkv_i8_layouts does. Only the unpacked storage mode (84, signed INT4 values in
+// one byte each, for the INT8 MMA route) is served here -- that is the T1024/hd24 production
+// shape, and it is the case where the codes are byte-per-value so the w8a8 store block applies
+// unchanged. The nibble-packed hd=48 shapes keep gemm_w4a4_awq_qkv_i4qk_i8v below.
+//
+// inv_out[] and lim[] are built offline against the SAME hp-padded channel space as B: inv_out
+// folds 1/sq on Q columns, 1/sk on K columns and 1/sv[d] on V columns, and lim is 7 on Q/K and
+// 127 on V. That is what removes the per-element role decode the two-kernel path pays for.
+std::vector<torch::Tensor> gemm_w4a4_awq_qkv_i4qk_i8v_layouts(
+    torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale, int64_t K,
+    torch::Tensor inv_out, torch::Tensor lim, torch::Tensor bias,
+    int64_t nh_, int64_t T_, int64_t hd_, int64_t hp_, torch::Tensor sv) {
+  TORCH_CHECK(A.is_cuda() && A.dtype() == torch::kChar && B.dtype() == torch::kChar
+              && w_scale.is_cuda() && w_scale.dtype() == torch::kFloat32
+              && inv_out.is_cuda() && inv_out.dtype() == torch::kFloat32
+              && lim.is_cuda() && lim.dtype() == torch::kFloat32
+              && bias.is_cuda() && bias.dtype() == torch::kHalf,
+              "direct-layout W4A4 QKV requires packed int4 A/B, fp32 scales and fp16 bias");
+  A = A.contiguous(); B = B.contiguous(); w_scale = w_scale.contiguous();
+  inv_out = inv_out.contiguous(); lim = lim.contiguous(); bias = bias.contiguous();
+  sv = sv.to(torch::kFloat32).contiguous();
+  const int M = A.size(0), N = B.size(0), Kb = (int)K / 2;
+  const int nh = (int)nh_, T = (int)T_, hd = (int)hd_, hp = (int)hp_;
+  const int n_out = 3 * nh * hp;
+  TORCH_CHECK(A.size(1) == Kb && B.size(1) == Kb && N % GWQ_CTA_N == 0
+              && K % (GWQ_CTA_K * 2) == 0 && M % T == 0
+              && nh > 0 && T >= 64 && hd > 0 && hd % 8 == 0
+              && hp >= hd && (hp == 32 || hp == 64)
+              && n_out == N && n_out % 128 == 0
+              && inv_out.numel() == N && lim.numel() == N
+              && w_scale.numel() == N && bias.numel() == N && sv.numel() >= hd,
+              "invalid direct-layout W4A4 QKV shape");
+  const int batch = M / T, BH = batch * nh;
+  auto oi = torch::TensorOptions().dtype(torch::kChar).device(A.device());
+  auto q = torch::empty({batch, T, nh, hp}, oi);   // token-major, read directly by Flash
+  auto k = torch::empty({BH, T, hp}, oi);
+  auto vt = torch::empty({BH, hp, T}, oi);         // already transposed
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  dim3 grid(N / GWQ_CTA_N, (M + GWQ_CTA_M - 1) / GWQ_CTA_M);
+  gemm_w4a4_kernel_awq_out_i8<1><<<grid, GWQ_NUM_WARPS * 32, 0, stream>>>(
+      A.data_ptr<int8_t>(), B.data_ptr<int8_t>(), w_scale.data_ptr<float>(),
+      (float)a_scale, inv_out.data_ptr<float>(), (int8_t*)nullptr, M, N, Kb,
+      reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()), n_out,
+      nh, hd, 0.f, 0.f, (const float*)nullptr, lim.data_ptr<float>(),
+      q.data_ptr<int8_t>(), k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(), T, hp);
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  return {q, k, vt, sv};
+}
+
 // Experimental W4A4 QKV GEMM epilogue. Bias/dequantization and static Q/K/V requantization happen
 // in the GEMM epilogue, so no FP16 QKV tensor is materialized. storage_mode is named at the Python
 // call site: 4 = packed native INT4 Q/K, 84 = unpacked signed-INT4 values for the INT8 MMA route.
@@ -1124,7 +1298,7 @@ std::vector<torch::Tensor> gemm_w4a4_awq_qkv_i4qk_i8v(
   auto raw = torch::empty({M, (int)n_out}, oi);
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
   dim3 grid(N / GWQ_CTA_N, (M + GWQ_CTA_M - 1) / GWQ_CTA_M);
-  gemm_w4a4_kernel_awq_out_i8<true><<<grid, GWQ_NUM_WARPS * 32, 0, stream>>>(
+  gemm_w4a4_kernel_awq_out_i8<2><<<grid, GWQ_NUM_WARPS * 32, 0, stream>>>(
       A.data_ptr<int8_t>(), B.data_ptr<int8_t>(), w_scale.data_ptr<float>(),
       (float)a_scale, nullptr, raw.data_ptr<int8_t>(), M, N, Kb,
       reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()), (int)n_out,

@@ -345,6 +345,10 @@ std::vector<torch::Tensor> gemm_w4a4_awq_qkv_i4qk_i8v(
     int64_t n_out, torch::Tensor bias, int64_t nh, int64_t T, int64_t hd,
     int64_t hp_qk, int64_t hp_v, int64_t storage_mode,
     double sq, double sk, torch::Tensor sv);
+std::vector<torch::Tensor> gemm_w4a4_awq_qkv_i4qk_i8v_layouts(
+    torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale, int64_t K,
+    torch::Tensor inv_out, torch::Tensor lim, torch::Tensor bias,
+    int64_t nh_, int64_t T_, int64_t hd_, int64_t hp_, torch::Tensor sv);
 torch::Tensor quantize_act_int8(torch::Tensor x, double a_scale);
 torch::Tensor quantize_act_int4_pack(torch::Tensor x, double a_scale);
 
@@ -385,6 +389,10 @@ torch::Tensor flash_attn_i4values_i8mma_qpacked_kv_static_qout(
     double proj_a_scale, int64_t k_pad);
 torch::Tensor flash_attn_i4values_i8mma_vt_static_qout(
     torch::Tensor q, torch::Tensor k, torch::Tensor vt, torch::Tensor sv,
+    int64_t hd_pad, double sq, double sk, double softmax_scale,
+    double proj_a_scale, int64_t k_pad);
+torch::Tensor flash_attn_i4values_i8mma_qi8_kv_static_qout_hd24(
+    torch::Tensor q_i8, torch::Tensor k, torch::Tensor vt, torch::Tensor sv,
     int64_t hd_pad, double sq, double sk, double softmax_scale,
     double proj_a_scale, int64_t k_pad);
 torch::Tensor flash_attn_int4(torch::Tensor q4, torch::Tensor k4, torch::Tensor v,
