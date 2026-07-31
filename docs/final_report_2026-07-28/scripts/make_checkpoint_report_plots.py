@@ -90,15 +90,27 @@ a2.set_title("B.  Per DDIM step\n(the number that scales with step count)", loc=
 a2.grid(axis="y", alpha=.25)
 
 bot = np.zeros(len(MODES))
+_tot = max(sum(split(e2e["modes"][m]["kernels"]).values()) for m, _ in MODES) / 1e3
+_hidden = []
 for key, lbl, colr, _ in STAGES:
     vv = np.array([split(e2e["modes"][m]["kernels"])[key] / 1e3 for m, _ in MODES])
-    a3.bar([l for _, l in MODES], vv, .55, bottom=bot, color=colr, label=lbl)
+    # Every segment is still drawn; only the LEGEND entry is dropped for stages too small to
+    # see (<1% of the tallest bar). A key for an invisible colour is pure clutter -- but the
+    # data stays in the stack and in the report's table, so nothing is hidden.
+    visible = vv.max() >= 0.01 * _tot
+    if not visible:
+        _hidden.append(f"{lbl} (max {vv.max():.0f} ms)")
+    a3.bar([l for _, l in MODES], vv, .55, bottom=bot, color=colr,
+           label=lbl if visible else None)
     bot += vv
+if _hidden:
+    print("legend omits (still drawn, <1% of tallest bar):", "; ".join(_hidden))
 for i, v in enumerate(bot):
     a3.text(i, v * 1.01, f"{v:.0f} ms", ha="center", fontweight="bold", fontsize=9)
 a3.set_ylim(0, bot.max() * 1.18)
 a3.set_ylabel(f"ms per batch of {e2e['batch']}")
-a3.set_title("C.  Whole-model time by stage\n(profiler self-time, scaled to the measured wall time)",
+a3.set_title("C.  Whole-model time by stage\n"
+             "profiler self-time scaled to measured wall time; stages <1% omitted from the key",
              loc="left")
 a3.legend(frameon=False, fontsize=8.5, loc="upper right")
 a3.grid(axis="y", alpha=.25)
@@ -106,12 +118,25 @@ fig.tight_layout()
 fig.savefig(f"{OUT}/fig_ck_e2e.png", dpi=150, facecolor="w")
 
 # =============================================================== layer-level data
+# attn_three_mode_final.json holds all three modes, but its INT4 column predates the fusion
+# round. attn_int4_m4.json is the re-measured INT4. Overlay it where present, and say which
+# entries came from where -- reading the older file alone silently reproduces stale INT4 numbers,
+# which is exactly the mistake this overlay exists to prevent.
 lay = json.load(open(f"{D}/attn_three_mode_final.json"))
 L = {}
 for m, _ in MODES:
     for e in lay["modes"][m]:
         key = (e["kind"], tuple(e["x_shape"]))
         L.setdefault(key, {})[m] = e
+_i4_path = f"{D}/attn_int4_m4.json"
+_overlaid = 0
+if os.path.exists(_i4_path):
+    for e in json.load(open(_i4_path))["modes"]["int4_baseline"]:
+        key = (e["kind"], tuple(e["x_shape"]))
+        if key in L:
+            L[key]["int4_baseline"] = e
+            _overlaid += 1
+    print(f"INT4 layer column: {_overlaid}/{len(L)} entries overlaid from attn_int4_m4.json")
 # order: attention by descending T, then resblocks by descending pixels
 keys = sorted(L.keys(), key=lambda k: (k[0], -(k[1][2] * k[1][3]), -k[1][1]))
 

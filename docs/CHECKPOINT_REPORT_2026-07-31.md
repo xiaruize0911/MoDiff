@@ -131,6 +131,13 @@ Every layer instance in the UNet, batch 128, 20 warmups, median of 5 rounds × 6
 
 ### By layer kind, summed over all instances
 
+These three are **UNet module types, not op types** — `AttentionBlock`, `ResBlock`, and `ResBlock`
+carrying an Upsample/Downsample (`layer_pipeline_bench.py:158`). Conv and Linear are *inside* all
+three: a ResBlock is GroupNorm+SiLU → conv → (resize) → GroupNorm+SiLU+emb Linear → conv → skip,
+and an AttentionBlock is GroupNorm → qkv → attention → proj → residual. The op-level view
+(convolution / GEMM / GroupNorm / attention core) is the whole-model stage table in §1; this table
+answers "which module", that one answers "which kernel".
+
 | mode | attention | resblock_plain | resblock_updown | total |
 |---|---:|---:|---:|---:|
 | FP16 | 24.17 ms | 48.05 ms | 6.41 ms | 78.63 ms |
@@ -190,8 +197,7 @@ Per-shape totals are in the table above; what the stage split adds:
 - **T64's 1.99× is a GroupNorm story.** FP16 spends more time in GN than in the score path at that
   shape — one of the largest relative wins in the table has nothing to do with the attention kernel.
 - **T256 no longer carries a K/V-prep block.** It now runs GEMM (322.7) → flash (183.7) →
-  projection (164.3) → GN (95.5), with the producer gone. The figure below predates this and still
-  shows the purple segment; the numbers in §2's table are current.
+  projection (164.3) → GN (95.5), with the producer gone.
 - **T4 is now INT4's second-best shape** (1.95×), having been the one attention shape INT8 held
   for most of this work. The dp4a int4 kernel costs 8.1 µs there against PyTorch flash's 38.4.
 
