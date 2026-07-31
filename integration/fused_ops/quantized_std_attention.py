@@ -166,6 +166,8 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         self._int4_layout_wscale = None
         self._int4_layout_inv_out = None
         self._int4_layout_lim = None
+        self._int4_codes_inv = None
+        self._int4_codes_lim = None
         self._int4_layout_bias = None
 
     def _flash_quant_attn(self, q, k, v):
@@ -325,8 +327,15 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         return getattr(self, "_fq_frozen2" if self.bits == 8 else "_fq4_frozen", False)
 
     def _observe_small_int8_scales(self, qkv):
-        """Calibrate T16/T4 static Q/K/V scales while their warmup uses FP16 SDPA."""
-        if self.bits != 8 or getattr(self, "_fq_frozen2", False):
+        """Calibrate T16/T4 static Q/K/V scales while their warmup uses FP16 SDPA.
+
+        Runs for BOTH bit widths. It used to return immediately for bits != 8, which meant the
+        six hd=96 INT4 blocks could never reach _fq4_frozen and so were permanently stuck on the
+        FP16 SDPA fallback -- there was no INT4 route for them to become eligible for anyway.
+        Now that flash_attn_i4values_small_qout exists, they need the frozen scales.
+        """
+        frozen = "_fq_frozen2" if self.bits == 8 else "_fq4_frozen"
+        if getattr(self, frozen, False):
             return
         _, _, _, _, hd = qkv.shape
         qv, kv, vv = qkv[:, :, :, 0, :], qkv[:, :, :, 1, :], qkv[:, :, :, 2, :]
@@ -337,13 +346,21 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
                        else torch.maximum(self._fq_av, avc))
         self._fq_n = getattr(self, "_fq_n", 0) + 1
         if self._fq_n >= self._calib_steps:
-            self._fq_sqc = self._fq_aq / 127.0
-            self._fq_skc = self._fq_ak / 127.0
+            # INT4 keeps values on the signed int4 grid, so the divisor is 7 not 127.
+            lvl = 127.0 if self.bits == 8 else 7.0
             hd_pad = ((hd + 31) // 32) * 32
             svv = torch.ones(hd_pad, device=qkv.device)
-            svv[:hd] = (self._fq_av / 127.0).clamp_min(1e-8)
-            self._fq_svv = svv.contiguous()
-            self._fq_frozen2 = True
+            svv[:hd] = (self._fq_av / 127.0).clamp_min(1e-8)   # V stays int8 in both paths
+            if self.bits == 8:
+                self._fq_sqc = self._fq_aq / lvl
+                self._fq_skc = self._fq_ak / lvl
+                self._fq_svv = svv.contiguous()
+                self._fq_frozen2 = True
+            else:
+                self._fq4_sqc = self._fq_aq / lvl
+                self._fq4_skc = self._fq_ak / lvl
+                self._fq4_svv = svv.contiguous()
+                self._fq4_frozen = True
 
     def _score_path(self, qkv, use_flash):
         """Attention score path -> a=[b,nh,T,hd]. Flash (fused int8/int4) when use_flash, else
@@ -433,10 +450,20 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         branch: the GEMM emits token-major Q, padded K and transposed Vt itself, so neither the
         FP16 QKV tensor nor the K/V producer nor the rearrange pass exists.
         """
+        mixed = (T == 1024 and hd == 24)          # unpacked int4 values through the int8 MMA
+        packed = (T in (256, 64) and hd == 48)     # native int4 MMA, nibble-packed Q/K
+        # T4 only. The dp4a kernel costs ~T^2 while PyTorch's flash is launch-bound and nearly
+        # flat at these sizes, so measured per-layer: T4 8.1us vs 38.4 (take it), T16 63.7 vs
+        # 41.7 (leave it). Routing "all hd=96" would have made T16 60us/layer worse.
+        small = (T == 4 and hd == 96)
         if (not self._int4_layout_epilogue or self.bits != 4
-                or not (T == 1024 and hd == 24)
-                or not hasattr(_mc, "gemm_w4a4_awq_qkv_i4qk_i8v_layouts")
-                or not hasattr(_mc, "flash_attn_i4values_i8mma_qi8_kv_static_qout_hd24")):
+                or not (mixed or packed or small)
+                or (not small and not hasattr(_mc, "gemm_w4a4_awq_qkv_i4qk_i8v_layouts"))
+                or (mixed and not hasattr(
+                    _mc, "flash_attn_i4values_i8mma_qi8_kv_static_qout_hd24"))
+                or (packed and not hasattr(_mc, "flash_attn_int4_vt_static_qout"))
+                or (small and not (hasattr(_mc, "flash_attn_i4values_small_qout")
+                                   and hasattr(_mc, "gemm_w4a4_awq_qkv_codes")))):
             return None
         qkv, proj = self.qkv, self.proj
         if not (self._qout_eligible() and _QuantLinearWxAx is not None
@@ -447,8 +474,52 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         gw, gb = self._gn_params(x.dtype)
         if gw is None or gb is None:
             return None
-        hp = ((hd + 31) // 32) * 32                      # 32
-        layout_n = nh * 3 * hp                           # 768
+        # mixed: hp=32 so the s8 MMA runs at k=32. packed: hp=64, the native s4 MMA's k.
+        if small:
+            # hd=96 needs no layout rearrangement at all: the dp4a kernel reads the compact
+            # token-major [b,T,nh,3,hd] code matrix directly, so one GEMM launch feeds it.
+            if self._qkv_inv_scale_t is None:
+                self._qkv_inv_scale_t = torch.tensor(
+                    [1.0 / qkv.a_scale], device=x.device, dtype=torch.float32)
+            empty0 = x.new_empty(0)
+            qb = qkv.bias
+            if qb is None:
+                qb = torch.zeros(qkv.out_features, device=x.device, dtype=torch.float16)
+            xq_img = _mc.group_norm_silu_quantize_pack_nhwc_fast(
+                x, gw, gb, self.norm.num_groups, self.norm.eps, False,
+                self._qkv_inv_scale_t, empty0, empty0, empty0, qkv._awqt_K)
+            if self._int4_codes_inv is None:
+                n_out = qkv.out_features
+                iv = torch.zeros(n_out, device=x.device, dtype=torch.float32)
+                lm = torch.zeros(n_out, device=x.device, dtype=torch.float32)
+                svf = self._fq4_svv[:hd].float()
+                for h in range(nh):
+                    for sel in range(3):
+                        d0 = (h * 3 + sel) * hd
+                        if sel == 0:
+                            iv[d0:d0 + hd] = 1.0 / float(self._fq4_sqc)
+                        elif sel == 1:
+                            iv[d0:d0 + hd] = 1.0 / float(self._fq4_skc)
+                        else:
+                            iv[d0:d0 + hd].copy_(1.0 / svf)
+                        lm[d0:d0 + hd] = 7.0 if sel < 2 else 127.0
+                self._int4_codes_inv = iv.contiguous()
+                self._int4_codes_lim = lm.contiguous()
+            codes = _mc.gemm_w4a4_awq_qkv_codes(
+                xq_img.reshape(b * T, qkv._awqt_K // 2), qkv.qweight, qkv.w_scale,
+                qkv.a_scale, qkv._awqt_K, qkv.out_features, qb, nh, hd,
+                self._int4_codes_inv, self._int4_codes_lim)
+            xattn = _mc.flash_attn_i4values_small_qout(
+                codes.view(b, T, nh, 3, hd), self._fq4_svv[:hd].contiguous(),
+                self._fq4_sqc, self._fq4_skc, self.scale, proj.a_scale, proj._awqt_K)
+            res0 = x_in_tok.reshape(b * T, c).contiguous()
+            pb0 = proj.bias if proj.bias is not None else empty0
+            out0 = _mc.gemm_w4a4_awq_bias_res(
+                xattn, proj.qweight, proj.w_scale, proj.a_scale,
+                proj._awqt_K, proj.out_features, pb0, res0)
+            return out0.reshape(b, T, c)
+        hp = 32 if mixed else 64
+        layout_n = nh * 3 * hp                           # 768 (mixed) / 1536 (packed)
         if (self._int4_layout_qweight is None
                 or self._int4_layout_qweight.size(0) != layout_n):
             # One-time offline channel layout, identical in structure to the INT8 builder below.
@@ -498,10 +569,19 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         q_i8, ki, vt, sv = _mc.gemm_w4a4_awq_qkv_i4qk_i8v_layouts(
             xq, self._int4_layout_qweight, self._int4_layout_wscale, qkv.a_scale,
             qkv._awqt_K, self._int4_layout_inv_out, self._int4_layout_lim,
-            self._int4_layout_bias, nh, T, hd, hp, self._fq4_svv[:hd])
-        xattn = _mc.flash_attn_i4values_i8mma_qi8_kv_static_qout_hd24(
-            q_i8, ki.view(b, nh, T, hp), vt.view(b, nh, hp, T), sv, hp,
-            self._fq4_sqc, self._fq4_skc, self.scale, proj.a_scale, proj._awqt_K)
+            self._int4_layout_bias, nh, T, hd, hp, self._fq4_svv[:hd],
+            1 if packed else 0)
+        if packed:
+            # Q/K come back head-major nibble-packed [BH,T,hp/2] -- exactly the layout
+            # flash_attn_int4_vt_static_qout already consumes, so no new wrapper is needed.
+            xattn = _mc.flash_attn_int4_vt_static_qout(
+                q_i8.view(b, nh, T, hp // 2), ki.view(b, nh, T, hp // 2),
+                vt.view(b, nh, hp, T), sv, hp,
+                self._fq4_sqc, self._fq4_skc, self.scale, proj.a_scale, proj._awqt_K)
+        else:
+            xattn = _mc.flash_attn_i4values_i8mma_qi8_kv_static_qout_hd24(
+                q_i8, ki.view(b, nh, T, hp), vt.view(b, nh, hp, T), sv, hp,
+                self._fq4_sqc, self._fq4_skc, self.scale, proj.a_scale, proj._awqt_K)
         res = x_in_tok.reshape(b * T, c).contiguous()
         pbias = proj.bias if proj.bias is not None else empty
         out = _mc.gemm_w4a4_awq_bias_res(
@@ -755,7 +835,7 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
             # blocks the fp16 fused_gn_qkv branch above doesn't cover (T%128!=0 or c%8!=0, e.g.
             # hd48/T64) and during the qkv scale calibration window.
             qkv = self._qkv_from_gn(x, b, T, c, nh, hd)
-        if self.bits == 8 and T < 64:
+        if T < 64:
             self._observe_small_int8_scales(qkv)
         # ---- Score path (QKᵀ + softmax + AV): fused int8/int4 flash (scores in SRAM) when the
         # fixed route selects it; else fp16 MATH SDPA. INT8 always selects quantized flash when

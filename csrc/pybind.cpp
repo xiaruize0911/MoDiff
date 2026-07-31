@@ -183,6 +183,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("flash_attn_i4values_i8mma_vt_static_qout",
           &flash_attn_i4values_i8mma_vt_static_qout,
           "Materialized signed-int4 Q/K values through int8 MMA; packed-int4 projection input");
+    m.def("flash_attn_i4values_small_qout", &flash_attn_i4values_small_qout,
+          "INT4 small-shape attention (T4/T16, hd96): dp4a warp-per-query, packed-int4 output");
     m.def("flash_attn_i4values_i8mma_qi8_kv_static_qout_hd24",
           &flash_attn_i4values_i8mma_qi8_kv_static_qout_hd24,
           "Exact T1024/hd24 signed-int4-values route: token-major direct Q from the W4A4 layout "
@@ -255,6 +257,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("gemm_w4a4_awq_qkv_i4qk_i8v", &gemm_w4a4_awq_qkv_i4qk_i8v,
           "Experimental W4A4 QKV epilogue: bias/dequant + static signed-I4 Q/K and I8 V, "
           "with packed/native or unpacked-I4-value output layouts");
+    m.def("gemm_w4a4_awq_qkv_codes", &gemm_w4a4_awq_qkv_codes,
+          "W4A4 QKV GEMM emitting compact token-major INT4-value codes, one launch, no rearrange");
     m.def("gemm_w4a4_awq_qkv_i4qk_i8v_layouts", &gemm_w4a4_awq_qkv_i4qk_i8v_layouts,
           "Direct-layout W4A4 QKV epilogue: ONE launch emits token-major Q, padded K and "
           "transposed Vt for Flash (unpacked signed-I4 values); no rearrange pass");

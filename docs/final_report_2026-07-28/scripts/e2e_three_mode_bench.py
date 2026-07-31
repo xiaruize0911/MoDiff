@@ -142,11 +142,10 @@ def main():
                     if type(m).__name__ == "QuantizedStandardAttentionBlock"]
             assert blks, f"{mode}: no QuantizedStandardAttentionBlock was installed"
             elig = sum(b._qout_eligible() for b in blks)
-            # INT8 has a small-shape kernel for the six hd=96 blocks, so all 21 are eligible.
-            # INT4 has no hd>48 route (its kernel caps at hd<=64 and _observe_small_int8_scales
-            # is int8-only, so _fq4_frozen is never reached there), so 15/21 is the CORRECT
-            # steady state, not a misconfiguration. Assert the mode's own expectation.
-            expected = len(blks) if "int8" in mode else sum(b.head_dim <= 48 for b in blks)
+            # Both bit widths now reach all 21: INT4 gained an hd=96 route (the dp4a small
+            # kernel) and _observe_small_int8_scales was un-gated so those blocks can freeze
+            # their scales. This used to be 15 for INT4.
+            expected = len(blks)
             qkv_t, proj_t = type(blks[0].qkv).__name__, type(blks[0].proj).__name__
             route = {"attn_blocks": len(blks), "qout_eligible": elig, "expected_eligible": expected,
                      "qkv_type": qkv_t, "proj_type": proj_t,

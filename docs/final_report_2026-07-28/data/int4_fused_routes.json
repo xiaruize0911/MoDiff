@@ -1,0 +1,119 @@
+{
+ "gpu": "NVIDIA A40",
+ "packed": [
+  {
+   "case": "packed T256/hd48 batch1",
+   "q_bit_exact": true,
+   "k_bit_exact": true,
+   "vt_bit_exact": true,
+   "q_max_diff": 0,
+   "k_max_diff": 0,
+   "vt_max_diff": 0,
+   "qk_pad_zero": true,
+   "vt_pad_zero": true
+  },
+  {
+   "case": "packed T64/hd48 batch1",
+   "q_bit_exact": true,
+   "k_bit_exact": true,
+   "vt_bit_exact": true,
+   "q_max_diff": 0,
+   "k_max_diff": 0,
+   "vt_max_diff": 0,
+   "qk_pad_zero": true,
+   "vt_pad_zero": true
+  },
+  {
+   "case": "packed T256/hd48 batch4",
+   "q_bit_exact": true,
+   "k_bit_exact": true,
+   "vt_bit_exact": true,
+   "q_max_diff": 0,
+   "k_max_diff": 0,
+   "vt_max_diff": 0,
+   "qk_pad_zero": true,
+   "vt_pad_zero": true
+  },
+  {
+   "case": "packed T64/hd48 batch4",
+   "q_bit_exact": true,
+   "k_bit_exact": true,
+   "vt_bit_exact": true,
+   "q_max_diff": 0,
+   "k_max_diff": 0,
+   "vt_max_diff": 0,
+   "qk_pad_zero": true,
+   "vt_pad_zero": true
+  },
+  {
+   "case": "packed T256/hd48 batch128",
+   "q_bit_exact": true,
+   "k_bit_exact": true,
+   "vt_bit_exact": true,
+   "q_max_diff": 0,
+   "k_max_diff": 0,
+   "vt_max_diff": 0,
+   "qk_pad_zero": true,
+   "vt_pad_zero": true
+  },
+  {
+   "case": "packed T64/hd48 batch128",
+   "q_bit_exact": true,
+   "k_bit_exact": true,
+   "vt_bit_exact": true,
+   "q_max_diff": 0,
+   "k_max_diff": 0,
+   "vt_max_diff": 0,
+   "qk_pad_zero": true,
+   "vt_pad_zero": true
+  }
+ ],
+ "small": [
+  {
+   "case": "small T16/hd96 batch1",
+   "codes_within_i4_grid": true,
+   "max_code_diff": 0,
+   "frac_differing": 0.0,
+   "rel_l2": 0.0
+  },
+  {
+   "case": "small T4/hd96 batch1",
+   "codes_within_i4_grid": true,
+   "max_code_diff": 0,
+   "frac_differing": 0.0,
+   "rel_l2": 0.0
+  },
+  {
+   "case": "small T16/hd96 batch4",
+   "codes_within_i4_grid": true,
+   "max_code_diff": 0,
+   "frac_differing": 0.0,
+   "rel_l2": 0.0
+  },
+  {
+   "case": "small T4/hd96 batch4",
+   "codes_within_i4_grid": true,
+   "max_code_diff": 0,
+   "frac_differing": 0.0,
+   "rel_l2": 0.0
+  },
+  {
+   "case": "small T16/hd96 batch128",
+   "codes_within_i4_grid": true,
+   "max_code_diff": 0,
+   "frac_differing": 0.0,
+   "rel_l2": 0.0
+  },
+  {
+   "case": "small T4/hd96 batch128",
+   "codes_within_i4_grid": true,
+   "max_code_diff": 0,
+   "frac_differing": 0.0,
+   "rel_l2": 0.0
+  }
+ ],
+ "gate": {
+  "packed_pass": true,
+  "small_pass": true
+ }
+}

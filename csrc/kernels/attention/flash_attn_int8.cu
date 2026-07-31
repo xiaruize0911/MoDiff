@@ -2415,11 +2415,12 @@ torch::Tensor flash_attn_int8_packed_persistent_qout(
 // within the warp, and lanes split the 96 output channels. This avoids routing
 // the score path back through FP16 merely because hd exceeds the MMA kernel's
 // hd_pad<=64 constraint.
-template <int TT, int HD, int WARPS = 4>
+template <int TT, int HD, int WARPS = 4, bool PACK_OUT4 = false>
 __global__ void flash_attn_int8_qi8packed_small_qout_kernel(
     const int8_t* __restrict__ qkv, const float* __restrict__ sv,
     int8_t* __restrict__ out_q, int N, int H,
-    float qk_scale, float softmax_scale, float proj_inv_scale) {
+    float qk_scale, float softmax_scale, float proj_inv_scale,
+    int qout_stride = 0) {
   const int nh = blockIdx.x, w = threadIdx.x >> 5, lane = threadIdx.x & 31;
   const int qi = blockIdx.y * WARPS + w;
   if (qi >= TT) return;
@@ -2459,10 +2460,63 @@ __global__ void flash_attn_int8_qi8packed_small_qout_kernel(
           + (size_t)(h * 3 + 2) * HD;
       acc += probs[w][j] * (float)vrow[d];
     }
-    int oq = __float2int_rn(acc * sv[d] * proj_inv_scale);
-    oq = oq > 127 ? 127 : (oq < -127 ? -127 : oq);
-    out_q[((size_t)n * TT + qi) * C + h * HD + d] = (int8_t)oq;
+    if constexpr (!PACK_OUT4) {
+      int oq = __float2int_rn(acc * sv[d] * proj_inv_scale);
+      oq = oq > 127 ? 127 : (oq < -127 ? -127 : oq);
+      out_q[((size_t)n * TT + qi) * C + h * HD + d] = (int8_t)oq;
+    } else {
+      // int4 codes, two channels per byte. Every lane computes its own code, then the
+      // even lane picks up its odd neighbour's via a shuffle and writes the merged byte,
+      // so the store stays one byte per pair with no extra pass over the output.
+      int oq = __float2int_rn(acc * sv[d] * proj_inv_scale);
+      oq = oq > 7 ? 7 : (oq < -7 ? -7 : oq);
+      const int hi = __shfl_down_sync(0xffffffffu, oq, 1);
+      if ((d & 1) == 0) {
+        const int8_t byte = (int8_t)((oq & 0xf) | ((hi & 0xf) << 4));
+        out_q[((size_t)n * TT + qi) * (qout_stride) + (h * HD + d) / 2] = byte;
+      }
+    }
   }
+}
+
+// INT4 counterpart of the small-shape route below. hd=96 is structurally outside the int4 MMA
+// kernel (it enforces hdp4 <= 64 because the k-fragment is sized for one 4-register operand), so
+// before this the six hd=96 blocks were the last part of the INT4 model still running FP16 SDPA
+// plus a separate quant_attn_out_int4_pack. This reuses the same dp4a warp-per-query kernel and
+// only changes the store: int4 codes, two channels per byte. The QKV it reads is int4 VALUES in
+// whole bytes, the same mixed-storage trick the hd=24 route uses.
+torch::Tensor flash_attn_i4values_small_qout(
+    torch::Tensor qkv_i8, torch::Tensor sv, double sq, double sk,
+    double softmax_scale, double proj_a_scale, int64_t k_pad) {
+  TORCH_CHECK(qkv_i8.is_cuda() && qkv_i8.dtype() == torch::kChar
+              && qkv_i8.dim() == 5 && qkv_i8.is_contiguous()
+              && sv.is_cuda() && sv.dtype() == torch::kFloat32
+              && sv.is_contiguous(),
+              "small int4 attention requires contiguous CUDA int8-coded QKV and fp32 sv");
+  const int N = qkv_i8.size(0), T = qkv_i8.size(1);
+  const int H = qkv_i8.size(2), hd = qkv_i8.size(4), C = H * hd;
+  const int Kpad = k_pad > 0 ? (int)k_pad : C, bstride = Kpad / 2;
+  TORCH_CHECK(qkv_i8.size(3) == 3 && hd == 96 && (T == 4 || T == 16)
+              && sv.numel() == hd && Kpad >= C && (Kpad % 2) == 0 && (hd % 2) == 0,
+              "small int4 attention supports only T4/T16, hd96, broadcast sv");
+  auto out_q = torch::zeros({(long)N * T, bstride},
+      torch::TensorOptions().dtype(torch::kChar).device(qkv_i8.device()));
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  dim3 grid(N * H, (T + 3) / 4);
+  if (T == 16)
+    flash_attn_int8_qi8packed_small_qout_kernel<16, 96, 4, true>
+        <<<grid, 4 * 32, 0, stream>>>(
+            qkv_i8.data_ptr<int8_t>(), sv.data_ptr<float>(),
+            out_q.data_ptr<int8_t>(), N, H, (float)(sq * sk),
+            (float)softmax_scale, 1.f / (float)proj_a_scale, bstride);
+  else
+    flash_attn_int8_qi8packed_small_qout_kernel<4, 96, 4, true>
+        <<<grid, 4 * 32, 0, stream>>>(
+            qkv_i8.data_ptr<int8_t>(), sv.data_ptr<float>(),
+            out_q.data_ptr<int8_t>(), N, H, (float)(sq * sk),
+            (float)softmax_scale, 1.f / (float)proj_a_scale, bstride);
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  return out_q;
 }
 
 torch::Tensor flash_attn_int8_qi8packed_small_qout(
@@ -2487,13 +2541,13 @@ torch::Tensor flash_attn_int8_qi8packed_small_qout(
         <<<grid, 4 * 32, 0, stream>>>(
             qkv_i8.data_ptr<int8_t>(), sv.data_ptr<float>(),
             out_q.data_ptr<int8_t>(), N, H, (float)(sq * sk),
-            (float)softmax_scale, 1.f / (float)proj_a_scale);
+            (float)softmax_scale, 1.f / (float)proj_a_scale, C);
   else
     flash_attn_int8_qi8packed_small_qout_kernel<4, 96>
         <<<grid, 4 * 32, 0, stream>>>(
             qkv_i8.data_ptr<int8_t>(), sv.data_ptr<float>(),
             out_q.data_ptr<int8_t>(), N, H, (float)(sq * sk),
-            (float)softmax_scale, 1.f / (float)proj_a_scale);
+            (float)softmax_scale, 1.f / (float)proj_a_scale, C);
   C10_CUDA_KERNEL_LAUNCH_CHECK();
   return out_q;
 }

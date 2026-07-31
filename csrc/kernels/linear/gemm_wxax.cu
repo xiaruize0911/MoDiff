@@ -911,6 +911,15 @@ torch::Tensor gemm_w4a4_awq_bias_res(torch::Tensor A, torch::Tensor B, torch::Te
 //       way gemm_w8a8_kernel_awq_out_i8<1> does. Requires the offline hp-padded weight layout.
 //   2 = compact token-major QKV codes, decoded per element, feeding
 //       qkv_i4codes_i8v_rearrange_kernel. This was the original `QKV_EPILOGUE = true`.
+//   4 = mode 1's hoisted-scale epilogue with mode 0's plain contiguous store. For consumers
+//       that want compact token-major codes but must not pay mode 2's per-element role decode
+//       (the hd=96 dp4a route): same offline inv_out[]/lim[] vectors, no layout shuffling.
+//   3 = like 1, but Q/K are NIBBLE-PACKED (_QK_I4_PACKED) and head-major, which is what the
+//       native-int4 hd=48 flash (flash_attn_int4_vt_static_qout) consumes. Mode 1 could reuse
+//       the w8a8 store verbatim because hd=24 keeps int4 VALUES in whole bytes; hd=48 packs two
+//       channels per byte, so the store has to read two Cs entries, clamp each, and merge them
+//       as v0 | (v1 << 4). That halves the destination width to hp/2 and is why it is a separate
+//       mode rather than a flag on mode 1.
 //
 // Mode 1 exists because mode 2 was measured at 2164.8 us for the T1024/hd24 QKV stage
 // (GEMM 1561.6 + rearrange 603.2) against the w8a8 fused equivalent's ~637 us. Two separate
@@ -995,7 +1004,7 @@ __global__ void gemm_w4a4_kernel_awq_out_i8(const int8_t* __restrict__ A, const 
       int c0 = warp_offset_n + j * GWQ_INTRIN_N + tig * 2, c1 = c0 + 8;
       int gc0 = n0 + c0, gc1 = n0 + c1;
       int* accv = acc[i][j];
-      if constexpr (QKV_LAYOUT == 1) {
+      if constexpr (QKV_LAYOUT == 1 || QKV_LAYOUT == 3 || QKV_LAYOUT == 4) {
         // Padded direct layouts. Every Q/K/V role decision has already been folded offline into
         // inv_out_scale[] (1/sq on Q columns, 1/sk on K, 1/sv[d] on V) and lim[] (7 on Q/K, 127
         // on V), so there is no per-element decode at all -- the combined scale and the bias
@@ -1126,6 +1135,75 @@ __global__ void gemm_w4a4_kernel_awq_out_i8(const int8_t* __restrict__ A, const 
         }
       }
     }
+  } else if constexpr (QKV_LAYOUT == 3) {
+    // Packed direct layouts for the native-int4 hd=48 route. Q and K are both HEAD-major and
+    // nibble-packed to hp/2 bytes, which is exactly what flash_attn_int4_vt_static_qout already
+    // consumes -- so no new flash wrapper is needed. V stays plain int8 and transposed, so its
+    // block below is identical to mode 1's.
+    const int nseg = GWQ_CTA_N / hp, half = hp / 2;
+    const int seg0 = n0 / hp;
+    // Q/K: each output byte merges two adjacent channels. 8 output bytes (16 source channels)
+    // per iteration keeps the global store at 8 bytes; the Cs reads are 16 contiguous bytes.
+    const int chunks_d = half / 8;
+    const int qk_work = GWQ_CTA_M * nseg * chunks_d;
+    for (int idx = t; idx < qk_work; idx += blockDim.x) {
+      const int row = idx / (nseg * chunks_d);
+      const int r = idx % (nseg * chunks_d);
+      const int sl = r / chunks_d, dc = r % chunks_d;
+      const int seg = seg0 + sl, h = seg / 3, sel = seg % 3;
+      const int gm = m0 + row;
+      if (gm < M && sel != 2) {
+        const int src = row * GWQ_CTA_N + sl * hp + dc * 16;   // 16 channels
+        uint32_t lo = 0, hi = 0;
+#pragma unroll
+        for (int i = 0; i < 4; ++i) {
+          const uint32_t a = (uint32_t)(Cs[src + 2 * i] & 0xf)
+                           | ((uint32_t)(Cs[src + 2 * i + 1] & 0xf) << 4);
+          const uint32_t b = (uint32_t)(Cs[src + 8 + 2 * i] & 0xf)
+                           | ((uint32_t)(Cs[src + 8 + 2 * i + 1] & 0xf) << 4);
+          lo |= a << (8 * i);
+          hi |= b << (8 * i);
+        }
+        const int b_ = gm / T, tok = gm - b_ * T;
+        int8_t* dst = (sel == 0 ? qout : kout)
+                    + ((size_t)(b_ * nh + h) * T + tok) * half + dc * 8;
+        *reinterpret_cast<uint2*>(dst) = make_uint2(lo, hi);
+      }
+    }
+    // V: identical to mode 1 -- int8, transposed, one coalesced uint4 per 16-token column.
+    const int token_chunks = GWQ_CTA_M / 16;
+    const int v_work = nseg * hp * token_chunks;
+    for (int idx = t; idx < v_work; idx += blockDim.x) {
+      const int sl = idx / (hp * token_chunks);
+      const int r = idx % (hp * token_chunks);
+      const int d = r / token_chunks, tc = r % token_chunks;
+      const int seg = seg0 + sl, h = seg / 3, sel = seg % 3;
+      const int row0 = tc * 16, gm = m0 + row0;
+      if (sel == 2 && gm < M) {
+        const int b_ = gm / T, tok = gm - b_ * T;
+        const int col = sl * hp + d;
+        uint32_t p[4];
+#pragma unroll
+        for (int g = 0; g < 4; ++g) {
+          const int rr = row0 + g * 4;
+          p[g] = (uint8_t)Cs[(rr + 0) * GWQ_CTA_N + col]
+               | ((uint32_t)(uint8_t)Cs[(rr + 1) * GWQ_CTA_N + col] << 8)
+               | ((uint32_t)(uint8_t)Cs[(rr + 2) * GWQ_CTA_N + col] << 16)
+               | ((uint32_t)(uint8_t)Cs[(rr + 3) * GWQ_CTA_N + col] << 24);
+        }
+        if (tok + 15 < T && gm + 15 < M) {
+          *reinterpret_cast<uint4*>(
+              &vtout[((size_t)(b_ * nh + h) * hp + d) * T + tok]) =
+                  make_uint4(p[0], p[1], p[2], p[3]);
+        } else {
+#pragma unroll
+          for (int i2 = 0; i2 < 16; ++i2)
+            if (gm + i2 < M && tok + i2 < T)
+              vtout[((size_t)(b_ * nh + h) * hp + d) * T + tok + i2] =
+                  Cs[(row0 + i2) * GWQ_CTA_N + col];
+        }
+      }
+    }
   } else {
     for (int idx = t; idx < GWQ_CTA_M * GWQ_CTA_N / 16; idx += blockDim.x) {
       int rc = idx * 16, row = rc / GWQ_CTA_N, col = rc % GWQ_CTA_N;
@@ -1234,7 +1312,8 @@ __global__ void qkv_i4codes_i8v_rearrange_kernel(
 std::vector<torch::Tensor> gemm_w4a4_awq_qkv_i4qk_i8v_layouts(
     torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale, int64_t K,
     torch::Tensor inv_out, torch::Tensor lim, torch::Tensor bias,
-    int64_t nh_, int64_t T_, int64_t hd_, int64_t hp_, torch::Tensor sv) {
+    int64_t nh_, int64_t T_, int64_t hd_, int64_t hp_, torch::Tensor sv,
+    int64_t packed_qk) {
   TORCH_CHECK(A.is_cuda() && A.dtype() == torch::kChar && B.dtype() == torch::kChar
               && w_scale.is_cuda() && w_scale.dtype() == torch::kFloat32
               && inv_out.is_cuda() && inv_out.dtype() == torch::kFloat32
@@ -1255,21 +1334,63 @@ std::vector<torch::Tensor> gemm_w4a4_awq_qkv_i4qk_i8v_layouts(
               && inv_out.numel() == N && lim.numel() == N
               && w_scale.numel() == N && bias.numel() == N && sv.numel() >= hd,
               "invalid direct-layout W4A4 QKV shape");
+  // packed = the native-int4 hd=48 route: Q/K nibble-packed head-major (mode 3).
+  // unpacked = the hd=24 i4values route: Q token-major, one int4 value per byte (mode 1).
+  const bool packed = packed_qk != 0;
+  TORCH_CHECK(!packed || (hd % 2) == 0, "packed Q/K needs an even head dim");
   const int batch = M / T, BH = batch * nh;
+  const int qkw = packed ? hp / 2 : hp;
   auto oi = torch::TensorOptions().dtype(torch::kChar).device(A.device());
-  auto q = torch::empty({batch, T, nh, hp}, oi);   // token-major, read directly by Flash
-  auto k = torch::empty({BH, T, hp}, oi);
-  auto vt = torch::empty({BH, hp, T}, oi);         // already transposed
+  auto q = packed ? torch::empty({BH, T, qkw}, oi)          // head-major, packed
+                  : torch::empty({batch, T, nh, hp}, oi);   // token-major, read directly
+  auto k = torch::empty({BH, T, qkw}, oi);
+  auto vt = torch::empty({BH, hp, T}, oi);                  // int8, already transposed
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
   dim3 grid(N / GWQ_CTA_N, (M + GWQ_CTA_M - 1) / GWQ_CTA_M);
-  gemm_w4a4_kernel_awq_out_i8<1><<<grid, GWQ_NUM_WARPS * 32, 0, stream>>>(
-      A.data_ptr<int8_t>(), B.data_ptr<int8_t>(), w_scale.data_ptr<float>(),
-      (float)a_scale, inv_out.data_ptr<float>(), (int8_t*)nullptr, M, N, Kb,
-      reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()), n_out,
-      nh, hd, 0.f, 0.f, (const float*)nullptr, lim.data_ptr<float>(),
-      q.data_ptr<int8_t>(), k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(), T, hp);
+  auto launch = [&](auto tag) {
+    constexpr int MODE = decltype(tag)::value;
+    gemm_w4a4_kernel_awq_out_i8<MODE><<<grid, GWQ_NUM_WARPS * 32, 0, stream>>>(
+        A.data_ptr<int8_t>(), B.data_ptr<int8_t>(), w_scale.data_ptr<float>(),
+        (float)a_scale, inv_out.data_ptr<float>(), (int8_t*)nullptr, M, N, Kb,
+        reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()), n_out,
+        nh, hd, 0.f, 0.f, (const float*)nullptr, lim.data_ptr<float>(),
+        q.data_ptr<int8_t>(), k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(), T, hp);
+  };
+  if (packed) launch(std::integral_constant<int, 3>{});
+  else        launch(std::integral_constant<int, 1>{});
   C10_CUDA_KERNEL_LAUNCH_CHECK();
   return {q, k, vt, sv};
+}
+
+// Token-major W4A4 QKV codes, ONE launch, no rearrange. This is mode 2's GEMM on its own: the
+// hd=96 small-shape route consumes the compact token-major [b,T,nh,3,hd] code matrix directly
+// (one warp per query row, dp4a), so it needs the codes but none of the layout shuffling that
+// qkv_i4codes_i8v_rearrange_kernel does for the MMA shapes.
+torch::Tensor gemm_w4a4_awq_qkv_codes(
+    torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale, int64_t K,
+    int64_t n_out_, torch::Tensor bias, int64_t nh, int64_t hd,
+    torch::Tensor inv_out, torch::Tensor lim) {
+  TORCH_CHECK(A.is_cuda() && A.dtype() == torch::kChar && B.dtype() == torch::kChar,
+              "W4A4 QKV codes: A/B must be packed INT4 CUDA");
+  A = A.contiguous(); B = B.contiguous(); w_scale = w_scale.contiguous();
+  bias = bias.contiguous(); inv_out = inv_out.contiguous(); lim = lim.contiguous();
+  const int M = A.size(0), N = B.size(0), Kb = (int)K / 2, n_out = (int)n_out_;
+  TORCH_CHECK(A.size(1) == Kb && B.size(1) == Kb && N % GWQ_CTA_N == 0
+              && K % (GWQ_CTA_K * 2) == 0 && n_out == nh * 3 * hd && n_out <= N
+              && bias.numel() == n_out && bias.dtype() == torch::kHalf
+              && inv_out.numel() >= n_out && lim.numel() >= n_out,
+              "W4A4 QKV codes: invalid shape");
+  auto raw = torch::empty({M, n_out},
+      torch::TensorOptions().dtype(torch::kChar).device(A.device()));
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  dim3 grid(N / GWQ_CTA_N, (M + GWQ_CTA_M - 1) / GWQ_CTA_M);
+  gemm_w4a4_kernel_awq_out_i8<4><<<grid, GWQ_NUM_WARPS * 32, 0, stream>>>(
+      A.data_ptr<int8_t>(), B.data_ptr<int8_t>(), w_scale.data_ptr<float>(),
+      (float)a_scale, inv_out.data_ptr<float>(), raw.data_ptr<int8_t>(), M, N, Kb,
+      reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()), n_out,
+      (int)nh, (int)hd, 0.f, 0.f, (const float*)nullptr, lim.data_ptr<float>());
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  return raw;
 }
 
 // Experimental W4A4 QKV GEMM epilogue. Bias/dequantization and static Q/K/V requantization happen
