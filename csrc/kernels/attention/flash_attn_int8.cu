@@ -2434,8 +2434,17 @@ torch::Tensor flash_attn_i4values_small_qout(
   TORCH_CHECK(qkv_i8.size(3) == 3 && hd == 96 && (T == 4 || T == 16)
               && sv.numel() == hd && Kpad >= C && (Kpad % 2) == 0 && (hd % 2) == 0,
               "small int4 attention supports only T4/T16, hd96, broadcast sv");
-  auto out_q = torch::zeros({(long)N * T, bstride},
-      torch::TensorOptions().dtype(torch::kChar).device(qkv_i8.device()));
+  // Zero-init ONLY when the row is actually padded. The kernel writes the first C/2 bytes of
+  // each row and never touches the tail, while the consumer (gemm_w4a4_awq_bias_res) contracts
+  // over the full Kpad -- so with Kpad > C those tail bytes must be zero or they feed garbage
+  // into the GEMM. When Kpad == C there is no tail, every byte written by the kernel overwrites
+  // the fill, and torch::zeros is pure overhead: it costs one FillFunctor launch of 2.84 us at
+  // T=16 and 1.41 us at T=4 (batch 128), which every hd=96 block in the churches UNet was paying
+  // for nothing, since all six have proj._awqt_K == C == 768. The int8 sibling
+  // (flash_attn_int8_qi8packed_small_qout) has no padded-row case at all and already uses empty.
+  auto opts = torch::TensorOptions().dtype(torch::kChar).device(qkv_i8.device());
+  auto out_q = (bstride * 2 == C) ? torch::empty({(long)N * T, bstride}, opts)
+                                  : torch::zeros({(long)N * T, bstride}, opts);
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
   dim3 grid(N * H, (T + 3) / 4);
   if (T == 16)
