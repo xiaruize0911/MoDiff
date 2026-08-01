@@ -52,8 +52,13 @@ def report_quant_memory(model: torch.nn.Module) -> Dict[str, Any]:
             _add_attr(buckets, module, "linear_o_hat_cache_mib", "o_hat_cache")
             _add_attr(buckets, module, "linear_residual_buf_mib", "_residual_buf")
             _add_attr(buckets, module, "linear_fp16_weights_mib", "weight_fp16")
+            # weight_int8_t / weight_dequant_scale exist on OptimizedInt8Linear, which still has
+            # a live int_gemm path. OptimizedInt4Linear used to carry a packed-int4
+            # `weight_packed_t` for its W4A4 path; that path and both of its buffers were removed
+            # on 2026-08-01 (no crossover at any K -- see the class docstring), so INT4 linears now
+            # contribute only weight_fp16 here. The line accounting weight_packed_t was dropped
+            # rather than left to silently sum to zero.
             _add_attr(buckets, module, "linear_quant_weights_mib", "weight_int8_t")
-            _add_attr(buckets, module, "linear_quant_weights_mib", "weight_packed_t")
             _add_attr(buckets, module, "linear_scale_state_mib", "weight_dequant_scale")
             _add_attr(buckets, module, "linear_scale_state_mib", "static_input_scale")
             _add_attr(buckets, module, "linear_bias_mib", "bias")

@@ -1,6 +1,30 @@
 // Plain host-facing prototypes for every function pybind.cpp exposes to Python.
 // Grouped to mirror the files under csrc/kernels/. Only included by pybind.cpp
 // (a plain .cpp, not .cu), so nothing here uses CUDA-only syntax.
+//
+// ---------------------------------------------------------------------------------------
+// DEAD-CODE POLICY for csrc/ -- read before deleting an unreferenced kernel.
+//
+// The rule (stated in full at csrc/kernels/norm/group_norm_silu.cu, above the pair-major
+// stats kernel): a superseded-but-correct kernel is DELETED once its replacement ships,
+// because git history already keeps it. A kernel is kept unreferenced only when the reason
+// it is unused is itself a finding worth not rediscovering.
+//
+// Exactly two blocks currently qualify, and both say so in their own header comment. Do
+// not "clean up" either one:
+//   * group_norm_silu.cu -- the int8-INPUT GN kernel: built, verified, measured ~1.03-1.09x
+//     faster, unreachable only because the upstream conv does not yet write int8 directly.
+//   * group_norm_silu.cu -- the pair-major vectorized stats kernel: a FAILED experiment.
+//     Changing the fp32 reduction order flipped int8 codes on real input
+//     (max_code_diff=1) while passing random-data checks. Kept as executable evidence for
+//     why the stats reduction stays scalar.
+//
+// Everything else unreferenced is deletable. The 2026-08-01 pass removed, with a runtime
+// probe as evidence rather than an assumption: three flash_attn_int*_qpacked_kv_static*
+// entry points (superseded by their _qout siblings, which are live), the two fp32-input
+// int4 conv epilogue kernels (superseded by the _from_half ones), and csrc/kernels/backup/
+// (never in setup.py sources, so it never compiled).
+// ---------------------------------------------------------------------------------------
 #pragma once
 
 #include <torch/extension.h>
