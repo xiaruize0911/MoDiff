@@ -34,7 +34,7 @@ INNER_ENV = "MODIFF_NSYS_INNER"
 
 
 # ----------------------------------------------------------------- inner: the annotated workload
-def run_inner(mode, batch, steps):
+def run_inner(mode, batch, steps, only=None):
     os.chdir(ROOT)
     sys.path.insert(0, ROOT)
     sys.path.insert(0, os.path.join(ROOT, "src/taming-transformers"))
@@ -60,6 +60,8 @@ def run_inner(mode, batch, steps):
     for nm, m in unet.named_modules():
         L = by_id.get(id(m))
         if L is None:
+            continue
+        if only and L["kind"] != only:
             continue
         xs = L["x_shape"]
         label = "L|%s|C%d|T%d" % (L["kind"], xs[1], xs[2] * xs[3])
@@ -213,6 +215,9 @@ def main():
     ap.add_argument("--mode", default="int4_baseline")
     ap.add_argument("--batch", type=int, default=128)
     ap.add_argument("--steps", type=int, default=20, help="must divide 1000")
+    ap.add_argument("--only", default=None,
+                    help="annotate only this layer kind (e.g. attention)")
+    ap.add_argument("--run", type=int, default=None, help="run index, used in the output name")
     ap.add_argument("--out", default=None)
     ap.add_argument("--analyze", metavar="REPORT",
                     help="skip tracing and analyse an existing .nsys-rep")
@@ -223,12 +228,15 @@ def main():
         return
 
     if os.environ.get(INNER_ENV):
-        run_inner(a.mode, a.batch, a.steps)
+        run_inner(a.mode, a.batch, a.steps, a.only)
         return
 
     nsys = find_nsys()
-    out = a.out or os.path.join(ROOT, "docs/final_report_2026-07-28/data",
-                                "nsys_layer_%s_b%d" % (a.mode, a.batch))
+    out = a.out or os.path.join(
+        ROOT, "docs/final_report_2026-07-28/data/nsys",
+        "nsys_%s_%s_b%d%s" % (a.only or "all", a.mode, a.batch,
+                              "" if a.run is None else "_run%d" % a.run))
+    os.makedirs(os.path.dirname(out), exist_ok=True)
     env = dict(os.environ, **{INNER_ENV: "1", "LBENCH_BATCH": str(a.batch)})
     cmd = [nsys, "profile", "--trace=cuda,nvtx",
            "--sample=none", "--cpuctxsw=none",          # perf_event is not permitted here
@@ -237,6 +245,8 @@ def main():
            "--force-overwrite=true", "-o", out,
            sys.executable, os.path.abspath(__file__),
            "--mode", a.mode, "--batch", str(a.batch), "--steps", str(a.steps)]
+    if a.only:
+        cmd += ["--only", a.only]
     print("running: %s" % " ".join(cmd[:8]))
     p = subprocess.run(cmd, cwd=ROOT, env=env, capture_output=True, text=True)
     tail = (p.stdout + p.stderr).strip().splitlines()[-6:]
