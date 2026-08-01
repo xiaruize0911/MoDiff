@@ -132,7 +132,7 @@ def main():
             w1 = l1t[l1]
             ax.barh(y["L1"], w1, left=x, height=0.9, color=L1_COL.get(l1, "#999"),
                     edgecolor="w")
-            if w1 / wall_ms > 0.04:
+            if w1 / wall_ms > 0.03:
                 ax.text(x + w1 / 2, y["L1"], "%s\n%.0f ms  %.0f%%"
                         % (l1, w1, w1 / wall_ms * 100), ha="center", va="center",
                         fontsize=8.5, color="w", fontweight="bold")
@@ -143,9 +143,9 @@ def main():
                 lab = STAGE_LABEL.get(st, st)
                 ax.barh(y["L2"], w2, left=x2, height=0.9,
                         color=L2_COL.get(lab, "#ccc"), edgecolor="w")
-                if w2 / wall_ms > 0.035:
+                if w2 / wall_ms > 0.018:
                     ax.text(x2 + w2 / 2, y["L2"], "%s\n%.0f ms" % (lab.split(" /")[0], w2),
-                            ha="center", va="center", fontsize=7.5, color="w")
+                            ha="center", va="center", fontsize=6.8, color="w")
                 ks = sorted(((v * scale / 1e6, kern) for (a1, s1, kern), v in acc.items()
                              if a1 == l1 and s1 == st), reverse=True)
                 x3 = x2
@@ -153,9 +153,9 @@ def main():
                     shade = 0.55 + 0.35 * (i % 3) / 2
                     ax.barh(y["L3"], w3, left=x3, height=0.9,
                             color=L2_COL.get(lab, "#ccc"), alpha=shade, edgecolor="w")
-                    if w3 / wall_ms > 0.028:
-                        ax.text(x3 + w3 / 2, y["L3"], "%s\n%.0f ms" % (kern[:26], w3),
-                                ha="center", va="center", fontsize=6.6, color="black")
+                    if w3 / wall_ms > 0.012:
+                        ax.text(x3 + w3 / 2, y["L3"], "%s\n%.0f ms" % (kern[:20], w3),
+                                ha="center", va="center", fontsize=6.0, color="black")
                     x3 += w3
                 x2 += w2
             x += w1
@@ -170,9 +170,22 @@ def main():
                      loc="left", fontsize=11, fontweight="bold")
         for s in ("top", "right", "left"):
             ax.spines[s].set_visible(False)
+    # A legend, because below the labelling threshold a segment is only a colour. Level 3
+    # inherits its op class's colour with a varying alpha, so one op-class key covers both rows.
+    from matplotlib.patches import Patch
+    seen1 = [k for k in L1_COL]
+    h1 = [Patch(facecolor=L1_COL[k], label=k) for k in seen1]
+    h2 = [Patch(facecolor=v, label=k) for k, v in L2_COL.items()]
+    leg1 = fig.legend(handles=h1, loc="upper left", bbox_to_anchor=(0.005, 0.962),
+                      ncol=4, frameon=False, fontsize=8.5, title="layer type (row 1)",
+                      title_fontsize=8.5)
+    fig.add_artist(leg1)
+    fig.legend(handles=h2, loc="upper right", bbox_to_anchor=(0.998, 0.962), ncol=4,
+               frameon=False, fontsize=8.5, title="op class (rows 2-3; row 3 = same colour, "
+               "lighter)", title_fontsize=8.5)
     fig.suptitle("Where the end-to-end time goes: layer type -> op class -> kernel",
-                 fontsize=13, y=0.995)
-    fig.tight_layout(rect=[0, 0, 1, 0.975])
+                 fontsize=13, y=0.992)
+    fig.tight_layout(rect=[0, 0, 1, 0.895])
     out = a.out if os.path.isabs(a.out) else os.path.join(ROOT, a.out)
     fig.savefig(out, dpi=150, facecolor="w")
     print("wrote %s" % out)
