@@ -124,19 +124,33 @@ def main():
             ax.bar([l for _, l in MODES], v, .6, bottom=bot, color=colour,
                    label=bname if xs == keys[0] else None)
             bot += v
-        for i, t in enumerate(bot):
-            ax.text(i, t * 1.02, "%.0f" % t, ha="center", fontsize=8.5, fontweight="bold")
+        # Mark the MEASURED pipeline latency. Without it the stack reads as the layer's time,
+        # which is badly wrong where the layer is launch-bound: at T=4 gpu_busy_frac is
+        # 0.45-0.57, i.e. over 40% of the wall clock is gaps between kernels and the stack
+        # accounts for barely half of it. An earlier caption claimed the gap was 0-1%.
+        wall = np.array([idx[xs][m]["pipeline_us"] for m, _ in MODES])
+        ax.plot(np.arange(len(MODES)), wall, "_", color="black", markersize=26,
+                markeredgewidth=2.2,
+                label="measured pipeline" if xs == keys[0] else None)
+        for i, (t, w) in enumerate(zip(bot, wall)):
+            frac = t / w if w else 0
+            ax.text(i, w * 1.03, "%.0f" % w, ha="center", fontsize=8.5, fontweight="bold")
+            if frac < 0.95:
+                ax.text(i, t * 0.5, "kernels\n%.0f%%" % (frac * 100), ha="center",
+                        fontsize=7.5, color="black")
         ax.set_title(shape_label(xs), fontsize=10)
-        ax.set_ylim(0, bot.max() * 1.18)
+        ax.set_ylim(0, wall.max() * 1.22)
         ax.grid(axis="y", alpha=.25)
     np.atleast_1d(axes)[0].set_ylabel("µs per layer call")
     fig.legend(loc="upper center", ncol=5, frameon=False, fontsize=9)
     # The stack height is the SUM OF KERNEL SELF-TIMES, which is slightly below the measured
     # pipeline latency (the gap is launch overhead -- gpu_busy_frac in the tables). Labelling it
     # "measured pipeline" would overstate what the bars show by that gap.
-    fig.suptitle("Kernels inside the AttentionBlock, batch %d "
-                 "(bar label = summed kernel self-time; measured pipeline is 0-1%% higher)"
-                 % lay["batch"], y=.9, fontsize=11)
+    fig.suptitle("Kernels inside the AttentionBlock, batch %d — stack = summed kernel "
+                 "self-time, black tick + label = measured pipeline latency.\n"
+                 "Where they differ the layer is launch-bound: kernels cover 98%% of the wall "
+                 "at T>=64 but only 45-57%% at T=4."
+                 % lay["batch"], y=.94, fontsize=10.5)
     fig.tight_layout(rect=[0, 0, 1, .86])
     out = a.out if os.path.isabs(a.out) else os.path.join(ROOT, a.out)
     fig.savefig(out, dpi=150, facecolor="w")

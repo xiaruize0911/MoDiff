@@ -162,6 +162,16 @@ Within a round the median of the timed calls is taken, so `cv_pct` is round-to-r
 reproducibility, not within-round jitter (`within_round_cv_pct` in the JSON covers that).
 `stability` is a label on `cv_pct`: `tight` <= 1%, `ok` <= 3%, `NOISY` > 3%.
 
+**`cv_pct` measures reproducibility WITHIN one process, and it does not predict reproducibility
+across sessions.** Re-running all three suites on the same binary moved 29 of 237 comparable
+kernel rows by more than 10%, with a maximum of **+31.4%** -- and that row had reported
+`cv_pct` 0.94%, i.e. `tight`. The affected rows are the launch-bound ones (per-call time of tens
+of microseconds: small-spatial convs, T=4/T=16 attention, the pool/upsample quantize kernels);
+rows above ~200 us/call reproduced to under 1%. Counts by suite, rows moving >10% between the two
+sessions: attention 5/31, conv 6/75, linear 5/31, norm/quantize 13/100. Cross-mode ratios measured
+inside one process are unaffected, since all three modes drift together; a small-shape absolute
+number quoted from one session is not a stable quantity.
+
 Two annotations appear in the tables and are properties of the data, not judgements:
 
 - **`quantized?` = `no — dtype only`** marks a key whose entry point is torch's own op in *all
@@ -224,6 +234,18 @@ near-identical stacks with different bucket boundaries invite a comparison that 
   reinstalled; torch 2.4.1+cu124 unchanged).
 - Stage tables are profiler self-time scaled to the measured **median** wall time; the scaled sums
   reproduce it to +-0.00%.
+- **Summed kernel self-time is not the layer's wall time where the layer is launch-bound.**
+  `gpu_busy_frac` (in the layer JSON) is the ratio: median 0.998 over the 78 layer measurements,
+  but 18 of them fall below 0.95 and the minimum is 0.379. For attention it is 0.976-0.998 at
+  T>=16 and only 0.449-0.572 at T=4, so at that shape less than 57% of the wall clock is inside
+  any kernel and the rest is gaps between launches. The attention profile figure therefore marks
+  the measured pipeline separately from the stack.
+- The catch-all `elementwise / copies / other` stage holds 23.5% of FP16's wall and 15.4% of
+  INT4's. Its largest members are torch elementwise kernels (17800 and 10400 launches in FP16),
+  `upsample_nearest2d_nhwc`, and `cat2_channels_last_fp16`; nothing in it is unidentified, but it
+  is not attributed to a named op stage.
+- [`ck_audit.py`](../integration/benchmarks/report/ck_audit.py) scans these files for
+  regressions, skewed distributions, launch-bound layers, cross-mode identities and drift.
 """
     out = rel(a.out)
     with open(out, "w") as f:
