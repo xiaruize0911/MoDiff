@@ -1,11 +1,13 @@
 # Checkpoint report — FP16 / INT8 / INT4, end-to-end and per layer
 
-> **SUPERSEDED by `CHECKPOINT_REPORT_2026-08-01.md`.** Kept as the historical record of the
+> **SUPERSEDED by `MEASUREMENT_REPORT_2026-08-01.md`.** Kept as the historical record of the
 > pre-K-gate state; its figures are left exactly as published rather than patched. Every INT4
 > column here predates the `b2206da` K-gate and is stale — notably e2e 12413.7 ms / 1.653×
 > (now 11995.6 / 1.711×) and layer 54.75 ms / 1.44× (now 51.04 / 1.562×). Its §2.1-vs-§1
 > contradiction about T16's route, the five sub-FP16 layers in §5, the mislabelled µs/ms row in
-> §2, the "5.2 ms lead" arithmetic, and the layer-instance count are all corrected there.
+> §2, the "5.2 ms lead" arithmetic, and the layer-instance count were all corrected in
+> the 2026-08-01 revisions; the measurements now live in MEASUREMENT_REPORT_2026-08-01.md
+> and the analysis that accompanied them is in git history at 5721afa.
 
 **Hardware:** NVIDIA A40 (SM86) · **Model:** LSUN-churches LDM, 21 attention blocks + 21 ResBlocks
 **Measured:** 2026-07-31, at commit `a72cde6` (all INT4 attention shapes fused)

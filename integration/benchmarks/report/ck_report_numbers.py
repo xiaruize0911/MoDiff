@@ -2,7 +2,7 @@
 
 The previous checkpoint report's tables were transcribed by hand, which is how it ended up
 carrying five stale figures and one self-contradiction across successive revisions. Anything
-quoted in CHECKPOINT_REPORT_2026-08-01.md that is a number should come out of here.
+quoted in MEASUREMENT_REPORT_2026-08-01.md that is a number should come out of here.
 
 Usage:
   python3 ck_report_numbers.py --e2e data/e2e_three_mode_2026-08-01.json \

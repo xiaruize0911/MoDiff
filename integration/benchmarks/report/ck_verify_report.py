@@ -6,7 +6,7 @@ matter and fails if any of them is not present, so a data refresh that is not ca
 prose is a hard error rather than a silent inconsistency.
 
 Usage:
-  python3 ck_verify_report.py ../../CHECKPOINT_REPORT_2026-08-01.md \
+  python3 ck_verify_report.py ../../MEASUREMENT_REPORT_2026-08-01.md \
       --e2e data/e2e_three_mode_2026-08-01.json --layers data/layers_2026-08-01.json
 """
 import argparse
