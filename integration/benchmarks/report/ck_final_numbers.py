@@ -210,10 +210,25 @@ def layer_tables(lay):
                  agg[m]["resblock_updown"], agg[m]["total"],
                  "1.000×" if m == "fp16" else "%.3f×" % (ft / agg[m]["total"])))
 
+    tg = {m: sum(e["gpu_us_sum"] * e["n_instances"] / 1e3 for e in lay["modes"][m])
+          for m, _ in MODES}
+    print("\nSame totals on summed kernel time instead of wall clock (see `busy` below): "
+          "FP16 %.2f, INT8 %.2f (%.3f×), INT4 %.2f (%.3f×) ms."
+          % (tg["fp16"], tg["int8_baseline"], tg["fp16"] / tg["int8_baseline"],
+             tg["int4_baseline"], tg["fp16"] / tg["int4_baseline"]))
+
     print("\n**Per (kind, shape), with the distribution**")
+    print("\n`busy` is the lowest gpu_busy_frac across the three modes. Below ~0.95 the layer is "
+          "bound by CPU dispatch rather than by its kernels -- the module's Python/aten issue cost "
+          "is roughly constant per call (measured 76-240 µs depending on mode, FP16's token-major "
+          "SDPA path being the most expensive) while GPU time scales with the shape, so the small "
+          "shapes starve the GPU. For those rows the wall-clock ratio is not a kernel ratio, and "
+          "the GPU-only ratio is given beside it. The bias runs both ways: at attention C768/2² "
+          "FP16 is the dispatch-bound mode and the wall overstates INT4 by 22%%, while at several "
+          "small ResBlocks INT4 is the bound one and the wall understates it by up to 35%%.")
     print("| kind | shape | n | FP16 µs ± CI (CV) | INT8 µs ± CI (CV) | INT4 µs ± CI (CV) |"
-          " INT8 × | INT4 × |")
-    print("|---|---|---:|---:|---:|---:|---:|---:|")
+          " INT8 × | INT4 × | busy | INT4 × GPU-only |")
+    print("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|")
     L = {}
     for m, _ in MODES:
         for e in lay["modes"][m]:
@@ -225,10 +240,15 @@ def layer_tables(lay):
         f, e8, e4 = (v["fp16"]["stats"], v["int8_baseline"]["stats"],
                      v["int4_baseline"]["stats"])
         s8, s4 = ratio_ci(f, e8), ratio_ci(f, e4)
-        print("| %s | C%d/%d² | %d | %s (%.2f%%) | %s (%.2f%%) | %s (%.2f%%) | %.2f± %.2f | %.2f ± %.2f |"
+        busy = min(v[m]["gpu_busy_frac"] for m, _ in MODES)
+        gpu_only = (v["fp16"]["gpu_us_sum"] / v["int4_baseline"]["gpu_us_sum"]
+                    if v["int4_baseline"]["gpu_us_sum"] else float("nan"))
+        print("| %s | C%d/%d² | %d | %s (%.2f%%) | %s (%.2f%%) | %s (%.2f%%) | %.2f± %.2f |"
+              " %.2f ± %.2f | %.2f%s | %.2f× |"
               % (k[0], k[1][1], k[1][2], v["fp16"]["n_instances"],
                  f_ci(f), f["cv_pct"], f_ci(e8), e8["cv_pct"], f_ci(e4), e4["cv_pct"],
-                 s8["ratio"], s8["ci95_half"], s4["ratio"], s4["ci95_half"]))
+                 s8["ratio"], s8["ci95_half"], s4["ratio"], s4["ci95_half"],
+                 busy, " ⚠" if busy < 0.95 else "", gpu_only))
 
 
 def e2e_table(e2e):
