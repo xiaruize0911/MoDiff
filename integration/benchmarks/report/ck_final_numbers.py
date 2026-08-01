@@ -242,21 +242,31 @@ def e2e_table(e2e):
             d["stats"] = summarize(d["wall_all_us"])
             d.setdefault("stability", "—")
     fp = e2e["modes"]["fp16"]
-    print("\n| mode | ms/batch (mean ± 95% CI) | ms/step | vs FP16 (95% CI) | CV | spread |"
-          " n | stability |")
-    print("|---|---:|---:|---:|---:|---:|---:|---|")
+    print("\n| mode | ms/batch (mean ± 95% CI) | ms/sample | ms/step | vs FP16 (95% CI) | CV |"
+          " spread | n | stability |")
+    print("|---|---:|---:|---:|---:|---:|---:|---:|---|")
     for m, lbl in MODES:
         d = e2e["modes"][m]
         st = d.get("stats")
         sp = ratio_ci(fp.get("stats"), st) if m != "fp16" else None
-        print("| %s | %.1f ± %.1f | %.2f | %s | %.2f%% | %.2f%% | %d | %s |"
-              % (lbl, st["mean"] / 1e3, st["ci95_half"] / 1e3, d["per_step_ms"],
-                 "1.000×" if sp is None else "%.3f ± %.3f" % (sp["ratio"], sp["ci95_half"]),
+        # ms/sample and ms/step are derived from the SAME central value as ms/batch (the mean),
+        # not from the median in d["per_sample_ms"]/d["per_step_ms"] -- mixing the two inside one
+        # row is how an earlier revision ended up with a mean ms/batch beside a median ms/step.
+        print("| %s | %.1f ± %.1f | %.3f | %.2f | %s | %.2f%% | %.2f%% | %d | %s |"
+              % (lbl, st["mean"] / 1e3, st["ci95_half"] / 1e3,
+                 st["mean"] / 1e3 / e2e["batch"], st["mean"] / 1e3 / e2e["steps"],
+                 # the x goes on the ratio, not after the interval: the same column's FP16 row
+                 # reads "1.000x", and without it the two rows were formatted differently
+                 "1.000×" if sp is None else "%.3f× ± %.3f" % (sp["ratio"], sp["ci95_half"]),
                  st["cv_pct"], st["spread_pct"], st["n"], d.get("stability", "—")))
-    print("\nper-repeat samples (ms/batch):")
+    # Fenced, not indented: a 2-space indent is not a markdown code block, so the three rows
+    # collapsed into one paragraph and lost their column alignment when rendered.
+    print("\nper-repeat samples (ms/batch):\n")
+    print("```")
     for m, lbl in MODES:
         s = e2e["modes"][m]["stats"]["samples"]
-        print("  %-5s %s" % (lbl, "  ".join("%.0f" % (x / 1e3) for x in s)))
+        print("%-5s %s" % (lbl, "  ".join("%.0f" % (x / 1e3) for x in s)))
+    print("```")
 
 
 def stability_summary(ks, lay, e2e):
