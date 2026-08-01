@@ -97,6 +97,27 @@ def attn_key(row):
     return (t, hd)
 
 
+def entry_priority(row):
+    """Which entry represents the STEADY-STATE production path at a given key.
+
+    Picking the slowest entry (an earlier version's rule) is wrong, because several entries
+    coexist at one key and the extra ones belong to the first few steps, not to a 200-step run:
+    at T=1024 the INT8 mode shows flash_attn_int8_vt (1843.5 us), _vt_static (1597.8) and the
+    fused qi8_kv_static_qout_hd24 (1597.3), and "slowest" picked the startup one, reporting
+    1.10x where the steady-state kernel gives 1.27x. At T=4 it was worse: it picked the fp16
+    SDPA fallback that fires in early steps (59.5 us) over the quantized small kernel that runs
+    afterwards (19.1 us), turning a 2.55x win into a reported 0.82x loss.
+
+    Priority: fused *_qout entry > any other native entry > torch's own op.
+    """
+    e = row["entry"]
+    if e.startswith("torch_"):
+        return 0
+    if "_qout" in e:
+        return 2
+    return 1
+
+
 def suite_table(ks, suite, keyfn, keyname, top=None, alignfn=None):
     """Per-mode table of per-call time, then a cross-mode view on the canonical key."""
     h("%s KERNELS — per call, batch %d, %d rounds x %d iters, warmup %d"
@@ -131,8 +152,8 @@ def suite_table(ks, suite, keyfn, keyname, top=None, alignfn=None):
             if k is None:
                 continue
             cur = idx[k].get(m)
-            if cur is None or r["stats"]["mean"] > cur["stats"]["mean"]:
-                idx[k][m] = r        # keep the dominant entry at that key
+            if cur is None or entry_priority(r) > entry_priority(cur):
+                idx[k][m] = r
     full = [(k, v) for k, v in idx.items() if len(v) == len(MODES)]
     print("\n**Cross-mode, on %s** — %d of %d keys present in all three modes"
           % (keyname, len(full), len(idx)))

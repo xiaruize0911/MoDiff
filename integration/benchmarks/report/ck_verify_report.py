@@ -37,17 +37,29 @@ def main():
     e2e = json.load(open(rel(a.e2e)))
     lay = json.load(open(rel(a.layers)))
 
-    checks = []   # (label, string that must appear)
+    # (label, [acceptable strings]) -- a report may quote either central statistic, since both
+    # the mean of the round medians and the median are in the JSON and they differ by <0.4%.
+    # An earlier version demanded the median only and failed a report that consistently used
+    # means, which is the statistic a confidence interval actually attaches to.
+    checks = []
 
     # ---- e2e headline
     fp = e2e["modes"]["fp16"]["wall_us_per_batch"]
+    fp_mean = (e2e["modes"]["fp16"].get("stats") or {}).get("mean", fp)
     for m, lbl in zip(MODES, ("FP16", "INT8", "INT4")):
         v = e2e["modes"][m]
-        checks.append((f"e2e {lbl} ms/batch", f"{v['wall_us_per_batch']/1e3:.1f}"))
-        checks.append((f"e2e {lbl} ms/sample", f"{v['per_sample_ms']:.3f}"))
-        checks.append((f"e2e {lbl} ms/step", f"{v['per_step_ms']:.2f}"))
-        checks.append((f"e2e {lbl} speedup", f"{fp/v['wall_us_per_batch']:.3f}×"))
-        checks.append((f"e2e {lbl} CV", f"{v['wall_cv_pct']:.2f}%"))
+        st = v.get("stats") or {}
+        mean = st.get("mean", v["wall_us_per_batch"])
+        checks.append((f"e2e {lbl} ms/batch",
+                       [f"{v['wall_us_per_batch']/1e3:.1f}", f"{mean/1e3:.1f}"]))
+        checks.append((f"e2e {lbl} ms/sample",
+                       [f"{v['per_sample_ms']:.3f}", f"{mean/1e3/e2e['batch']:.3f}"]))
+        checks.append((f"e2e {lbl} ms/step",
+                       [f"{v['per_step_ms']:.2f}", f"{mean/1e3/e2e['steps']:.2f}"]))
+        checks.append((f"e2e {lbl} speedup",
+                       [f"{fp/v['wall_us_per_batch']:.3f}×", f"{fp_mean/mean:.3f}×"]))
+        checks.append((f"e2e {lbl} CV",
+                       [f"{v['wall_cv_pct']:.2f}%", f"{st.get('cv_pct', -1):.2f}%"]))
 
     # ---- stage table
     S = {m: split(e2e["modes"][m]["kernels"]) for m in MODES}
@@ -55,7 +67,7 @@ def main():
         if max(S[m][key] for m in MODES) < 1000:      # sub-1ms rows print as 0.0
             continue
         for m in MODES:
-            checks.append((f"stage {lbl} {m}", f"{S[m][key]/1e3:.1f}"))
+            checks.append((f"stage {lbl} {m}", [f"{S[m][key]/1e3:.1f}"]))
 
     # ---- layer table
     for m, lbl in zip(MODES, ("FP16", "INT8", "INT4")):
@@ -63,30 +75,39 @@ def main():
         for e in lay["modes"][m]:
             agg[e["kind"]] += e["pipeline_us"] * e["n_instances"] / 1e3
         tot = sum(agg.values())
+        agg_mean = {k: 0.0 for k in KINDS}
+        for e in lay["modes"][m]:
+            if e.get("stats"):
+                agg_mean[e["kind"]] += e["stats"]["mean"] * e["n_instances"] / 1e3
         for k in KINDS:
-            checks.append((f"layer {lbl} {k}", f"{agg[k]:.2f} ms"))
-        checks.append((f"layer {lbl} total", f"{tot:.2f} ms"))
+            checks.append((f"layer {lbl} {k}",
+                           [f"{agg[k]:.2f} ms", f"{agg_mean[k]:.2f} ms"]))
+        checks.append((f"layer {lbl} total",
+                       [f"{tot:.2f} ms", f"{sum(agg_mean.values()):.2f} ms"]))
 
     # ---- attention per shape
     for m in MODES:
         for e in lay["modes"][m]:
             if e["kind"] == "attention":
+                alts = [f"{e['pipeline_us']:.1f}"]
+                if e.get("stats"):
+                    alts.append(f"{e['stats']['mean']:.1f}")
                 checks.append((f"attn {m} C{e['x_shape'][1]}/T"
-                               f"{e['x_shape'][2]*e['x_shape'][3]}",
-                               f"{e['pipeline_us']:.1f}"))
+                               f"{e['x_shape'][2]*e['x_shape'][3]}", alts))
 
     # ---- nothing below 1.0x must be claimed only if true
     below = [(m, e["kind"], e["x_shape"])
              for m in MODES[1:] for e in lay["modes"][m]
              if e["fp16_us"] / e["pipeline_us"] < 1.0]
 
-    missing = [(lbl, s) for lbl, s in checks if s not in text]
+    missing = [(lbl, alts) for lbl, alts in checks
+               if not any(a in text for a in (alts if isinstance(alts, list) else [alts]))]
     print(f"{len(checks)} figures checked against {os.path.basename(a.e2e)} + "
           f"{os.path.basename(a.layers)}")
     if missing:
         print(f"\nFAIL: {len(missing)} figure(s) quoted nowhere in the report:")
-        for lbl, s in missing:
-            print(f"  {lbl:44s} expected to find {s!r}")
+        for lbl, alts in missing:
+            print(f"  {lbl:44s} expected one of {alts!r}")
     if below:
         print(f"\nNOTE: {len(below)} layer(s) genuinely below 1.0x vs FP16: {below}")
         if "no red cells" in text or "No layer is slower" in text:
