@@ -976,6 +976,208 @@ __global__ void group_norm_silu_quantize_pack_nhwc_vec2_kernel(
     }
 }
 
+// Fused GroupNorm+SiLU+quantize+2x resize, one launch, for the updown ResBlock path.
+// Pass 1 (the stats reduction) is copied verbatim from the non-resizing sibling; only pass 2
+// differs. UP=true does nearest 2x upsample, which is an exact index-select, so a value is
+// computed once and stored to the four output positions. UP=false does 2x2 average pooling
+// and is the reason this has to be ONE kernel: averaging must happen on the fp32 post-SiLU
+// values BEFORE quantization. Splitting it (quantize, then average the int4 codes) rounds
+// each of the four inputs first and averages the rounded values, which is a different and
+// worse result -- that non-commutation is exactly why the shipped pipeline keeps GroupNorm at
+// fp16 and defers the quantize to the resize kernel instead.
+template <typename TIn, bool FAST_REDUCE, bool UP>
+__global__ void group_norm_silu_quantize_pack_resize_nhwc_kernel(
+    const TIn* __restrict__ X,
+    int8_t* __restrict__ Yqp,         // [N, H, W, C/2] packed int4, channels_last-flat
+    const TIn* __restrict__ gamma,
+    const TIn* __restrict__ beta,
+    const TIn* __restrict__ mod_scale, // [N, C] scale-shift modulation, or nullptr
+    const TIn* __restrict__ mod_shift,
+    const float* __restrict__ scale_ptr,
+    const float* __restrict__ smooth_inv,
+    int C,
+    long HW,
+    int G,
+    float eps,
+    bool apply_silu,
+    int Kpad,                      // padded row width in CHANNELS (>= C, even); == C for no padding
+    int W                          // INPUT width, needed to map hw -> (h, w) for the resize
+) {
+    const int CPG = C / G;
+    const long group_size = (long)CPG * HW;
+    const int KpadH = Kpad / 2;    // bytes per spatial position in the output
+
+    const int n = blockIdx.x / G;
+    const int g = blockIdx.x % G;
+    const int c_start = g * CPG;
+
+    const TIn* x_base = X + (long)n * HW * C;
+    const long HW_OUT = UP ? (HW * 4) : (HW / 4);
+    int8_t* yqp_base = Yqp + (long)n * (HW_OUT * (long)KpadH);
+
+    extern __shared__ float sdata[];
+    float* s_sum = sdata;
+    float* s_sumsq = sdata + blockDim.x;
+
+    float local_sum = 0.0f, local_sumsq = 0.0f;
+    if constexpr (FAST_REDUCE) {
+        const int HALF_CPG = CPG / 2;
+        const long pairs = group_size / 2;
+        for (long pidx = threadIdx.x; pidx < pairs; pidx += blockDim.x) {
+            const int cpair = pidx % HALF_CPG;
+            const long hw = pidx / HALF_CPG;
+            const long mem_idx0 = hw * C + c_start + 2 * cpair;
+            const float2 v = gn_load2(x_base, mem_idx0);
+            local_sum += v.x + v.y;
+            local_sumsq += v.x * v.x + v.y * v.y;
+        }
+    } else {
+        for (long idx = threadIdx.x; idx < group_size; idx += blockDim.x) {
+            int c_local = idx % CPG;
+            long hw = idx / CPG;
+            long mem_idx = hw * C + c_start + c_local;
+            float v = gn_load(x_base, mem_idx);
+            local_sum += v;
+            local_sumsq += v * v;
+        }
+    }
+    __shared__ float mean_s, inv_std_s;
+    if constexpr (FAST_REDUCE) {
+        const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
+#pragma unroll
+        for (int off = 16; off > 0; off >>= 1) {
+            local_sum += __shfl_down_sync(0xffffffff, local_sum, off);
+            local_sumsq += __shfl_down_sync(0xffffffff, local_sumsq, off);
+        }
+        if (lane == 0) {
+            s_sum[warp] = local_sum;
+            s_sumsq[warp] = local_sumsq;
+        }
+        __syncthreads();
+        if (warp == 0) {
+            const int nwarp = (blockDim.x + 31) >> 5;
+            float block_sum = lane < nwarp ? s_sum[lane] : 0.0f;
+            float block_sumsq = lane < nwarp ? s_sumsq[lane] : 0.0f;
+#pragma unroll
+            for (int off = 16; off > 0; off >>= 1) {
+                block_sum += __shfl_down_sync(0xffffffff, block_sum, off);
+                block_sumsq += __shfl_down_sync(0xffffffff, block_sumsq, off);
+            }
+            if (lane == 0) {
+                float mean = block_sum / (float)group_size;
+                float var = block_sumsq / (float)group_size - mean * mean;
+                mean_s = mean;
+                inv_std_s = rsqrtf(fmaxf(var, 0.0f) + eps);
+            }
+        }
+    } else {
+        s_sum[threadIdx.x] = local_sum;
+        s_sumsq[threadIdx.x] = local_sumsq;
+        __syncthreads();
+        for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+            if (threadIdx.x < s) {
+                s_sum[threadIdx.x] += s_sum[threadIdx.x + s];
+                s_sumsq[threadIdx.x] += s_sumsq[threadIdx.x + s];
+            }
+            __syncthreads();
+        }
+        if (threadIdx.x == 0) {
+            float mean = s_sum[0] / (float)group_size;
+            float var = s_sumsq[0] / (float)group_size - mean * mean;
+            mean_s = mean;
+            inv_std_s = rsqrtf(fmaxf(var, 0.0f) + eps);
+        }
+    }
+    __syncthreads();
+    const float mean = mean_s;
+    const float inv_std = inv_std_s;
+    const float scale = *scale_ptr;
+
+    const int HALF_CPG = CPG / 2;
+    const int Wi = W, Hi = (int)(HW / W);
+
+    // Compute one channel pair's post-SiLU fp32 values at input position hw.
+    auto compute_pair = [&](long hw, int c_global0, float& o0, float& o1) {
+        const long mem_idx0 = hw * (long)C + c_global0;
+        float2 v = gn_load2(x_base, mem_idx0);
+        float2 wgt = gn_load2(gamma, c_global0);
+        float2 b = gn_load2(beta, c_global0);
+        float n0 = (v.x - mean) * inv_std * wgt.x + b.x;
+        float n1 = (v.y - mean) * inv_std * wgt.y + b.y;
+        if (mod_scale != nullptr) {
+            const long midx0 = (long)n * C + c_global0;
+            float2 ms = gn_load2(mod_scale, midx0);
+            float2 sh = gn_load2(mod_shift, midx0);
+            n0 = n0 * (1.0f + ms.x) + sh.x;
+            n1 = n1 * (1.0f + ms.y) + sh.y;
+        }
+        o0 = apply_silu ? (n0 / (1.0f + expf(-n0))) : n0;
+        o1 = apply_silu ? (n1 / (1.0f + expf(-n1))) : n1;
+        if (smooth_inv != nullptr) {
+            o0 *= smooth_inv[c_global0];
+            o1 *= smooth_inv[c_global0 + 1];
+        }
+    };
+
+    if constexpr (UP) {
+        const int Wo = Wi * 2;
+        const long pairs = group_size / 2;                 // iterate INPUT positions
+        for (long pidx = threadIdx.x; pidx < pairs; pidx += blockDim.x) {
+            const int cpair = pidx % HALF_CPG;
+            const long hw = pidx / HALF_CPG;
+            const int c_global0 = c_start + 2 * cpair;
+            float o0, o1;
+            compute_pair(hw, c_global0, o0, o1);
+            const int8_t i0 = (int8_t)fmaxf(-7.0f, fminf(7.0f, roundf(o0 * scale)));
+            const int8_t i1 = (int8_t)fmaxf(-7.0f, fminf(7.0f, roundf(o1 * scale)));
+            const int8_t packed = (int8_t)((i0 & 0x0F) | ((i1 & 0x0F) << 4));
+            const int h = (int)(hw / Wi), w = (int)(hw % Wi);
+            const int byte_c = c_global0 >> 1;
+#pragma unroll
+            for (int dy = 0; dy < 2; ++dy)
+#pragma unroll
+                for (int dx = 0; dx < 2; ++dx) {
+                    const long hw_out = (long)(2 * h + dy) * Wo + (2 * w + dx);
+                    yqp_base[hw_out * (long)KpadH + byte_c] = packed;
+                }
+        }
+    } else {
+        const int Wo = Wi / 2, Ho = Hi / 2;
+        const long pairs_out = (long)Ho * Wo * HALF_CPG;   // iterate OUTPUT positions
+        for (long pidx = threadIdx.x; pidx < pairs_out; pidx += blockDim.x) {
+            const int cpair = pidx % HALF_CPG;
+            const long hwo = pidx / HALF_CPG;
+            const int ho = (int)(hwo / Wo), wo = (int)(hwo % Wo);
+            const int c_global0 = c_start + 2 * cpair;
+            float a0 = 0.0f, a1 = 0.0f;
+#pragma unroll
+            for (int dy = 0; dy < 2; ++dy)
+#pragma unroll
+                for (int dx = 0; dx < 2; ++dx) {
+                    float o0, o1;
+                    compute_pair((long)(2 * ho + dy) * Wi + (2 * wo + dx), c_global0, o0, o1);
+                    a0 += o0;
+                    a1 += o1;
+                }
+            a0 *= 0.25f;                                   // average BEFORE quantizing
+            a1 *= 0.25f;
+            const int8_t i0 = (int8_t)fmaxf(-7.0f, fminf(7.0f, roundf(a0 * scale)));
+            const int8_t i1 = (int8_t)fmaxf(-7.0f, fminf(7.0f, roundf(a1 * scale)));
+            yqp_base[hwo * (long)KpadH + (c_global0 >> 1)] =
+                (int8_t)((i0 & 0x0F) | ((i1 & 0x0F) << 4));
+        }
+    }
+
+    if (g == 0 && Kpad > C) {
+        const int tail_bytes = KpadH - C / 2;
+        for (long idx = threadIdx.x; idx < HW_OUT * (long)tail_bytes; idx += blockDim.x) {
+            const long hw = idx / tail_bytes;
+            const int pb = idx % tail_bytes;
+            yqp_base[hw * (long)KpadH + C / 2 + pb] = 0;
+        }
+    }
+}
+
 // -----------------------------------------------------------------------------
 //   Op:       GroupNorm(+SiLU)+quantize-to-INT4+pack NHWC (channels_last-native)
 //   Inputs:   x          fp16|fp32 [N,C,H,W] channels_last-contiguous (NHWC physical)
@@ -1108,6 +1310,71 @@ static torch::Tensor group_norm_silu_quantize_pack_nhwc_impl(
     }
 
     C10_CUDA_KERNEL_LAUNCH_CHECK();
+    return yqp;
+}
+
+// Host side of the fused GN+SiLU+quantize+resize kernel. `resize` is +1 for a nearest 2x
+// upsample and -1 for a 2x2 average pool; the output is [N, H*2, W*2, Kpad/2] or
+// [N, H/2, W/2, Kpad/2]. Deliberately a separate entry point from the non-resizing sibling: it
+// is a prototype for the updown ResBlock path and is not wired into the pipeline.
+torch::Tensor group_norm_silu_quantize_pack_resize_nhwc(
+    torch::Tensor x, torch::Tensor weight, torch::Tensor bias,
+    int64_t num_groups, double eps, bool apply_silu,
+    torch::Tensor scale, torch::Tensor smooth_inv,
+    torch::Tensor mod_scale, torch::Tensor mod_shift,
+    int64_t k_pad, int64_t resize
+) {
+    CHECK_CUDA(x);
+    CHECK_CONTIGUOUS(x);
+    TORCH_CHECK(x.dim() == 4, "gn_quantize_pack_resize expects [N, C, H, W]");
+    TORCH_CHECK(x.scalar_type() == torch::kFloat16 || x.scalar_type() == torch::kFloat32,
+                "gn_quantize_pack_resize: only fp16/fp32 supported");
+    TORCH_CHECK(resize == 1 || resize == -1, "gn_quantize_pack_resize: resize must be +1 or -1");
+    const bool has_mod = mod_scale.numel() > 0;
+    const int N = x.size(0), C = x.size(1), H = x.size(2), W = x.size(3);
+    TORCH_CHECK(C % num_groups == 0, "channels must divide into groups");
+    const int CPG = C / (int)num_groups;
+    TORCH_CHECK(C % 2 == 0 && CPG % 2 == 0, "channels and channels-per-group must be even");
+    const bool up = (resize == 1);
+    if (!up) TORCH_CHECK(H % 2 == 0 && W % 2 == 0, "downsample needs even H and W");
+    const long HW = (long)H * W;
+    const long group_size = (long)CPG * HW;
+    const int Kpad = (k_pad > (int64_t)C) ? (int)k_pad : C;
+    TORCH_CHECK(Kpad % 2 == 0, "k_pad must be even");
+    const int Ho = up ? H * 2 : H / 2, Wo = up ? W * 2 : W / 2;
+    auto yqp = torch::empty({N, Ho, Wo, Kpad / 2},
+                            torch::TensorOptions().dtype(torch::kInt8).device(x.device()));
+
+    int block_size = 128;
+    while ((long)block_size * 12 < group_size && block_size < 512) block_size <<= 1;
+    dim3 grid((unsigned int)(N * num_groups)), block((unsigned int)block_size);
+    size_t shmem = 2 * (size_t)block_size * sizeof(float);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    const float* smooth_ptr = (smooth_inv.numel() > 0) ? smooth_inv.data_ptr<float>() : nullptr;
+
+    // gn_load2 is overloaded for `const float*` and `const __half*` only, so the fp16 launch has
+    // to reinterpret at::Half -- instantiating the kernel on at::Half itself does not compile.
+#define MODIFF_GNQR_LAUNCH(T, ATT, UPV)                                                     \
+    group_norm_silu_quantize_pack_resize_nhwc_kernel<T, true, UPV>                          \
+        <<<grid, block, shmem, stream>>>(                                                   \
+            reinterpret_cast<const T*>(x.data_ptr<ATT>()),                                  \
+            reinterpret_cast<int8_t*>(yqp.data_ptr<int8_t>()),                              \
+            reinterpret_cast<const T*>(weight.data_ptr<ATT>()),                             \
+            reinterpret_cast<const T*>(bias.data_ptr<ATT>()),                               \
+            has_mod ? reinterpret_cast<const T*>(mod_scale.data_ptr<ATT>()) : nullptr,      \
+            has_mod ? reinterpret_cast<const T*>(mod_shift.data_ptr<ATT>()) : nullptr,      \
+            scale.data_ptr<float>(), smooth_ptr, C, HW, (int)num_groups, (float)eps,        \
+            apply_silu, Kpad, W)
+
+    if (x.scalar_type() == torch::kFloat32) {
+        if (up) MODIFF_GNQR_LAUNCH(float, float, true);
+        else    MODIFF_GNQR_LAUNCH(float, float, false);
+    } else {
+        if (up) MODIFF_GNQR_LAUNCH(__half, at::Half, true);
+        else    MODIFF_GNQR_LAUNCH(__half, at::Half, false);
+    }
+#undef MODIFF_GNQR_LAUNCH
+    C10_CUDA_CHECK(cudaGetLastError());
     return yqp;
 }
 
