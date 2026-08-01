@@ -159,15 +159,26 @@ Two annotations appear in the tables and are properties of the data, not judgeme
 
 ## Figures
 
-![e2e](final_report_2026-07-28/plots/fig_ck0801_e2e.png)
+All four figures below are generated from the SAME two files the tables use
+(`{lb}` and `{eb}`). An earlier revision of this document linked the
+`fig_ck0801_*` set, which was built from the checkpoint report's data instead -- a
+different run, 5 e2e repeats against 9 and layer totals differing by +0.9% / -1.9%, so the
+figures and the tables did not describe the same measurement.
 
-![layers](final_report_2026-07-28/plots/fig_ck0801_layers.png)
+![e2e](final_report_2026-07-28/plots/fig_final_e2e.png)
 
-![speedup matrix](final_report_2026-07-28/plots/fig_ck0801_speedup_matrix.png)
+![layers](final_report_2026-07-28/plots/fig_final_layers.png)
 
-![attention stages](final_report_2026-07-28/plots/fig_ck0801_attn_stages.png)
+![speedup matrix](final_report_2026-07-28/plots/fig_final_speedup_matrix.png)
 
 ![attention kernel profile](final_report_2026-07-28/plots/fig_attn_kernel_profile.png)
+
+The attention-by-stage view is the figure above, from `ck_attention_profile.py`. A second
+rendering of the same quantity exists (`fig_final_attn_stages.png`, from
+`make_checkpoint_report_plots.py`) and is NOT shown here: it plots the same layers under a
+different 7-bucket taxonomy and rescales each stack to `pipeline_us`, whereas the figure above
+plots raw kernel self-time under 5 buckets and comes with the per-kernel tables below. Two
+near-identical stacks with different bucket boundaries invite a comparison that means nothing.
 
 ## Suites 1-5: tables
 
