@@ -29,6 +29,9 @@ from torch.profiler import profile, ProfilerActivity, DeviceType
 
 import integration.benchmarks.benchmark_ldm as B
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from ck_bench_stats import summarize, stability_verdict
+
 MODES = ["fp16", "int8_baseline", "int4_baseline"]
 CALIB = {"int8_baseline": "integration/calibration/int8_calibration.pt",
          "int4_baseline": "integration/calibration/int4_calibration.pt"}
@@ -176,7 +179,15 @@ def main():
             sample()
         rows, raw_us = kernel_table(prof, wall_us)
 
+        # Same summary the kernel and layer suites report, so all five suites in the final
+        # report quote stability the same way. The hand-rolled fields below are kept because
+        # the published data already uses them; `stats` adds the t-based 95% CI on the mean,
+        # which the +-sigma fields do not give at these repeat counts.
+        st = summarize(times)
+
         out["modes"][mode] = {
+            "stats": st,
+            "stability": stability_verdict(st),
             "wall_us_per_batch": wall_us,
             "wall_mean_us": mean_us,
             "wall_stdev_us": sd_us,

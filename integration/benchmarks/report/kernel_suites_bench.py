@@ -1,0 +1,284 @@
+"""Kernel-level benchmark + profile for every real kernel call, all modes in ONE process.
+
+Covers three of the final report's five suites -- attention, conv and linear kernels -- plus the
+norm/quantize kernels, since excluding them would understate where the time actually goes.
+
+Two design decisions, both forced by what the code actually does:
+
+1. SHAPES ARE CAPTURED, NEVER LISTED. The older per-report scripts carry hardcoded shape
+   tables that no longer match this model at all: docs/benchmark_5mode_2026-07-2x/scripts/
+   conv_kernel.py benches Cin=128/256/512 at 64x64..8x8, while the churches UNet runs Cin in
+   {4,192,384,576,768,1152} at 32x32..2x2 and never sees a 64x64 conv or a 128-channel one;
+   integration/benchmarks/bench_attn_kernel.py lists qkv as 192->576 where the real projection
+   is 192->768. A hardcoded table reports on shapes the model does not have.
+
+2. KERNELS ARE CAPTURED AT THE C++ ENTRY POINT, NOT AT THE MODULE. A forward hook on conv/
+   linear modules cannot see the quantized path: the fused ResBlock calls
+   modiff_cutlass.conv2d_int8_evt_bias_residual_fp16 and the gemm_w8a8_awq_* family DIRECTLY,
+   bypassing module.forward(), so a module-level hook captures 33 conv shapes in fp16 but only
+   13 in int8_baseline -- and those 13 are the leftovers that stayed fp16. Wrapping the entry
+   points instead captures all of them, and puts the three modes at the same level.
+   (isinstance(nn.Conv2d) is doubly useless here: the conversion REPLACES the classes with
+   OptimizedInt8Conv2d/QuantLinearWxAx, which do not subclass the torch types.)
+
+Real call arguments are intercepted during a live sample and REPLAYED verbatim, rather than
+synthesized from shapes: each attention shape alone dispatches a different entry with its own
+packing convention (qi8_kv_static_qout_hd24 for T=1024/hd=24, qi8_kv_static_qout for
+T=256/64/hd=48, qi8packed_small_qout for T=16/4/hd=96 with packed qkv), and hand-building valid
+inputs for those is where a kernel benchmark silently starts measuring the wrong thing.
+Captured tensors are parked on CPU (~7 GB worst case against ~450 GB free) and moved back one
+signature at a time, so GPU memory stays bounded however many signatures exist.
+
+FP16 has no such entry points -- its kernels ARE torch's -- so F.conv2d / F.linear /
+scaled_dot_product_attention are wrapped through the same door and land in the same tables.
+
+Statistics come from ck_bench_stats: warmup, then rounds x iters with each round's median as
+one sample, reported as mean +- t-based 95% CI with CV and spread.
+
+Writes ONE json (default data/kernel_suites.json): per mode, per suite, one entry per
+(entry point, argument shapes) with its full timing distribution and per-kernel profile.
+"""
+import argparse
+import collections
+import json
+import os
+import sys
+
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+os.chdir(_ROOT)
+sys.path.insert(0, _ROOT)
+sys.path.insert(0, os.path.join(_ROOT, "src/taming-transformers"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import torch
+import torch.nn.functional as F
+from torch.profiler import profile, ProfilerActivity, DeviceType
+
+import modiff_cutlass as mc
+import integration.benchmarks.benchmark_ldm as B
+from ck_bench_stats import cuda_bench_stats, stability_verdict
+from profile_tree import classify as classify_kernel, short_kernel_name
+
+MODES = ["fp16", "int8_baseline", "int4_baseline"]
+CALIB = {"int8_baseline": "integration/calibration/int8_calibration.pt",
+         "int4_baseline": "integration/calibration/int4_calibration.pt"}
+QUANT_ENV = {"MODIFF_QUANT_LINEAR": "1", "MODIFF_QUANT_ATTN": "1",
+             "MODIFF_QUANT_ATTN_STATIC": "1", "MODIFF_QATTN_FLASH": "1",
+             "MODIFF_FLASH_GATE": "on", "MODIFF_LINEAR_OUT_I8": "0"}
+
+
+def suite_of(entry):
+    """Map a kernel entry point to one of the report's suites."""
+    e = entry.lower()
+    if "flash_attn" in e or "sdpa" in e:
+        return "attention"
+    if "conv2d" in e:
+        return "conv"
+    if "gemm" in e or "linear" in e:
+        return "linear"
+    if "group_norm" in e or "quant" in e:
+        return "norm_quantize"
+    return "other"
+
+
+def set_env(mode):
+    quant = mode != "fp16"
+    for k, v in QUANT_ENV.items():
+        os.environ[k] = v if quant else ("0" if k in ("MODIFF_QUANT_LINEAR",
+                                                      "MODIFF_QUANT_ATTN") else v)
+    for k in ("MODIFF_FLASH_ATTN", "MODIFF_FLASH_PACKED", "MODIFF_SDPA_BACKEND"):
+        os.environ.pop(k, None)
+
+
+# ---------------------------------------------------------------- arg parking
+def park(args):
+    """Move a captured arg list to CPU, remembering how to put each tensor back.
+
+    channels_last has to be recorded explicitly: several conv entries TORCH_CHECK it, and a
+    .cpu() round trip does not preserve it.
+    """
+    out = []
+    for a in args:
+        if torch.is_tensor(a):
+            cl = (a.dim() == 4 and a.is_contiguous(memory_format=torch.channels_last)
+                  and not a.is_contiguous())
+            out.append(dict(_t=a.detach().to("cpu", copy=True), cl=cl,
+                            shape=tuple(a.shape), dtype=str(a.dtype)))
+        else:
+            out.append(a)
+    return out
+
+
+def unpark(parked, dev="cuda"):
+    out = []
+    for a in parked:
+        if isinstance(a, dict) and "_t" in a:
+            t = a["_t"].to(dev)
+            if a["cl"]:
+                t = t.contiguous(memory_format=torch.channels_last)
+            out.append(t)
+        else:
+            out.append(a)
+    return out
+
+
+def scalar_args(parked):
+    return [None if (isinstance(a, dict) and "_t" in a) else
+            (a if isinstance(a, (int, float, bool, str)) else None) for a in parked]
+
+
+def arg_dtypes(parked):
+    return [a["dtype"] if isinstance(a, dict) and "_t" in a else None for a in parked]
+
+
+# ---------------------------------------------------------------- profiling
+def kernel_profile(fn, iters=30):
+    for _ in range(5):
+        fn()
+    torch.cuda.synchronize()
+    with profile(activities=[ProfilerActivity.CUDA]) as prof:
+        for _ in range(iters):
+            fn()
+        torch.cuda.synchronize()
+    rows, total = [], 0.0
+    for evt in prof.key_averages():
+        if evt.device_type != DeviceType.CUDA or evt.self_device_time_total <= 0:
+            continue
+        t = evt.self_device_time_total / iters
+        layer_type, role = classify_kernel(evt.key)
+        rows.append(dict(kernel=short_kernel_name(evt.key), layer_type=layer_type, role=role,
+                         us_per_call=round(t, 3), launches=round(evt.count / iters, 2)))
+        total += t
+    for r in rows:
+        r["pct"] = round(r["us_per_call"] / total * 100, 2) if total else 0.0
+    rows.sort(key=lambda r: -r["us_per_call"])
+    return rows, round(total, 3)
+
+
+# ---------------------------------------------------------------- capture
+def capture(mode, batch, steps, max_sig_per_entry):
+    """Run one real sample in `mode`, recording every kernel entry call and its arguments."""
+    set_env(mode)
+    calls = collections.OrderedDict()
+    restore = []
+
+    def wrap(owner, name, orig, label):
+        def w(*a, **kw):
+            sig = (label, tuple(tuple(x.shape) for x in a if torch.is_tensor(x)))
+            rec = calls.get(sig)
+            if rec is None:
+                if sum(1 for k in calls if k[0] == label) < max_sig_per_entry:
+                    calls[sig] = dict(entry=label, fn=orig, args=park(a),
+                                      kwargs=dict(kw), count=1)
+            else:
+                rec["count"] += 1
+            return orig(*a, **kw)
+        setattr(owner, name, w)
+        restore.append((owner, name, orig))
+
+    for n in dir(mc):
+        if n.startswith("_"):
+            continue
+        o = getattr(mc, n)
+        if callable(o):
+            wrap(mc, n, o, n)
+    for name, label in (("conv2d", "torch_conv2d_fp16"), ("linear", "torch_linear_fp16"),
+                        ("scaled_dot_product_attention", "torch_sdpa_fp16")):
+        wrap(F, name, getattr(F, name), label)
+
+    r = B.BenchmarkRunner("configs/latent-diffusion/lsun_churches-ldm-kl-8.yaml",
+                          "models/ldm/lsun_churches256/model.ckpt",
+                          output_dir="docs/final_report_2026-07-28/tmp_out",
+                          batch_size=batch, steps=steps, shape=(4, 32, 32),
+                          calibration_path=CALIB.get(mode), linear_backend="fp16")
+    model, sampler = r._setup_model(mode)
+    cond = r._cond_kwargs(model, batch)
+    # Everything the calibration/observer pass fired is discarded: those entries (plain
+    # flash_attn_int8_vt, the dynamic-scale probes) are not what a production step executes.
+    calls.clear()
+    with torch.inference_mode(), torch.amp.autocast("cuda", enabled=True,
+                                                    dtype=torch.float16):
+        sampler.sample(S=steps, batch_size=batch, shape=r.shape, eta=0.0, verbose=False,
+                       **cond)
+    torch.cuda.synchronize()
+    for owner, name, orig in restore:
+        setattr(owner, name, orig)
+    del model, sampler
+    torch.cuda.empty_cache()
+    return calls
+
+
+def bench_calls(calls, warm, iters, rounds, profile_it):
+    per_suite = collections.defaultdict(list)
+    for (label, shapes), rec in calls.items():
+        args = unpark(rec["args"])
+        torch.cuda.synchronize()
+        fn = lambda f=rec["fn"], a=args, k=rec["kwargs"]: f(*a, **k)
+        # Replay under the SAME context production runs in. The captured args are what the
+        # caller passed *before* autocast applied its own casts, so torch's own ops
+        # (F.conv2d/F.linear) get an fp16 input against an fp32 weight and raise a dtype
+        # mismatch if replayed bare. The context is entered once around the whole timing
+        # loop, not per call, so its overhead does not land in the measurement.
+        with torch.inference_mode(), torch.autocast("cuda", enabled=True,
+                                                    dtype=torch.float16):
+            st, err = cuda_bench_stats(fn, warm=warm, iters=iters, rounds=rounds)
+        row = dict(entry=label, arg_shapes=[list(s) for s in shapes],
+                   arg_dtypes=arg_dtypes(rec["args"]), scalar_args=scalar_args(rec["args"]),
+                   calls_per_sample=rec["count"], stats=st, error=err,
+                   stability=stability_verdict(st))
+        if st and profile_it:
+            with torch.inference_mode(), torch.autocast("cuda", enabled=True,
+                                                        dtype=torch.float16):
+                row["kernels"], row["gpu_us_sum"] = kernel_profile(fn)
+        per_suite[suite_of(label)].append(row)
+        print("  %-14s %-44s %-22s %s" %
+              (suite_of(label), label[:44], str(shapes[0]) if shapes else "-",
+               ("%8.1f us  CV %5.2f%%  x%d" % (st["mean"], st["cv_pct"], rec["count"]))
+               if st else ("ERR " + str(err)[:40])))
+        del args
+        torch.cuda.empty_cache()
+    return per_suite
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--batch", type=int, default=128)
+    ap.add_argument("--capture-steps", type=int, default=5,
+                    help="steps used only to capture calls; must divide 1000")
+    ap.add_argument("--warmup", type=int, default=30)
+    ap.add_argument("--iters", type=int, default=60)
+    ap.add_argument("--rounds", type=int, default=8)
+    ap.add_argument("--max-sig-per-entry", type=int, default=64)
+    ap.add_argument("--no-profile", action="store_true")
+    ap.add_argument("--output", default="docs/final_report_2026-07-28/data/kernel_suites.json")
+    a = ap.parse_args()
+
+    bn = torch.randn(1024, 1024, device="cuda", dtype=torch.float16)
+    for _ in range(8):
+        bn = bn @ bn
+    torch.cuda.synchronize()
+    del bn
+    torch.cuda.empty_cache()
+
+    out = {"gpu": torch.cuda.get_device_name(0), "batch": a.batch, "warmup": a.warmup,
+           "iters_per_round": a.iters, "rounds": a.rounds,
+           "capture_steps": a.capture_steps, "modes": {}}
+    for mode in MODES:
+        print("\n" + "=" * 96 + "\n%s\n" % mode + "=" * 96)
+        calls = capture(mode, a.batch, a.capture_steps, a.max_sig_per_entry)
+        entries = collections.Counter(k[0] for k in calls)
+        print("captured %d call signatures across %d entry points" % (len(calls), len(entries)))
+        per_suite = bench_calls(calls, a.warmup, a.iters, a.rounds, not a.no_profile)
+        out["modes"][mode] = dict(per_suite)
+        print("  -> " + ", ".join("%s=%d" % (k, len(v)) for k, v in per_suite.items()))
+        del calls, per_suite
+        torch.cuda.empty_cache()
+
+    path = a.output if os.path.isabs(a.output) else os.path.join(_ROOT, a.output)
+    with open(path, "w") as f:
+        json.dump(out, f, indent=1)
+    print("\nWROTE %s" % path)
+
+
+if __name__ == "__main__":
+    main()

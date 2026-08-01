@@ -31,10 +31,13 @@ from integration.fused_ops.fused_resblock import FusedResBlock
 # Reuse profile_tree.py's classification so intra-layer roles match the whole-model tree's roles.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from profile_tree import classify as classify_kernel, short_kernel_name
+from ck_bench_stats import cuda_bench_stats, stability_verdict
 
 HERE = "docs/final_report_2026-07-28"
 BATCH = int(os.environ.get("LBENCH_BATCH", "128"))
-WARM, ITERS, ROUNDS = 20, 60, 5
+# ROUNDS is what the reported CV/CI is computed over, so it went 5 -> 8: at 5 rounds the
+# t-based 95% interval is 2.78 SEM wide, at 8 it is 2.36, for 60% more wall time.
+WARM, ITERS, ROUNDS = 20, 60, 8
 PROF_ITERS = 30
 # AttentionBlock gets swapped for one of these wrappers by the mode conversion, so all
 # three names must be matched or the quantized modes report zero attention layers.
@@ -47,22 +50,15 @@ MODES = [m for m in _ALL_MODES if not _MODE_FILTER or m[0] in _MODE_FILTER]
 
 
 def cuda_bench(fn, warm=WARM, iters=ITERS, rounds=ROUNDS):
-    try:
-        for _ in range(warm):
-            fn()
-        torch.cuda.synchronize()
-    except Exception as e:
-        return None, repr(e)[:120]
-    meds = []
-    for _ in range(rounds):
-        s = [torch.cuda.Event(True) for _ in range(iters)]
-        e = [torch.cuda.Event(True) for _ in range(iters)]
-        for i in range(iters):
-            s[i].record(); fn(); e[i].record()
-        torch.cuda.synchronize()
-        t = sorted(s[i].elapsed_time(e[i]) for i in range(iters))
-        meds.append(t[len(t) // 2])
-    return statistics.median(meds) * 1e3, None   # microseconds
+    """(stats_dict_us, error). Delegates to ck_bench_stats so this suite reports the same
+    distribution as the kernel and e2e suites instead of collapsing to a bare median.
+
+    The previous version returned `median(round_medians)` and threw the samples away, so a
+    stable number could not be distinguished from one that happened to land there once. The
+    caller still stores that same median as `pipeline_us` for continuity with the data already
+    published, and the full distribution alongside it.
+    """
+    return cuda_bench_stats(fn, warm=warm, iters=iters, rounds=rounds)
 
 
 def kernel_sequence(fn, iters=PROF_ITERS):
@@ -192,10 +188,12 @@ def main():
                 x = x.contiguous(memory_format=torch.channels_last) if x.dim() == 4 else x
                 emb = torch.randn(*es, device="cuda", dtype=torch.float16) if es else None
                 fn = (lambda: m(x, emb)) if emb is not None else (lambda: m(x))
-                us, err = cuda_bench(fn)
+                st, err = cuda_bench(fn)
+                us = st["median"] if st else None
                 row = dict(kind=kind, x_shape=list(xs), emb_shape=list(es) if es else None,
                            n_instances=len(insts), example=insts[0]["name"],
-                           pipeline_us=us, error=err)
+                           pipeline_us=us, stats=st, stability=stability_verdict(st),
+                           error=err)
                 if us is not None:
                     ks, roles, gpu_us = kernel_sequence(fn)
                     row["kernels"] = ks              # per-kernel, with pct_of_layer
@@ -205,7 +203,8 @@ def main():
                     row["gpu_busy_frac"] = round(gpu_us / us, 3) if us else None
                 rows.append(row)
                 print(f"  {kind:16s} {str(list(xs)):22s} x{len(insts):2d}  "
-                      f"{'%.1f us' % us if us else 'ERR ' + str(err)}")
+                      + (f"{us:8.1f} us  CV {st['cv_pct']:5.2f}%  "
+                         f"+-{st['ci95_half']:.1f}" if st else 'ERR ' + str(err)))
                 del x, emb
                 torch.cuda.empty_cache()
         out["modes"][label] = rows
