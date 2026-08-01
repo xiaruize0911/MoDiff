@@ -69,7 +69,25 @@ def main():
     ap.add_argument("--e2e", required=True)
     ap.add_argument("--out", default="docs/FINAL_REPORT_2026-08-01.md")
     ap.add_argument("--commit", default="")
+    ap.add_argument("--with-figures", action="store_true",
+                    help="regenerate the figures this document links, from the same JSON")
     a = ap.parse_args()
+
+    # Generate the figures from the SAME files as the tables. Without this the two can drift:
+    # an earlier revision linked figures built from the checkpoint report's run while its tables
+    # came from this one -- 5 e2e repeats against 9, layer totals off by up to 1.9%.
+    if a.with_figures:
+        env_plots = dict(os.environ, CK_E2E=os.path.basename(a.e2e),
+                         CK_LAYERS=os.path.basename(a.layers), CK_TAG="final")
+        r = subprocess.run([sys.executable,
+                            os.path.join(HERE, "make_checkpoint_report_plots.py")],
+                           capture_output=True, text=True, cwd=ROOT, env=env_plots)
+        if r.returncode != 0:
+            raise SystemExit("figure generation failed:\n%s\n%s"
+                             % (r.stdout[-1500:], r.stderr[-1500:]))
+        print(r.stdout.strip().splitlines()[-1])
+        print(run("ck_attention_profile.py",
+                  ["--layers", a.layers]).strip().splitlines()[-1])
 
     ks = json.load(open(rel(a.kernels)))
     lay = json.load(open(rel(a.layers)))
