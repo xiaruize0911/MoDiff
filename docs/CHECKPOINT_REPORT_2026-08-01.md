@@ -335,11 +335,11 @@ measurement predicted.
 | `final_report_2026-07-28/data/e2e_three_mode.json` | post-gate e2e measured 07-31; the §4 cross-check |
 | `final_report_2026-07-28/data/layer_pipeline_bench.json` | post-gate layers measured 07-31; the §4 cross-check |
 | `final_report_2026-07-28/data/attn_uniform.json` | **pre**-gate layers; the "before" column in §2.1 and §5 |
-| `final_report_2026-07-28/scripts/e2e_three_mode_bench.py` | e2e driver (asserts the route before timing) |
-| `final_report_2026-07-28/scripts/layer_pipeline_bench.py` | layer driver |
-| `final_report_2026-07-28/scripts/ck_stages.py` | kernel → stage attribution, shared by tables and figures |
-| `final_report_2026-07-28/scripts/ck_report_numbers.py` | emits every table above from the JSON |
-| `final_report_2026-07-28/scripts/make_checkpoint_report_plots.py` | the four figures |
+| `integration/benchmarks/report/e2e_three_mode_bench.py` | e2e driver (asserts the route before timing) |
+| `integration/benchmarks/report/layer_pipeline_bench.py` | layer driver |
+| `integration/benchmarks/report/ck_stages.py` | kernel → stage attribution, shared by tables and figures |
+| `integration/benchmarks/report/ck_report_numbers.py` | emits every table above from the JSON |
+| `integration/benchmarks/report/make_checkpoint_report_plots.py` | the four figures |
 
 The pre-gate e2e column in §1.1, §4 and §5 is the version of `data/e2e_three_mode.json` committed
 at `b2206da`, i.e. `git show b2206da:docs/final_report_2026-07-28/data/e2e_three_mode.json`.
@@ -347,16 +347,21 @@ at `b2206da`, i.e. `git show b2206da:docs/final_report_2026-07-28/data/e2e_three
 ```bash
 LBENCH_BATCH=128 LBENCH_MODES=fp16,int8_baseline,int4_baseline \
   LBENCH_OUT=$PWD/docs/final_report_2026-07-28/data/layers_2026-08-01.json \
-  python3 docs/final_report_2026-07-28/scripts/layer_pipeline_bench.py
-python3 docs/final_report_2026-07-28/scripts/e2e_three_mode_bench.py \
+  python3 docs/integration/benchmarks/report/layer_pipeline_bench.py
+python3 docs/integration/benchmarks/report/e2e_three_mode_bench.py \
   --batch 128 --steps 200 --repeats 5 --warmups 3 \
   --output docs/final_report_2026-07-28/data/e2e_three_mode_2026-08-01.json
 CK_E2E=e2e_three_mode_2026-08-01.json CK_LAYERS=layers_2026-08-01.json CK_TAG=ck0801 \
-  python3 docs/final_report_2026-07-28/scripts/make_checkpoint_report_plots.py
-python3 docs/final_report_2026-07-28/scripts/ck_report_numbers.py \
+  python3 docs/integration/benchmarks/report/make_checkpoint_report_plots.py
+python3 docs/integration/benchmarks/report/ck_report_numbers.py \
   --e2e docs/final_report_2026-07-28/data/e2e_three_mode_2026-08-01.json \
   --layers docs/final_report_2026-07-28/data/layers_2026-08-01.json
 ```
+
+The suite's **code** lives in `integration/benchmarks/report/`, not under this report's directory;
+only the measured JSON/CSV and the figures stay in `docs/`. It was moved there on 2026-08-01 so
+the drivers are packaged with the rest of the project instead of being buried in a dated report
+folder, and so successive reports share one copy rather than forking a per-report snapshot.
 
 Two process notes, both prompted by this report's predecessor carrying five stale figures:
 

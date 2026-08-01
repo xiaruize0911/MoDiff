@@ -256,17 +256,17 @@ Per-shape totals are in the table above; what the stage split adds:
 | `final_report_2026-07-28/data/int4_fused_routes.json` | packed hd=48 byte-exactness + hd=96 small-kernel check |
 | `final_report_2026-07-28/data/attn_int4_m4.json` | superseded; the INT4 "before" column in §2.1 |
 | `final_report_2026-07-28/data/int4_step0_same_session.json` | the same-session baseline that scoped the INT4 work |
-| `final_report_2026-07-28/scripts/e2e_three_mode_bench.py` | e2e driver (asserts the route before timing) |
-| `final_report_2026-07-28/scripts/layer_pipeline_bench.py` | layer driver |
-| `final_report_2026-07-28/scripts/make_checkpoint_report_plots.py` | all four figures |
+| `integration/benchmarks/report/e2e_three_mode_bench.py` | e2e driver (asserts the route before timing) |
+| `integration/benchmarks/report/layer_pipeline_bench.py` | layer driver |
+| `integration/benchmarks/report/make_checkpoint_report_plots.py` | all four figures |
 | `final_report_2026-07-28/scripts/int4_fused_routes_check.py` | validation for the two new INT4 routes |
 
 ```bash
-python3 docs/final_report_2026-07-28/scripts/e2e_three_mode_bench.py --batch 128 --steps 200 --repeats 5 --warmups 3
+python3 docs/integration/benchmarks/report/e2e_three_mode_bench.py --batch 128 --steps 200 --repeats 5 --warmups 3
 LBENCH_BATCH=128 LBENCH_MODES=fp16,int8_baseline,int4_baseline \
   LBENCH_OUT=docs/final_report_2026-07-28/data/attn_uniform.json \
-  python3 docs/final_report_2026-07-28/scripts/layer_pipeline_bench.py
-python3 docs/final_report_2026-07-28/scripts/make_checkpoint_report_plots.py
+  python3 docs/integration/benchmarks/report/layer_pipeline_bench.py
+python3 docs/integration/benchmarks/report/make_checkpoint_report_plots.py
 ```
 
 Stage attribution is by kernel name; anything unmatched is routed to an explicit "other" bucket

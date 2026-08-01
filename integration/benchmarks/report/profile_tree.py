@@ -17,9 +17,10 @@ CUDA-device-only self-times are scaled onto that wall-clock ms/step.
 Writes data/profile_tree.json.
 """
 import os, sys, json, time, statistics, re
-os.chdir("/workspace/MoDiff")
-sys.path.insert(0, "/workspace/MoDiff")
-sys.path.insert(0, "/workspace/MoDiff/src/taming-transformers")
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+os.chdir(_ROOT)
+sys.path.insert(0, _ROOT)
+sys.path.insert(0, os.path.join(_ROOT, "src/taming-transformers"))
 import torch
 from torch.profiler import profile, ProfilerActivity, DeviceType
 import integration.benchmarks.benchmark_ldm as B

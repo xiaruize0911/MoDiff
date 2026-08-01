@@ -23,6 +23,9 @@ os.chdir("/workspace/MoDiff")
 sys.path.insert(0, "/workspace/MoDiff")
 sys.path.insert(0, "/workspace/MoDiff/src/taming-transformers")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# profile_tree.py moved to integration/benchmarks/report/ (2026-08-01 consolidation).
+sys.path.insert(0, os.path.abspath(os.path.join(
+    os.path.dirname(__file__), "..", "..", "..", "integration/benchmarks/report")))
 import torch
 from torch.profiler import profile, ProfilerActivity
 import integration.benchmarks.benchmark_ldm as B

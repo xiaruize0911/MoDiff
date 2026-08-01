@@ -20,9 +20,10 @@ Layer types measured, each at every distinct real input shape:
 Writes data/layer_pipeline_bench.json.
 """
 import os, sys, json, statistics, collections
-os.chdir("/workspace/MoDiff")
-sys.path.insert(0, "/workspace/MoDiff")
-sys.path.insert(0, "/workspace/MoDiff/src/taming-transformers")
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+os.chdir(_ROOT)
+sys.path.insert(0, _ROOT)
+sys.path.insert(0, os.path.join(_ROOT, "src/taming-transformers"))
 import torch
 from torch.profiler import profile, ProfilerActivity, DeviceType
 import integration.benchmarks.benchmark_ldm as B
