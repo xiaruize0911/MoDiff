@@ -91,12 +91,13 @@ def short_kernel(name):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--nsys-dir", default="docs/final_report_2026-07-28/data/nsys")
-    ap.add_argument("--e2e", required=True, help="e2e json for the no-profiler wall time")
+    ap.add_argument("--e2e", required=True, action="append",
+                    help="e2e json for the no-profiler wall time; repeatable, means averaged")
     ap.add_argument("--out", default="docs/final_report_2026-07-28/plots/fig_e2e_hierarchy.png")
     ap.add_argument("--topk", type=int, default=6)
     a = ap.parse_args()
     nsys = find_nsys()
-    e2e = json.load(open(a.e2e if os.path.isabs(a.e2e) else os.path.join(ROOT, a.e2e)))
+    e2es = [json.load(open(f if os.path.isabs(f) else os.path.join(ROOT, f))) for f in a.e2e]
     nd = a.nsys_dir if os.path.isabs(a.nsys_dir) else os.path.join(ROOT, a.nsys_dir)
 
     fig, axes = plt.subplots(3, 1, figsize=(17, 11.5))
@@ -112,7 +113,10 @@ def main():
                     l1 = rng.split("|")[1]
                 acc[(l1, stage_of(kern), short_kernel(kern))] += tot / len(reps)
         traced = sum(acc.values())
-        wall_ms = e2e["modes"][mode]["stats"]["mean"] / 1e3        # ms per batch, no profiler
+        # Mean over the independent e2e invocations, each of which timed the model WITHOUT a
+        # profiler before profiling it once. Cross-run CV here is 0.00-0.14%.
+        walls = [d["modes"][mode]["stats"]["mean"] / 1e3 for d in e2es]
+        wall_ms = sum(walls) / len(walls)
         scale = wall_ms / (traced / 1e6) if traced else 1.0
 
         l1t = collections.Counter()
@@ -160,8 +164,9 @@ def main():
         ax.set_yticks([y["L3"], y["L2"], y["L1"]])
         ax.set_yticklabels(["kernel", "op class", "layer type"], fontsize=9)
         ax.set_xlabel("ms per batch of 128 (scaled to the profiler-free wall time)", fontsize=9)
-        ax.set_title("%s  —  %.0f ms/batch measured without a profiler; "
-                     "attribution from %d nsys trace(s)" % (lbl, wall_ms, len(reps)),
+        ax.set_title("%s  —  %.0f ms/batch, mean of %d profiler-free runs; "
+                     "attribution from %d nsys trace(s)"
+                     % (lbl, wall_ms, len(walls), len(reps)),
                      loc="left", fontsize=11, fontweight="bold")
         for s in ("top", "right", "left"):
             ax.spines[s].set_visible(False)
