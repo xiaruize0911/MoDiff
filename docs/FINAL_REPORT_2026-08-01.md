@@ -79,6 +79,55 @@ startup path: 1.10× instead of 1.27× at T=1024, and **0.82× instead of 2.55×
 loss where there is a 2.5× win. The tables above select the steady-state fused entry. Per-call
 times come from this suite; the call **mix** comes from the 200-step e2e profile.
 
+### 1.2 Profile: where the time goes inside the AttentionBlock
+
+The per-call table above prices the attention-core kernel in isolation. It cannot say which stage
+paid for a layer-level result — and at T=16 those two disagree, so the breakdown is necessary
+rather than decorative. Every CUDA kernel inside one AttentionBlock call, from the layer suite's
+profile:
+
+![attention kernel profile](final_report_2026-07-28/plots/fig_attn_kernel_profile.png)
+
+**Fusion collapses FP16's 7 kernels to 4.** At T=1024:
+
+| FP16 — 3132.2 µs, 7 kernels | µs | % of layer | | INT4 — 2670.3 µs, 4 kernels | µs | % of layer |
+|---|---:|---:|---|---|---:|---:|
+| `pytorch_flash::flash_fwd_kernel` | 1897.0 | 60.9% | | `flash_attn_int8_mma_kernel_t` | 1438.0 | 53.9% |
+| `ImplicitGemmConvolutionFusionPerSample` | 641.1 | 20.6% | | `gemm_w4a4_kernel_awq_out_i8` | 616.1 | 23.1% |
+| `vectorized_elementwise_kernel[add]` | 266.5 | 8.6% | | `gemm_w4a4_kernel_awq` | 332.8 | 12.5% |
+| `ampere_fp16_s1688gemm_fp16_128x128` | 194.2 | 6.2% | | `group_norm_silu_quantize_pack_nhwc_vec2` | 283.6 | 10.6% |
+| `gn_accum_kernel` | 108.7 | 3.5% | | | | |
+| `gn_finalize_kernel` + 2× `FillFunctor` | 6.5 | 0.2% | | | | |
+
+By bucket, µs per layer call, with INT4 vs FP16 per bucket:
+
+| shape | attention core | QKV / out projection | GroupNorm + quantize | elementwise | layer total |
+|---|---|---|---|---|---|
+| C192/32² (T=1024) | 1897 → 1438 **1.32×** | 835 → 949 **0.88×** | 112 → 284 **0.39×** | 270 → 0 **gone** | **1.17×** |
+| C384/16² (T=256) | 295 → 187 **1.58×** | 570 → 494 1.15× | 70 → 97 0.72× | 139 → 0 gone | **1.38×** |
+| C384/8² (T=64) | 74 → 31 **2.40×** | 140 → 148 0.94× | 167 → 28 **5.96×** | 32 → 0 gone | **1.96×** |
+| C768/4² (T=16) | 44 → 64 **0.68×** | 103 → 69 **1.50×** | 52 → 17 3.01× | 13 → 3 | **1.62×** |
+| C768/2² (T=4) | 39 → 8 **4.84×** | 35 → 31 1.10× | 12 → 11 1.12× | 5 → 1 | **2.41×** |
+
+Four things only the breakdown shows:
+
+- **T=16's 1.62× is entirely a projection win, not an attention win.** Its attention core
+  *regresses* to 0.68× (44 → 64 µs) — the same loss the isolated kernel measured at 0.744×/0.711×
+  — and the projection's 1.50× (103 → 69 µs) plus GroupNorm's 3.01× more than cover it. So the fix
+  for T=16 is a small-shape kernel, not a re-route: the surrounding stages are already winning.
+- **T=64's 1.96× is a GroupNorm story with almost nothing to do with attention.** FP16 spends more
+  time in GN (167 µs) than in the score path (74 µs) at that shape, and quantization cuts GN to
+  28 µs — **5.96×**, the largest single-bucket gain anywhere in this table.
+- **The elementwise bucket is deleted outright at the three larger shapes** (270 / 139 / 32 → 0).
+  This is the fusion, visible directly: FP16's residual add and its two-pass `gn_accum` +
+  `gn_finalize` all fold into the single `group_norm_silu_quantize_pack` kernel.
+- **At T=1024 both GroupNorm and the projections are net losses** (0.39× and 0.88×). That shape
+  reaches 1.17× on the attention core's 1.32× and the 270 µs of deleted elementwise alone — which
+  is the same conclusion §6 reaches for the whole model, reproduced inside one layer.
+
+The bar labels are summed kernel self-time, which sits 0–1.1% below the measured pipeline latency;
+the gap is launch overhead (`gpu_busy_frac` 0.989–1.000, printed per row by the script).
+
 ---
 
 ## 2. Conv kernels
@@ -299,6 +348,8 @@ relative to the 07-31 sessions — see `CHECKPOINT_REPORT_2026-08-01.md` §4.1.
 | `integration/benchmarks/report/e2e_three_mode_bench.py` | suite 5 driver |
 | `integration/benchmarks/report/ck_bench_stats.py` | the statistics contract shared by all five |
 | `integration/benchmarks/report/ck_final_numbers.py` | emits every table above |
+| `integration/benchmarks/report/ck_attention_profile.py` | §1.2: per-kernel profile inside the attention layer + its figure |
+| `final_report_2026-07-28/plots/fig_attn_kernel_profile.png` | the §1.2 figure |
 
 ```bash
 python3 integration/benchmarks/report/kernel_suites_bench.py \
@@ -314,6 +365,8 @@ python3 integration/benchmarks/report/ck_final_numbers.py \
   --kernels docs/final_report_2026-07-28/data/kernel_suites_b128.json \
   --layers docs/final_report_2026-07-28/data/layers_final_b128.json \
   --e2e docs/final_report_2026-07-28/data/e2e_final_b128.json
+python3 integration/benchmarks/report/ck_attention_profile.py \
+  --layers docs/final_report_2026-07-28/data/layers_final_b128.json
 ```
 
 Shapes are **captured from a live sampling step, never listed**. The older per-report scripts
