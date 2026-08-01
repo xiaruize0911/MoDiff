@@ -298,12 +298,12 @@ torch::Tensor group_norm_silu_quantize_pack_nhwc(
     int64_t num_groups, double eps, bool apply_silu,
     torch::Tensor scale, torch::Tensor smooth_inv,
     torch::Tensor mod_scale, torch::Tensor mod_shift, int64_t k_pad = 0);
-torch::Tensor group_norm_silu_quantize_pack_resize_nhwc(
+torch::Tensor group_norm_silu_quantize_resize_nhwc(
     torch::Tensor x, torch::Tensor weight, torch::Tensor bias,
     int64_t num_groups, double eps, bool apply_silu,
     torch::Tensor scale, torch::Tensor smooth_inv,
     torch::Tensor mod_scale, torch::Tensor mod_shift,
-    int64_t k_pad, int64_t resize);
+    int64_t k_pad, int64_t resize, bool pack);
 torch::Tensor group_norm_silu_quantize_pack_nhwc_fast(
     torch::Tensor x, torch::Tensor weight, torch::Tensor bias,
     int64_t num_groups, double eps, bool apply_silu,

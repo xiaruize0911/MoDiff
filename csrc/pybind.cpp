@@ -128,9 +128,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           pybind11::arg("scale"), pybind11::arg("smooth_inv"),
           pybind11::arg("mod_scale"), pybind11::arg("mod_shift"),
           pybind11::arg("k_pad") = 0);
-    m.def("group_norm_silu_quantize_pack_resize_nhwc",
-          &group_norm_silu_quantize_pack_resize_nhwc,
-          "Fused GroupNorm+SiLU+quantize+2x resize (prototype; resize=+1 up, -1 down)");
+    m.def("group_norm_silu_quantize_resize_nhwc", &group_norm_silu_quantize_resize_nhwc,
+          "Fused GroupNorm+SiLU+quantize+2x resize; resize=+1 up, -1 down; pack=int4 nibbles");
     m.def("group_norm_silu_quantize_pack_nhwc_fast", &group_norm_silu_quantize_pack_nhwc_fast,
           "Attention-only INT4 GroupNorm+pack with pair-vectorized warp reduction.",
           pybind11::arg("x"), pybind11::arg("weight"), pybind11::arg("bias"),

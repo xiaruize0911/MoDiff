@@ -110,8 +110,10 @@ try:
     # Upsample(nearest,2x)+quantize fusion (default ON): fold a ResBlock's updown
     # h_upd (Upsample, use_conv=False) into the following in_conv's quantize step, the
     # same upsample2x_quantize[_pack]_noahat kernel FusedUpsample already uses for
-    # standalone Upsample(use_conv=True) modules -- see _prequant_upsample_conv.
+    # standalone Upsample(use_conv=True) modules -- see FusedUpsample.
     # Disable with MODIFF_DISABLE_UPSAMPLE_QUANTIZE_FUSION=1.
+    HAS_GN_SILU_QUANTIZE_RESIZE = hasattr(
+        modiff_cutlass, "group_norm_silu_quantize_resize_nhwc")
     HAS_UPSAMPLE_QUANTIZE = hasattr(modiff_cutlass, "upsample2x_quantize_noahat_fprop")
     HAS_UPSAMPLE_QUANTIZE_PACK = hasattr(modiff_cutlass, "upsample2x_quantize_pack_noahat_fprop")
     # Downsample(avg_pool,2x2)+quantize fusion (default ON): the down-direction sibling of
@@ -120,7 +122,7 @@ try:
     # own arithmetic with the following in_conv's quantize step into one kernel, computing
     # each 2x2 window's fp16-rounded average (bit-exact to nn.AvgPool2d's actual output,
     # see avgpool4_as_stored in modiff_delta_quantize.cu) and quantizing it directly,
-    # without ever materializing the fp16 pooled intermediate. See _prequant_avgpool_conv.
+    # without ever materializing the fp16 pooled intermediate (FusedUpsample's path).
     # Disable with MODIFF_DISABLE_AVGPOOL_QUANTIZE_FUSION=1.
     HAS_AVGPOOL_QUANTIZE = hasattr(modiff_cutlass, "avgpool2x_quantize_noahat_fprop")
     HAS_AVGPOOL_QUANTIZE_PACK = hasattr(modiff_cutlass, "avgpool2x_quantize_pack_noahat_fprop")
@@ -362,150 +364,69 @@ def _prequant_gn_conv(x, gn, conv, mod_scale=None, mod_shift=None, residual=None
         return conv.forward_from_int8(q, residual=residual)
 
 
-def _first_fused(*fns):
-    """Try each zero-arg fusion attempt in order, returning the first non-None result.
-    NOT the same as `f1() or f2()`: these functions return a real (possibly multi-element)
-    conv-output Tensor on success, and Python's `or` calls `bool()` on that Tensor to decide
-    whether to short-circuit -- which raises ("Boolean value of Tensor with more than one
-    element is ambiguous") the moment the first attempt actually succeeds. `is None` avoids
-    ever boolean-testing a Tensor."""
-    for fn in fns:
-        result = fn()
-        if result is not None:
-            return result
-    return None
+def _prequant_gn_resize_conv(x, gn, h_upd, conv, mod_scale=None, mod_shift=None):
+    """updown ResBlock: GroupNorm+SiLU+quantize+2x resize in ONE kernel, then the conv.
 
+    Replaces the two-kernel pair this path used to run -- `group_norm_silu_nhwc` (fp16 out)
+    followed by `{upsample2x,avgpool2x}_quantize_[pack_]noahat_fprop`. GroupNorm emitted fp16
+    there because, split across kernels, the DOWN direction is only exact with the quantize on
+    the far side of the resize: averaging four already-quantized codes rounds each input before
+    averaging, which is not the same as averaging and rounding once. Inside a single kernel the
+    2x2 average is taken on the fp32 post-SiLU values, so both directions fuse and the result is
+    closer to fp32 than the old pair was -- measured rel-L2 vs an fp32 reference falls from
+    ~0.006-0.007 to <=0.0003 (integration/tests/test_gn_resize_fusion.py), and the pair of
+    kernels becomes one at 1.45-5.6x, median ~2.9x, on the eight real updown shapes.
 
-def _prequant_upsample_conv(x, h_upd, conv):
-    """Fuse a ResBlock's updown Upsample (`h_upd`, nearest-2x, always `use_conv=False`
-    per openaimodel.py's ResBlock.__init__) with the following `in_conv`'s quantize step,
-    using the same `upsample2x_quantize[_pack]_noahat` kernel `FusedUpsample` already
-    uses for standalone `Upsample(use_conv=True)` modules elsewhere in this file. Reads
-    the SMALL pre-upsample tensor once and writes the quantized LARGE tensor directly, so
-    the upsampled fp32 intermediate (`F.interpolate` under autocast is forced to fp32) is
-    never materialized, and the separate quantize kernel never has to re-read it.
-    Nearest-neighbor upsampling is an exact index-select (no interpolation arithmetic), so
-    this reordering is bit-identical to `F.interpolate` -> quantize -- the same argument
-    `FusedUpsample`'s docstring makes (and that path's correctness gate already verifies).
-
-    This model (`resblock_updown=True`) never constructs a standalone `Upsample` module at
-    all -- every resize goes through `ResBlock.h_upd`/`x_upd`. `FusedUpsample` (this file's
-    OTHER fusion, for wrapping standalone `Upsample(use_conv=True)` modules) can't reach
-    this case on its own -- `h_upd` isn't the module that owns the following conv; they're
-    siblings in `FusedResBlock` -- but `convert_upsample_to_fused` still walks into
-    `FusedResBlock.h_upd`/`x_upd` (they're registered `nn.Module` children too) and wraps
-    them in `FusedUpsample` unconditionally, where they always take `FusedUpsample`'s
-    fallback path (`self.orig.use_conv=False` means `conv=None`, so `_fusable` always
-    returns False) -- silently undoing this fusion once that conversion pass runs, unless
-    `h_upd` is unwrapped back to the real `Upsample` first. Handles both cases: a raw
-    `Upsample` (pre-conversion) or a `FusedUpsample`-wrapped one (post-conversion, the
-    steady-state case for every real inference call).
-
-    Baseline-only (mirrors `_prequant_common_ok`): the MoDiff modulated path's delta-quantize
-    semantics aren't replicated here. Only applies when `h_upd` (unwrapped) is an actual
-    `Upsample` (not `Downsample` -- avg_pool cannot commute with quantize the same way,
-    since averaging int8 codes is not the same as averaging then quantizing). Returns the
-    conv output, or None to fall through to the existing `h_upd(x)` -> `conv(x)` two-step path.
+    Returns the conv output, or None to fall through to `h_upd(h)` -> `conv(h)`.
     """
+    if not HAS_GN_SILU_QUANTIZE_RESIZE:
+        return None
     try:
-        from ldm.modules.diffusionmodules.openaimodel import Upsample
+        from ldm.modules.diffusionmodules.openaimodel import Upsample, Downsample
     except ImportError:
         return None
-    h_upd = getattr(h_upd, 'orig', h_upd)  # unwrap FusedUpsample, if convert_upsample_to_fused ran
-    if not isinstance(h_upd, Upsample) or h_upd.use_conv or h_upd.dims != 2:
+    h_upd = getattr(h_upd, 'orig', h_upd)   # unwrap FusedUpsample if that pass ran
+    if isinstance(h_upd, Upsample):
+        direction = 1
+    elif isinstance(h_upd, Downsample):
+        direction = -1
+    else:
         return None
-    if x.dtype != torch.float16 or not x.is_cuda:
+    if h_upd.use_conv or h_upd.dims != 2:
         return None
-    if not (getattr(conv, 'is_calibrated', False)
-            and not getattr(conv, 'modiff_enabled', True)
-            and getattr(conv, 'use_cutlass', False)
-            and getattr(conv, 'groups', 1) == 1):
+    if not _prequant_common_ok(conv):
         return None
-    is_int4 = hasattr(conv, 'weight_packed')
-    if is_int4 and not HAS_UPSAMPLE_QUANTIZE_PACK:
+    if not (x.is_cuda and x.dtype in (torch.float32, torch.float16)):
         return None
-    if not is_int4 and not HAS_UPSAMPLE_QUANTIZE:
+    ng, eps = gn.num_groups, gn.eps
+    N, C, H, W = x.shape
+    if C % ng != 0:
         return None
-
+    if direction < 0 and (H % 2 or W % 2):
+        return None
+    is_int4 = hasattr(conv, 'forward_from_int4')
+    if C % 2 != 0 or (C // ng) % 2 != 0:      # both variants store channel PAIRS
+        return None
+    if not is_int4 and not hasattr(conv, '_conv_from_int8'):
+        return None
     if not x.is_contiguous(memory_format=torch.channels_last):
         x = x.contiguous(memory_format=torch.channels_last)
+
+    w, b = gn._cast_params(x.dtype)
     conv._ensure_conv_caches(x.device)
+    scale = conv._cached_scale_tensor
     smooth_inv = (conv._empty_smooth if getattr(conv, '_smooth_is_identity', True)
                   else conv._smooth_inv.view(-1).to(torch.float32).contiguous())
-    if is_int4:
-        x_q = modiff_cutlass.upsample2x_quantize_pack_noahat_fprop(
-            x, conv.static_input_scale.view(1), smooth_inv)
-        return conv._conv_from_int4(x_q, x.shape[2] * 2, x.shape[3] * 2)
-    x_q = modiff_cutlass.upsample2x_quantize_noahat_fprop(
-        x, conv.static_input_scale.view(1), smooth_inv)
-    return conv._conv_from_int8(x_q)
+    if mod_scale is not None:
+        ms2d = mod_scale.reshape(N, C).contiguous()
+        sh2d = mod_shift.reshape(N, C).contiguous()
+    else:
+        ms2d = sh2d = x.new_empty(0)
 
-
-def _prequant_avgpool_conv(x, h_upd, conv):
-    """Down-direction sibling of `_prequant_upsample_conv`: fuse a ResBlock's updown
-    Downsample (`h_upd`, 2x2 avg_pool, always `use_conv=False` per openaimodel.py's
-    ResBlock.__init__) with the following `in_conv`'s quantize step, using the new
-    `avgpool2x_quantize[_pack]_noahat` kernel (csrc/kernels/quantize/modiff_delta_quantize.cu).
-
-    Note: `skip_connection` is NOT a call site for this function -- checked and ruled out
-    this session. Every updown ResBlock in this architecture (openaimodel.py's down/up-
-    transition blocks) is constructed with `out_channels == channels` (`out_ch = ch` at
-    both call sites), so `skip_connection` is always `nn.Identity()` for these blocks per
-    `ResBlock.__init__`'s `if self.out_channels == channels: self.skip_connection =
-    nn.Identity()` -- there is no conv on the residual path to fuse into.
-
-    Unlike the upsample case, this is NOT a reordering -- avg_pool's mean over 4 codes is not
-    the same computation as quantizing 4 already-averaged fp16 values, so quantize must still
-    happen strictly after pooling, in the same order as the unfused path. What's fused here is
-    the *kernel launch*, not the op order: the fused kernel computes each 2x2 window's average
-    exactly as `nn.AvgPool2d` would (sum as float32, scale by 0.25, round through fp16 -- see
-    `avgpool4_as_stored`'s comment in the .cu file, verified bit-exact against a real
-    `nn.AvgPool2d(2,2).cuda()` fp16 forward) and quantizes it immediately, so the fp16 pooled
-    [N,C,H/2,W/2] intermediate `Downsample.forward` would otherwise write -- and the separate
-    quantize kernel would then re-read -- is never materialized.
-
-    `convert_upsample_to_fused` (see `_prequant_upsample_conv`'s docstring) only matches
-    `Upsample` instances, so unlike `h_upd` in the up case, `h_upd` here is never wrapped by
-    anything and needs no unwrapping.
-
-    Baseline-only (mirrors `_prequant_common_ok`). Only applies when `h_upd` is an actual
-    `Downsample` with `use_conv=False` (if `use_conv=True`, downsampling is a strided conv,
-    not avg_pool, and there's no separate resize op to fuse). Returns the conv output, or
-    None to fall through to the existing `h_upd(x)` -> `conv(x)` two-step path.
-    """
-    try:
-        from ldm.modules.diffusionmodules.openaimodel import Downsample
-    except ImportError:
-        return None
-    if not isinstance(h_upd, Downsample) or h_upd.use_conv or h_upd.dims != 2:
-        return None
-    if x.dtype != torch.float16 or not x.is_cuda:
-        return None
-    if x.shape[2] % 2 != 0 or x.shape[3] % 2 != 0:
-        return None
-    if not (getattr(conv, 'is_calibrated', False)
-            and not getattr(conv, 'modiff_enabled', True)
-            and getattr(conv, 'use_cutlass', False)
-            and getattr(conv, 'groups', 1) == 1):
-        return None
-    is_int4 = hasattr(conv, 'weight_packed')
-    if is_int4 and not HAS_AVGPOOL_QUANTIZE_PACK:
-        return None
-    if not is_int4 and not HAS_AVGPOOL_QUANTIZE:
-        return None
-
-    if not x.is_contiguous(memory_format=torch.channels_last):
-        x = x.contiguous(memory_format=torch.channels_last)
-    conv._ensure_conv_caches(x.device)
-    smooth_inv = (conv._empty_smooth if getattr(conv, '_smooth_is_identity', True)
-                  else conv._smooth_inv.view(-1).to(torch.float32).contiguous())
-    if is_int4:
-        x_q = modiff_cutlass.avgpool2x_quantize_pack_noahat_fprop(
-            x, conv.static_input_scale.view(1), smooth_inv)
-        return conv._conv_from_int4(x_q, x.shape[2] // 2, x.shape[3] // 2)
-    x_q = modiff_cutlass.avgpool2x_quantize_noahat_fprop(
-        x, conv.static_input_scale.view(1), smooth_inv)
-    return conv._conv_from_int8(x_q)
+    x_q = modiff_cutlass.group_norm_silu_quantize_resize_nhwc(
+        x, w, b, ng, eps, True, scale, smooth_inv, ms2d, sh2d, 0, direction, is_int4)
+    Ho, Wo = (H * 2, W * 2) if direction > 0 else (H // 2, W // 2)
+    return conv._conv_from_int4(x_q, Ho, Wo) if is_int4 else conv._conv_from_int8(x_q)
 
 
 def _gn_mod_silu_fp32_cl(x, num_groups, weight, bias, eps, mod_scale, mod_shift):
@@ -725,17 +646,16 @@ class FusedResBlock(TimestepBlock):
         """Fused forward for openaimodel.ResBlock"""
         # Input path: fused GroupNorm + SiLU, then Conv
         if self.updown:
-            h = self.fused_in_norm_silu(x)
-            # Resize->quantize fusion, both directions: Upsample(nearest) reorders exactly
-            # with quantize; Downsample(avg_pool) doesn't reorder but still fuses its own
-            # arithmetic with the quantize kernel launch (see _prequant_avgpool_conv). Both
-            # fall through to the plain h_upd(h)->in_conv(h) path when ineligible (modiff,
-            # uncalibrated, fp32/CPU, use_conv=True, etc).
-            fused = _first_fused(lambda: _prequant_upsample_conv(h, self.h_upd, self.in_conv),
-                                 lambda: _prequant_avgpool_conv(h, self.h_upd, self.in_conv))
+            # GroupNorm+SiLU+quantize+resize in one kernel (see _prequant_gn_resize_conv),
+            # which takes the RAW x -- the normalisation happens inside it. GroupNorm is
+            # therefore only computed separately on the fallback path (fp16 mode, modiff,
+            # uncalibrated, use_conv=True, ...), where the conv needs an fp16 input anyway.
+            fused = _prequant_gn_resize_conv(x, self.fused_in_norm_silu, self.h_upd,
+                                             self.in_conv)
             if fused is not None:
                 h = fused
             else:
+                h = self.fused_in_norm_silu(x)
                 h = self.h_upd(h)
                 h = self.in_conv(h)
             x = self.x_upd(x)

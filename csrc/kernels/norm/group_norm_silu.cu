@@ -985,8 +985,10 @@ __global__ void group_norm_silu_quantize_pack_nhwc_vec2_kernel(
 // each of the four inputs first and averages the rounded values, which is a different and
 // worse result -- that non-commutation is exactly why the shipped pipeline keeps GroupNorm at
 // fp16 and defers the quantize to the resize kernel instead.
-template <typename TIn, bool FAST_REDUCE, bool UP>
-__global__ void group_norm_silu_quantize_pack_resize_nhwc_kernel(
+// PACK=true writes one byte per channel PAIR (two int4 nibbles, range +-7); PACK=false
+// writes two int8 bytes as one int16 store (range +-127), matching the non-pack sibling.
+template <typename TIn, bool FAST_REDUCE, bool UP, bool PACK>
+__global__ void group_norm_silu_quantize_resize_nhwc_kernel(
     const TIn* __restrict__ X,
     int8_t* __restrict__ Yqp,         // [N, H, W, C/2] packed int4, channels_last-flat
     const TIn* __restrict__ gamma,
@@ -1013,7 +1015,8 @@ __global__ void group_norm_silu_quantize_pack_resize_nhwc_kernel(
 
     const TIn* x_base = X + (long)n * HW * C;
     const long HW_OUT = UP ? (HW * 4) : (HW / 4);
-    int8_t* yqp_base = Yqp + (long)n * (HW_OUT * (long)KpadH);
+    const long row_bytes = PACK ? (long)KpadH : (long)C;
+    int8_t* yqp_base = Yqp + (long)n * (HW_OUT * row_bytes);
 
     extern __shared__ float sdata[];
     float* s_sum = sdata;
@@ -1128,17 +1131,22 @@ __global__ void group_norm_silu_quantize_pack_resize_nhwc_kernel(
             const int c_global0 = c_start + 2 * cpair;
             float o0, o1;
             compute_pair(hw, c_global0, o0, o1);
-            const int8_t i0 = (int8_t)fmaxf(-7.0f, fminf(7.0f, roundf(o0 * scale)));
-            const int8_t i1 = (int8_t)fmaxf(-7.0f, fminf(7.0f, roundf(o1 * scale)));
+            const float lim = PACK ? 7.0f : 127.0f;
+            const int8_t i0 = (int8_t)fmaxf(-lim, fminf(lim, roundf(o0 * scale)));
+            const int8_t i1 = (int8_t)fmaxf(-lim, fminf(lim, roundf(o1 * scale)));
             const int8_t packed = (int8_t)((i0 & 0x0F) | ((i1 & 0x0F) << 4));
+            const int16_t pair16 = (int16_t)(((uint8_t)i0) | (((uint16_t)(uint8_t)i1) << 8));
             const int h = (int)(hw / Wi), w = (int)(hw % Wi);
-            const int byte_c = c_global0 >> 1;
 #pragma unroll
             for (int dy = 0; dy < 2; ++dy)
 #pragma unroll
                 for (int dx = 0; dx < 2; ++dx) {
                     const long hw_out = (long)(2 * h + dy) * Wo + (2 * w + dx);
-                    yqp_base[hw_out * (long)KpadH + byte_c] = packed;
+                    if constexpr (PACK)
+                        yqp_base[hw_out * row_bytes + (c_global0 >> 1)] = packed;
+                    else
+                        reinterpret_cast<int16_t*>(yqp_base)[
+                            (hw_out * row_bytes + c_global0) >> 1] = pair16;
                 }
         }
     } else {
@@ -1161,19 +1169,26 @@ __global__ void group_norm_silu_quantize_pack_resize_nhwc_kernel(
                 }
             a0 *= 0.25f;                                   // average BEFORE quantizing
             a1 *= 0.25f;
-            const int8_t i0 = (int8_t)fmaxf(-7.0f, fminf(7.0f, roundf(a0 * scale)));
-            const int8_t i1 = (int8_t)fmaxf(-7.0f, fminf(7.0f, roundf(a1 * scale)));
-            yqp_base[hwo * (long)KpadH + (c_global0 >> 1)] =
-                (int8_t)((i0 & 0x0F) | ((i1 & 0x0F) << 4));
+            const float lim = PACK ? 7.0f : 127.0f;
+            const int8_t i0 = (int8_t)fmaxf(-lim, fminf(lim, roundf(a0 * scale)));
+            const int8_t i1 = (int8_t)fmaxf(-lim, fminf(lim, roundf(a1 * scale)));
+            if constexpr (PACK)
+                yqp_base[hwo * row_bytes + (c_global0 >> 1)] =
+                    (int8_t)((i0 & 0x0F) | ((i1 & 0x0F) << 4));
+            else
+                reinterpret_cast<int16_t*>(yqp_base)[(hwo * row_bytes + c_global0) >> 1] =
+                    (int16_t)(((uint8_t)i0) | (((uint16_t)(uint8_t)i1) << 8));
         }
     }
 
-    if (g == 0 && Kpad > C) {
-        const int tail_bytes = KpadH - C / 2;
-        for (long idx = threadIdx.x; idx < HW_OUT * (long)tail_bytes; idx += blockDim.x) {
-            const long hw = idx / tail_bytes;
-            const int pb = idx % tail_bytes;
-            yqp_base[hw * (long)KpadH + C / 2 + pb] = 0;
+    if constexpr (PACK) {
+        if (g == 0 && Kpad > C) {
+            const int tail_bytes = KpadH - C / 2;
+            for (long idx = threadIdx.x; idx < HW_OUT * (long)tail_bytes; idx += blockDim.x) {
+                const long hw = idx / tail_bytes;
+                const int pb = idx % tail_bytes;
+                yqp_base[hw * (long)KpadH + C / 2 + pb] = 0;
+            }
         }
     }
 }
@@ -1317,19 +1332,19 @@ static torch::Tensor group_norm_silu_quantize_pack_nhwc_impl(
 // upsample and -1 for a 2x2 average pool; the output is [N, H*2, W*2, Kpad/2] or
 // [N, H/2, W/2, Kpad/2]. Deliberately a separate entry point from the non-resizing sibling: it
 // is a prototype for the updown ResBlock path and is not wired into the pipeline.
-torch::Tensor group_norm_silu_quantize_pack_resize_nhwc(
+torch::Tensor group_norm_silu_quantize_resize_nhwc(
     torch::Tensor x, torch::Tensor weight, torch::Tensor bias,
     int64_t num_groups, double eps, bool apply_silu,
     torch::Tensor scale, torch::Tensor smooth_inv,
     torch::Tensor mod_scale, torch::Tensor mod_shift,
-    int64_t k_pad, int64_t resize
+    int64_t k_pad, int64_t resize, bool pack
 ) {
     CHECK_CUDA(x);
     CHECK_CONTIGUOUS(x);
-    TORCH_CHECK(x.dim() == 4, "gn_quantize_pack_resize expects [N, C, H, W]");
+    TORCH_CHECK(x.dim() == 4, "gn_quantize_resize expects [N, C, H, W]");
     TORCH_CHECK(x.scalar_type() == torch::kFloat16 || x.scalar_type() == torch::kFloat32,
-                "gn_quantize_pack_resize: only fp16/fp32 supported");
-    TORCH_CHECK(resize == 1 || resize == -1, "gn_quantize_pack_resize: resize must be +1 or -1");
+                "gn_quantize_resize: only fp16/fp32 supported");
+    TORCH_CHECK(resize == 1 || resize == -1, "gn_quantize_resize: resize must be +1 or -1");
     const bool has_mod = mod_scale.numel() > 0;
     const int N = x.size(0), C = x.size(1), H = x.size(2), W = x.size(3);
     TORCH_CHECK(C % num_groups == 0, "channels must divide into groups");
@@ -1339,11 +1354,12 @@ torch::Tensor group_norm_silu_quantize_pack_resize_nhwc(
     if (!up) TORCH_CHECK(H % 2 == 0 && W % 2 == 0, "downsample needs even H and W");
     const long HW = (long)H * W;
     const long group_size = (long)CPG * HW;
-    const int Kpad = (k_pad > (int64_t)C) ? (int)k_pad : C;
+    const int Kpad = (pack && k_pad > (int64_t)C) ? (int)k_pad : C;
     TORCH_CHECK(Kpad % 2 == 0, "k_pad must be even");
     const int Ho = up ? H * 2 : H / 2, Wo = up ? W * 2 : W / 2;
-    auto yqp = torch::empty({N, Ho, Wo, Kpad / 2},
-                            torch::TensorOptions().dtype(torch::kInt8).device(x.device()));
+    auto opts = torch::TensorOptions().dtype(torch::kInt8).device(x.device());
+    auto yq = pack ? torch::empty({N, Ho, Wo, Kpad / 2}, opts)
+                   : torch::empty({N, Ho, Wo, C}, opts);
 
     int block_size = 128;
     while ((long)block_size * 12 < group_size && block_size < 512) block_size <<= 1;
@@ -1354,28 +1370,31 @@ torch::Tensor group_norm_silu_quantize_pack_resize_nhwc(
 
     // gn_load2 is overloaded for `const float*` and `const __half*` only, so the fp16 launch has
     // to reinterpret at::Half -- instantiating the kernel on at::Half itself does not compile.
-#define MODIFF_GNQR_LAUNCH(T, ATT, UPV)                                                     \
-    group_norm_silu_quantize_pack_resize_nhwc_kernel<T, true, UPV>                          \
+#define MODIFF_GNQR_LAUNCH(T, ATT, UPV, PK)                                                 \
+    group_norm_silu_quantize_resize_nhwc_kernel<T, true, UPV, PK>                           \
         <<<grid, block, shmem, stream>>>(                                                   \
             reinterpret_cast<const T*>(x.data_ptr<ATT>()),                                  \
-            reinterpret_cast<int8_t*>(yqp.data_ptr<int8_t>()),                              \
+            reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),                               \
             reinterpret_cast<const T*>(weight.data_ptr<ATT>()),                             \
             reinterpret_cast<const T*>(bias.data_ptr<ATT>()),                               \
             has_mod ? reinterpret_cast<const T*>(mod_scale.data_ptr<ATT>()) : nullptr,      \
             has_mod ? reinterpret_cast<const T*>(mod_shift.data_ptr<ATT>()) : nullptr,      \
             scale.data_ptr<float>(), smooth_ptr, C, HW, (int)num_groups, (float)eps,        \
             apply_silu, Kpad, W)
+#define MODIFF_GNQR_DISPATCH(T, ATT)                                                        \
+    do {                                                                                    \
+        if (up &&  pack) MODIFF_GNQR_LAUNCH(T, ATT, true,  true);                           \
+        if (up && !pack) MODIFF_GNQR_LAUNCH(T, ATT, true,  false);                          \
+        if (!up &&  pack) MODIFF_GNQR_LAUNCH(T, ATT, false, true);                          \
+        if (!up && !pack) MODIFF_GNQR_LAUNCH(T, ATT, false, false);                         \
+    } while (0)
 
-    if (x.scalar_type() == torch::kFloat32) {
-        if (up) MODIFF_GNQR_LAUNCH(float, float, true);
-        else    MODIFF_GNQR_LAUNCH(float, float, false);
-    } else {
-        if (up) MODIFF_GNQR_LAUNCH(__half, at::Half, true);
-        else    MODIFF_GNQR_LAUNCH(__half, at::Half, false);
-    }
+    if (x.scalar_type() == torch::kFloat32) MODIFF_GNQR_DISPATCH(float, float);
+    else                                    MODIFF_GNQR_DISPATCH(__half, at::Half);
+#undef MODIFF_GNQR_DISPATCH
 #undef MODIFF_GNQR_LAUNCH
     C10_CUDA_CHECK(cudaGetLastError());
-    return yqp;
+    return yq;
 }
 
 torch::Tensor group_norm_silu_quantize_pack_nhwc(

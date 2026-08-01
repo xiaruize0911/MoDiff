@@ -10,14 +10,16 @@ side of the resize the DOWN direction stays exact: averaging four already-quanti
 not the same as averaging the real values and quantizing once. That argument only binds ACROSS
 kernels. Inside a single kernel the 2x2 average can be taken on the fp32 post-SiLU values before
 quantization, so the fusion is available in both directions -- which is what
-group_norm_silu_quantize_pack_resize_nhwc does.
+group_norm_silu_quantize_resize_nhwc does.
 
 This measures whether that is worth wiring in. It reports, per real updown shape:
   * max |int4 code difference| between the two paths
   * rel-L2 of each path's dequantized output against an fp32 reference
   * per-call time of the fused kernel against the two-kernel sequence
 
-Nothing here changes the pipeline; the fused entry point is not called by the model.
+Coverage: both directions, both quantizations (int4 packed nibbles and int8 bytes), and both
+with and without a non-identity SmoothQuant vector, since the pipeline folds smooth_inv into
+this kernel.
 """
 import os
 import statistics
@@ -47,7 +49,7 @@ def unpack_int4(y, C):
     return torch.stack([lo, hi], dim=-1).reshape(*y.shape[:-1], C)
 
 
-def reference(x, gamma, beta, scale, direction):
+def reference(x, gamma, beta, scale, direction, smooth=None, lim=7.0):
     """fp32 GN -> SiLU -> resize -> quantize, the order the fused kernel implements."""
     x32 = x.float()
     N, C, H, W = x32.shape
@@ -57,9 +59,55 @@ def reference(x, gamma, beta, scale, direction):
     g = (g - mean) / torch.sqrt(var + EPS)
     y = g.reshape(N, C, H, W) * gamma.float().view(1, C, 1, 1) + beta.float().view(1, C, 1, 1)
     y = y * torch.sigmoid(y)
+    if smooth is not None:
+        y = y * smooth.float().view(1, C, 1, 1)
     y = (F.interpolate(y, scale_factor=2, mode="nearest") if direction > 0
          else F.avg_pool2d(y, 2))
-    return torch.clamp(torch.round(y * scale), -7, 7)          # [N,C,Ho,Wo] fp32 codes
+    return torch.clamp(torch.round(y * scale), -lim, lim)      # [N,C,Ho,Wo] fp32 codes
+
+
+def variants():
+    """int8 (unpacked) and non-identity SmoothQuant, checked against the fp32 reference.
+
+    The pipeline folds smooth_inv into this kernel and uses the unpacked int8 store in INT8
+    mode, so both have to be exercised: the timing table below only covers int4 with identity
+    smoothing.
+    """
+    dev = "cuda"
+    torch.manual_seed(1)
+    print("Coverage: int8 store and non-identity SmoothQuant\n")
+    print("| shape | dir | quant | smooth | rel-L2 vs fp32 | max code err |")
+    print("|---|---|---|---|---:|---:|")
+    for C, H, W, direction in [(384, 16, 16, -1), (384, 16, 16, +1)]:
+        for pack in (True, False):
+            for use_smooth in (False, True):
+                x = torch.randn(32, C, H, W, device=dev, dtype=torch.float16)
+                x = x.contiguous(memory_format=torch.channels_last)
+                gamma = torch.randn(C, device=dev, dtype=torch.float16)
+                beta = torch.randn(C, device=dev, dtype=torch.float16)
+                lim = 7.0 if pack else 127.0
+                scale_t = torch.tensor([lim / 6.0], device=dev, dtype=torch.float32)
+                smooth = (torch.rand(C, device=dev, dtype=torch.float32) + 0.5
+                          if use_smooth else None)
+                sm_arg = smooth if smooth is not None else torch.empty(
+                    0, device=dev, dtype=torch.float32)
+                empty = x.new_empty(0)
+                with torch.inference_mode():
+                    y = mc.group_norm_silu_quantize_resize_nhwc(
+                        x, gamma, beta, GROUPS, EPS, True, scale_t, sm_arg,
+                        empty, empty, 0, direction, pack)
+                    ref = reference(x, gamma, beta, float(scale_t.item()), direction,
+                                    smooth, lim)
+                    if pack:
+                        got = unpack_int4(y, C).permute(0, 3, 1, 2).float()
+                    else:
+                        got = y.permute(0, 3, 1, 2).float()
+                    rel = ((got - ref).norm() / ref.norm()).item()
+                    mx = (got - ref).abs().max().item()
+                print("| C%d/%dx%d | %s | %s | %s | %.5f | %.0f |"
+                      % (C, H, W, "up" if direction > 0 else "down",
+                         "int4" if pack else "int8", "yes" if use_smooth else "no", rel, mx))
+    print()
 
 
 def main():
@@ -70,6 +118,7 @@ def main():
           "two-kernel µs | fused µs | speedup |")
     print("|---|---|---:|---:|---:|---:|---:|---:|")
     sp = []
+    variants()
     for C, H, W, direction in SHAPES:
         x = torch.randn(BATCH, C, H, W, device=dev, dtype=torch.float16)
         x = x.contiguous(memory_format=torch.channels_last)
@@ -87,8 +136,9 @@ def main():
             return resize_fn(h, scale_t, empty_f)
 
         def fused():
-            return mc.group_norm_silu_quantize_pack_resize_nhwc(
-                x, gamma, beta, GROUPS, EPS, True, scale_t, empty_f, empty, empty, 0, direction)
+            return mc.group_norm_silu_quantize_resize_nhwc(
+                x, gamma, beta, GROUPS, EPS, True, scale_t, empty_f, empty, empty,
+                0, direction, True)
 
         with torch.inference_mode():
             y_two, y_fus = two_kernel(), fused()
