@@ -1,83 +1,51 @@
 """Figures for the FP16 / INT8 / INT4 checkpoint report.
 
-Inputs (all measured with the three modes in ONE process, so columns are comparable):
-  data/e2e_three_mode.json        end-to-end DDIM + per-kernel profile
-  data/attn_three_mode_final.json per-layer-type benchmark + per-kernel profile
+Inputs (all measured with the three modes in ONE process, so columns are comparable), overridable
+so one script serves successive report revisions instead of being forked per revision:
+  CK_E2E     e2e DDIM + per-kernel profile      default data/e2e_three_mode.json
+  CK_LAYERS  per-layer-type bench + profile     default data/attn_uniform.json
+  CK_TAG     figure filename infix              default "ck"
+
+Defaults reproduce the figures of CHECKPOINT_REPORT_2026-07-31.md. The 2026-08-01 revision passes
+its own data files and CK_TAG=ck0801, so regenerating one revision cannot overwrite the other's
+figures.
 
 Outputs, in plots/:
-  fig_ck_e2e.png            e2e latency, speedup, and where the whole model's time goes
-  fig_ck_layers.png         every layer type x shape, three modes side by side
-  fig_ck_attn_stages.png    attention layers broken into stages
-  fig_ck_speedup_matrix.png one heatmap: speedup vs FP16 for every (layer, shape, mode)
+  fig_<tag>_e2e.png            e2e latency, speedup, and where the whole model's time goes
+  fig_<tag>_layers.png         every layer type x shape, three modes side by side
+  fig_<tag>_attn_stages.png    attention layers broken into stages
+  fig_<tag>_speedup_matrix.png one heatmap: speedup vs FP16 for every (layer, shape, mode)
 """
 import json
 import os
-from collections import defaultdict
+import sys
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from ck_stages import STAGES, split  # noqa: E402
+
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 D = os.path.join(ROOT, "docs/final_report_2026-07-28/data")
 OUT = os.path.join(ROOT, "docs/final_report_2026-07-28/plots")
 os.makedirs(OUT, exist_ok=True)
 
+E2E_FILE = os.environ.get("CK_E2E", "e2e_three_mode.json")
+LAY_FILE = os.environ.get("CK_LAYERS", "attn_uniform.json")
+TAG = os.environ.get("CK_TAG", "ck")
+
 MODES = [("fp16", "FP16"), ("int8_baseline", "INT8"), ("int4_baseline", "INT4")]
 COL = {"fp16": "#8d99ae", "int8_baseline": "#2f6fb2", "int4_baseline": "#27924f"}
 plt.rcParams.update({"font.size": 10, "axes.spines.top": False, "axes.spines.right": False})
 
-# ---- kernel -> stage, shared by the e2e and layer views ------------------------------------
-STAGES = [
-    ("attn", "attention core", "#c0392b",
-     ("flash_attn_int8_mma", "flash_attn_int4_mma", "pytorch_flash", "flash_fwd",
-      "qi8packed_small", "bmm", "softmax")),
-    # conv vs GEMM is decided by NAME TOKENS, and the names are adversarial: CUTLASS calls a
-    # convolution "..._s16816fprop_..." and a matmul "..._s16816gemm_...", while the fused
-    # GN->QKV projection is called "ImplicitGemmConvolutionFusionPerSample" -- a projection with
-    # "Convolution" in its name. Matching loosely on "cutlass" or "ImplicitGemm" puts the wrong
-    # kernels in the wrong bucket, which made FP16's attention bars show phantom convolution.
-    # So: GEMM is matched on gemm-specific tokens FIRST, conv on fprop/convolve tokens after.
-    ("gemm", "QKV / output projection", "#2f6fb2",
-     ("ImplicitGemmConvolutionFusionPerSample",   # fused GN->QKV; attention-only, verified
-      "s16816gemm", "s1688gemm", "xmma_gemm", "gemm_w8a8_kernel", "gemm_w4a4_kernel",
-      "gemm_w4a4_awq", "gemv")),
-    ("conv", "convolution", "#1b7f79",
-     ("ImplicitGemmConvolution", "fprop", "implicit_convolve", "conv2d", "cudnn",
-      "Kernel_conv", "wgrad", "dgrad", "xmma_conv")),
-    ("norm", "GroupNorm + quantize", "#e6a020",
-     ("group_norm", "gn_accum", "gn_finalize", "quantize_act", "quant_act")),
-    # Split from a single "K/V prep + out quantize" bucket. They are different operations with
-    # different causes: the K/V producer is what the layout epilogues removed, while the output
-    # quantize exists only where attention itself is not quantized. Lumping them made INT4's
-    # residual look like leftover producer work when no producer remains -- INT4's K/V prep is
-    # now exactly 0.0 ms and its 14.2 ms is entirely output quantize for the FP16-SDPA T16 blocks.
-    ("kvprep", "K/V gather + transpose", "#7d5ba6",
-     ("aq_kv_packed", "qkv_i4codes", "from_i8_kv_tiled", "quantize_attn_kv", "layout_transform",
-      "modiff_delta")),
-    ("outq", "attention output quantize", "#c98bdb",
-     ("quant_attn_out", "quantize_attn_out")),
-    ("misc", "elementwise / copies / other", "#b9c2cc", ()),
-]
-
-
-def stage_of(name):
-    for key, _, _, frags in STAGES:
-        if frags and any(f.lower() in name.lower() for f in frags):
-            return key
-    return "misc"
-
-
-def split(kernels, keyname="kernel", usname="us"):
-    t = defaultdict(float)
-    for k in kernels:
-        t[stage_of(k[keyname])] += k[usname]
-    return t
-
+# The kernel -> stage mapping now lives in ck_stages.py, imported above, so the report's
+# prose tables (ck_report_numbers.py) and these figures cannot drift apart.
 
 # =============================================================== figure 1: end to end
-e2e = json.load(open(f"{D}/e2e_three_mode.json"))
+e2e = json.load(open(f"{D}/{E2E_FILE}"))
 fig, (a1, a2, a3) = plt.subplots(1, 3, figsize=(17, 5.4),
                                  gridspec_kw={"width_ratios": [1, 1, 1.5]})
 
@@ -128,14 +96,14 @@ a3.set_title("C.  Whole-model time by stage\n"
 a3.legend(frameon=False, fontsize=8.5, loc="upper right")
 a3.grid(axis="y", alpha=.25)
 fig.tight_layout()
-fig.savefig(f"{OUT}/fig_ck_e2e.png", dpi=150, facecolor="w")
+fig.savefig(f"{OUT}/fig_{TAG}_e2e.png", dpi=150, facecolor="w")
 
 # =============================================================== layer-level data
-# attn_uniform.json holds all three modes measured together on the current routing. An earlier
+# CK_LAYERS must hold all three modes measured together on the current routing. An earlier
 # revision read the INT4 column from a separate file and overlaid it, because the three-mode file
 # had a stale INT4 column; that is no longer needed and the overlay was itself a hazard (it would
 # silently mask a future mismatch). One file, one measurement session.
-lay = json.load(open(f"{D}/attn_uniform.json"))
+lay = json.load(open(f"{D}/{LAY_FILE}"))
 L = {}
 for m, _ in MODES:
     for e in lay["modes"][m]:
@@ -143,7 +111,7 @@ for m, _ in MODES:
         L.setdefault(key, {})[m] = e
 _missing = [k for k in L if len(L[k]) != len(MODES)]
 assert not _missing, f"incomplete mode coverage for {_missing[:3]}"
-print(f"layer data: {len(L)} (kind, shape) entries x {len(MODES)} modes, all from attn_uniform.json")
+print(f"layer data: {len(L)} (kind, shape) entries x {len(MODES)} modes, all from {LAY_FILE}")
 
 # order: attention by descending T, then resblocks by descending pixels
 keys = sorted(L.keys(), key=lambda k: (k[0], -(k[1][2] * k[1][3]), -k[1][1]))
@@ -177,7 +145,7 @@ ax.set_title("Every layer type and shape in the UNet, three modes side by side\n
 ax.legend(frameon=False, ncol=3)
 ax.grid(axis="y", alpha=.25, which="both")
 fig.tight_layout()
-fig.savefig(f"{OUT}/fig_ck_layers.png", dpi=150, facecolor="w")
+fig.savefig(f"{OUT}/fig_{TAG}_layers.png", dpi=150, facecolor="w")
 
 # =============================================================== figure 3: attention stages
 akeys = [k for k in keys if k[0] == "attention"]
@@ -204,7 +172,7 @@ np.atleast_1d(axes)[0].set_ylabel("µs per layer")
 fig.legend(loc="upper center", ncol=6, frameon=False, fontsize=9, bbox_to_anchor=(.5, 1.0))
 fig.suptitle("Attention layers, broken into stages   (bar label = total µs)", y=.9, fontsize=11.5)
 fig.tight_layout(rect=[0, 0, 1, .85])
-fig.savefig(f"{OUT}/fig_ck_attn_stages.png", dpi=150, facecolor="w")
+fig.savefig(f"{OUT}/fig_{TAG}_attn_stages.png", dpi=150, facecolor="w")
 
 # =============================================================== figure 4: speedup heatmap
 qm = [m for m, _ in MODES if m != "fp16"]
@@ -227,9 +195,10 @@ ax.set_title("Speedup vs FP16 per layer — green is faster, red is SLOWER than 
              "Bold = winning mode for that layer", loc="left")
 fig.colorbar(im, ax=ax, shrink=.85, label="x vs FP16")
 fig.tight_layout()
-fig.savefig(f"{OUT}/fig_ck_speedup_matrix.png", dpi=150, facecolor="w")
+fig.savefig(f"{OUT}/fig_{TAG}_speedup_matrix.png", dpi=150, facecolor="w")
 
 print("e2e ms/batch:", {l: round(e2e["modes"][m]["wall_us_per_batch"] / 1e3, 1)
                         for m, l in MODES})
-for f in ("fig_ck_e2e", "fig_ck_layers", "fig_ck_attn_stages", "fig_ck_speedup_matrix"):
+for f in (f"fig_{TAG}_e2e", f"fig_{TAG}_layers", f"fig_{TAG}_attn_stages",
+          f"fig_{TAG}_speedup_matrix"):
     print(f"wrote {OUT}/{f}.png")
