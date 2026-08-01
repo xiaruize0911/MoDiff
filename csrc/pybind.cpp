@@ -155,8 +155,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "Fused int8 flash attention, V PRE-TRANSPOSED [N,H,hd_pad,T] (skips internal transpose; mma path only)");
     m.def("flash_attn_int8_vt_static", &flash_attn_int8_vt_static,
           "Steady-state int8 flash with frozen scalar Q/K scales folded into the kernel");
-    m.def("flash_attn_int8_qpacked_kv_static", &flash_attn_int8_qpacked_kv_static,
-          "Hybrid int8 flash: packed fp16 Q quantized once in its consuming CTA; prequantized K/V");
     m.def("flash_attn_int8_qpacked_kv_static_qout", &flash_attn_int8_qpacked_kv_static_qout,
           "Hybrid int8 flash with fused calibrated int8 projection input");
     m.def("flash_attn_int8_qi8packed_kv_static_qout",
@@ -174,9 +172,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("flash_attn_int8_qi8packed_small_qout",
           &flash_attn_int8_qi8packed_small_qout,
           "Packed-int8 small-sequence attention with fused calibrated projection quantization");
-    m.def("flash_attn_int8_qpacked_kv_static_qout_w16",
-          &flash_attn_int8_qpacked_kv_static_qout_w16,
-          "Experimental 16-warp hybrid int8 flash for large production shapes");
     m.def("flash_attn_i4values_i8mma_qpacked_kv_static_qout",
           &flash_attn_i4values_i8mma_qpacked_kv_static_qout,
           "Signed-int4 Q/K values executed by the K=32 int8 MMA path; packed-int4 projection input");
@@ -195,8 +190,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "Fused int4 flash attention, V PRE-TRANSPOSED int8 [N,H,hdp_v,T] (skips internal transpose)");
     m.def("flash_attn_int4_vt_static", &flash_attn_int4_vt_static,
           "Steady-state int4 flash with frozen scalar Q/K scales folded into the kernel");
-    m.def("flash_attn_int4_qpacked_kv_static", &flash_attn_int4_qpacked_kv_static,
-          "Hybrid int4 flash: packed fp16 Q quantized once in its consuming CTA; prequantized K/V");
     m.def("flash_attn_int4_qpacked_kv_static_qout", &flash_attn_int4_qpacked_kv_static_qout,
           "Hybrid int4 flash with fused calibrated packed-int4 projection input");
     m.def("flash_attn_int8_vt_qout", &flash_attn_int8_vt_qout,

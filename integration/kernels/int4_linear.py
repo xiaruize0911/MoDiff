@@ -30,17 +30,28 @@ except ImportError:
     HAS_CUTLASS = False
 
 
-# Contraction-dim (in_features) below which the W4A4 GEMM path defers to fp16 cuBLAS.
-# Mirrors K_INT8_GATE in int8_linear.py; see _int4_gemm_linear for the measurements.
-K_INT4_GATE = 2048
-
-
 class OptimizedInt4Linear(nn.Module):
     """
     FP16-accelerated Linear layer with MoDiff temporal caching (INT4 quantisation).
 
-    Uses per-tensor symmetric INT4 quantization for activation cache tracking
-    and FP16 F.linear for actual computation (fastest for small M dimensions).
+    Uses per-tensor symmetric INT4 quantization for activation cache tracking, and
+    FP16 F.linear as the ONLY compute path.
+
+    There is deliberately no W4A4 integer-GEMM path here. One existed and was removed
+    after a K sweep found it has no crossover at any contraction dim: measured on A40 at
+    M=128, fp16-relative, it was 11.1x slower at K=768, 9.3x at K=2048, and still 1.5x
+    slower at K=16384 where its quantize chain is fully amortised. Two costs stacked --
+    `quantize_symmetric_int4` is eager PyTorch (~13 launches, ~36us around a 17.5us GEMM
+    at K=768), and the Triton gemm_w4a4 never reached cuBLAS fp16 on its own. It also cost
+    accuracy: rel-L2 0.33 vs the fp16 reference. Removing it deleted 339.8 ms/batch of
+    elementwise work and a further 63.7 ms of GEMM end to end at batch 128 / 200 steps.
+    Do not reintroduce it without a measurement that shows a crossover.
+
+    `backend` and `int_gemm_min_m` are accepted for caller compatibility -- benchmark_ldm
+    threads one --linear_backend through to both the INT8 and INT4 converters, and INT8
+    does still have a live int_gemm path (it wins at large K and is covered by
+    test_kernel_correctness.test_int8_linear at K=4096). For INT4 the value is recorded
+    and ignored.
     """
 
     def __init__(self, linear: nn.Linear, layer_name: str = "",
@@ -54,12 +65,6 @@ class OptimizedInt4Linear(nn.Module):
 
         # Store weights in FP16 for fast matmul
         self.register_buffer('weight_fp16', linear.weight.data.half())
-
-        # Store packed per-tensor INT4 weights for the optional true INT GEMM backend.
-        from modiff_triton.kernels.gemm_w4a4 import pack_int4_weight
-        weight_packed, weight_scale = pack_int4_weight(linear.weight.data.float().t().contiguous())
-        self.register_buffer('weight_packed_t', weight_packed.contiguous())
-        self.register_buffer('weight_dequant_scale', weight_scale.float().reshape(1))
 
         # --- Bias ---
         if linear.bias is not None:
@@ -126,78 +131,10 @@ class OptimizedInt4Linear(nn.Module):
         out = F.linear(x_fp16, self.weight_fp16, self.bias if with_bias else None)
         return out if self.standard_output_fp16 else out.float()
 
-    def _int4_gemm_linear(self, x: torch.Tensor, with_bias: bool = True,
-                          input_scale: Optional[float | torch.Tensor] = None) -> torch.Tensor:
-        """True W4A4 GEMM path: pack activation, int4 GEMM, dequantize.
-
-        K-gated exactly like `OptimizedInt8Linear._int8_gemm_linear` (K_INT8_GATE):
-        below the crossover the fp16 cuBLAS GEMM is faster, so route there and keep
-        the int_gemm backend from ever being a regression. Every OptimizedInt4Linear
-        in the churches UNet is a ResBlock emb projection with K=768, i.e. entirely
-        below the gate -- measured A40, M=128, fp16-relative:
-
-            K=768   11.1x slower   K=1024  10.8x   K=2048   9.3x
-            K=4096   2.8x slower   K=8192   1.7x   K=16384  1.5x
-
-        Two costs stack up. `quantize_symmetric_int4` is eager PyTorch despite living
-        under modiff_triton/ -- div, round, 2x clamp, +8, cast, two strided slices,
-        two masks, shift, or, cast -- so ~13 launches per call, which at K=768 is 13
-        of a ResBlock's 23 launches and ~36us of GPU around a 17.5us GEMM. On top of
-        that the Triton gemm_w4a4 itself never reaches cuBLAS fp16 here, which is why
-        the ratio is still 1.5x at K=16384 where the quantize chain is amortised.
-        The sweep found no crossover at any K tested; the gate is set to INT8's 2048
-        for parity rather than to "always fp16" because K>=2048 does not occur in
-        this model and has not been validated beyond the microbenchmark above.
-        """
-        x_2d = x.reshape(-1, self.in_features)
-        if (x_2d.shape[0] < self.int_gemm_min_m or not x_2d.is_cuda
-                or self.in_features < K_INT4_GATE):
-            return self._fp16_linear(x, with_bias=with_bias)
-
-        from modiff_triton.kernels.quantize import quantize_symmetric_int4
-        from modiff_triton.kernels.gemm_w4a4 import gemm_w4a4
-
-        if input_scale is None:
-            # Dynamic per-tensor absmax. NOTE: it is tempting to substitute
-            # `static_input_scale` here since `is_calibrated` is True on these layers,
-            # which would delete this whole reduction -- do not. As shipped, every
-            # OptimizedInt4Linear in the churches model carries the *same* placeholder
-            # scale (34.6463), ~21x larger than the true per-layer activation absmax,
-            # so the static path clips almost everything to +-7: measured rel-L2 vs the
-            # fp16 reference is 0.80 static vs 0.33 dynamic across all 21 layers. The
-            # substitution only becomes correct once a real per-layer calibration is
-            # recorded.
-            abs_max = x_2d.abs().amax()
-            act_dequant_scale = torch.clamp(abs_max / 7.0, min=1e-8)
-        else:
-            # Existing calibration stores quantization scale (7 / absmax).
-            if isinstance(input_scale, torch.Tensor):
-                act_dequant_scale = 1.0 / torch.clamp(input_scale.float(), min=1e-8)
-            else:
-                act_dequant_scale = torch.tensor(
-                    1.0 / max(float(input_scale), 1e-8),
-                    device=x_2d.device,
-                    dtype=torch.float32,
-                )
-
-        x_packed, scale_a, _ = quantize_symmetric_int4(x_2d, scale=act_dequant_scale)
-        x_packed = x_packed.view(x_2d.shape[0], self.in_features // 2)
-        bias = self.bias if (with_bias and self.bias is not None) else None
-        out = gemm_w4a4(
-            x_packed,
-            self.weight_packed_t,
-            scale_a,
-            self.weight_dequant_scale,
-            self.in_features,
-            bias,
-        )
-        out = out.reshape(*x.shape[:-1], self.out_features)
-        return out.half() if self.standard_output_fp16 else out
 
     def _linear(self, x: torch.Tensor, with_bias: bool = True,
                 input_scale: Optional[float | torch.Tensor] = None) -> torch.Tensor:
-        if self.backend == "int_gemm":
-            return self._int4_gemm_linear(x, with_bias=with_bias, input_scale=input_scale)
+        # Single compute path -- see the class docstring for why W4A4 was removed.
         return self._fp16_linear(x, with_bias=with_bias)
 
     # ==================================================================

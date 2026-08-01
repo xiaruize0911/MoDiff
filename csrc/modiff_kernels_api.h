@@ -364,9 +364,6 @@ torch::Tensor flash_attn_int8_vt(torch::Tensor q, torch::Tensor k, torch::Tensor
                                  torch::Tensor sq, torch::Tensor sk, torch::Tensor sv, double softmax_scale);
 torch::Tensor flash_attn_int8_vt_static(torch::Tensor q, torch::Tensor k, torch::Tensor vt,
                                         torch::Tensor sv, double sq, double sk, double softmax_scale);
-torch::Tensor flash_attn_int8_qpacked_kv_static(
-    torch::Tensor qkv, torch::Tensor k, torch::Tensor vt, torch::Tensor sv,
-    int64_t hd_pad, double sq, double sk, double softmax_scale);
 torch::Tensor flash_attn_int8_qpacked_kv_static_qout(
     torch::Tensor qkv, torch::Tensor k, torch::Tensor vt, torch::Tensor sv,
     int64_t hd_pad, double sq, double sk, double softmax_scale, double proj_a_scale);
@@ -385,9 +382,6 @@ torch::Tensor flash_attn_int8_qi8_kv_static_qout_hd24(
 torch::Tensor flash_attn_int8_qi8packed_small_qout(
     torch::Tensor qkv_i8, torch::Tensor sv, double sq, double sk,
     double softmax_scale, double proj_a_scale);
-torch::Tensor flash_attn_int8_qpacked_kv_static_qout_w16(
-    torch::Tensor qkv, torch::Tensor k, torch::Tensor vt, torch::Tensor sv,
-    int64_t hd_pad, double sq, double sk, double softmax_scale, double proj_a_scale);
 torch::Tensor flash_attn_i4values_i8mma_qpacked_kv_static_qout(
     torch::Tensor qkv, torch::Tensor k, torch::Tensor vt, torch::Tensor sv,
     int64_t hd_pad, double sq, double sk, double softmax_scale,
@@ -410,9 +404,6 @@ torch::Tensor flash_attn_int4_vt(torch::Tensor q4, torch::Tensor k4, torch::Tens
 torch::Tensor flash_attn_int4_vt_static(torch::Tensor q4, torch::Tensor k4, torch::Tensor vt,
                                         torch::Tensor sv, int64_t hdp4, double sq, double sk,
                                         double softmax_scale);
-torch::Tensor flash_attn_int4_qpacked_kv_static(
-    torch::Tensor qkv, torch::Tensor k4, torch::Tensor vt, torch::Tensor sv,
-    int64_t hdp4, double sq, double sk, double softmax_scale);
 torch::Tensor flash_attn_int4_qpacked_kv_static_qout(
     torch::Tensor qkv, torch::Tensor k4, torch::Tensor vt, torch::Tensor sv,
     int64_t hdp4, double sq, double sk, double softmax_scale,

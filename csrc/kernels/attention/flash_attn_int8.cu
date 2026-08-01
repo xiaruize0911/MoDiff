@@ -1816,33 +1816,6 @@ torch::Tensor flash_attn_int8_vt_static(torch::Tensor q, torch::Tensor k, torch:
   return out;
 }
 
-torch::Tensor flash_attn_int8_qpacked_kv_static(
-    torch::Tensor qkv, torch::Tensor k, torch::Tensor vt, torch::Tensor sv,
-    int64_t hd_pad, double sq, double sk, double softmax_scale) {
-  TORCH_CHECK(qkv.is_cuda() && qkv.dtype() == torch::kHalf && qkv.dim() == 5
-              && qkv.is_contiguous(), "qkv must be contiguous fp16 [N,T,H,3,hd]");
-  TORCH_CHECK(k.is_cuda() && k.is_contiguous() && vt.is_contiguous() && k.dim() == 4,
-              "k/vt must be contiguous CUDA tensors");
-  const int N = k.size(0), H = k.size(1), T = k.size(2), hd = qkv.size(4);
-  TORCH_CHECK(qkv.size(0) == N && qkv.size(1) == T && qkv.size(2) == H
-              && qkv.size(3) == 3 && k.size(3) == hd_pad
-              && vt.size(2) == hd_pad && vt.size(3) == T && sv.size(-1) == hd,
-              "hybrid int8 flash shape mismatch");
-  auto out = torch::empty({N, H, T, hd},
-      torch::TensorOptions().dtype(torch::kFloat16).device(k.device()));
-  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-  const int fa_w = modiff_fa_warps(T);
-  dim3 grid(N * H, T / (fa_w * FA_MMA_BR));
-  MODIFF_FA_MMA_DISPATCH(grid, fa_w, stream, (int)hd_pad, T, true,
-      (const int8_t*)nullptr, k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
-      (const float*)nullptr, (const float*)nullptr, sv.data_ptr<float>(),
-      reinterpret_cast<__half*>(out.data_ptr<at::Half>()),
-      N, H, T, hd, (int)hd_pad, (float)softmax_scale, (int8_t*)nullptr, 0.f, 0,
-      (float)(sq * sk), reinterpret_cast<const __half*>(qkv.data_ptr<at::Half>()),
-      hd, 1.f / (float)sq);
-  return out;
-}
-
 torch::Tensor flash_attn_int8_qpacked_kv_static_qout(
     torch::Tensor qkv, torch::Tensor k, torch::Tensor vt, torch::Tensor sv,
     int64_t hd_pad, double sq, double sk, double softmax_scale, double proj_a_scale) {
@@ -2039,44 +2012,6 @@ torch::Tensor flash_attn_int8_qi8_kv_static_qout_hd24(
 
 // Experimental 16-warp specialization for the two large production shapes.
 // BC=32 keeps shared memory and registers within the SM86 one-CTA resource limit.
-torch::Tensor flash_attn_int8_qpacked_kv_static_qout_w16(
-    torch::Tensor qkv, torch::Tensor k, torch::Tensor vt, torch::Tensor sv,
-    int64_t hd_pad, double sq, double sk, double softmax_scale, double proj_a_scale) {
-  TORCH_CHECK(qkv.is_cuda() && qkv.dtype() == torch::kHalf && qkv.dim() == 5
-              && qkv.is_contiguous(), "qkv must be contiguous fp16 [N,T,H,3,hd]");
-  TORCH_CHECK(k.is_cuda() && k.is_contiguous() && vt.is_contiguous() && k.dim() == 4,
-              "k/vt must be contiguous CUDA tensors");
-  const int N = k.size(0), H = k.size(1), T = k.size(2), hd = qkv.size(4);
-  TORCH_CHECK(qkv.size(0) == N && qkv.size(1) == T && qkv.size(2) == H
-              && qkv.size(3) == 3 && k.size(3) == hd_pad
-              && vt.size(2) == hd_pad && vt.size(3) == T && sv.size(-1) == hd
-              && ((T == 1024 && hd == 24 && hd_pad == 32)
-                  || (T == 256 && hd == 48 && hd_pad == 64)),
-              "W16 hybrid int8 flash supports T1024/hd24 or T256/hd48 only");
-  const int C = H * hd;
-  auto out_q = torch::empty({(long)N * T, C},
-      torch::TensorOptions().dtype(torch::kChar).device(k.device()));
-  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-  dim3 grid(N * H, T / (16 * FA_MMA_BR));
-  if (hd_pad == 32) {
-    flash_attn_int8_mma_kernel_t<32, 16, 32, true><<<grid, 16 * 32, 0, stream>>>(
-        (const int8_t*)nullptr, k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
-        (const float*)nullptr, (const float*)nullptr, sv.data_ptr<float>(), (__half*)nullptr,
-        N, H, T, hd, 32, (float)softmax_scale, out_q.data_ptr<int8_t>(),
-        1.f / (float)proj_a_scale, C, (float)(sq * sk),
-        reinterpret_cast<const __half*>(qkv.data_ptr<at::Half>()), hd, 1.f / (float)sq);
-  } else {
-    flash_attn_int8_mma_kernel_t<64, 16, 64, true><<<grid, 16 * 32, 0, stream>>>(
-        (const int8_t*)nullptr, k.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
-        (const float*)nullptr, (const float*)nullptr, sv.data_ptr<float>(), (__half*)nullptr,
-        N, H, T, hd, 64, (float)softmax_scale, out_q.data_ptr<int8_t>(),
-        1.f / (float)proj_a_scale, C, (float)(sq * sk),
-        reinterpret_cast<const __half*>(qkv.data_ptr<at::Half>()), hd, 1.f / (float)sq);
-  }
-  C10_CUDA_KERNEL_LAUNCH_CHECK();
-  return out_q;
-}
-
 // The native s4 MMA has K=64, so hd=24 wastes 40/64 of every QK dot product. This route keeps
 // exactly the same signed-int4 Q/K values and scales, but stores them unpacked and executes QK
 // through m16n8k32.s8. PV remains int8 as in the native int4 kernel, and the final store is still
@@ -2672,35 +2607,6 @@ torch::Tensor flash_attn_int4_vt_static(torch::Tensor q4, torch::Tensor k4, torc
       N, H, T, hd, (int)hdp4, hdp_v, (float)softmax_scale,
       (int8_t*)nullptr, 0.f, 0, (float)(sq * sk), (const __half*)nullptr, 0, 0.f,
       broadcast_sv);
-  C10_CUDA_KERNEL_LAUNCH_CHECK();
-  return out;
-}
-
-torch::Tensor flash_attn_int4_qpacked_kv_static(
-    torch::Tensor qkv, torch::Tensor k4, torch::Tensor vt, torch::Tensor sv,
-    int64_t hdp4, double sq, double sk, double softmax_scale) {
-  TORCH_CHECK(qkv.is_cuda() && qkv.dtype() == torch::kHalf && qkv.dim() == 5
-              && qkv.is_contiguous(), "qkv must be contiguous fp16 [N,T,H,3,hd]");
-  TORCH_CHECK(k4.is_cuda() && k4.is_contiguous() && vt.is_contiguous() && k4.dim() == 4,
-              "k4/vt must be contiguous CUDA tensors");
-  const int N = k4.size(0), H = k4.size(1), T = k4.size(2), hd = qkv.size(4);
-  const int hdp_v = ((hd + 31) / 32) * 32;
-  TORCH_CHECK(qkv.size(0) == N && qkv.size(1) == T && qkv.size(2) == H
-              && qkv.size(3) == 3 && k4.size(3) == hdp4 / 2
-              && vt.size(2) == hdp_v && vt.size(3) == T && sv.size(-1) == hd,
-              "hybrid int4 flash shape mismatch");
-  auto out = torch::empty({N, H, T, hd},
-      torch::TensorOptions().dtype(torch::kFloat16).device(k4.device()));
-  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-  const int fa_w = modiff_fa_warps(T);
-  dim3 grid(N * H, T / (fa_w * FA_MMA_BR));
-  MODIFF_FA_MMA4_DISPATCH(grid, fa_w, stream, hdp_v, T, true,
-      (const int8_t*)nullptr, k4.data_ptr<int8_t>(), vt.data_ptr<int8_t>(),
-      (const float*)nullptr, (const float*)nullptr, sv.data_ptr<float>(),
-      reinterpret_cast<__half*>(out.data_ptr<at::Half>()),
-      N, H, T, hd, (int)hdp4, hdp_v, (float)softmax_scale, (int8_t*)nullptr, 0.f, 0,
-      (float)(sq * sk), reinterpret_cast<const __half*>(qkv.data_ptr<at::Half>()),
-      hd, 1.f / (float)sq);
   C10_CUDA_KERNEL_LAUNCH_CHECK();
   return out;
 }
