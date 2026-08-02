@@ -1,52 +1,52 @@
 running: /opt/nsys/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/nsys profile --trace=cuda,nvtx --sample=none --cpuctxsw=none --capture-range=cudaProfilerApi --capture-range-end=stop --force-overwrite=true
-DDIM Sampler:  80%|████████  | 16/20 [00:01<00:00,  9.76it/s]
-DDIM Sampler:  85%|████████▌ | 17/20 [00:01<00:00,  9.76it/s]
-DDIM Sampler:  90%|█████████ | 18/20 [00:01<00:00,  9.77it/s]
-DDIM Sampler:  95%|█████████▌| 19/20 [00:01<00:00,  9.77it/s]
-DDIM Sampler: 100%|██████████| 20/20 [00:02<00:00,  9.77it/s]
-DDIM Sampler: 100%|██████████| 20/20 [00:02<00:00,  9.78it/s]
+DDIM Sampler:  80%|████████  | 16/20 [00:01<00:00,  9.96it/s]
+DDIM Sampler:  85%|████████▌ | 17/20 [00:01<00:00,  9.94it/s]
+DDIM Sampler:  90%|█████████ | 18/20 [00:01<00:00,  9.93it/s]
+DDIM Sampler:  95%|█████████▌| 19/20 [00:01<00:00,  9.93it/s]
+DDIM Sampler: 100%|██████████| 20/20 [00:02<00:00,  9.92it/s]
+DDIM Sampler: 100%|██████████| 20/20 [00:02<00:00,  9.96it/s]
 
 ============================================================================================
 GPU time attributed to each layer, as it runs inside a real sample
 ============================================================================================
 | layer | GPU ms | share | calls | GPU µs/call | CPU issue µs/call | GPU/issue |
 |---|---:|---:|---:|---:|---:|---:|
-| attention        C192   T1024  | 301.12 | 15.8% | 100 | 3011.2 | 390.1 | 7.719 |
-| resblock_updown  C384   T256   | 237.65 | 12.4% | 40 | 5941.3 | 804.2 | 7.388 |
-| resblock_plain   C384   T1024  | 188.95 | 9.9% | 40 | 4723.8 | 756.3 | 6.246 |
-| resblock_plain   C576   T1024  | 164.77 | 8.6% | 20 | 8238.6 | 809.2 | 10.181 |
-| resblock_plain   C768   T256   | 154.03 | 8.1% | 40 | 3850.8 | 783.5 | 4.915 |
-| resblock_plain   C192   T1024  | 130.34 | 6.8% | 40 | 3258.5 | 718.4 | 4.536 |
-| attention        C384   T256   | 108.02 | 5.7% | 100 | 1080.2 | 391.7 | 2.758 |
-| resblock_updown  C384   T64    | 70.38 | 3.7% | 40 | 1759.6 | 804.6 | 2.187 |
-| resblock_plain   C576   T256   | 61.74 | 3.2% | 20 | 3087.0 | 753.9 | 4.095 |
-| resblock_updown  C768   T16    | 52.06 | 2.7% | 40 | 1301.4 | 798.0 | 1.631 |
-| resblock_plain   C384   T256   | 48.29 | 2.5% | 20 | 2414.6 | 676.8 | 3.568 |
-| resblock_plain   C768   T64    | 47.43 | 2.5% | 40 | 1185.7 | 757.6 | 1.565 |
-| resblock_plain   C192   T256   | 43.60 | 2.3% | 20 | 2179.9 | 753.3 | 2.894 |
-| attention        C384   T64    | 43.44 | 2.3% | 100 | 434.4 | 422.0 | 1.030 |
-| resblock_plain   C1536  T16    | 40.48 | 2.1% | 40 | 1011.9 | 790.4 | 1.280 |
-| resblock_updown  C192   T1024  | 38.08 | 2.0% | 20 | 1904.2 | 792.5 | 2.403 |
-| resblock_plain   C384   T64    | 34.89 | 1.8% | 40 | 872.2 | 650.0 | 1.342 |
-| resblock_plain   C1152  T64    | 33.14 | 1.7% | 20 | 1656.8 | 804.6 | 2.059 |
-| attention        C768   T16    | 22.45 | 1.2% | 100 | 224.5 | 422.3 | 0.532 |
-| resblock_plain   C1536  T4     | 17.62 | 0.9% | 60 | 293.6 | 745.1 | 0.394 |
-| resblock_plain   C1152  T16    | 17.27 | 0.9% | 20 | 863.3 | 773.8 | 1.116 |
-| resblock_plain   C768   T4     | 17.02 | 0.9% | 80 | 212.7 | 616.7 | 0.345 |
-| resblock_updown  C768   T4     | 12.88 | 0.7% | 20 | 643.9 | 828.7 | 0.777 |
-| resblock_plain   C768   T16    | 11.67 | 0.6% | 20 | 583.7 | 659.9 | 0.885 |
-| resblock_plain   C384   T16    | 10.03 | 0.5% | 20 | 501.5 | 743.7 | 0.674 |
-| attention        C768   T4     | 1.99 | 0.1% | 20 | 99.7 | 419.6 | 0.238 |
-| **all annotated layers** | **1909.34** | 100% | | | | |
+| attention        C192   T1024  | 298.29 | 15.9% | 100 | 2982.9 | 280.0 | 10.653 |
+| resblock_updown  C384   T256   | 234.03 | 12.4% | 40 | 5850.7 | 559.7 | 10.453 |
+| resblock_plain   C384   T1024  | 186.02 | 9.9% | 40 | 4650.5 | 526.4 | 8.835 |
+| resblock_plain   C576   T1024  | 162.80 | 8.7% | 20 | 8139.8 | 560.8 | 14.514 |
+| resblock_plain   C768   T256   | 151.39 | 8.1% | 40 | 3784.8 | 547.4 | 6.914 |
+| resblock_plain   C192   T1024  | 127.60 | 6.8% | 40 | 3190.1 | 491.4 | 6.492 |
+| attention        C384   T256   | 107.44 | 5.7% | 100 | 1074.4 | 276.0 | 3.892 |
+| resblock_updown  C384   T64    | 69.27 | 3.7% | 40 | 1731.8 | 558.5 | 3.101 |
+| resblock_plain   C576   T256   | 60.65 | 3.2% | 20 | 3032.3 | 521.8 | 5.812 |
+| resblock_updown  C768   T16    | 51.06 | 2.7% | 40 | 1276.5 | 550.9 | 2.317 |
+| resblock_plain   C384   T256   | 47.25 | 2.5% | 20 | 2362.7 | 464.1 | 5.091 |
+| resblock_plain   C768   T64    | 46.71 | 2.5% | 40 | 1167.7 | 524.4 | 2.227 |
+| attention        C384   T64    | 42.85 | 2.3% | 100 | 428.5 | 291.5 | 1.470 |
+| resblock_plain   C192   T256   | 42.77 | 2.3% | 20 | 2138.3 | 527.3 | 4.055 |
+| resblock_plain   C1536  T16    | 39.54 | 2.1% | 40 | 988.4 | 539.3 | 1.833 |
+| resblock_updown  C192   T1024  | 37.34 | 2.0% | 20 | 1867.0 | 545.6 | 3.422 |
+| resblock_plain   C384   T64    | 34.15 | 1.8% | 40 | 853.7 | 448.6 | 1.903 |
+| resblock_plain   C1152  T64    | 32.58 | 1.7% | 20 | 1629.1 | 562.5 | 2.896 |
+| attention        C768   T16    | 22.03 | 1.2% | 100 | 220.3 | 292.1 | 0.754 |
+| resblock_plain   C1536  T4     | 17.14 | 0.9% | 60 | 285.7 | 512.6 | 0.557 |
+| resblock_plain   C1152  T16    | 16.96 | 0.9% | 20 | 847.8 | 515.7 | 1.644 |
+| resblock_plain   C768   T4     | 16.60 | 0.9% | 80 | 207.5 | 438.6 | 0.473 |
+| resblock_updown  C768   T4     | 12.58 | 0.7% | 20 | 629.0 | 571.9 | 1.100 |
+| resblock_plain   C768   T16    | 11.40 | 0.6% | 20 | 570.2 | 448.8 | 1.270 |
+| resblock_plain   C384   T16    | 9.79 | 0.5% | 20 | 489.7 | 523.1 | 0.936 |
+| attention        C768   T4     | 1.95 | 0.1% | 20 | 97.4 | 294.5 | 0.331 |
+| **all annotated layers** | **1880.19** | 100% | | | | |
 
 ============================================================================================
 GPU idle on the timeline (is the device ever waiting for the CPU?)
 ============================================================================================
-kernels traced        12954
-timeline span         2049.03 ms
-GPU busy              2009.31 ms  (98.1%)
-GPU idle              39.72 ms  (1.9%) in 12953 gaps
-gap sizes: max 410.7 µs, p99 74.4 µs, median 0.83 µs
-gaps > 50 µs: 224, totalling 23.85 ms (1.2% of the span)
+kernels traced        12974
+timeline span         2009.65 ms
+GPU busy              1979.95 ms  (98.5%)
+GPU idle              29.70 ms  (1.5%) in 12973 gaps
+gap sizes: max 331.6 µs, p99 51.5 µs, median 0.80 µs
+gaps > 50 µs: 138, totalling 11.85 ms (0.6% of the span)
 
 report: /workspace/MoDiff/docs/final_report_2026-07-28/data/nsys/nsys_all_fp16_b128_run3.nsys-rep

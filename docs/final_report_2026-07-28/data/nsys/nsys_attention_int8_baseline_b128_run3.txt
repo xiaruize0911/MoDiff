@@ -1,31 +1,31 @@
 running: /opt/nsys/opt/nvidia/nsight-systems/2026.1.3/target-linux-x64/nsys profile --trace=cuda,nvtx --sample=none --cpuctxsw=none --capture-range=cudaProfilerApi --capture-range-end=stop --force-overwrite=true
-DDIM Sampler:  60%|██████    | 12/20 [00:00<00:00, 13.63it/s]
-DDIM Sampler:  70%|███████   | 14/20 [00:01<00:00, 13.64it/s]
-DDIM Sampler:  80%|████████  | 16/20 [00:01<00:00, 13.63it/s]
-DDIM Sampler:  90%|█████████ | 18/20 [00:01<00:00, 13.60it/s]
-DDIM Sampler: 100%|██████████| 20/20 [00:01<00:00, 13.62it/s]
-DDIM Sampler: 100%|██████████| 20/20 [00:01<00:00, 13.65it/s]
+DDIM Sampler:  60%|██████    | 12/20 [00:00<00:00, 14.32it/s]
+DDIM Sampler:  70%|███████   | 14/20 [00:00<00:00, 14.28it/s]
+DDIM Sampler:  80%|████████  | 16/20 [00:01<00:00, 14.27it/s]
+DDIM Sampler:  90%|█████████ | 18/20 [00:01<00:00, 14.24it/s]
+DDIM Sampler: 100%|██████████| 20/20 [00:01<00:00, 14.23it/s]
+DDIM Sampler: 100%|██████████| 20/20 [00:01<00:00, 14.30it/s]
 
 ============================================================================================
 GPU time attributed to each layer, as it runs inside a real sample
 ============================================================================================
 | layer | GPU ms | share | calls | GPU µs/call | CPU issue µs/call | GPU/issue |
 |---|---:|---:|---:|---:|---:|---:|
-| attention        C192   T1024  | 257.79 | 66.6% | 100 | 2577.9 | 197.3 | 13.062 |
-| attention        C384   T256   | 85.86 | 22.2% | 100 | 858.6 | 182.8 | 4.698 |
-| attention        C384   T64    | 23.22 | 6.0% | 100 | 232.2 | 181.6 | 1.279 |
-| attention        C768   T16    | 18.89 | 4.9% | 100 | 188.9 | 166.1 | 1.137 |
-| attention        C768   T4     | 1.53 | 0.4% | 20 | 76.7 | 172.0 | 0.446 |
-| **all annotated layers** | **387.30** | 100% | | | | |
+| attention        C192   T1024  | 251.83 | 66.5% | 100 | 2518.3 | 176.6 | 14.262 |
+| attention        C384   T256   | 84.14 | 22.2% | 100 | 841.4 | 173.5 | 4.850 |
+| attention        C384   T64    | 22.85 | 6.0% | 100 | 228.5 | 166.0 | 1.376 |
+| attention        C768   T16    | 18.49 | 4.9% | 100 | 184.9 | 151.9 | 1.217 |
+| attention        C768   T4     | 1.50 | 0.4% | 20 | 75.2 | 155.2 | 0.485 |
+| **all annotated layers** | **378.81** | 100% | | | | |
 
 ============================================================================================
 GPU idle on the timeline (is the device ever waiting for the CPU?)
 ============================================================================================
-kernels traced        9454
-timeline span         1468.96 ms
-GPU busy              1428.66 ms  (97.3%)
-GPU idle              40.30 ms  (2.7%) in 9453 gaps
-gap sizes: max 405.4 µs, p99 109.4 µs, median 0.83 µs
-gaps > 50 µs: 227, totalling 27.46 ms (1.9% of the span)
+kernels traced        9294
+timeline span         1400.48 ms
+GPU busy              1369.60 ms  (97.8%)
+GPU idle              30.88 ms  (2.2%) in 9293 gaps
+gap sizes: max 342.9 µs, p99 78.0 µs, median 0.80 µs
+gaps > 50 µs: 185, totalling 17.64 ms (1.3% of the span)
 
 report: /workspace/MoDiff/docs/final_report_2026-07-28/data/nsys/nsys_attention_int8_baseline_b128_run3.nsys-rep
