@@ -98,10 +98,19 @@ def variants():
                         empty, empty, 0, direction, pack)
                     ref = reference(x, gamma, beta, float(scale_t.item()), direction,
                                     smooth, lim)
+                    # int4 comes back as a literal [N,Ho,Wo,C/2] byte buffer; int8 as a
+                    # channels_last [N,C,Ho,Wo], which is what _conv_from_int8 requires since
+                    # it reads the spatial extents off shape[2]/shape[3]. Assert that here:
+                    # getting it wrong is not a wrong number, it is the conv reading past the
+                    # end of the activation, and only the pipeline showed it the first time.
+                    Ho, Wo = (H * 2, W * 2) if direction > 0 else (H // 2, W // 2)
                     if pack:
+                        assert tuple(y.shape) == (32, Ho, Wo, C // 2), tuple(y.shape)
                         got = unpack_int4(y, C).permute(0, 3, 1, 2).float()
                     else:
-                        got = y.permute(0, 3, 1, 2).float()
+                        assert tuple(y.shape) == (32, C, Ho, Wo), tuple(y.shape)
+                        assert y.is_contiguous(memory_format=torch.channels_last)
+                        got = y.float()
                     rel = ((got - ref).norm() / ref.norm()).item()
                     mx = (got - ref).abs().max().item()
                 print("| C%d/%dx%d | %s | %s | %s | %.5f | %.0f |"

@@ -1358,8 +1358,18 @@ torch::Tensor group_norm_silu_quantize_resize_nhwc(
     TORCH_CHECK(Kpad % 2 == 0, "k_pad must be even");
     const int Ho = up ? H * 2 : H / 2, Wo = up ? W * 2 : W / 2;
     auto opts = torch::TensorOptions().dtype(torch::kInt8).device(x.device());
-    auto yq = pack ? torch::empty({N, Ho, Wo, Kpad / 2}, opts)
-                   : torch::empty({N, Ho, Wo, C}, opts);
+    // The two outputs have the same NHWC-physical bytes but deliberately different LOGICAL
+    // shapes, because their consumers disagree about where the spatial extents come from.
+    // int4 goes to _conv_from_int4(x_q, Ho, Wo), which is told them; the tensor is a literal
+    // [N, Ho, Wo, Kpad/2] byte buffer (Kpad/2 != C, so an NCHW shape would be a lie anyway).
+    // int8 goes to _conv_from_int8(x_q), which reads H and W off x_q.shape[2] and [3] -- so it
+    // must be [N, C, Ho, Wo] channels_last, matching avgpool2x_quantize_noahat_fprop. Returning
+    // a literal [N, Ho, Wo, C] here made the conv read Wo as its height and C as its width and
+    // walk ~128 KiB off the end of the activation.
+    auto yq = pack
+        ? torch::empty({N, Ho, Wo, Kpad / 2}, opts)
+        : torch::empty({N, C, Ho, Wo},
+                       opts.memory_format(torch::MemoryFormat::ChannelsLast));
 
     int block_size = 128;
     while ((long)block_size * 12 < group_size && block_size < 512) block_size <<= 1;
