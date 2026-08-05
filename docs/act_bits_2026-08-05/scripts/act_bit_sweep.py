@@ -59,7 +59,20 @@ if os.environ.get("SWEEP_BITS"):                        # subset, for smoke test
     Q_LEVELS = [(b, q) for b, q in Q_LEVELS if b in _want]
 SEEDS = [int(s) for s in os.environ.get("SWEEP_SEEDS", "1234,20260805,777").split(",")]
 CALIB = H.CALIB["int8"]
-OUT = "docs/act_bits_2026-08-05/data/act_bit_sweep.json"
+
+#: Which precision the MoDiff arm's t=T warm-up runs at. Both are legitimate and they measure
+#: different things, so the arm is labelled by which one it used.
+#:   strict  every conv activation site at A_b, t=T included. The stricter reading, and what you
+#:           want if the question is "what does a b-bit activation datapath cost".
+#:   paper   t=T left on the A8 grid, only the deltas at A_b. This is the PAPER's protocol:
+#:           Appendix B, "Warm-up: We apply warm-up at the first step, where we use full activation
+#:           for computation." Their anchor is full precision; A8 is this implementation's nearest
+#:           equivalent, since the static grid is what a W8A8 model has at t=T.
+#: Worth 2x at A4 (0.163 -> 0.358), so the label is not cosmetic -- see verify_vs_old_w8a4.py.
+ANCHOR = os.environ.get("SWEEP_ANCHOR", "strict").lower()
+assert ANCHOR in ("strict", "paper")
+OUT = (f"docs/act_bits_2026-08-05/data/act_bit_sweep"
+       f"{'' if ANCHOR == 'strict' else '_paper_anchor'}.json")
 
 
 def runs(mode, delta_mode, refs):
@@ -102,15 +115,21 @@ def main():
     print(f"fp16 reference: {fp16_ms:6.2f} ms/step, "
           f"|x|max {max(float(v.abs().max()) for v in refs.values()):.4f}\n", flush=True)
 
-    out = {"batch": H.BATCH, "steps": H.STEPS, "seeds": SEEDS,
+    out = {"batch": H.BATCH, "steps": H.STEPS, "seeds": SEEDS, "anchor": ANCHOR,
            "fp16_ms_per_step": fp16_ms, "rows": []}
     print(f"{'bits':>5} {'Q':>4} {'levels':>7} | {'baseline relL2':>22} | "
           f"{'MoDiff relL2':>22} | {'gain':>6} | {'ms/step b/M':>13}", flush=True)
     print("-" * 96, flush=True)
 
     for bits, q in Q_LEVELS:
-        os.environ["MODIFF_ACT_Q"] = str(q)
+        # The baseline arm has no delta quantizer, so its activation grid IS the swept quantity in
+        # both anchor modes: MODIFF_ACT_Q, clip 1.0.
+        os.environ["MODIFF_ACT_Q"], os.environ["MODIFF_DELTA_CLIP"] = str(q), "1.0"
         base_rel, base_ms = runs("int8_baseline", "static", refs)
+        # The MoDiff arm's delta Q_level is act_q/clip either way. Under the paper anchor the static
+        # grid stays at A8 and the clip ratio carries the b bits instead.
+        if ANCHOR == "paper":
+            os.environ["MODIFF_ACT_Q"], os.environ["MODIFF_DELTA_CLIP"] = "127", str(127.0 / q)
         mod_rel, mod_ms = runs("int8", "dynamic", refs)
         b, m = stat(base_rel), stat(mod_rel)
         out["rows"].append({

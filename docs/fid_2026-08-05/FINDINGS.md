@@ -69,15 +69,18 @@ Same activation precision, 3.5× different outcome: the gap is entirely the weig
 drop to 4-bit activations and still beat 8-bit PTQ. So `277.96 → 200.14` is not a failure to
 reproduce the paper; it is a strictly harder configuration the paper never claimed.
 
-> **CORRECTION, 2026-08-05 (docs/act_bits_2026-08-05).** The table above is A4 *deltas* with an A8
-> *anchor*, not W8A4. `MODIFF_DELTA_CLIP` moves only the delta quantizer; the static grid that
-> quantizes t=T stayed at 8 bits, and t=T seeds â for every later step. Setting all conv activation
-> sites to A4 (`MODIFF_ACT_Q=7`) gives **0.337–0.358**, not 0.127 — the difference is entirely the
-> t=T anchor, verified by an arm that differs in nothing else. W8A4+MoDiff therefore does **not**
-> beat the W8A8 baseline (0.257) here, and the "paper's claim in substance" sentence above is
-> withdrawn. What the paper's A4/A3 numbers rest on is per-CHANNEL dynamic activation quantization;
-> its own per-tensor variant (Appendix D.2) degrades at A4 much as this implementation does. The
-> 0.127 itself reproduces — it was a single seed at the bottom of a 0.130–0.196 spread.
+> **CLARIFICATION, 2026-08-05 (docs/act_bits_2026-08-05).** The table above is A4 *deltas* with an
+> A8 *anchor*: `MODIFF_DELTA_CLIP` moves only the delta quantizer, so the static grid that quantizes
+> t=T stayed at 8 bits. That is worth 2.2× — setting every conv activation site to A4
+> (`MODIFF_ACT_Q=7`) gives 0.337–0.358 rather than 0.153–0.163 — so the rows should be labelled
+> "A4 deltas, A8 anchor", and the 0.127 itself is a single seed at the bottom of a 0.130–0.196 spread.
+>
+> **The conclusion stands, though.** The paper specifies exactly this anchor (Appendix B: *"Warm-up:
+> we apply warm-up at the first step, where we use full activation for computation"*), so the
+> anchored reading is the paper-comparable one, and at A4 it is 0.153 ± 0.022 against the W8A8
+> baseline's 0.256 — MoDiff at 4-bit activations does beat 8-bit PTQ, at per-tensor granularity. An
+> earlier revision of this note withdrew that claim; that was an over-correction. The full sweep
+> (A8→A2, both anchors) is in docs/act_bits_2026-08-05/FINDINGS.md.
 
 **3. A real defect in the int4 weight quantizer, now fixed.** It used one symmetric absmax scale per
 output channel over the whole flattened kernel — 15 levels shared by up to ~1700 weights, with a
