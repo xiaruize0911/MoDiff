@@ -1,5 +1,30 @@
 # INT8 T1024/hd24 exact specialization
 
+> **Correction, 2026-08-03 — the latent-level evidence below is withdrawn.**
+> Every "latent relative L2" and whole-layer "bit-exact" result in this document was vacuous.
+> `UNetModel.out[-1]` is a `zero_module` (`ldm/modules/diffusionmodules/openaimodel.py:745`) and
+> `AttentionBlock.proj_out` is another (`:345`); this tree's checkpoint is an 856-byte stub whose
+> `state_dict` has 0 entries, loaded `strict=False`, so both stayed zero. Consequently every
+> attention block was a bit-exact identity on its input and the UNet predicted **identically zero**
+> for every input, which makes the sampled latent a function of the initial noise and the DDIM
+> schedule alone. A latent relative L2 of `0` was guaranteed for any change, correct or not —
+> demonstrated by forcing all 21 attention blocks to return a constant during sampling: `forward`
+> fired 420 times and the latent was bit-identical. The five goldens in
+> `integration/tests/golden/e2e_*_vacuous.pt` are further evidence: fp16, int8 and int4 are all
+> bit-identical to each other.
+>
+> **What still stands:** the kernel-level correctness results — the nine attention shapes compared
+> against an fp32 reference computed from the same quantized codes on synthetic tensors
+> (`scripts/qattn_correctness.py`), and the code-difference/relative-L2 numbers measured directly on
+> kernel outputs. Those need no checkpoint and do not pass through either zero_module.
+> **Also unaffected:** every timing in this document. Kernel cost is data-independent, and the
+> shapes and launch sequences were real.
+>
+> The scripts have been fixed (they now activate the zero-initialised layers and assert
+> observability before comparing) so re-running them produces meaningful verdicts. Full account:
+> [`docs/gn_qkv_fusion_2026-08-03/FINDINGS.md`](../gn_qkv_fusion_2026-08-03/FINDINGS.md) section 5.
+
+
 ## Outcome
 
 The production `T=1024, hd=24, hd_pad=32, BC=32, WARPS=8` shared-P

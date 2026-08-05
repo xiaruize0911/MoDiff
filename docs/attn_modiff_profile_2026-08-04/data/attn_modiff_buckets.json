@@ -1,0 +1,326 @@
+{
+  "buckets": {
+    "FP16|C192/T1024": {
+      "elementwise / copy": 268.194,
+      "GroupNorm": 110.945,
+      "out projection": 2399.313,
+      "other": 191.649
+    },
+    "FP16|C384/T256": {
+      "elementwise / copy": 137.88899999999998,
+      "GroupNorm": 69.12,
+      "out projection": 841.894
+    },
+    "FP16|C384/T64": {
+      "GroupNorm": 166.177,
+      "other": 81.921,
+      "out projection": 127.809,
+      "elementwise / copy": 32.128
+    },
+    "FP16|C768/T16": {
+      "GroupNorm": 52.128,
+      "other": 76.289,
+      "out projection": 70.208,
+      "elementwise / copy": 13.504
+    },
+    "FP16|C768/T4": {
+      "GroupNorm": 12.449,
+      "out projection": 61.504000000000005,
+      "other": 12.832,
+      "elementwise / copy": 4.896
+    },
+    "INT8|C192/T1024": {
+      "GroupNorm": 254.563,
+      "qkv projection": 604.933,
+      "attn core (flash)": 1345.356,
+      "out projection": 345.699
+    },
+    "INT8|C384/T256": {
+      "GroupNorm": 97.217,
+      "qkv projection": 302.658,
+      "attn core (flash)": 246.243,
+      "out projection": 185.218
+    },
+    "INT8|C384/T64": {
+      "GroupNorm": 27.041,
+      "qkv projection": 89.121,
+      "attn core (flash)": 40.576,
+      "out projection": 65.057
+    },
+    "INT8|C768/T16": {
+      "GroupNorm": 16.576,
+      "qkv projection": 54.145,
+      "attn core (flash)": 63.297,
+      "out projection": 44.096
+    },
+    "INT8|C768/T4": {
+      "GroupNorm": 10.496,
+      "qkv projection": 20.064,
+      "attn core (flash)": 7.745,
+      "out projection": 29.472
+    },
+    "INT8+MoDiff|C192/T1024": {
+      "GroupNorm": 260.418,
+      "qkv projection": 615.942,
+      "attn core (flash)": 1368.876,
+      "out projection": 349.507
+    },
+    "INT8+MoDiff|C384/T256": {
+      "GroupNorm": 100.545,
+      "qkv projection": 302.563,
+      "attn core (flash)": 249.123,
+      "out projection": 192.705
+    },
+    "INT8+MoDiff|C384/T64": {
+      "GroupNorm": 27.456,
+      "qkv projection": 88.705,
+      "attn core (flash)": 41.089,
+      "out projection": 65.025
+    },
+    "INT8+MoDiff|C768/T16": {
+      "GroupNorm": 17.056,
+      "qkv projection": 54.113,
+      "attn core (flash)": 63.328,
+      "out projection": 43.584
+    },
+    "INT8+MoDiff|C768/T4": {
+      "GroupNorm": 10.592,
+      "qkv projection": 20.064,
+      "attn core (flash)": 7.904,
+      "out projection": 28.641
+    },
+    "INT4|C192/T1024": {
+      "GroupNorm": 275.81,
+      "qkv projection": 576.87,
+      "attn core (flash)": 1346.188,
+      "out projection": 325.635
+    },
+    "INT4|C384/T256": {
+      "GroupNorm": 94.945,
+      "qkv projection": 323.267,
+      "attn core (flash)": 184.674,
+      "out projection": 167.713
+    },
+    "INT4|C384/T64": {
+      "GroupNorm": 27.776,
+      "qkv projection": 88.929,
+      "attn core (flash)": 30.432,
+      "out projection": 58.017
+    },
+    "INT4|C768/T16": {
+      "GroupNorm": 17.44,
+      "qkv projection": 35.04,
+      "attn core (flash)": 63.553,
+      "out projection": 34.977
+    },
+    "INT4|C768/T4": {
+      "GroupNorm": 11.04,
+      "qkv projection": 12.736,
+      "attn core (flash)": 8.128,
+      "out projection": 19.136
+    },
+    "INT4+MoDiff|C192/T1024": {
+      "GroupNorm": 278.21,
+      "qkv projection": 592.709,
+      "attn core (flash)": 1383.341,
+      "out projection": 333.251
+    },
+    "INT4+MoDiff|C384/T256": {
+      "GroupNorm": 97.633,
+      "qkv projection": 322.467,
+      "attn core (flash)": 184.546,
+      "out projection": 174.818
+    },
+    "INT4+MoDiff|C384/T64": {
+      "GroupNorm": 27.809,
+      "qkv projection": 89.793,
+      "attn core (flash)": 30.752,
+      "out projection": 58.209
+    },
+    "INT4+MoDiff|C768/T16": {
+      "GroupNorm": 17.472,
+      "qkv projection": 35.072,
+      "attn core (flash)": 63.617,
+      "out projection": 33.92
+    },
+    "INT4+MoDiff|C768/T4": {
+      "GroupNorm": 11.103,
+      "qkv projection": 12.768,
+      "attn core (flash)": 8.192,
+      "out projection": 19.616
+    }
+  },
+  "kernels": {
+    "FP16|C192/T1024": {
+      "void at::native::vectorized_elementwise_kernel<4, at::native": 268.194,
+      "gn_accum_kernel(__half const*, float*, float*, int, int, int": 108.353,
+      "gn_finalize_kernel(float const*, float const*, __half*, __ha": 2.592,
+      "_ZN7cutlass6KernelINS_4conv6kernel38ImplicitGemmConvolutionF": 617.508,
+      "void pytorch_flash::flash_fwd_kernel<pytorch_flash::Flash_fw": 1781.805,
+      "ampere_fp16_s1688gemm_fp16_128x128_ldg8_relu_f2f_tn": 191.649
+    },
+    "FP16|C384/T256": {
+      "void at::native::vectorized_elementwise_kernel<4, at::native": 137.88899999999998,
+      "gn_accum_kernel(__half const*, float*, float*, int, int, int": 65.952,
+      "gn_finalize_kernel(float const*, float const*, __half*, __ha": 3.168,
+      "_ZN7cutlass6KernelINS_4conv6kernel38ImplicitGemmConvolutionF": 428.355,
+      "void pytorch_flash::flash_fwd_kernel<pytorch_flash::Flash_fw": 292.354,
+      "void cutlass::Kernel2<cutlass_80_tensorop_f16_s16816gemm_rel": 121.185
+    },
+    "FP16|C384/T64": {
+      "void group_norm_silu_nhwc_kernel<__half>(__half const*, __ha": 166.177,
+      "ampere_fp16_s1688gemm_fp16_128x128_ldg8_relu_f2f_tn": 81.921,
+      "void pytorch_flash::flash_fwd_kernel<pytorch_flash::Flash_fw": 71.712,
+      "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize96x128x32_stag": 56.097,
+      "void at::native::vectorized_elementwise_kernel<4, at::native": 32.128
+    },
+    "FP16|C768/T16": {
+      "void group_norm_silu_nhwc_kernel<__half>(__half const*, __ha": 52.128,
+      "ampere_fp16_s16816gemm_fp16_256x128_ldg8_relu_f2f_stages_32x": 76.289,
+      "void pytorch_flash::flash_fwd_kernel<pytorch_flash::Flash_fw": 43.392,
+      "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize160x128x32_sta": 26.816,
+      "void at::native::vectorized_elementwise_kernel<4, at::native": 13.504
+    },
+    "FP16|C768/T4": {
+      "void group_norm_silu_nhwc_kernel<__half>(__half const*, __ha": 12.449,
+      "void cutlass::Kernel2<cutlass_80_tensorop_f16_s16816gemm_rel": 22.176,
+      "void pytorch_flash::flash_fwd_kernel<pytorch_flash::Flash_fw": 39.328,
+      "ampere_fp16_s16816gemm_fp16_128x64_ldg8_relu_f2f_stages_64x3": 12.832,
+      "void at::native::vectorized_elementwise_kernel<4, at::native": 4.896
+    },
+    "INT8|C192/T1024": {
+      "void group_norm_silu_quantize_nhwc_vec2_kernel<__half, true>": 254.563,
+      "void gemm_w8a8_kernel_awq_out_i8<1>(signed char const*, sign": 604.933,
+      "void flash_attn_int8_mma_kernel_t<32, 8, 32, true, false, fa": 1345.356,
+      "gemm_w8a8_kernel_awq(signed char const*, signed char const*,": 345.699
+    },
+    "INT8|C384/T256": {
+      "void group_norm_silu_quantize_nhwc_vec2_kernel<__half, true>": 97.217,
+      "void gemm_w8a8_kernel_awq_out_i8<2>(signed char const*, sign": 302.658,
+      "void flash_attn_int8_mma_kernel_t<64, 8, 64, true, false, fa": 246.243,
+      "gemm_w8a8_kernel_awq(signed char const*, signed char const*,": 185.218
+    },
+    "INT8|C384/T64": {
+      "void group_norm_silu_quantize_nhwc_vec2_kernel<__half, true>": 27.041,
+      "void gemm_w8a8_kernel_awq_out_i8<2>(signed char const*, sign": 89.121,
+      "void flash_attn_int8_mma_kernel_t<64, 4, 32, true, false, fa": 40.576,
+      "gemm_w8a8_kernel_awq(signed char const*, signed char const*,": 65.057
+    },
+    "INT8|C768/T16": {
+      "void group_norm_silu_quantize_nhwc_vec2_kernel<__half, true>": 16.576,
+      "void gemm_w8a8_kernel_awq_out_i8<0>(signed char const*, sign": 54.145,
+      "void flash_attn_int8_qi8packed_small_qout_kernel<16, 96, 4, ": 63.297,
+      "gemm_w8a8_kernel_awq(signed char const*, signed char const*,": 44.096
+    },
+    "INT8|C768/T4": {
+      "void group_norm_silu_quantize_nhwc_vec2_kernel<__half, true>": 10.496,
+      "void gemm_w8a8_kernel_awq_out_i8<0>(signed char const*, sign": 20.064,
+      "void flash_attn_int8_qi8packed_small_qout_kernel<4, 96, 4, f": 7.745,
+      "gemm_w8a8_kernel_awq(signed char const*, signed char const*,": 29.472
+    },
+    "INT8+MoDiff|C192/T1024": {
+      "void group_norm_silu_quantize_nhwc_vec2_kernel<__half, true>": 260.418,
+      "void gemm_w8a8_kernel_awq_out_i8<1>(signed char const*, sign": 615.942,
+      "void flash_attn_int8_mma_kernel_t<32, 8, 32, true, false, fa": 1368.876,
+      "gemm_w8a8_kernel_awq(signed char const*, signed char const*,": 349.507
+    },
+    "INT8+MoDiff|C384/T256": {
+      "void group_norm_silu_quantize_nhwc_vec2_kernel<__half, true>": 100.545,
+      "void gemm_w8a8_kernel_awq_out_i8<2>(signed char const*, sign": 302.563,
+      "void flash_attn_int8_mma_kernel_t<64, 8, 64, true, false, fa": 249.123,
+      "gemm_w8a8_kernel_awq(signed char const*, signed char const*,": 192.705
+    },
+    "INT8+MoDiff|C384/T64": {
+      "void group_norm_silu_quantize_nhwc_vec2_kernel<__half, true>": 27.456,
+      "void gemm_w8a8_kernel_awq_out_i8<2>(signed char const*, sign": 88.705,
+      "void flash_attn_int8_mma_kernel_t<64, 4, 32, true, false, fa": 41.089,
+      "gemm_w8a8_kernel_awq(signed char const*, signed char const*,": 65.025
+    },
+    "INT8+MoDiff|C768/T16": {
+      "void group_norm_silu_quantize_nhwc_vec2_kernel<__half, true>": 17.056,
+      "void gemm_w8a8_kernel_awq_out_i8<0>(signed char const*, sign": 54.113,
+      "void flash_attn_int8_qi8packed_small_qout_kernel<16, 96, 4, ": 63.328,
+      "gemm_w8a8_kernel_awq(signed char const*, signed char const*,": 43.584
+    },
+    "INT8+MoDiff|C768/T4": {
+      "void group_norm_silu_quantize_nhwc_vec2_kernel<__half, true>": 10.592,
+      "void gemm_w8a8_kernel_awq_out_i8<0>(signed char const*, sign": 20.064,
+      "void flash_attn_int8_qi8packed_small_qout_kernel<4, 96, 4, f": 7.904,
+      "gemm_w8a8_kernel_awq(signed char const*, signed char const*,": 28.641
+    },
+    "INT4|C192/T1024": {
+      "void group_norm_silu_quantize_pack_nhwc_vec2_kernel<__half, ": 275.81,
+      "void gemm_w4a4_kernel_awq_out_i8<1>(signed char const*, sign": 576.87,
+      "void flash_attn_int8_mma_kernel_t<32, 8, 32, true, true, fal": 1346.188,
+      "gemm_w4a4_kernel_awq(signed char const*, signed char const*,": 325.635
+    },
+    "INT4|C384/T256": {
+      "void group_norm_silu_quantize_pack_nhwc_vec2_kernel<__half, ": 94.945,
+      "void gemm_w4a4_kernel_awq_out_i8<3>(signed char const*, sign": 323.267,
+      "void flash_attn_int4_mma_kernel_t<64, 64, 8, true>(signed ch": 184.674,
+      "gemm_w4a4_kernel_awq(signed char const*, signed char const*,": 167.713
+    },
+    "INT4|C384/T64": {
+      "void group_norm_silu_quantize_pack_nhwc_vec2_kernel<__half, ": 27.776,
+      "void gemm_w4a4_kernel_awq_out_i8<3>(signed char const*, sign": 88.929,
+      "void flash_attn_int4_mma_kernel_t<64, 32, 4, true>(signed ch": 30.432,
+      "gemm_w4a4_kernel_awq(signed char const*, signed char const*,": 58.017
+    },
+    "INT4|C768/T16": {
+      "void group_norm_silu_quantize_pack_nhwc_vec2_kernel<__half, ": 17.44,
+      "void gemm_w4a4_kernel_awq_out_i8<4>(signed char const*, sign": 35.04,
+      "void flash_attn_int8_qi8packed_small_qout_kernel<16, 96, 4, ": 63.553,
+      "gemm_w4a4_kernel_awq(signed char const*, signed char const*,": 34.977
+    },
+    "INT4|C768/T4": {
+      "void group_norm_silu_quantize_pack_nhwc_vec2_kernel<__half, ": 11.04,
+      "void gemm_w4a4_kernel_awq_out_i8<4>(signed char const*, sign": 12.736,
+      "void flash_attn_int8_qi8packed_small_qout_kernel<4, 96, 4, t": 8.128,
+      "gemm_w4a4_kernel_awq(signed char const*, signed char const*,": 19.136
+    },
+    "INT4+MoDiff|C192/T1024": {
+      "void group_norm_silu_quantize_pack_nhwc_vec2_kernel<__half, ": 278.21,
+      "void gemm_w4a4_kernel_awq_out_i8<1>(signed char const*, sign": 592.709,
+      "void flash_attn_int8_mma_kernel_t<32, 8, 32, true, true, fal": 1383.341,
+      "gemm_w4a4_kernel_awq(signed char const*, signed char const*,": 333.251
+    },
+    "INT4+MoDiff|C384/T256": {
+      "void group_norm_silu_quantize_pack_nhwc_vec2_kernel<__half, ": 97.633,
+      "void gemm_w4a4_kernel_awq_out_i8<3>(signed char const*, sign": 322.467,
+      "void flash_attn_int4_mma_kernel_t<64, 64, 8, true>(signed ch": 184.546,
+      "gemm_w4a4_kernel_awq(signed char const*, signed char const*,": 174.818
+    },
+    "INT4+MoDiff|C384/T64": {
+      "void group_norm_silu_quantize_pack_nhwc_vec2_kernel<__half, ": 27.809,
+      "void gemm_w4a4_kernel_awq_out_i8<3>(signed char const*, sign": 89.793,
+      "void flash_attn_int4_mma_kernel_t<64, 32, 4, true>(signed ch": 30.752,
+      "gemm_w4a4_kernel_awq(signed char const*, signed char const*,": 58.209
+    },
+    "INT4+MoDiff|C768/T16": {
+      "void group_norm_silu_quantize_pack_nhwc_vec2_kernel<__half, ": 17.472,
+      "void gemm_w4a4_kernel_awq_out_i8<4>(signed char const*, sign": 35.072,
+      "void flash_attn_int8_qi8packed_small_qout_kernel<16, 96, 4, ": 63.617,
+      "gemm_w4a4_kernel_awq(signed char const*, signed char const*,": 33.92
+    },
+    "INT4+MoDiff|C768/T4": {
+      "void group_norm_silu_quantize_pack_nhwc_vec2_kernel<__half, ": 11.103,
+      "void gemm_w4a4_kernel_awq_out_i8<4>(signed char const*, sign": 12.768,
+      "void flash_attn_int8_qi8packed_small_qout_kernel<4, 96, 4, t": 8.192,
+      "gemm_w4a4_kernel_awq(signed char const*, signed char const*,": 19.616
+    }
+  },
+  "modes": [
+    "FP16",
+    "INT8",
+    "INT8+MoDiff",
+    "INT4",
+    "INT4+MoDiff"
+  ],
+  "shapes": [
+    "C192/T1024",
+    "C384/T256",
+    "C384/T64",
+    "C768/T16",
+    "C768/T4"
+  ]
+}

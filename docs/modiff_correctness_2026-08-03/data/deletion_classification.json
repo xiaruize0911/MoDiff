@@ -1,0 +1,461 @@
+{
+  "never_fired": [
+    "attn_softmax_fp16",
+    "avgpool2x_quantize_noahat_fprop",
+    "avgpool2x_quantize_pack_noahat_fprop",
+    "awq_w8a8_gemm",
+    "conv2d_int4_dequant_fp16_tuned",
+    "conv2d_int4_fprop_bias_residual_dual",
+    "conv2d_int4_fprop_deepfuse_bias_residual_fp16",
+    "conv2d_int4_fprop_no_ohat",
+    "conv2d_int4_fprop_no_ohat_prealloc",
+    "conv2d_int4_fprop_no_ohat_prealloc_bias",
+    "conv2d_int4_fprop_no_ohat_prealloc_bias_residual",
+    "conv2d_int4_fprop_o_hat",
+    "conv2d_int4_fprop_o_hat_residual",
+    "conv2d_int4_fprop_relu_requant_int4",
+    "conv2d_int4_fprop_tuned",
+    "conv2d_int4_num_tuned_configs",
+    "conv2d_int8_fprop_deepfuse_bias_residual_dual",
+    "conv2d_int8_fprop_deepfuse_bias_residual_fp16",
+    "conv2d_int8_fprop_deepfuse_relu_requant_int8",
+    "conv2d_int8_fprop_dequant_fp16_prealloc",
+    "conv2d_int8_fprop_no_ohat",
+    "conv2d_int8_fprop_no_ohat_prealloc",
+    "conv2d_int8_fprop_no_ohat_prealloc_bias",
+    "conv2d_int8_fprop_no_ohat_prealloc_bias_residual",
+    "conv2d_int8_fprop_o_hat_residual",
+    "conv2d_int8_fprop_relu_requant_int8",
+    "dequant_accumulate_and_return_int8",
+    "dequant_accumulate_int4",
+    "dequant_accumulate_int8",
+    "dequant_bias_i8",
+    "dynamic_quantize_int8_fprop",
+    "dynamic_quantize_pack_int4_fprop",
+    "flash_attn_i4values_i8mma_qpacked_kv_static_qout",
+    "flash_attn_i4values_i8mma_vt_static_qout",
+    "flash_attn_int4",
+    "flash_attn_int4_qpacked_kv_static_qout",
+    "flash_attn_int4_vt_qout",
+    "flash_attn_int8",
+    "flash_attn_int8_packed_persistent_qout",
+    "flash_attn_int8_packed_vt",
+    "flash_attn_int8_packed_vt_qout",
+    "flash_attn_int8_qi8packed_kv_static_qout",
+    "flash_attn_int8_qi8packed_kv_static_qout_preg",
+    "flash_attn_int8_qpacked_kv_static_qout",
+    "flash_attn_int8_vt_qout",
+    "flash_attn_int8_vt_static_qout",
+    "fp16_ncw_delta_to_int8_cl",
+    "fused_gn_qkv_i8evt",
+    "fused_gn_qkv_int8",
+    "gemm_w4a4_awq",
+    "gemm_w4a4_awq_nout",
+    "gemm_w4a4_awq_out_i8",
+    "gemm_w4a4_awq_qkv_i4qk_i8v",
+    "gemm_w8a8_awq",
+    "gemm_w8a8_awq_nout",
+    "gemm_w8a8_awq_out_i8",
+    "group_norm_silu_dequant_quantize_nhwc",
+    "mma_smoke",
+    "quantize_and_pack",
+    "quantize_attn_kv_from_i8",
+    "quantize_attn_kv_packed_static",
+    "quantize_attn_qkv",
+    "quantize_attn_qkv_from_i8",
+    "quantize_attn_qkv_i4qk_i8v",
+    "quantize_attn_qkv_i4qk_i8v_static",
+    "quantize_attn_qkv_packed_static",
+    "quantize_attn_qkv_packed_static_compact",
+    "quantize_attn_qkv_static",
+    "step1_quantize_no_ahat_fprop",
+    "step1_quantize_pack_int4_fprop",
+    "step1_quantize_pack_int4_no_ahat_fprop",
+    "step1_static_quantize_fprop_silu",
+    "step1_static_quantize_noahat_fprop",
+    "step1_static_quantize_pack_int4_fprop_silu",
+    "step1_static_quantize_pack_int4_noahat_fprop",
+    "sub_absmax_scale",
+    "upsample2x_quantize_noahat_fprop",
+    "upsample2x_quantize_pack_noahat_fprop"
+  ],
+  "buckets": {
+    "B_env_gated": [
+      {
+        "symbol": "attn_softmax_fp16",
+        "why": "MODIFF_FP16_MATERIALIZED"
+      },
+      {
+        "symbol": "dequant_bias_i8",
+        "why": "MODIFF_LINEAR_OUT_I8"
+      },
+      {
+        "symbol": "flash_attn_i4values_i8mma_vt_static_qout",
+        "why": "MODIFF_INT4_QKV_EPILOGUE"
+      },
+      {
+        "symbol": "flash_attn_int8_packed_persistent_qout",
+        "why": "MODIFF_FLASH_PACKED"
+      },
+      {
+        "symbol": "flash_attn_int8_packed_vt",
+        "why": "MODIFF_FLASH_PACKED"
+      },
+      {
+        "symbol": "flash_attn_int8_packed_vt_qout",
+        "why": "MODIFF_FLASH_PACKED"
+      },
+      {
+        "symbol": "flash_attn_int8_qi8packed_kv_static_qout_preg",
+        "why": "MODIFF_INT8_FLASH_PREG"
+      },
+      {
+        "symbol": "fused_gn_qkv_i8evt",
+        "why": "MODIFF_ROUTE1"
+      },
+      {
+        "symbol": "gemm_w4a4_awq_out_i8",
+        "why": "MODIFF_LINEAR_OUT_I8"
+      },
+      {
+        "symbol": "gemm_w4a4_awq_qkv_i4qk_i8v",
+        "why": "MODIFF_INT4_QKV_EPILOGUE"
+      },
+      {
+        "symbol": "gemm_w8a8_awq_out_i8",
+        "why": "MODIFF_LINEAR_OUT_I8"
+      },
+      {
+        "symbol": "quantize_attn_qkv_from_i8",
+        "why": "MODIFF_ROUTE1"
+      }
+    ],
+    "F_fallback": [
+      {
+        "symbol": "avgpool2x_quantize_noahat_fprop",
+        "why": "integration/tests/test_updown_fusion_pipeline.py:42"
+      },
+      {
+        "symbol": "avgpool2x_quantize_pack_noahat_fprop",
+        "why": "integration/tests/test_updown_fusion_pipeline.py:42; integration/tests/test_gn_resize_fusion.py:141"
+      },
+      {
+        "symbol": "conv2d_int4_dequant_fp16_tuned",
+        "why": "integration/kernels/int4_optimized.py:720; integration/kernels/int4_optimized.py:726"
+      },
+      {
+        "symbol": "conv2d_int4_fprop_bias_residual_dual",
+        "why": "integration/kernels/int4_optimized.py:811"
+      },
+      {
+        "symbol": "conv2d_int4_fprop_deepfuse_bias_residual_fp16",
+        "why": "integration/kernels/int4_optimized.py:642"
+      },
+      {
+        "symbol": "conv2d_int4_fprop_no_ohat_prealloc",
+        "why": "integration/kernels/int4_optimized.py:666"
+      },
+      {
+        "symbol": "conv2d_int4_fprop_no_ohat_prealloc_bias",
+        "why": "integration/kernels/int4_optimized.py:658"
+      },
+      {
+        "symbol": "conv2d_int4_fprop_no_ohat_prealloc_bias_residual",
+        "why": "integration/kernels/int4_optimized.py:651"
+      },
+      {
+        "symbol": "conv2d_int4_fprop_o_hat",
+        "why": "integration/kernels/int4_optimized.py:363; integration/kernels/int4_optimized.py:429; integration/kernels/int4_optimized.py:892"
+      },
+      {
+        "symbol": "conv2d_int4_fprop_o_hat_residual",
+        "why": "integration/kernels/int4_optimized.py:440; integration/kernels/int4_optimized.py:465"
+      },
+      {
+        "symbol": "conv2d_int4_fprop_relu_requant_int4",
+        "why": "integration/kernels/int4_optimized.py:775"
+      },
+      {
+        "symbol": "conv2d_int4_num_tuned_configs",
+        "why": "integration/kernels/int4_optimized.py:707"
+      },
+      {
+        "symbol": "conv2d_int8_fprop_deepfuse_bias_residual_dual",
+        "why": "integration/kernels/int8_optimized.py:808"
+      },
+      {
+        "symbol": "conv2d_int8_fprop_deepfuse_bias_residual_fp16",
+        "why": "integration/kernels/int4_optimized.py:632"
+      },
+      {
+        "symbol": "conv2d_int8_fprop_deepfuse_relu_requant_int8",
+        "why": "integration/kernels/int8_optimized.py:862"
+      },
+      {
+        "symbol": "conv2d_int8_fprop_dequant_fp16_prealloc",
+        "why": "integration/kernels/int8_optimized.py:698"
+      },
+      {
+        "symbol": "conv2d_int8_fprop_no_ohat_prealloc",
+        "why": "integration/kernels/int8_optimized.py:741"
+      },
+      {
+        "symbol": "conv2d_int8_fprop_no_ohat_prealloc_bias",
+        "why": "integration/kernels/int8_optimized.py:733"
+      },
+      {
+        "symbol": "conv2d_int8_fprop_no_ohat_prealloc_bias_residual",
+        "why": "integration/kernels/int8_optimized.py:726; integration/fused_ops/chained_bottleneck.py:12"
+      },
+      {
+        "symbol": "conv2d_int8_fprop_o_hat_residual",
+        "why": "integration/kernels/int8_optimized.py:482; integration/kernels/int8_optimized.py:506"
+      },
+      {
+        "symbol": "conv2d_int8_fprop_relu_requant_int8",
+        "why": "integration/kernels/int8_optimized.py:869"
+      },
+      {
+        "symbol": "dequant_accumulate_and_return_int8",
+        "why": "integration/kernels/int8_linear.py:297; integration/kernels/int8_linear.py:314; integration/kernels/int8_linear.py:356"
+      },
+      {
+        "symbol": "dequant_accumulate_int4",
+        "why": "integration/kernels/int4_linear.py:9; integration/kernels/int4_linear.py:277"
+      },
+      {
+        "symbol": "dequant_accumulate_int8",
+        "why": "integration/kernels/int8_linear.py:10; integration/kernels/int8_linear.py:47; integration/kernels/int8_linear.py:352"
+      },
+      {
+        "symbol": "dynamic_quantize_int8_fprop",
+        "why": "integration/kernels/int8_optimized.py:305; integration/kernels/int8_optimized.py:313; integration/kernels/int8_optimized.py:324"
+      },
+      {
+        "symbol": "dynamic_quantize_pack_int4_fprop",
+        "why": "integration/kernels/int4_optimized.py:286; integration/kernels/int4_optimized.py:298"
+      },
+      {
+        "symbol": "flash_attn_i4values_i8mma_qpacked_kv_static_qout",
+        "why": "integration/fused_ops/quantized_std_attention.py:978"
+      },
+      {
+        "symbol": "flash_attn_int4_qpacked_kv_static_qout",
+        "why": "integration/fused_ops/quantized_std_attention.py:989"
+      },
+      {
+        "symbol": "flash_attn_int4_vt_qout",
+        "why": "integration/fused_ops/quantized_std_attention.py:1046"
+      },
+      {
+        "symbol": "flash_attn_int8_qi8packed_kv_static_qout",
+        "why": "integration/fused_ops/quantized_std_attention.py:458; integration/fused_ops/quantized_std_attention.py:793"
+      },
+      {
+        "symbol": "flash_attn_int8_qpacked_kv_static_qout",
+        "why": "integration/fused_ops/quantized_std_attention.py:912"
+      },
+      {
+        "symbol": "flash_attn_int8_vt_qout",
+        "why": "integration/fused_ops/quantized_std_attention.py:273; integration/fused_ops/quantized_std_attention.py:958"
+      },
+      {
+        "symbol": "flash_attn_int8_vt_static_qout",
+        "why": "integration/fused_ops/quantized_std_attention.py:279; integration/fused_ops/quantized_std_attention.py:955"
+      },
+      {
+        "symbol": "fp16_ncw_delta_to_int8_cl",
+        "why": "integration/kernels/modiff_attention.py:221; integration/benchmarks/bench_attn_kernel.py:206"
+      },
+      {
+        "symbol": "gemm_w4a4_awq",
+        "why": "integration/tests/test_wxax.py:27; integration/tests/test_wxax.py:49; integration/kernels/wxax_linear.py:4"
+      },
+      {
+        "symbol": "gemm_w4a4_awq_nout",
+        "why": "integration/kernels/wxax_linear.py:112"
+      },
+      {
+        "symbol": "gemm_w8a8_awq",
+        "why": "integration/tests/test_wxax.py:27; integration/tests/test_wxax.py:39; integration/kernels/wxax_linear.py:4"
+      },
+      {
+        "symbol": "gemm_w8a8_awq_nout",
+        "why": "integration/kernels/wxax_linear.py:108; integration/fused_ops/token_major_attention.py:280"
+      },
+      {
+        "symbol": "group_norm_silu_dequant_quantize_nhwc",
+        "why": "integration/fused_ops/fused_resblock.py:59"
+      },
+      {
+        "symbol": "quantize_and_pack",
+        "why": "integration/kernels/int4_optimized.py:244; integration/kernels/fused_baseline.py:319; integration/kernels/fused_baseline.py:416"
+      },
+      {
+        "symbol": "quantize_attn_kv_from_i8",
+        "why": "integration/fused_ops/quantized_std_attention.py:455; integration/fused_ops/quantized_std_attention.py:721; integration/fused_ops/quantized_std_attention.py:791"
+      },
+      {
+        "symbol": "quantize_attn_kv_packed_static",
+        "why": "integration/fused_ops/quantized_std_attention.py:909; integration/fused_ops/quantized_std_attention.py:972; integration/fused_ops/quantized_std_attention.py:986"
+      },
+      {
+        "symbol": "quantize_attn_qkv",
+        "why": "integration/fused_ops/quantized_std_attention.py:206"
+      },
+      {
+        "symbol": "quantize_attn_qkv_i4qk_i8v",
+        "why": "integration/fused_ops/quantized_std_attention.py:224; integration/fused_ops/quantized_std_attention.py:242"
+      },
+      {
+        "symbol": "quantize_attn_qkv_i4qk_i8v_static",
+        "why": "integration/fused_ops/quantized_std_attention.py:239"
+      },
+      {
+        "symbol": "quantize_attn_qkv_packed_static",
+        "why": "integration/fused_ops/quantized_std_attention.py:262; integration/fused_ops/quantized_std_attention.py:264; integration/fused_ops/quantized_std_attention.py:274"
+      },
+      {
+        "symbol": "quantize_attn_qkv_packed_static_compact",
+        "why": "integration/fused_ops/quantized_std_attention.py:996; integration/fused_ops/quantized_std_attention.py:1026"
+      },
+      {
+        "symbol": "quantize_attn_qkv_static",
+        "why": "integration/fused_ops/quantized_std_attention.py:203"
+      },
+      {
+        "symbol": "step1_quantize_pack_int4_fprop",
+        "why": "integration/kernels/int4_optimized.py:923; integration/benchmarks/benchmark_extended.py:835; integration/benchmarks/benchmark_extended.py:845"
+      },
+      {
+        "symbol": "step1_static_quantize_fprop_silu",
+        "why": "integration/kernels/int8_optimized.py:367; integration/kernels/int8_optimized.py:387; integration/kernels/int8_optimized.py:424"
+      },
+      {
+        "symbol": "step1_static_quantize_noahat_fprop",
+        "why": "integration/kernels/int8_optimized.py:579"
+      },
+      {
+        "symbol": "step1_static_quantize_pack_int4_fprop_silu",
+        "why": "integration/kernels/int4_optimized.py:336; integration/kernels/int4_optimized.py:354; integration/kernels/int4_optimized.py:389"
+      },
+      {
+        "symbol": "step1_static_quantize_pack_int4_noahat_fprop",
+        "why": "integration/kernels/int4_optimized.py:534"
+      },
+      {
+        "symbol": "sub_absmax_scale",
+        "why": "integration/kernels/int4_linear.py:9; integration/kernels/int4_linear.py:242; integration/kernels/int4_linear.py:287"
+      },
+      {
+        "symbol": "upsample2x_quantize_noahat_fprop",
+        "why": "integration/tests/test_updown_fusion_pipeline.py:41; integration/fused_ops/fused_resblock.py:846; integration/fused_ops/fused_resblock.py:888"
+      },
+      {
+        "symbol": "upsample2x_quantize_pack_noahat_fprop",
+        "why": "integration/tests/test_updown_fusion_pipeline.py:41; integration/tests/test_gn_resize_fusion.py:140; integration/fused_ops/fused_resblock.py:885"
+      }
+    ],
+    "A_unreferenced": [
+      {
+        "symbol": "awq_w8a8_gemm",
+        "why": ""
+      },
+      {
+        "symbol": "fused_gn_qkv_int8",
+        "why": ""
+      },
+      {
+        "symbol": "mma_smoke",
+        "why": ""
+      }
+    ],
+    "D_bench_only": [
+      {
+        "symbol": "conv2d_int4_fprop_no_ohat",
+        "why": "integration/benchmarks/benchmark_extended.py"
+      },
+      {
+        "symbol": "conv2d_int8_fprop_no_ohat",
+        "why": "integration/benchmarks/benchmark_extended.py"
+      },
+      {
+        "symbol": "flash_attn_int4",
+        "why": "integration/benchmarks/report/profile_tree.py"
+      },
+      {
+        "symbol": "flash_attn_int8",
+        "why": "integration/benchmarks/report/profile_tree.py"
+      },
+      {
+        "symbol": "step1_quantize_no_ahat_fprop",
+        "why": "integration/benchmarks/benchmark_extended.py"
+      },
+      {
+        "symbol": "step1_quantize_pack_int4_no_ahat_fprop",
+        "why": "integration/benchmarks/benchmark_extended.py"
+      }
+    ],
+    "E_sentinel": [
+      {
+        "symbol": "conv2d_int4_fprop_tuned",
+        "why": "integration/kernels/int4_optimized.py:21"
+      }
+    ]
+  },
+  "steady_state": [
+    "cat2_channels_last_fp16",
+    "conv2d_int4_evt_bias_residual_fp16",
+    "conv2d_int4_evt_o_hat",
+    "conv2d_int4_evt_o_hat_residual",
+    "conv2d_int8_evt_bias_residual_fp16",
+    "conv2d_int8_evt_o_hat",
+    "conv2d_int8_evt_o_hat_residual",
+    "dequant_accumulate_and_return_int4",
+    "flash_attn_i4values_i8mma_qi8_kv_static_qout_hd24",
+    "flash_attn_i4values_small_qout",
+    "flash_attn_int4_vt_static_qout",
+    "flash_attn_int8_qi8_kv_static_qout",
+    "flash_attn_int8_qi8_kv_static_qout_hd24",
+    "flash_attn_int8_qi8packed_small_qout",
+    "fused_gn_qkv",
+    "gemm_w4a4_awq_bias_res",
+    "gemm_w4a4_awq_qkv_codes",
+    "gemm_w4a4_awq_qkv_i4qk_i8v_layouts",
+    "gemm_w8a8_awq_bias_res",
+    "gemm_w8a8_awq_out_i8_bias_nout",
+    "gemm_w8a8_awq_qkv_i8_layouts",
+    "gemm_w8a8_awq_qkv_i8_layouts_compact",
+    "group_norm_silu_delta_quantize_nhwc",
+    "group_norm_silu_delta_quantize_pack_nhwc",
+    "group_norm_silu_nhwc",
+    "group_norm_silu_quantize_nhwc",
+    "group_norm_silu_quantize_nhwc_fast",
+    "group_norm_silu_quantize_pack_nhwc",
+    "group_norm_silu_quantize_pack_nhwc_fast",
+    "group_norm_silu_quantize_resize_nhwc",
+    "quantize_act_int8",
+    "step1_static_quantize_fprop",
+    "step1_static_quantize_pack_int4_fprop"
+  ],
+  "calibration_only": [
+    "conv2d_int4_fprop",
+    "conv2d_int8_dequant_fp16_tuned",
+    "conv2d_int8_fprop",
+    "conv2d_int8_fprop_o_hat",
+    "conv2d_int8_num_tuned_configs",
+    "flash_attn_int4_vt",
+    "flash_attn_int4_vt_static",
+    "flash_attn_int8_vt",
+    "flash_attn_int8_vt_static",
+    "fp16_ncw_to_fp32_cl",
+    "fp32_cl_to_fp16_ncw",
+    "quantize_act_int4_pack",
+    "quantize_attn_out_int4_pack",
+    "quantize_attn_out_int8",
+    "quantize_attn_qkv_packed",
+    "scale_quantize_and_pack",
+    "scale_quantize_int8",
+    "step1_quantize_fprop"
+  ]
+}

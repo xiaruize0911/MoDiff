@@ -1,0 +1,36 @@
+{
+  "delta_scale_OFF (full-activation grid)": {
+    "in_conv": {
+      "n": 35,
+      "ratio_median": 23.01611048405565,
+      "ratio_max": 281.2235930134931,
+      "runtime_median": 5.60546875
+    },
+    "out_conv": {
+      "n": 35,
+      "ratio_median": 40957.092831108515,
+      "ratio_max": 63549.66852239173,
+      "runtime_median": 18.109375
+    },
+    "table_layers": 0,
+    "latent_absmax": 100.53975677490234,
+    "latent_finite": true
+  },
+  "delta_scale_ON  (per-step delta grid)": {
+    "in_conv": {
+      "n": 35,
+      "ratio_median": 23.01611048405565,
+      "ratio_max": 281.2235930134931,
+      "runtime_median": 5.60546875
+    },
+    "out_conv": {
+      "n": 35,
+      "ratio_median": 45575.40194005291,
+      "ratio_max": 66962.86554579847,
+      "runtime_median": 20.25
+    },
+    "table_layers": 70,
+    "latent_absmax": 100.53975677490234,
+    "latent_finite": true
+  }
+}

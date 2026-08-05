@@ -1,0 +1,24 @@
+{
+  "results": {
+    "int8_linear_modiff_0": {
+      "rel_l2_vs_fp16": 0.04128352552652359,
+      "ms_per_step": 18.763702660799026,
+      "latent_absmax": 5.315608978271484
+    },
+    "int8_linear_modiff_1": {
+      "rel_l2_vs_fp16": 0.039577383548021317,
+      "ms_per_step": 23.803747072815895,
+      "latent_absmax": 5.261308670043945
+    },
+    "int4_linear_modiff_0": {
+      "rel_l2_vs_fp16": 0.480398952960968,
+      "ms_per_step": 15.63367873430252,
+      "latent_absmax": 5.151494026184082
+    },
+    "int4_linear_modiff_1": {
+      "rel_l2_vs_fp16": 0.4513354003429413,
+      "ms_per_step": 18.04400622844696,
+      "latent_absmax": 4.621130466461182
+    }
+  }
+}

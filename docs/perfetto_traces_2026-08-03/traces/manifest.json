@@ -1,0 +1,73 @@
+{
+  "gpu": "NVIDIA A40",
+  "torch": "2.4.1+cu124",
+  "batch": 128,
+  "e2e_steps": 5,
+  "layer_iters": 5,
+  "kernel_iters": 5,
+  "traces": [
+    {
+      "file": "e2e_fp16_b128_s5.json.gz",
+      "note": "5 UNet steps, batch 128, fp16; one 'step/NNN' slice per step",
+      "events": 42315,
+      "raw_mb": 14.51,
+      "gz_mb": 0.93
+    },
+    {
+      "file": "layers_fp16.json.gz",
+      "note": "26 (kind, shape) groups x 5 forwards, fp16; slice label is 'kind/shape xN', N = instances in the UNet",
+      "events": 18398,
+      "raw_mb": 6.13,
+      "gz_mb": 0.31
+    },
+    {
+      "file": "kernels_fp16.json.gz",
+      "note": "84 kernel entry signatures x 5 calls, fp16; slice label is 'suite/entry/first-arg-shape'",
+      "events": 15524,
+      "raw_mb": 5.08,
+      "gz_mb": 0.28
+    },
+    {
+      "file": "e2e_int8_baseline_b128_s5.json.gz",
+      "note": "5 UNet steps, batch 128, int8_baseline; one 'step/NNN' slice per step",
+      "events": 24260,
+      "raw_mb": 8.99,
+      "gz_mb": 0.5
+    },
+    {
+      "file": "layers_int8_baseline.json.gz",
+      "note": "26 (kind, shape) groups x 5 forwards, int8_baseline; slice label is 'kind/shape xN', N = instances in the UNet",
+      "events": 11833,
+      "raw_mb": 4.46,
+      "gz_mb": 0.21
+    },
+    {
+      "file": "kernels_int8_baseline.json.gz",
+      "note": "126 kernel entry signatures x 5 calls, int8_baseline; slice label is 'suite/entry/first-arg-shape'",
+      "events": 14152,
+      "raw_mb": 4.54,
+      "gz_mb": 0.28
+    },
+    {
+      "file": "e2e_int4_baseline_b128_s5.json.gz",
+      "note": "5 UNet steps, batch 128, int4_baseline; one 'step/NNN' slice per step",
+      "events": 24460,
+      "raw_mb": 9.05,
+      "gz_mb": 0.5
+    },
+    {
+      "file": "layers_int4_baseline.json.gz",
+      "note": "26 (kind, shape) groups x 5 forwards, int4_baseline; slice label is 'kind/shape xN', N = instances in the UNet",
+      "events": 11808,
+      "raw_mb": 4.44,
+      "gz_mb": 0.21
+    },
+    {
+      "file": "kernels_int4_baseline.json.gz",
+      "note": "126 kernel entry signatures x 5 calls, int4_baseline; slice label is 'suite/entry/first-arg-shape'",
+      "events": 14277,
+      "raw_mb": 4.54,
+      "gz_mb": 0.28
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "steps": 50,
+  "batch": 8,
+  "rounds": 1,
+  "fp16_absmax": 5.287425994873047,
+  "ab": {
+    "delta table OFF (activation grid)": {
+      "rel_l2_vs_fp16": 0.18497084081172943,
+      "latent_absmax": 5.333770275115967,
+      "table_layers": 0
+    },
+    "delta table ON  (static per-step delta grid)": {
+      "rel_l2_vs_fp16": 0.042226143181324005,
+      "latent_absmax": 5.329334259033203,
+      "table_layers": 70
+    }
+  },
+  "median_step_gain": 1.4148841808219077
+}

@@ -1,0 +1,227 @@
+Loading model from models/ldm/lsun_churches256/model.ckpt
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+
+============================================================
+Applying ResBlock Fusion Optimization
+============================================================
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+
+============================================================
+ResBlock Fusion Summary
+============================================================
+Total fused blocks: 35
+  - OpenAI ResBlocks: 35
+  - ResNet Blocks: 0
+Fusion method: native channels_last GroupNorm(+SiLU) CUDA kernel, falling back to F.group_norm + F.silu with autocast locally disabled (HAS_NATIVE_GN_SILU=True)
+============================================================
+
+Converting UNet to INT8 Baseline (INT8 kernels without MoDiff temporal caching) (89 conv layers)...
+Converting UNet linear layers to INT8 using fp16 backend (37 linear layers)...
+Loading static calibration from integration/calibration/int8_calibration_realckpt.pt
+✓ Loaded 70 INT8 conv layer scales for baseline (static quantization enabled)
+✓ Converted 21 AttentionBlocks to QUANTIZED standard attention (W8A8 QKᵀ/AV, STATIC)
+✓ Quantized 42 Linear layers to W8A8 (modiff=False)
+Data shape for DDIM sampling is (4, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 5 timesteps
+DDIM Sampler:   0%|          | 0/5 [00:00<?, ?it/s]DDIM Sampler:  20%|██        | 1/5 [00:01<00:04,  1.25s/it]DDIM Sampler: 100%|██████████| 5/5 [00:01<00:00,  4.76it/s]DDIM Sampler: 100%|██████████| 5/5 [00:01<00:00,  3.67it/s]
+✓ Calibrated 42 W8A8 linear activation scales (static)
+✓ Wired SiLU fusion for 62 quantized conv layers
+✓ Wired Upsample->quantize fusion for 16 Upsample layers
+Data shape for DDIM sampling is (128, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 20 timesteps
+DDIM Sampler:   0%|          | 0/20 [00:00<?, ?it/s]DDIM Sampler:   5%|▌         | 1/20 [00:00<00:04,  3.92it/s]DDIM Sampler:  15%|█▌        | 3/20 [00:00<00:02,  7.14it/s]DDIM Sampler:  20%|██        | 4/20 [00:00<00:02,  7.31it/s]DDIM Sampler:  30%|███       | 6/20 [00:00<00:01,  9.64it/s]DDIM Sampler:  40%|████      | 8/20 [00:00<00:01, 11.13it/s]DDIM Sampler:  50%|█████     | 10/20 [00:01<00:00, 12.10it/s]DDIM Sampler:  60%|██████    | 12/20 [00:01<00:00, 12.77it/s]DDIM Sampler:  70%|███████   | 14/20 [00:01<00:00, 13.23it/s]DDIM Sampler:  80%|████████  | 16/20 [00:01<00:00, 13.55it/s]DDIM Sampler:  90%|█████████ | 18/20 [00:01<00:00, 13.76it/s]DDIM Sampler: 100%|██████████| 20/20 [00:01<00:00, 13.92it/s]DDIM Sampler: 100%|██████████| 20/20 [00:01<00:00, 11.70it/s]
+Data shape for DDIM sampling is (128, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 20 timesteps
+DDIM Sampler:   0%|          | 0/20 [00:00<?, ?it/s]DDIM Sampler:  10%|█         | 2/20 [00:00<00:01, 14.27it/s]DDIM Sampler:  20%|██        | 4/20 [00:00<00:01, 14.21it/s]DDIM Sampler:  30%|███       | 6/20 [00:00<00:00, 14.18it/s]DDIM Sampler:  40%|████      | 8/20 [00:00<00:00, 14.16it/s]DDIM Sampler:  50%|█████     | 10/20 [00:00<00:00, 14.13it/s]DDIM Sampler:  60%|██████    | 12/20 [00:00<00:00, 14.13it/s]DDIM Sampler:  70%|███████   | 14/20 [00:00<00:00, 14.12it/s]DDIM Sampler:  80%|████████  | 16/20 [00:01<00:00, 14.10it/s]DDIM Sampler:  90%|█████████ | 18/20 [00:01<00:00, 14.11it/s]DDIM Sampler: 100%|██████████| 20/20 [00:01<00:00, 14.12it/s]DDIM Sampler: 100%|██████████| 20/20 [00:01<00:00, 14.13it/s]
+
+### int8_baseline: 69.50 ms/step of GPU kernel time
+     24.21 ms  quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)
+     16.21 ms  GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)
+      8.58 ms  int8/int4 quantized GEMM (W8A8 / W4A4)
+      8.56 ms  our int8/int4 flash kernel (fused QK^T+softmax+AV)
+      2.46 ms  dtype cast / device copy
+      2.06 ms  fp16 cuDNN conv
+      1.92 ms  skip-concat (decoder): specialized 2-tensor channels-last
+      1.31 ms  residual add
+      1.22 ms  nearest upsample (unfused; x_upd path)
+      0.86 ms  GN+SiLU only (fp16 out; updown blocks + fp16 mode)
+      0.57 ms  fp16 tensor-core GEMM (cuBLAS)
+      0.46 ms  SiLU / activation (standalone)
+      0.45 ms  avg_pool 2x2 (unfused; x_upd path)
+      0.37 ms  other elementwise
+      0.24 ms  PyTorch native GroupNorm internals (fp16 fallback path)
+      0.01 ms  memset / memcpy
+      0.00 ms  DDIM schedule indexing / noise generation
+      0.00 ms  reduction (amax/absmax for dynamic scales)
+      0.00 ms  fill / zero-init
+Loading model from models/ldm/lsun_churches256/model.ckpt
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+
+============================================================
+Applying ResBlock Fusion Optimization
+============================================================
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+
+============================================================
+ResBlock Fusion Summary
+============================================================
+Total fused blocks: 35
+  - OpenAI ResBlocks: 35
+  - ResNet Blocks: 0
+Fusion method: native channels_last GroupNorm(+SiLU) CUDA kernel, falling back to F.group_norm + F.silu with autocast locally disabled (HAS_NATIVE_GN_SILU=True)
+============================================================
+
+Converting UNet to INT8 (89 conv layers)...
+Converting UNet linear layers to INT8 (37 linear layers)...
+Loading static calibration from integration/calibration/int8_calibration_realckpt.pt
+✓ Loaded 70 INT8 conv layer scales (static quantization enabled)
+✓ Converted 21 AttentionBlocks to QUANTIZED standard attention (W8A8 QKᵀ/AV, STATIC)
+✓ Quantized 42 Linear layers to W8A8 (modiff=False)
+Data shape for DDIM sampling is (4, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 5 timesteps
+DDIM Sampler:   0%|          | 0/5 [00:00<?, ?it/s]DDIM Sampler:  40%|████      | 2/5 [00:00<00:00, 14.66it/s]DDIM Sampler: 100%|██████████| 5/5 [00:00<00:00, 22.04it/s]DDIM Sampler: 100%|██████████| 5/5 [00:00<00:00, 20.73it/s]
+✓ Calibrated 42 W8A8 linear activation scales (static)
+✓ Wired SiLU fusion for 62 quantized conv layers
+✓ Wired Upsample->quantize fusion for 16 Upsample layers
+Data shape for DDIM sampling is (128, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 20 timesteps
+DDIM Sampler:   0%|          | 0/20 [00:00<?, ?it/s]DDIM Sampler:   5%|▌         | 1/20 [00:00<00:09,  2.04it/s]DDIM Sampler:  10%|█         | 2/20 [00:00<00:04,  3.78it/s]DDIM Sampler:  15%|█▌        | 3/20 [00:00<00:03,  5.15it/s]DDIM Sampler:  25%|██▌       | 5/20 [00:00<00:01,  7.62it/s]DDIM Sampler:  35%|███▌      | 7/20 [00:01<00:01,  9.48it/s]DDIM Sampler:  45%|████▌     | 9/20 [00:01<00:01, 10.62it/s]DDIM Sampler:  55%|█████▌    | 11/20 [00:01<00:00, 11.52it/s]DDIM Sampler:  65%|██████▌   | 13/20 [00:01<00:00, 12.01it/s]DDIM Sampler:  75%|███████▌  | 15/20 [00:01<00:00, 12.47it/s]DDIM Sampler:  85%|████████▌ | 17/20 [00:01<00:00, 12.65it/s]DDIM Sampler:  95%|█████████▌| 19/20 [00:01<00:00, 12.92it/s]DDIM Sampler: 100%|██████████| 20/20 [00:01<00:00, 10.02it/s]
+Data shape for DDIM sampling is (128, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 20 timesteps
+DDIM Sampler:   0%|          | 0/20 [00:00<?, ?it/s]DDIM Sampler:  10%|█         | 2/20 [00:00<00:01, 12.86it/s]DDIM Sampler:  20%|██        | 4/20 [00:00<00:01, 13.30it/s]DDIM Sampler:  30%|███       | 6/20 [00:00<00:01, 13.09it/s]DDIM Sampler:  40%|████      | 8/20 [00:00<00:00, 13.28it/s]DDIM Sampler:  50%|█████     | 10/20 [00:00<00:00, 13.15it/s]DDIM Sampler:  60%|██████    | 12/20 [00:00<00:00, 13.32it/s]DDIM Sampler:  70%|███████   | 14/20 [00:01<00:00, 13.19it/s]DDIM Sampler:  80%|████████  | 16/20 [00:01<00:00, 13.33it/s]DDIM Sampler:  90%|█████████ | 18/20 [00:01<00:00, 13.21it/s]DDIM Sampler: 100%|██████████| 20/20 [00:01<00:00, 13.33it/s]DDIM Sampler: 100%|██████████| 20/20 [00:01<00:00, 13.25it/s]
+
+### int8 dynamic: 73.98 ms/step of GPU kernel time
+     25.45 ms  quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)
+     10.77 ms  MoDiff GN+SiLU+delta-quantize+cache apply
+      8.60 ms  int8/int4 quantized GEMM (W8A8 / W4A4)
+      8.57 ms  our int8/int4 flash kernel (fused QK^T+softmax+AV)
+      4.38 ms  GN group-statistics reduction (mean/var)
+      2.85 ms  dtype cast / device copy
+      2.06 ms  fp16 cuDNN conv
+      2.03 ms  GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)
+      1.92 ms  skip-concat (decoder): specialized 2-tensor channels-last
+      1.57 ms  reduction (amax/absmax for dynamic scales)
+      1.54 ms  nearest upsample (unfused; x_upd path)
+      1.31 ms  residual add
+      0.57 ms  fp16 tensor-core GEMM (cuBLAS)
+      0.56 ms  avg_pool 2x2 (unfused; x_upd path)
+      0.47 ms  SiLU / activation (standalone)
+      0.40 ms  GN+SiLU only (fp16 out; updown blocks + fp16 mode)
+      0.37 ms  other elementwise
+      0.31 ms  MoDiff delta-quantize + a_hat cache update
+      0.24 ms  PyTorch native GroupNorm internals (fp16 fallback path)
+      0.01 ms  memset / memcpy
+      0.00 ms  DDIM schedule indexing / noise generation
+      0.00 ms  fill / zero-init
+
+==============================================================================
+Cost by role: int8 dynamic minus int8_baseline, ms/step
+==============================================================================
+    -14.19 ms  GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)
+    +10.77 ms  MoDiff GN+SiLU+delta-quantize+cache apply
+     +4.38 ms  GN group-statistics reduction (mean/var)
+     +1.57 ms  reduction (amax/absmax for dynamic scales)
+     +1.23 ms  quantized implicit-GEMM conv (CUTLASS, EVT-fused epilogue)
+     -0.45 ms  GN+SiLU only (fp16 out; updown blocks + fp16 mode)
+     +0.38 ms  dtype cast / device copy
+     +0.31 ms  MoDiff delta-quantize + a_hat cache update
+     +0.31 ms  nearest upsample (unfused; x_upd path)
+     +0.11 ms  avg_pool 2x2 (unfused; x_upd path)
+
+     +4.48 ms  TOTAL
+
+==============================================================================
+Top kernels, int8 dynamic
+==============================================================================
+     25.45 ms  ImplicitGemmConvolutionEVT
+      8.23 ms  flash_attn_int8_mma_kernel_t
+      8.19 ms  gn_apply_delta_quantize_flat_vec2_kernel
+      5.34 ms  gemm_w8a8_kernel_awq_out_i8
+      3.35 ms  gn_stats_partials_chanmajor_kernel
+      3.25 ms  gemm_w8a8_kernel_awq
+      2.59 ms  group_norm_silu_delta_quantize_resize_nhwc_kernel
+      2.03 ms  group_norm_silu_quantize_nhwc_vec2_kernel
+      1.92 ms  cat2_channels_last_fp16_kernel
+      1.90 ms  unrolled_elementwise_kernel[direct_copy_kernel_cuda]
+      1.60 ms  sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_n
+      1.57 ms  gn_delta_absmax_flat_vec2_kernel
+      1.54 ms  upsample_nearest2d_nhwc_out_frame
+      1.31 ms  elementwise_kernel[CUDAFunctor_add]
+      0.95 ms  elementwise_kernel[direct_copy_kernel_cuda]
+      0.69 ms  gn_group_stats_kernel
+      0.56 ms  avg_pool2d_out_cuda_frame_nhwc
+      0.49 ms  vectorized_elementwise_kernel

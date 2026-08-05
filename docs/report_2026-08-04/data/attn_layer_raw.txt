@@ -1,0 +1,367 @@
+Loading model from models/ldm/lsun_churches256/model.ckpt
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+
+============================================================
+Applying ResBlock Fusion Optimization
+============================================================
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+
+============================================================
+ResBlock Fusion Summary
+============================================================
+Total fused blocks: 35
+  - OpenAI ResBlocks: 35
+  - ResNet Blocks: 0
+Fusion method: native channels_last GroupNorm(+SiLU) CUDA kernel, falling back to F.group_norm + F.silu with autocast locally disabled (HAS_NATIVE_GN_SILU=True)
+============================================================
+
+✓ Converted 21 AttentionBlocks to token-major (MATH SDPA)
+✓ Wired Upsample->quantize fusion for 16 Upsample layers
+
+fp16: 21 attention modules
+   C192/T1024     3116.3 +-  14.6 us  CV 0.68%  spread 2.12%
+   C384/T256      1076.0 +-   1.0 us  CV 0.14%  spread 0.45%
+   C384/T64        412.3 +-   1.2 us  CV 0.43%  spread 1.20%
+   C768/T16        216.1 +-   1.1 us  CV 0.77%  spread 2.28%
+   C768/T4         162.3 +-   1.5 us  CV 1.35%  spread 4.00%
+Loading model from models/ldm/lsun_churches256/model.ckpt
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+
+============================================================
+Applying ResBlock Fusion Optimization
+============================================================
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+
+============================================================
+ResBlock Fusion Summary
+============================================================
+Total fused blocks: 35
+  - OpenAI ResBlocks: 35
+  - ResNet Blocks: 0
+Fusion method: native channels_last GroupNorm(+SiLU) CUDA kernel, falling back to F.group_norm + F.silu with autocast locally disabled (HAS_NATIVE_GN_SILU=True)
+============================================================
+
+Converting UNet to INT8 Baseline (INT8 kernels without MoDiff temporal caching) (89 conv layers)...
+Converting UNet linear layers to INT8 using fp16 backend (37 linear layers)...
+Loading static calibration from integration/calibration/int8_calibration_realckpt.pt
+✓ Loaded 70 INT8 conv layer scales for baseline (static quantization enabled)
+✓ Converted 21 AttentionBlocks to QUANTIZED standard attention (W8A8 QKᵀ/AV, STATIC)
+✓ Quantized 42 Linear layers to W8A8 (modiff=False)
+Data shape for DDIM sampling is (4, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 5 timesteps
+DDIM Sampler:   0%|          | 0/5 [00:00<?, ?it/s]DDIM Sampler:  20%|██        | 1/5 [00:00<00:03,  1.28it/s]DDIM Sampler: 100%|██████████| 5/5 [00:00<00:00,  7.22it/s]DDIM Sampler: 100%|██████████| 5/5 [00:00<00:00,  5.64it/s]
+✓ Calibrated 42 W8A8 linear activation scales (static)
+✓ Wired SiLU fusion for 62 quantized conv layers
+✓ Wired Upsample->quantize fusion for 16 Upsample layers
+
+int8_baseline: 21 attention modules
+   C192/T1024     2711.6 +-  27.1 us  CV 1.44%  spread 4.03%
+   C384/T256       856.8 +-   4.1 us  CV 0.69%  spread 2.28%
+   C384/T64        223.8 +-   0.9 us  CV 0.60%  spread 1.86%
+   C768/T16        180.3 +-   0.0 us  CV 0.04%  spread 0.11%
+   C768/T4          67.9 +-   0.2 us  CV 0.50%  spread 1.55%
+Loading model from models/ldm/lsun_churches256/model.ckpt
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+
+============================================================
+Applying ResBlock Fusion Optimization
+============================================================
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+
+============================================================
+ResBlock Fusion Summary
+============================================================
+Total fused blocks: 35
+  - OpenAI ResBlocks: 35
+  - ResNet Blocks: 0
+Fusion method: native channels_last GroupNorm(+SiLU) CUDA kernel, falling back to F.group_norm + F.silu with autocast locally disabled (HAS_NATIVE_GN_SILU=True)
+============================================================
+
+Converting UNet to INT8 (89 conv layers)...
+Converting UNet linear layers to INT8 (37 linear layers)...
+Loading static calibration from integration/calibration/int8_calibration_realckpt.pt
+✓ Loaded 70 INT8 conv layer scales (static quantization enabled)
+✓ Converted 21 AttentionBlocks to QUANTIZED standard attention (W8A8 QKᵀ/AV, STATIC)
+✓ Quantized 42 Linear layers to W8A8 (modiff=False)
+Data shape for DDIM sampling is (4, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 5 timesteps
+DDIM Sampler:   0%|          | 0/5 [00:00<?, ?it/s]DDIM Sampler:  40%|████      | 2/5 [00:00<00:00, 17.42it/s]DDIM Sampler: 100%|██████████| 5/5 [00:00<00:00, 24.40it/s]
+✓ Calibrated 42 W8A8 linear activation scales (static)
+✓ Wired SiLU fusion for 62 quantized conv layers
+✓ Wired Upsample->quantize fusion for 16 Upsample layers
+
+int8: 21 attention modules
+   C192/T1024     2716.5 +-  36.3 us  CV 1.93%  spread 5.60%
+   C384/T256       850.7 +-   5.0 us  CV 0.85%  spread 2.22%
+   C384/T64        223.4 +-   1.0 us  CV 0.65%  spread 1.99%
+   C768/T16        180.3 +-   0.0 us  CV 0.03%  spread 0.09%
+   C768/T4          81.4 +-   0.1 us  CV 0.14%  spread 0.44%
+Loading model from models/ldm/lsun_churches256/model.ckpt
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+
+============================================================
+Applying ResBlock Fusion Optimization
+============================================================
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+
+============================================================
+ResBlock Fusion Summary
+============================================================
+Total fused blocks: 35
+  - OpenAI ResBlocks: 35
+  - ResNet Blocks: 0
+Fusion method: native channels_last GroupNorm(+SiLU) CUDA kernel, falling back to F.group_norm + F.silu with autocast locally disabled (HAS_NATIVE_GN_SILU=True)
+============================================================
+
+Converting UNet to INT4 Baseline (INT4 kernels without MoDiff temporal caching) (89 conv layers)...
+Converting UNet linear layers to INT4 (37 linear layers)...
+Loading INT4 calibration from integration/calibration/int4_calibration_realckpt.pt
+✓ Loaded static scales for 70 INT4 baseline conv layers
+✓ Converted 21 AttentionBlocks to QUANTIZED standard attention (W4A4 QKᵀ/AV, STATIC)
+✓ Quantized 42 Linear layers to W4A4 (modiff=False)
+Data shape for DDIM sampling is (4, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 5 timesteps
+DDIM Sampler:   0%|          | 0/5 [00:00<?, ?it/s]DDIM Sampler:  60%|██████    | 3/5 [00:00<00:00, 28.40it/s]DDIM Sampler: 100%|██████████| 5/5 [00:00<00:00, 32.24it/s]
+✓ Calibrated 42 W4A4 linear activation scales (static)
+✓ Wired SiLU fusion for 62 quantized conv layers
+✓ Wired Upsample->quantize fusion for 16 Upsample layers
+
+int4_baseline: 21 attention modules
+   C192/T1024     2624.2 +-  15.2 us  CV 0.84%  spread 2.71%
+   C384/T256       764.5 +-   3.8 us  CV 0.72%  spread 2.20%
+   C384/T64        206.9 +-   0.2 us  CV 0.11%  spread 0.38%
+   C768/T16        150.9 +-   0.0 us  CV 0.04%  spread 0.10%
+   C768/T4          72.7 +-   0.7 us  CV 1.35%  spread 3.73%
+Loading model from models/ldm/lsun_churches256/model.ckpt
+LatentDiffusion: Running in eps-prediction mode
+Keeping EMAs of 522.
+Restored from models/first_stage_models/kl-f8/model.ckpt
+Training LatentDiffusion as an unconditional model.
+
+============================================================
+Applying ResBlock Fusion Optimization
+============================================================
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 1 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 2 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+✓ Fused ResBlock: 0 (ResBlock)
+
+============================================================
+ResBlock Fusion Summary
+============================================================
+Total fused blocks: 35
+  - OpenAI ResBlocks: 35
+  - ResNet Blocks: 0
+Fusion method: native channels_last GroupNorm(+SiLU) CUDA kernel, falling back to F.group_norm + F.silu with autocast locally disabled (HAS_NATIVE_GN_SILU=True)
+============================================================
+
+Converting UNet to INT4 (89 conv layers)...
+Converting UNet linear layers to INT4 (37 linear layers)...
+Loading INT4 calibration from integration/calibration/int4_calibration_realckpt.pt
+✓ Loaded static scales for 70 INT4 conv layers
+✓ Converted 21 AttentionBlocks to QUANTIZED standard attention (W4A4 QKᵀ/AV, STATIC)
+✓ Quantized 42 Linear layers to W4A4 (modiff=False)
+Data shape for DDIM sampling is (4, 4, 32, 32), eta 0.0
+Running DDIM Sampling with 5 timesteps
+DDIM Sampler:   0%|          | 0/5 [00:00<?, ?it/s]DDIM Sampler:  40%|████      | 2/5 [00:00<00:00, 15.18it/s]DDIM Sampler: 100%|██████████| 5/5 [00:00<00:00, 23.02it/s]
+✓ Calibrated 42 W4A4 linear activation scales (static)
+✓ Wired SiLU fusion for 62 quantized conv layers
+✓ Wired Upsample->quantize fusion for 16 Upsample layers
+
+int4: 21 attention modules
+   C192/T1024     2606.2 +-   6.9 us  CV 0.38%  spread 1.00%
+   C384/T256       765.9 +-   3.7 us  CV 0.70%  spread 2.11%
+   C384/T64        203.7 +-   0.1 us  CV 0.06%  spread 0.21%
+   C768/T16        151.3 +-   0.0 us  CV 0.04%  spread 0.13%
+   C768/T4          72.5 +-   0.6 us  CV 1.26%  spread 3.81%
+
+============================================================================================
+Attention LAYER, whole module, batch 128, us/call
+============================================================================================
+       shape             fp16    int8_baseline             int8    int4_baseline             int4   int8/fp16  int4/fp16
+  C192/T1024           3116.3           2711.6           2716.5           2624.2           2606.2        1.149      1.188
+   C384/T256           1076.0            856.8            850.7            764.5            765.9        1.256      1.407
+    C384/T64            412.3            223.8            223.4            206.9            203.7        1.842      1.993
+    C768/T16            216.1            180.3            180.3            150.9            151.3        1.199      1.432
+     C768/T4            162.3             67.9             81.4             72.7             72.5        2.389      2.231
+
+WROTE docs/report_2026-08-04/data/attn_layer_speed.csv

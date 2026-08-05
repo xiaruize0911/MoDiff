@@ -1,0 +1,125 @@
+{
+  "fp16": {
+    "samples_ms": [
+      20431.0,
+      20555.0,
+      20537.4
+    ],
+    "median_ms_batch": 20537.4,
+    "ms_per_step": 102.687,
+    "spread_pct": 0.6,
+    "mode": "fp16",
+    "delta_mode": "static",
+    "refresh": null
+  },
+  "int8_baseline": {
+    "samples_ms": [
+      14187.6,
+      14286.9,
+      14218.9
+    ],
+    "median_ms_batch": 14218.9,
+    "ms_per_step": 71.094,
+    "spread_pct": 0.7,
+    "mode": "int8_baseline",
+    "delta_mode": "static",
+    "refresh": null
+  },
+  "int8 modiff static": {
+    "samples_ms": [
+      15652.2,
+      15723.9,
+      15625.7
+    ],
+    "median_ms_batch": 15652.2,
+    "ms_per_step": 78.261,
+    "spread_pct": 0.6,
+    "mode": "int8",
+    "delta_mode": "static",
+    "refresh": null
+  },
+  "int8 dynamic K=1": {
+    "samples_ms": [
+      16708.2,
+      16744.5,
+      16760.4
+    ],
+    "median_ms_batch": 16744.5,
+    "ms_per_step": 83.723,
+    "spread_pct": 0.3,
+    "mode": "int8",
+    "delta_mode": "dynamic",
+    "refresh": 1
+  },
+  "int8 dynamic K=4": {
+    "samples_ms": [
+      15456.8,
+      15463.8,
+      15474.8
+    ],
+    "median_ms_batch": 15463.8,
+    "ms_per_step": 77.319,
+    "spread_pct": 0.1,
+    "mode": "int8",
+    "delta_mode": "dynamic",
+    "refresh": 4
+  },
+  "int4_baseline": {
+    "samples_ms": [
+      11496.9,
+      11595.4,
+      11600.8
+    ],
+    "median_ms_batch": 11595.4,
+    "ms_per_step": 57.977,
+    "spread_pct": 0.9,
+    "mode": "int4_baseline",
+    "delta_mode": "static",
+    "refresh": null
+  },
+  "int4 modiff static": {
+    "samples_ms": [
+      12878.6,
+      12848.1,
+      12875.5
+    ],
+    "median_ms_batch": 12875.5,
+    "ms_per_step": 64.377,
+    "spread_pct": 0.2,
+    "mode": "int4",
+    "delta_mode": "static",
+    "refresh": null
+  },
+  "int4 dynamic K=1": {
+    "samples_ms": [
+      13971.9,
+      13974.3,
+      13982.8
+    ],
+    "median_ms_batch": 13974.3,
+    "ms_per_step": 69.872,
+    "spread_pct": 0.1,
+    "mode": "int4",
+    "delta_mode": "dynamic",
+    "refresh": 1
+  },
+  "int4 dynamic K=4": {
+    "samples_ms": [
+      12567.7,
+      12602.1,
+      12626.0
+    ],
+    "median_ms_batch": 12602.1,
+    "ms_per_step": 63.01,
+    "spread_pct": 0.5,
+    "mode": "int4",
+    "delta_mode": "dynamic",
+    "refresh": 4
+  },
+  "_config": {
+    "batch": 128,
+    "steps": 200,
+    "repeats": 3,
+    "gpu": "NVIDIA A40"
+  }
+}

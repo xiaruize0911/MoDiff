@@ -1,0 +1,52 @@
+{
+  "results": {
+    "int8|ALT=0 (old group-major tree)": {
+      "rel_l2_vs_fp16": 0.039226677268743515,
+      "ms_per_step": 18.51642567664385,
+      "deterministic": true,
+      "max_abs_diff_replay": 0.0
+    },
+    "int8|default = chan-major partials": {
+      "rel_l2_vs_fp16": 0.041236765682697296,
+      "ms_per_step": 16.79808184504509,
+      "deterministic": true,
+      "max_abs_diff_replay": 0.0
+    },
+    "int8|ALT=1 (two-pass element-major)": {
+      "rel_l2_vs_fp16": 0.042129356414079666,
+      "ms_per_step": 45.33167738467455,
+      "deterministic": false,
+      "max_abs_diff_replay": 0.11293414235115051
+    },
+    "int8|ALT=2 (single-pass atomic)": {
+      "rel_l2_vs_fp16": 0.034971605986356735,
+      "ms_per_step": 31.25507339835167,
+      "deterministic": false,
+      "max_abs_diff_replay": 0.10554671287536621
+    },
+    "int4|ALT=0 (old group-major tree)": {
+      "rel_l2_vs_fp16": 0.45710358023643494,
+      "ms_per_step": 18.34219627082348,
+      "deterministic": true,
+      "max_abs_diff_replay": 0.0
+    },
+    "int4|default = chan-major partials": {
+      "rel_l2_vs_fp16": 0.4582628905773163,
+      "ms_per_step": 15.971826873719692,
+      "deterministic": true,
+      "max_abs_diff_replay": 0.0
+    },
+    "int4|ALT=1 (two-pass element-major)": {
+      "rel_l2_vs_fp16": 0.4517839252948761,
+      "ms_per_step": 42.68632024526596,
+      "deterministic": false,
+      "max_abs_diff_replay": 0.559844970703125
+    },
+    "int4|ALT=2 (single-pass atomic)": {
+      "rel_l2_vs_fp16": 0.4608618915081024,
+      "ms_per_step": 29.74462065845728,
+      "deterministic": false,
+      "max_abs_diff_replay": 0.6605539321899414
+    }
+  }
+}

@@ -7,6 +7,18 @@ sys.path[:0] = ["/workspace/MoDiff", "/workspace/MoDiff/src/taming-transformers"
 
 import torch
 import integration.benchmarks.benchmark_ldm as B
+from integration.utils import attention_identity_guard as guard
+# 2026-08-03: this gate could not fail before the two lines marked [guard] below. UNetModel.out[-1]
+# is a zero_module (ldm/modules/diffusionmodules/openaimodel.py:745) and this tree's checkpoint is
+# an 856-byte stub with an empty state_dict, so that layer stayed zero, the UNet predicted
+# identically zero for every input, and the sampled latent depended only on the initial noise -- so
+# reference and candidate agreed exactly no matter what the routes did. Separately, torch seeds its
+# global RNG nondeterministically, and every weight here comes from default-init, so the two calls
+# built two DIFFERENT random networks. Both are fixed below. This is a same-mode A/B, so the shared
+# static calibration stays valid and the comparison is meaningful; a CROSS-mode comparison would
+# not be (see integration/tests/test_std_attn_e2e.py).
+# Background: docs/gn_qkv_fusion_2026-08-03/FINDINGS.md section 5.
+
 
 BATCH = 4
 STEPS = 50
@@ -29,6 +41,7 @@ def _all_latents(epilogue):
         "MODIFF_INT8_QKV_EPILOGUE": "on" if epilogue else "off",
         "MODIFF_INT8_KV_COMPACT24": "0",
     })
+    guard.seed_model_construction()          # [guard] same random net every call
     runner = B.BenchmarkRunner(
         "configs/latent-diffusion/lsun_churches-ldm-kl-8.yaml",
         "models/ldm/lsun_churches256/model.ckpt",
@@ -40,6 +53,8 @@ def _all_latents(epilogue):
         linear_backend="int_gemm",
     )
     model, sampler = runner._setup_model("int8")
+    guard.prepare_for_comparison(          # [guard] make the latent observable
+        model, what="this same-mode A/B latent comparison", verbose=False)
     cond = runner._cond_kwargs(model, BATCH)
 
     def sample(steps, seed):

@@ -1,0 +1,154 @@
+{
+  "FP16|C192/T1024": {
+    "elementwise / copy": 268.194,
+    "GroupNorm (+quantize)": 110.945,
+    "qkv projection": 617.508,
+    "attention core": 1781.805,
+    "out projection": 191.649
+  },
+  "FP16|C384/T256": {
+    "elementwise / copy": 137.88899999999998,
+    "GroupNorm (+quantize)": 69.12,
+    "qkv projection": 428.355,
+    "attention core": 292.354,
+    "out projection": 121.185
+  },
+  "FP16|C384/T64": {
+    "GroupNorm (+quantize)": 166.177,
+    "out projection": 138.018,
+    "attention core": 71.712,
+    "elementwise / copy": 32.128
+  },
+  "FP16|C768/T16": {
+    "GroupNorm (+quantize)": 52.128,
+    "out projection": 103.105,
+    "attention core": 43.392,
+    "elementwise / copy": 13.504
+  },
+  "FP16|C768/T4": {
+    "GroupNorm (+quantize)": 12.449,
+    "out projection": 35.007999999999996,
+    "attention core": 39.328,
+    "elementwise / copy": 4.896
+  },
+  "INT8|C192/T1024": {
+    "GroupNorm (+quantize)": 254.563,
+    "qkv projection": 604.933,
+    "attention core": 1345.356,
+    "out projection": 345.699
+  },
+  "INT8|C384/T256": {
+    "GroupNorm (+quantize)": 97.217,
+    "qkv projection": 302.658,
+    "attention core": 246.243,
+    "out projection": 185.218
+  },
+  "INT8|C384/T64": {
+    "GroupNorm (+quantize)": 27.041,
+    "qkv projection": 89.121,
+    "attention core": 40.576,
+    "out projection": 65.057
+  },
+  "INT8|C768/T16": {
+    "GroupNorm (+quantize)": 16.576,
+    "qkv projection": 54.145,
+    "attention core": 63.297,
+    "out projection": 44.096
+  },
+  "INT8|C768/T4": {
+    "GroupNorm (+quantize)": 10.496,
+    "qkv projection": 20.064,
+    "attention core": 7.745,
+    "out projection": 29.472
+  },
+  "INT8+MoDiff|C192/T1024": {
+    "GroupNorm (+quantize)": 260.418,
+    "qkv projection": 615.942,
+    "attention core": 1368.876,
+    "out projection": 349.507
+  },
+  "INT8+MoDiff|C384/T256": {
+    "GroupNorm (+quantize)": 100.545,
+    "qkv projection": 302.563,
+    "attention core": 249.123,
+    "out projection": 192.705
+  },
+  "INT8+MoDiff|C384/T64": {
+    "GroupNorm (+quantize)": 27.456,
+    "qkv projection": 88.705,
+    "attention core": 41.089,
+    "out projection": 65.025
+  },
+  "INT8+MoDiff|C768/T16": {
+    "GroupNorm (+quantize)": 17.056,
+    "qkv projection": 54.113,
+    "attention core": 63.328,
+    "out projection": 43.584
+  },
+  "INT8+MoDiff|C768/T4": {
+    "GroupNorm (+quantize)": 10.592,
+    "qkv projection": 20.064,
+    "attention core": 7.904,
+    "out projection": 28.641
+  },
+  "INT4|C192/T1024": {
+    "GroupNorm (+quantize)": 275.81,
+    "qkv projection": 576.87,
+    "attention core": 1346.188,
+    "out projection": 325.635
+  },
+  "INT4|C384/T256": {
+    "GroupNorm (+quantize)": 94.945,
+    "qkv projection": 323.267,
+    "attention core": 184.674,
+    "out projection": 167.713
+  },
+  "INT4|C384/T64": {
+    "GroupNorm (+quantize)": 27.776,
+    "qkv projection": 88.929,
+    "attention core": 30.432,
+    "out projection": 58.017
+  },
+  "INT4|C768/T16": {
+    "GroupNorm (+quantize)": 17.44,
+    "qkv projection": 35.04,
+    "attention core": 63.553,
+    "out projection": 34.977
+  },
+  "INT4|C768/T4": {
+    "GroupNorm (+quantize)": 11.04,
+    "qkv projection": 12.736,
+    "attention core": 8.128,
+    "out projection": 19.136
+  },
+  "INT4+MoDiff|C192/T1024": {
+    "GroupNorm (+quantize)": 278.21,
+    "qkv projection": 592.709,
+    "attention core": 1383.341,
+    "out projection": 333.251
+  },
+  "INT4+MoDiff|C384/T256": {
+    "GroupNorm (+quantize)": 97.633,
+    "qkv projection": 322.467,
+    "attention core": 184.546,
+    "out projection": 174.818
+  },
+  "INT4+MoDiff|C384/T64": {
+    "GroupNorm (+quantize)": 27.809,
+    "qkv projection": 89.793,
+    "attention core": 30.752,
+    "out projection": 58.209
+  },
+  "INT4+MoDiff|C768/T16": {
+    "GroupNorm (+quantize)": 17.472,
+    "qkv projection": 35.072,
+    "attention core": 63.617,
+    "out projection": 33.92
+  },
+  "INT4+MoDiff|C768/T4": {
+    "GroupNorm (+quantize)": 11.103,
+    "qkv projection": 12.768,
+    "attention core": 8.192,
+    "out projection": 19.616
+  }
+}

@@ -138,16 +138,25 @@ Attribution by NVTX range from the nsys traces, scaled to the mean profiler-free
 
 ## End to end, three independent invocations
 
+> **What "INT8"/"INT4" mean here.** They are the `int8_baseline` / `int4_baseline` modes --
+> MoDiff temporal caching **disabled** -- i.e. plain W8A8 / W4A4 post-training quantization. They are
+> pinned in `make_measurement_report.py`'s `MODES`. This is worth stating because the repo implements
+> MoDiff (arXiv 2506.22463) and a reader reasonably assumes the headline speedups are MoDiff results;
+> they are the opposite. Per the paper's Table 2 (LSUN-Church, W8), A8 is precisely the regime where
+> MoDiff adds nothing (Q-Diff 4.24 vs +MoDiff 3.85 FID) -- its value is at A4 (355.85 -> 3.97) and A3
+> (367.51 -> 5.40). The MoDiff modes are the internal `int8` / `int4`, and they are not in this report.
+
+
 | mode | run 1 | run 2 | run 3 | mean ms/batch | cross-run CV | within-run CV | vs FP16 |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | FP16 | 20277.0 | 20307.7 | 20376.3 | 20320.3 | 0.25% | 0.03% | 1.000× |
-| INT8 | 14148.6 | 14166.1 | 14177.3 | 14164.0 | 0.10% | 0.15% | 1.435× |
-| INT4 | 11495.0 | 11547.7 | 11507.6 | 11516.8 | 0.24% | 0.14% | 1.764× |
+| INT8 (MoDiff off) | 14148.6 | 14166.1 | 14177.3 | 14164.0 | 0.10% | 0.15% | 1.435× |
+| INT4 (MoDiff off) | 11495.0 | 11547.7 | 11507.6 | 11516.8 | 0.24% | 0.14% | 1.764× |
 
 ### Whole-model time by stage
 
 Profiler self-time scaled to the measured median wall time, ms per batch.
-| stage | FP16 | INT8 | INT4 | INT4 - INT8 |
+| stage | FP16 | INT8 (MoDiff off) | INT4 (MoDiff off) | INT4 - INT8 |
 |---|---:|---:|---:|---:|
 | attention core | 2252.3 | 1765.6 | 1688.3 | -77.3 |
 | QKV / output projection | 1773.5 | 1850.5 | 1772.9 | -77.6 |
@@ -190,12 +199,12 @@ GPU time attributed to each attention shape by NVTX range, over three traces per
 | mode | traces | GPU busy | GPU idle | median gap | gaps > 50 µs |
 |---|---:|---:|---:|---:|---|
 | FP16 | 3 | 98.5% | 1.5% | 0.80 µs | 135, 0.6% of the span |
-| INT8 | 3 | 98.1% | 1.9% | 0.80 µs | 149, 1.0% of the span |
-| INT4 | 3 | 97.5% | 2.5% | 0.80 µs | 161, 1.3% of the span |
+| INT8 (MoDiff off) | 3 | 98.1% | 1.9% | 0.80 µs | 149, 1.0% of the span |
+| INT4 (MoDiff off) | 3 | 97.5% | 2.5% | 0.80 µs | 161, 1.3% of the span |
 
 ### Share of end-to-end time by layer type
 
-| layer type | FP16 | INT8 | INT4 |
+| layer type | FP16 | INT8 (MoDiff off) | INT4 (MoDiff off) |
 |---|---:|---:|---:|
 | resblock_plain | 10245 ms  (50%) | 6990 ms  (49%) | 5126 ms  (45%) |
 | attention | 4830 ms  (24%) | 3907 ms  (28%) | 3745 ms  (33%) |
@@ -526,8 +535,8 @@ keys NOT present in all three modes (listed, not dropped): 25
 | mode | attention | resblock_plain | resblock_updown | total | vs FP16 |
 |---|---:|---:|---:|---:|---:|
 | FP16 | 24.13 ms | 48.04 ms | 6.43 ms | 78.61 ms | 1.000× |
-| INT8 | 20.01 ms | 34.39 ms | 4.11 ms | 58.52 ms | 1.343× |
-| INT4 | 19.02 ms | 26.35 ms | 3.64 ms | 49.01 ms | 1.604× |
+| INT8 (MoDiff off) | 20.01 ms | 34.39 ms | 4.11 ms | 58.52 ms | 1.343× |
+| INT4 (MoDiff off) | 19.02 ms | 26.35 ms | 3.64 ms | 49.01 ms | 1.604× |
 
 Same totals on summed kernel time instead of wall clock (see `busy` below): FP16 77.27, INT8 57.76 (1.338×), INT4 47.02 (1.643×) ms.
 
@@ -568,8 +577,8 @@ Same totals on summed kernel time instead of wall clock (see `busy` below): FP16
 | mode | ms/batch (mean ± 95% CI) | ms/sample | ms/step | vs FP16 (95% CI) | CV | spread | n | stability |
 |---|---:|---:|---:|---:|---:|---:|---:|---|
 | FP16 | 20300.6 ± 12.4 | 158.598 | 101.50 | 1.000× | 0.08% | 0.23% | 9 | tight |
-| INT8 | 14135.0 ± 11.4 | 110.430 | 70.68 | 1.436× ± 0.001 | 0.10% | 0.38% | 9 | tight |
-| INT4 | 11541.4 ± 16.7 | 90.167 | 57.71 | 1.759× ± 0.003 | 0.19% | 0.62% | 9 | tight |
+| INT8 (MoDiff off) | 14135.0 ± 11.4 | 110.430 | 70.68 | 1.436× ± 0.001 | 0.10% | 0.38% | 9 | tight |
+| INT4 (MoDiff off) | 11541.4 ± 16.7 | 90.167 | 57.71 | 1.759× ± 0.003 | 0.19% | 0.62% | 9 | tight |
 
 per-repeat samples (ms/batch):
 
@@ -784,6 +793,18 @@ INT4 — pipeline 110.4 µs, kernels sum 51.0 µs, GPU busy 0.462
   loaded with `strict=False`; all weights are randomly initialised. No figure here is an
   image-quality measurement. The INT4 static calibration carries one shared scale (34.6463) across
   all 21 layers.
+- Stronger than "quality is not measured" (found 2026-08-03): `zero_module` sites the stub never
+  fills in make parts of this network *inert*. `AttentionBlock.proj_out`
+  (`ldm/modules/diffusionmodules/openaimodel.py:345`) stays zero, so all 21 attention blocks are
+  **bit-exact identities on their input**; `UNetModel.out[-1]` (`:745`) stays zero, so the UNet
+  predicts **identically zero** for every input. Nothing inside the network can affect a sampled
+  latent, so any correctness check built on layer outputs or latents passes unconditionally. This
+  does not affect a single timing here — kernel cost is data-independent and every shape and launch
+  sequence is real — but it does void the layer/e2e numerical validation quoted in the
+  `final_report_2026-07-28/*_2026-07-30.md` docs, which now carry corrections. Attention
+  correctness rests on the kernel-level synthetic-tensor tests
+  (`final_report_2026-07-28/scripts/qattn_correctness.py`). See
+  [`gn_qkv_fusion_2026-08-03/FINDINGS.md`](gn_qkv_fusion_2026-08-03/FINDINGS.md) section 5.
 - Nsight Compute counters are unavailable: `ncu` returns `ERR_NVGPUCTRPERM`, the driver has
   `RmProfilingAdminOnly=1` and the container has no `CAP_SYS_ADMIN`. Nsight Systems traces
   normally, since CUPTI's Activity API is not gated by that permission; its CPU sampling is

@@ -1,0 +1,75 @@
+{
+  "modes": {
+    "fp16": {
+      "eps_absmax": 4.28515625,
+      "identity_attn_blocks": 0,
+      "latent_absmax": 5.271316051483154
+    },
+    "int8_baseline": {
+      "eps_absmax": 4.44921875,
+      "identity_attn_blocks": 0,
+      "latent_absmax": 6.218039512634277
+    },
+    "int8": {
+      "eps_absmax": 4.44140625,
+      "identity_attn_blocks": 0,
+      "latent_absmax": 6.301648139953613
+    },
+    "int4_baseline": {
+      "eps_absmax": 4.40234375,
+      "identity_attn_blocks": 0,
+      "latent_absmax": 0.9185944199562073
+    },
+    "int4": {
+      "eps_absmax": 4.375,
+      "identity_attn_blocks": 0,
+      "latent_absmax": 0.9449477195739746
+    }
+  },
+  "pairs": {
+    "fp16|int8_baseline": {
+      "bit_identical": false,
+      "rel_l2": 0.8820255994796753
+    },
+    "fp16|int8": {
+      "bit_identical": false,
+      "rel_l2": 0.883213460445404
+    },
+    "fp16|int4_baseline": {
+      "bit_identical": false,
+      "rel_l2": 3.0231127738952637
+    },
+    "fp16|int4": {
+      "bit_identical": false,
+      "rel_l2": 3.068711757659912
+    },
+    "int8_baseline|int8": {
+      "bit_identical": false,
+      "rel_l2": 0.1150851622223854
+    },
+    "int8_baseline|int4_baseline": {
+      "bit_identical": false,
+      "rel_l2": 5.799276351928711
+    },
+    "int8_baseline|int4": {
+      "bit_identical": false,
+      "rel_l2": 5.909195423126221
+    },
+    "int8|int4_baseline": {
+      "bit_identical": false,
+      "rel_l2": 5.620440483093262
+    },
+    "int8|int4": {
+      "bit_identical": false,
+      "rel_l2": 5.7278547286987305
+    },
+    "int4_baseline|int4": {
+      "bit_identical": false,
+      "rel_l2": 0.4082101285457611
+    }
+  },
+  "all_bit_identical": false,
+  "batch": 4,
+  "steps": 20,
+  "seed": 1234
+}

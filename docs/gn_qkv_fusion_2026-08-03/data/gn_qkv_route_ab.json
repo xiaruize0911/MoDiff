@@ -1,0 +1,789 @@
+{
+  "gpu": "NVIDIA A40",
+  "warmups": 12,
+  "rounds": 8,
+  "iters": 60,
+  "routes": {
+    "P": "production W8A8 QKV int8-epilogue",
+    "R1": "int8-emitting fused GN->qkv (MODIFF_ROUTE1)",
+    "A": "fp16 fused GN->qkv (MODIFF_FUSE_GN_QKV_INT8)",
+    "N": "pre-07-30 baseline: GN+quantize -> plain W8A8 qkv"
+  },
+  "shapes": [
+    {
+      "x_shape": [
+        128,
+        192,
+        32,
+        32
+      ],
+      "T": 1024,
+      "channels": 192,
+      "n_instances": 5,
+      "example": "input_blocks.1.1",
+      "fuse_eligible": true,
+      "scales_frozen": true,
+      "vs_P": {
+        "R1": {
+          "max_abs_diff": 0.0,
+          "rel_l2": 0.0
+        },
+        "A": {
+          "max_abs_diff": 0.0,
+          "rel_l2": 0.0
+        },
+        "N": {
+          "max_abs_diff": 0.0,
+          "rel_l2": 0.0
+        }
+      },
+      "timing": {
+        "P": {
+          "median_us": 2722.760021686554,
+          "mean_us": 2714.210018515587,
+          "cv_pct": 0.71,
+          "round_medians_us": [
+            2676.7,
+            2700.9,
+            2724.3,
+            2702.8,
+            2724.3,
+            2729.4,
+            2734.1,
+            2721.2
+          ],
+          "speedup_vs_P": 1.0,
+          "gpu_us_sum": 2575.68,
+          "launches": 4,
+          "roles": {
+            "our int8/int4 flash kernel (fused QK^T+softmax+AV)": 1364.2,
+            "int8/int4 quantized GEMM (W8A8 / W4A4)": 954.5,
+            "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": 257.0
+          },
+          "kernels": [
+            [
+              "flash_attn_int8_mma_kernel_t",
+              1364.25
+            ],
+            [
+              "gemm_w8a8_kernel_awq_out_i8",
+              610.03
+            ],
+            [
+              "gemm_w8a8_kernel_awq",
+              344.43
+            ],
+            [
+              "group_norm_silu_quantize_nhwc_vec2_kernel",
+              256.96
+            ]
+          ]
+        },
+        "R1": {
+          "median_us": 2892.0159935951233,
+          "mean_us": 2898.364007472992,
+          "cv_pct": 0.651,
+          "round_medians_us": [
+            2883.5,
+            2941.7,
+            2887.9,
+            2888.0,
+            2894.1,
+            2907.0,
+            2894.8,
+            2889.9
+          ],
+          "speedup_vs_P": 0.9415,
+          "gpu_us_sum": 2757.33,
+          "launches": 7,
+          "roles": {
+            "our int8/int4 flash kernel (fused QK^T+softmax+AV)": 1410.7,
+            "fused GroupNorm->QKV projection (CUTLASS per-sample fusion)": 580.1,
+            "int8/int4 quantized GEMM (W8A8 / W4A4)": 345.0,
+            "unclassified (investigate)": 307.5,
+            "GN accumulate/finalize (split two-pass helper kernels)": 110.7,
+            "fill / zero-init": 3.4
+          },
+          "kernels": [
+            [
+              "flash_attn_int8_mma_kernel_t",
+              1410.67
+            ],
+            [
+              "ImplicitGemmConvolutionFusionPerSampleEVT",
+              580.1
+            ],
+            [
+              "gemm_w8a8_kernel_awq",
+              345.0
+            ],
+            [
+              "from_i8_kv_tiled_kernel",
+              307.52
+            ],
+            [
+              "gn_accum_kernel",
+              108.0
+            ],
+            [
+              "vectorized_elementwise_kernel[FillFunctor]",
+              3.39
+            ],
+            [
+              "gn_finalize_kernel",
+              2.65
+            ]
+          ]
+        },
+        "A": {
+          "median_us": 3020.5519795417786,
+          "mean_us": 3017.005980014801,
+          "cv_pct": 0.519,
+          "round_medians_us": [
+            2994.7,
+            3022.2,
+            3000.1,
+            3037.1,
+            3027.4,
+            3018.9,
+            3003.8,
+            3031.8
+          ],
+          "speedup_vs_P": 0.9014,
+          "gpu_us_sum": 2894.55,
+          "launches": 7,
+          "roles": {
+            "our int8/int4 flash kernel (fused QK^T+softmax+AV)": 1437.7,
+            "fused GroupNorm->QKV projection (CUTLASS per-sample fusion)": 624.8,
+            "unclassified (investigate)": 371.2,
+            "int8/int4 quantized GEMM (W8A8 / W4A4)": 346.5,
+            "GN accumulate/finalize (split two-pass helper kernels)": 110.9,
+            "fill / zero-init": 3.5
+          },
+          "kernels": [
+            [
+              "flash_attn_int8_mma_kernel_t",
+              1437.66
+            ],
+            [
+              "ImplicitGemmConvolutionFusionPerSample",
+              624.83
+            ],
+            [
+              "aq_kv_packed_static_tiled_vec2_kernel",
+              371.23
+            ],
+            [
+              "gemm_w8a8_kernel_awq",
+              346.52
+            ],
+            [
+              "gn_accum_kernel",
+              108.16
+            ],
+            [
+              "vectorized_elementwise_kernel[FillFunctor]",
+              3.45
+            ],
+            [
+              "gn_finalize_kernel",
+              2.71
+            ]
+          ]
+        },
+        "N": {
+          "median_us": 2970.5439805984497,
+          "mean_us": 2965.479999780655,
+          "cv_pct": 0.628,
+          "round_medians_us": [
+            2929.9,
+            2957.7,
+            2994.0,
+            2971.1,
+            2954.9,
+            2970.0,
+            2972.3,
+            2974.0
+          ],
+          "speedup_vs_P": 0.9166,
+          "gpu_us_sum": 2819.79,
+          "launches": 4,
+          "roles": {
+            "our int8/int4 flash kernel (fused QK^T+softmax+AV)": 1449.3,
+            "int8/int4 quantized GEMM (W8A8 / W4A4)": 737.3,
+            "unclassified (investigate)": 372.2,
+            "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": 261.0
+          },
+          "kernels": [
+            [
+              "flash_attn_int8_mma_kernel_t",
+              1449.28
+            ],
+            [
+              "gemm_w8a8_kernel_awq",
+              737.28
+            ],
+            [
+              "aq_kv_packed_static_tiled_vec2_kernel",
+              372.22
+            ],
+            [
+              "group_norm_silu_quantize_nhwc_vec2_kernel",
+              261.01
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "x_shape": [
+        128,
+        384,
+        16,
+        16
+      ],
+      "T": 256,
+      "channels": 384,
+      "n_instances": 5,
+      "example": "input_blocks.4.1",
+      "fuse_eligible": true,
+      "scales_frozen": true,
+      "vs_P": {
+        "R1": {
+          "max_abs_diff": 0.0,
+          "rel_l2": 0.0
+        },
+        "A": {
+          "max_abs_diff": 0.0,
+          "rel_l2": 0.0
+        },
+        "N": {
+          "max_abs_diff": 0.0,
+          "rel_l2": 0.0
+        }
+      },
+      "timing": {
+        "P": {
+          "median_us": 884.9440068006516,
+          "mean_us": 886.1880004405975,
+          "cv_pct": 0.384,
+          "round_medians_us": [
+            885.5,
+            882.6,
+            884.5,
+            891.2,
+            884.4,
+            885.3,
+            884.1,
+            891.8
+          ],
+          "speedup_vs_P": 1.0,
+          "gpu_us_sum": 849.35,
+          "launches": 4,
+          "roles": {
+            "int8/int4 quantized GEMM (W8A8 / W4A4)": 497.4,
+            "our int8/int4 flash kernel (fused QK^T+softmax+AV)": 252.8,
+            "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": 99.2
+          },
+          "kernels": [
+            [
+              "gemm_w8a8_kernel_awq_out_i8",
+              311.24
+            ],
+            [
+              "flash_attn_int8_mma_kernel_t",
+              252.75
+            ],
+            [
+              "gemm_w8a8_kernel_awq",
+              186.13
+            ],
+            [
+              "group_norm_silu_quantize_nhwc_vec2_kernel",
+              99.23
+            ]
+          ]
+        },
+        "R1": {
+          "median_us": 1085.536003112793,
+          "mean_us": 1087.0360061526299,
+          "cv_pct": 0.625,
+          "round_medians_us": [
+            1093.6,
+            1099.5,
+            1082.5,
+            1088.7,
+            1078.0,
+            1085.5,
+            1082.9,
+            1085.5
+          ],
+          "speedup_vs_P": 0.8152,
+          "gpu_us_sum": 1019.24,
+          "launches": 7,
+          "roles": {
+            "fused GroupNorm->QKV projection (CUTLASS per-sample fusion)": 383.5,
+            "our int8/int4 flash kernel (fused QK^T+softmax+AV)": 250.2,
+            "int8/int4 quantized GEMM (W8A8 / W4A4)": 183.6,
+            "unclassified (investigate)": 129.6,
+            "GN accumulate/finalize (split two-pass helper kernels)": 68.9,
+            "fill / zero-init": 3.4
+          },
+          "kernels": [
+            [
+              "ImplicitGemmConvolutionFusionPerSampleEVT",
+              383.5
+            ],
+            [
+              "flash_attn_int8_mma_kernel_t",
+              250.19
+            ],
+            [
+              "gemm_w8a8_kernel_awq",
+              183.61
+            ],
+            [
+              "from_i8_kv_tiled_kernel",
+              129.62
+            ],
+            [
+              "gn_accum_kernel",
+              65.59
+            ],
+            [
+              "vectorized_elementwise_kernel[FillFunctor]",
+              3.4
+            ],
+            [
+              "gn_finalize_kernel",
+              3.34
+            ]
+          ]
+        },
+        "A": {
+          "median_us": 1172.8320121765137,
+          "mean_us": 1175.551988184452,
+          "cv_pct": 0.488,
+          "round_medians_us": [
+            1182.3,
+            1185.7,
+            1170.8,
+            1177.5,
+            1171.7,
+            1173.7,
+            1172.0,
+            1170.7
+          ],
+          "speedup_vs_P": 0.7545,
+          "gpu_us_sum": 1115.87,
+          "launches": 7,
+          "roles": {
+            "fused GroupNorm->QKV projection (CUTLASS per-sample fusion)": 432.4,
+            "our int8/int4 flash kernel (fused QK^T+softmax+AV)": 254.8,
+            "int8/int4 quantized GEMM (W8A8 / W4A4)": 183.8,
+            "unclassified (investigate)": 172.4,
+            "GN accumulate/finalize (split two-pass helper kernels)": 69.1,
+            "fill / zero-init": 3.4
+          },
+          "kernels": [
+            [
+              "ImplicitGemmConvolutionFusionPerSample",
+              432.45
+            ],
+            [
+              "flash_attn_int8_mma_kernel_t",
+              254.75
+            ],
+            [
+              "gemm_w8a8_kernel_awq",
+              183.76
+            ],
+            [
+              "aq_kv_packed_static_tiled_vec2_kernel",
+              172.42
+            ],
+            [
+              "gn_accum_kernel",
+              65.75
+            ],
+            [
+              "vectorized_elementwise_kernel[FillFunctor]",
+              3.4
+            ],
+            [
+              "gn_finalize_kernel",
+              3.34
+            ]
+          ]
+        },
+        "N": {
+          "median_us": 1001.695990562439,
+          "mean_us": 1001.5919916331768,
+          "cv_pct": 0.207,
+          "round_medians_us": [
+            1003.0,
+            1005.2,
+            999.7,
+            999.6,
+            1002.7,
+            999.1,
+            1001.6,
+            1001.8
+          ],
+          "speedup_vs_P": 0.8834,
+          "gpu_us_sum": 956.1,
+          "launches": 4,
+          "roles": {
+            "int8/int4 quantized GEMM (W8A8 / W4A4)": 430.2,
+            "our int8/int4 flash kernel (fused QK^T+softmax+AV)": 256.2,
+            "unclassified (investigate)": 172.1,
+            "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": 97.6
+          },
+          "kernels": [
+            [
+              "gemm_w8a8_kernel_awq",
+              430.2
+            ],
+            [
+              "flash_attn_int8_mma_kernel_t",
+              256.18
+            ],
+            [
+              "aq_kv_packed_static_tiled_vec2_kernel",
+              172.08
+            ],
+            [
+              "group_norm_silu_quantize_nhwc_vec2_kernel",
+              97.63
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "x_shape": [
+        128,
+        384,
+        8,
+        8
+      ],
+      "T": 64,
+      "channels": 384,
+      "n_instances": 5,
+      "example": "input_blocks.7.1",
+      "fuse_eligible": false,
+      "scales_frozen": true,
+      "vs_P": {
+        "N": {
+          "max_abs_diff": 0.0,
+          "rel_l2": 0.0
+        }
+      },
+      "timing": {
+        "P": {
+          "median_us": 263.36799561977386,
+          "mean_us": 263.5119967162609,
+          "cv_pct": 0.288,
+          "round_medians_us": [
+            262.7,
+            262.5,
+            263.4,
+            264.4,
+            263.3,
+            264.5,
+            264.1,
+            263.2
+          ],
+          "speedup_vs_P": 1.0,
+          "gpu_us_sum": 223.45,
+          "launches": 4,
+          "roles": {
+            "int8/int4 quantized GEMM (W8A8 / W4A4)": 155.1,
+            "our int8/int4 flash kernel (fused QK^T+softmax+AV)": 40.5,
+            "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": 27.8
+          },
+          "kernels": [
+            [
+              "gemm_w8a8_kernel_awq_out_i8",
+              89.09
+            ],
+            [
+              "gemm_w8a8_kernel_awq",
+              65.98
+            ],
+            [
+              "flash_attn_int8_mma_kernel_t",
+              40.54
+            ],
+            [
+              "group_norm_silu_quantize_nhwc_vec2_kernel",
+              27.83
+            ]
+          ]
+        },
+        "N": {
+          "median_us": 299.1600036621094,
+          "mean_us": 299.0140002220869,
+          "cv_pct": 0.155,
+          "round_medians_us": [
+            298.2,
+            298.7,
+            299.6,
+            299.0,
+            298.6,
+            299.3,
+            299.4,
+            299.3
+          ],
+          "speedup_vs_P": 0.8804,
+          "gpu_us_sum": 262.27,
+          "launches": 4,
+          "roles": {
+            "int8/int4 quantized GEMM (W8A8 / W4A4)": 146.4,
+            "our int8/int4 flash kernel (fused QK^T+softmax+AV)": 46.1,
+            "unclassified (investigate)": 42.1,
+            "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": 27.6
+          },
+          "kernels": [
+            [
+              "gemm_w8a8_kernel_awq",
+              146.42
+            ],
+            [
+              "flash_attn_int8_mma_kernel_t",
+              46.12
+            ],
+            [
+              "aq_kv_packed_static_tiled_vec2_kernel",
+              42.1
+            ],
+            [
+              "group_norm_silu_quantize_nhwc_vec2_kernel",
+              27.62
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "x_shape": [
+        128,
+        768,
+        4,
+        4
+      ],
+      "T": 16,
+      "channels": 768,
+      "n_instances": 5,
+      "example": "input_blocks.10.1",
+      "fuse_eligible": false,
+      "scales_frozen": true,
+      "vs_P": {
+        "N": {
+          "max_abs_diff": 0.0,
+          "rel_l2": 0.0
+        }
+      },
+      "timing": {
+        "P": {
+          "median_us": 221.68000042438507,
+          "mean_us": 221.70800156891346,
+          "cv_pct": 0.086,
+          "round_medians_us": [
+            222.0,
+            221.9,
+            221.9,
+            221.7,
+            221.5,
+            221.7,
+            221.5,
+            221.5
+          ],
+          "speedup_vs_P": 1.0,
+          "gpu_us_sum": 176.38,
+          "launches": 4,
+          "roles": {
+            "int8/int4 quantized GEMM (W8A8 / W4A4)": 96.6,
+            "our int8/int4 flash kernel (fused QK^T+softmax+AV)": 63.0,
+            "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": 16.8
+          },
+          "kernels": [
+            [
+              "flash_attn_int8_qi8packed_small_qout_kernel",
+              62.97
+            ],
+            [
+              "gemm_w8a8_kernel_awq_out_i8",
+              53.19
+            ],
+            [
+              "gemm_w8a8_kernel_awq",
+              43.44
+            ],
+            [
+              "group_norm_silu_quantize_nhwc_vec2_kernel",
+              16.77
+            ]
+          ]
+        },
+        "N": {
+          "median_us": 232.14400187134743,
+          "mean_us": 232.09400102496147,
+          "cv_pct": 0.085,
+          "round_medians_us": [
+            232.3,
+            232.3,
+            232.2,
+            232.1,
+            231.9,
+            232.2,
+            232.1,
+            231.7
+          ],
+          "speedup_vs_P": 0.9549,
+          "gpu_us_sum": 191.95,
+          "launches": 5,
+          "roles": {
+            "int8/int4 quantized GEMM (W8A8 / W4A4)": 103.2,
+            "PyTorch fused flash SDPA (pytorch_flash)": 41.9,
+            "attention output quantize (for the proj GEMM)": 17.3,
+            "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": 16.7,
+            "dtype cast / device copy": 12.8
+          },
+          "kernels": [
+            [
+              "gemm_w8a8_kernel_awq",
+              103.24
+            ],
+            [
+              "pytorch_flash::flash_fwd_kernel",
+              41.91
+            ],
+            [
+              "quant_attn_out_int8_kernel",
+              17.26
+            ],
+            [
+              "group_norm_silu_quantize_nhwc_vec2_kernel",
+              16.7
+            ],
+            [
+              "elementwise_kernel[direct_copy_kernel_cuda]",
+              12.84
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "x_shape": [
+        128,
+        768,
+        2,
+        2
+      ],
+      "T": 4,
+      "channels": 768,
+      "n_instances": 1,
+      "example": "middle_block.1",
+      "fuse_eligible": false,
+      "scales_frozen": true,
+      "vs_P": {
+        "N": {
+          "max_abs_diff": 0.0,
+          "rel_l2": 0.0
+        }
+      },
+      "timing": {
+        "P": {
+          "median_us": 118.35999973118305,
+          "mean_us": 118.33199951797724,
+          "cv_pct": 0.071,
+          "round_medians_us": [
+            118.2,
+            118.4,
+            118.2,
+            118.4,
+            118.3,
+            118.4,
+            118.3,
+            118.4
+          ],
+          "speedup_vs_P": 1.0,
+          "gpu_us_sum": 67.22,
+          "launches": 4,
+          "roles": {
+            "int8/int4 quantized GEMM (W8A8 / W4A4)": 48.9,
+            "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": 10.6,
+            "our int8/int4 flash kernel (fused QK^T+softmax+AV)": 7.7
+          },
+          "kernels": [
+            [
+              "gemm_w8a8_kernel_awq",
+              28.79
+            ],
+            [
+              "gemm_w8a8_kernel_awq_out_i8",
+              20.15
+            ],
+            [
+              "group_norm_silu_quantize_nhwc_vec2_kernel",
+              10.56
+            ],
+            [
+              "flash_attn_int8_qi8packed_small_qout_kernel",
+              7.72
+            ]
+          ]
+        },
+        "N": {
+          "median_us": 187.3519979417324,
+          "mean_us": 187.46399879455566,
+          "cv_pct": 0.187,
+          "round_medians_us": [
+            188.0,
+            187.4,
+            187.2,
+            187.3,
+            187.3,
+            187.5,
+            187.9,
+            187.0
+          ],
+          "speedup_vs_P": 0.6318,
+          "gpu_us_sum": 113.21,
+          "launches": 5,
+          "roles": {
+            "int8/int4 quantized GEMM (W8A8 / W4A4)": 56.1,
+            "PyTorch fused flash SDPA (pytorch_flash)": 37.6,
+            "GN+SiLU+quantize fused (K1 path: one kernel, int8/int4 out)": 10.6,
+            "attention output quantize (for the proj GEMM)": 5.2,
+            "dtype cast / device copy": 3.7
+          },
+          "kernels": [
+            [
+              "gemm_w8a8_kernel_awq",
+              56.08
+            ],
+            [
+              "pytorch_flash::flash_fwd_kernel",
+              37.58
+            ],
+            [
+              "group_norm_silu_quantize_nhwc_vec2_kernel",
+              10.62
+            ],
+            [
+              "quant_attn_out_int8_kernel",
+              5.25
+            ],
+            [
+              "elementwise_kernel[direct_copy_kernel_cuda]",
+              3.67
+            ]
+          ]
+        }
+      }
+    }
+  ]
+}

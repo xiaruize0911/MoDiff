@@ -1,0 +1,23 @@
+{
+  "steps": 50,
+  "batch": 8,
+  "runs": 3,
+  "results": {
+    "int8_baseline": {
+      "rel_l2_vs_fp16": 0.27172181010246277,
+      "latent_absmax": 4.966434478759766
+    },
+    "int8": {
+      "rel_l2_vs_fp16": 0.19991061091423035,
+      "latent_absmax": 4.914463520050049
+    },
+    "int4_baseline": {
+      "rel_l2_vs_fp16": 0.7666558623313904,
+      "latent_absmax": 2.1999588012695312
+    },
+    "int4": {
+      "rel_l2_vs_fp16": 0.7637813091278076,
+      "latent_absmax": 2.307628870010376
+    }
+  }
+}

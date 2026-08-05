@@ -1,0 +1,30 @@
+{
+  "results": {
+    "int4_baseline (MoDiff off)": {
+      "rel_l2_vs_fp16": 0.7837337255477905,
+      "ms_per_step": 11.762453056871891,
+      "table_layers": 0
+    },
+    "int4 MoDiff, table OFF": {
+      "rel_l2_vs_fp16": 0.7762797474861145,
+      "ms_per_step": 16.98503140360117,
+      "table_layers": 0
+    },
+    "int4 MoDiff, table ON": {
+      "rel_l2_vs_fp16": 0.7555432915687561,
+      "ms_per_step": 19.172727689146996,
+      "table_layers": 70
+    },
+    "int4 MoDiff dynamic (ref)": {
+      "rel_l2_vs_fp16": 0.45824432373046875,
+      "ms_per_step": 16.78647603839636,
+      "table_layers": 0
+    },
+    "int8_baseline (the bar to beat)": {
+      "rel_l2_vs_fp16": 0.23778937757015228,
+      "ms_per_step": 12.14996587485075,
+      "table_layers": 0
+    }
+  },
+  "median_step_gain": 0.6740702261901501
+}

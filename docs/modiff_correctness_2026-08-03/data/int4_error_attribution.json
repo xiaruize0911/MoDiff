@@ -1,0 +1,43 @@
+{
+  "bar_int8_baseline": 0.2377825677394867,
+  "results": {
+    "int8_baseline": {
+      "rel_l2_vs_fp16": 0.2377825677394867,
+      "ms_per_step": 13.259388357400894
+    },
+    "int4 all quantized (shipped)": {
+      "rel_l2_vs_fp16": 0.47457778453826904,
+      "ms_per_step": 16.22288443148136,
+      "env": {}
+    },
+    "int4, attention fp16": {
+      "rel_l2_vs_fp16": 0.476633757352829,
+      "ms_per_step": 16.048594266176224,
+      "env": {
+        "MODIFF_QUANT_ATTN": "0"
+      }
+    },
+    "int4, linear fp16": {
+      "rel_l2_vs_fp16": 0.4357551336288452,
+      "ms_per_step": 17.655683271586895,
+      "env": {
+        "MODIFF_QUANT_LINEAR": "0"
+      }
+    },
+    "int4, linear + MoDiff": {
+      "rel_l2_vs_fp16": 0.43323588371276855,
+      "ms_per_step": 28.531044088304043,
+      "env": {
+        "MODIFF_LINEAR": "1"
+      }
+    },
+    "int4, attn+linear fp16 (conv only)": {
+      "rel_l2_vs_fp16": 0.4357551336288452,
+      "ms_per_step": 20.77167607843876,
+      "env": {
+        "MODIFF_QUANT_ATTN": "0",
+        "MODIFF_QUANT_LINEAR": "0"
+      }
+    }
+  }
+}
