@@ -128,6 +128,48 @@ Caveat on the comparison throughout: they report FID over 50k images at 200 step
 relL2 at 50 steps, and relL2 is badly nonlinear against FID. It supports "which is better, and
 roughly where the cliff is", not "our A4 equals their FID 28".
 
+## The weight floor: how much of W4A4 is reachable from the activation side at all
+
+`scripts/weight_ceiling.py` fake-quantizes weights with the shipped scale rules and leaves
+activations in fp16, so each row is the error **no** activation-side work — MoDiff, clip tuning,
+per-token scales — can get below. Same protocol: batch 8, DDIM 50, 3 seeds, paired.
+
+| weights quantized | layers | relL2 vs fp16 |
+|---|---|---:|
+| int8 convs (control) | 70 | 0.0229 ± 0.0019 |
+| **int4 convs, MSE clip (shipped)** | 70 | **0.2443 ± 0.0064** |
+| int4 convs, absmax (pre-08-05 rule) | 70 | 0.2184 ± 0.0070 |
+| int4 convs MSE + linears absmax (shipped linear rule) | 70 + 79 | 0.2603 ± 0.0055 |
+| int4 convs MSE + linears MSE | 70 + 79 | 0.2888 ± 0.0099 |
+
+Caveat on the linear rows: the predicate used here (`wxax_linear._eligible(bits=4)`) matches 79
+`nn.Linear` modules while the runtime gate quantizes 42, so those two rows are an upper bound on the
+linear contribution, not the shipped set. The conv rows match the shipped set exactly.
+
+**"W4A4 is weight-limited" was too strong.** Against W4A4+MoDiff's measured 0.44–0.47, a 0.244 weight
+floor is about half the error in RMS terms and roughly a quarter of it in squared terms — the
+activation side still contributes more. What *is* true, and is the useful statement:
+
+> Even with a perfect activation datapath, int4 weights alone cost relL2 0.244, which sits on the
+> 0.238 → FID 16.4 anchor. **W4A4 cannot reach fp16 parity by any amount of activation-side work.**
+> Better weight quantization is a necessary condition, not a sufficient one.
+
+For contrast, at int8 the weight floor is 0.0229 against a W8A8+MoDiff total of 0.063 — there the
+activation side is clearly dominant, which is why MoDiff reaches FID parity at W8A8 and cannot at W4A4.
+
+**Two things this kills.** First, the MSE clip search is a *regression* on weight-only error (0.2443
+vs absmax's 0.2184, a ~4σ gap on these seeds). Its shipped justification stands — the paired
+end-to-end A/B at W4A4 measured 0.5067 → 0.4689 — but that means its win comes from an *interaction*
+with activation quantization (clipping weight outliers costs less than the activation error it avoids),
+exactly as `_int4_weight_scale`'s own comment suspected. Second, extending that MSE rule to the
+Linear layers, which was on my list, makes the floor worse (0.2603 → 0.2888). Both are reminders that
+neither `‖W − Q(W)‖` nor weight-only relL2 predicts end-to-end error; each rule has to be measured in
+the mode it ships in.
+
+**This gives learned rounding (AdaRound) a cheap evaluation loop.** A new weight quantizer can be
+scored by re-running this script — one model build, no MoDiff, no activation confounder — and only
+promoted to a full W4A4 run if the 0.244 floor actually moves.
+
 ## Scope of MODIFF_ACT_Q, which bounds every number above
 
 It reaches the quantized **conv** path (70 calibrated layers of 89 converted). It does **not** reach
