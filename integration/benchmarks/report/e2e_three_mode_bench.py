@@ -32,9 +32,15 @@ import integration.benchmarks.benchmark_ldm as B
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ck_bench_stats import summarize, stability_verdict
 
-MODES = ["fp16", "int8_baseline", "int4_baseline"]
+#: Selectable so the same suite can be run for the MoDiff modes ("int8"/"int4") -- see
+#: kernel_suites_bench for the same pattern. Default unchanged: the baseline modes.
+_ALL_MODES = ["fp16", "int8_baseline", "int4_baseline", "int8", "int4"]
+_MODE_FILTER = [x.strip() for x in os.environ.get("E2EBENCH_MODES", "").split(",") if x.strip()]
+MODES = [m for m in _MODE_FILTER if m in _ALL_MODES] or _ALL_MODES[:3]
 CALIB = {"int8_baseline": "integration/calibration/int8_calibration.pt",
-         "int4_baseline": "integration/calibration/int4_calibration.pt"}
+         "int4_baseline": "integration/calibration/int4_calibration.pt",
+         "int8": "integration/calibration/int8_calibration.pt",
+         "int4": "integration/calibration/int4_calibration.pt"}
 
 # MODIFF_QUANT_LINEAR=1 is load-bearing and easy to miss: it is what turns the attention block's
 # qkv/proj into _QuantLinearWxAx. Without it they stay plain nn.Linear, _qout_eligible() returns
@@ -215,9 +221,14 @@ def main():
         del model, sampler, runner
         torch.cuda.empty_cache()
 
-    fp = out["modes"]["fp16"]["wall_us_per_batch"]
+    # fp16 is the reference but is no longer guaranteed to be in the run: E2EBENCH_MODES makes the
+    # mode list selectable, and a MoDiff-vs-own-baseline A/B has no reason to spend 3.5 minutes
+    # re-measuring fp16. Indexing it unconditionally threw KeyError AFTER every mode had been
+    # measured but BEFORE the JSON was written, i.e. it discarded a complete 12-minute run.
+    fp = (out["modes"].get("fp16") or {}).get("wall_us_per_batch")
     for m in MODES:
-        out["modes"][m]["speedup_vs_fp16"] = fp / out["modes"][m]["wall_us_per_batch"]
+        out["modes"][m]["speedup_vs_fp16"] = (fp / out["modes"][m]["wall_us_per_batch"]
+                                              if fp else None)
 
     with open(a.output, "w") as f:
         json.dump(out, f, indent=1)
@@ -226,8 +237,9 @@ def main():
           f"{'vs fp16':>9}{'CV':>8}{'spread':>8}")
     for m in MODES:
         d = out["modes"][m]
+        sp = f"{d['speedup_vs_fp16']:>8.3f}x" if d["speedup_vs_fp16"] else f"{'—':>9}"
         print(f"{m:<16}{d['wall_us_per_batch']/1e3:>11.1f}{d['per_sample_ms']:>11.3f}"
-              f"{d['per_step_ms']:>9.2f}{d['speedup_vs_fp16']:>8.3f}x"
+              f"{d['per_step_ms']:>9.2f}{sp}"
               f"{d['wall_cv_pct']:>7.2f}%{d['wall_spread_pct']:>7.2f}%")
 
 

@@ -4,6 +4,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Dict, Optional
+
+#: Table length for the MoDiff per-step delta scale. Matches int8_optimized.MODIFF_MAX_STEPS.
+MODIFF_MAX_STEPS = 256
 from integration.utils.profiler import profiler
 
 # Try to import the compiled extension
@@ -18,7 +21,10 @@ except ImportError:
 # set). Each conv times all tile configs on its actual packed input and caches the
 # fastest. Shared kill-switch with int8: MODIFF_DISABLE_CONV_AUTOTUNE=1 -> fixed tile.
 _INT4_CONV_AUTOTUNE = (os.environ.get("MODIFF_DISABLE_CONV_AUTOTUNE") != "1"
-                       and HAS_CUTLASS and hasattr(modiff_cutlass, "conv2d_int4_fprop_tuned"))
+                       and HAS_CUTLASS
+                       # The int4 autotuner times conv2d_int4_dequant_fp16_tuned, not
+                       # conv2d_int4_fprop_tuned, which this used to probe and which nothing calls.
+                       and hasattr(modiff_cutlass, "conv2d_int4_dequant_fp16_tuned"))
 
 # Deep-fuse int4 dequant store (default ON): fold the per-channel weight_scale into
 # the CUTLASS int4 epilogue (fp16 out, no fp32 temp) + a from_half bias/residual
@@ -48,6 +54,60 @@ def pack_int4(tensor: torch.Tensor) -> torch.Tensor:
     
     packed = (low | high).to(torch.int8) 
     return packed
+
+
+def _int4_weight_scale(w_flat: torch.Tensor, Q: float = 7.0) -> torch.Tensor:
+    """Per-output-channel symmetric INT4 weight scale, chosen to minimise reconstruction MSE.
+
+    The obvious choice, scale = absmax/Q, is what this replaced. At 4 bits it is a poor one: the
+    real checkpoint's conv weights have a median max/median ratio of 6.5 and up to 24.9, so one
+    outlier in a channel stretches the 15-level grid for all ~1700 of that channel's weights.
+    Measured over the 87 quantized convs (relative Frobenius error of the reconstructed weight):
+
+        per-channel absmax   0.1825 median, 0.4493 worst   <- what this replaced
+        per-channel p99.9    0.1498 median, 0.3203 worst
+        per-channel MSE      0.1254 median, 0.2609 worst   <- this
+        group-128 absmax     0.1226 median, 0.2206 worst
+
+    So the MSE search recovers 96% of what group-wise quantization would buy, and unlike group-wise
+    it is free: the CUTLASS int4 conv epilogue folds ONE fp16 scale per output channel, and this
+    keeps that layout exactly. Group-wise would need the scale applied inside the K-loop.
+
+    Cost is at load only -- 13 candidate clips x one pass each, per layer.
+
+    Why this matters for MoDiff specifically: MoDiff is an ACTIVATION method, so none of the weight
+    error above is reachable by it. At W4A4 the weight error alone (0.18) is a large fraction of
+    the mode's total latent relL2 (0.44), which is why W4A4+MoDiff underperforms the paper's W8A4
+    result by so much.
+    """
+    #: DEFAULT IS mse, on a PAIRED A/B (same 4 seeds per arm, batch 16, DDIM 50, warm-up run
+    #: discarded), W4A4+MoDiff latent relL2 vs fp16:
+    #:     absmax  0.5067 +- 0.0195   (0.5248, 0.4983, 0.5206, 0.4833)
+    #:     mse     0.4689 +- 0.0093   (0.4737, 0.4688, 0.4772, 0.4559)
+    #: 4/4 seeds improve, mean -7.5%, effect ~2x the spread. An earlier UNPAIRED single-seed check
+    #: had this backwards (0.4437 -> 0.4981 "worse") -- in that same comparison the int8 rows, which
+    #: this code cannot affect, also moved 10-30%, which is what exposed it as noise. Note the
+    #: end-to-end gain (-7.5%) is much smaller than the weight-reconstruction gain (-31%): lower
+    #: ||W-Q(W)|| is not the same objective as lower output error, and clipping outliers trades away
+    #: some of the salient weights AWQ exists to protect. MODIFF_INT4_WSCALE=absmax restores the old
+    #: rule for A/B without a rebuild.
+    mode = os.environ.get("MODIFF_INT4_WSCALE", "mse")
+    am = w_flat.abs().max(dim=1).values
+    if mode == "absmax":
+        return torch.clamp(am / Q, min=1e-8)
+    best_err = None
+    best_scale = None
+    for r in (1.0, 0.95, 0.9, 0.85, 0.8, 0.75, 0.7, 0.65, 0.6, 0.55, 0.5, 0.45, 0.4):
+        sc = torch.clamp(am * r / Q, min=1e-8)
+        e = (((w_flat / sc[:, None]).round().clamp(-Q, Q) * sc[:, None] - w_flat) ** 2).sum(1)
+        if best_err is None:
+            best_err, best_scale = e, sc
+        else:
+            m = e < best_err
+            best_err = torch.where(m, e, best_err)
+            best_scale = torch.where(m, sc, best_scale)
+    return best_scale
+
 
 class OptimizedInt4Conv2d(nn.Module):
     """
@@ -95,8 +155,7 @@ class OptimizedInt4Conv2d(nn.Module):
 
         # --- Per-output-channel symmetric INT4 weight quantization ---
         w_flat = w_data.reshape(K, -1)
-        ch_max = w_flat.abs().max(dim=1).values  # [K]
-        ch_scale = torch.clamp(ch_max / 7.0, min=1e-8)  # [K]
+        ch_scale = _int4_weight_scale(w_flat)  # [K]; MSE-optimal clip, see the helper
         self.register_buffer('weight_scale_channel', ch_scale.view(1, K, 1, 1))
         # FP16 per-channel weight scale for the deep-fuse conv epilogue (folds
         # weight_scale into the CUTLASS GEMM -> fp16 out, no fp32 temp). Kept in sync
@@ -136,6 +195,24 @@ class OptimizedInt4Conv2d(nn.Module):
         self._scale_sum = 0.0
         self._scale_count = 0
         self.register_buffer('static_input_scale', torch.tensor(1.0, dtype=torch.float32))
+        # --- MoDiff per-step delta-scale table (W4A4). The int8 twin of this landed 2026-08-03;
+        # int4 was left out, which meant int4 MoDiff had only the activation grid to quantize the
+        # delta on -- and per Theorem 4.3 that predicts no error reduction at all. Measured: int4
+        # MoDiff static 0.7772 vs int4_baseline 0.7830, i.e. it bought essentially nothing. The
+        # int8 table by contrast is a 4.4x improvement (0.1850 -> 0.0422), so this is the single
+        # largest quality gap left in the W4A4 path.
+        self.register_buffer('static_delta_scale',
+                             torch.zeros(MODIFF_MAX_STEPS, dtype=torch.float32))
+        self.register_buffer('static_delta_alpha',      # 1/scale, the CUTLASS epilogue alpha
+                             torch.zeros(MODIFF_MAX_STEPS, dtype=torch.float32))
+        self.register_buffer('is_delta_calibrated', torch.tensor(False))
+        #: Host mirror of is_delta_calibrated -- the hot path must never read the device buffer
+        #: (one GPU->CPU sync per modulated conv per step; measured ~5 ms/step for the int8 twin).
+        self._delta_cal = False
+        self._delta_calib = False
+        self._delta_absmax_obs: Optional[torch.Tensor] = None
+        self._delta_obs_code_max: Optional[float] = None
+        self._delta_obs_clipped_frac: Optional[float] = None
         self._act_channel_max: Optional[torch.Tensor] = None
         self._cached_scale_float: Optional[float] = None
         self._cached_alpha_tensor: Optional[torch.Tensor] = None
@@ -157,6 +234,31 @@ class OptimizedInt4Conv2d(nn.Module):
         # for the full rationale.
         self.fuse_input_silu = False
 
+        #: Delta-quantizer mode, W4A4. Same contract as OptimizedInt8Conv2d.delta_dynamic, with
+        #: Q=7 instead of 127. This path never had a static per-step delta table (Stage 1 was
+        #: int8-only), so `static` here means the temporal delta is quantized on the *activation*
+        #: grid -- the delta gets 15 levels spanning the whole activation range, and per the
+        #: paper's Theorem 4.3 that leaves the quantization error unchanged from baseline. With
+        #: only 4 bits to spend, clipping and coarseness both bite harder than at int8, so
+        #: `dynamic` matters more here than it does for W8A8.
+        self.delta_dynamic = os.environ.get("MODIFF_DELTA_MODE", "dynamic").lower() != "static"
+        #: See OptimizedInt8Conv2d.delta_clip_ratio for the measured sweep. At W4A4 the curve is
+        #: flat within noise from 0.35 to 1.0 (relL2 0.42-0.46) and degrades below 0.25, so the
+        #: 1.0 default is fine and the knob is for tuning, not correctness.
+        self.delta_clip_ratio = float(os.environ.get("MODIFF_DELTA_CLIP", "1.0"))
+        #: See OptimizedInt8Conv2d._delta_should_refresh -- recompute the dynamic scale every Nth
+        #: modulated step, reuse it in between. 1 = exact.
+        self.delta_refresh = max(1, int(os.environ.get("MODIFF_DELTA_REFRESH", "4")))
+        #: Free absmax reporting, INT4 twin. DEFAULT OFF -- see OptimizedInt8Conv2d.delta_report for
+        #: the full reasoning. At W4A4 it does not merely degrade, it DIVERGES: latent relL2 0.4746
+        #: (off) -> 11.6553 (on), measured 2026-08-04. With only 15 levels, the extra staleness
+        #: (the scale is published on a refresh step and consumed across the following window, so up
+        #: to 2*delta_refresh steps old) clips, and clipping compounds through the error-feedback
+        #: term. Kept only as the recorded result.
+        self.delta_report = os.environ.get("MODIFF_DELTA_REPORT", "0") == "1"
+        self.delta_report_safety = float(os.environ.get("MODIFF_DELTA_SAFETY", "1.15"))
+        self._delta_seeded = False
+
         # --- Fused kernel persistent buffers (lazy-initialized) ---
         self._residual_buf: Optional[torch.Tensor] = None
         self._scale_buf: Optional[torch.Tensor] = None
@@ -175,10 +277,28 @@ class OptimizedInt4Conv2d(nn.Module):
     def _cache_dtype(self) -> torch.dtype:
         return torch.float16 if self.is_calibrated else torch.float32
 
+    def effective_code_utilisation(self, x: torch.Tensor, fused_silu: bool = False) -> float:
+        """max |value| this layer's static quantizer will see, in CODE units. Q (=7) is full scale.
+
+        See OptimizedInt8Conv2d.effective_code_utilisation for why this exists and for the two
+        wrong ways of computing it that this replaces. int4's Q is 7, so the headroom is far
+        smaller and a mis-provisioned scale bites correspondingly harder.
+        """
+        xs = x.detach().float()
+        if fused_silu:
+            xs = F.silu(xs)
+        if not self._smooth_is_identity:
+            xs = xs * self._smooth_inv.to(xs.device, torch.float32)
+        return float(xs.abs().max().item() * float(self.static_input_scale.item()))
+
     def _module_output(self) -> torch.Tensor:
         # See OptimizedInt8Conv2d._module_output: forcing fp32 here just to have
         # the next fp16-autocast op cast back down again is a wasted full-tensor
         # copy. Return the cache (fp16 when calibrated) as-is.
+        #
+        # See the int8 twin: casting fp32 -> fp16 here is deliberately NOT done. The uncalibrated
+        # window is an fp32-flavoured pipeline, and the one consumer that requires fp16 enforces it
+        # itself (quantized_std_attention._proj_with_residual).
         return self.o_hat_cache
 
     # ==================================================================
@@ -321,6 +441,210 @@ class OptimizedInt4Conv2d(nn.Module):
     # Forward paths
     # ==================================================================
 
+    # ------------------------------------------------------------------
+    # Dynamic delta scale (W4A4). Mirrors OptimizedInt8Conv2d's helpers with Q=7.
+    # ------------------------------------------------------------------
+    Q_DELTA = 7.0
+
+    def _ensure_delta_dyn_bufs(self, device):
+        """Allocate the 4 reduction buffers the dynamic delta scale needs.
+
+        The uncalibrated path allocates these too (see the lazy-init block in
+        _forward_modulated), but only *after* the calibrated branch has already returned -- so
+        the calibrated path, which is the one dynamic mode runs on, needs its own init.
+        """
+        if self._scale_buf is None or self._scale_buf.device != device:
+            self._scale_buf = torch.empty(1, device=device, dtype=torch.float32)
+            self._inv_scale_buf = torch.empty(1, device=device, dtype=torch.float32)
+            self._absmax_buf = torch.zeros(1, device=device, dtype=torch.float32)
+            self._retire_count = torch.zeros(1, device=device, dtype=torch.int32)
+
+    # ------------------------------------------------------------------
+    # MoDiff per-step delta-scale table (W4A4). Same purpose as OptimizedInt8Conv2d's, but the
+    # CALIBRATION mechanism has to differ, and that is the whole story here.
+    #
+    # Q is 7, not 127. The int8 twin recovers the delta's range by observing max|code| under a known
+    # scale, so its resolution is one quantizer step -- fine out of 255 levels, useless out of 15.
+    # Measured: observing int4 codes gave code_max == 1 for all 70 layers (visible as "step gain
+    # median 1.72x max 1.72x", identical everywhere, which back-solves to code_max == 1), and the
+    # resulting table made latent error 2.1x WORSE than no table (0.7772 -> 1.6630).
+    #
+    # So this path observes the delta absmax EXACTLY instead, by running the layer in dynamic mode
+    # during calibration and reading back what the absmax kernel computed. See
+    # _observe_delta_absmax.
+    # ------------------------------------------------------------------
+
+    def _delta_step_index(self) -> int:
+        """Table index for the modulated step about to run. step_count is incremented at the top of
+        every modulated forward and is 0 after _forward_first_step, so the first modulated step sees
+        1 -> index 0. Longer runs than the table clamp to its last entry."""
+        return min(max(self.step_count - 1, 0), MODIFF_MAX_STEPS - 1)
+
+    def _observe_delta_absmax(self):
+        """Record this step's EXACT delta absmax, read from what the dynamic kernel just computed.
+
+        Why not observe max|code| the way the int8 twin does. That trick recovers the range as
+        code_max/scale_used, so its resolution is one quantizer step -- fine with 255 levels, useless
+        with 15. Measured directly: observing int4 codes gave code_max == 1 for all 70 layers, i.e.
+        a range estimate good to about a factor of two, and the resulting table made latent error
+        2.1x WORSE than no table at all (0.7772 -> 1.6630).
+
+        So calibration instead runs the layer in DYNAMIC mode, where delta_absmax_fp16 /
+        gn_delta_absmax_flat_kernel compute max|delta| exactly, and reads the answer back out of
+        `_inv_scale_buf` (which holds absmax/Q by construction). Two benefits beyond resolution:
+        the calibration trajectory is quantized with a good scale rather than a deliberately coarse
+        observation scale, and the resulting static table reproduces the dynamic scale's per-step
+        envelope -- which is why the int8 table lands within a few percent of dynamic.
+
+        Runs entirely on device (a max into a resident [MODIFF_MAX_STEPS] buffer), so no host sync.
+        """
+        if not self._delta_calib or self._inv_scale_buf is None:
+            return
+        if self._delta_absmax_obs is None or self._delta_absmax_obs.device != self._inv_scale_buf.device:
+            self._delta_absmax_obs = torch.zeros(MODIFF_MAX_STEPS, dtype=torch.float32,
+                                                 device=self._inv_scale_buf.device)
+        i = self._delta_step_index()
+        am = self._inv_scale_buf.view(()) * self.Q_DELTA      # inv_scale = absmax / Q
+        self._delta_absmax_obs[i] = torch.maximum(self._delta_absmax_obs[i], am)
+
+    def begin_delta_calibration(self, reset: bool = False):
+        """Arm exact delta-absmax observation. The layer runs in dynamic mode for the pass, so the
+        absmax is computed by the kernel rather than inferred through a 4-bit quantizer -- see
+        _observe_delta_absmax for why the int8 code-observation trick cannot be reused here.
+        `reset` is vestigial, kept for signature parity with the int8 twin."""
+        self._delta_calib = True
+        self._delta_absmax_obs = None
+        self._delta_calib_was_dynamic = self.delta_dynamic
+        self._delta_calib_was_refresh = self.delta_refresh
+        self.delta_dynamic = True      # exact per-call absmax
+        self.delta_refresh = 1         # every step, or the per-step table would be undersampled
+        self.is_delta_calibrated.fill_(False)
+        self._delta_cal = False
+
+    def end_delta_calibration(self, safety: float = 1.02, smooth: bool = True) -> bool:
+        """Turn the observed per-step absmax into the scale table. Returns True if set."""
+        self._delta_calib = False
+        # Restore whatever mode the caller had; the dynamic forcing was for the observation pass.
+        self.delta_dynamic = getattr(self, "_delta_calib_was_dynamic", self.delta_dynamic)
+        self.delta_refresh = getattr(self, "_delta_calib_was_refresh", self.delta_refresh)
+        if self._delta_absmax_obs is None or not self.is_calibrated:
+            return False
+        absmax = self._delta_absmax_obs.detach().to("cpu", torch.float64)
+        seen = absmax > 0
+        if not bool(seen.any()):
+            return False
+        self._delta_obs_code_max = None            # not applicable: observation is not quantized
+        self._delta_obs_clipped_frac = 0.0         # exact absmax cannot clip by construction
+
+        # Forward-fill steps never reached, then back-fill the head. The delta range is flat in the
+        # tail, so a short calibration run still yields a usable table for a longer production run.
+        last = 0.0
+        for i in range(absmax.numel()):
+            if seen[i]:
+                last = float(absmax[i])
+            elif last > 0.0:
+                absmax[i] = last
+        first = next((float(absmax[i]) for i in range(absmax.numel()) if absmax[i] > 0), 0.0)
+        absmax[absmax <= 0] = first
+        if first <= 0.0:
+            return False
+
+        if smooth:
+            # Running max over a 3-wide window: one noisy batch must not shrink a neighbour's scale.
+            a = absmax.clone()
+            for i in range(absmax.numel()):
+                lo, hi = max(0, i - 1), min(absmax.numel(), i + 2)
+                absmax[i] = float(a[lo:hi].max())
+
+        scale = self.Q_DELTA / (absmax * safety).clamp_min(1e-12)
+        self.static_delta_scale.copy_(scale.to(torch.float32))
+        self.static_delta_alpha.copy_((1.0 / scale).to(torch.float32))
+        self.is_delta_calibrated.fill_(True)
+        self._delta_cal = True
+        self._delta_absmax_obs = None
+        return True
+
+    def delta_calibration_report(self) -> Dict[str, object]:
+        """Diagnostics: how much finer the delta grid is than the activation grid it replaces."""
+        if not bool(self.is_delta_calibrated):
+            return {"layer": self.layer_name, "calibrated": False}
+        act = float(self.static_input_scale.item())
+        tail = self.static_delta_scale.detach().to("cpu", torch.float64)
+        pos = tail[tail > 0]
+        return {"layer": self.layer_name, "calibrated": True,
+                "act_scale": act,
+                "delta_scale_median": float(pos.median()) if pos.numel() else 0.0,
+                "step_gain_tail": (float(pos.median()) / act) if (pos.numel() and act > 0) else None,
+                "obs_code_max": self._delta_obs_code_max,
+                "obs_clipped_frac": self._delta_obs_clipped_frac}
+
+    def _delta_should_refresh(self) -> bool:
+        """See OptimizedInt8Conv2d._delta_should_refresh. step_count is 1 on the first modulated
+        step, so that step always refreshes -- required, since the buffers hold nothing before."""
+        k = self.delta_refresh
+        return k <= 1 or ((self.step_count - 1) % k) == 0
+
+    def _delta_scale_args_i4(self, device, x=None, fused_silu=False):
+        """(quantize_scale, conv_alpha) for the current step.
+
+        Static mode returns the activation scale and its cached reciprocal -- the pre-existing
+        behaviour. Dynamic mode reduces max|delta| for this call and returns device views of the
+        result, so the 15 available int4 levels span the delta's own range instead of the whole
+        activation's. `fused_silu` must match whether the paired quantize kernel applies SiLU,
+        or the reduced and quantized expressions differ and the no-clip guarantee is void.
+        """
+        if self.delta_dynamic:
+            self._ensure_delta_dyn_bufs(device)
+            if x is not None and self._delta_should_refresh():
+                modiff_cutlass.delta_absmax_fp16(
+                    x, self.a_hat_cache, self._absmax_buf, self._scale_buf, self._inv_scale_buf,
+                    self._retire_count, self.Q_DELTA / self.delta_clip_ratio,
+                    self._smooth_inv_flat, fused_silu)
+            return self._scale_buf.view(1), self._inv_scale_buf.view(1)
+        # Static mode: prefer the per-step delta table when it has been calibrated. Falling back to
+        # the activation scale reproduces the pre-table behaviour, which per Theorem 4.3 leaves the
+        # quantization error unchanged from baseline -- so warn once rather than fail silently.
+        if not self._delta_cal and bool(self.is_delta_calibrated):
+            self._delta_cal = True
+        if self._delta_cal:
+            i = self._delta_step_index()
+            return self.static_delta_scale[i:i + 1], self.static_delta_alpha[i:i + 1]
+        if not getattr(self, "_warned_no_delta_calib", False):
+            self._warned_no_delta_calib = True
+            print(f"⚠ {self.layer_name or type(self).__name__}: no INT4 MoDiff delta calibration; "
+                  f"quantizing the temporal delta on the FULL-ACTIVATION grid with only 15 levels. "
+                  f"Per Theorem 4.3 this leaves the error unchanged -- MoDiff buys only error "
+                  f"feedback. Run the int4 delta calibration.")
+        return self.static_input_scale.view(1), self._cached_alpha_tensor.view(1)
+
+    def _delta_report_on_i4(self) -> bool:
+        """Free reporting is live: dynamic, enabled, seeded, and on a refresh step."""
+        return (self.delta_dynamic and self.delta_report and self._delta_seeded
+                and self._delta_should_refresh())
+
+    def _delta_gn_dynamic_args_i4(self, device):
+        """The five trailing arguments of group_norm_silu_delta_quantize_pack_nhwc: empty
+        tensors in static mode, the real reduction buffers in dynamic mode (where the kernel
+        finds the scale itself from silu(gn(x)), which only exists inside it)."""
+        if getattr(self, "_empty_f32", None) is None or self._empty_f32.device != device:
+            self._empty_f32 = torch.empty(0, device=device, dtype=torch.float32)
+        e = self._empty_f32
+        if not self.delta_dynamic:
+            return e, e, e, e, self.Q_DELTA, False, 1.0
+        self._ensure_delta_dyn_bufs(device)
+        if self._delta_report_on_i4():
+            # The quantize kernel both quantizes with the published scale and publishes the next
+            # one: no separate absmax pass at all.
+            return (self._absmax_buf, self._scale_buf, self._inv_scale_buf,
+                    self._retire_count, self.Q_DELTA / self.delta_clip_ratio,
+                    True, self.delta_report_safety)
+        if not self._delta_should_refresh():
+            # Reuse the last measured scale; empty buffers make the kernel skip its absmax pass.
+            return e, e, e, e, self.Q_DELTA, False, 1.0
+        self._delta_seeded = True      # this pass publishes a scale the next window can ride on
+        return (self._absmax_buf, self._scale_buf, self._inv_scale_buf,
+                self._retire_count, self.Q_DELTA / self.delta_clip_ratio, False, 1.0)
+
     def _can_fuse_input_silu(self, x: torch.Tensor) -> bool:
         """See OptimizedInt8Conv2d._can_fuse_input_silu for the rationale."""
         return (self.fuse_input_silu and self.modiff_enabled and not self.is_first_step
@@ -350,20 +674,24 @@ class OptimizedInt4Conv2d(nn.Module):
             else:
                 self._smooth_inv_flat = torch.empty(0, device=x.device, dtype=torch.float32)
 
+        d_scale, d_alpha = self._delta_scale_args_i4(x.device, x, fused_silu=True)
+
         p_step1 = profiler.start("MoDiff INT4 Static Step1 (fused SiLU)")
         x_packed = modiff_cutlass.step1_static_quantize_pack_int4_fprop_silu(
             x,
             self.a_hat_cache,
-            self.static_input_scale.view(1),
+            d_scale,
             self._smooth_inv_flat,
         )
         profiler.stop("MoDiff INT4 Static Step1 (fused SiLU)", p_step1)
+        if self._delta_calib:
+            self._observe_delta_absmax()
 
         p_conv = profiler.start("MoDiff INT4 Static Conv2d")
         (modiff_cutlass.conv2d_int4_evt_o_hat if self.o_hat_cache.dtype == torch.float16 else modiff_cutlass.conv2d_int4_fprop_o_hat)(
             x_packed,
             self.weight_packed,
-            self._cached_alpha_tensor.view(1),
+            d_alpha,
             self.weight_scale_channel.view(-1),
             self.o_hat_cache,
             self.stride[0], self.stride[1],
@@ -402,12 +730,26 @@ class OptimizedInt4Conv2d(nn.Module):
             else:
                 self._smooth_inv_flat = torch.empty(0, device=x.device, dtype=torch.float32)
 
+        # silu(gn(x)) exists only inside the fused kernel, so in dynamic mode the kernel does
+        # the reduction itself (reusing its GN statistics) and the conv alpha comes from the
+        # buffer it writes. See the int8 counterpart forward_gn_fused_modiff.
+        gn_dyn = self._delta_gn_dynamic_args_i4(x.device)
+        d_alpha = (self._inv_scale_buf.view(1) if self.delta_dynamic
+                   else self._cached_alpha_tensor.view(1))
+        # In dynamic mode the scale lives in _scale_buf (written by the kernel on refresh steps,
+        # retained from the last refresh otherwise); in static mode it is the activation scale.
+        d_scale, _ = self._delta_scale_args_i4(x.device)   # table in static mode, buffer in dynamic
+        if self.delta_dynamic:
+            d_scale = self._scale_buf.view(1)
+
         p_step1 = profiler.start("MoDiff INT4 GN-fused Step1 (GN+SiLU+delta+pack)")
         x_packed = modiff_cutlass.group_norm_silu_delta_quantize_pack_nhwc(
             x, gn_weight, gn_bias, self.a_hat_cache, num_groups, eps, True,
-            self.static_input_scale.view(1), self._smooth_inv_flat,
-            mod_scale2d, mod_shift2d)
+            d_scale, self._smooth_inv_flat,
+            mod_scale2d, mod_shift2d, *gn_dyn)
         profiler.stop("MoDiff INT4 GN-fused Step1 (GN+SiLU+delta+pack)", p_step1)
+        if self._delta_calib:
+            self._observe_delta_absmax()
 
         if residual is not None:
             # EVT dual-store (see int8 counterpart OptimizedInt8Conv2d.forward_gn_fused_modiff
@@ -418,7 +760,7 @@ class OptimizedInt4Conv2d(nn.Module):
             out = torch.empty_like(self.o_hat_cache)
             p_conv = profiler.start("MoDiff INT4 Static Conv2d (o_hat+residual)")
             modiff_cutlass.conv2d_int4_evt_o_hat_residual(
-                x_packed, self.weight_packed, self._cached_alpha_tensor.view(1),
+                x_packed, self.weight_packed, d_alpha,
                 self.weight_scale_channel.view(-1), self.o_hat_cache, residual, out,
                 self.stride[0], self.stride[1], self.padding[0], self.padding[1],
                 self.dilation[0], self.dilation[1])
@@ -427,7 +769,7 @@ class OptimizedInt4Conv2d(nn.Module):
 
         p_conv = profiler.start("MoDiff INT4 Static Conv2d")
         (modiff_cutlass.conv2d_int4_evt_o_hat if self.o_hat_cache.dtype == torch.float16 else modiff_cutlass.conv2d_int4_fprop_o_hat)(
-            x_packed, self.weight_packed, self._cached_alpha_tensor.view(1),
+            x_packed, self.weight_packed, d_alpha,
             self.weight_scale_channel.view(-1), self.o_hat_cache,
             self.stride[0], self.stride[1], self.padding[0], self.padding[1],
             self.dilation[0], self.dilation[1])
@@ -453,10 +795,14 @@ class OptimizedInt4Conv2d(nn.Module):
             else:
                 self._smooth_inv_flat = torch.empty(0, device=x.device, dtype=torch.float32)
 
+        d_scale, d_alpha = self._delta_scale_args_i4(x.device, x, fused_silu=True)
+
         p_step1 = profiler.start("MoDiff INT4 Static Step1 (fused SiLU)")
         x_packed = modiff_cutlass.step1_static_quantize_pack_int4_fprop_silu(
-            x, self.a_hat_cache, self.static_input_scale.view(1), self._smooth_inv_flat)
+            x, self.a_hat_cache, d_scale, self._smooth_inv_flat)
         profiler.stop("MoDiff INT4 Static Step1 (fused SiLU)", p_step1)
+        if self._delta_calib:
+            self._observe_delta_absmax()
 
         residual = residual.to(torch.float16).contiguous(memory_format=torch.channels_last)
         out = torch.empty_like(self.o_hat_cache)
@@ -464,7 +810,7 @@ class OptimizedInt4Conv2d(nn.Module):
         # EVT dual-store (see int8 counterpart): o_hat RMW + residual in one conv pass,
         # no fp32 round-trip. Bit-exact o_hat + out vs conv2d_int4_fprop_o_hat_residual.
         modiff_cutlass.conv2d_int4_evt_o_hat_residual(
-            x_packed, self.weight_packed, self._cached_alpha_tensor.view(1),
+            x_packed, self.weight_packed, d_alpha,
             self.weight_scale_channel.view(-1), self.o_hat_cache, residual, out,
             self.stride[0], self.stride[1], self.padding[0], self.padding[1],
             self.dilation[0], self.dilation[1])
@@ -576,6 +922,31 @@ class OptimizedInt4Conv2d(nn.Module):
             self._empty_bias = torch.empty(0, device=device)
         if self._empty_smooth is None or self._empty_smooth.device != device:
             self._empty_smooth = torch.empty(0, device=device, dtype=torch.float32)
+
+    def _conv_from_int4_o_hat(self, x_packed: torch.Tensor, h_in: int, w_in: int,
+                             alpha: torch.Tensor) -> torch.Tensor:
+        """INT4 twin of OptimizedInt8Conv2d._conv_from_int8_o_hat. h_in/w_in are passed explicitly
+        because the packed tensor is a [N,H,W,C/2] byte buffer whose logical shape carries no
+        spatial extents."""
+        h_out = ((h_in + 2 * self.padding[0] - self.dilation[0] * (self.kernel_size[0] - 1) - 1)
+                 // self.stride[0]) + 1
+        w_out = ((w_in + 2 * self.padding[1] - self.dilation[1] * (self.kernel_size[1] - 1) - 1)
+                 // self.stride[1]) + 1
+        shape = (x_packed.shape[0], self.out_channels, h_out, w_out)
+        dtype = torch.float16 if self.is_calibrated else torch.float32
+        if (self.o_hat_cache is None or self.o_hat_cache.shape != shape
+                or self.o_hat_cache.dtype != dtype):
+            self.o_hat_cache = torch.zeros(shape, device=x_packed.device, dtype=dtype
+                                           ).contiguous(memory_format=torch.channels_last)
+        p = profiler.start("MoDiff INT4 Static Conv2d (from codes)")
+        (modiff_cutlass.conv2d_int4_evt_o_hat if self.o_hat_cache.dtype == torch.float16
+         else modiff_cutlass.conv2d_int4_fprop_o_hat)(
+            x_packed, self.weight_packed, alpha, self.weight_scale_channel.view(-1),
+            self.o_hat_cache,
+            self.stride[0], self.stride[1], self.padding[0], self.padding[1],
+            self.dilation[0], self.dilation[1])
+        profiler.stop("MoDiff INT4 Static Conv2d (from codes)", p)
+        return self._module_output()
 
     def _conv_from_int4(self, x_packed: torch.Tensor, h_in: int, w_in: int,
                         residual: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -879,20 +1250,25 @@ class OptimizedInt4Conv2d(nn.Module):
                 else:
                     self._smooth_inv_flat = torch.empty(0, device=x.device, dtype=torch.float32)
 
+            # No SiLU here: step1_static_quantize_pack_int4_fprop quantizes x itself.
+            d_scale, d_alpha = self._delta_scale_args_i4(x.device, x, fused_silu=False)
+
             p_step1 = profiler.start("MoDiff INT4 Static Step1")
             x_packed = modiff_cutlass.step1_static_quantize_pack_int4_fprop(
                 x,
                 self.a_hat_cache,
-                self.static_input_scale.view(1),
+                d_scale,
                 self._smooth_inv_flat,
             )
             profiler.stop("MoDiff INT4 Static Step1", p_step1)
+            if self._delta_calib:
+                self._observe_delta_absmax()
 
             p_conv = profiler.start("MoDiff INT4 Static Conv2d")
             (modiff_cutlass.conv2d_int4_evt_o_hat if self.o_hat_cache.dtype == torch.float16 else modiff_cutlass.conv2d_int4_fprop_o_hat)(
                 x_packed,
                 self.weight_packed,
-                self._cached_alpha_tensor.view(1),
+                d_alpha,
                 self.weight_scale_channel.view(-1),
                 self.o_hat_cache,
                 self.stride[0], self.stride[1],
@@ -1017,6 +1393,14 @@ class OptimizedInt4Conv2d(nn.Module):
         ratio = act_max / torch.clamp(w_max, min=1e-8)
         s = ratio.sqrt().clamp(min=1e-4, max=1e4)
 
+        # Identity smoothing where the weight range is zero -- see the int8 twin. Hygiene, not
+        # numerics: a uniform s cancels against the scale, so codes are unchanged. It stops
+        # static_input_scale and smooth_scale from being pinned to a clamp ceiling (~1e4x off), which
+        # is what makes those fields readable in diagnostics.
+        dead = w_max <= 1e-12
+        if bool(dead.any()):
+            s = torch.where(dead, torch.ones_like(s), s)
+
         self._fold_weights_with_smooth(s)
 
     def _fold_weights_with_smooth(self, s: torch.Tensor):
@@ -1033,8 +1417,9 @@ class OptimizedInt4Conv2d(nn.Module):
 
         w_smoothed = w_dev * s.view(1, -1, 1, 1)
         w_flat = w_smoothed.reshape(K, -1)
-        ch_max = w_flat.abs().max(dim=1).values
-        ch_scale = torch.clamp(ch_max / 7.0, min=1e-8)
+        # Same MSE-optimal scale as __init__; the two sites must agree or a SmoothQuant refold
+        # would silently revert the layer to absmax.
+        ch_scale = _int4_weight_scale(w_flat)
 
         self.weight_scale_channel.copy_(ch_scale.view(1, K, 1, 1))
         self.weight_scale_channel_half.copy_(ch_scale.half().to(self.weight_scale_channel_half.device))
@@ -1172,6 +1557,72 @@ def set_calibrating_int4(model: nn.Module, calibrating: bool):
                 module.begin_calibration()
             else:
                 module.end_calibration()
+
+
+# ----------------------------------------------------------------------
+# MoDiff per-step delta-scale table: model-level driver. Mirrors the int8 helpers in
+# int8_optimized.py one-for-one, so a caller can drive either bit-width the same way.
+# ----------------------------------------------------------------------
+
+def begin_delta_calibration_int4(model: nn.Module, reset: bool = False) -> int:
+    """Arm delta-range observation on every calibrated int4 conv. Returns how many were armed.
+
+    Must run AFTER the ordinary activation calibration: the observation scale is derived from
+    static_input_scale, and t=T's Q(a_T) needs it too.
+    """
+    n = 0
+    for m in model.modules():
+        if isinstance(m, OptimizedInt4Conv2d) and m.is_calibrated:
+            m.begin_delta_calibration(reset=reset)
+            n += 1
+    return n
+
+
+def end_delta_calibration_int4(model: nn.Module, safety: float = 1.02) -> int:
+    """Convert observations into per-step tables. Returns how many layers got one."""
+    n = 0
+    for m in model.modules():
+        if isinstance(m, OptimizedInt4Conv2d):
+            if m.end_delta_calibration(safety=safety):
+                n += 1
+    return n
+
+
+def export_int4_delta_scales(model: nn.Module) -> Dict[str, object]:
+    """Export the delta table keyed by layer name. Deliberately a SEPARATE artifact from
+    export_int4_static_scales -- the two describe different quantities (activation range vs
+    temporal-delta range) and are valid for different modes."""
+    out = {}
+    for m in model.modules():
+        if isinstance(m, OptimizedInt4Conv2d) and bool(m.is_delta_calibrated):
+            out[m.layer_name] = m.static_delta_scale.detach().to("cpu", torch.float32).clone()
+    return out
+
+
+def apply_int4_delta_scales(model: nn.Module, table: Dict[str, object]) -> int:
+    """Load a table from export_int4_delta_scales. Returns how many layers were filled."""
+    if not table:
+        return 0
+    loaded = 0
+    for m in model.modules():
+        if not isinstance(m, OptimizedInt4Conv2d) or m.layer_name not in table:
+            continue
+        t = table[m.layer_name].to(m.static_delta_scale.device, torch.float32)
+        n = min(t.numel(), m.static_delta_scale.numel())
+        m.static_delta_scale[:n].copy_(t[:n])
+        if n < m.static_delta_scale.numel():          # forward-fill a shorter saved table
+            m.static_delta_scale[n:].fill_(float(t[n - 1]))
+        m.static_delta_alpha.copy_(1.0 / m.static_delta_scale.clamp_min(1e-12))
+        m.is_delta_calibrated.fill_(True)
+        m._delta_cal = True
+        loaded += 1
+    return loaded
+
+
+def delta_calibration_report_int4(model: nn.Module):
+    """Per-layer diagnostics: how much finer the delta grid is than the activation grid."""
+    return [m.delta_calibration_report() for m in model.modules()
+            if isinstance(m, OptimizedInt4Conv2d) and bool(m.is_delta_calibrated)]
 
 
 def export_int4_static_scales(model: nn.Module) -> Dict[str, object]:

@@ -106,12 +106,17 @@ try:
     # the o_hat conv's accumulate epilogue (conv2d_intX_fprop_o_hat_residual),
     # removing the trailing aten::add. Low-risk (elementwise, coalesced; the o_hat
     # cache write is byte-identical). Disable with MODIFF_DISABLE_O_HAT_RESIDUAL_FUSION=1.
-    HAS_O_HAT_RESIDUAL = hasattr(modiff_cutlass, "conv2d_int8_fprop_o_hat_residual")
+    # Probe the EVT symbol, which is what the code actually calls. It used to probe
+    # conv2d_int8_fprop_o_hat_residual -- the superseded fp32-round-trip version -- so deleting
+    # that dead symbol would have silently turned this fusion OFF rather than failing loudly.
+    HAS_O_HAT_RESIDUAL = hasattr(modiff_cutlass, "conv2d_int8_evt_o_hat_residual")
     # Upsample(nearest,2x)+quantize fusion (default ON): fold a ResBlock's updown
     # h_upd (Upsample, use_conv=False) into the following in_conv's quantize step, the
     # same upsample2x_quantize[_pack]_noahat kernel FusedUpsample already uses for
     # standalone Upsample(use_conv=True) modules -- see FusedUpsample.
     # Disable with MODIFF_DISABLE_UPSAMPLE_QUANTIZE_FUSION=1.
+    HAS_GN_SILU_DELTA_QUANTIZE_RESIZE = hasattr(
+        modiff_cutlass, "group_norm_silu_delta_quantize_resize_nhwc")
     HAS_GN_SILU_QUANTIZE_RESIZE = hasattr(
         modiff_cutlass, "group_norm_silu_quantize_resize_nhwc")
     HAS_UPSAMPLE_QUANTIZE = hasattr(modiff_cutlass, "upsample2x_quantize_noahat_fprop")
@@ -128,6 +133,7 @@ try:
     HAS_AVGPOOL_QUANTIZE_PACK = hasattr(modiff_cutlass, "avgpool2x_quantize_pack_noahat_fprop")
 except ImportError:
     modiff_cutlass = None
+    HAS_GN_SILU_DELTA_QUANTIZE_RESIZE = False
     HAS_NATIVE_GN_SILU = False
     HAS_GN_SILU_QUANTIZE = False
     HAS_GN_SILU_QUANTIZE_PACK = False
@@ -362,6 +368,104 @@ def _prequant_gn_conv(x, gn, conv, mod_scale=None, mod_shift=None, residual=None
             q = modiff_cutlass.scale_quantize_int8(
                 _gn_mod_silu_fp32_cl(x, ng, w, b, eps, mod_scale, mod_shift), scale)
         return conv.forward_from_int8(q, residual=residual)
+
+
+def _prequant_gn_resize_conv_modiff(x, gn, h_upd, conv, mod_scale=None, mod_shift=None):
+    """MoDiff twin of _prequant_gn_resize_conv: GN+SiLU+resize+delta-quantize+a_hat in ONE kernel.
+
+    The eight updown ResBlocks previously got NO fusion under MoDiff -- the sibling below gates on
+    `not modiff`, so MoDiff fell back to a standalone PyTorch resize followed by a separate
+    delta-quantize. Measured cost of that fallback at batch 128 (2026-08-04): +1.20 ms/step nearest
+    upsample, +0.44 avg_pool, +0.71 GN+SiLU-only, i.e. 2.35 ms/step and the largest remaining
+    non-intrinsic MoDiff overhead.
+
+    a_hat stays at the POST-resize (conv input) resolution, the same layout the unfused path uses,
+    so this is a pure fusion.
+
+    Returns the conv output, or None to fall through. It deliberately declines on DYNAMIC refresh
+    steps: the fused kernel takes its scale as a device pointer but does not compute an absmax, so
+    on a step that must re-measure the delta range we let the unfused path run and do that. With the
+    default MODIFF_DELTA_REFRESH=4 that is one step in four; the other three fuse.
+    """
+    if not (HAS_GN_SILU_DELTA_QUANTIZE_RESIZE and conv is not None):
+        return None
+    if not getattr(conv, 'modiff_enabled', False) or not getattr(conv, 'is_calibrated', False):
+        return None
+    if getattr(conv, 'is_first_step', True):
+        return None                       # t=T has no cache to subtract yet
+    if not getattr(conv, 'use_cutlass', False) or getattr(conv, 'groups', 1) != 1:
+        return None
+    # Dynamic mode: only fuse on steps that reuse the retained scale (see the docstring). And only
+    # once that retained scale actually exists -- the reduction buffers are allocated by the
+    # unfused path, so the first modulated step (which is always a refresh) must run there first.
+    if getattr(conv, 'delta_dynamic', False):
+        if conv._delta_should_refresh():
+            return None
+        if getattr(conv, '_scale_buf', None) is None or getattr(conv, '_inv_scale_buf', None) is None:
+            return None
+    try:
+        from ldm.modules.diffusionmodules.openaimodel import Upsample, Downsample
+    except ImportError:
+        return None
+    h_upd = getattr(h_upd, 'orig', h_upd)
+    if isinstance(h_upd, Upsample):
+        direction = 1
+    elif isinstance(h_upd, Downsample):
+        direction = -1
+    else:
+        return None
+    if h_upd.use_conv or h_upd.dims != 2:
+        return None
+    if not (x.is_cuda and x.dtype in (torch.float32, torch.float16)):
+        return None
+    ng, eps = gn.num_groups, gn.eps
+    N, C, H, W = x.shape
+    if C % ng != 0 or C % 2 != 0 or (C // ng) % 2 != 0:
+        return None
+    if direction < 0 and (H % 2 or W % 2):
+        return None
+    Ho, Wo = (H * 2, W * 2) if direction > 0 else (H // 2, W // 2)
+    is_int4 = hasattr(conv, 'forward_from_int4')
+    if not is_int4 and not hasattr(conv, '_conv_from_int8'):
+        return None
+    if not x.is_contiguous(memory_format=torch.channels_last):
+        x = x.contiguous(memory_format=torch.channels_last)
+
+    # The conv owns the a_hat cache and sizes it to ITS input, which is the post-resize shape.
+    # Bail rather than reshape if it is not there yet -- a wrong-shaped cache would silently
+    # corrupt o_hat for every remaining timestep.
+    ah = getattr(conv, 'a_hat_cache', None)
+    if ah is None or ah.dtype != torch.float16 or ah.numel() != N * C * Ho * Wo:
+        return None
+
+    conv.step_count += 1
+    w, b = gn._cast_params(x.dtype)
+    d_scale, d_alpha = (conv._delta_scale_args_i4(x.device) if is_int4
+                        else conv._delta_scale_args(x.device))
+    if getattr(conv, 'delta_dynamic', False):
+        # Use the pair currently IN FORCE, not _scale_buf unconditionally -- free reporting
+        # double-buffers the published scale (see OptimizedInt8Conv2d._scale_pair_b).
+        cur = conv._cur_scale_pair() if hasattr(conv, '_cur_scale_pair') else (
+            conv._scale_buf, conv._inv_scale_buf)
+        d_scale, d_alpha = cur[0].view(1), cur[1].view(1)
+    # _empty_smooth is lazily created, so it may still be None here -- build the empty sentinel
+    # rather than passing None into the kernel.
+    if getattr(conv, '_smooth_is_identity', True):
+        smooth_inv = torch.empty(0, device=x.device, dtype=torch.float32)
+    else:
+        smooth_inv = conv._smooth_inv.view(-1).to(torch.float32).contiguous()
+    if mod_scale is not None:
+        ms2d = mod_scale.reshape(N, C).contiguous()
+        sh2d = mod_shift.reshape(N, C).contiguous()
+    else:
+        ms2d = sh2d = x.new_empty(0)
+
+    x_q = modiff_cutlass.group_norm_silu_delta_quantize_resize_nhwc(
+        x, w, b, ng, eps, True, d_scale, smooth_inv, ms2d, sh2d, 0, direction, is_int4, ah)
+    if conv._delta_calib:
+        conv._observe_delta_absmax() if is_int4 else conv._observe_delta_codes(x_q)
+    return (conv._conv_from_int4_o_hat(x_q, Ho, Wo, d_alpha) if is_int4
+            else conv._conv_from_int8_o_hat(x_q, d_alpha))
 
 
 def _prequant_gn_resize_conv(x, gn, h_upd, conv, mod_scale=None, mod_shift=None):
@@ -650,8 +754,11 @@ class FusedResBlock(TimestepBlock):
             # which takes the RAW x -- the normalisation happens inside it. GroupNorm is
             # therefore only computed separately on the fallback path (fp16 mode, modiff,
             # uncalibrated, use_conv=True, ...), where the conv needs an fp16 input anyway.
-            fused = _prequant_gn_resize_conv(x, self.fused_in_norm_silu, self.h_upd,
-                                             self.in_conv)
+            fused = _prequant_gn_resize_conv_modiff(x, self.fused_in_norm_silu, self.h_upd,
+                                                    self.in_conv)
+            if fused is None:
+                fused = _prequant_gn_resize_conv(x, self.fused_in_norm_silu, self.h_upd,
+                                                 self.in_conv)
             if fused is not None:
                 h = fused
             else:
@@ -863,12 +970,38 @@ class FusedUpsample(nn.Module):
         self.orig = orig
 
     def _fusable(self, x, conv):
+        """Eligible for the fused upsample+quantize path, in EITHER mode.
+
+        This used to require `not modiff_enabled`, which excluded 16 standalone Upsample->conv layers
+        from the fusion whenever MoDiff was on -- they fell back to F.interpolate plus a separate
+        delta-quantize. That exclusion is gone: `upsample2x_quantize_[pack_]noahat_fprop` now takes an
+        OPTIONAL a_hat_cache, so the same kernel does the baseline quantize (empty cache) or the
+        MoDiff delta-quantize (real cache). No MoDiff twin kernel was needed -- the loop already
+        grids over output elements, so it already visits each a_hat entry exactly once.
+        """
         if conv is None or self.orig.dims != 2 or x.dtype != torch.float16 or not x.is_cuda:
             return False
-        return (getattr(conv, 'is_calibrated', False)
-                and not getattr(conv, 'modiff_enabled', True)
+        if not (getattr(conv, 'is_calibrated', False)
                 and getattr(conv, 'use_cutlass', False)
-                and getattr(conv, 'groups', 1) == 1)
+                and getattr(conv, 'groups', 1) == 1):
+            return False
+        if getattr(conv, 'modiff_enabled', False):
+            # MoDiff needs a cache to subtract, sized to the conv's (post-upsample) input, and the
+            # first step has none. It also needs a published scale: on a dynamic refresh step the
+            # scale must be re-measured, which this kernel does not do, so defer to the unfused path
+            # there (one step in MODIFF_DELTA_REFRESH).
+            if getattr(conv, 'is_first_step', True):
+                return False
+            if getattr(conv, 'delta_dynamic', False):
+                if conv._delta_should_refresh():
+                    return False
+                if getattr(conv, '_scale_buf', None) is None:
+                    return False
+            ah = getattr(conv, 'a_hat_cache', None)
+            n, c, h, w = x.shape
+            if ah is None or ah.dtype != torch.float16 or ah.numel() != n * c * h * 2 * w * 2:
+                return False
+        return True
 
     def forward(self, x):
         assert x.shape[1] == self.orig.channels
@@ -880,14 +1013,27 @@ class FusedUpsample(nn.Module):
         conv._ensure_conv_caches(x.device)
         smooth_inv = (conv._empty_smooth if getattr(conv, '_smooth_is_identity', True)
                       else conv._smooth_inv.view(-1).to(torch.float32).contiguous())
+        if smooth_inv is None:
+            smooth_inv = torch.empty(0, device=x.device, dtype=torch.float32)
         is_int4 = hasattr(conv, 'weight_packed')
+        modiff = getattr(conv, 'modiff_enabled', False)
+        if modiff:
+            conv.step_count += 1
+            ah = conv.a_hat_cache
+            d_scale, d_alpha = (conv._delta_scale_args_i4(x.device) if is_int4
+                                else conv._delta_scale_args(x.device))
+            if getattr(conv, 'delta_dynamic', False):
+                d_scale, d_alpha = conv._scale_buf.view(1), conv._inv_scale_buf.view(1)
+        else:
+            ah = torch.empty(0, device=x.device, dtype=torch.float16)
+            d_scale, d_alpha = conv.static_input_scale.view(1), None
         if is_int4:
-            x_q = modiff_cutlass.upsample2x_quantize_pack_noahat_fprop(
-                x, conv.static_input_scale.view(1), smooth_inv)
-            return conv._conv_from_int4(x_q, x.shape[2] * 2, x.shape[3] * 2)
-        x_q = modiff_cutlass.upsample2x_quantize_noahat_fprop(
-            x, conv.static_input_scale.view(1), smooth_inv)
-        return conv._conv_from_int8(x_q)
+            x_q = modiff_cutlass.upsample2x_quantize_pack_noahat_fprop(x, d_scale, smooth_inv, ah)
+            return (conv._conv_from_int4_o_hat(x_q, x.shape[2] * 2, x.shape[3] * 2, d_alpha)
+                    if modiff else conv._conv_from_int4(x_q, x.shape[2] * 2, x.shape[3] * 2))
+        x_q = modiff_cutlass.upsample2x_quantize_noahat_fprop(x, d_scale, smooth_inv, ah)
+        return (conv._conv_from_int8_o_hat(x_q, d_alpha) if modiff
+                else conv._conv_from_int8(x_q))
 
 
 def convert_upsample_to_fused(module):

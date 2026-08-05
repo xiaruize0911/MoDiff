@@ -25,6 +25,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     // MoDiff temporal-delta cache update (kernels/modiff_delta_quantize.cu)
     m.def("sub_absmax_scale", &sub_absmax_scale, "Fused Subtract + AbsMax + Scale computation");
+    m.def("delta_absmax_fp16", &delta_absmax_fp16, "FP16-cache delta absmax + dynamic scale (reduction only)");
     m.def("step1_quantize_fprop", &step1_quantize_fprop, "Fused sub_absmax_scale + dequant + quantize for step 1");
     m.def("step1_quantize_no_ahat_fprop", &step1_quantize_no_ahat_fprop,
           "Benchmark-only: same as step1_quantize_fprop but skips the a_hat_cache write, to isolate the "
@@ -71,7 +72,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("conv2d_int4_fprop_no_ohat_prealloc_bias", &conv2d_int4_fprop_no_ohat_prealloc_bias, "Fused INT4 conv + dequant + bias into a preallocated output buffer");
     m.def("conv2d_int4_fprop_no_ohat_prealloc_bias_residual", &conv2d_int4_fprop_no_ohat_prealloc_bias_residual, "Fused INT4 conv + dequant + bias + residual (skip-add) into a preallocated output buffer");
     m.def("conv2d_int4_num_tuned_configs", &conv2d_int4_num_tuned_configs, "Number of autotunable tile configs for the INT4 conv");
-    m.def("conv2d_int4_fprop_tuned", &conv2d_int4_fprop_tuned, "INT4 conv (FP32 out) using tile config `config_id` (per-shape autotuning; <0 = default tile)");
     m.def("conv2d_int4_dequant_fp16_tuned", &conv2d_int4_dequant_fp16_tuned, "Deep-fuse INT4 conv (per-channel weight_scale folded into CUTLASS epilogue -> FP16 out, no fp32 temp) using tile config `config_id`");
     m.def("conv2d_int4_fprop_deepfuse_bias_residual_fp16", &conv2d_int4_fprop_deepfuse_bias_residual_fp16,
           "Deep-fuse INT4 conv (weight_scale in epilogue -> fp16) + per-channel bias + optional skip residual via a from_half store (no fp32 temp)");
@@ -142,17 +142,20 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "int8 output), computes GN from dequantized values, requantizes to int8 output");
     m.def("group_norm_silu_delta_quantize_nhwc", &group_norm_silu_delta_quantize_nhwc,
           "MoDiff-fused GroupNorm(+mod)+SiLU + INT8 temporal-delta quantize + in-place a_hat "
-          "update (fuses the modiff GN+step1_static_quantize_fprop_silu two-kernel pass)");
+          "update (fuses the modiff GN+step1_static_quantize_fprop_silu two-kernel pass). Pass "
+          "empty absmax_buf/scale_out/inv_scale_out/retire_count for the static scale, or real "
+          "1-element buffers for the dynamic per-call scale (adds one reduction pass, cannot clip)");
+    m.def("group_norm_silu_delta_quantize_resize_nhwc", &group_norm_silu_delta_quantize_resize_nhwc,
+          "MoDiff-fused GroupNorm(+mod)+SiLU + 2x resize + temporal-delta quantize + in-place "
+          "a_hat update (the updown ResBlocks' fusion, previously modiff-excluded)");
     m.def("group_norm_silu_delta_quantize_pack_nhwc", &group_norm_silu_delta_quantize_pack_nhwc,
           "MoDiff-fused GroupNorm(+mod)+SiLU + INT4 delta-quantize+pack + in-place a_hat update "
-          "(int4 counterpart; requires even channels-per-group)");
+          "(int4 counterpart; requires even channels-per-group). Same static/dynamic scale "
+          "contract as the INT8 sibling, Q_level 7.0");
     m.def("fused_gn_qkv", &fused_gn_qkv, "Fused GroupNorm->qkv (per-sample scale/bias mainloop fusion)");
-    m.def("fused_gn_qkv_int8", &fused_gn_qkv_int8, "Fused GroupNorm->qkv with int8-clamp output (oscale folded into weight/bias)");
     m.def("fused_gn_qkv_i8evt", &fused_gn_qkv_i8evt, "Fused GroupNorm->qkv, int8 output via fp32-bias/int8-clamp EVT epilogue (signed-qkv-correct)");
 
     // Fused int8/int4 flash attention (tensor-core, scores kept in SRAM, fp32 online softmax).
-    m.def("flash_attn_int8", &flash_attn_int8,
-          "Fused int8 flash attention: q,k,v int8 [N,H,T,hd_pad], sq,sk [N,H,T], sv [N,H,hd] -> out fp16 [N,H,T,hd]");
     m.def("flash_attn_int8_vt", &flash_attn_int8_vt,
           "Fused int8 flash attention, V PRE-TRANSPOSED [N,H,hd_pad,T] (skips internal transpose; mma path only)");
     m.def("flash_attn_int8_vt_static", &flash_attn_int8_vt_static,
@@ -186,8 +189,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           &flash_attn_i4values_i8mma_qi8_kv_static_qout_hd24,
           "Exact T1024/hd24 signed-int4-values route: token-major direct Q from the W4A4 layout "
           "epilogue, int8 MMA, packed-int4 projection input");
-    m.def("flash_attn_int4", &flash_attn_int4,
-          "Fused int4 flash attention (int4 QKᵀ, int8 PV): q4,k4 packed [N,H,T,hdp4/2], v int8 [N,H,T,hdp_v] -> fp16");
     m.def("flash_attn_int4_vt", &flash_attn_int4_vt,
           "Fused int4 flash attention, V PRE-TRANSPOSED int8 [N,H,hdp_v,T] (skips internal transpose)");
     m.def("flash_attn_int4_vt_static", &flash_attn_int4_vt_static,
@@ -213,13 +214,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "One-pass quantize for int4 flash: Q/K packed int4 + V int8-transposed -> {q4,k4,vt,sq,sk,sv}");
     m.def("quantize_attn_qkv_i4qk_i8v_static", &quantize_attn_qkv_i4qk_i8v_static,
           "Static (calibrated, single-pass) int4 Q/K + int8 V quantize for int4 flash");
-    m.def("mma_smoke", &mma_smoke, "m16n8k32.s8 fragment-mapping smoke test");
 
     // AWQ w8a8 GEMM, vendored verbatim from llm-awq (MIT, (c) 2023 MIT HAN Lab) -- faster than our
     // gemm_w8a8_awq on the qkv/proj shapes. in[M,K] int8, weight[N,K] int8, wscales[N] half,
     // ascales[M] half (per-token), out[M,N] fp16 PREALLOCATED. N%128==0, K%64==0.
-    m.def("awq_w8a8_gemm", &w8a8_gemm_forward_cuda,
-          "AWQ w8a8 GEMM (vendored from llm-awq, MIT): int8xint8 -> fp16, per-token ascale + per-channel wscale");
     m.def("gemm_w8a8_awq", &gemm_w8a8_awq,
           "W8A8 Linear (production): AWQ-tiling-scheme GEMM (CTA_M/N=128, ldmatrix+swizzle) -- "
           "C[M,N] fp16 = (A[M,K] int8 . B[N,K]^T int8) * a_scale * w_scale[n]; requires N%128==0, K%64==0");
@@ -228,6 +226,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "(n_out even), skipping padded cols -- removes the downstream slice+.contiguous() copy");
     m.def("gemm_w4a4_awq_nout", &gemm_w4a4_awq_nout,
           "W4A4 Linear, unpadded output: writes [M,n_out] directly (n_out even), skipping padded cols");
+    m.def("gemm_w8a8_awq_o_hat", &gemm_w8a8_awq_o_hat,
+          "Linear W8A8 GEMM + MoDiff o_hat accumulate in the epilogue (Eq 9, no bias)");
+    m.def("gemm_w4a4_awq_o_hat", &gemm_w4a4_awq_o_hat,
+          "Linear W4A4 GEMM + MoDiff o_hat accumulate in the epilogue (Eq 9, no bias)");
     m.def("gemm_w8a8_awq_bias_res", &gemm_w8a8_awq_bias_res,
           "W8A8 Linear + fused bias + optional residual in the epilogue (empty tensor = skip); removes the separate bias/residual add");
     m.def("gemm_w4a4_awq_bias_res", &gemm_w4a4_awq_bias_res,

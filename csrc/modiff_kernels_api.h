@@ -56,6 +56,14 @@ void sub_absmax_scale(torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor 
                       torch::Tensor absmax_buf, torch::Tensor scale_out, torch::Tensor inv_scale_out,
                       torch::Tensor retire_count, float Q_level, torch::Tensor smooth_inv);
 
+// FP16-cache twin of the above, reduction only (no residual store). Supplies the dynamic
+// MoDiff delta scale to the calibrated path, whose caches are fp16 and whose conv is the
+// EVT in-place o_hat RMW. Q_level selects int8 (127) or int4 (7).
+void delta_absmax_fp16(torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor absmax_buf,
+                       torch::Tensor scale_out, torch::Tensor inv_scale_out,
+                       torch::Tensor retire_count, float Q_level, torch::Tensor smooth_inv,
+                       bool fused_silu);
+
 torch::Tensor step1_quantize_fprop(
     torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor residual_buf,
     torch::Tensor absmax_buf, torch::Tensor scale_buf, torch::Tensor inv_scale_buf,
@@ -89,10 +97,16 @@ torch::Tensor step1_static_quantize_pack_int4_noahat_fprop(
 // Upsample(nearest,2x) + static quantize fusion (baseline conv, NO a_hat): fold Upsample.forward's
 // F.interpolate into the following conv's quantize prologue, never materializing the fp16 upsampled
 // intermediate. x is the SMALL pre-upsample [N,C,H,W]; output is [N,C,2H,2W] (int4: packed [N,2H,2W,C/2]).
+// `a_hat_cache` is OPTIONAL: empty => the cache-free baseline these were named for, bit-identical
+// to before it existed; fp16 [N,C,2H,2W] => MoDiff (subtract a_hat, quantize the delta, advance the
+// cache in place). One kernel serves both modes -- there is no cloned MoDiff twin, because the loop
+// already grids over output elements and so already visits each a_hat entry exactly once.
 torch::Tensor upsample2x_quantize_noahat_fprop(
-    torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv);
+    torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv,
+    torch::Tensor a_hat_cache);
 torch::Tensor upsample2x_quantize_pack_noahat_fprop(
-    torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv);
+    torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv,
+    torch::Tensor a_hat_cache);
 
 // Downsample(avg_pool,2x2,stride2) + static quantize fusion (baseline conv, NO a_hat): fold
 // Downsample.forward's nn.AvgPool2d into the following conv's quantize prologue, never
@@ -321,12 +335,25 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc(
     torch::Tensor x, torch::Tensor weight, torch::Tensor bias, torch::Tensor a_hat_cache,
     int64_t num_groups, double eps, bool apply_silu,
     torch::Tensor scale, torch::Tensor smooth_inv,
-    torch::Tensor mod_scale, torch::Tensor mod_shift);
+    torch::Tensor mod_scale, torch::Tensor mod_shift,
+    torch::Tensor absmax_buf, torch::Tensor scale_out, torch::Tensor inv_scale_out,
+    torch::Tensor retire_count, double Q_level, bool report_next, double safety);
+// MoDiff twin of group_norm_silu_quantize_resize_nhwc: fuses GN(+mod)(+SiLU)+2x resize+delta
+// quantize+in-place a_hat for the eight updown ResBlocks, which get no fusion otherwise.
+torch::Tensor group_norm_silu_delta_quantize_resize_nhwc(
+    torch::Tensor x, torch::Tensor weight, torch::Tensor bias,
+    int64_t num_groups, double eps, bool apply_silu,
+    torch::Tensor scale, torch::Tensor smooth_inv,
+    torch::Tensor mod_scale, torch::Tensor mod_shift,
+    int64_t k_pad, int64_t resize, bool pack, torch::Tensor a_hat_cache);
+
 torch::Tensor group_norm_silu_delta_quantize_pack_nhwc(
     torch::Tensor x, torch::Tensor weight, torch::Tensor bias, torch::Tensor a_hat_cache,
     int64_t num_groups, double eps, bool apply_silu,
     torch::Tensor scale, torch::Tensor smooth_inv,
-    torch::Tensor mod_scale, torch::Tensor mod_shift);
+    torch::Tensor mod_scale, torch::Tensor mod_shift,
+    torch::Tensor absmax_buf, torch::Tensor scale_out, torch::Tensor inv_scale_out,
+    torch::Tensor retire_count, double Q_level, bool report_next, double safety);
 
 // ---- csrc/kernels/norm/fused_gn_qkv.cu ----
 torch::Tensor fused_gn_qkv(
@@ -342,7 +369,6 @@ torch::Tensor fused_gn_qkv_i8evt(
     int groups, double eps, double shift);
 
 // ---- csrc/kernels/linear/awq_w8a8_gemm_cuda.cu (vendored from llm-awq, MIT) ----
-void w8a8_gemm_forward_cuda(torch::Tensor in_feats, torch::Tensor kernel, torch::Tensor wscales, torch::Tensor ascales, torch::Tensor out_feats);
 
 // ---- csrc/kernels/linear/gemm_wxax.cu ----
 // Production Linear GEMM backend: AWQ-tiling-scheme ports (CTA_M/N=128, CTA_K=64,
@@ -354,6 +380,19 @@ void w8a8_gemm_forward_cuda(torch::Tensor in_feats, torch::Tensor kernel, torch:
 torch::Tensor gemm_w8a8_awq(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale);
 torch::Tensor gemm_w8a8_awq_nout(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale, int64_t n_out);
 torch::Tensor gemm_w4a4_awq_nout(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale, int64_t K, int64_t n_out);
+// MoDiff o_hat accumulate in the Linear GEMM epilogue (Eq 9). No bias parameter: on a modulated
+// step the bias belongs to o_hat_T only. `residual` empty => returns o_hat itself; given => also
+// returns o_hat_t + residual as a separate tensor (the ResBlock/attention skip, which must NOT be
+// folded into the temporal state).
+// a_scale is a 1-element fp32 DEVICE tensor, not a double: the MoDiff delta scale is produced on
+// device each call, and taking it by value would force a host sync per linear per step.
+torch::Tensor gemm_w8a8_awq_o_hat(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale,
+                                  torch::Tensor a_scale, int64_t n_out, torch::Tensor o_hat,
+                                  torch::Tensor residual, torch::Tensor bias);
+torch::Tensor gemm_w4a4_awq_o_hat(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale,
+                                  torch::Tensor a_scale, int64_t n_out, torch::Tensor o_hat,
+                                  torch::Tensor residual, torch::Tensor bias);
+
 torch::Tensor gemm_w8a8_awq_bias_res(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale, int64_t n_out, torch::Tensor bias, torch::Tensor residual);
 torch::Tensor gemm_w4a4_awq_bias_res(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale, int64_t K, int64_t n_out, torch::Tensor bias, torch::Tensor residual);
 torch::Tensor gemm_w8a8_awq_out_i8(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale, torch::Tensor inv_out_scale);

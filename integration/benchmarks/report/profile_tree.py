@@ -95,7 +95,12 @@ RULES = [
       "group_norm_silu_dequant_quantize"]),
     ("Normalization", "MoDiff GN+SiLU+delta-quantize+cache apply",
      ["gn_apply_delta_quantize", "group_norm_silu_delta_quantize"]),
-    ("Normalization", "GN group-statistics reduction (mean/var; deliberately scalar)",
+    # "deliberately scalar" was true until 2026-08-04: the group-major tree kernel was kept scalar
+    # because its vectorized twin perturbed var by ~1 ULP and flipped int8 codes. That constraint
+    # died with the switch to a dynamic delta scale (bit-exactness vs the old path is gone by
+    # design), and the default is now gn_stats_partials_chanmajor_kernel -- channel-major, fully
+    # coalesced, atomic-free and deterministic. 9.61 -> 3.35 ms/step at batch 128.
+    ("Normalization", "GN group-statistics reduction (mean/var)",
      ["gn_group_stats", "gn_stats_"]),
     ("Normalization", "GN+SiLU only (fp16 out; updown blocks + fp16 mode)",
      ["group_norm_silu_nhwc", "group_norm", "layer_norm"]),

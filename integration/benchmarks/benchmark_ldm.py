@@ -706,11 +706,23 @@ class BenchmarkRunner:
                 from integration.kernels.wxax_linear import (
                     convert_linears_to_wxax, set_wxax_calibrating, finalize_wxax_ascale, reset_wxax_modiff)
                 lb = 4 if "int4" in mode else 8
-                # MoDiff temporal-delta on the LINEAR activations was tried and is
-                # counterproductive (rel-err diverges 0.06->3.2 as quant error accumulates
-                # over DDIM steps, +memory, slower). So all modes use the static W/A linear
-                # quant; the baseline/modiff distinction stays in the conv path only.
-                is_modiff = False
+                # MoDiff temporal-delta on the LINEAR activations was disabled because rel-err
+                # diverged 0.06 -> 3.2 over DDIM steps. That divergence had a single cause --
+                # Bug 2, wxax_linear.py passing the already-quantized codes `q` into _gemm(),
+                # which re-quantized them and saturated every nonzero delta to +-127, poisoning
+                # o_hat while a_hat stayed correct. Bug 2 was fixed 2026-08-03, so the stated
+                # reason for this flag no longer holds and it is now measurable rather than
+                # assumed: MODIFF_LINEAR=1 turns it on.
+                #
+                # It stays OFF by default for a different and still-valid reason: the linear
+                # MoDiff path has no GEMM o_hat-accumulate epilogue, so it costs three extra
+                # full-tensor PyTorch launches per linear per step. That is a speed argument
+                # (Stage 3.3 fixes it), not a correctness one -- do not restore the old comment.
+                # Gate on the MODE, not just the flag: MODIFF_LINEAR=1 previously turned Linear
+                # MoDiff on in int8_baseline / int4_baseline too, which made the "baseline" rows of
+                # an A/B carry MoDiff and moved them by +25 ms/step. A baseline must stay a baseline.
+                is_modiff = (os.environ.get("MODIFF_LINEAR", "0") == "1"
+                             and mode in ("int8", "int4"))
                 n_lin = convert_linears_to_wxax(model.model.diffusion_model, bits=lb, modiff=is_modiff)
                 print(f"✓ Quantized {n_lin} Linear layers to W{lb}A{lb} (modiff={is_modiff})")
                 if n_lin > 0:   # static activation-scale calibration (short sample)
@@ -791,9 +803,26 @@ class BenchmarkRunner:
         except Exception as e:
             print(f"✗ torch.compile failed: {e}")
     
-    def _calibrate_int8(self, model, sampler, num_runs: int = 10):
-        """Calibrate INT8 quantization scales (conv + linear)."""
-        print(f"Calibrating INT8 ({num_runs} runs)...")
+    def _calibrate_int8(self, model, sampler, num_runs: int = 10,
+                        calib_steps: int = None, calib_batch: int = None,
+                        refine_rounds: int = 1):
+        """Calibrate INT8 quantization scales (conv + linear).
+
+        `calib_steps`/`calib_batch` default to the runner's own configuration, i.e. the run this
+        calibration is FOR. They used to be hardcoded S=5, batch=2 while production runs 20-200 steps
+        at batch 4-128, so the observed activation range was systematically short of the real one:
+        measured 2026-08-03 with `effective_code_utilisation` (Q=127 is full scale), the conv
+        activations ran at 326 (in_conv) / 631 (out_conv) -- i.e. clipping ~2.6-5x -- and matching
+        only the horizon already recovered 246 / 580. This affects the BASELINE as much as MoDiff:
+        both read the same static scales.
+
+        Capped, because calibration cost is linear in both: a 200-step production run does not need a
+        200-step calibration to see the range plateau, and batch is capped where the extreme-value
+        gain flattens. Pass explicit values to override.
+        """
+        calib_steps = min(int(calib_steps or self.steps or 5), 50)
+        calib_batch = min(int(calib_batch or self.batch_size or 2), 8)
+        print(f"Calibrating INT8 ({num_runs} runs, S={calib_steps}, batch={calib_batch})...")
         reset_calibration_int8()
         set_calibrating_int8(model.model.diffusion_model, True)
         if HAS_INT8_LINEAR:
@@ -809,13 +838,41 @@ class BenchmarkRunner:
                 # without this, attention's temporal cache would carry state across what are
                 # meant to be independent calibration samples.
                 reset_attention_modiff(model.model.diffusion_model)
-                sampler.sample(S=5, batch_size=2, shape=self.shape, eta=0.0, verbose=False,
-                               **self._cond_kwargs(model, 2))
+                sampler.sample(S=calib_steps, batch_size=calib_batch, shape=self.shape,
+                               eta=0.0, verbose=False,
+                               **self._cond_kwargs(model, calib_batch))
 
         get_calibration_config_int8().finalize()
         set_calibrating_int8(model.model.diffusion_model, False)
         if HAS_INT8_LINEAR:
             set_calibrating_linear(model.model.diffusion_model, False)
+
+        # REFINEMENT ROUNDS. Round 0 necessarily observes the UNCALIBRATED path (is_calibrated is
+        # False while calibrating), whose numerics differ from the calibrated path production
+        # actually runs -- in MoDiff mode a_hat/o_hat evolve differently, so the activations differ.
+        # Calibrating on one path and running the other left the quantizer 4x short even with the
+        # horizon and batch matched: measured effective_code_utilisation 170 (in_conv) / 521
+        # (out_conv) against Q=127. Re-observing on the now-calibrated path closes that.
+        #
+        # SmoothQuant is not re-derived: _fold_weights_with_smooth releases _orig_weight, so
+        # _apply_smoothquant is skipped from round 1 on and end_calibration takes its
+        # "_act_channel_max is not None" branch -- the per-channel smooth scale from round 0 is kept
+        # and only the per-tensor scale is refreshed. That is what we want; refolding the weights
+        # every round would move the target.
+        for _ in range(max(0, int(refine_rounds))):
+            set_calibrating_int8(model.model.diffusion_model, True)
+            with torch.no_grad():
+                for _ in range(num_runs):
+                    reset_modiff_state_int8(model.model.diffusion_model)
+                    if HAS_INT8_LINEAR:
+                        reset_modiff_state_linear(model.model.diffusion_model)
+                    reset_attention_modiff(model.model.diffusion_model)
+                    sampler.sample(S=calib_steps, batch_size=calib_batch, shape=self.shape,
+                                   eta=0.0, verbose=False,
+                                   **self._cond_kwargs(model, calib_batch))
+            get_calibration_config_int8().finalize()
+            set_calibrating_int8(model.model.diffusion_model, False)
+
         num_layers = len(get_calibration_config_int8().scales)
         
         # Merge linear scales into the calibration dict
@@ -832,9 +889,15 @@ class BenchmarkRunner:
             torch.save(all_scales, self.calibration_path)
             print(f"✓ Saved INT8 static scales: {self.calibration_path}")
     
-    def _calibrate_int4(self, model, sampler, num_runs: int = 5):
-        """Calibrate INT4 quantization scales (dynamic to static transition)."""
-        print(f"Calibrating INT4 ({num_runs} runs for speed)...")
+    def _calibrate_int4(self, model, sampler, num_runs: int = 5,
+                        calib_steps: int = None, calib_batch: int = None):
+        """Calibrate INT4 quantization scales (dynamic to static transition).
+
+        Same horizon/batch fix as _calibrate_int8 -- see there. It matters more at 4 bits: with only
+        15 levels there is no headroom to absorb a range the calibration never saw."""
+        calib_steps = min(int(calib_steps or self.steps or 5), 50)
+        calib_batch = min(int(calib_batch or self.batch_size or 2), 8)
+        print(f"Calibrating INT4 ({num_runs} runs, S={calib_steps}, batch={calib_batch})...")
         from integration.kernels.int4_optimized import set_calibrating_int4
         from integration.kernels.modiff_attention import reset_attention_modiff
 
@@ -861,8 +924,9 @@ class BenchmarkRunner:
                 # needs representative activation statistics, not production-size
                 # batches, so using self.batch_size here was doing up to ~84x more
                 # compute/memory than calibration requires.
-                sampler.sample(S=5, batch_size=2, shape=self.shape, eta=0.0, verbose=False,
-                               **self._cond_kwargs(model, 2))
+                sampler.sample(S=calib_steps, batch_size=calib_batch, shape=self.shape,
+                               eta=0.0, verbose=False,
+                               **self._cond_kwargs(model, calib_batch))
 
         set_calibrating_int4(model.model.diffusion_model, False)
         if HAS_INT4_LINEAR:

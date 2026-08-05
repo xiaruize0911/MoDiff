@@ -142,7 +142,10 @@ def main():
 
         def two_kernel():
             h = mc.group_norm_silu_nhwc(x, gamma, beta, GROUPS, EPS, True, empty, empty)
-            return resize_fn(h, scale_t, empty_f)
+            # upsample2x/avgpool2x now take an OPTIONAL trailing a_hat_cache; empty = the
+            # cache-free baseline this test compares against (verified bit-identical).
+            return (resize_fn(h, scale_t, empty_f, x.new_empty(0, dtype=torch.float16))
+                    if direction > 0 else resize_fn(h, scale_t, empty_f))
 
         def fused():
             return mc.group_norm_silu_quantize_resize_nhwc(

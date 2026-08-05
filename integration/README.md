@@ -57,24 +57,35 @@ python integration/benchmarks/generate_extended_report.py
 
 ## Benchmark Results (LDM LSUN-Churches, 100 steps, NVIDIA L40S)
 
+> ⚠ **The FID column cannot be reproduced in this checkout, and the INT4 note is wrong.**
+> `models/ldm/lsun_churches256/model.ckpt` here is an 856-byte stub whose `state_dict` has 0 entries,
+> loaded `strict=False`, so every weight is random; on top of that `UNetModel.out[-1]` is a
+> `zero_module`, which makes the UNet's epsilon prediction identically zero. No image-quality number
+> can come from this tree — see `docs/gn_qkv_fusion_2026-08-03/FINDINGS.md` §5. Treat 8.20 as
+> inherited from elsewhere (provenance unknown) until it is regenerated against a real checkpoint.
+> The timings are on an L40S and predate the current kernels; the measured, reproducible numbers are
+> in `docs/MEASUREMENT_REPORT_2026-08-01.md` (A40, batch 128).
+
 | Mode | Time/Sample | Speedup | FID (50k) | Notes |
 |------|-------------|---------|-----------|-------|
 | FP32 | 0.271s | 1.00x | - | TF32 disabled |
 | FP16 | 0.231s | 1.17x | - | torch.autocast |
-| **INT8** | **0.254s** | **1.07x** | **8.20** | CUTLASS Tensor Cores, dynamic residuals |
-| **INT4** | **0.227s** | **1.19x** | - | INT4→INT8 unpacking, fastest mode |
+| **INT8** | **0.254s** | **1.07x** | 8.20 ⚠ unreproducible here | CUTLASS Tensor Cores |
+| **INT4** | **0.227s** | **1.19x** | - | native CUTLASS s4 (not "INT4→INT8 unpacking") |
 
 ## Key Features
 
 ### CUTLASS Tensor Core Acceleration
 - INT8 convolution using CUTLASS implicit GEMM
-- INT4 unpacks to INT8 for Tensor Core execution
+- INT4 uses native CUTLASS s4 Tensor Cores (`cutlass::int4b_t`, csrc/kernels/conv/conv2d_int4.cu:52);
+  it does NOT unpack to INT8 -- that description was stale
 - Per-channel weight quantization, per-tensor activation quantization
 
 ### Dynamic Residual Quantization
 - Prevents blurring by using dynamic scales for residuals
 - Static scales for forward pass, dynamic for MoDiff error compensation
-- FID of 8.20 demonstrates excellent quality preservation
+- (An FID of 8.20 was previously claimed here. It cannot be produced in this checkout --
+  stub checkpoint, zero UNet output -- so the claim is withdrawn pending a real ckpt.)
 
 ### Adaptive Precision
 - Converts Conv2d layers with `in_channels >= 32` to INT8/INT4 (see
@@ -85,9 +96,33 @@ python integration/benchmarks/generate_extended_report.py
 - Percentile-based calibration (99.99%) for optimal scale selection
 
 ### MoDiff Temporal Caching
-- Reuses previous timestep outputs
-- Computes only residual convolutions for subsequent steps
-- Error compensation maintains quality with reduced computation
+- Reuses previous timestep outputs: `ô_t = A(Q(a_t − â_{t+1})) + ô_{t+1}` (paper Eqs 13–14)
+- **Same FLOPs, not fewer.** "Computes only residual convolutions" used to appear here and is wrong:
+  every convolution still runs at full size every step. What changes is *what is quantized* — the
+  temporal delta instead of the activation — which by Theorem 4.3 (`‖x − Q(x)‖² ≤ s²d`) shrinks the
+  quantization error because the delta's range is smaller. Measured on this tree: a 12.5× median
+  reduction in quantizer step, i.e. ~155× in squared error
+  (`docs/modiff_correctness_2026-08-03/FINDINGS.md`).
+- Costs extra HBM traffic, which is intrinsic: the `â` read-modify-write plus the `ô` accumulate mean
+  ~2.3× the bytes of the non-MoDiff path per large conv. The honest framing is quality-at-low-bits,
+  not wall-clock speedup.
+- Error compensation (`e_t = a_t − â_t` fed forward) is what stops that error accumulating across
+  steps; verified by `test_kernel_correctness.py::modiff_invariants`.
+
+## Script prerequisites
+
+Checked 2026-08-03 by importing each:
+
+| script | status |
+|---|---|
+| `scripts/sample_diffusion_ldm.py` | **cannot run** — imports `qdiff` (Q-Diffusion), which is neither vendored in this tree nor in `requirements.txt`. Vendor it or drop the script. |
+| `scripts/sample_diffusion_ddim.py` | fine — needs `lmdb`, which *is* pinned (`requirements.txt:27`) |
+| `scripts/txt2img.py` | fine — needs `opencv-python`, which *is* pinned (`requirements.txt:30`) |
+
+If an import fails on `lmdb`/`cv2`/`omegaconf`/`einops`, the container has simply lost its packages:
+run `pip install -r requirements.txt`. That file pins `torchmetrics==0.6.0` deliberately —
+`pytorch-lightning==1.4.2` imports `torchmetrics.utilities.data.get_num_classes`, which newer
+torchmetrics removed, so installing packages one at a time will miss the constraint and break.
 
 ## Usage
 
@@ -171,7 +206,8 @@ python integration/calculate_fid_lmdb.py \
     --batch_size 50 \
     --output results/int8_50k/fid_score.txt
 
-# Result: INT8 FID = 8.20 (excellent quality)
+# NOTE: needs a REAL checkpoint. With the 856-byte stub in this tree the UNet output is
+# identically zero, so every mode produces the same latents and FID is meaningless.
 cat results/int8_50k/fid_score.txt
 ```
 
@@ -198,29 +234,31 @@ Just ensure Triton is installed: `pip install triton`.
 - **Convolution**: CUTLASS implicit GEMM (INT8 × INT8 → INT32)
 - **Calibration**: Percentile-based (99.99%) for optimal scales
 
-### INT4 Implementation ⚠️ **Incomplete - Not True INT4 MoDiff**
+### INT4 Implementation
 
-**Current Status**: Uses INT8 CUTLASS backend with INT4 weights (not native INT4 Tensor Cores)
+All four limitations previously listed here were **out of date and are removed** — each was checked
+against the code on 2026-08-03:
 
-**Critical Limitations**:
-- ❌ **FP32 caches**: MoDiff temporal caches stored in FP32 (wastes 4× memory)
-- ❌ **FP32 residuals**: Residual computation in FP32, then re-quantized each step
-- ❌ **INT8 backend**: Unpacks INT4→INT8 before computation (adds overhead)
-- ❌ **No native INT4**: Doesn't use CUTLASS INT4 Tensor Cores (sm_89 supports this)
+- *"Uses an INT8 backend / unpacks INT4→INT8"* — no. `csrc/kernels/conv/conv2d_int4.cu:52-53`
+  instantiates CUTLASS with `cutlass::int4b_t` for both operands; the weight stays packed
+  (`weight_packed.data_ptr()` cast to `int4b_t*`, `:167-168`). It is a native s4 convolution.
+- *"No native INT4 Tensor Cores (sm_89 supports this)"* — native s4 IMMA is available from sm_75, and
+  this repo's target is **sm_86** (A40), where it works. The claim also misidentifies the requirement.
+- *"FP32 caches"* — no. `_cache_dtype()` (`integration/kernels/int4_optimized.py:175`) returns fp16
+  once calibrated. fp32 is the uncalibrated window only.
+- *"FP32 residuals, re-quantized each step"* — the temporal delta is formed and quantized inside one
+  kernel (`group_norm_silu_delta_quantize_pack_nhwc` / `step1_static_quantize_pack_int4_fprop`), with
+  the `o_hat` accumulate folded into the conv's CUTLASS EVT epilogue (`conv2d_int4_evt_o_hat`). There
+  is no fp32 round trip on the calibrated path.
 
-**What it actually does**:
-1. Pack weights to INT4 (2 values per byte)
-2. **Unpack INT4→INT8** at runtime
-3. Call INT8 CUTLASS convolution
-4. Store caches in **FP32** (not INT4!)
-
-**Expected behavior** (when properly implemented):
-- ✓ Store caches as `uint8` (INT4 packed) → 4× memory savings
-- ✓ Compute residuals in INT4 precision → less overhead  
-- ✓ Use native INT4 CUTLASS Tensor Cores → ~1.5-1.8× speedup vs INT8
+**Real remaining limitation**: the `a_hat`/`o_hat` caches are fp16, not packed int4, so MoDiff's
+memory overhead is 2 bytes per activation element rather than 0.5. Storing `a_hat` as int codes is
+tracked as a possible future change; it is a bandwidth question, not a correctness one.
 
 **Current performance**: 1.19× speedup (only from INT8 backend, INT4 adds overhead)
 
-**Recommendation**: **Use INT8 mode for production** (fully optimized, 1.18× speedup, FID=8.20)
+**Recommendation**: **Use INT8 mode for production** (fully optimized, 1.18× speedup).
+The FID=8.20 that used to appear here is withdrawn -- unreproducible in this checkout, see
+the note under Benchmark Results.
 
 **See**: [INT4_ANALYSIS.md](../INT4_ANALYSIS.md) for detailed explanation and fix roadmap.

@@ -154,6 +154,25 @@ class OptimizedInt4Linear(nn.Module):
         if not self.modiff_enabled:
             return self._linear(x, with_bias=True)
 
+        # `_linear` is fp16-only here -- W4A4 was removed from this class, see the class docstring.
+        # So the MoDiff temporal-cache bookkeeping below rounds x - a_hat onto an INT4 grid (15
+        # levels) and feeds the dequantized result to an FP16 GEMM: it injects quantization noise
+        # and pays 3 extra full-tensor launches (the x - a_hat subtract,
+        # dequant_accumulate_and_return_int4, and the o_hat add) for exactly zero GEMM benefit.
+        # Measured 2026-08-03: dequant_accumulate_and_return_int4 fired 185x over 5 DDIM steps in
+        # mode int4, i.e. once per quantized Linear per step, all of it waste.
+        #
+        # Skip the whole path and run a plain per-step fp16 linear: strictly higher quality (no
+        # injected rounding) and strictly cheaper. This mirrors the short-circuit
+        # OptimizedInt8Linear._forward_2d already has for its K-gate; int4 never got it.
+        # If W4A4 is restored to `_linear`, revert this to the dispatch preserved in
+        # `_forward_2d_modulated` below -- the delta quantization becomes load-bearing again then.
+        self.step_count += 1
+        return self._fp16_linear(x, with_bias=True)
+
+    def _forward_2d_modulated(self, x: torch.Tensor) -> torch.Tensor:
+        """The MoDiff dispatch `_forward_2d` used before 2026-08-03. Currently unreachable; kept
+        because it is the correct shape for this class once `_linear` can do W4A4 again."""
         if x.dtype != torch.float32:
             x = x.float()
 

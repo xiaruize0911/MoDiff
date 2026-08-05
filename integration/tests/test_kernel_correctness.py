@@ -101,6 +101,160 @@ def _calib_conv(opt, x0):
     return opt
 
 
+
+# ---- Stage 6: MoDiff invariants + the code-utilisation metric ------------------------------
+#
+# Written because the same measurement was got wrong twice from ad-hoc instrumentation. These
+# tests pin the metric and the two invariants that define MoDiff (paper Eqs 13-14, 18), on
+# synthetic tensors at production shapes -- no checkpoint, so none of the vacuity that affects
+# layer/e2e checks in this tree applies (docs/gn_qkv_fusion_2026-08-03/FINDINGS.md section 5).
+
+
+def _calib_conv_smooth(opt, x0):
+    """Calibrate WITH SmoothQuant left active, unlike _calib_conv which nulls it.
+
+    _calib_conv deliberately takes end_calibration's no-SmoothQuant branch, so every existing test
+    runs with smooth_inv == identity -- which is exactly the regime where the utilisation metric is
+    easy to get right. The interesting regime is the other one.
+    """
+    opt.set_calibrating(True)
+    _ = opt(x0)
+    opt.set_calibrating(False)          # folds SmoothQuant into the weights
+    opt.set_standard_output_fp16(True)
+    opt.enable_modiff(False)
+    return opt
+
+
+def _modiff_trajectory(opt, C, HW, N, steps, drift=0.02):
+    """Run a slowly-varying trajectory through a MoDiff conv; yield (a_t, a_hat, o_hat) per step."""
+    a = torch.randn(N, C, HW, HW, device=DEV, dtype=torch.float16).contiguous(
+        memory_format=torch.channels_last)
+    for _ in range(steps):
+        a = (a + drift * torch.randn(N, C, HW, HW, device=DEV, dtype=torch.float16)).contiguous(
+            memory_format=torch.channels_last)
+        opt(a)
+        if opt.a_hat_cache is not None and not opt.is_first_step:
+            yield a, opt.a_hat_cache, opt.o_hat_cache
+
+
+def test_modiff_invariants_int8():
+    """I1: ||a - a_hat||inf bounded by half a step.  I2: o_hat == conv(a_hat).
+
+    Both under SmoothQuant-active calibration, which no other test in this file covers.
+    """
+    from integration.kernels.int8_optimized import OptimizedInt8Conv2d
+    torch.manual_seed(0)
+    C, HW, N, STEPS = 128, 16, 8, 25
+    conv = nn.Conv2d(C, C, 3, padding=1).to(DEV)
+    opt = _calib_conv_smooth(OptimizedInt8Conv2d(conv).to(DEV),
+                             torch.randn(N, C, HW, HW, device=DEV)).to(
+                                 memory_format=torch.channels_last)
+    opt.enable_modiff(True)
+    w_deq = opt.dequantized_weight()
+    smooth_active = not opt._smooth_is_identity
+
+    worst_i1, worst_i2 = 0.0, 0.0
+    for a, a_hat, o_hat in _modiff_trajectory(opt, C, HW, N, STEPS):
+        # I1 is stated in the SMOOTHED domain, because a_hat_cache stores the smoothed value:
+        # the kernel computes cache += q/scale on x*smooth_inv, not on x.
+        a_s = a.float()
+        if smooth_active:
+            a_s = a_s * opt._smooth_inv.float()
+        step = 1.0 / float(opt.static_input_scale.item())          # one code in the smoothed domain
+        worst_i1 = max(worst_i1, (a_s - a_hat.float()).abs().max().item() / step)
+        # I2: o_hat must still be conv(a_hat) with the smoothed dequantized weight.
+        ref = F.conv2d(a_hat.float(), w_deq, padding=1)
+        worst_i2 = max(worst_i2, rel_err(o_hat.float(), ref))
+
+    # I1 tolerance: half a code from rounding plus the fp16 ulp of a_hat. Measured 0.54, so 2.0
+    # leaves headroom for shape/scale variation while still being a real bound -- a clipped delta or
+    # a broken a_hat update sends this well above 1 (see the positive control below).
+    #
+    # POSITIVE CONTROL: a test that cannot fail is decoration. Force a wildly wrong delta scale and
+    # confirm I1 detects it. This mirrors what caught Bug 2 (o_hat drift) in the linear path.
+    #
+    # The control must be pinned to STATIC mode. It works by injecting a bad value into
+    # static_delta_scale, and dynamic mode computes its scale on device from the actual delta -- so
+    # under MODIFF_DELTA_MODE=dynamic the injection is correctly ignored, the control reports "1x
+    # worse", and the test would fail for the wrong reason. Pin the flag rather than skip, so the
+    # control still runs (and still guards the static path) in either mode.
+    was_dynamic = opt.delta_dynamic
+    opt.delta_dynamic = False
+    opt.reset_state(); opt.enable_modiff(True)
+    opt.static_delta_scale.fill_(float(opt.static_input_scale.item()) * 1e-4)   # 10000x too coarse
+    opt.static_delta_alpha.copy_(1.0 / opt.static_delta_scale.clamp_min(1e-12))
+    opt.is_delta_calibrated.fill_(True)
+    broken_i1 = 0.0
+    for a, a_hat, _ in _modiff_trajectory(opt, C, HW, N, 6):
+        a_s = a.float() * (opt._smooth_inv.float() if smooth_active else 1.0)
+        broken_i1 = max(broken_i1, (a_s - a_hat.float()).abs().max().item()
+                        / (1.0 / float(opt.static_input_scale.item())))
+    opt.is_delta_calibrated.fill_(False)
+    opt.delta_dynamic = was_dynamic
+
+    control_ok = broken_i1 > 10.0 * max(worst_i1, 1e-9)
+    ok = worst_i1 <= 2.0 and worst_i2 <= 0.05 and smooth_active and control_ok
+    return ("modiff_invariants", ok,
+            f"mode={'dynamic' if was_dynamic else 'static'} smooth={smooth_active} "
+            f"I1={worst_i1:.2f} codes (<=2) I2={worst_i2:.4f} (<=0.05) "
+            f"control(static): broken I1={broken_i1:.1f} "
+            f"({broken_i1/max(worst_i1,1e-9):.0f}x worse)")
+
+
+def test_code_utilisation_metric():
+    """The metric must read ~Q when matched and >>Q when the scale is under-provisioned.
+
+    This is the positive control for effective_code_utilisation. It is the check that would have
+    caught both earlier mis-measurements: `127/static_input_scale` as the range (wrong under
+    SmoothQuant) and a raw forward-hook absmax (wrong because some entry points get int8 codes).
+    """
+    from integration.kernels.int8_optimized import OptimizedInt8Conv2d
+    torch.manual_seed(0)
+    C, HW, N = 128, 16, 8
+    conv = nn.Conv2d(C, C, 3, padding=1).to(DEV)
+    xcal = torch.randn(N, C, HW, HW, device=DEV)
+
+    res = {}
+    for tag, calib in (("identity", _calib_conv), ("smoothquant", _calib_conv_smooth)):
+        torch.manual_seed(0)
+        opt = calib(OptimizedInt8Conv2d(nn.Conv2d(C, C, 3, padding=1).to(DEV)).to(DEV),
+                    xcal.clone()).to(memory_format=torch.channels_last)
+        matched = opt.effective_code_utilisation(xcal.half())
+        # Under-provision by 8x: same layer, 8x larger activations than it was calibrated for.
+        over = opt.effective_code_utilisation((xcal * 8.0).half())
+        res[tag] = (matched, over)
+
+    # Matched should sit near Q (not above it by much); the 8x case must be detected as ~8x worse.
+    ok = all(0.3 * 127 <= m <= 1.6 * 127 and o / max(m, 1e-9) > 6.0 for m, o in res.values())
+    detail = "  ".join(f"{t}: matched={m:.0f} over8x={o:.0f}" for t, (m, o) in res.items())
+    return "code_utilisation", ok, detail
+
+
+def test_modiff_determinism_int8():
+    """Same input replayed must give bit-identical o_hat growth (no atomics in the modiff path)."""
+    from integration.kernels.int8_optimized import OptimizedInt8Conv2d
+    torch.manual_seed(0)
+    C, HW, N = 128, 16, 8
+    conv = nn.Conv2d(C, C, 3, padding=1).to(DEV)
+    opt = _calib_conv(OptimizedInt8Conv2d(conv).to(DEV),
+                      torch.randn(N, C, HW, HW, device=DEV)).to(memory_format=torch.channels_last)
+    x = torch.randn(N, C, HW, HW, device=DEV, dtype=torch.float16).contiguous(
+        memory_format=torch.channels_last)
+
+    def run():
+        opt.reset_state(); opt.enable_modiff(True)
+        for _ in range(6):
+            opt(x)
+        return opt.o_hat_cache.clone(), opt.a_hat_cache.clone()
+
+    o0, a0 = run()
+    same = True
+    for _ in range(9):
+        o, a = run()
+        same &= bool(torch.equal(o, o0) and torch.equal(a, a0))
+    return "modiff_determinism", same, f"bit-identical over 10 replays: {same}"
+
+
 # ---- individual checks: return (name, ok, detail) ----
 
 def test_int8_conv():
@@ -404,7 +558,9 @@ def test_int8_export_apply():
 TESTS = [test_int8_conv, test_int8_conv_channels_last, test_int8_dual_store,
          test_int4_conv, test_int4_dual_store, test_int8_modiff_conv, test_int4_modiff_conv,
          test_int4_export_apply, test_int8_export_apply,
-         test_int8_linear, test_group_norm_silu, test_fused_gn_qkv]
+         test_int8_linear, test_group_norm_silu, test_fused_gn_qkv,
+         test_modiff_invariants_int8, test_code_utilisation_metric,
+         test_modiff_determinism_int8]
 
 
 def main():

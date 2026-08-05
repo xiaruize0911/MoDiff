@@ -57,14 +57,30 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         assert bits in (4, 8)
         self.bits = bits
         # Opt-in (MODIFF_FUSE_GN_QKV_INT8=1): even in quant mode, run the fp16 fused GN->qkv (A)
-        # for eligible blocks (T%128==0, c%8==0). Measured faster than the int8 separate qkv on the
-        # big memory-bound blocks (T=1024: 1.37x, T=256: 1.15x) since int8 doesn't speed up these
-        # small projections but the fusion removes the separate GroupNorm + its round-trip. int8
-        # only (int4 qweight is nibble-packed, can't cheaply rebuild the fp16 weight).
+        # for eligible blocks (T%128==0, c%8==0). int8 only (int4 qweight is nibble-packed, can't
+        # cheaply rebuild the fp16 weight).
+        #
+        # SUPERSEDED, and unreachable in steady state: _int8_qkv_epilogue_forward returns before
+        # this branch, so the flag only does anything with MODIFF_INT8_QKV_EPILOGUE=0. The
+        # 1.37x/1.15x this comment used to claim was measured 2026-07-23 against the then baseline,
+        # a week before the QKV int8-epilogue route existed. Re-measured 2026-08-03 against today's
+        # routes (docs/gn_qkv_fusion_2026-08-03): 0.901x at T=1024 and 0.754x vs production, and
+        # 0.983x/0.854x even against the plain _qkv_from_gn baseline, which has since fused its own
+        # GN+quantize. The GN fusion does win its own segment (1.25x on norm+QKV at T=1024) but it
+        # forfeits the layout epilogue, which is worth more: production emits Q/K/Vt straight out of
+        # the QKV GEMM, so the 307 us K/V gather+transpose pass does not exist, while a fused-GN
+        # route has to pay it back. The two fusions are mutually exclusive -- applying per-sample GN
+        # scale/bias in the mainloop needs CUTLASS ImplicitGemmConvolutionFusion, whose
+        # LinearCombination epilogue cannot also emit the three attention layouts. Kept as a
+        # rollback/diagnostic route only.
         self._fuse_gn_qkv_i8 = (bits == 8 and os.environ.get("MODIFF_FUSE_GN_QKV_INT8", "0") != "0")
         # Route 1 (opt-in MODIFF_ROUTE1=1): int8-emitting fused GN->qkv + int8 reshuffle, skipping
         # both the fp16 qkv round-trip and the separate flash quantize. int8 only; kicks in only once
         # flash + its static scales have frozen (calibration uses the normal path).
+        # Same status as _fuse_gn_qkv_i8 above: superseded by the QKV int8-epilogue route, which
+        # returns first, so this needs MODIFF_INT8_QKV_EPILOGUE=0 to be reachable. Measured
+        # 2026-08-03 at 0.942x (T=1024) and 0.815x (T=256) vs production -- the best of the three
+        # fused-GN variants, and still a loss. See docs/gn_qkv_fusion_2026-08-03/FINDINGS.md.
         self._route1 = (bits == 8 and os.environ.get("MODIFF_ROUTE1", "0") != "0"
                         and hasattr(_mc, "fused_gn_qkv_i8evt") and hasattr(_mc, "quantize_attn_qkv_from_i8"))
         self._r1_ready = False
@@ -515,7 +531,9 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
             xattn = _mc.flash_attn_i4values_small_qout(
                 codes.view(b, T, nh, 3, hd), self._fq4_svv[:hd].contiguous(),
                 self._fq4_sqc, self._fq4_skc, self.scale, proj.a_scale, proj._awqt_K)
-            res0 = x_in_tok.reshape(b * T, c).contiguous()
+            # gemm_*_awq_bias_res requires an fp16 residual. No-op in production; load-bearing
+            # while the conv layers are uncalibrated, where they emit fp32.
+            res0 = x_in_tok.reshape(b * T, c).half().contiguous()
             pb0 = proj.bias if proj.bias is not None else empty0
             out0 = _mc.gemm_w4a4_awq_bias_res(
                 xattn, proj.qweight, proj.w_scale, proj.a_scale,
@@ -585,7 +603,9 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
             xattn = _mc.flash_attn_i4values_i8mma_qi8_kv_static_qout_hd24(
                 q_i8, ki.view(b, nh, T, hp), vt.view(b, nh, hp, T), sv, hp,
                 self._fq4_sqc, self._fq4_skc, self.scale, proj.a_scale, proj._awqt_K)
-        res = x_in_tok.reshape(b * T, c).contiguous()
+        # gemm_*_awq_bias_res requires an fp16 residual. No-op in production; load-bearing while
+        # the conv layers are uncalibrated, where they emit fp32 (see FINDINGS 2026-08-03).
+        res = x_in_tok.reshape(b * T, c).half().contiguous()
         pbias = proj.bias if proj.bias is not None else empty
         out = _mc.gemm_w4a4_awq_bias_res(
             xattn, proj.qweight, proj.w_scale, proj.a_scale,
@@ -640,7 +660,9 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
             xattn = _mc.flash_attn_int4_vt_static_qout(
                 q, k, vt, sv, hp_qk, self._fq4_sqc, self._fq4_skc,
                 self.scale, proj.a_scale, proj._awqt_K)
-        res = x_in_tok.reshape(b * T, c).contiguous()
+        # gemm_*_awq_bias_res requires an fp16 residual. No-op in production; load-bearing while
+        # the conv layers are uncalibrated, where they emit fp32 (see FINDINGS 2026-08-03).
+        res = x_in_tok.reshape(b * T, c).half().contiguous()
         pbias = proj.bias if proj.bias is not None else empty
         out = _mc.gemm_w4a4_awq_bias_res(
             xattn, proj.qweight, proj.w_scale, proj.a_scale,
@@ -783,7 +805,9 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
                 qkv_pk, ki.view(b, nh, T, hd_pad),
                 vt.view(b, nh, hd_pad, T), sv, hd_pad,
                 self._fq_sqc, self._fq_skc, self.scale, proj.a_scale)
-        res = x_in_tok.reshape(b * T, c).contiguous()
+        # gemm_*_awq_bias_res requires an fp16 residual. No-op in production; load-bearing while
+        # the conv layers are uncalibrated, where they emit fp32 (see FINDINGS 2026-08-03).
+        res = x_in_tok.reshape(b * T, c).half().contiguous()
         pbias = proj.bias if proj.bias is not None else empty
         out = _mc.gemm_w8a8_awq_bias_res(
             xattn, proj.qweight, proj.w_scale, proj.a_scale,
@@ -791,6 +815,22 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         return out.reshape(b, T, c)
 
     def forward(self, x):
+        """Dtype-transparent wrapper around the route dispatch.
+
+        Every quantized route returns fp16, because the GEMM epilogues emit fp16. That is correct in
+        production, where the whole pipeline is fp16. It is wrong during the conv layers'
+        UNCALIBRATED window: there the surrounding pipeline is fp32, and handing fp16 to the next
+        non-quantized conv raises "Input type (c10::Half) and bias type (float) should be the same"
+        -- those convs run with autocast locally disabled, so nothing casts on their behalf.
+        Enforcing dtype in == dtype out here, once, is what makes MoDiff-mode conv calibration
+        possible at all; without it _calibrate_int8 crashes inside its own sampling pass and the only
+        way to get scales is to load a file, which in this tree describes a different random network
+        than the one loading it. See docs/modiff_correctness_2026-08-03/FINDINGS.md.
+        """
+        out = self._forward_routes(x)
+        return out if out.dtype == x.dtype else out.to(x.dtype)
+
+    def _forward_routes(self, x):
         b, c, H, W = x.shape
         T = H * W
         nh, hd = self.num_heads, self.head_dim
@@ -819,7 +859,9 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
                 proj = self.proj
                 xq = self._route1_qout(
                     x, b, T, nh, hd, _FUSE_SHIFT, proj.a_scale)
-                res = x_in_tok.reshape(b * T, c).contiguous()
+                # gemm_*_awq_bias_res requires an fp16 residual. No-op in production; load-bearing while
+                # the conv layers are uncalibrated, where they emit fp32 (see FINDINGS 2026-08-03).
+                res = x_in_tok.reshape(b * T, c).half().contiguous()
                 pbias = proj.bias if proj.bias is not None else x.new_empty(0)
                 out = _mc.gemm_w8a8_awq_bias_res(
                     xq, proj.qweight, proj.w_scale, proj.a_scale,
@@ -880,7 +922,9 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         nh, hd = self.num_heads, self.head_dim
         proj = self.proj
         qkv = qkv.contiguous()
-        res = x_in_tok.reshape(b * T, c).contiguous()
+        # gemm_*_awq_bias_res requires an fp16 residual. No-op in production; load-bearing while
+        # the conv layers are uncalibrated, where they emit fp32 (see FINDINGS 2026-08-03).
+        res = x_in_tok.reshape(b * T, c).half().contiguous()
         bias = proj.bias if proj.bias is not None else qkv.new_empty(0)
         if self.bits == 8:
             hd_pad = ((hd + 31) // 32) * 32
@@ -1051,7 +1095,16 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
                 and getattr(proj, "_use_bias_res", False) and proj.a_scale is not None
                 and not getattr(proj, "_calib", False) and proj.bits in (8, 4)
                 and ((proj.bits == 8 and _HAS_FUSED_ATTN_OUT) or (proj.bits == 4 and _HAS_ATTN_OUT_I4))):
-            res = x_in_tok.reshape(b * T, c).contiguous()
+            # gemm_wXaX_awq_bias_res requires an fp16 residual and raises
+            # `residual fp16 [M,n_out]` otherwise. Enforce the contract here rather than relying on
+            # every upstream emitter: in production x_in_tok is already fp16 so `.half()` is a no-op
+            # (torch returns self), but while the conv layers are UNCALIBRATED they emit fp32 and
+            # this call is the first thing that sees it. That made MoDiff-mode conv calibration
+            # impossible -- _calibrate_int8 crashed inside its own sampling pass, so the only way to
+            # get scales was to load a file, and this tree's stub checkpoint means a saved file
+            # describes a different random network than the one loading it. See
+            # docs/modiff_correctness_2026-08-03/FINDINGS.md.
+            res = x_in_tok.reshape(b * T, c).half().contiguous()
             bias = proj.bias if proj.bias is not None else a.new_empty(0)
             if proj.bits == 8:
                 xq = _mc.quantize_attn_out_int8(a, proj.a_scale)           # int8 [b*T,c]: transpose+quantize
@@ -1062,7 +1115,12 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
                 xq = _mc.quantize_attn_out_int4_pack(a, proj.a_scale, proj._awqt_K)   # packed int4 [b*T,K_pad/2]
                 out = _mc.gemm_w4a4_awq_bias_res(xq, proj.qweight, proj.w_scale, proj.a_scale,
                                                  proj._awqt_K, proj.out_features, bias, res)
-            return out.reshape(b, T, c)
+            # Be dtype-transparent: the GEMM always returns fp16, but during the uncalibrated
+            # calibration window the surrounding pipeline is fp32, and handing it fp16 trips the
+            # next non-quantized conv ("Input type (c10::Half) and bias type (float) should be the
+            # same" -- those convs run with autocast locally disabled, so nothing casts for them).
+            # No-op in production, where x_in_tok is already fp16.
+            return out.reshape(b, T, c).to(x_in_tok.dtype)
         # fallback: materialize the transpose, then proj (own quantize; bias+residual epilogue if available)
         a = a.transpose(1, 2).reshape(b, T, c)
         return proj(a, residual=x_in_tok) if getattr(proj, "_use_bias_res", False) else x_in_tok + proj(a)

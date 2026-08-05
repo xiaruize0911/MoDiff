@@ -39,3 +39,8 @@ transformers>=4.22.2
 omegaconf
 git+https://github.com/openai/CLIP.git@main#egg=clip
 git+https://github.com/CompVis/taming-transformers.git@master#egg=taming-transformers
+
+# Build dependency for the CUDA extension. Without it torch's BuildExtension silently falls
+# back to the serial distutils backend, which turned a rebuild of the 14 CUTLASS translation
+# units from ~minutes into >10 minutes on a 96-core box (measured 2026-08-03).
+ninja

@@ -147,17 +147,51 @@ __device__ __forceinline__ void gwq_s2r_B(const int8_t* src, int8_t* dst, int la
 // Fused epilogue store: writes two adjacent fp16 columns (col,col+1) at C[idx], optionally adding a
 // per-column bias[col] and an elementwise residual[idx] in fp32 before the half cast. bias/residual
 // are nullptr for the plain dequant path (behavior identical to the original store).
+// MoDiff Eq 9 in the GEMM epilogue: o_hat_t = A(Q(delta)) + o_hat_{t+1}, accumulated in place.
+//
+// `o_hat` nullable keeps this ONE helper serving both modes -- with o_hat == nullptr the function is
+// byte-for-byte the baseline it always was. That is the same pattern used for the upsample/avgpool
+// delta quantize, and it is why the Linear MoDiff path needs no cloned GEMM.
+//
+// Two contract details that are easy to get wrong:
+//   * BIAS MUST NOT be added on a modulated step. Per Eq 9 the bias belongs to o_hat_T only, so the
+//     increment A(Q(delta)) carries no bias. The caller passes bias=nullptr on modulated steps; this
+//     function does not silently drop it, because a non-null bias with a non-null o_hat is a caller
+//     bug worth reproducing rather than hiding.
+//   * the accumulate reads o_hat BEFORE adding, and the residual is added only to the SEPARATE
+//     output C, never into o_hat. Folding the ResBlock skip into o_hat would corrupt the temporal
+//     state for every remaining timestep.
 __device__ __forceinline__ void gwq_store2(__half* C, const __half* bias, const __half* residual,
-                                           size_t idx, int col, float v0, float v1) {
+                                           size_t idx, int col, float v0, float v1,
+                                           __half* o_hat = nullptr) {
+  // ORDER IS THE CONTRACT. The o_hat accumulate happens FIRST, so bias and residual land on the
+  // OUTPUT only and never enter the temporal state:
+  //     o_hat_t = A(Q(delta)) + o_hat_{t+1}          <- Eq 9, no bias, no residual
+  //     out_t   = o_hat_t + bias + residual          <- what the next layer consumes
+  // Adding bias before the accumulate would compound it once per step, and folding the residual
+  // into o_hat would corrupt the state for every remaining timestep. With o_hat == nullptr the
+  // ordering is unobservable, so the baseline path is unchanged.
+  if (o_hat) {
+    float2 h = __half22float2(*(const __half2*)&o_hat[idx]);
+    v0 += h.x; v1 += h.y;
+    *(__half2*)&o_hat[idx] = __halves2half2(__float2half(v0), __float2half(v1));
+  }
   if (bias) { v0 += __half2float(bias[col]); v1 += __half2float(bias[col + 1]); }
   if (residual) { float2 r = __half22float2(*(const __half2*)&residual[idx]); v0 += r.x; v1 += r.y; }
-  *(__half2*)&C[idx] = __halves2half2(__float2half(v0), __float2half(v1));
+  if (C) *(__half2*)&C[idx] = __halves2half2(__float2half(v0), __float2half(v1));
 }
 
 __global__ void gemm_w8a8_kernel_awq(const int8_t* __restrict__ A, const int8_t* __restrict__ B,
                                      const float* __restrict__ w_scale, float a_scale,
                                      __half* __restrict__ C, int M, int N, int K, int n_out,
-                                     const __half* __restrict__ bias, const __half* __restrict__ residual) {
+                                     const __half* __restrict__ bias, const __half* __restrict__ residual,
+                                     __half* __restrict__ o_hat = nullptr,
+                                     // Optional DEVICE a_scale. The MoDiff path's delta scale is
+                                     // computed on device per call; passing it by value would need a
+                                     // .item() sync per linear per step (42 x 200 = 8400 syncs, which
+                                     // cost the conv path ~5 ms/step when it made the same mistake).
+                                     const float* __restrict__ a_scale_ptr = nullptr) {
+  if (a_scale_ptr) a_scale = *a_scale_ptr;
   const int t = threadIdx.x, warp = t >> 5, lane = t & 31, gid = lane >> 2, tig = lane & 3;
   const int m0 = blockIdx.y * GWQ_CTA_M, n0 = blockIdx.x * GWQ_CTA_N;
   const int warp_offset_n = warp * GWQ_WARP_N;
@@ -225,12 +259,12 @@ __global__ void gemm_w8a8_kernel_awq(const int8_t* __restrict__ A, const int8_t*
       int* accv = acc[i][j];
       bool c0 = col0 < n_out, c1 = col1 < n_out;  // n_out even -> col0<n_out guards [col0,col0+1]
       if (row0 < M) {
-        if (c0) gwq_store2(C, bias, residual, (size_t)row0 * n_out + col0, col0, accv[0] * s00, accv[1] * s01);
-        if (c1) gwq_store2(C, bias, residual, (size_t)row0 * n_out + col1, col1, accv[4] * s10, accv[5] * s11);
+        if (c0) gwq_store2(C, bias, residual, (size_t)row0 * n_out + col0, col0, accv[0] * s00, accv[1] * s01, o_hat);
+        if (c1) gwq_store2(C, bias, residual, (size_t)row0 * n_out + col1, col1, accv[4] * s10, accv[5] * s11, o_hat);
       }
       if (row1 < M) {
-        if (c0) gwq_store2(C, bias, residual, (size_t)row1 * n_out + col0, col0, accv[2] * s00, accv[3] * s01);
-        if (c1) gwq_store2(C, bias, residual, (size_t)row1 * n_out + col1, col1, accv[6] * s10, accv[7] * s11);
+        if (c0) gwq_store2(C, bias, residual, (size_t)row1 * n_out + col0, col0, accv[2] * s00, accv[3] * s01, o_hat);
+        if (c1) gwq_store2(C, bias, residual, (size_t)row1 * n_out + col1, col1, accv[6] * s10, accv[7] * s11, o_hat);
       }
     }
   }
@@ -698,6 +732,62 @@ torch::Tensor gemm_w8a8_awq_nout(torch::Tensor A, torch::Tensor B, torch::Tensor
 //   Outputs:  C fp16 [M,n_out] = dequant(A.B)*a_scale*w_scale[n] + bias[n] + residual[m,n]
 //   Fuses:    dequant + bias add + residual add in the GEMM epilogue -> removes the separate
 //             `out + bias` and `x + proj(out)` elementwise-add kernels (the residual-add glue).
+// -----------------------------------------------------------------------------
+//   Op:       Linear W8A8 GEMM + MoDiff o_hat accumulate (attention qkv / proj on the modulated path)
+//   Inputs:   A int8 [M,K] the quantized DELTA codes; B int8 [N,K]; w_scale fp32 [N]; a_scale the
+//             reciprocal of the scale that quantized A; n_out; o_hat fp16 [M,n_out] modified in
+//             place; residual fp16 [M,n_out] or empty
+//   Outputs:  o_hat advanced to o_hat_t (Eq 9, bias- and residual-free), and RETURNS
+//             o_hat_t + bias + residual -- what the next layer consumes.
+//   Computes: o_hat_t = A(Q(a_t - a_hat_{t+1})) * a_scale * w_scale[n] + o_hat_{t+1}
+//   Fuses:    the accumulate into the GEMM epilogue, replacing three full-tensor PyTorch launches
+//             per linear per step (dequant, add, store). That overhead -- measured +10.9 ms/step at
+//             batch 8 -- is the ONLY reason MoDiff on the Linear layers was off by default; the
+//             method itself is correct there since Bug 2 was fixed (int4 latent relL2 0.4571 ->
+//             0.4220 with it on).
+//   Constraints: bias and residual are applied to the RETURNED tensor only, never to o_hat -- see
+//             gwq_store2, where the accumulate deliberately precedes them.
+// -----------------------------------------------------------------------------
+torch::Tensor gemm_w8a8_awq_o_hat(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale,
+                                  torch::Tensor a_scale, int64_t n_out, torch::Tensor o_hat,
+                                  torch::Tensor residual, torch::Tensor bias) {
+  TORCH_CHECK(a_scale.numel() == 1 && a_scale.dtype() == torch::kFloat32,
+              "a_scale must be a 1-element fp32 DEVICE tensor (no host sync on the hot path)");
+  TORCH_CHECK(A.is_cuda() && A.dtype() == torch::kChar && B.dtype() == torch::kChar, "A/B int8 CUDA");
+  A = A.contiguous(); B = B.contiguous();
+  int M = A.size(0), K = A.size(1), N = B.size(0);
+  TORCH_CHECK(B.size(1) == K, "K mismatch");
+  TORCH_CHECK(N % GWQ_CTA_N == 0 && K % GWQ_CTA_K == 0, "N%128==0, K%64==0");
+  TORCH_CHECK(n_out > 0 && n_out <= N && n_out % 2 == 0, "n_out even in (0,N]");
+  TORCH_CHECK(o_hat.dtype() == torch::kHalf && o_hat.numel() == (int64_t)M * n_out,
+              "o_hat must be fp16 [M,n_out]");
+  __half* op = reinterpret_cast<__half*>(o_hat.contiguous().data_ptr<at::Half>());
+  const __half* rp = nullptr;
+  const __half* bp = nullptr;
+  if (residual.numel()) {
+    TORCH_CHECK(residual.numel() == (int64_t)M * n_out && residual.dtype() == torch::kHalf,
+                "residual fp16 [M,n_out]");
+    rp = reinterpret_cast<const __half*>(residual.contiguous().data_ptr<at::Half>());
+  }
+  if (bias.numel()) {
+    TORCH_CHECK(bias.numel() == n_out && bias.dtype() == torch::kHalf, "bias fp16 [n_out]");
+    bp = reinterpret_cast<const __half*>(bias.contiguous().data_ptr<at::Half>());
+  }
+  // C is ALWAYS produced: it is o_hat_t + bias + residual, i.e. what the next layer consumes.
+  // Returning o_hat itself would force the caller to add bias to the state tensor in place.
+  auto C = torch::empty({M, (int)n_out},
+                        torch::TensorOptions().dtype(torch::kFloat16).device(A.device()));
+  __half* cp = reinterpret_cast<__half*>(C.data_ptr<at::Half>());
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  dim3 grid(N / GWQ_CTA_N, (M + GWQ_CTA_M - 1) / GWQ_CTA_M);
+  gemm_w8a8_kernel_awq<<<grid, GWQ_NUM_WARPS * 32, 0, stream>>>(
+      A.data_ptr<int8_t>(), B.data_ptr<int8_t>(), w_scale.contiguous().data_ptr<float>(),
+      0.f, cp, M, N, K, (int)n_out, bp, rp, op,
+      a_scale.contiguous().data_ptr<float>());
+  C10_CUDA_CHECK(cudaGetLastError());
+  return C;
+}
+
 torch::Tensor gemm_w8a8_awq_bias_res(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale,
                                      int64_t n_out, torch::Tensor bias, torch::Tensor residual) {
   TORCH_CHECK(A.is_cuda() && A.dtype() == torch::kChar && B.dtype() == torch::kChar, "A/B int8 CUDA");
@@ -741,7 +831,14 @@ torch::Tensor gemm_w8a8_awq_bias_res(torch::Tensor A, torch::Tensor B, torch::Te
 __global__ void gemm_w4a4_kernel_awq(const int8_t* __restrict__ A, const int8_t* __restrict__ B,
                                      const float* __restrict__ w_scale, float a_scale,
                                      __half* __restrict__ C, int M, int N, int Kb, int n_out,
-                                     const __half* __restrict__ bias, const __half* __restrict__ residual) {
+                                     const __half* __restrict__ bias, const __half* __restrict__ residual,
+                                     __half* __restrict__ o_hat = nullptr,
+                                     // Optional DEVICE a_scale. The MoDiff path's delta scale is
+                                     // computed on device per call; passing it by value would need a
+                                     // .item() sync per linear per step (42 x 200 = 8400 syncs, which
+                                     // cost the conv path ~5 ms/step when it made the same mistake).
+                                     const float* __restrict__ a_scale_ptr = nullptr) {
+  if (a_scale_ptr) a_scale = *a_scale_ptr;
   const int t = threadIdx.x, warp = t >> 5, lane = t & 31, gid = lane >> 2, tig = lane & 3;
   const int m0 = blockIdx.y * GWQ_CTA_M, n0 = blockIdx.x * GWQ_CTA_N;
   const int warp_offset_n = warp * GWQ_WARP_N;
@@ -806,12 +903,12 @@ __global__ void gemm_w4a4_kernel_awq(const int8_t* __restrict__ A, const int8_t*
       int* accv = acc[i][j];
       bool c0 = col0 < n_out, c1 = col1 < n_out;  // n_out even -> col0<n_out guards [col0,col0+1]
       if (row0 < M) {
-        if (c0) gwq_store2(C, bias, residual, (size_t)row0 * n_out + col0, col0, accv[0] * s00, accv[1] * s01);
-        if (c1) gwq_store2(C, bias, residual, (size_t)row0 * n_out + col1, col1, accv[4] * s10, accv[5] * s11);
+        if (c0) gwq_store2(C, bias, residual, (size_t)row0 * n_out + col0, col0, accv[0] * s00, accv[1] * s01, o_hat);
+        if (c1) gwq_store2(C, bias, residual, (size_t)row0 * n_out + col1, col1, accv[4] * s10, accv[5] * s11, o_hat);
       }
       if (row1 < M) {
-        if (c0) gwq_store2(C, bias, residual, (size_t)row1 * n_out + col0, col0, accv[2] * s00, accv[3] * s01);
-        if (c1) gwq_store2(C, bias, residual, (size_t)row1 * n_out + col1, col1, accv[6] * s10, accv[7] * s11);
+        if (c0) gwq_store2(C, bias, residual, (size_t)row1 * n_out + col0, col0, accv[2] * s00, accv[3] * s01, o_hat);
+        if (c1) gwq_store2(C, bias, residual, (size_t)row1 * n_out + col1, col1, accv[6] * s10, accv[7] * s11, o_hat);
       }
     }
   }
@@ -829,6 +926,46 @@ __global__ void gemm_w4a4_kernel_awq(const int8_t* __restrict__ A, const int8_t*
 //             GEMM-only i.e. activation-quantize fused upstream. With a standalone activation quantize
 //             the win is erased (int8 ~0.99x, int4 ~0.78x). Wins biggest at K>=384 (int4 up to 2.66x);
 //             weakest at K=192.
+// INT4 twin. Same contract; Kb is the packed K (two int4 per byte), handled by the kernel.
+torch::Tensor gemm_w4a4_awq_o_hat(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale,
+                                  torch::Tensor a_scale, int64_t n_out, torch::Tensor o_hat,
+                                  torch::Tensor residual, torch::Tensor bias) {
+  TORCH_CHECK(a_scale.numel() == 1 && a_scale.dtype() == torch::kFloat32,
+              "a_scale must be a 1-element fp32 DEVICE tensor (no host sync on the hot path)");
+  TORCH_CHECK(A.is_cuda() && A.dtype() == torch::kChar && B.dtype() == torch::kChar, "A/B int8 CUDA");
+  A = A.contiguous(); B = B.contiguous();
+  int M = A.size(0), Kb = A.size(1), N = B.size(0);
+  TORCH_CHECK(B.size(1) == Kb, "Kb mismatch");
+  TORCH_CHECK(n_out > 0 && n_out <= N && n_out % 2 == 0, "n_out even in (0,N]");
+  TORCH_CHECK(o_hat.dtype() == torch::kHalf && o_hat.numel() == (int64_t)M * n_out,
+              "o_hat must be fp16 [M,n_out]");
+  __half* op = reinterpret_cast<__half*>(o_hat.contiguous().data_ptr<at::Half>());
+  const __half* rp = nullptr;
+  const __half* bp = nullptr;
+  if (residual.numel()) {
+    TORCH_CHECK(residual.numel() == (int64_t)M * n_out && residual.dtype() == torch::kHalf,
+                "residual fp16 [M,n_out]");
+    rp = reinterpret_cast<const __half*>(residual.contiguous().data_ptr<at::Half>());
+  }
+  if (bias.numel()) {
+    TORCH_CHECK(bias.numel() == n_out && bias.dtype() == torch::kHalf, "bias fp16 [n_out]");
+    bp = reinterpret_cast<const __half*>(bias.contiguous().data_ptr<at::Half>());
+  }
+  // C is ALWAYS produced: it is o_hat_t + bias + residual, i.e. what the next layer consumes.
+  // Returning o_hat itself would force the caller to add bias to the state tensor in place.
+  auto C = torch::empty({M, (int)n_out},
+                        torch::TensorOptions().dtype(torch::kFloat16).device(A.device()));
+  __half* cp = reinterpret_cast<__half*>(C.data_ptr<at::Half>());
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  dim3 grid(N / GWQ_CTA_N, (M + GWQ_CTA_M - 1) / GWQ_CTA_M);
+  gemm_w4a4_kernel_awq<<<grid, GWQ_NUM_WARPS * 32, 0, stream>>>(
+      A.data_ptr<int8_t>(), B.data_ptr<int8_t>(), w_scale.contiguous().data_ptr<float>(),
+      0.f, cp, M, N, Kb, (int)n_out, bp, rp, op,
+      a_scale.contiguous().data_ptr<float>());
+  C10_CUDA_CHECK(cudaGetLastError());
+  return C;
+}
+
 torch::Tensor gemm_w4a4_awq(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale, int64_t K) {
   TORCH_CHECK(A.is_cuda() && A.dtype() == torch::kChar && B.dtype() == torch::kChar, "A/B packed int4 CUDA");
   A = A.contiguous(); B = B.contiguous();

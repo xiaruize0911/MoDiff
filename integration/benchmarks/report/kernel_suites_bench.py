@@ -59,9 +59,18 @@ import integration.benchmarks.benchmark_ldm as B
 from ck_bench_stats import cuda_bench_stats, stability_verdict
 from profile_tree import classify as classify_kernel, short_kernel_name
 
-MODES = ["fp16", "int8_baseline", "int4_baseline"]
+#: Selectable so the same suite can be run for the MoDiff modes ("int8"/"int4" in benchmark_ldm's
+#: naming) without a second copy of the harness -- same pattern as layer_pipeline_bench's
+#: LBENCH_MODES. Default is unchanged, i.e. the baseline modes the 08-01 report used.
+_ALL_MODES = ["fp16", "int8_baseline", "int4_baseline", "int8", "int4"]
+_MODE_FILTER = [x.strip() for x in os.environ.get("KBENCH_MODES", "").split(",") if x.strip()]
+MODES = [m for m in _MODE_FILTER if m in _ALL_MODES] or _ALL_MODES[:3]
+#: The MoDiff modes read the same calibration artifact as their baseline; the delta scale is
+#: computed at runtime (MODIFF_DELTA_MODE=dynamic) and is not stored in this file.
 CALIB = {"int8_baseline": "integration/calibration/int8_calibration.pt",
-         "int4_baseline": "integration/calibration/int4_calibration.pt"}
+         "int4_baseline": "integration/calibration/int4_calibration.pt",
+         "int8": "integration/calibration/int8_calibration.pt",
+         "int4": "integration/calibration/int4_calibration.pt"}
 QUANT_ENV = {"MODIFF_QUANT_LINEAR": "1", "MODIFF_QUANT_ATTN": "1",
              "MODIFF_QUANT_ATTN_STATIC": "1", "MODIFF_QATTN_FLASH": "1",
              "MODIFF_FLASH_GATE": "on", "MODIFF_LINEAR_OUT_I8": "0"}

@@ -10,6 +10,28 @@ alter numerics (e.g. the GroupNorm fp16 change) without running full FID.
   python integration/tests/e2e_output_check.py --mode fp16 --capture
   # after:
   python integration/tests/e2e_output_check.py --mode fp16 --compare
+
+IMPORTANT -- this gate was vacuous until 2026-08-03. `UNetModel.out[-1]` is a `zero_module`
+(ldm/modules/diffusionmodules/openaimodel.py:745) and this tree's checkpoint is an 856-byte stub
+with an empty `state_dict` loaded strict=False, so that layer stayed zero and the UNet predicted
+identically zero for every input. The sampled latent was a function of the initial noise and the
+DDIM schedule alone, so this check PASSED for every change anywhere in the network. It now
+activates those zero-initialised layers first and asserts the UNet output is observable, so a
+change that alters numerics can actually move the latent. See
+docs/gn_qkv_fusion_2026-08-03/FINDINGS.md section 5.
+
+Because activation changes the model, goldens are keyed on it: a reference captured with
+--no-activate-zeroed is not comparable to one captured with it. Changing the activation SCHEME
+invalidates goldens the same way, so recapture after touching the guard. Note also that
+quantization scales are calibrated before activation, so the absolute latent here is not a quality
+measurement -- this is an A/B equivalence gate, which is what it is used for.
+
+Measured sensitivity, int8_baseline / 20 steps / batch 4 (2026-08-03):
+  byte-identical code       rel_err 0.0000, 0.0000, 0.0004 over three fresh processes
+  MODIFF_FLASH_GATE=off     rel_err 0.0011   (a real attention-route change, correctly under tol)
+  same, --no-activate-zeroed rel_err 0.0000  (the blind case: the change is invisible)
+So the floor is ~4e-4, not 0 -- some kernels reduce with atomicAdd and are not bit-reproducible.
+The default tol=0.02 is ~50x that floor, i.e. this gate catches gross breakage, not drift.
 """
 import os, sys, argparse, torch
 
@@ -17,18 +39,28 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
+# ldm's config instantiates taming-transformers classes; without this the script cannot import.
+_TAMING = os.path.join(REPO, "src/taming-transformers")
+if _TAMING not in sys.path:
+    sys.path.insert(1, _TAMING)
 import importlib.util
 spec = importlib.util.spec_from_file_location(
     "bldm", os.path.join(REPO, "integration/benchmarks/benchmark_ldm.py"))
 bldm = importlib.util.module_from_spec(spec); spec.loader.exec_module(bldm)
+from integration.utils import attention_identity_guard as guard
 
 REFDIR = os.path.join(HERE, "golden")
 os.makedirs(REFDIR, exist_ok=True)
 
 
-def gen(mode, steps, batch, seed):
+def gen(mode, steps, batch, seed, activate=True, model_seed=20260803):
     cal = ("integration/calibration/int8_calibration.pt" if "int8" in mode or mode in ("fp16", "fp32")
            else "integration/calibration/int4_calibration.pt")
+    # The checkpoint is an empty stub, so every weight comes from default-initialisation off the
+    # global RNG -- and torch seeds that nondeterministically per process. Unseeded, this model is
+    # a DIFFERENT random network in every run and no golden can survive; measured rel_err ~0.4 for
+    # byte-identical code. Seed before construction so the network itself is reproducible.
+    torch.manual_seed(model_seed); torch.cuda.manual_seed_all(model_seed)
     runner = bldm.BenchmarkRunner(config_path="configs/latent-diffusion/lsun_churches-ldm-kl-8.yaml",
                                   ckpt_path="models/ldm/lsun_churches256/model.ckpt",
                                   output_dir="/tmp/e2e_out", batch_size=batch, steps=steps,
@@ -38,6 +70,11 @@ def gen(mode, steps, batch, seed):
         cfg = bldm.get_calibration_config_int8()
         if not cfg.is_calibrated:
             runner._calibrate_int8(model, sampler)
+    # Without this the UNet predicts identically zero and the comparison below cannot fail.
+    if activate:
+        guard.activate_zeroed_modules(model)
+        guard.assert_unet_output_observable(model.model.diffusion_model,
+                                           what="this e2e latent comparison")
     torch.manual_seed(seed); torch.cuda.manual_seed_all(seed)
     use_ac = mode != "fp32"
     with torch.inference_mode(), torch.autocast("cuda", dtype=torch.float16, enabled=use_ac):
@@ -55,9 +92,15 @@ def main():
     ap.add_argument("--tol", type=float, default=0.02)
     ap.add_argument("--capture", action="store_true")
     ap.add_argument("--compare", action="store_true")
+    ap.add_argument("--no-activate-zeroed", dest="activate", action="store_false",
+                    help="skip activating zero_module layers -- makes this check vacuous, "
+                         "only for reproducing pre-2026-08-03 goldens")
     a = ap.parse_args()
-    out = gen(a.mode, a.steps, a.batch, a.seed)
-    path = os.path.join(REFDIR, f"e2e_{a.mode}_s{a.steps}_b{a.batch}.pt")
+    out = gen(a.mode, a.steps, a.batch, a.seed, activate=a.activate)
+    # Keyed on activation: the two settings produce different models, so their goldens must
+    # never be compared against each other.
+    tag = "" if a.activate else "_vacuous"
+    path = os.path.join(REFDIR, f"e2e_{a.mode}_s{a.steps}_b{a.batch}{tag}.pt")
     if a.capture or not os.path.exists(path):
         torch.save(out, path)
         print(f"[capture] {a.mode}: saved reference {tuple(out.shape)} -> {path}")

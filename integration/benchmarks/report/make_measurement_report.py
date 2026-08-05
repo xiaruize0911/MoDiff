@@ -23,7 +23,13 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 D = "final_report_2026-07-28"
-MODES = [("fp16", "FP16"), ("int8_baseline", "INT8"), ("int4_baseline", "INT4")]
+# The label must name the mode, not just its bit width. These are the *_baseline modes, i.e. MoDiff
+# temporal caching DISABLED -- the plain W8A8/W4A4 PTQ configuration. Labelling them "INT8"/"INT4"
+# read as though the report's headline speedups were MoDiff results; they are the opposite, and per
+# the paper's Table 2 (LSUN-Church, W8) A8 is exactly the regime where MoDiff adds nothing (4.24 vs
+# 3.85 FID). Its value is at A4 (355.85 -> 3.97). The MoDiff modes are internal "int8"/"int4".
+MODES = [("fp16", "FP16"), ("int8_baseline", "INT8 (MoDiff off)"),
+         ("int4_baseline", "INT4 (MoDiff off)")]
 
 
 def rel(p):

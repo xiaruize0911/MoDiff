@@ -994,6 +994,217 @@ void sub_absmax_scale(
 }
 
 // =========================================================================
+// FP16 twin of sub_absmax_scale: reduction ONLY, no residual materialization.
+//
+// Why this exists as a separate kernel rather than a template on the one above.
+// sub_absmax_scale is fp32-in/fp32-cache and writes a full fp32 residual tensor,
+// because it serves the *uncalibrated* path where a_hat/o_hat are fp32. Once a
+// layer is calibrated the caches are fp16 (see int8_optimized.py
+// _ensure_state_buffers) and the conv is the CUTLASS-EVT in-place o_hat RMW,
+// which requires an fp16 o_hat. So the fp32 kernel cannot be reused there
+// without demoting the whole layer off the EVT path -- the opposite of what we
+// want.
+//
+// What it buys: the *dynamic* MoDiff delta scale. Measured 2026-08-04 on the
+// real LSUN-churches checkpoint, the production static setting (delta quantized
+// on the activation's grid, scale = static_input_scale) CLIPS on 49 of 70
+// observed conv layers -- median max|q| lands exactly on the 127 ceiling. A
+// per-call scale of Q/max|delta| cannot clip by construction, which is also the
+// regime the paper's Theorem 4.3 assumes ("dynamic quantizers ... to avoid
+// clipping error").
+//
+// It writes into the same scale_out/inv_scale_out 1-element buffers that
+// step1_static_quantize_fprop and conv2d_int8_evt_o_hat already read through
+// device pointers, so the entire existing fused chain downstream is untouched:
+//   delta_absmax_fp16(...)  ->  step1_static_quantize_fprop(x, a_hat, scale_out, ...)
+//                           ->  conv2d_int8_evt_o_hat(..., inv_scale_out, ...)
+// No residual is stored because step1_static_quantize_fprop recomputes the
+// delta itself from x and a_hat; materializing it here would add a full-tensor
+// fp32 write + read for nothing. The cost is therefore one extra *read* pass
+// over x and a_hat -- the price of a non-clipping scale.
+//
+// Q_level parameterizes int8 (127) vs int4 (7), so this one kernel serves both
+// W8A8 and W4A4.
+//
+// TIn is templated because the calibrated MoDiff path does NOT guarantee an fp16
+// *input* -- only an fp16 *cache*. step1_static_quantize_fprop reads x through
+// load_as_float and is instantiated for both float and __half, and the ResBlock
+// feeds fp32 activations into some of those layers. The "fp16" in the name refers
+// to the cache dtype, which is what distinguishes this from sub_absmax_scale.
+template <typename TIn>
+__global__ void delta_absmax_fp16_kernel(
+    const TIn* __restrict__ x,
+    const __half* __restrict__ a_hat_cache,   // nullptr => absmax(x) with no cache to subtract
+    float* __restrict__ absmax_buf,      // Must be 0 on entry (self-resetting)
+    float* __restrict__ scale_out,       // Q_level / max(absmax, eps)
+    float* __restrict__ inv_scale_out,   // max(absmax, eps) / Q_level  (CUTLASS alpha)
+    unsigned int* __restrict__ retire_count, // Must be 0 on entry (self-resetting)
+    const float* __restrict__ smooth_inv,  // Per-channel SmoothQuant inverse (NULL=skip)
+    int num_channels,                    // C for NHWC channel indexing
+    float Q_level,                       // 7.0 for INT4, 127.0 for INT8
+    bool fused_silu,                     // apply SiLU to x first (see below)
+    int num_elements
+) {
+    extern __shared__ float sdata[];
+
+    int tid = threadIdx.x;
+    int num_threads = blockDim.x * gridDim.x;
+
+    // Pairwise loop. For fp16 input a __half2 load keeps the access fully coalesced
+    // across a warp (128 B/warp) while avoiding the num_channels % 8 constraint an
+    // 8-wide float4 load would impose; every channel count in this UNet is even, and
+    // the scalar tail covers the odd case. For fp32 input the pair is a float2.
+    //
+    // Operation order is silu -> smooth_inv -> subtract cache, matching
+    // static_quantize_and_update_ahat_kernel_int8_half_cache_silu exactly. The
+    // order is not interchangeable: SiLU is nonlinear, so silu(x*s) != silu(x)*s,
+    // and reducing a different expression than the quantizer evaluates would
+    // give a scale that clips.
+    float local_max = 0.0f;
+    int num_elements2 = num_elements / 2;
+    for (int i2 = blockIdx.x * blockDim.x + tid; i2 < num_elements2; i2 += num_threads) {
+        // load_as_float2 / half_cache_load2 take an ELEMENT index and pair internally,
+        // and are overloaded for both input dtypes -- same helpers the vec2 quantize
+        // kernels in this file use.
+        float2 x_v = load_as_float2(x, i2 * 2);
+        if (fused_silu) {
+            x_v.x = silu_f(x_v.x);
+            x_v.y = silu_f(x_v.y);
+        }
+        if (smooth_inv != nullptr) {
+            int ch = (i2 * 2) % num_channels;
+            x_v.x *= smooth_inv[ch];
+            x_v.y *= smooth_inv[ch + 1];
+        }
+        if (a_hat_cache != nullptr) {
+            float2 c_v = half_cache_load2(a_hat_cache, i2 * 2);
+            x_v.x -= c_v.x;
+            x_v.y -= c_v.y;
+        }
+        local_max = fmaxf(local_max, fmaxf(fabsf(x_v.x), fabsf(x_v.y)));
+    }
+    // Scalar tail (odd num_elements only).
+    for (int i = num_elements2 * 2 + blockIdx.x * blockDim.x + tid;
+         i < num_elements; i += num_threads) {
+        float xval = load_as_float(x, i);
+        if (fused_silu) {
+            xval = silu_f(xval);
+        }
+        if (smooth_inv != nullptr) {
+            xval *= smooth_inv[i % num_channels];
+        }
+        if (a_hat_cache != nullptr) {
+            xval -= __half2float(a_hat_cache[i]);
+        }
+        local_max = fmaxf(local_max, fabsf(xval));
+    }
+
+    // Block reduction, then the same atomic-max + last-block-retires election as
+    // sub_absmax_scale_kernel above.
+    sdata[tid] = local_max;
+    __syncthreads();
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (tid < s) sdata[tid] = fmaxf(sdata[tid], sdata[tid + s]);
+        __syncthreads();
+    }
+
+    if (tid == 0) {
+        float val = sdata[0];
+        unsigned int* addr = (unsigned int*)absmax_buf;
+        unsigned int old = *addr, assumed;
+        do {
+            assumed = old;
+            old = atomicCAS(addr, assumed,
+                __float_as_uint(fmaxf(val, __uint_as_float(assumed))));
+        } while (assumed != old);
+
+        __threadfence();
+        unsigned int ticket = atomicAdd(retire_count, 1u);
+        if (ticket == gridDim.x - 1) {
+            float am = fmaxf(*absmax_buf, 1e-6f);
+            *scale_out = Q_level / am;
+            *inv_scale_out = am / Q_level;
+            *absmax_buf = 0.0f;
+            *retire_count = 0;
+        }
+    }
+}
+
+// C++ wrapper for the FP16 dynamic delta scale. See the kernel comment for why
+// this is not a template on sub_absmax_scale.
+//   Op:       MoDiff temporal-delta absmax + dynamic scale (fp16 caches, reduction only)
+//   Inputs:   x FP16 [N,C,H,W] (channels_last); a_hat_cache FP16 [same] MoDiff cache, or an
+//             empty tensor to reduce absmax(x) with no subtraction; absmax_buf FP32 [1]
+//             (init 0, self-reset); scale_out FP32 [1] out; inv_scale_out FP32 [1] out;
+//             retire_count int32 [1] (init 0, self-reset); Q_level float (7.0 int4 /
+//             127.0 int8); smooth_inv FP32 [C] per-channel SmoothQuant inverse (empty = skip);
+//             fused_silu bool -- set it iff the paired quantize kernel is a _silu variant, so
+//             both reduce and quantize the same expression
+//   Outputs:  scale_out = Q_level/max(absmax,1e-6); inv_scale_out = its reciprocal
+//             (CUTLASS alpha). No residual tensor is written.
+//   Computes: max |silu?(x)*smooth_inv - a_hat| over the tensor, then the dynamic scale that
+//             maps it to exactly +-Q_level -- so the subsequent delta quantize cannot clip.
+//   Fuses:    sub + abs + amax + div into one cooperative kernel (atomic float-max +
+//             block-retirement counter elects the last block); no host sync, so the result
+//             stays a device pointer and the static-quantize + EVT-conv chain is unchanged.
+//   Constraints: absmax_buf & retire_count must be 0 on entry (self-resetting); x and
+//                a_hat_cache must both be FP16 and the same shape; with smooth_inv the
+//                __half2 pairs assume num_channels % 2 == 0
+//   vs fp16:  n/a (quantization support op — this is the overhead a dynamic quantizer
+//             costs, traded against the clipping a static one suffers)
+void delta_absmax_fp16(
+    torch::Tensor x,
+    torch::Tensor a_hat_cache,
+    torch::Tensor absmax_buf,
+    torch::Tensor scale_out,
+    torch::Tensor inv_scale_out,
+    torch::Tensor retire_count,
+    float Q_level,
+    torch::Tensor smooth_inv,
+    bool fused_silu
+) {
+    TORCH_CHECK(x.scalar_type() == torch::kHalf || x.scalar_type() == torch::kFloat32,
+                "delta_absmax_fp16: x must be FP16 or FP32");
+    const bool has_cache = a_hat_cache.numel() > 0;
+    if (has_cache) {
+        TORCH_CHECK(a_hat_cache.scalar_type() == torch::kHalf,
+                    "delta_absmax_fp16: a_hat_cache must be FP16 (the calibrated MoDiff path); "
+                    "use sub_absmax_scale for the FP32-cache uncalibrated path");
+        TORCH_CHECK(a_hat_cache.numel() == x.numel(),
+                    "delta_absmax_fp16: a_hat_cache must match x element count");
+    }
+
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    int num_elements = x.numel();
+    int block_size = 256;
+    int grid_size = min((num_elements / 2 + block_size - 1) / block_size, 1024);
+    grid_size = max(grid_size, 1);
+
+    const float* smooth_ptr = nullptr;
+    int num_channels = 0;
+    if (smooth_inv.numel() > 0) {
+        smooth_ptr = smooth_inv.data_ptr<float>();
+        num_channels = smooth_inv.numel();
+    }
+
+    const __half* cache_ptr = has_cache
+        ? reinterpret_cast<const __half*>(a_hat_cache.data_ptr<at::Half>()) : nullptr;
+    if (x.scalar_type() == torch::kHalf) {
+        delta_absmax_fp16_kernel<__half><<<grid_size, block_size, block_size * sizeof(float), stream>>>(
+            reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), cache_ptr,
+            absmax_buf.data_ptr<float>(), scale_out.data_ptr<float>(),
+            inv_scale_out.data_ptr<float>(), (unsigned int*)retire_count.data_ptr<int>(),
+            smooth_ptr, num_channels, Q_level, fused_silu, num_elements);
+    } else {
+        delta_absmax_fp16_kernel<float><<<grid_size, block_size, block_size * sizeof(float), stream>>>(
+            x.data_ptr<float>(), cache_ptr,
+            absmax_buf.data_ptr<float>(), scale_out.data_ptr<float>(),
+            inv_scale_out.data_ptr<float>(), (unsigned int*)retire_count.data_ptr<int>(),
+            smooth_ptr, num_channels, Q_level, fused_silu, num_elements);
+    }
+}
+
+// =========================================================================
 // Dynamic per-tensor scale discovery for the plain (non-MoDiff) baseline.
 //
 // Cache-free counterpart of sub_absmax_scale above: reduces absmax(x) over
@@ -1518,6 +1729,12 @@ torch::Tensor step1_static_quantize_pack_int4_fprop(
 
     int N = x.size(0);
     int C = x.size(1);
+    // 2D is a first-class case: the MoDiff Linear path quantizes a [M, K] activation with this same
+    // kernel (the elementwise body only walks numel), so the output reshape must not assume NCHW.
+    // Without this the Linear path died with "Dimension out of range ... but got 2".
+    if (x.dim() == 2) {
+        return x_packed.view({x.size(0), x.size(1) / 2});
+    }
     int H = x.size(2);
     int W = x.size(3);
 
@@ -1622,8 +1839,15 @@ template <typename T_IN>
 __global__ void upsample2x_quantize_noahat_kernel(
     const T_IN* __restrict__ x, int8_t* __restrict__ output_int8,
     const float* __restrict__ scale_ptr, const float* __restrict__ smooth_inv,
-    int C, int H, int W, int num_channels, long num_elements_out) {
+    int C, int H, int W, int num_channels, long num_elements_out,
+    // MoDiff, opt-in: subtract a_hat before quantizing and advance it in place. nullptr keeps the
+    // baseline behaviour BIT-IDENTICALLY (cache reads as 0 and nothing is stored), so one kernel
+    // serves both modes -- no cloned MoDiff twin. The loop already grids over OUTPUT elements,
+    // which is what makes this work: nearest-2x upsample gives each output position its own a_hat
+    // entry, and a clone gridding over input positions would have had to quantize four times.
+    __half* __restrict__ a_hat_cache) {
     float scale = *scale_ptr;
+    const float inv_scale = 1.0f / scale;
     const int Wo = W * 2, Ho = H * 2;
     long idx = (long)blockIdx.x * blockDim.x + threadIdx.x;
     for (long i = idx; i < num_elements_out; i += (long)blockDim.x * gridDim.x) {
@@ -1637,7 +1861,9 @@ __global__ void upsample2x_quantize_noahat_kernel(
         long i_in = ((n * H + hi) * (long)W + wi) * C + c;
         float xval = load_as_float(x, (int)i_in);
         if (smooth_inv != nullptr) xval *= smooth_inv[c % num_channels];
-        float q = fmaxf(-127.0f, fminf(127.0f, roundf(xval * scale)));
+        const float cache = (a_hat_cache != nullptr) ? __half2float(a_hat_cache[i]) : 0.0f;
+        float q = fmaxf(-127.0f, fminf(127.0f, roundf((xval - cache) * scale)));
+        if (a_hat_cache != nullptr) a_hat_cache[i] = __float2half_rn(cache + q * inv_scale);
         output_int8[i] = static_cast<int8_t>(q);
     }
 }
@@ -1646,8 +1872,10 @@ template <typename T_IN>
 __global__ void upsample2x_quantize_pack_noahat_kernel(
     const T_IN* __restrict__ x, int8_t* __restrict__ output_packed,
     const float* __restrict__ scale_ptr, const float* __restrict__ smooth_inv,
-    int C, int H, int W, int num_channels, long num_elements_out) {
+    int C, int H, int W, int num_channels, long num_elements_out,
+    __half* __restrict__ a_hat_cache) {   // nullptr => baseline, bit-identical (see int8 sibling)
     float scale = *scale_ptr;
+    const float inv_scale = 1.0f / scale;
     const int Wo = W * 2, Ho = H * 2;
     long idx = (long)blockIdx.x * blockDim.x + threadIdx.x;
     long stride = (long)blockDim.x * gridDim.x;
@@ -1662,12 +1890,17 @@ __global__ void upsample2x_quantize_pack_noahat_kernel(
         long pix_in = (n * H + hi) * (long)W + wi;
         float x0 = load_as_float(x, (int)(pix_in * C + c0));
         if (smooth_inv != nullptr) x0 *= smooth_inv[c0 % num_channels];
-        float q0 = fmaxf(-7.0f, fminf(7.0f, roundf(x0 * scale)));
+        const float c_0 = (a_hat_cache != nullptr) ? __half2float(a_hat_cache[base]) : 0.0f;
+        float q0 = fmaxf(-7.0f, fminf(7.0f, roundf((x0 - c_0) * scale)));
+        if (a_hat_cache != nullptr) a_hat_cache[base] = __float2half_rn(c_0 + q0 * inv_scale);
         float q1 = 0.0f;
         if (base + 1 < num_elements_out) {
             float x1 = load_as_float(x, (int)(pix_in * C + c0 + 1));
             if (smooth_inv != nullptr) x1 *= smooth_inv[(c0 + 1) % num_channels];
-            q1 = fmaxf(-7.0f, fminf(7.0f, roundf(x1 * scale)));
+            const float c_1 = (a_hat_cache != nullptr) ? __half2float(a_hat_cache[base + 1]) : 0.0f;
+            q1 = fmaxf(-7.0f, fminf(7.0f, roundf((x1 - c_1) * scale)));
+            if (a_hat_cache != nullptr)
+                a_hat_cache[base + 1] = __float2half_rn(c_1 + q1 * inv_scale);
         }
         output_packed[base / 2] = (static_cast<int8_t>(q0) & 0x0F) | ((static_cast<int8_t>(q1) & 0x0F) << 4);
     }
@@ -1677,7 +1910,10 @@ __global__ void upsample2x_quantize_pack_noahat_kernel(
 // Inputs: x FP16/FP32 [N,C,H,W] channels_last (pre-upsample); scale_buf FP32 [1]; smooth_inv FP32 [C] (empty = skip).
 // Output: INT8 [N,C,2H,2W] channels_last -- feeds the Upsample.conv's conv2d_int*_evt_* directly.
 torch::Tensor upsample2x_quantize_noahat_fprop(
-    torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv) {
+    torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv,
+    torch::Tensor a_hat_cache) {
+    // Name kept for pybind/API compatibility (csrc/modiff_kernels_api.h notes the _noahat spelling
+    // is load-bearing); an EMPTY a_hat_cache is the no-a_hat baseline it was named for.
     TORCH_CHECK(x.dim() == 4, "upsample2x_quantize_noahat_fprop: x must be [N,C,H,W]");
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     int N = x.size(0), C = x.size(1), H = x.size(2), W = x.size(3);
@@ -1688,14 +1924,25 @@ torch::Tensor upsample2x_quantize_noahat_fprop(
     int grid_size = (int)std::min<long>((num_elements_out + block_size - 1) / block_size, 2147483647L);
     const float* smooth_ptr = (smooth_inv.numel() > 0) ? smooth_inv.data_ptr<float>() : nullptr;
     int num_channels = (smooth_inv.numel() > 0) ? (int)smooth_inv.numel() : C;
+    __half* cache_ptr = nullptr;
+    if (a_hat_cache.numel() > 0) {
+        TORCH_CHECK(a_hat_cache.scalar_type() == torch::kHalf,
+                    "upsample2x_quantize_noahat_fprop: a_hat_cache must be fp16");
+        TORCH_CHECK(a_hat_cache.numel() == num_elements_out,
+                    "upsample2x_quantize_noahat_fprop: a_hat_cache must be POST-upsample sized "
+                    "(N*C*2H*2W)");
+        cache_ptr = reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>());
+    }
     if (x.scalar_type() == torch::kHalf) {
         upsample2x_quantize_noahat_kernel<__half><<<grid_size, block_size, 0, stream>>>(
             reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), y.data_ptr<int8_t>(),
-            scale_buf.data_ptr<float>(), smooth_ptr, C, H, W, num_channels, num_elements_out);
+            scale_buf.data_ptr<float>(), smooth_ptr, C, H, W, num_channels, num_elements_out,
+            cache_ptr);
     } else {
         upsample2x_quantize_noahat_kernel<float><<<grid_size, block_size, 0, stream>>>(
             x.data_ptr<float>(), y.data_ptr<int8_t>(),
-            scale_buf.data_ptr<float>(), smooth_ptr, C, H, W, num_channels, num_elements_out);
+            scale_buf.data_ptr<float>(), smooth_ptr, C, H, W, num_channels, num_elements_out,
+            cache_ptr);
     }
     return y;
 }
@@ -1704,7 +1951,8 @@ torch::Tensor upsample2x_quantize_noahat_fprop(
 // (same layout convention as step1_static_quantize_pack_int4_noahat_fprop). Requires C%2==0
 // (channel-pair packing), matching every other int4 quantize kernel in this file.
 torch::Tensor upsample2x_quantize_pack_noahat_fprop(
-    torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv) {
+    torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv,
+    torch::Tensor a_hat_cache) {
     TORCH_CHECK(x.dim() == 4, "upsample2x_quantize_pack_noahat_fprop: x must be [N,C,H,W]");
     int N = x.size(0), C = x.size(1), H = x.size(2), W = x.size(3);
     TORCH_CHECK(C % 2 == 0, "upsample2x_quantize_pack_noahat_fprop: C must be even for int4 packing");
@@ -1717,14 +1965,22 @@ torch::Tensor upsample2x_quantize_pack_noahat_fprop(
     int grid_size = (int)std::min<long>((num_work_items + block_size - 1) / block_size, 2147483647L);
     const float* smooth_ptr = (smooth_inv.numel() > 0) ? smooth_inv.data_ptr<float>() : nullptr;
     int num_channels = (smooth_inv.numel() > 0) ? (int)smooth_inv.numel() : C;
+    __half* cache_ptr = nullptr;
+    if (a_hat_cache.numel() > 0) {
+        TORCH_CHECK(a_hat_cache.scalar_type() == torch::kHalf,
+                    "upsample2x_quantize_pack_noahat_fprop: a_hat_cache must be fp16");
+        TORCH_CHECK(a_hat_cache.numel() == num_elements_out,
+                    "upsample2x_quantize_pack_noahat_fprop: a_hat_cache must be POST-upsample sized");
+        cache_ptr = reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>());
+    }
     if (x.scalar_type() == torch::kHalf) {
         upsample2x_quantize_pack_noahat_kernel<__half><<<grid_size, block_size, 0, stream>>>(
             reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), x_packed.data_ptr<int8_t>(),
-            scale_buf.data_ptr<float>(), smooth_ptr, C, H, W, num_channels, num_elements_out);
+            scale_buf.data_ptr<float>(), smooth_ptr, C, H, W, num_channels, num_elements_out, cache_ptr);
     } else {
         upsample2x_quantize_pack_noahat_kernel<float><<<grid_size, block_size, 0, stream>>>(
             x.data_ptr<float>(), x_packed.data_ptr<int8_t>(),
-            scale_buf.data_ptr<float>(), smooth_ptr, C, H, W, num_channels, num_elements_out);
+            scale_buf.data_ptr<float>(), smooth_ptr, C, H, W, num_channels, num_elements_out, cache_ptr);
     }
     return x_packed.view({N, H * 2, W * 2, C / 2});
 }

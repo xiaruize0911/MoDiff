@@ -74,6 +74,10 @@ class QuantLinearWxAx(nn.Module):
         self._amax = 0.0
         self.a_hat = None                                      # MoDiff temporal caches (modiff mode)
         self.o_hat = None
+        # Scratch for the fused MoDiff path (lazily sized on first modulated call).
+        self._absmax = self._scale = self._inv_scale = self._retire = None
+        self._empty_f32 = None
+        self._empty_h = None
         # int8-OUTPUT GEMM (output-fusion fix): the GEMM writes int8 (half the M*N output write) and the
         # per-column dequant is fused into the bias add (out = int8·out_scale + bias, one epilogue op that
         # replaces the plain +bias). Needs a calibrated per-column output scale. Engages only when bias is
@@ -126,12 +130,36 @@ class QuantLinearWxAx(nn.Module):
         xq = _mc.quantize_act_int4_pack(xf, a_scale)
         return _mc.gemm_w4a4_awq_bias_res(xq, self.qweight, self.w_scale, a_scale, self._awqt_K, self.out_features, bias, res)
 
+    def _ensure_modiff_bufs(self, xf):
+        """1-element device scratch for the dynamic delta scale, plus the two empty sentinels.
+
+        Allocated once per layer and reused, so the hot path performs no allocation. absmax and
+        retire must be zero on entry; both kernels self-reset them.
+        """
+        d = xf.device
+        if self._scale is None or self._scale.device != d:
+            self._absmax = torch.zeros(1, device=d, dtype=torch.float32)
+            self._scale = torch.empty(1, device=d, dtype=torch.float32)
+            self._inv_scale = torch.empty(1, device=d, dtype=torch.float32)
+            self._retire = torch.zeros(1, device=d, dtype=torch.int32)
+            self._empty_f32 = torch.empty(0, device=d, dtype=torch.float32)
+            self._empty_h = torch.empty(0, device=d, dtype=torch.float16)
+
     def forward(self, x, residual=None):
         orig = x.shape
         xf = x.reshape(-1, self.in_features).half().contiguous()
         if self._calib:
             self._amax = max(self._amax, float(xf.abs().max()))
         rflat = residual.reshape(-1, self.out_features).half().contiguous() if residual is not None else None
+
+        # A shape change invalidates the temporal caches: they are indexed by tensor position, so an
+        # a_hat built at one M (batch x tokens) means nothing at another. This happens in normal use
+        # -- the activation-scale calibration samples at a smaller batch than production -- and it
+        # surfaced as "delta_absmax_fp16: a_hat_cache must match x element count" on the int4 path.
+        # Dropping the caches makes the next call re-seed, which is the correct semantics.
+        if self.modiff and self.a_hat is not None and self.a_hat.shape[0] != xf.shape[0]:
+            self.a_hat = None
+            self.o_hat = None
 
         if self._use_bias_res:
             # FUSED bias(+residual) epilogue -- the default int8/int4 Linear path
@@ -140,14 +168,57 @@ class QuantLinearWxAx(nn.Module):
             return out.reshape(*orig[:-1], self.out_features)
 
         if self.modiff and self.a_hat is not None:
-            # MoDiff: quantize only the temporal DELTA (small range -> less int error),
-            # accumulate the GEMM into o_hat. o_hat_t = o_hat_{t-1} + Linear(Q(x - a_hat)).
-            delta = xf - self.a_hat
-            d_scale = (delta.abs().max().item() / self.Q) or 1e-8
-            q = torch.round(delta / d_scale).clamp_(-self.Q, self.Q)
-            self.a_hat = self.a_hat + q * d_scale                       # dequantized-delta reconstruction
-            self.o_hat = self.o_hat + self._gemm(q.half().contiguous(), d_scale)
-            out = self.o_hat
+            # MoDiff (paper Eqs 13-14) on the FUSED path: three kernels, no eager arithmetic.
+            #   a_hat_t = Q(x_t - a_hat_{t+1}) + a_hat_{t+1}
+            #   o_hat_t = Linear(Q(x_t - a_hat_{t+1})) + o_hat_{t+1}
+            #
+            # This used to be ~6 launches of eager PyTorch (subtract, round, clamp, a_hat add, gemm,
+            # o_hat add) plus a host sync for the delta absmax, costing +10.9 ms/step at batch 8 --
+            # the ONLY reason MoDiff on the Linear layers stayed off by default. The method itself has
+            # been correct since Bug 2 was fixed (int4 latent relL2 0.4571 -> 0.4220 with it on).
+            #
+            # Every kernel below already existed except gemm_w{8a8,4a4}_awq_o_hat, and none of them is
+            # a MoDiff-only clone:
+            #   delta_absmax_fp16              the conv path's dynamic delta scale, on device, no sync
+            #   step1_static_quantize[_pack]   the conv path's delta-quantize + in-place a_hat update.
+            #                                  It is dimension-agnostic (it walks x.numel() and only
+            #                                  reads size(1) for SmoothQuant, which is empty here), so
+            #                                  the 2D [M,K] Linear activation needs no separate kernel.
+            #   gemm_*_awq_o_hat               the accumulate folded into the GEMM epilogue.
+            self._ensure_modiff_bufs(xf)
+            # a_hat is seeded at the PADDED width (see the first-step branch), so pad x to match or
+            # the delta subtract is a shape error. int4 pads K to _awqt_K for the AWQ layout; int8
+            # usually does not, in which case this is a no-op.
+            xq_in = xf
+            if self._awqt_K != self.in_features:
+                xq_in = F.pad(xf, (0, self._awqt_K - self.in_features)).contiguous()
+            assert self.a_hat.shape[-1] == xq_in.shape[-1], (
+                f"a_hat width {self.a_hat.shape[-1]} != padded x width {xq_in.shape[-1]}")
+            # Dynamic per-call delta scale. Q_level is passed as the int8/int4 code ceiling, and the
+            # kernel writes scale = Q/max|delta| plus its reciprocal, so the quantize below cannot
+            # clip. Same choice as the conv path, and for the same measured reason.
+            _mc.delta_absmax_fp16(xq_in, self.a_hat, self._absmax, self._scale, self._inv_scale,
+                                  self._retire, float(self.Q), self._empty_f32, False)
+            if self.bits == 8:
+                codes = _mc.step1_static_quantize_fprop(xq_in, self.a_hat, self._scale,
+                                                        self._empty_f32)
+                out = _mc.gemm_w8a8_awq_o_hat(codes, self.qweight, self.w_scale,
+                                              self._inv_scale, self.out_features,
+                                              self.o_hat, rflat if rflat is not None else self._empty_h,
+                                              self.bias if self.bias is not None else self._empty_h)
+            else:
+                codes = _mc.step1_static_quantize_pack_int4_fprop(xq_in, self.a_hat, self._scale,
+                                                                  self._empty_f32)
+                out = _mc.gemm_w4a4_awq_o_hat(codes, self.qweight, self.w_scale,
+                                              self._inv_scale, self.out_features,
+                                              self.o_hat, rflat if rflat is not None else self._empty_h,
+                                              self.bias if self.bias is not None else self._empty_h)
+            # The GEMM advanced o_hat in place (bias- and residual-free, Eq 9) and returned
+            # o_hat_t + bias + residual. So return directly: falling through to the shared
+            # bias/residual tail below would apply both a SECOND time. Getting this wrong is what
+            # took int8 latent relL2 from 0.039 to 0.300 in the first version of this path -- the
+            # bias was dropped entirely instead of being moved to the output.
+            return out.reshape(*orig[:-1], self.out_features)
         elif self._out_i8 and self._inv_out_scale is not None:
             # int8-OUTPUT GEMM (output-fusion): GEMM writes int8 (half the M*N output write); the
             # per-column dequant is fused into the bias add via dequant_bias_i8 (one epilogue op).
@@ -169,9 +240,16 @@ class QuantLinearWxAx(nn.Module):
                 cur = out.detach().abs().amax(0).float()               # [out_features]
                 self._out_amax = cur if self._out_amax is None else torch.maximum(self._out_amax, cur)
             if self.modiff:                                            # first step: seed the caches
-                q = torch.round(xf / a_scale).clamp_(-self.Q, self.Q)
-                self.a_hat = (q * a_scale).contiguous()
-                self.o_hat = out.clone()
+                # Seed at the PADDED width: the modulated path quantizes the padded activation, and
+                # a_hat must have the same element count or delta_absmax_fp16 rejects it.
+                xs = (F.pad(xf, (0, self._awqt_K - self.in_features)).contiguous()
+                      if self._awqt_K != self.in_features else xf)
+                q = torch.round(xs / a_scale).clamp_(-self.Q, self.Q)
+                self.a_hat = (q * a_scale).half().contiguous()
+                # o_hat holds Linear(a_hat_T) only -- bias and residual are added at the output on
+                # every step, including this one (the tail below does it), so they must NOT be
+                # baked into the state here.
+                self.o_hat = out.detach().half().contiguous()
 
         out = out.reshape(*orig[:-1], self.out_features)
         if self.bias is not None:
