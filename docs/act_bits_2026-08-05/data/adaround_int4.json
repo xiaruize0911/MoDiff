@@ -1,0 +1,1199 @@
+{
+  "iters": 2000,
+  "lambda": 0.01,
+  "seeds": [
+    1234,
+    20260805,
+    777
+  ],
+  "calib": {
+    "steps": [
+      0,
+      8,
+      16,
+      24,
+      32,
+      40,
+      48
+    ],
+    "batch": 2,
+    "shapes": {
+      "input_blocks.1.0.original.in_layers.2": [
+        2,
+        192,
+        32,
+        32
+      ],
+      "input_blocks.1.0.original.out_layers.3": [
+        2,
+        192,
+        32,
+        32
+      ],
+      "input_blocks.2.0.original.in_layers.2": [
+        2,
+        192,
+        32,
+        32
+      ],
+      "input_blocks.2.0.original.out_layers.3": [
+        2,
+        192,
+        32,
+        32
+      ],
+      "input_blocks.3.0.original.in_layers.2": [
+        2,
+        192,
+        16,
+        16
+      ],
+      "input_blocks.3.0.original.out_layers.3": [
+        2,
+        192,
+        16,
+        16
+      ],
+      "input_blocks.4.0.original.in_layers.2": [
+        2,
+        192,
+        16,
+        16
+      ],
+      "input_blocks.4.0.original.out_layers.3": [
+        2,
+        384,
+        16,
+        16
+      ],
+      "input_blocks.5.0.original.in_layers.2": [
+        2,
+        384,
+        16,
+        16
+      ],
+      "input_blocks.5.0.original.out_layers.3": [
+        2,
+        384,
+        16,
+        16
+      ],
+      "input_blocks.6.0.original.in_layers.2": [
+        2,
+        384,
+        8,
+        8
+      ],
+      "input_blocks.6.0.original.out_layers.3": [
+        2,
+        384,
+        8,
+        8
+      ],
+      "input_blocks.7.0.original.in_layers.2": [
+        2,
+        384,
+        8,
+        8
+      ],
+      "input_blocks.7.0.original.out_layers.3": [
+        2,
+        384,
+        8,
+        8
+      ],
+      "input_blocks.8.0.original.in_layers.2": [
+        2,
+        384,
+        8,
+        8
+      ],
+      "input_blocks.8.0.original.out_layers.3": [
+        2,
+        384,
+        8,
+        8
+      ],
+      "input_blocks.9.0.original.in_layers.2": [
+        2,
+        384,
+        4,
+        4
+      ],
+      "input_blocks.9.0.original.out_layers.3": [
+        2,
+        384,
+        4,
+        4
+      ],
+      "input_blocks.10.0.original.in_layers.2": [
+        2,
+        384,
+        4,
+        4
+      ],
+      "input_blocks.10.0.original.out_layers.3": [
+        2,
+        768,
+        4,
+        4
+      ],
+      "input_blocks.11.0.original.in_layers.2": [
+        2,
+        768,
+        4,
+        4
+      ],
+      "input_blocks.11.0.original.out_layers.3": [
+        2,
+        768,
+        4,
+        4
+      ],
+      "input_blocks.12.0.original.in_layers.2": [
+        2,
+        768,
+        2,
+        2
+      ],
+      "input_blocks.12.0.original.out_layers.3": [
+        2,
+        768,
+        2,
+        2
+      ],
+      "input_blocks.13.0.original.in_layers.2": [
+        2,
+        768,
+        2,
+        2
+      ],
+      "input_blocks.13.0.original.out_layers.3": [
+        2,
+        768,
+        2,
+        2
+      ],
+      "input_blocks.14.0.original.in_layers.2": [
+        2,
+        768,
+        2,
+        2
+      ],
+      "input_blocks.14.0.original.out_layers.3": [
+        2,
+        768,
+        2,
+        2
+      ],
+      "middle_block.0.original.in_layers.2": [
+        2,
+        768,
+        2,
+        2
+      ],
+      "middle_block.0.original.out_layers.3": [
+        2,
+        768,
+        2,
+        2
+      ],
+      "middle_block.2.original.in_layers.2": [
+        2,
+        768,
+        2,
+        2
+      ],
+      "middle_block.2.original.out_layers.3": [
+        2,
+        768,
+        2,
+        2
+      ],
+      "output_blocks.0.0.original.in_layers.2": [
+        2,
+        1536,
+        2,
+        2
+      ],
+      "output_blocks.0.0.original.out_layers.3": [
+        2,
+        768,
+        2,
+        2
+      ],
+      "output_blocks.1.0.original.in_layers.2": [
+        2,
+        1536,
+        2,
+        2
+      ],
+      "output_blocks.1.0.original.out_layers.3": [
+        2,
+        768,
+        2,
+        2
+      ],
+      "output_blocks.2.0.original.in_layers.2": [
+        2,
+        1536,
+        2,
+        2
+      ],
+      "output_blocks.2.0.original.out_layers.3": [
+        2,
+        768,
+        2,
+        2
+      ],
+      "output_blocks.2.1.original.in_layers.2": [
+        2,
+        768,
+        4,
+        4
+      ],
+      "output_blocks.2.1.original.out_layers.3": [
+        2,
+        768,
+        4,
+        4
+      ],
+      "output_blocks.3.0.original.in_layers.2": [
+        2,
+        1536,
+        4,
+        4
+      ],
+      "output_blocks.3.0.original.out_layers.3": [
+        2,
+        768,
+        4,
+        4
+      ],
+      "output_blocks.4.0.original.in_layers.2": [
+        2,
+        1536,
+        4,
+        4
+      ],
+      "output_blocks.4.0.original.out_layers.3": [
+        2,
+        768,
+        4,
+        4
+      ],
+      "output_blocks.5.0.original.in_layers.2": [
+        2,
+        1152,
+        4,
+        4
+      ],
+      "output_blocks.5.0.original.out_layers.3": [
+        2,
+        768,
+        4,
+        4
+      ],
+      "output_blocks.5.2.original.in_layers.2": [
+        2,
+        768,
+        8,
+        8
+      ],
+      "output_blocks.5.2.original.out_layers.3": [
+        2,
+        768,
+        8,
+        8
+      ],
+      "output_blocks.6.0.original.in_layers.2": [
+        2,
+        1152,
+        8,
+        8
+      ],
+      "output_blocks.6.0.original.out_layers.3": [
+        2,
+        384,
+        8,
+        8
+      ],
+      "output_blocks.7.0.original.in_layers.2": [
+        2,
+        768,
+        8,
+        8
+      ],
+      "output_blocks.7.0.original.out_layers.3": [
+        2,
+        384,
+        8,
+        8
+      ],
+      "output_blocks.8.0.original.in_layers.2": [
+        2,
+        768,
+        8,
+        8
+      ],
+      "output_blocks.8.0.original.out_layers.3": [
+        2,
+        384,
+        8,
+        8
+      ],
+      "output_blocks.8.2.original.in_layers.2": [
+        2,
+        384,
+        16,
+        16
+      ],
+      "output_blocks.8.2.original.out_layers.3": [
+        2,
+        384,
+        16,
+        16
+      ],
+      "output_blocks.9.0.original.in_layers.2": [
+        2,
+        768,
+        16,
+        16
+      ],
+      "output_blocks.9.0.original.out_layers.3": [
+        2,
+        384,
+        16,
+        16
+      ],
+      "output_blocks.10.0.original.in_layers.2": [
+        2,
+        768,
+        16,
+        16
+      ],
+      "output_blocks.10.0.original.out_layers.3": [
+        2,
+        384,
+        16,
+        16
+      ],
+      "output_blocks.11.0.original.in_layers.2": [
+        2,
+        576,
+        16,
+        16
+      ],
+      "output_blocks.11.0.original.out_layers.3": [
+        2,
+        384,
+        16,
+        16
+      ],
+      "output_blocks.11.2.original.in_layers.2": [
+        2,
+        384,
+        32,
+        32
+      ],
+      "output_blocks.11.2.original.out_layers.3": [
+        2,
+        384,
+        32,
+        32
+      ],
+      "output_blocks.12.0.original.in_layers.2": [
+        2,
+        576,
+        32,
+        32
+      ],
+      "output_blocks.12.0.original.out_layers.3": [
+        2,
+        192,
+        32,
+        32
+      ],
+      "output_blocks.13.0.original.in_layers.2": [
+        2,
+        384,
+        32,
+        32
+      ],
+      "output_blocks.13.0.original.out_layers.3": [
+        2,
+        192,
+        32,
+        32
+      ],
+      "output_blocks.14.0.original.in_layers.2": [
+        2,
+        384,
+        32,
+        32
+      ],
+      "output_blocks.14.0.original.out_layers.3": [
+        2,
+        192,
+        32,
+        32
+      ]
+    }
+  },
+  "arms": {
+    "mse": {
+      "nearest": {
+        "n_layers": 70,
+        "per_seed": {
+          "1234": 0.24393585324287415,
+          "20260805": 0.2506876289844513,
+          "777": 0.23810391128063202
+        },
+        "mean": 0.2442424645026525,
+        "stdev": 0.006297459460831868
+      },
+      "adaround": {
+        "n_layers": 70,
+        "per_seed": {
+          "1234": 0.15818437933921814,
+          "20260805": 0.20081083476543427,
+          "777": 0.19086197018623352
+        },
+        "mean": 0.18328572809696198,
+        "stdev": 0.02230029727822557
+      },
+      "mean_layer_output_err_nearest": 0.008095781874718658,
+      "mean_layer_output_err_adaround": 0.0024708278026603055,
+      "mean_frac_flipped": 0.08910612849784749,
+      "per_layer": {
+        "input_blocks.1.0.original.in_layers.2": {
+          "output_err_nearest": 0.002951631140309243,
+          "output_err_learned": 0.0006318754087233409,
+          "frac_flipped_vs_nearest": 0.12572941184043884
+        },
+        "input_blocks.1.0.original.out_layers.3": {
+          "output_err_nearest": 0.010799079932636334,
+          "output_err_learned": 0.003833946734857933,
+          "frac_flipped_vs_nearest": 0.18550769984722137
+        },
+        "input_blocks.2.0.original.in_layers.2": {
+          "output_err_nearest": 0.006498078593025215,
+          "output_err_learned": 0.0017525898551559373,
+          "frac_flipped_vs_nearest": 0.16361038386821747
+        },
+        "input_blocks.2.0.original.out_layers.3": {
+          "output_err_nearest": 0.014261354038062338,
+          "output_err_learned": 0.005350814867803327,
+          "frac_flipped_vs_nearest": 0.17652572691440582
+        },
+        "input_blocks.3.0.original.in_layers.2": {
+          "output_err_nearest": 0.002413959669322993,
+          "output_err_learned": 0.0006969433031653251,
+          "frac_flipped_vs_nearest": 0.14801552891731262
+        },
+        "input_blocks.3.0.original.out_layers.3": {
+          "output_err_nearest": 0.0048216818651954955,
+          "output_err_learned": 0.0018298615324240561,
+          "frac_flipped_vs_nearest": 0.1814507395029068
+        },
+        "input_blocks.4.0.original.in_layers.2": {
+          "output_err_nearest": 0.0021310541816464564,
+          "output_err_learned": 0.0008067336293602972,
+          "frac_flipped_vs_nearest": 0.12493821233510971
+        },
+        "input_blocks.4.0.original.out_layers.3": {
+          "output_err_nearest": 0.005775266186010842,
+          "output_err_learned": 0.002604797584057142,
+          "frac_flipped_vs_nearest": 0.12768328189849854
+        },
+        "input_blocks.5.0.original.in_layers.2": {
+          "output_err_nearest": 0.004062580277945859,
+          "output_err_learned": 0.0014238114913001742,
+          "frac_flipped_vs_nearest": 0.13230915367603302
+        },
+        "input_blocks.5.0.original.out_layers.3": {
+          "output_err_nearest": 0.010514048847663347,
+          "output_err_learned": 0.004185737046794922,
+          "frac_flipped_vs_nearest": 0.15818655490875244
+        },
+        "input_blocks.6.0.original.in_layers.2": {
+          "output_err_nearest": 0.0016423833944187365,
+          "output_err_learned": 0.0005262101241306933,
+          "frac_flipped_vs_nearest": 0.07045717537403107
+        },
+        "input_blocks.6.0.original.out_layers.3": {
+          "output_err_nearest": 0.006564169456369121,
+          "output_err_learned": 0.002973357106228609,
+          "frac_flipped_vs_nearest": 0.08577021956443787
+        },
+        "input_blocks.7.0.original.in_layers.2": {
+          "output_err_nearest": 0.0013541410072920375,
+          "output_err_learned": 0.0005035074375830151,
+          "frac_flipped_vs_nearest": 0.06638666242361069
+        },
+        "input_blocks.7.0.original.out_layers.3": {
+          "output_err_nearest": 0.008725875107447859,
+          "output_err_learned": 0.00344211765727188,
+          "frac_flipped_vs_nearest": 0.1050618514418602
+        },
+        "input_blocks.8.0.original.in_layers.2": {
+          "output_err_nearest": 0.0025303674258276804,
+          "output_err_learned": 0.0006130694938221072,
+          "frac_flipped_vs_nearest": 0.07436719536781311
+        },
+        "input_blocks.8.0.original.out_layers.3": {
+          "output_err_nearest": 0.0077976192686705055,
+          "output_err_learned": 0.0028085605095330914,
+          "frac_flipped_vs_nearest": 0.10289472341537476
+        },
+        "input_blocks.9.0.original.in_layers.2": {
+          "output_err_nearest": 0.0009361837864076396,
+          "output_err_learned": 0.00024862929119680007,
+          "frac_flipped_vs_nearest": 0.03869779780507088
+        },
+        "input_blocks.9.0.original.out_layers.3": {
+          "output_err_nearest": 0.009260339758306623,
+          "output_err_learned": 0.0029170868668305303,
+          "frac_flipped_vs_nearest": 0.08210886269807816
+        },
+        "input_blocks.10.0.original.in_layers.2": {
+          "output_err_nearest": 0.0016419400399127692,
+          "output_err_learned": 0.0007521463068418476,
+          "frac_flipped_vs_nearest": 0.03693794831633568
+        },
+        "input_blocks.10.0.original.out_layers.3": {
+          "output_err_nearest": 0.008087760977213755,
+          "output_err_learned": 0.004374356787257748,
+          "frac_flipped_vs_nearest": 0.03520993888378143
+        },
+        "input_blocks.11.0.original.in_layers.2": {
+          "output_err_nearest": 0.0005314604787652671,
+          "output_err_learned": 0.00027524026081936963,
+          "frac_flipped_vs_nearest": 0.025093549862504005
+        },
+        "input_blocks.11.0.original.out_layers.3": {
+          "output_err_nearest": 0.011536086370430711,
+          "output_err_learned": 0.005054998307917151,
+          "frac_flipped_vs_nearest": 0.046355634927749634
+        },
+        "input_blocks.12.0.original.in_layers.2": {
+          "output_err_nearest": 0.0003904333197494137,
+          "output_err_learned": 0.0001579573017313594,
+          "frac_flipped_vs_nearest": 0.01680915802717209
+        },
+        "input_blocks.12.0.original.out_layers.3": {
+          "output_err_nearest": 0.012725601071534963,
+          "output_err_learned": 0.003027671897990807,
+          "frac_flipped_vs_nearest": 0.049628742039203644
+        },
+        "input_blocks.13.0.original.in_layers.2": {
+          "output_err_nearest": 0.0006129225645963407,
+          "output_err_learned": 0.0002529058434459836,
+          "frac_flipped_vs_nearest": 0.01865886151790619
+        },
+        "input_blocks.13.0.original.out_layers.3": {
+          "output_err_nearest": 0.019063264518984466,
+          "output_err_learned": 0.0032140270403530602,
+          "frac_flipped_vs_nearest": 0.08450260758399963
+        },
+        "input_blocks.14.0.original.in_layers.2": {
+          "output_err_nearest": 0.0005310020038530041,
+          "output_err_learned": 0.0001670506366780189,
+          "frac_flipped_vs_nearest": 0.01871236227452755
+        },
+        "input_blocks.14.0.original.out_layers.3": {
+          "output_err_nearest": 0.005836938095756289,
+          "output_err_learned": 0.0008790833501930937,
+          "frac_flipped_vs_nearest": 0.06291405856609344
+        },
+        "middle_block.0.original.in_layers.2": {
+          "output_err_nearest": 0.0004160831737062589,
+          "output_err_learned": 0.00014556902834602145,
+          "frac_flipped_vs_nearest": 0.015672659501433372
+        },
+        "middle_block.0.original.out_layers.3": {
+          "output_err_nearest": 0.0280229682617282,
+          "output_err_learned": 0.0023565666211068596,
+          "frac_flipped_vs_nearest": 0.12257799506187439
+        },
+        "middle_block.2.original.in_layers.2": {
+          "output_err_nearest": 0.0004722821090201204,
+          "output_err_learned": 0.00017549727222635123,
+          "frac_flipped_vs_nearest": 0.016709692776203156
+        },
+        "middle_block.2.original.out_layers.3": {
+          "output_err_nearest": 0.006108649882873632,
+          "output_err_learned": 0.0015800646697235572,
+          "frac_flipped_vs_nearest": 0.041841670870780945
+        },
+        "output_blocks.0.0.original.in_layers.2": {
+          "output_err_nearest": 0.0004300994752003371,
+          "output_err_learned": 0.0001616273447778704,
+          "frac_flipped_vs_nearest": 0.013996925204992294
+        },
+        "output_blocks.0.0.original.out_layers.3": {
+          "output_err_nearest": 0.05530577317706532,
+          "output_err_learned": 0.0050803245606484615,
+          "frac_flipped_vs_nearest": 0.19064143300056458
+        },
+        "output_blocks.1.0.original.in_layers.2": {
+          "output_err_nearest": 0.0005084814170889324,
+          "output_err_learned": 0.00016323356689210725,
+          "frac_flipped_vs_nearest": 0.017588675022125244
+        },
+        "output_blocks.1.0.original.out_layers.3": {
+          "output_err_nearest": 0.026799199821546674,
+          "output_err_learned": 0.004252965217398941,
+          "frac_flipped_vs_nearest": 0.16037364304065704
+        },
+        "output_blocks.2.0.original.in_layers.2": {
+          "output_err_nearest": 0.001043478847900922,
+          "output_err_learned": 0.0003266095978011613,
+          "frac_flipped_vs_nearest": 0.018659615889191628
+        },
+        "output_blocks.2.0.original.out_layers.3": {
+          "output_err_nearest": 0.011656470375183525,
+          "output_err_learned": 0.00311677484704198,
+          "frac_flipped_vs_nearest": 0.04417946934700012
+        },
+        "output_blocks.2.1.original.in_layers.2": {
+          "output_err_nearest": 0.0006157541219147446,
+          "output_err_learned": 0.00017565761725602067,
+          "frac_flipped_vs_nearest": 0.024491675198078156
+        },
+        "output_blocks.2.1.original.out_layers.3": {
+          "output_err_nearest": 0.008474476568654117,
+          "output_err_learned": 0.0011498320091905935,
+          "frac_flipped_vs_nearest": 0.10821891576051712
+        },
+        "output_blocks.3.0.original.in_layers.2": {
+          "output_err_nearest": 0.0009984034018420194,
+          "output_err_learned": 0.00044426468193607476,
+          "frac_flipped_vs_nearest": 0.02271854691207409
+        },
+        "output_blocks.3.0.original.out_layers.3": {
+          "output_err_nearest": 0.008741003826791903,
+          "output_err_learned": 0.0032953517864352955,
+          "frac_flipped_vs_nearest": 0.05427400767803192
+        },
+        "output_blocks.4.0.original.in_layers.2": {
+          "output_err_nearest": 0.0013606815870884279,
+          "output_err_learned": 0.0007936737811193136,
+          "frac_flipped_vs_nearest": 0.02092328481376171
+        },
+        "output_blocks.4.0.original.out_layers.3": {
+          "output_err_nearest": 0.007461678104700854,
+          "output_err_learned": 0.0036736433630144695,
+          "frac_flipped_vs_nearest": 0.04099961370229721
+        },
+        "output_blocks.5.0.original.in_layers.2": {
+          "output_err_nearest": 0.002747985989740337,
+          "output_err_learned": 0.0015966259899270923,
+          "frac_flipped_vs_nearest": 0.023599883541464806
+        },
+        "output_blocks.5.0.original.out_layers.3": {
+          "output_err_nearest": 0.00679202590311146,
+          "output_err_learned": 0.003795039748075954,
+          "frac_flipped_vs_nearest": 0.034139376133680344
+        },
+        "output_blocks.5.2.original.in_layers.2": {
+          "output_err_nearest": 0.0015767061932166287,
+          "output_err_learned": 0.0007483875306886356,
+          "frac_flipped_vs_nearest": 0.038145843893289566
+        },
+        "output_blocks.5.2.original.out_layers.3": {
+          "output_err_nearest": 0.007654013413199957,
+          "output_err_learned": 0.0028614215070410704,
+          "frac_flipped_vs_nearest": 0.07051689177751541
+        },
+        "output_blocks.6.0.original.in_layers.2": {
+          "output_err_nearest": 0.0020752765095859104,
+          "output_err_learned": 0.0008813618290637988,
+          "frac_flipped_vs_nearest": 0.040292996913194656
+        },
+        "output_blocks.6.0.original.out_layers.3": {
+          "output_err_nearest": 0.007926434479791328,
+          "output_err_learned": 0.0028981044272063904,
+          "frac_flipped_vs_nearest": 0.1151801198720932
+        },
+        "output_blocks.7.0.original.in_layers.2": {
+          "output_err_nearest": 0.003093064037314415,
+          "output_err_learned": 0.001253880677750092,
+          "frac_flipped_vs_nearest": 0.052957795560359955
+        },
+        "output_blocks.7.0.original.out_layers.3": {
+          "output_err_nearest": 0.007693760635932243,
+          "output_err_learned": 0.003288359376490582,
+          "frac_flipped_vs_nearest": 0.10564357042312622
+        },
+        "output_blocks.8.0.original.in_layers.2": {
+          "output_err_nearest": 0.003525473840556856,
+          "output_err_learned": 0.0014747081952543345,
+          "frac_flipped_vs_nearest": 0.0577324777841568
+        },
+        "output_blocks.8.0.original.out_layers.3": {
+          "output_err_nearest": 0.007861711968634878,
+          "output_err_learned": 0.003430892386589581,
+          "frac_flipped_vs_nearest": 0.09796369075775146
+        },
+        "output_blocks.8.2.original.in_layers.2": {
+          "output_err_nearest": 0.0021674082820597766,
+          "output_err_learned": 0.0007325136277788245,
+          "frac_flipped_vs_nearest": 0.07698190957307816
+        },
+        "output_blocks.8.2.original.out_layers.3": {
+          "output_err_nearest": 0.009179029748224918,
+          "output_err_learned": 0.0030499359340520928,
+          "frac_flipped_vs_nearest": 0.1519971340894699
+        },
+        "output_blocks.9.0.original.in_layers.2": {
+          "output_err_nearest": 0.004443504116836229,
+          "output_err_learned": 0.0016484662056828047,
+          "frac_flipped_vs_nearest": 0.08888979256153107
+        },
+        "output_blocks.9.0.original.out_layers.3": {
+          "output_err_nearest": 0.010757808393995151,
+          "output_err_learned": 0.004281663042206132,
+          "frac_flipped_vs_nearest": 0.15436770021915436
+        },
+        "output_blocks.10.0.original.in_layers.2": {
+          "output_err_nearest": 0.007495793587402433,
+          "output_err_learned": 0.0021368683331250134,
+          "frac_flipped_vs_nearest": 0.10743920505046844
+        },
+        "output_blocks.10.0.original.out_layers.3": {
+          "output_err_nearest": 0.009908092187944292,
+          "output_err_learned": 0.004064797807904984,
+          "frac_flipped_vs_nearest": 0.15369783341884613
+        },
+        "output_blocks.11.0.original.in_layers.2": {
+          "output_err_nearest": 0.004233199489938392,
+          "output_err_learned": 0.0015176562637888536,
+          "frac_flipped_vs_nearest": 0.09232785552740097
+        },
+        "output_blocks.11.0.original.out_layers.3": {
+          "output_err_nearest": 0.012737541500951473,
+          "output_err_learned": 0.004847111631127259,
+          "frac_flipped_vs_nearest": 0.14048635959625244
+        },
+        "output_blocks.11.2.original.in_layers.2": {
+          "output_err_nearest": 0.003369547781022806,
+          "output_err_learned": 0.001137165609262066,
+          "frac_flipped_vs_nearest": 0.08357370644807816
+        },
+        "output_blocks.11.2.original.out_layers.3": {
+          "output_err_nearest": 0.012225751610910413,
+          "output_err_learned": 0.004630958636114702,
+          "frac_flipped_vs_nearest": 0.13527952134609222
+        },
+        "output_blocks.12.0.original.in_layers.2": {
+          "output_err_nearest": 0.010481275944004689,
+          "output_err_learned": 0.0030989871109819555,
+          "frac_flipped_vs_nearest": 0.13280144333839417
+        },
+        "output_blocks.12.0.original.out_layers.3": {
+          "output_err_nearest": 0.026955244157900942,
+          "output_err_learned": 0.011863938032157864,
+          "frac_flipped_vs_nearest": 0.17492525279521942
+        },
+        "output_blocks.13.0.original.in_layers.2": {
+          "output_err_nearest": 0.008103380237133938,
+          "output_err_learned": 0.002399141114037064,
+          "frac_flipped_vs_nearest": 0.14720474183559418
+        },
+        "output_blocks.13.0.original.out_layers.3": {
+          "output_err_nearest": 0.03498455171198063,
+          "output_err_learned": 0.011372454677313959,
+          "frac_flipped_vs_nearest": 0.18026922643184662
+        },
+        "output_blocks.14.0.original.in_layers.2": {
+          "output_err_nearest": 0.004749129276147661,
+          "output_err_learned": 0.0013644032795203022,
+          "frac_flipped_vs_nearest": 0.11341839283704758
+        },
+        "output_blocks.14.0.original.out_layers.3": {
+          "output_err_nearest": 0.03155431270310708,
+          "output_err_learned": 0.010386359574697267,
+          "frac_flipped_vs_nearest": 0.20920440554618835
+        }
+      }
+    },
+    "absmax": {
+      "nearest": {
+        "n_layers": 70,
+        "per_seed": {
+          "1234": 0.21619844436645508,
+          "20260805": 0.22650225460529327,
+          "777": 0.21298743784427643
+        },
+        "mean": 0.21856271227200827,
+        "stdev": 0.00706079953460563
+      },
+      "adaround": {
+        "n_layers": 70,
+        "per_seed": {
+          "1234": 0.19145841896533966,
+          "20260805": 0.20237959921360016,
+          "777": 0.18992766737937927
+        },
+        "mean": 0.19458856185277304,
+        "stdev": 0.006790507895057127
+      },
+      "mean_layer_output_err_nearest": 0.010758694876542732,
+      "mean_layer_output_err_adaround": 0.007493368802556465,
+      "mean_frac_flipped": 0.03987425822165928,
+      "per_layer": {
+        "input_blocks.1.0.original.in_layers.2": {
+          "output_err_nearest": 0.004278704286397176,
+          "output_err_learned": 0.001517366871849808,
+          "frac_flipped_vs_nearest": 0.09430459141731262
+        },
+        "input_blocks.1.0.original.out_layers.3": {
+          "output_err_nearest": 0.015465723648574464,
+          "output_err_learned": 0.008574440552055482,
+          "frac_flipped_vs_nearest": 0.11391722410917282
+        },
+        "input_blocks.2.0.original.in_layers.2": {
+          "output_err_nearest": 0.011373628748821994,
+          "output_err_learned": 0.005476523930440589,
+          "frac_flipped_vs_nearest": 0.10767506062984467
+        },
+        "input_blocks.2.0.original.out_layers.3": {
+          "output_err_nearest": 0.02227765331536976,
+          "output_err_learned": 0.01471685829928767,
+          "frac_flipped_vs_nearest": 0.10260236263275146
+        },
+        "input_blocks.3.0.original.in_layers.2": {
+          "output_err_nearest": 0.003902810418466618,
+          "output_err_learned": 0.0015359991439685644,
+          "frac_flipped_vs_nearest": 0.109619140625
+        },
+        "input_blocks.3.0.original.out_layers.3": {
+          "output_err_nearest": 0.008380323978424068,
+          "output_err_learned": 0.004181505116008083,
+          "frac_flipped_vs_nearest": 0.13464505970478058
+        },
+        "input_blocks.4.0.original.in_layers.2": {
+          "output_err_nearest": 0.0034133189479988147,
+          "output_err_learned": 0.0018979163788310045,
+          "frac_flipped_vs_nearest": 0.08334539085626602
+        },
+        "input_blocks.4.0.original.out_layers.3": {
+          "output_err_nearest": 0.010691444723851128,
+          "output_err_learned": 0.007099022597805589,
+          "frac_flipped_vs_nearest": 0.07140208780765533
+        },
+        "input_blocks.5.0.original.in_layers.2": {
+          "output_err_nearest": 0.007402780071293276,
+          "output_err_learned": 0.004753313120825529,
+          "frac_flipped_vs_nearest": 0.06493160873651505
+        },
+        "input_blocks.5.0.original.out_layers.3": {
+          "output_err_nearest": 0.01938370969957307,
+          "output_err_learned": 0.01327139246863835,
+          "frac_flipped_vs_nearest": 0.08144500851631165
+        },
+        "input_blocks.6.0.original.in_layers.2": {
+          "output_err_nearest": 0.002261788224766278,
+          "output_err_learned": 0.0013847247967317886,
+          "frac_flipped_vs_nearest": 0.039222247898578644
+        },
+        "input_blocks.6.0.original.out_layers.3": {
+          "output_err_nearest": 0.012135884365265415,
+          "output_err_learned": 0.007401324394331987,
+          "frac_flipped_vs_nearest": 0.05178267881274223
+        },
+        "input_blocks.7.0.original.in_layers.2": {
+          "output_err_nearest": 0.002067627539492649,
+          "output_err_learned": 0.0012975617774358301,
+          "frac_flipped_vs_nearest": 0.039201900362968445
+        },
+        "input_blocks.7.0.original.out_layers.3": {
+          "output_err_nearest": 0.01425109475778479,
+          "output_err_learned": 0.009061291442151457,
+          "frac_flipped_vs_nearest": 0.0499742291867733
+        },
+        "input_blocks.8.0.original.in_layers.2": {
+          "output_err_nearest": 0.002701926689824394,
+          "output_err_learned": 0.0016271914287318175,
+          "frac_flipped_vs_nearest": 0.03999987989664078
+        },
+        "input_blocks.8.0.original.out_layers.3": {
+          "output_err_nearest": 0.012223994889206937,
+          "output_err_learned": 0.007539670317744188,
+          "frac_flipped_vs_nearest": 0.04656530171632767
+        },
+        "input_blocks.9.0.original.in_layers.2": {
+          "output_err_nearest": 0.0009666034150643173,
+          "output_err_learned": 0.0005589269776753559,
+          "frac_flipped_vs_nearest": 0.02226351574063301
+        },
+        "input_blocks.9.0.original.out_layers.3": {
+          "output_err_nearest": 0.012092416793561947,
+          "output_err_learned": 0.007903254256008381,
+          "frac_flipped_vs_nearest": 0.02567470259964466
+        },
+        "input_blocks.10.0.original.in_layers.2": {
+          "output_err_nearest": 0.0024909285963658997,
+          "output_err_learned": 0.0017599263355047908,
+          "frac_flipped_vs_nearest": 0.018477829173207283
+        },
+        "input_blocks.10.0.original.out_layers.3": {
+          "output_err_nearest": 0.014387714768735155,
+          "output_err_learned": 0.01166852142239248,
+          "frac_flipped_vs_nearest": 0.010134473443031311
+        },
+        "input_blocks.11.0.original.in_layers.2": {
+          "output_err_nearest": 0.0007827575359578983,
+          "output_err_learned": 0.0006475451299011552,
+          "frac_flipped_vs_nearest": 0.00790781993418932
+        },
+        "input_blocks.11.0.original.out_layers.3": {
+          "output_err_nearest": 0.018112243935898956,
+          "output_err_learned": 0.014845248458324516,
+          "frac_flipped_vs_nearest": 0.009049215354025364
+        },
+        "input_blocks.12.0.original.in_layers.2": {
+          "output_err_nearest": 0.0004522372150538416,
+          "output_err_learned": 0.0003652227651482374,
+          "frac_flipped_vs_nearest": 0.004480055999010801
+        },
+        "input_blocks.12.0.original.out_layers.3": {
+          "output_err_nearest": 0.011755951381175656,
+          "output_err_learned": 0.00973467002508501,
+          "frac_flipped_vs_nearest": 0.003894382156431675
+        },
+        "input_blocks.13.0.original.in_layers.2": {
+          "output_err_nearest": 0.0007196000169529979,
+          "output_err_learned": 0.0005786568520925755,
+          "frac_flipped_vs_nearest": 0.004726080223917961
+        },
+        "input_blocks.13.0.original.out_layers.3": {
+          "output_err_nearest": 0.013495745689253718,
+          "output_err_learned": 0.01145188813262308,
+          "frac_flipped_vs_nearest": 0.0042894151993095875
+        },
+        "input_blocks.14.0.original.in_layers.2": {
+          "output_err_nearest": 0.0004778184696357079,
+          "output_err_learned": 0.0003963609313807378,
+          "frac_flipped_vs_nearest": 0.004633774049580097
+        },
+        "input_blocks.14.0.original.out_layers.3": {
+          "output_err_nearest": 0.004026330432350397,
+          "output_err_learned": 0.0032846652981737183,
+          "frac_flipped_vs_nearest": 0.005740130320191383
+        },
+        "middle_block.0.original.in_layers.2": {
+          "output_err_nearest": 0.0004215051519817739,
+          "output_err_learned": 0.0003382626708025345,
+          "frac_flipped_vs_nearest": 0.0045793321914970875
+        },
+        "middle_block.0.original.out_layers.3": {
+          "output_err_nearest": 0.013614851613266308,
+          "output_err_learned": 0.010041610045547203,
+          "frac_flipped_vs_nearest": 0.006573147140443325
+        },
+        "middle_block.2.original.in_layers.2": {
+          "output_err_nearest": 0.0004972264787061604,
+          "output_err_learned": 0.0004085783133391291,
+          "frac_flipped_vs_nearest": 0.004798229783773422
+        },
+        "middle_block.2.original.out_layers.3": {
+          "output_err_nearest": 0.006801573002351752,
+          "output_err_learned": 0.005204247869286209,
+          "frac_flipped_vs_nearest": 0.006259494461119175
+        },
+        "output_blocks.0.0.original.in_layers.2": {
+          "output_err_nearest": 0.0003911785927991525,
+          "output_err_learned": 0.0003404740267489525,
+          "frac_flipped_vs_nearest": 0.002156010363250971
+        },
+        "output_blocks.0.0.original.out_layers.3": {
+          "output_err_nearest": 0.020531822740837303,
+          "output_err_learned": 0.017966393978153816,
+          "frac_flipped_vs_nearest": 0.0055592856369912624
+        },
+        "output_blocks.1.0.original.in_layers.2": {
+          "output_err_nearest": 0.0003662871522276279,
+          "output_err_learned": 0.00032550659345945273,
+          "frac_flipped_vs_nearest": 0.0020620087161660194
+        },
+        "output_blocks.1.0.original.out_layers.3": {
+          "output_err_nearest": 0.01502944886078483,
+          "output_err_learned": 0.012910397713997242,
+          "frac_flipped_vs_nearest": 0.003696959698572755
+        },
+        "output_blocks.2.0.original.in_layers.2": {
+          "output_err_nearest": 0.0008720326060442568,
+          "output_err_learned": 0.0007704667565677432,
+          "frac_flipped_vs_nearest": 0.0024566650390625
+        },
+        "output_blocks.2.0.original.out_layers.3": {
+          "output_err_nearest": 0.011852912632896378,
+          "output_err_learned": 0.009785348341293467,
+          "frac_flipped_vs_nearest": 0.004441437777131796
+        },
+        "output_blocks.2.1.original.in_layers.2": {
+          "output_err_nearest": 0.0004666831599443094,
+          "output_err_learned": 0.0003915215469267453,
+          "frac_flipped_vs_nearest": 0.0058480724692344666
+        },
+        "output_blocks.2.1.original.out_layers.3": {
+          "output_err_nearest": 0.005030251149160253,
+          "output_err_learned": 0.0042361573119537674,
+          "frac_flipped_vs_nearest": 0.00793833751231432
+        },
+        "output_blocks.3.0.original.in_layers.2": {
+          "output_err_nearest": 0.0012714963288658026,
+          "output_err_learned": 0.0011227224768198608,
+          "frac_flipped_vs_nearest": 0.004125336185097694
+        },
+        "output_blocks.3.0.original.out_layers.3": {
+          "output_err_nearest": 0.012844588582124294,
+          "output_err_learned": 0.01053831820417716,
+          "frac_flipped_vs_nearest": 0.0095503069460392
+        },
+        "output_blocks.4.0.original.in_layers.2": {
+          "output_err_nearest": 0.0024714581840934538,
+          "output_err_learned": 0.002181671303158026,
+          "frac_flipped_vs_nearest": 0.005019858945161104
+        },
+        "output_blocks.4.0.original.out_layers.3": {
+          "output_err_nearest": 0.013043502300249988,
+          "output_err_learned": 0.010488758977566143,
+          "frac_flipped_vs_nearest": 0.010449256747961044
+        },
+        "output_blocks.5.0.original.in_layers.2": {
+          "output_err_nearest": 0.005331575350435461,
+          "output_err_learned": 0.0044743302099795575,
+          "frac_flipped_vs_nearest": 0.007412254810333252
+        },
+        "output_blocks.5.0.original.out_layers.3": {
+          "output_err_nearest": 0.012588850450956009,
+          "output_err_learned": 0.010054033479141564,
+          "frac_flipped_vs_nearest": 0.011436368338763714
+        },
+        "output_blocks.5.2.original.in_layers.2": {
+          "output_err_nearest": 0.0021928281073825035,
+          "output_err_learned": 0.0018038009515333531,
+          "frac_flipped_vs_nearest": 0.012501469813287258
+        },
+        "output_blocks.5.2.original.out_layers.3": {
+          "output_err_nearest": 0.010478885075368568,
+          "output_err_learned": 0.00876746178254145,
+          "frac_flipped_vs_nearest": 0.015236372128129005
+        },
+        "output_blocks.6.0.original.in_layers.2": {
+          "output_err_nearest": 0.003259047776682274,
+          "output_err_learned": 0.0025412026128510596,
+          "frac_flipped_vs_nearest": 0.01581363007426262
+        },
+        "output_blocks.6.0.original.out_layers.3": {
+          "output_err_nearest": 0.011979449534972443,
+          "output_err_learned": 0.007740285320621341,
+          "frac_flipped_vs_nearest": 0.050452716648578644
+        },
+        "output_blocks.7.0.original.in_layers.2": {
+          "output_err_nearest": 0.004706917519098182,
+          "output_err_learned": 0.0033800807759564954,
+          "frac_flipped_vs_nearest": 0.025490842759609222
+        },
+        "output_blocks.7.0.original.out_layers.3": {
+          "output_err_nearest": 0.014500976625323805,
+          "output_err_learned": 0.008832316930075846,
+          "frac_flipped_vs_nearest": 0.057837970554828644
+        },
+        "output_blocks.8.0.original.in_layers.2": {
+          "output_err_nearest": 0.006095694707001158,
+          "output_err_learned": 0.0042698503289025904,
+          "frac_flipped_vs_nearest": 0.026912735775113106
+        },
+        "output_blocks.8.0.original.out_layers.3": {
+          "output_err_nearest": 0.015457425000136511,
+          "output_err_learned": 0.00936440249462129,
+          "frac_flipped_vs_nearest": 0.057220082730054855
+        },
+        "output_blocks.8.2.original.in_layers.2": {
+          "output_err_nearest": 0.003134754428126957,
+          "output_err_learned": 0.0019406151191255323,
+          "frac_flipped_vs_nearest": 0.0422566719353199
+        },
+        "output_blocks.8.2.original.out_layers.3": {
+          "output_err_nearest": 0.014676556703730567,
+          "output_err_learned": 0.0095944702468806,
+          "frac_flipped_vs_nearest": 0.06204336881637573
+        },
+        "output_blocks.9.0.original.in_layers.2": {
+          "output_err_nearest": 0.008680720171915433,
+          "output_err_learned": 0.00634889178583809,
+          "frac_flipped_vs_nearest": 0.03671829774975777
+        },
+        "output_blocks.9.0.original.out_layers.3": {
+          "output_err_nearest": 0.022100417408591776,
+          "output_err_learned": 0.01484703306723566,
+          "frac_flipped_vs_nearest": 0.07915882766246796
+        },
+        "output_blocks.10.0.original.in_layers.2": {
+          "output_err_nearest": 0.013020472139487005,
+          "output_err_learned": 0.009633500344998236,
+          "frac_flipped_vs_nearest": 0.03933301568031311
+        },
+        "output_blocks.10.0.original.out_layers.3": {
+          "output_err_nearest": 0.020580402145668,
+          "output_err_learned": 0.014070286002544879,
+          "frac_flipped_vs_nearest": 0.07627134025096893
+        },
+        "output_blocks.11.0.original.in_layers.2": {
+          "output_err_nearest": 0.007987673388601665,
+          "output_err_learned": 0.005585976189266919,
+          "frac_flipped_vs_nearest": 0.044794779270887375
+        },
+        "output_blocks.11.0.original.out_layers.3": {
+          "output_err_nearest": 0.027051392341548516,
+          "output_err_learned": 0.01816150331067871,
+          "frac_flipped_vs_nearest": 0.06974133104085922
+        },
+        "output_blocks.11.2.original.in_layers.2": {
+          "output_err_nearest": 0.005724373155237697,
+          "output_err_learned": 0.0034311264623087603,
+          "frac_flipped_vs_nearest": 0.047767169773578644
+        },
+        "output_blocks.11.2.original.out_layers.3": {
+          "output_err_nearest": 0.025194709320161456,
+          "output_err_learned": 0.017266528893753578,
+          "frac_flipped_vs_nearest": 0.0684882253408432
+        },
+        "output_blocks.12.0.original.in_layers.2": {
+          "output_err_nearest": 0.024470873313802495,
+          "output_err_learned": 0.015297110090887654,
+          "frac_flipped_vs_nearest": 0.07105697691440582
+        },
+        "output_blocks.12.0.original.out_layers.3": {
+          "output_err_nearest": 0.05366309931239653,
+          "output_err_learned": 0.039061898068909674,
+          "frac_flipped_vs_nearest": 0.08446662873029709
+        },
+        "output_blocks.13.0.original.in_layers.2": {
+          "output_err_nearest": 0.016470786937744935,
+          "output_err_learned": 0.010325518105005196,
+          "frac_flipped_vs_nearest": 0.08046241849660873
+        },
+        "output_blocks.13.0.original.out_layers.3": {
+          "output_err_nearest": 0.04384592466747322,
+          "output_err_learned": 0.030901479254933265,
+          "frac_flipped_vs_nearest": 0.09701424837112427
+        },
+        "output_blocks.14.0.original.in_layers.2": {
+          "output_err_nearest": 0.01134481418239897,
+          "output_err_learned": 0.0050986340883149,
+          "frac_flipped_vs_nearest": 0.06290991604328156
+        },
+        "output_blocks.14.0.original.out_layers.3": {
+          "output_err_nearest": 0.031090440502298065,
+          "output_err_learned": 0.020162054911101155,
+          "frac_flipped_vs_nearest": 0.11098150908946991
+        }
+      }
+    }
+  }
+}

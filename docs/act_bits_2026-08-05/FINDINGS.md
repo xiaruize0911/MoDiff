@@ -170,6 +170,40 @@ the mode it ships in.
 scored by re-running this script — one model build, no MoDiff, no activation confounder — and only
 promoted to a full W4A4 run if the 0.244 floor actually moves.
 
+### Learned rounding moves the floor 25%, and reverses which scale rule is best
+
+`scripts/adaround_int4.py` implements AdaRound over the 70 int4 convs: initialise each weight's
+rounding gate at the nearest-rounding decision, then minimise the *layer output* error against real
+captured activations (6 timesteps × batch 2), annealing the gates to hard 0/1. The product is int4
+codes plus one fp16 per-channel scale — the shipped layout, so **inference and kernels are
+untouched**. 15 minutes of A40 time for both arms.
+
+| scale rule | layer-output err ↓ | codes flipped | nearest floor | **AdaRound floor** |
+|---|---:|---:|---:|---:|
+| MSE clip (shipped) | 64.6% | 8.9% | 0.2442 ± 0.0063 | **0.1833 ± 0.0223** |
+| absmax | 28.8% | 4.0% | 0.2186 ± 0.0071 | 0.1946 ± 0.0068 |
+
+* **The floor drops 25%**, 0.2442 → 0.1833. By the FID anchors that is roughly FID 16 → 13 — real,
+  but not enough on its own to bring W4A4 near fp16's 7.80.
+* **The MSE clip rule and learned rounding compose, and the ranking flips.** Under nearest rounding
+  MSE is *worse* than absmax (0.2442 vs 0.2186); under AdaRound it is *better* (0.1833 vs 0.1946).
+  Clipping outliers buys a finer grid at the cost of rounding accuracy, and AdaRound is exactly what
+  buys the rounding accuracy back. It also has more to work with — 64.6% layer-error reduction and
+  8.9% of codes flipped, against 28.8% / 4.0% on the unclipped grid. So the shipped default is more
+  right than the weight-only rows above suggested, *provided* rounding is learned.
+* This run is deliberately the **cheap corner** of the design space: 12 calibration samples, 2000
+  iterations, layer-wise with fp16 inputs. Q-Diffusion uses 256 samples per timestep over 20
+  timesteps, ~10× the iterations, and feeds each layer the *already-quantized* network's activations.
+  None of those three levers has been pulled here.
+* Caveat: the winning arm's seed spread is 3.5× the loser's (±0.0223 vs ±0.0068). Three seeds
+  separates 0.183 from 0.244 comfortably; it does not confidently separate 0.183 from 0.195.
+
+**What this does not yet do:** the learned codes are evaluated through the fp16 conv path, not the
+int4 CUTLASS kernel. Using them for real means writing codes — not just scales — into
+`OptimizedInt4Conv2d`'s packed AWQ layout, which the existing export/apply mechanism does not cover.
+That work is only worth doing once the floor has been pushed as far as it goes, since by itself it
+buys nothing.
+
 ## Scope of MODIFF_ACT_Q, which bounds every number above
 
 It reaches the quantized **conv** path (70 calibrated layers of 89 converted). It does **not** reach
