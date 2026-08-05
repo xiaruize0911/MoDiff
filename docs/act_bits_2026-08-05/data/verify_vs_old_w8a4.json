@@ -1,0 +1,53 @@
+{
+  "seeds": [
+    1234,
+    20260805,
+    777
+  ],
+  "batch": 8,
+  "steps": 50,
+  "arms": {
+    "old_delta_clip_only": {
+      "act_q": 127,
+      "delta_clip": 18.142857142857142,
+      "per_seed": {
+        "1234": 0.1621672660112381,
+        "20260805": 0.19582636654376984,
+        "777": 0.12989754974842072
+      },
+      "mean": 0.16263039410114288,
+      "stdev": 0.03296684829839548,
+      "path_calls_3_runs": {
+        "_forward_first_step": 210,
+        "forward_gn_fused_modiff": 9114,
+        "_forward_modulated": 288
+      },
+      "path_layer_counts": {
+        "_forward_first_step": 70,
+        "forward_gn_fused_modiff": 62,
+        "_forward_modulated": 8
+      },
+      "plain_modulated_layers": [
+        "input_blocks.12.0.in_conv",
+        "input_blocks.3.0.in_conv",
+        "input_blocks.6.0.in_conv",
+        "input_blocks.9.0.in_conv",
+        "output_blocks.11.2.in_conv",
+        "output_blocks.2.1.in_conv",
+        "output_blocks.5.2.in_conv",
+        "output_blocks.8.2.in_conv"
+      ]
+    },
+    "new_act_q": {
+      "act_q": 7,
+      "delta_clip": 1.0,
+      "per_seed": {
+        "1234": 0.2856151759624481,
+        "20260805": 0.37225693464279175,
+        "777": 0.4163367450237274
+      },
+      "mean": 0.3580696185429891,
+      "stdev": 0.06650557952568711
+    }
+  }
+}

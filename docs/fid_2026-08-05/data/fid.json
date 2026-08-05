@@ -1,0 +1,36 @@
+{
+  "n_real": 10000,
+  "dims": 2048,
+  "modes": {
+    "fp16": {
+      "label": "FP16 (reference model)",
+      "n": 10000,
+      "fid_vs_real": 7.803408529413531,
+      "fid_vs_fp16": 0.0
+    },
+    "int8_baseline": {
+      "label": "W8A8 baseline (MoDiff off)",
+      "n": 10000,
+      "fid_vs_real": 16.365814349261456,
+      "fid_vs_fp16": 6.394220167827029
+    },
+    "int8_modiff": {
+      "label": "W8A8 + MoDiff",
+      "n": 10000,
+      "fid_vs_real": 7.802469090492224,
+      "fid_vs_fp16": 0.17489430907528458
+    },
+    "int4_baseline": {
+      "label": "W4A4 baseline (MoDiff off)",
+      "n": 10000,
+      "fid_vs_real": 277.96279557036826,
+      "fid_vs_fp16": 277.9806588828179
+    },
+    "int4_modiff": {
+      "label": "W4A4 + MoDiff",
+      "n": 10000,
+      "fid_vs_real": 200.13935087228197,
+      "fid_vs_fp16": 191.0917471709654
+    }
+  }
+}

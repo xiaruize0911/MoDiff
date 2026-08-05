@@ -1,0 +1,12 @@
+{
+  "n_real": 10000,
+  "dims": 2048,
+  "modes": {
+    "fp16": {
+      "label": "FP16 (reference model)",
+      "n": 10000,
+      "fid_vs_real": 7.803408529413531,
+      "fid_vs_fp16": 0.0
+    }
+  }
+}
