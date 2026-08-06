@@ -242,6 +242,19 @@ r=1.0 rows): per-seed differences of −9.5%, −0.3%, −4.0% at K=1 and −0.4
 That is the floor the A4/A3 clip effects (50-66%, 3/3 seeds, worst seed 15-61%) clear by a wide
 margin, and it is why nothing smaller than a 3/3-seed effect is called real anywhere in this document.
 
+## Figures (`scripts/make_plots.py`, `plots/`)
+
+| figure | what it shows | source |
+|---|---|---|
+| `fig_quality_vs_bits.png` | baseline vs MoDiff, A8→A2, with the pre-ceiling MoDiff row dashed underneath and the FID anchors from `docs/fid_2026-08-05` as reference lines | `act_bit_sweep_ceiling_k4.json` + `act_bit_sweep.json` |
+| `fig_clip_sweep.png` | relL2 vs clip ratio for A8/A4/A3, one panel per refresh setting, optimum ringed | `clip_e2e_bits.json` |
+| `fig_speed.png` | ms/step for fp16 / int8 / int8+MoDiff at batch 128 and batch 8 | `e2e_ceiling_b{128,8}.json` |
+
+Each axis draws from ONE harness's JSON. Mixing two would draw a difference that is measurement
+rather than model, given the ~20% cross-script disagreement documented above -- so the clip results
+(`clip_e2e_bits.json`) and the A8..A2 sweep (`act_bit_sweep_*.json`) never share an axis, even though
+both contain an A4 r=1.0 row.
+
 ## Re-running A8..A2 with the ceiling: what the flattered rows were worth (`scripts/act_bits_ceiling_diff.py`)
 
 `docs/act_bits_2026-08-05/scripts/act_bit_sweep.py`, unmodified, re-run at both refresh settings
