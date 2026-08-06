@@ -34,13 +34,17 @@ from ck_bench_stats import summarize, stability_verdict
 
 #: Selectable so the same suite can be run for the MoDiff modes ("int8"/"int4") -- see
 #: kernel_suites_bench for the same pattern. Default unchanged: the baseline modes.
-_ALL_MODES = ["fp16", "int8_baseline", "int4_baseline", "int8", "int4"]
+#: int8_attn_modiff extends MoDiff to the attention qkv/proj projections (the modiff_attention
+#: Conv1d route). Selectable here because its cost is the point of measuring it -- that path has no
+#: GEMM o_hat-accumulate epilogue, so it is expected to be SLOWER than "int8", not faster.
+_ALL_MODES = ["fp16", "int8_baseline", "int4_baseline", "int8", "int4", "int8_attn_modiff"]
 _MODE_FILTER = [x.strip() for x in os.environ.get("E2EBENCH_MODES", "").split(",") if x.strip()]
 MODES = [m for m in _MODE_FILTER if m in _ALL_MODES] or _ALL_MODES[:3]
 CALIB = {"int8_baseline": "integration/calibration/int8_calibration.pt",
          "int4_baseline": "integration/calibration/int4_calibration.pt",
          "int8": "integration/calibration/int8_calibration.pt",
-         "int4": "integration/calibration/int4_calibration.pt"}
+         "int4": "integration/calibration/int4_calibration.pt",
+         "int8_attn_modiff": "integration/calibration/int8_calibration.pt"}
 
 # MODIFF_QUANT_LINEAR=1 is load-bearing and easy to miss: it is what turns the attention block's
 # qkv/proj into _QuantLinearWxAx. Without it they stay plain nn.Linear, _qout_eligible() returns
@@ -149,12 +153,33 @@ def main():
         if mode != "fp16":
             blks = [m for m in model.modules()
                     if type(m).__name__ == "QuantizedStandardAttentionBlock"]
-            assert blks, f"{mode}: no QuantizedStandardAttentionBlock was installed"
+            # The *_attn_modiff modes deliberately install MoDiff-wrapped AttentionBlocks instead
+            # (convert_attention_to_modiff takes the qkv/proj Conv1d), so no
+            # QuantizedStandardAttentionBlock exists and the QK^T/AV math runs in fp16 SDPA. That is
+            # a real property of those modes -- and a confound when comparing them to "int8", which
+            # DOES quantize the attention math -- not a setup failure, so skip the route check.
+            if "attn_modiff" in mode and not blks:
+                print(f"  route check: {mode} installs MoDiff attention blocks; "
+                      f"QK^T/AV runs fp16 and the qout epilogue does not apply")
+                route = {"attn_blocks": 0, "modiff_attention": True, "qkv_type": "MoDiffConv1d"}
+                skip_route_check = True
+            else:
+                skip_route_check = False
+                assert blks, f"{mode}: no QuantizedStandardAttentionBlock was installed"
+        if mode != "fp16" and not skip_route_check:
             elig = sum(b._qout_eligible() for b in blks)
             # Both bit widths now reach all 21: INT4 gained an hd=96 route (the dp4a small
             # kernel) and _observe_small_int8_scales was un-gated so those blocks can freeze
             # their scales. This used to be 15 for INT4.
             expected = len(blks)
+            # MoDiff on the projections legitimately makes every block ineligible: QuantLinearWxAx
+            # sets _out_i8 = (not modiff and ...), so with MODIFF_LINEAR=1 the fused int8-output
+            # epilogue cannot engage on any of the 21 -- that is a real cost of the configuration,
+            # not a misconfiguration. Folded into `expected` rather than dropping the guard, because
+            # the failure it exists to catch (qkv/proj left as plain nn.Linear) is still caught by
+            # the type assertion below.
+            if os.environ.get("MODIFF_LINEAR") == "1":
+                expected = 0
             qkv_t, proj_t = type(blks[0].qkv).__name__, type(blks[0].proj).__name__
             route = {"attn_blocks": len(blks), "qout_eligible": elig, "expected_eligible": expected,
                      "qkv_type": qkv_t, "proj_type": proj_t,

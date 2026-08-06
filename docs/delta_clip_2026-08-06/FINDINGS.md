@@ -301,6 +301,99 @@ One cross-script note, consistent with the floor discussion above: this sweep pu
 the same configuration with the same code. Well inside the ~20% cross-script caveat, and a reminder to
 compare within one script.
 
+## MoDiff on the attention projections: what it buys, what it costs, and the default flip
+
+### The "42 Linear layers" are the attention projections
+
+Every scope note in this project, including this document's earlier sections, describes MoDiff's
+exclusions as "the 21 quantized attention blocks and the 42 quantized Linear layers". Enumerated by
+name, the 42 are:
+
+    wxax layers: 42, modiff flags: {False}
+    suffixes: Counter({'qkv': 21, 'proj': 21})
+    sample: ['input_blocks.1.1.qkv', 'input_blocks.1.1.proj', ...]
+
+They are **the attention qkv and proj projections**, not generic Linears -- as
+`e2e_three_mode_bench.py`'s own comment says, `MODIFF_QUANT_LINEAR=1` "is what turns the attention
+block's qkv/proj into `_QuantLinearWxAx`". So attention has two quantized halves with opposite
+behaviour, and the `attn_ablation.py` arms measure one each:
+
+| half | MoDiff reachable | removing it entirely is worth |
+|---|---|---|
+| QK^T/AV math (`quantized_std_attention`) | no, structurally (`docs/attn_modiff_profile_2026-08-04` §1) | **nothing**: 1.005x A8, 1.019x A4/r=1.0, 1.009x A4/r=0.40 |
+| qkv/proj projections (42 wxax Linears) | **yes** | 15% at A4/r=1.0, 0.7% at A4/r=0.40, 2.9% at A8 |
+
+This corrects a claim made earlier in this session: "attention has no headroom, the Linears do" was
+mislabelled. The `linear fp16` ablation arm WAS the attention projections. The half with no headroom
+is exactly the half MoDiff cannot reach, so the two facts cancel and attention *does* have headroom.
+
+### Two routes to the same 42 layers
+
+* **wxax** -- `MODIFF_LINEAR=1`, mode `int8`. `convert_linears_to_wxax(..., modiff=True)`.
+* **conv1d** -- mode `int8_attn_modiff`. `convert_attention_to_modiff` takes the qkv/proj Conv1d
+  first, so wxax then reports "Quantized 0 Linear layers". A `+both` arm is meaningless.
+
+**The conv1d route carries a confound**: that mode never installs `QuantizedStandardAttentionBlock`,
+so its **QK^T/AV math runs in fp16**, not W8A8. Part of its quality advantage is therefore "attention
+math not quantized" rather than "projections modulated". The ablation says that part is worth ~0, so
+most of the gain should still be the projections, but it is not a clean single-variable comparison.
+
+### Quality (`scripts/modiff_everywhere.py`, batch 8, DDIM 50, 3 paired seeds, K=4)
+
+| config | arm | 1234 | 20260805 | 777 | mean | vs shipped | wins |
+|---|---|---|---|---|---|---|---|
+| A8 | shipped | 0.0380 | 0.0921 | 0.0520 | 0.0607 | — | |
+| | proj:wxax | 0.0367 | 0.0892 | 0.0266 | **0.0508** | **0.837x** | **3/3** |
+| | proj:conv1d | 0.0401 | 0.0657 | 0.0382 | 0.0480 | 0.791x | 2/3 |
+| A4 r=1.0 | shipped | 0.1911 | 0.2161 | 0.1409 | 0.1827 | — | |
+| | proj:wxax | 0.1764 | 0.1804 | 0.1428 | 0.1665 | 0.911x | 2/3 |
+| | proj:conv1d | 0.1466 | 0.1770 | 0.1222 | **0.1486** | **0.813x** | **3/3** |
+| A4 r=0.40 | shipped | 0.0585 | 0.1310 | 0.0682 | 0.0859 | — | |
+| | proj:wxax | 0.0654 | 0.1255 | 0.0568 | 0.0826 | 0.961x | 2/3 |
+| | proj:conv1d | 0.0697 | 0.1260 | 0.0636 | 0.0864 | 1.006x | 2/3 |
+
+Counting only 3/3 effects: **A8 improves 16%** (wxax) and **A4/r=1.0 improves 19%** (conv1d). At the
+clip optimum A4/r=0.40 neither route does anything -- which the ablation predicted, since removing the
+projections outright was worth only 0.7% there. The clip already collected that error.
+
+### Speed (batch 128, DDIM 200, A40, 3 warmups + 5 repeats)
+
+| config | ms/step | vs fp16 | vs shipped | CV |
+|---|---|---|---|---|
+| fp16 | 106.98 | 1.00x | 0.72x | — |
+| int8 PTQ (MoDiff off) | 73.41 | 1.46x | 1.05x | 0.35% |
+| shipped MoDiff (conv only) | 77.38 | 1.38x | 1.00x | 0.33% |
+| + proj MoDiff, wxax | 103.25 | **1.04x** | **0.75x** | 0.11% |
+| + proj MoDiff, conv1d | 155.15 | **0.69x** | **0.50x** | 0.26% |
+
+The wxax cost is larger than the "three extra full-tensor launches per linear per step" that
+`benchmark_ldm.py` predicted, and the reason is structural: `QuantLinearWxAx` sets
+`_out_i8 = (not modiff and ...)`, so MoDiff on the projections **disables the fused int8-output
+epilogue on all 21 attention blocks**. `e2e_three_mode_bench`'s route check reads 0/21 qout-eligible,
+which is how this was found -- its assertion exists precisely to catch "measuring a different, slower
+configuration without noticing".
+
+The conv1d route is slower than fp16 (0.69x), and it also gives up the quantized attention math.
+
+### The default is now ON (wxax route), by request
+
+`MODIFF_LINEAR` defaults to 1 as of this commit. On the evidence above this trades **25% of the
+end-to-end speedup (1.38x → 1.04x fp16) for 16% of the A8 latent error**, and buys nothing at the A4
+clip optimum. My own reading is that the clip is the better deal -- it collected more at zero speed
+cost, and after it the projections have no residual value -- and that the right fix is a GEMM
+o_hat-accumulate epilogue for the linear MoDiff path ("Stage 3.3" in the existing comment), which
+would make the 16% approximately free. That is recorded here rather than acted on: the default was
+flipped on explicit instruction, with the cost stated.
+
+**A reset gap had to be fixed first, or the flipped default would ship a NaN.** `reset_wxax_modiff`
+was called in exactly one place -- once after calibration -- and never between samples, while the
+conv, int8-Linear and attention families were all reset per sample. With MoDiff on the projections
+their `a_hat` caches therefore survived into the next sampling run. Measured on the conv1d route,
+which had the same gap: **a finite latent on run 1 and an all-NaN latent on run 2**, and since every
+protocol in this directory discards run 1 as warm-up, that is what a sweep would have recorded.
+`_reset_wxax_modiff_safe` is now called at all 5 per-sample reset sites. Verified with no env vars
+set and only the code's own reset: 42/42 `modiff=True`, three consecutive runs finite.
+
 ## Code changes
 
 Measurement scripts (`clip_probe.py`, `clip_e2e.py`, `clip_e2e_paired.py`, `accum_probe.py`,

@@ -304,6 +304,16 @@ class FullPipelineInt4Wrapper(nn.Module):
         return out_int4
 
 
+def _reset_wxax_modiff_safe(model):
+    """Clear the wxax MoDiff temporal caches. No-op when the wxax path is absent or not in MoDiff
+    mode, so it is safe to call unconditionally from every per-sample reset point."""
+    try:
+        from integration.kernels.wxax_linear import reset_wxax_modiff
+        reset_wxax_modiff(model)
+    except Exception:
+        pass
+
+
 class BenchmarkRunner:
     """Unified benchmark runner for all precision modes."""
     
@@ -721,8 +731,20 @@ class BenchmarkRunner:
                 # Gate on the MODE, not just the flag: MODIFF_LINEAR=1 previously turned Linear
                 # MoDiff on in int8_baseline / int4_baseline too, which made the "baseline" rows of
                 # an A/B carry MoDiff and moved them by +25 ms/step. A baseline must stay a baseline.
-                is_modiff = (os.environ.get("MODIFF_LINEAR", "0") == "1"
-                             and mode in ("int8", "int4"))
+                # The *_attn_modiff modes belong here too: they are MoDiff modes (conv + attention
+                # projections), not baselines, so MODIFF_LINEAR=1 must reach their Linears as well.
+                # Without them in this tuple, asking for "MoDiff everywhere" silently left the 42
+                # wxax Linears un-modulated.
+                # DEFAULT FLIPPED TO 1 (2026-08-06), by explicit request, accepting the speed
+                # cost. What it buys and what it costs, both measured at batch 128 / DDIM 200:
+                # A8 latent relL2 0.0607 -> 0.0508 (0.84x, 3 of 3 paired seeds), and 77.4 -> 103.3
+                # ms/step, i.e. the int8 speedup drops from 1.38x fp16 to 1.04x. The cost is larger
+                # than "three extra launches per linear": MoDiff sets _out_i8 False, which disables
+                # the fused int8-output epilogue on all 21 attention blocks (0/21 qout-eligible).
+                # Revisit when the linear MoDiff path gains a GEMM o_hat-accumulate epilogue.
+                is_modiff = (os.environ.get("MODIFF_LINEAR", "1") == "1"
+                             and mode in ("int8", "int4",
+                                          "int8_attn_modiff", "int4_attn_modiff"))
                 n_lin = convert_linears_to_wxax(model.model.diffusion_model, bits=lb, modiff=is_modiff)
                 print(f"✓ Quantized {n_lin} Linear layers to W{lb}A{lb} (modiff={is_modiff})")
                 if n_lin > 0:   # static activation-scale calibration (short sample)
@@ -838,6 +860,12 @@ class BenchmarkRunner:
                 # without this, attention's temporal cache would carry state across what are
                 # meant to be independent calibration samples.
                 reset_attention_modiff(model.model.diffusion_model)
+                # Same reason, for the wxax path: with MODIFF_LINEAR=1 the 21 attention qkv/proj
+                # carry a MoDiff a_hat cache too, and it was previously reset ONLY after
+                # calibration -- so it survived into the next sample. Measured consequence of
+                # leaving one family unreset: a finite latent on run 1 and an all-NaN latent on
+                # run 2. No-op unless convert_linears_to_wxax(modiff=True) has run.
+                _reset_wxax_modiff_safe(model)
                 sampler.sample(S=calib_steps, batch_size=calib_batch, shape=self.shape,
                                eta=0.0, verbose=False,
                                **self._cond_kwargs(model, calib_batch))
@@ -867,6 +895,12 @@ class BenchmarkRunner:
                     if HAS_INT8_LINEAR:
                         reset_modiff_state_linear(model.model.diffusion_model)
                     reset_attention_modiff(model.model.diffusion_model)
+                    # Same reason, for the wxax path: with MODIFF_LINEAR=1 the 21 attention qkv/proj
+                    # carry a MoDiff a_hat cache too, and it was previously reset ONLY after
+                    # calibration -- so it survived into the next sample. Measured consequence of
+                    # leaving one family unreset: a finite latent on run 1 and an all-NaN latent on
+                    # run 2. No-op unless convert_linears_to_wxax(modiff=True) has run.
+                    _reset_wxax_modiff_safe(model)
                     sampler.sample(S=calib_steps, batch_size=calib_batch, shape=self.shape,
                                    eta=0.0, verbose=False,
                                    **self._cond_kwargs(model, calib_batch))
@@ -919,6 +953,12 @@ class BenchmarkRunner:
                 # attention's temporal cache would carry state across what are meant to
                 # be independent calibration samples.
                 reset_attention_modiff(model.model.diffusion_model)
+                # Same reason, for the wxax path: with MODIFF_LINEAR=1 the 21 attention qkv/proj
+                # carry a MoDiff a_hat cache too, and it was previously reset ONLY after
+                # calibration -- so it survived into the next sample. Measured consequence of
+                # leaving one family unreset: a finite latent on run 1 and an all-NaN latent on
+                # run 2. No-op unless convert_linears_to_wxax(modiff=True) has run.
+                _reset_wxax_modiff_safe(model)
                 # Sample a few steps to get representative activations.
                 # Small fixed batch (matches _calibrate_int8): calibration only
                 # needs representative activation statistics, not production-size
@@ -971,6 +1011,12 @@ class BenchmarkRunner:
         if mode in ('attn_modiff', 'int8_attn_modiff', 'int4_attn_modiff'):
             from integration.kernels.modiff_attention import reset_attention_modiff
             reset_attention_modiff(model.model.diffusion_model)
+            # Same reason, for the wxax path: with MODIFF_LINEAR=1 the 21 attention qkv/proj
+            # carry a MoDiff a_hat cache too, and it was previously reset ONLY after
+            # calibration -- so it survived into the next sample. Measured consequence of
+            # leaving one family unreset: a finite latent on run 1 and an all-NaN latent on
+            # run 2. No-op unless convert_linears_to_wxax(modiff=True) has run.
+            _reset_wxax_modiff_safe(model)
         # Match the timed run's autocast: quantized convs emit fp16 regardless,
         # and some models (cin256) feed that into plain fp32 nn.Conv2d skips, which
         # errors without autocast to reconcile the dtypes.
@@ -1001,6 +1047,12 @@ class BenchmarkRunner:
             if mode in ('attn_modiff', 'int8_attn_modiff', 'int4_attn_modiff'):
                 from integration.kernels.modiff_attention import reset_attention_modiff
                 reset_attention_modiff(model.model.diffusion_model)
+                # Same reason, for the wxax path: with MODIFF_LINEAR=1 the 21 attention qkv/proj
+                # carry a MoDiff a_hat cache too, and it was previously reset ONLY after
+                # calibration -- so it survived into the next sample. Measured consequence of
+                # leaving one family unreset: a finite latent on run 1 and an all-NaN latent on
+                # run 2. No-op unless convert_linears_to_wxax(modiff=True) has run.
+                _reset_wxax_modiff_safe(model)
             # Note: baseline modes have state reset but MoDiff optimizations disabled
             
             torch.cuda.synchronize()
