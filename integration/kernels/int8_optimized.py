@@ -225,13 +225,18 @@ class OptimizedInt8Conv2d(nn.Module):
         #: This is why the delta-quantize kernels were NOT modified to report the absmax they
         #: already compute (which would give a one-step-stale scale for free): K=4 captures most of
         #: the same win with no kernel changes at all.
-        #: DEFAULT 1 = recompute every step, which is what the paper's dynamic quantizer specifies;
-        #: K>1 is a speed approximation this project added and the paper has no counterpart for. The
-        #: staleness sweep that blessed K=4 was run at A8 only, and a stale scale clips -- which is
-        #: exactly what Theorem 4.3 assumes away, and what the error-feedback term then propagates.
-        #: K=4 is still available and costs about 8% of ms/step to give up; measure before shipping it
-        #: at any activation precision below 8 bits.
-        self.delta_refresh = max(1, int(os.environ.get("MODIFF_DELTA_REFRESH", "1")))
+        #: DEFAULT 4, and this survived a challenge. K=1 recomputes every step, which is what the
+        #: paper's dynamic quantizer specifies, so 2026-08-06 this was changed to 1 on fidelity
+        #: grounds -- and the measurement said no. Paired over 3 seeds, MoDiff latent relL2, warm-up
+        #: fix in place, K=4 vs K=1:
+        #:     A8  0.0595 / 0.0613 (K=1 loses 3/3 seeds)   A5  0.0768 / 0.0688 (wash)
+        #:     A6  0.0590 / 0.0630 (2/3)                   A4  0.1553 / 0.1529 (wash)
+        #:     A3  0.3595 / 0.4302 (3/3, by 0.055-0.087)   A2  0.6058 / 0.7063 (3/3, by 0.079-0.121)
+        #: K=1 never wins and loses badly at 3 and 2 bits, on top of costing ~8% of ms/step. The
+        #: mechanism is that a per-step absmax sets the grid from THIS step's single worst outlier,
+        #: while holding it for K steps smooths that estimate -- and with 3-7 levels, one outlier
+        #: eats most of the grid. Fidelity to the paper's formulation lost to the measurement.
+        self.delta_refresh = max(1, int(os.environ.get("MODIFF_DELTA_REFRESH", "4")))
         #: Free absmax reporting: let the delta-quantize kernel record the range it already
         #: computes and publish the NEXT step's scale in its own retirement election, instead of
         #: running a separate reduction pass (gn_report_delta_absmax in group_norm_silu.cu).

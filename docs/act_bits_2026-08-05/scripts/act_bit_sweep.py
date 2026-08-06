@@ -71,8 +71,9 @@ CALIB = H.CALIB["int8"]
 #: Worth 2x at A4 (0.163 -> 0.358), so the label is not cosmetic -- see verify_vs_old_w8a4.py.
 ANCHOR = os.environ.get("SWEEP_ANCHOR", "strict").lower()
 assert ANCHOR in ("strict", "paper")
-OUT = (f"docs/act_bits_2026-08-05/data/act_bit_sweep"
-       f"{'' if ANCHOR == 'strict' else '_paper_anchor'}.json")
+OUT = os.environ.get("SWEEP_OUT") or (
+    f"docs/act_bits_2026-08-05/data/act_bit_sweep"
+    f"{'' if ANCHOR == 'strict' else '_paper_anchor'}.json")
 
 
 def runs(mode, delta_mode, refs):
@@ -105,17 +106,25 @@ def stat(d):
 
 
 def main():
-    os.environ["MODIFF_DELTA_REFRESH"] = "4"
+    # Do NOT pin MODIFF_DELTA_REFRESH here. It used to be set to "4" unconditionally, copying
+    # run_all.sh's habit of stating the configuration explicitly -- but that OVERRODE the caller's
+    # environment, so every sweep in this directory silently ran at refresh=4 including the ones
+    # launched to vary it. Inherit it, and print what was actually used.
+    os.environ.setdefault("MODIFF_DELTA_REFRESH", "1")
     os.environ["MODIFF_DELTA_CLIP"] = "1.0"    # the bits knob does the clipping now, not this one
     os.environ["MODIFF_DELTA_REPORT"] = "0"
     os.environ["MODIFF_ACT_Q"] = "127"
 
-    print(f"batch {H.BATCH}, DDIM {H.STEPS}, seeds {SEEDS}\n", flush=True)
+    print(f"batch {H.BATCH}, DDIM {H.STEPS}, seeds {SEEDS}, "
+          f"refresh={os.environ['MODIFF_DELTA_REFRESH']}, warmup={os.environ.get('MODIFF_WARMUP_STEPS', '5')}\n",
+          flush=True)
     refs, fp16_ms = runs("fp16", "static", None)
     print(f"fp16 reference: {fp16_ms:6.2f} ms/step, "
           f"|x|max {max(float(v.abs().max()) for v in refs.values()):.4f}\n", flush=True)
 
     out = {"batch": H.BATCH, "steps": H.STEPS, "seeds": SEEDS, "anchor": ANCHOR,
+           "delta_refresh": os.environ["MODIFF_DELTA_REFRESH"],
+           "warmup_steps": os.environ.get("MODIFF_WARMUP_STEPS", "5"),
            "fp16_ms_per_step": fp16_ms, "rows": []}
     print(f"{'bits':>5} {'Q':>4} {'levels':>7} | {'baseline relL2':>22} | "
           f"{'MoDiff relL2':>22} | {'gain':>6} | {'ms/step b/M':>13}", flush=True)

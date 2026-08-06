@@ -251,10 +251,11 @@ class OptimizedInt4Conv2d(nn.Module):
         self.delta_clip_ratio = float(os.environ.get("MODIFF_DELTA_CLIP", "1.0"))
         #: See OptimizedInt8Conv2d._delta_should_refresh -- recompute the dynamic scale every Nth
         #: modulated step, reuse it in between. 1 = exact.
-        #: 1 = every step, matching the paper's dynamic quantizer. See
-        #: OptimizedInt8Conv2d.delta_refresh -- K>1 is this project's speed approximation, validated
-        #: at A8 only, and stale scales clip hardest exactly where int4 lives.
-        self.delta_refresh = max(1, int(os.environ.get("MODIFF_DELTA_REFRESH", "1")))
+        #: 4. See OptimizedInt8Conv2d.delta_refresh: K=1 is the paper's formulation and was tried as
+        #: the default on 2026-08-06, but it never wins on a paired sweep and loses badly at 3 and 2
+        #: activation bits, because a per-step absmax is set by one outlier where a held scale is
+        #: smoothed.
+        self.delta_refresh = max(1, int(os.environ.get("MODIFF_DELTA_REFRESH", "4")))
         #: Free absmax reporting, INT4 twin. DEFAULT OFF -- see OptimizedInt8Conv2d.delta_report for
         #: the full reasoning. At W4A4 it does not merely degrade, it DIVERGES: latent relL2 0.4746
         #: (off) -> 11.6553 (on), measured 2026-08-04. With only 15 levels, the extra staleness

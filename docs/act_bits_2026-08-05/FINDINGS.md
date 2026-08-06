@@ -38,15 +38,15 @@ carries 1e-5. Fixed in both `int8_optimized.py` and `int4_optimized.py`: the cal
 per-round dynamic scale, and `warmup_steps` defaults to 5 (`MODIFF_WARMUP_STEPS`). Cost is two extra
 quantize+conv per layer on one step in fifty.
 
-`MODIFF_DELTA_REFRESH` also went 4 → 1 in the same change. K>1 reuses a scale up to K steps old; the
-paper's dynamic quantizer has no such approximation, the sweep that blessed K=4 was run at A8 only, and
-a stale scale clips — which is what Theorem 4.3 assumes away and what the feedback term propagates.
-Costs about 8% of ms/step. **The two changes are not separated in the numbers below.**
+`MODIFF_DELTA_REFRESH` was also changed 4 → 1 on fidelity grounds — the paper's dynamic quantizer
+recomputes the scale every step — and then **measured, and reverted**. See the section below; the
+sweep numbers here are all at K=4, so every improvement in them is the warm-up fix alone.
 
 ## Result
 
 Q is the symmetric code ceiling 2^(b−1)−1, applied to **every** conv activation site including the t=T
-warm-up — the paper's protocol, now that the warm-up converges. Baseline is MoDiff off with the
+warm-up — the paper's protocol, now that the warm-up converges. `MODIFF_DELTA_REFRESH=4`
+throughout. Baseline is MoDiff off with the
 calibrated per-tensor grid rescaled to b bits; it is unaffected by either fix and reproduces its
 pre-fix values to ≤0.0015, which is the cross-run control.
 
@@ -81,6 +81,53 @@ confirming this is a quality instrument only. A low A_b costs nothing and saves 
 activations keep their int8 container and the GEMM stays W8A8. A real 4-bit activation datapath needs
 int4 tensor cores, which take both operands at 4 bits — no mainstream ISA has a mixed s8×s4 MMA, so
 W8A4 is not a speed configuration on any hardware, only a quality one.
+
+## Fidelity to the paper's quantizer lost to the measurement
+
+`MODIFF_DELTA_REFRESH=K` reuses the dynamic delta scale for K steps. The paper has no such
+approximation, so on 2026-08-06 the default went 4 → 1, and then the sweep was re-run at K=1 to check.
+Paired over the same 3 seeds, MoDiff arm, warm-up fix in place (`data/act_bit_sweep_refresh1.json`):
+
+| A bits | K=4 | K=1 | seeds where K=1 wins |
+|---|---:|---:|---:|
+| A8 | **0.0595** | 0.0613 | 0/3 |
+| A7 | **0.0588** | 0.0601 | 1/3 |
+| A6 | **0.0590** | 0.0630 | 1/3 |
+| A5 | 0.0768 | 0.0688 | 2/3 |
+| A4 | 0.1553 | 0.1529 | 2/3 |
+| A3 | **0.3595** | 0.4302 | 0/3, by 0.055–0.087 |
+| A2 | **0.6058** | 0.7063 | 0/3, by 0.079–0.121 |
+
+K=1 never wins, is a wash at A5/A4, and loses badly at 3 and 2 bits — on top of recomputing the absmax
+every step instead of every fourth. The mechanism is that a per-step absmax sets the grid from *this*
+step's single worst outlier, while holding it for K steps smooths that estimate; with 3–7 levels one
+outlier eats most of the grid. **Default reverted to 4**, with the paired data recorded at the knob so
+the next fidelity argument has to beat it.
+
+This is the second parameter today changed on a plausible argument and then refuted by measuring it
+(the first was AdaRound's learning rate, where "a gate only needs ~2 units of travel" picked 1e-3 and
+1e-2 measured almost twice as good).
+
+## Speed, at the final configuration
+
+`e2e_three_mode_bench.py`, 3 warm-up samples + 5 timed repeats, DDIM 200, warm-up fix in place and
+`MODIFF_DELTA_REFRESH=4` (`data/e2e_postfix_b128.json`, `data/e2e_postfix_b8.json`):
+
+| batch | fp16 | INT8 baseline | INT8 + MoDiff | MoDiff vs fp16 | MoDiff vs baseline |
+|---|---:|---:|---:|---:|---:|
+| **128** (CV ≤ 0.33%) | 106.20 | 74.05 | **78.06** | **1.360×** | **0.949×** |
+| 8 (CV 3.6–6.9%, NOISY) | 18.09 | 16.76 | 19.82 | 0.912× | 0.845× |
+
+At batch 128 this reproduces the pre-fix report's ratios exactly (1.359× / 0.946× on 2026-08-04), so
+the warm-up fix costs nothing measurable — it adds two quantize+conv per layer on 1 step in 200. All
+three modes are ~3.4% slower in absolute terms than that report, fp16 included, and fp16 is untouched
+by every change since; that is cross-session drift, which this project has documented before, and it
+is why the ratios rather than the absolutes are the thing to quote.
+
+**At batch 8 the whole stack barely pays.** INT8 is only 1.079× fp16, and MoDiff is *slower than fp16*
+(0.912×). The three extra launches per layer per step are pure latency at that size. Treat the batch-8
+row as directional: at CV ~7% it does not support fine comparisons, including against the 0.691× the
+batch sweep reported on 2026-08-04.
 
 ## What this means for the earlier numbers, and for docs/fid_2026-08-05
 
@@ -292,6 +339,7 @@ cannot clip by construction. Both effects understate MoDiff, so the gains above 
 | `int8_optimized.py`, `int4_optimized.py` | **the warm-up fix**: the calibrated t=T path passed the static activation grid to every residual round, making the loop a no-op. Now a per-round dynamic scale, and `warmup_steps` 3 → 5 (`MODIFF_WARMUP_STEPS`), per the paper's Appendix D.5 |
 | `int8_optimized.py`, `int4_optimized.py` | `MODIFF_DELTA_REFRESH` default 4 → 1: the paper's dynamic quantizer recomputes the scale every step, and K>1 was only ever validated at A8 |
 | `scripts/probe_warmup.py` | the per-round contraction measurement that found the no-op |
+| `scripts/act_bit_sweep.py` | **removed an env pin**: `main()` set `MODIFF_DELTA_REFRESH=4` unconditionally, overriding the caller, so every sweep here silently ran at K=4 — including runs launched to vary it. The value used is now inherited and recorded in the output JSON |
 | `scripts/act_bit_sweep.py` | the sweep. `SWEEP_ANCHOR=strict|paper`, `SWEEP_BITS`, `SWEEP_SEEDS` |
 | `scripts/verify_vs_old_w8a4.py` | the anchor attribution and forward-path instrumentation (`forward_gn_fused_modiff` 62 layers, `_forward_modulated` 8, `_forward_first_step` 70) |
 
@@ -301,9 +349,10 @@ bit-identical, and the baseline arm reproduced across two independent processes 
 
 ## Open, in the order I would take them
 
-1. **Separate the two fixes.** The post-fix table changed the warm-up AND `MODIFF_DELTA_REFRESH`
-   (4 → 1) at once. Re-running at `MODIFF_DELTA_REFRESH=4` attributes them and decides whether the
-   ~8% of ms/step that refresh=1 costs is buying anything. ~40 min, no code.
+1. **Re-measure FID for W8A8+MoDiff.** The 7.802 in `docs/fid_2026-08-05` was taken with the broken
+   warm-up. At A8 that fix is worth ~5% of relL2 so the FID is probably unchanged, but it should be
+   confirmed. Only `fid/int8_modiff` needs regenerating — fp16 and int8_baseline are untouched by any
+   change since. FID-vs-fp16 works today; FID-vs-real needs the LSUN LMDB re-downloaded first.
 2. **Sweep `MODIFF_DELTA_CLIP` at A4 and A3.** Zero code, ~20 min, and it is what separates our delta
    quantizer from the paper's best A4 row. If an MSE-ish clip ratio moves A4 from 0.155 toward the
    A5/A6 plateau, that is the cheapest quality win available.
