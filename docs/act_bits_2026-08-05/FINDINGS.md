@@ -204,6 +204,57 @@ int4 CUTLASS kernel. Using them for real means writing codes — not just scales
 That work is only worth doing once the floor has been pushed as far as it goes, since by itself it
 buys nothing.
 
+### Full-strength AdaRound: the floor stops at ~0.15, and sequential buys nothing
+
+`scripts/adaround_int4_full.py` and `scripts/adaround_sequential.py` pull the three levers
+Q-Diffusion uses and the cheap run left alone: 136 calibration samples (17 trajectory positions ×
+batch 8) instead of 12, 10k iterations instead of 2k, and layer inputs taken from the
+already-quantized network instead of the FP one.
+
+| weight quantizer | floor relL2 | per seed |
+|---|---:|---|
+| nearest rounding | 0.2442 ± 0.0064 | 0.244, 0.251, 0.238 |
+| AdaRound, cheap (12 samples, 2k iters) | 0.1833 ± 0.0223 | 0.158, 0.201, 0.191 |
+| **AdaRound, 136 samples, 10k iters** | **0.1531 ± 0.0236** | 0.156, 0.175, 0.128 |
+| **AdaRound, + sequential (in-order)** | **0.1467 ± 0.0258** | 0.129, 0.176, 0.135 |
+| AdaRound, sequential done wrong | 0.4893 ± 0.0650 | 0.563, 0.439, 0.467 |
+
+* **Data and iterations pay**: 0.1833 → 0.1531, and 3/3 seeds improve paired, though unevenly
+  (+0.002, +0.026, +0.063) so the magnitude is not to be quoted precisely.
+* **Sequential reconstruction, done correctly, is a tie**: 0.1467 vs 0.1531 is 1/3 seeds paired
+  (+0.028, −0.001, −0.007). The lever that should matter most on paper buys nothing measurable here.
+* **The floor stops around 0.147–0.153**, a 40% reduction from nearest rounding. Against the
+  acceptance test set before the run (≈0.12 continue, ≈0.17 abandon) this lands in between, so the
+  decision has to be made on what it implies end to end rather than on the floor alone.
+
+**Two implementation faults, both caught by the floor and neither by the layer-error metric.**
+
+*Bias.* Targets captured with a forward hook include the conv's bias while the prediction used
+`bias=None`, so the optimiser was asked to cancel a constant offset with rounding decisions. Floor
+came back 0.2879 — worse than nearest rounding — while its own layer-error metric read a healthy
+"61% improvement", because both sides of that ratio carried the same offset.
+
+*Simultaneous compensation.* The first `sequential` arm captured every layer's input from the fully
+nearest-rounded model up front and then optimised all 70 layers against those inputs at once. Each
+layer learned to compensate an upstream error that the finished model does not have, since its
+upstream is AdaRound'd. 70 layers of over-correction compounded to floor 0.4893, twice as bad as
+doing nothing, with 27.8% of codes flipped — moving hard in a direction calibrated to the wrong
+input distribution. Correct sequential reconstruction processes layers in **forward execution order**
+(taken from hook firing order, not `named_modules()` — a UNet with skip connections does not execute
+in definition order) and writes each learned weight back before capturing the next layer's input.
+
+*Learning rate.* 1e-3 with 10k iterations reasons correctly about how far a gate must travel and
+still loses to 1e-2 under mini-batch noise: probed on 6 layers, layer output error 0.438× vs 0.251×
+of nearest. Probed on the direct objective, not on the floor, so the acceptance test stayed clean.
+
+**What it means for W4A4.** The weight floor moved 0.244 → 0.147, but W4A4+MoDiff's total is
+0.44–0.47 and the activation side contributes most of it. Composing in quadrature, a floor this much
+lower predicts roughly a 10% end-to-end improvement — from a mode whose FID is 200. So AdaRound is
+real and it works, and it does not rescue W4A4: reaching fp16 parity there needs a much better
+activation quantizer *as well*, which is a research programme rather than a fix. The recommendation
+is to treat W4A4 as a speed configuration, stop spending on its quality, and not build the
+codes-into-AWQ-layout injection path, which by itself buys nothing.
+
 ## Scope of MODIFF_ACT_Q, which bounds every number above
 
 It reaches the quantized **conv** path (70 calibrated layers of 89 converted). It does **not** reach
