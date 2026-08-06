@@ -74,11 +74,17 @@ torch::Tensor step1_quantize_no_ahat_fprop(
     torch::Tensor absmax_buf, torch::Tensor scale_buf, torch::Tensor inv_scale_buf,
     torch::Tensor retire_count, float Q_level, torch::Tensor smooth_inv);
 
+// code_ceiling: symmetric code ceiling, i.e. Q_b for a b-bit activation datapath. <= 0 keeps the
+// literal 127 these kernels clamped at before the parameter existed, so an un-migrated caller and
+// every caller at clip ratio 1.0 stay bit-identical. Needed for a clip ratio to actually clip --
+// see docs/delta_clip_2026-08-06/FINDINGS.md.
 torch::Tensor step1_static_quantize_fprop(
-    torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor scale_buf, torch::Tensor smooth_inv);
+    torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor scale_buf, torch::Tensor smooth_inv,
+    float code_ceiling = -1.0f);
 
 torch::Tensor step1_static_quantize_fprop_silu(
-    torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor scale_buf, torch::Tensor smooth_inv);
+    torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor scale_buf, torch::Tensor smooth_inv,
+    float code_ceiling = -1.0f);
 
 torch::Tensor step1_quantize_pack_int4_fprop(
     torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor residual_buf,
@@ -337,7 +343,8 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc(
     torch::Tensor scale, torch::Tensor smooth_inv,
     torch::Tensor mod_scale, torch::Tensor mod_shift,
     torch::Tensor absmax_buf, torch::Tensor scale_out, torch::Tensor inv_scale_out,
-    torch::Tensor retire_count, double Q_level, bool report_next, double safety);
+    torch::Tensor retire_count, double Q_level, bool report_next, double safety,
+    double code_ceiling_in = -1.0);
 // MoDiff twin of group_norm_silu_quantize_resize_nhwc: fuses GN(+mod)(+SiLU)+2x resize+delta
 // quantize+in-place a_hat for the eight updown ResBlocks, which get no fusion otherwise.
 torch::Tensor group_norm_silu_delta_quantize_resize_nhwc(

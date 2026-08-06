@@ -450,18 +450,47 @@ class OptimizedInt8Conv2d(nn.Module):
         return (self.delta_dynamic and self.delta_report and self._delta_seeded
                 and self._delta_should_refresh())
 
+    @property
+    def _delta_code_ceiling(self) -> float:
+        """Where the delta quantizer's codes saturate, or -1 to keep the kernels' literal 127.
+
+        `act_q` in dynamic mode, -1 in static mode, and the asymmetry is deliberate.
+
+        In dynamic mode the scale is `Q_level/absmax` with `Q_level = act_q/clip`, so at clip 1.0 no
+        code can exceed `act_q` and passing it changes nothing. It starts to matter in exactly two
+        places, both of which are the quantizer failing to honour its own bit width:
+          * clip < 1, whose whole purpose is to make the top (1-clip) of the range saturate. Without
+            a ceiling it did not saturate at all below A8 -- the knob was a finer grid, not a clip.
+          * MODIFF_DELTA_REFRESH > 1, where a scale measured up to K-1 steps ago is reused and the
+            delta's range may have grown since. Those codes are supposed to clip at act_q; clamped
+            at 127 instead, an "A4" layer can emit a code of 100 on 3 of every 4 steps.
+
+        Static mode keeps -1 on purpose. There the scale is the calibrated Q_b/range, which is not
+        built from this call's absmax, and the 127 ceiling is what lets a delta above the calibrated
+        range keep resolution instead of saturating. That behaviour is load-bearing for the published
+        baseline comparison (it is the asymmetry documented in MODIFF_ACT_Q's comment, and it
+        favours the baseline arm), so changing it belongs to its own measurement, not to this one.
+        """
+        return float(self.act_q) if self.delta_dynamic else -1.0
+
     def _delta_gn_dynamic_args(self, device):
-        """The five trailing arguments of group_norm_silu_delta_quantize[_pack]_nhwc.
+        """The six trailing arguments of group_norm_silu_delta_quantize[_pack]_nhwc.
 
         Static mode passes empty tensors, so the kernel keeps using the scale it is given.
         Dynamic mode passes the real reduction buffers, and the kernel discovers the scale from
         this call's own delta between its statistics pass and its quantize pass -- see
         gn_delta_absmax_flat_kernel. In dynamic mode the conv alpha must come from
         `_inv_scale_buf` (which that kernel writes), not from the table.
+
+        The trailing element is the code ceiling (see `_delta_code_ceiling`). Note the Q_level in
+        these tuples and that ceiling are different quantities: Q_level/absmax is the SCALE the
+        kernel will publish for a later step, the ceiling is where THIS call's codes saturate, and a
+        clip ratio is exactly the case where they stop agreeing.
         """
         if not self.delta_dynamic:
             e = self._empty_f32_arg(device)
-            return e, e, e, e, 127.0, False, 1.0
+            return e, e, e, e, 127.0, False, 1.0, -1.0
+        ceil = self._delta_code_ceiling
         if self._delta_report_on():
             # Free reporting: the quantize kernel quantizes with the pair currently in force (the
             # caller passes it as `scale`, and the conv reads its alpha) while publishing the next
@@ -470,16 +499,17 @@ class OptimizedInt8Conv2d(nn.Module):
             self._scale_pair_b = not self._scale_pair_b
             return (self._absmax_buf, pub_s, pub_i,
                     self._retire_count, self.act_q / self.delta_clip_ratio,
-                    True, self.delta_report_safety)
+                    True, self.delta_report_safety, ceil)
         if not self._delta_should_refresh():
             # Reuse the last measured scale: pass empty reduction buffers so the kernel skips its
             # absmax pass entirely. The caller hands it `_scale_buf` as the scale to quantize with,
-            # which still holds the value the last refresh wrote there.
+            # which still holds the value the last refresh wrote there. This is the case the ceiling
+            # matters most for: that scale is up to K-1 steps old, so the delta may have outgrown it.
             e = self._empty_f32_arg(device)
-            return e, e, e, e, 127.0, False, 1.0
+            return e, e, e, e, 127.0, False, 1.0, ceil
         self._delta_seeded = True      # this pass publishes a scale the next step can ride on
         return (self._absmax_buf, self._scale_buf, self._inv_scale_buf,
-                self._retire_count, self.act_q / self.delta_clip_ratio, False, 1.0)
+                self._retire_count, self.act_q / self.delta_clip_ratio, False, 1.0, ceil)
 
     def _delta_scale_args(self, device, x=None, fused_silu=False):
         """(quantize_scale, conv_alpha) as 1-element device views for the current step.
@@ -797,6 +827,7 @@ class OptimizedInt8Conv2d(nn.Module):
             self.a_hat_cache,
             d_scale,
             self._smooth_inv_flat,
+            self._delta_code_ceiling,
         )
         profiler.stop("MoDiff INT8 Static Step1 (fused SiLU)", p_step1)
         if self._delta_calib:
@@ -917,7 +948,7 @@ class OptimizedInt8Conv2d(nn.Module):
 
         p_step1 = profiler.start("MoDiff INT8 Static Step1 (fused SiLU)")
         x_int8 = modiff_cutlass.step1_static_quantize_fprop_silu(
-            x, self.a_hat_cache, d_scale, self._smooth_inv_flat)
+            x, self.a_hat_cache, d_scale, self._smooth_inv_flat, self._delta_code_ceiling)
         profiler.stop("MoDiff INT8 Static Step1 (fused SiLU)", p_step1)
         if self._delta_calib:
             self._observe_delta_codes(x_int8)
@@ -1450,6 +1481,7 @@ class OptimizedInt8Conv2d(nn.Module):
                 self.a_hat_cache,
                 d_scale,
                 self._smooth_inv_flat,
+                self._delta_code_ceiling,
             )
             profiler.stop("MoDiff INT8 Static Step1", p_step1)
             if self._delta_calib:

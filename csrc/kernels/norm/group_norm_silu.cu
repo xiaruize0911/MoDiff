@@ -2348,7 +2348,10 @@ __global__ void gn_apply_delta_quantize_flat_kernel(
     const float* __restrict__ inv_std_in, // [N*G]
     const float* __restrict__ scale_ptr,  // scalar quant multiplier = 127/absmax
     const float* __restrict__ smooth_inv, // [C] or nullptr
-    int C, int G, long sample_stride, long num_elements, bool apply_silu
+    int C, int G, long sample_stride, long num_elements, bool apply_silu,
+    // Symmetric code ceiling; <= 0 means the 127 this kernel used to clamp at unconditionally.
+    // Only differs from 127 when a clip ratio is in force -- see clamp_code in common.cuh.
+    float code_ceiling
 ) {
     const int CPG = C / G;
     const float scale = *scale_ptr;
@@ -2374,7 +2377,7 @@ __global__ void gn_apply_delta_quantize_flat_kernel(
         float out = apply_silu ? gns_silu(normed_h) : normed_h;
         if (smooth_inv != nullptr) out *= smooth_inv[c];
         float cache = __half2float(a_hat_cache[i]);
-        float q = fmaxf(-127.0f, fminf(127.0f, roundf((out - cache) * scale)));
+        float q = clamp_code(roundf((out - cache) * scale), code_ceiling, 127.0f);
         a_hat_cache[i] = __float2half_rn(cache + q * inv_scale);
         Yq[i] = (int8_t)q;
     }
@@ -2586,7 +2589,12 @@ __global__ void gn_apply_delta_quantize_flat_vec2_kernel(
     // one-step-stale scale, which the staleness sweep showed costs nothing.
     float* __restrict__ absmax_buf, float* __restrict__ next_scale_out,
     float* __restrict__ next_inv_out, unsigned int* __restrict__ retire_count,
-    float Q_level, float safety
+    float Q_level, float safety,
+    // Symmetric code ceiling for THIS step's quantization; <= 0 means the 127 this kernel used
+    // to clamp at unconditionally. Distinct from Q_level above, which sets the NEXT step's
+    // scale: Q_level/absmax is a scale, code_ceiling is where codes saturate, and a clip ratio
+    // is exactly the case where the two stop agreeing (see clamp_code in common.cuh).
+    float code_ceiling
 ) {
     extern __shared__ float sdata[];
     const int CPG = C / G;
@@ -2623,8 +2631,8 @@ __global__ void gn_apply_delta_quantize_flat_vec2_kernel(
         const float d0 = o0 - cache.x, d1 = o1 - cache.y;
         // Reduced BEFORE the clamp, so the report is the true delta range, not a clipped lower bound.
         local_max = fmaxf(local_max, fmaxf(fabsf(d0), fabsf(d1)));
-        float q0 = fmaxf(-127.0f, fminf(127.0f, roundf(d0 * scale)));
-        float q1 = fmaxf(-127.0f, fminf(127.0f, roundf(d1 * scale)));
+        float q0 = clamp_code(roundf(d0 * scale), code_ceiling, 127.0f);
+        float q1 = clamp_code(roundf(d1 * scale), code_ceiling, 127.0f);
         gn_store2(a_hat_cache, base, make_float2(cache.x + q0 * inv_scale, cache.y + q1 * inv_scale));
         int8_t i0 = (int8_t)q0, i1 = (int8_t)q1;
         reinterpret_cast<int16_t*>(Yq)[base >> 1] =
@@ -2664,8 +2672,15 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc(
     // delta range and publish the next step's scale for free (gn_report_delta_absmax). `scale` then
     // has to be the scale a previous step published. safety gives headroom for the range growing.
     bool report_next,
-    double safety
+    double safety,
+    // Symmetric code ceiling, i.e. Q_b for a b-bit activation datapath. <= 0 (the default) keeps the
+    // 127 these kernels clamped at unconditionally, so every pre-existing caller is bit-identical.
+    // Only matters when the scale is deliberately larger than Q_b/absmax -- which is what a clip
+    // ratio is, and why the ratio was not a clip below A8 before this existed
+    // (docs/delta_clip_2026-08-06/FINDINGS.md).
+    double code_ceiling_in
 ) {
+    const float code_ceiling = (float)code_ceiling_in;
     CHECK_CUDA(x);
     CHECK_CONTIGUOUS(x);
     TORCH_CHECK(x.dim() == 4, "group_norm_silu_delta_quantize_nhwc expects a 4D [N, C, H, W] tensor");
@@ -2802,7 +2817,7 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc(
                 report ? scale_out.data_ptr<float>() : nullptr,
                 report ? inv_scale_out.data_ptr<float>() : nullptr,
                 report ? (unsigned int*)retire_count.data_ptr<int>() : nullptr,
-                (float)Q_level, (float)safety);
+                (float)Q_level, (float)safety, code_ceiling);
         } else {
             gn_apply_delta_quantize_flat_kernel<float><<<agrid_scalar, ablock, 0, stream>>>(
                 x.data_ptr<float>(), cache_ptr, reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
@@ -2811,7 +2826,7 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc(
                 has_mod ? mod_shift.data_ptr<float>() : nullptr,
                 mean.data_ptr<float>(), inv_std.data_ptr<float>(),
                 scale_ptr_eff, smooth_ptr,
-                C, (int)num_groups, sample_stride, num_elements, apply_silu);
+                C, (int)num_groups, sample_stride, num_elements, apply_silu, code_ceiling);
         }
     } else {
         if (use_vec2) {
@@ -2830,7 +2845,7 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc(
                 report ? scale_out.data_ptr<float>() : nullptr,
                 report ? inv_scale_out.data_ptr<float>() : nullptr,
                 report ? (unsigned int*)retire_count.data_ptr<int>() : nullptr,
-                (float)Q_level, (float)safety);
+                (float)Q_level, (float)safety, code_ceiling);
         } else {
             gn_apply_delta_quantize_flat_kernel<__half><<<agrid_scalar, ablock, 0, stream>>>(
                 reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), cache_ptr,
@@ -2841,7 +2856,7 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc(
                 has_mod ? reinterpret_cast<const __half*>(mod_shift.data_ptr<at::Half>()) : nullptr,
                 mean.data_ptr<float>(), inv_std.data_ptr<float>(),
                 scale_ptr_eff, smooth_ptr,
-                C, (int)num_groups, sample_stride, num_elements, apply_silu);
+                C, (int)num_groups, sample_stride, num_elements, apply_silu, code_ceiling);
         }
     }
     return yq;

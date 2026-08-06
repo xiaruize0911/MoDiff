@@ -3,7 +3,7 @@
 2026-08-06. Follows `docs/act_bits_2026-08-05/FINDINGS.md`, whose open item 2 was "sweep
 `MODIFF_DELTA_CLIP` at A4 and A3 -- zero code, ~20 min, the cheapest quality win available".
 
-Three results, in the order they landed:
+Four results, in the order they landed:
 
 1. That item cannot be run as written. **`MODIFF_DELTA_CLIP` stops being a clip below A8**, because
    the code ceiling is a literal in the kernels and only the scale moves. A sweep at A4 would have
@@ -12,8 +12,12 @@ Three results, in the order they landed:
    r=0.8-0.9, 1 of 3 paired seeds, and monotone losses below r=0.7 (+17.5% at r=0.4). The shipped
    default r=1.0 stands.
 3. At A4/A3 a real clip looks worth **26-33% of the accumulated activation error**, at r=0.2-0.3, by
-   two independent offline measurements that agree. That is the cheapest quality win still available,
-   and collecting it needs the kernel change described at the bottom.
+   two independent offline measurements that agree. Collecting it needs a code ceiling in the kernels.
+4. With that ceiling landed, the measured end-to-end win is **larger than predicted: A4 halves
+   (0.1758 → 0.0861 at r=0.40) and A3 drops 2.6x (0.3934 → 0.1548 at r=0.25)**, 3 of 3 seeds on every
+   clip row, while A8 stays flat-to-worse exactly as in (2). A real clip buys back roughly the bit
+   that was lost. The ceiling is also a defect fix: on scale-reuse steps the old literal let an "A4"
+   layer emit codes far outside ±7, so the previously published A4/A3 rows were flattered.
 
 The reason 2 and 3 point opposite ways is not noise, and it corrects a piece of the 2026-08-04
 reasoning: over a trajectory this quantizer is solving a *tracking* problem, not a reconstruction
@@ -150,31 +154,139 @@ subtrahend is the true previous activation rather than the dequantized one for `
 about one quantization error. Fine for ranking clip ratios; not a substitute for the end-to-end
 number, which is why A8 was measured both ways -- and the two agree.
 
+## The code ceiling, and what the clip is worth at A4/A3 (`scripts/clip_e2e_bits.py`)
+
+With `code_ceiling` threaded through the delta-quantize kernels (see Code changes), a b-bit delta
+quantizer saturates at Q_b and the A4/A3 rows become measurable. Same protocol: batch 8, DDIM 50,
+paired over 3 seeds against a per-seed fp16 reference, one warm-up run per arm discarded.
+
+**Mean relL2, and the ratio to that row's own r=1.0.** Every A4 and A3 clip row below wins on 3 of 3
+seeds; every A8 clip row loses in the mean. Per-seed detail is in `data/clip_e2e_bits.json`.
+
+| K | bits | r=1.0 | r=0.60 | r=0.40 | r=0.30 | r=0.25 | r=0.20 |
+|---|---|---|---|---|---|---|---|
+| 1 | A8 | 0.0619 | 0.0631 (1.02x) | 0.0667 (1.08x) | 0.0739 (1.19x) | 0.0855 (1.38x) | 0.1094 (1.77x) |
+| 1 | A4 | 0.1516 | 0.0896 (0.59x) | **0.0765 (0.50x)** | 0.0796 (0.53x) | 0.0906 (0.60x) | 0.1129 (0.74x) |
+| 1 | A3 | 0.4233 | 0.2372 (0.56x) | 0.1665 (0.39x) | 0.1475 (0.35x) | **0.1452 (0.34x)** | 0.1450 (0.34x) |
+| 4 | A8 | 0.0615 | 0.0641 (1.04x) | 0.0734 (1.19x) | 0.0794 (1.29x) | 0.0951 (1.55x) | 0.1237 (2.01x) |
+| 4 | A4 | 0.1758 | 0.1013 (0.58x) | **0.0861 (0.49x)** | 0.0908 (0.52x) | 0.1002 (0.57x) | 0.1272 (0.72x) |
+| 4 | A3 | 0.3934 | 0.2753 (0.70x) | 0.1867 (0.47x) | 0.1585 (0.40x) | **0.1548 (0.39x)** | 0.1587 (0.40x) |
+
+The offline probes predicted this and understated it. `accum_probe.py` put the trajectory optimum at
+r≈0.25/A4 and r≈0.20/A3, worth 26%/33% of accumulated conv activation error; the end-to-end optima are
+r≈0.40 at A4 and r≈0.20-0.25 at A3, worth **50% and 66% of latent relL2**. Note the direction of the
+miss: at A8 a predicted 2.6% showed up as 1-2% (attenuated, as expected from the conv delta path being
+one contributor among several), while at A4/A3 a predicted 26-33% shows up as 50-66%. The clip is
+doing more than reducing that one error term -- plausibly because a_hat feeds the next step's delta, so
+a better-tracked a_hat also shrinks what the next quantizer has to represent, but that is a hypothesis
+this data does not test.
+
+The per-seed spread is no longer a problem the way it was at A8: at A4/K=1 the worst single seed still
+improves 36.2% at r=0.40, and at A3/K=1 the worst improves 60.4% at r=0.30. These are effects several
+times the spread, not inside it.
+
+**Roughly one bit, for free.** Old A4 without a clip was 0.1553 (K=4); new A3 *with* a clip is 0.1548.
+Old A5 was 0.0768; new A4 with a clip is 0.0861. So a real clip buys back approximately the bit that
+was lost -- which is what the paper's "up to 3 bits" claim needs, and this implementation could not
+previously deliver because its quantizer could not saturate.
+
+**No default change.** The optimum is precision-dependent (1.0 at A8, 0.40 at A4, 0.25 at A3) and
+`MODIFF_DELTA_CLIP` is one global knob, so a single new default would regress the shipped W8A8 mode --
+where r=1.0 is the best row at both K, and 0.20 costs 1.8-2.0x. A precision-dependent default (keyed
+off `act_q`) is the obvious follow-up, and it wants its own measurement: more seeds, and the W8A4 FID
+question, before a default that changes shipping behaviour.
+
+### The ceiling is also a defect fix, and here is the control that shows it
+
+On a `MODIFF_DELTA_REFRESH=K>1` reuse step the scale is up to K-1 steps old, so the delta can outgrow
+it. Those codes are supposed to saturate at Q_b; clamped at 127 instead, an "A4" layer could emit a
+code of 100. `scripts/verify_ceiling.py` demonstrates it directly at the kernel level: at A4 with
+r=0.25 the old literal produces `max|code|` of 27 (step1) and 31 (GN-fused), and with the ceiling both
+saturate at exactly 7, with 31% and 19% of codes at the ceiling.
+
+So the previously published A8..A2 table was measured with a quantizer that exceeded its own bit width
+on 3 of every 4 steps. Per-seed against the committed pre-ceiling JSONs, at r=1.0:
+
+| | seed 1234 | 20260805 | 777 | |
+|---|---|---|---|---|
+| A8, K=1 | 0.0416 → 0.0437 | 0.0974 → 0.0954 | 0.0451 → 0.0467 | mixed sign, within the floor below |
+| A4, K=1 | 0.1560 → 0.1549 | 0.1874 → 0.1833 | 0.1153 → 0.1166 | unchanged (≤0.4%) |
+| A3, K=1 | 0.4621 → 0.4599 | 0.4176 → 0.4141 | 0.4109 → 0.3959 | unchanged (≤3.6%) |
+| A8, K=4 | 0.0387 → 0.0385 | 0.0958 → 0.0944 | 0.0441 → 0.0515 | 2 flat, 1 unexplained (+17%) |
+| A4, K=4 | 0.1572 → **0.1956** | 0.1691 → **0.1870** | 0.1397 → **0.1448** | worse 3/3 (+3.7..+24%) |
+| A3, K=4 | 0.3923 → **0.4105** | 0.3623 → **0.3992** | 0.3239 → **0.3705** | worse 3/3 (+4.6..+14%) |
+
+The **A4/A3 rows are the predicted pattern**, and they are the reason to believe the change does what
+it claims rather than something else: unchanged at K=1, where every step refreshes its own absmax so
+no code could exceed Q_b and the ceiling is a no-op; worse on every seed at K=4, where reuse steps now
+saturate as a b-bit quantizer must. A K=1 row moving would have meant the parameter was reaching calls
+it should not.
+
+The corrected rows are the honest baseline the clip is measured against, and the clip more than pays
+for the correction: A4/K=4 goes 0.1553 (flattered) → 0.1758 (honest) → 0.0861 (clipped).
+
+**The A8 rows carry a caveat I could not resolve.** At A8 `act_q` is 127, identical to the old
+literal, and `verify_ceiling.py` proves the kernels emit byte-identical codes there -- so A8 cannot
+move for any reason internal to this change. Most seeds agree. But A8/K=4/seed 777 reads 0.0441 before
+and 0.0515 after, and a second independent post-ceiling process reproduces 0.0522, so it is not
+one-off scatter either. What it is *not* is the ceiling. The remaining difference between the two
+measurements is the script: `act_bit_sweep.py` runs a baseline arm between the fp16 reference and the
+MoDiff arm, in one process, so its MoDiff arm sees different accumulated GPU state (and its own fp16
+references) than `clip_e2e_bits.py`'s does. That is the likeliest cause and it is untested here;
+attributing it would need the two harnesses run against each other at A8, which nothing above depends
+on. It does mean cross-script relL2 comparisons in this project should not be trusted below ~20%.
+
+**Same-script cross-process floor** (`data/a8_control_repeat.json`, an independent rerun of the A8
+r=1.0 rows): per-seed differences of −9.5%, −0.3%, −4.0% at K=1 and −0.4%, −1.8%, +1.4% at K=4; means
+0.0619 vs 0.0598 and 0.0615 vs 0.0611. So ~10% per seed, ~3% in the mean, with everything held fixed.
+That is the floor the A4/A3 clip effects (50-66%, 3/3 seeds, worst seed 15-61%) clear by a wide
+margin, and it is why nothing smaller than a 3/3-seed effect is called real anywhere in this document.
+
 ## Code changes
 
-None. All three scripts are measurement only; no kernel, harness or default was touched.
+Measurement scripts (`clip_probe.py`, `clip_e2e.py`, `clip_e2e_paired.py`, `accum_probe.py`) touch
+nothing. The ceiling is a kernel change:
+
+| file | change |
+|---|---|
+| `csrc/common.cuh` | new `clamp_code(v, ceiling, native)`: clamps at `ceiling` when it is > 0, else at the literal the call site used before the parameter existed. One place, so the fallback rule cannot drift between kernels |
+| `csrc/kernels/quantize/modiff_delta_quantize.cu` | `float code_ceiling` on the five int8 static delta kernels (fp32 cache, fp16 cache, fp16-cache vec2, and the two SiLU-fused variants) and their 9 launch sites; `step1_static_quantize_fprop` and `..._silu` take it as a trailing argument |
+| `csrc/kernels/norm/group_norm_silu.cu` | same for `gn_apply_delta_quantize_flat_kernel` and `..._vec2_kernel` (4 launch sites) and `group_norm_silu_delta_quantize_nhwc`. Note it is NOT `Q_level`, which that kernel already has for a different purpose: `Q_level/absmax` is the scale it publishes for a later step, `code_ceiling` is where this step's codes saturate |
+| `csrc/pybind.cpp` | a second overload per entry point rather than `py::arg` defaults. pybind11 does not inherit C++ default arguments, this file annotates no argument names anywhere, and ~20 call sites across `integration/`, `analysis_*/` and 8 archived `docs/*/scripts` pass the short form. Short form registered first, so those are untouched |
+| `integration/kernels/int8_optimized.py` | new `_delta_code_ceiling`: `act_q` in dynamic mode, `-1` in static mode. Static keeps the 127 ceiling deliberately -- there the scale is the calibrated Q_b/range rather than this call's absmax, and the 127 ceiling is what lets a delta above the calibrated range keep resolution instead of saturating. That behaviour is load-bearing for the published baseline comparison (it is the asymmetry in `MODIFF_ACT_Q`'s comment, and it favours the baseline arm), so changing it belongs to its own measurement |
+| `integration/kernels/int8_optimized.py` | `_delta_gn_dynamic_args` returns the ceiling as an 8th element; the three MoDiff `step1_static_quantize_fprop[_silu]` call sites pass it. The 4th call site (`forward_from_int8`, a zeroed a_hat and the static grid) is the baseline quantize path and deliberately keeps the literal |
+| `docs/delta_clip_2026-08-06/scripts/verify_ceiling.py` | the kernel-level test: short overload == `-1`, `127` == the literal at the A8 scale, and `Q_b` saturates where the literal does not. Both entry points, 6 checks each |
+
+Not migrated, and deliberately so: the int4 kernels (`7.0f` literals) and the updown resize path. At
+W4A4 the ceiling is 7 and `act_q` is 7, so the literal is already correct at r=1.0; a clip ratio there
+needs the same treatment, and W4A4 is a speed configuration per `docs/act_bits_2026-08-05`, so it can
+wait for a reason to spend the rebuild.
 
 ## Open, in the order I would take them
 
-1. **A real code ceiling in the kernels**, which is what collecting the A4/A3 gain requires.
-   `Q_level` is already a threaded `float`, so this is a sibling `float code_ceiling` (default -1 →
-   keep the literal, so every existing call stays bit-identical) clamped instead of the constant, at
-   7+7 int8 sites and the int4 ones, plus `csrc/modiff_kernels_api.h`, `csrc/pybind.cpp`, and the
-   Python callers passing `act_q`. Rebuild required (~minutes with ninja). Then the A4/A3 sweep
-   becomes a real measurement, with a specific prediction to check it against: r≈0.25 at A4 should
-   cut accumulated conv activation error ~26%, and at A8 the same machinery should reproduce the
-   ~2% null already measured through the existing knob.
-   Temper the expected end-to-end size by the A8 calibration: a 2.6% predicted trajectory gain there
-   showed up as 1-2% of latent relL2, so the conv delta path carries a fraction of the total. A 26%
-   trajectory gain at A4 is worth having but should not be assumed to move W8A4's 0.155 by 26%.
-2. Once the ceiling exists, `MODIFF_ACT_Q` at A4 stops being a pure quality instrument and the
-   `act_bit_sweep.py` A8..A2 table should be re-run: every row below A8 in
-   `docs/act_bits_2026-08-05` was measured with a quantizer that could not saturate, which is
-   generous to both arms but not equally.
-3. The FID items inherited from `docs/act_bits_2026-08-05` -- **note the sample stores were lost**
+1. **Re-run the A8..A2 sweep in `docs/act_bits_2026-08-05`.** Its rows below A8 were measured with a
+   quantizer that exceeded its own bit width on 3 of every 4 steps (K=4), so A4/A3/A2 are all
+   flattered by an unknown amount -- measured here as +3.7..+24% at A4 and +4.6..+14% at A3. The A2
+   row (0.6058) is the least trustworthy of all, since the gap between Q_b and 127 is largest there.
+   The `MODIFF_ACT_Q=127` control row is unaffected.
+2. **A precision-dependent `MODIFF_DELTA_CLIP` default**, which is how the A4/A3 win actually gets
+   collected rather than left on a knob. Measured optima: 1.0 at A8, 0.40 at A4, 0.25 at A3. Wants
+   more than 3 seeds and a look at whether the optimum is batch- or step-count-dependent before it
+   changes shipping behaviour, since one global default would regress W8A8 (0.20 costs 2.0x there).
+3. **FID at W8A4+MoDiff with r=0.40**, now that relL2 there (0.086) is in the same range as the A5/A6
+   rows that were considered free. This is the row where a quality claim would actually land, and
+   relL2 is a poor proxy for perceptual quality at these levels. Note the sample stores were lost
    when this container was reset: `fid/fp16` holds 1965 of its 10k samples and `fid/int8_baseline`,
-   `fid/int8_modiff`, `fid/int4_*` and `fid/real` are empty, so those items now cost an fp16
-   regeneration too. `/workspace/lsun_dl` is still empty, so FID-vs-real still needs the LSUN LMDB.
-4. Per-row / per-token dynamic activation scales, unchanged from the previous list: the foldable
+   `fid/int8_modiff`, `fid/int4_*` and `fid/real` are empty, so this costs an fp16 regeneration too.
+   `/workspace/lsun_dl` is still empty, so FID-vs-real still needs the LSUN LMDB re-downloaded.
+4. **Why the end-to-end gain exceeds the offline prediction** (50-66% measured against 26-33%
+   predicted), when at A8 it was attenuated instead. The hypothesis in that section -- a
+   better-tracked a_hat shrinks the next step's delta, so the clip compounds along the trajectory --
+   is untested, and `accum_probe.py` is teacher-forced on an fp16 trajectory and so cannot see it.
+   A quantized-trajectory capture would.
+5. **The int4 kernels and the updown resize path**, if a clip at W4A4 is ever wanted: same change,
+   same 4 sites plus the resize twin. Not done here because at W4A4 the ceiling and `act_q` are both
+   7, so r=1.0 is already correct, and W4A4 is a speed configuration.
+6. Per-row / per-token dynamic activation scales, unchanged from the previous list: the foldable
    analogue of the paper's channel-wise, and the only granularity improvement with a real datapath
    on this hardware.
