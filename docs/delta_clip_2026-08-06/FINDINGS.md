@@ -242,10 +242,56 @@ r=1.0 rows): per-seed differences of −9.5%, −0.3%, −4.0% at K=1 and −0.4
 That is the floor the A4/A3 clip effects (50-66%, 3/3 seeds, worst seed 15-61%) clear by a wide
 margin, and it is why nothing smaller than a 3/3-seed effect is called real anywhere in this document.
 
+## Re-running A8..A2 with the ceiling: what the flattered rows were worth (`scripts/act_bits_ceiling_diff.py`)
+
+`docs/act_bits_2026-08-05/scripts/act_bit_sweep.py`, unmodified, re-run at both refresh settings
+(`data/act_bit_sweep_ceiling_k{4,1}.json`) and diffed per seed against its own committed pre-ceiling
+output. `MODIFF_DELTA_CLIP` is 1.0 throughout, so this isolates the defect fix from the clip.
+
+**MoDiff arm at K=4 (the shipped default, and the configuration the published table used):**
+
+| bits | was | now | | 3 seeds, old → new |
+|---|---|---|---|---|
+| A8 | 0.0595 | 0.0607 | 1.019x, 1/3 worse | 0.0387→0.0377  0.0958→0.0927  0.0441→0.0517 |
+| A7 | 0.0588 | 0.0597 | 1.015x, 2/3 | 0.0368→0.0372  0.0972→0.0957  0.0425→0.0461 |
+| A6 | 0.0590 | 0.0596 | 1.009x, 2/3 | 0.0276→0.0279  0.0991→0.1007  0.0504→0.0501 |
+| A5 | 0.0768 | 0.0804 | 1.047x, 1/3 | 0.0597→0.0572  0.1036→0.1233  0.0670→0.0605 |
+| A4 | 0.1553 | **0.1825** | 1.175x, **3/3** | 0.1572→0.1912  0.1691→0.2156  0.1397→0.1406 |
+| A3 | 0.3595 | **0.3926** | 1.092x, **3/3** | 0.3923→0.4127  0.3623→0.3923  0.3239→0.3729 |
+| A2 | 0.6058 | **0.6539** | 1.079x, **3/3** | 0.6516→0.6916  0.5800→0.6302  0.5857→0.6399 |
+
+**A4, A3 and A2 were flattered by 8-18%; A5 and above were not.** Only those three move on all three
+seeds; A8-A5 are mixed-sign scatter inside the ~10% per-seed floor. That the effect appears exactly
+where the delta path dominates the total error, and only below A5, is worth noting but is not something
+this data explains — the fraction of codes that outgrow a stale scale does not obviously depend on Q_b.
+
+The reported gain shrinks with it: A4 5.19x → 4.42x, A3 2.59x → 2.37x, A2 1.54x → 1.43x. Every
+qualitative conclusion in that report survives — MoDiff still flat A8→A5, A4 still beats the W8A8
+baseline (0.183 vs 0.256), still helps at A2 — with A4's margin narrower than first quoted.
+
+**Both controls pass, which is what makes the above readable as the fix rather than as drift.**
+
+* *The baseline arm does not move, at any precision or either K*: ratios 0.999-1.011x with per-seed
+  differences in the fourth decimal and no consistent sign. It goes through `scale_quantize_int8` /
+  `dynamic_quantize_int8_fprop`, which this change never touched, and `_delta_code_ceiling` is -1 in
+  static mode. A baseline row moving would have meant the parameter was reaching calls it should not.
+* *The MoDiff arm does not move at K=1*: 0.955-1.005x, 0/3 to 2/3 worse, mixed sign, with A4 reading
+  4.5% *better* (0/3 worse) — noise in the favourable direction. At K=1 every step measures its own
+  absmax, so no code can exceed Q_b and the ceiling is provably a no-op. This is the row that
+  distinguishes "the ceiling bit on reuse steps" from "something else changed".
+
+`docs/act_bits_2026-08-05/FINDINGS.md` has been amended in place with the corrected table, since that
+is the table a reader will use; its original values are kept in a labelled column.
+
+One cross-script note, consistent with the floor discussion above: this sweep puts A4/K=4/r=1.0 at
+0.1825 where `clip_e2e_bits.py` put it at 0.1758, a 3.8% disagreement between two harnesses measuring
+the same configuration with the same code. Well inside the ~20% cross-script caveat, and a reminder to
+compare within one script.
+
 ## Code changes
 
-Measurement scripts (`clip_probe.py`, `clip_e2e.py`, `clip_e2e_paired.py`, `accum_probe.py`) touch
-nothing. The ceiling is a kernel change:
+Measurement scripts (`clip_probe.py`, `clip_e2e.py`, `clip_e2e_paired.py`, `accum_probe.py`,
+`act_bits_ceiling_diff.py`) touch nothing. The ceiling is a kernel change:
 
 | file | change |
 |---|---|
@@ -264,11 +310,9 @@ wait for a reason to spend the rebuild.
 
 ## Open, in the order I would take them
 
-1. **Re-run the A8..A2 sweep in `docs/act_bits_2026-08-05`.** Its rows below A8 were measured with a
-   quantizer that exceeded its own bit width on 3 of every 4 steps (K=4), so A4/A3/A2 are all
-   flattered by an unknown amount -- measured here as +3.7..+24% at A4 and +4.6..+14% at A3. The A2
-   row (0.6058) is the least trustworthy of all, since the gap between Q_b and 127 is largest there.
-   The `MODIFF_ACT_Q=127` control row is unaffected.
+1. ~~Re-run the A8..A2 sweep in `docs/act_bits_2026-08-05`.~~ **Done** — see the section above. A4,
+   A3 and A2 were flattered by 8-18% (0.1553 → 0.1825, 0.3595 → 0.3926, 0.6058 → 0.6539); A5 and
+   above were inside the noise floor; both controls passed. That report's table is amended.
 2. **A precision-dependent `MODIFF_DELTA_CLIP` default**, which is how the A4/A3 win actually gets
    collected rather than left on a knob. Measured optima: 1.0 at A8, 0.40 at A4, 0.25 at A3. Wants
    more than 3 seeds and a look at whether the optimum is batch- or step-count-dependent before it

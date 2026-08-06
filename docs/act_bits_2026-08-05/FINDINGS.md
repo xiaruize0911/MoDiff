@@ -44,34 +44,49 @@ sweep numbers here are all at K=4, so every improvement in them is the warm-up f
 
 ## Result
 
+> **Corrected 2026-08-06.** Q was *not* the code ceiling when this was measured, only the scale: the
+> kernels clamped codes at a literal 127 regardless of b, so on the 3 of every 4 steps that reuse a
+> stale scale (`MODIFF_DELTA_REFRESH=4`) an "A4" layer could emit a code of 100. The MoDiff column
+> below is therefore the RE-MEASURED one, with the real ceiling in place
+> (`docs/delta_clip_2026-08-06`); the original values are kept in the last column. A4, A3 and A2 were
+> flattered by 8–18%, A5 and above were inside the noise floor, and the baseline arm did not move at
+> all (it never went through those kernels). Every qualitative conclusion below survives; the gains
+> shrink. Full per-seed diff and the controls: `docs/delta_clip_2026-08-06/FINDINGS.md`.
+
 Q is the symmetric code ceiling 2^(b−1)−1, applied to **every** conv activation site including the t=T
 warm-up — the paper's protocol, now that the warm-up converges. `MODIFF_DELTA_REFRESH=4`
 throughout. Baseline is MoDiff off with the
 calibrated per-tensor grid rescaled to b bits; it is unaffected by either fix and reproduces its
 pre-fix values to ≤0.0015, which is the cross-run control.
 
-| A bits | levels | baseline (PTQ) | **MoDiff** | gain | MoDiff before the fix |
-|---|---:|---:|---:|---:|---:|
-| A8 | 255 | 0.2563 ± 0.017 | **0.0595 ± 0.032** | 4.30× | 0.0627 |
-| A7 | 127 | 0.2574 ± 0.049 | **0.0588 ± 0.033** | 4.38× | 0.0669 |
-| A6 | 63 | 0.3170 ± 0.042 | **0.0590 ± 0.037** | 5.37× | 0.0795 |
-| A5 | 31 | 0.7361 ± 0.020 | **0.0768 ± 0.024** | 9.59× | 0.1563 |
-| A4 | 15 | 0.8066 ± 0.038 | **0.1553 ± 0.015** | 5.19× | 0.3367 |
-| A3 | 7 | 0.9317 ± 0.033 | **0.3595 ± 0.034** | 2.59× | 0.8206 |
-| A2 | 3 | 0.9308 ± 0.057 | **0.6058 ± 0.040** | 1.54× | 1.3308 |
+| A bits | levels | baseline (PTQ) | **MoDiff** | gain | MoDiff pre-ceiling (was quoted) | MoDiff before the warm-up fix |
+|---|---:|---:|---:|---:|---:|---:|
+| A8 | 255 | 0.2564 ± 0.017 | **0.0607 ± 0.029** | 4.22× | 0.0595 | 0.0627 |
+| A7 | 127 | 0.2577 ± 0.049 | **0.0597 ± 0.032** | 4.32× | 0.0588 | 0.0669 |
+| A6 | 63 | 0.3184 ± 0.043 | **0.0596 ± 0.037** | 5.34× | 0.0590 | 0.0795 |
+| A5 | 31 | 0.7356 ± 0.020 | **0.0804 ± 0.037** | 9.15× | 0.0768 | 0.1563 |
+| A4 | 15 | 0.8071 ± 0.038 | **0.1825 ± 0.038** | 4.42× | 0.1553 | 0.3367 |
+| A3 | 7 | 0.9313 ± 0.034 | **0.3926 ± 0.020** | 2.37× | 0.3595 | 0.8206 |
+| A2 | 3 | 0.9366 ± 0.061 | **0.6539 ± 0.033** | 1.43× | 0.6058 | 1.3308 |
+
+A clip ratio recovers most of what A4 and A3 lose here, and it could not be applied until the ceiling
+existed: at `MODIFF_DELTA_CLIP=0.40` A4 reaches 0.0861 and at 0.25 A3 reaches 0.1548, i.e. each
+precision lands about where one bit higher did without a clip. Those rows are not in this table because
+they are not this table's configuration (r=1.0 throughout) — see `docs/delta_clip_2026-08-06`.
 
 Read against the relL2 → FID anchors from `docs/fid_2026-08-05` (0.039 → FID 7.80 = parity with fp16;
 0.238 → 16.4; 0.456 → 200; 0.784 → 278):
 
-* **MoDiff is flat from A8 to A6** — 0.0595, 0.0588, 0.0590 — and still nearly flat at A5 (0.0768).
+* **MoDiff is flat from A8 to A6** — 0.0607, 0.0597, 0.0596 — and still nearly flat at A5 (0.0804).
   Three to four bits of activation precision removed for nothing measurable.
-* **A4 costs something** (0.155, between the FID-7.8 and FID-16.4 anchors) and **A3 is where it breaks**
-  (0.360, approaching the 0.456 → FID 200 anchor).
+* **A4 costs something** (0.183, between the FID-7.8 and FID-16.4 anchors) and **A3 is where it breaks**
+  (0.393, approaching the 0.456 → FID 200 anchor).
 * **The baseline collapses two to three bits earlier**: FID ≈ 16 already at A8 (0.256), degrading at A6
   and gone by A5 (0.736, next to the 0.784 → FID 278 anchor).
-* **MoDiff at A4 (0.155) beats the W8A8 baseline (0.256)** — the paper's claim in substance, 4-bit
-  activations with modulation beating 8-bit PTQ without it, reproduced at per-tensor granularity.
-* **MoDiff helps at every precision, including A2** (1.54×). An earlier revision of this document
+* **MoDiff at A4 (0.183) beats the W8A8 baseline (0.256)** — the paper's claim in substance, 4-bit
+  activations with modulation beating 8-bit PTQ without it, reproduced at per-tensor granularity. The
+  margin is narrower than the 0.155 first quoted, and a clip ratio widens it again (0.086 at r=0.40).
+* **MoDiff helps at every precision, including A2** (1.43×). An earlier revision of this document
   reported MoDiff being *worse* than the baseline at A2 and explained it via Theorem 4.4's error bound
   failing at three levels. That was entirely the broken warm-up — a 2-bit anchor with a no-op warm-up
   is noise, and the feedback term propagated it. The explanation is withdrawn.
