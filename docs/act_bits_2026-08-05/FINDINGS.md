@@ -9,80 +9,94 @@ every earlier quality number confounds weight error with activation error — an
 the second. W4A4+MoDiff at FID 200 (`docs/fid_2026-08-05`) is the visible consequence: int4 *weights*
 dominate there, so that row cannot test the paper's claim either way.
 
-Data: `data/act_bit_sweep.json`, `data/act_bit_sweep_paper_anchor.json`, `data/verify_vs_old_w8a4.json`.
+Data: `data/act_bit_sweep.json` (post-fix, the headline table), `data/act_bit_sweep_prewarmupfix.json`
+and `data/act_bit_sweep_paper_anchor_prewarmupfix.json` (kept for the before/after),
+`data/verify_vs_old_w8a4.json`.
 
-## The t=T anchor is a protocol choice, and it dominates everything below A6
+## The t=T warm-up was broken, and that was the whole story below A6
 
-MoDiff quantizes a difference against â, and â is seeded by the t=T warm-up. So "what precision does
-t=T run at" is a free parameter, and it turns out to be the single largest one at low activation
-bits. Both readings are measured here:
+MoDiff quantizes a difference against â, and â is seeded by the t=T warm-up. The paper's warm-up
+(Appendix D.5) is *"repeatedly inputting a_T. This process converges to the full-precision activation
+due to the contraction of the quantization error ... approximately 4 to 5 steps are sufficient to
+reduce the quantization error to a negligible level on CIFAR-10 using 4-bit precision."*
 
-| | t=T warm-up | what it answers |
-|---|---|---|
-| **paper** | left on the A8 grid | the published method. Appendix B: *"Warm-up: We apply warm-up at the first step, where we use full activation for computation."* Their anchor is full precision; the A8 static grid is this implementation's nearest equivalent |
-| **strict** | at A_b like everything else | what a pure b-bit activation datapath would cost, with no high-precision step anywhere |
+The contraction needs each round to quantize the shrunken residual on a grid matched to it. This tree
+ran `warmup_steps = 3` but passed the **static activation grid** to every round on the calibrated path
+that ships. After round 1 the residual is under half an LSB of that grid, so round 2 rounds it to zero:
+**the loop was a no-op.** Measured on real activations, |â − x| / |x| per round
+(`scripts/probe_warmup.py`):
+
+| precision | scheme | r1 | r2 | r3 | r4 | r5 |
+|---|---|---:|---:|---:|---:|---:|
+| A8 | static (was shipped) | 0.0197 | 0.0197 | 0.0197 | 0.0197 | 0.0197 |
+| A8 | dynamic (the paper's) | 0.0197 | 0.00008 | 0.00000 | 0.00000 | 0.00000 |
+| **A4** | **static (was shipped)** | **0.4006** | **0.4006** | **0.4006** | **0.4006** | **0.4006** |
+| **A4** | dynamic (the paper's) | 0.4006 | 0.0263 | 0.0018 | 0.00013 | **0.00001** |
+
+So at A4 the anchor every later step is measured against carried 40% relative error, where the paper's
+carries 1e-5. Fixed in both `int8_optimized.py` and `int4_optimized.py`: the calibrated path now uses a
+per-round dynamic scale, and `warmup_steps` defaults to 5 (`MODIFF_WARMUP_STEPS`). Cost is two extra
+quantize+conv per layer on one step in fifty.
+
+`MODIFF_DELTA_REFRESH` also went 4 → 1 in the same change. K>1 reuses a scale up to K steps old; the
+paper's dynamic quantizer has no such approximation, the sweep that blessed K=4 was run at A8 only, and
+a stale scale clips — which is what Theorem 4.3 assumes away and what the feedback term propagates.
+Costs about 8% of ms/step. **The two changes are not separated in the numbers below.**
 
 ## Result
 
-Q is the symmetric code ceiling 2^(b−1)−1. The baseline column is MoDiff off with the calibrated
-per-tensor grid rescaled to b bits — identical configuration in both runs, and it reproduced to
-≤0.0002 across them, which is the pairing's cross-run control.
+Q is the symmetric code ceiling 2^(b−1)−1, applied to **every** conv activation site including the t=T
+warm-up — the paper's protocol, now that the warm-up converges. Baseline is MoDiff off with the
+calibrated per-tensor grid rescaled to b bits; it is unaffected by either fix and reproduces its
+pre-fix values to ≤0.0015, which is the cross-run control.
 
-| A bits | levels | baseline (PTQ) | **MoDiff, paper anchor** | MoDiff, strict | gain (paper) |
+| A bits | levels | baseline (PTQ) | **MoDiff** | gain | MoDiff before the fix |
 |---|---:|---:|---:|---:|---:|
-| A8 | 255 | 0.2564 ± 0.017 | **0.0628 ± 0.029** | 0.0627 ± 0.028 | 4.09× |
-| A7 | 127 | 0.2578 ± 0.049 | **0.0596 ± 0.030** | 0.0669 ± 0.028 | 4.33× |
-| A6 | 63 | 0.3185 ± 0.043 | **0.0617 ± 0.035** | 0.0795 ± 0.025 | 5.16× |
-| A5 | 31 | 0.7356 ± 0.020 | **0.0730 ± 0.034** | 0.1563 ± 0.018 | 10.07× |
-| A4 | 15 | 0.8071 ± 0.038 | **0.1529 ± 0.022** | 0.3367 ± 0.066 | 5.28× |
-| A3 | 7 | 0.9313 ± 0.034 | 0.3791 ± 0.026 | 0.8206 ± 0.021 | 2.46× |
-| A2 | 3 | 0.9366 ± 0.061 | 0.6319 ± 0.031 | 1.3308 ± 0.077 | 1.48× |
+| A8 | 255 | 0.2563 ± 0.017 | **0.0595 ± 0.032** | 4.30× | 0.0627 |
+| A7 | 127 | 0.2574 ± 0.049 | **0.0588 ± 0.033** | 4.38× | 0.0669 |
+| A6 | 63 | 0.3170 ± 0.042 | **0.0590 ± 0.037** | 5.37× | 0.0795 |
+| A5 | 31 | 0.7361 ± 0.020 | **0.0768 ± 0.024** | 9.59× | 0.1563 |
+| A4 | 15 | 0.8066 ± 0.038 | **0.1553 ± 0.015** | 5.19× | 0.3367 |
+| A3 | 7 | 0.9317 ± 0.033 | **0.3595 ± 0.034** | 2.59× | 0.8206 |
+| A2 | 3 | 0.9308 ± 0.057 | **0.6058 ± 0.040** | 1.54× | 1.3308 |
 
 Read against the relL2 → FID anchors from `docs/fid_2026-08-05` (0.039 → FID 7.80 = parity with fp16;
 0.238 → 16.4; 0.456 → 200; 0.784 → 278):
 
-* **Under the paper's protocol MoDiff is flat from A8 to A5** — 0.063, 0.060, 0.062, 0.073, i.e. four
-  bits of activation precision removed for nothing measurable, all inside the seed spread.
-* **A4 is where it starts to cost** (0.153, between the FID-7.8 and FID-16.4 anchors) and **A3 is
-  where it breaks** (0.379, approaching the 0.456 → FID 200 anchor).
-* **The baseline collapses two to three bits earlier**: already at FID ≈ 16 at A8 (0.256), degrading
-  at A6 (0.318) and gone by A5 (0.736, next to the 0.784 → FID 278 anchor).
-* **MoDiff at A4 (0.153) beats the W8A8 baseline (0.256).** This is the paper's claim in substance —
-  4-bit activations with modulation beating 8-bit PTQ without it — and it reproduces here at
-  per-tensor granularity.
-* **The anchor is worth 2.2× at A4 and 2.1× at A2**, and it is what decides whether MoDiff helps at
-  all in the extreme: with a 2-bit anchor MoDiff is *worse* than the baseline (1.33 vs 0.94), with an
-  8-bit anchor it is still 1.48× better. A 2-bit â is not a reference the feedback term can correct
-  against; it is noise that the feedback then propagates.
+* **MoDiff is flat from A8 to A6** — 0.0595, 0.0588, 0.0590 — and still nearly flat at A5 (0.0768).
+  Three to four bits of activation precision removed for nothing measurable.
+* **A4 costs something** (0.155, between the FID-7.8 and FID-16.4 anchors) and **A3 is where it breaks**
+  (0.360, approaching the 0.456 → FID 200 anchor).
+* **The baseline collapses two to three bits earlier**: FID ≈ 16 already at A8 (0.256), degrading at A6
+  and gone by A5 (0.736, next to the 0.784 → FID 278 anchor).
+* **MoDiff at A4 (0.155) beats the W8A8 baseline (0.256)** — the paper's claim in substance, 4-bit
+  activations with modulation beating 8-bit PTQ without it, reproduced at per-tensor granularity.
+* **MoDiff helps at every precision, including A2** (1.54×). An earlier revision of this document
+  reported MoDiff being *worse* than the baseline at A2 and explained it via Theorem 4.4's error bound
+  failing at three levels. That was entirely the broken warm-up — a 2-bit anchor with a no-op warm-up
+  is noise, and the feedback term propagated it. The explanation is withdrawn.
 
-Keeping t=T high-precision is cheap and is not a thumb on the scale: it is 1 step in 50, it is the
-grid the W8A8 model already carries, and the paper specifies it. Anyone quoting an A_b number from
-this project should say which anchor it used.
-
-ms/step is flat across every row (baseline 11.8–16.8, MoDiff 17.2–22.8, fp16 18.1–21.1) — the control
+ms/step is flat across every row (baseline 12.6–14.8, MoDiff 17.6–20.3, fp16 16.7) — the control
 confirming this is a quality instrument only. A low A_b costs nothing and saves nothing here:
 activations keep their int8 container and the GEMM stays W8A8. A real 4-bit activation datapath needs
 int4 tensor cores, which take both operands at 4 bits — no mainstream ISA has a mixed s8×s4 MMA, so
 W8A4 is not a speed configuration on any hardware, only a quality one.
 
-## What this corrects in docs/fid_2026-08-05/FINDINGS.md
+## What this means for the earlier numbers, and for docs/fid_2026-08-05
 
-That report's W8A4+MoDiff row (relL2 0.127) was **mislabelled but not wrong in its conclusion**. It
-was produced by abusing `MODIFF_DELTA_CLIP` (Q_level = 127/ratio), which moves only the delta
-quantizer and leaves the static grid at A8 — i.e. it measured the *paper-anchor* configuration, not
-"A4 everywhere". Reproduced in `data/verify_vs_old_w8a4.json`:
+Three readings of "W8A4+MoDiff" have now been measured, and they differ only in the anchor:
 
 | configuration | relL2 |
 |---|---:|
-| old: `DELTA_CLIP=127/7`, anchor at A8 | 0.1626 ± 0.033 (0.127 was its bottom seed; single-seed) |
-| this sweep, paper anchor, A4 | 0.1529 ± 0.022 |
-| strict: `ACT_Q=7`, every conv activation site at A4 | 0.3367–0.3581 |
+| broken warm-up, A4 everywhere | 0.337–0.358 |
+| broken warm-up, t=T left on the A8 grid (the old FID report's row) | 0.153–0.163 |
+| **fixed warm-up, A4 everywhere — the paper's protocol** | **0.1553 ± 0.015** |
 
-The two arms differ in exactly one thing — the t=T grid — so the 2.2× is attributable with no
-confounder. And since the paper's own protocol keeps the warm-up at full precision, **the old row's
-claim that W8A4+MoDiff beats the W8A8 baseline stands**; it just needed the anchor stated. An earlier
-version of this document withdrew that claim, which was an over-correction, and the note in the FID
-report has been revised accordingly.
+The old FID report's 0.127 row (single seed, bottom of a 0.130–0.196 spread) landed close to the right
+answer for the wrong reason: leaving t=T on the A8 grid happened to approximate what a converged
+warm-up would have given. Its conclusion — **W8A4+MoDiff beats the W8A8 baseline** — holds under the
+correct protocol. The "paper anchor vs strict" framing that an earlier revision of this document
+introduced was a workaround for the bug and is gone; there is one protocol, the paper's.
 
 ## Against the paper
 
@@ -275,6 +289,9 @@ cannot clip by construction. Both effects understate MoDiff, so the gains above 
 |---|---|
 | `integration/kernels/int8_optimized.py` | new `MODIFF_ACT_Q` (default 127 = shipped A8, bit-identical). Applied at the delta quantizer's `Q_level` and, as a Q_b/127 rescale of the calibrated grid, in `set_static_scale` / `end_calibration` — so the baseline path and MoDiff's t=T warm-up move together. Load-time only |
 | `integration/kernels/int8_optimized.py` | `_forward_modulated`'s `step1_quantize_fprop` passed a literal `127.0` while the GN-fused paths honoured the knobs, so `MODIFF_DELTA_CLIP` was silently partial — 8 of 70 layers kept an 8-bit delta grid at any setting |
+| `int8_optimized.py`, `int4_optimized.py` | **the warm-up fix**: the calibrated t=T path passed the static activation grid to every residual round, making the loop a no-op. Now a per-round dynamic scale, and `warmup_steps` 3 → 5 (`MODIFF_WARMUP_STEPS`), per the paper's Appendix D.5 |
+| `int8_optimized.py`, `int4_optimized.py` | `MODIFF_DELTA_REFRESH` default 4 → 1: the paper's dynamic quantizer recomputes the scale every step, and K>1 was only ever validated at A8 |
+| `scripts/probe_warmup.py` | the per-round contraction measurement that found the no-op |
 | `scripts/act_bit_sweep.py` | the sweep. `SWEEP_ANCHOR=strict|paper`, `SWEEP_BITS`, `SWEEP_SEEDS` |
 | `scripts/verify_vs_old_w8a4.py` | the anchor attribution and forward-path instrumentation (`forward_gn_fused_modiff` 62 layers, `_forward_modulated` 8, `_forward_first_step` 70) |
 
@@ -284,13 +301,13 @@ bit-identical, and the baseline arm reproduced across two independent processes 
 
 ## Open, in the order I would take them
 
-1. **Sweep `MODIFF_DELTA_CLIP` at A4 and A3.** Zero code, ~20 min, and it is what separates our delta
-   quantizer from the paper's best A4 row. If an MSE-ish clip ratio moves A4 from 0.153 toward the
+1. **Separate the two fixes.** The post-fix table changed the warm-up AND `MODIFF_DELTA_REFRESH`
+   (4 → 1) at once. Re-running at `MODIFF_DELTA_REFRESH=4` attributes them and decides whether the
+   ~8% of ms/step that refresh=1 costs is buying anything. ~40 min, no code.
+2. **Sweep `MODIFF_DELTA_CLIP` at A4 and A3.** Zero code, ~20 min, and it is what separates our delta
+   quantizer from the paper's best A4 row. If an MSE-ish clip ratio moves A4 from 0.155 toward the
    A5/A6 plateau, that is the cheapest quality win available.
-2. **Make the anchor precision its own knob.** Today `MODIFF_ACT_Q` moves the delta grid and the t=T
-   grid together; the measurements above show they should be settable independently, and that the
-   shipped policy should keep t=T at A8.
-3. **FID for W8A5+MoDiff** (paper anchor, relL2 0.073) — the lowest activation precision that looks
+3. **FID for W8A5+MoDiff** (relL2 0.077) — the lowest activation precision that looks
    free here, and the row whose FID is not guessable from the anchors. `fid/fp16` still holds its 10k
    samples so FID-vs-fp16 is one generation; FID-vs-real also needs the LSUN LMDB re-downloaded
    (`/workspace/lsun_dl` is empty) and `fid/real` re-exported.

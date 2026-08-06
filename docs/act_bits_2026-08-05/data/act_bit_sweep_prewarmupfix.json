@@ -1,0 +1,55 @@
+{
+  "batch": 2,
+  "steps": 10,
+  "seeds": [
+    1234
+  ],
+  "anchor": "strict",
+  "fp16_ms_per_step": 21.184268101933412,
+  "rows": [
+    {
+      "act_bits": 8,
+      "q_level": 127.0,
+      "levels": 255,
+      "baseline": {
+        "mean": 0.18883410096168518,
+        "stdev": 0.0,
+        "per_seed": {
+          "1234": 0.18883410096168518
+        },
+        "ms_per_step": 13.485408999258652
+      },
+      "modiff": {
+        "mean": 0.0483868345618248,
+        "stdev": 0.0,
+        "per_seed": {
+          "1234": 0.0483868345618248
+        },
+        "ms_per_step": 29.693946600309573
+      },
+      "gain_baseline_over_modiff": 3.90259256824102
+    },
+    {
+      "act_bits": 4,
+      "q_level": 7.0,
+      "levels": 15,
+      "baseline": {
+        "mean": 0.902536153793335,
+        "stdev": 0.0,
+        "per_seed": {
+          "1234": 0.902536153793335
+        },
+        "ms_per_step": 14.46796620148234
+      },
+      "modiff": {
+        "mean": 0.209151491522789,
+        "stdev": 0.0,
+        "per_seed": {
+          "1234": 0.209151491522789
+        },
+        "ms_per_step": 24.87959059944842
+      },
+      "gain_baseline_over_modiff": 4.315226954501519
+    }
+  ]
+}

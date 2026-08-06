@@ -187,7 +187,10 @@ class OptimizedInt4Conv2d(nn.Module):
         self.a_hat_cache: Optional[torch.Tensor] = None
         self.o_hat_cache: Optional[torch.Tensor] = None
         self.step_count = 0
-        self.warmup_steps = 3  # Reduced from 5: 3 steps sufficient for convergence
+        #: 5 rounds, per the paper's Appendix D.5 warm-up. See OptimizedInt8Conv2d.warmup_steps for
+        #: the measured contraction; at 4 bits it is 0.4006 -> 0.00001 over 5 rounds, and 0 over any
+        #: number of rounds with the static grid this used to pass.
+        self.warmup_steps = max(1, int(os.environ.get("MODIFF_WARMUP_STEPS", "5")))
 
         # --- Calibration state ---
         self.calibrating = False
@@ -248,7 +251,10 @@ class OptimizedInt4Conv2d(nn.Module):
         self.delta_clip_ratio = float(os.environ.get("MODIFF_DELTA_CLIP", "1.0"))
         #: See OptimizedInt8Conv2d._delta_should_refresh -- recompute the dynamic scale every Nth
         #: modulated step, reuse it in between. 1 = exact.
-        self.delta_refresh = max(1, int(os.environ.get("MODIFF_DELTA_REFRESH", "4")))
+        #: 1 = every step, matching the paper's dynamic quantizer. See
+        #: OptimizedInt8Conv2d.delta_refresh -- K>1 is this project's speed approximation, validated
+        #: at A8 only, and stale scales clip hardest exactly where int4 lives.
+        self.delta_refresh = max(1, int(os.environ.get("MODIFF_DELTA_REFRESH", "1")))
         #: Free absmax reporting, INT4 twin. DEFAULT OFF -- see OptimizedInt8Conv2d.delta_report for
         #: the full reasoning. At W4A4 it does not merely degrade, it DIVERGES: latent relL2 0.4746
         #: (off) -> 11.6553 (on), measured 2026-08-04. With only 15 levels, the extra staleness
@@ -1205,7 +1211,10 @@ class OptimizedInt4Conv2d(nn.Module):
 
         for _ in range(self.warmup_steps - 1):
             residual = x - a_hat
-            r_scale = input_scale if self.is_calibrated else self._compute_activation_scale(residual, is_residual=True)
+            # Dynamic per-round scale. Passing the static activation grid here (what this did) makes
+            # the warm-up loop a no-op -- see OptimizedInt8Conv2d._forward_first_step.
+            r_scale = (self._compute_scale_tensor(residual) if self.is_calibrated
+                       else self._compute_activation_scale(residual, is_residual=True))
             conv_r  = self._int4_conv(residual, r_scale, with_bias=False)
             r_dq    = self._dequantize_activation(residual, r_scale)
             a_hat   = a_hat + r_dq

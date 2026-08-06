@@ -69,18 +69,17 @@ Same activation precision, 3.5× different outcome: the gap is entirely the weig
 drop to 4-bit activations and still beat 8-bit PTQ. So `277.96 → 200.14` is not a failure to
 reproduce the paper; it is a strictly harder configuration the paper never claimed.
 
-> **CLARIFICATION, 2026-08-05 (docs/act_bits_2026-08-05).** The table above is A4 *deltas* with an
-> A8 *anchor*: `MODIFF_DELTA_CLIP` moves only the delta quantizer, so the static grid that quantizes
-> t=T stayed at 8 bits. That is worth 2.2× — setting every conv activation site to A4
-> (`MODIFF_ACT_Q=7`) gives 0.337–0.358 rather than 0.153–0.163 — so the rows should be labelled
-> "A4 deltas, A8 anchor", and the 0.127 itself is a single seed at the bottom of a 0.130–0.196 spread.
+> **NOTE, 2026-08-06 (docs/act_bits_2026-08-05).** The rows above were produced by abusing
+> `MODIFF_DELTA_CLIP`, which moves only the delta quantizer and leaves the static grid that quantizes
+> t=T at A8. That mattered for a reason nobody had spotted: the t=T warm-up loop was a **no-op** on the
+> calibrated path — it passed the static grid to every residual round, so round 2 rounded to zero —
+> leaving the A4 anchor with 40% relative error where the paper's converged warm-up carries 1e-5.
+> Leaving t=T on the A8 grid accidentally approximated a working warm-up.
 >
-> **The conclusion stands, though.** The paper specifies exactly this anchor (Appendix B: *"Warm-up:
-> we apply warm-up at the first step, where we use full activation for computation"*), so the
-> anchored reading is the paper-comparable one, and at A4 it is 0.153 ± 0.022 against the W8A8
-> baseline's 0.256 — MoDiff at 4-bit activations does beat 8-bit PTQ, at per-tensor granularity. An
-> earlier revision of this note withdrew that claim; that was an over-correction. The full sweep
-> (A8→A2, both anchors) is in docs/act_bits_2026-08-05/FINDINGS.md.
+> With the warm-up fixed, W8A4+MoDiff with **every** conv activation site at A4 — the paper's protocol
+> — measures **0.1553 ± 0.015**, so this table's conclusion stands: it beats the W8A8 baseline (0.256).
+> The 0.127 itself was a single seed at the bottom of a 0.130–0.196 spread. Full sweep, before and
+> after the fix, in docs/act_bits_2026-08-05/FINDINGS.md.
 
 **3. A real defect in the int4 weight quantizer, now fixed.** It used one symmetric absmax scale per
 output channel over the whole flattened kernel — 15 levels shared by up to ~1700 weights, with a

@@ -101,7 +101,16 @@ class OptimizedInt8Conv2d(nn.Module):
         self.a_hat_cache: Optional[torch.Tensor] = None
         self.o_hat_cache: Optional[torch.Tensor] = None
         self.step_count = 0
-        self.warmup_steps = 3  # Reduced from 5: 3 steps sufficient for convergence
+        #: t=T warm-up rounds. The paper's warm-up is "repeatedly inputting a_T" until the
+        #: quantization error contracts away (Appendix D.5), which needs 4-5 rounds at 4 bits. The
+        #: previous value of 3 came with the comment "3 steps sufficient for convergence" -- true at
+        #: int8, where one round already lands within 2% -- but the loop was ALSO a no-op (see
+        #: _forward_first_step), so the count never mattered. Measured contraction of |a_hat - x| /
+        #: |x| on real activations, per round (docs/act_bits_2026-08-05/scripts/probe_warmup.py):
+        #:     A8   0.0197 -> 0.00008 -> 0.00000
+        #:     A4   0.4006 -> 0.0263  -> 0.0018 -> 0.00013 -> 0.00001
+        #: 5 matches the paper and costs 2 extra quantize+conv per layer on ONE step in 50.
+        self.warmup_steps = max(1, int(os.environ.get("MODIFF_WARMUP_STEPS", "5")))
 
         # --- Calibration state ---
         self.calibrating = False
@@ -216,7 +225,13 @@ class OptimizedInt8Conv2d(nn.Module):
         #: This is why the delta-quantize kernels were NOT modified to report the absmax they
         #: already compute (which would give a one-step-stale scale for free): K=4 captures most of
         #: the same win with no kernel changes at all.
-        self.delta_refresh = max(1, int(os.environ.get("MODIFF_DELTA_REFRESH", "4")))
+        #: DEFAULT 1 = recompute every step, which is what the paper's dynamic quantizer specifies;
+        #: K>1 is a speed approximation this project added and the paper has no counterpart for. The
+        #: staleness sweep that blessed K=4 was run at A8 only, and a stale scale clips -- which is
+        #: exactly what Theorem 4.3 assumes away, and what the error-feedback term then propagates.
+        #: K=4 is still available and costs about 8% of ms/step to give up; measure before shipping it
+        #: at any activation precision below 8 bits.
+        self.delta_refresh = max(1, int(os.environ.get("MODIFF_DELTA_REFRESH", "1")))
         #: Free absmax reporting: let the delta-quantize kernel record the range it already
         #: computes and publish the NEXT step's scale in its own retirement election, instead of
         #: running a separate reduction pass (gn_report_delta_absmax in group_norm_silu.cu).
@@ -1349,7 +1364,14 @@ class OptimizedInt8Conv2d(nn.Module):
         for _ in range(self.warmup_steps - 1):
             residual = x - a_hat
             if self.is_calibrated:
-                r_scale = input_scale
+                # A DYNAMIC scale, not the static activation grid. The warm-up converges only if the
+                # grid shrinks with the residual: after round 1 the residual is under half an LSB of
+                # the full-activation grid, so quantizing it on that same grid rounds to zero and the
+                # loop does nothing. Measured on real activations (probe_warmup.py): with the static
+                # scale |a_hat - x|/|x| is bit-identical across all 5 rounds -- 0.0197 at A8, 0.4006
+                # at A4 -- while a per-round absmax contracts to 0.00008 and 0.00001 respectively.
+                # This is the paper's Appendix D.5 warm-up; the static version was not.
+                r_scale = self._compute_scale_tensor(residual)
             elif self.calibrating:
                 r_scale = self._compute_activation_scale(residual, is_residual=True)
             else:
