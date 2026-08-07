@@ -724,10 +724,19 @@ class BenchmarkRunner:
                 # reason for this flag no longer holds and it is now measurable rather than
                 # assumed: MODIFF_LINEAR=1 turns it on.
                 #
-                # It stays OFF by default for a different and still-valid reason: the linear
-                # MoDiff path has no GEMM o_hat-accumulate epilogue, so it costs three extra
-                # full-tensor PyTorch launches per linear per step. That is a speed argument
-                # (Stage 3.3 fixes it), not a correctness one -- do not restore the old comment.
+                # STALE AS WRITTEN, corrected 2026-08-06: "has no GEMM o_hat-accumulate epilogue
+                # (Stage 3.3 fixes it)". Stage 3.3 LANDED on 2026-08-04 -- gemm_w{8a8,4a4}_awq_o_hat
+                # folds the accumulate into the AWQ GEMM epilogue via a nullable o_hat pointer, and
+                # it halved the batch-8 cost (+10.9 -> +5.0 ms/step). The epilogue is in the tree and
+                # is what runs today, so the remaining cost is NOT a missing fusion.
+                #
+                # What remains is bandwidth, and no epilogue removes it: Eqs 9-10 require a_hat and
+                # o_hat state, and on these layers M = batch x tokens, so at batch 128 / T=1024 one
+                # qkv layer's a_hat is 50 MB and its o_hat is 151 MB. Stage 3.3's accounting put the
+                # extra traffic at 10.21 GB/step (~14.6 ms at 700 GB/s) plus 42 -> 126 launches, and
+                # measured +25.5 ms/step at batch 128. Its verdict was "MODIFF_LINEAR stays 0: +35%
+                # wall clock for a 4-6% accuracy gain is not a trade worth taking -- a finding about
+                # MoDiff, not about the implementation". See docs/modiff_correctness_2026-08-03.
                 # Gate on the MODE, not just the flag: MODIFF_LINEAR=1 previously turned Linear
                 # MoDiff on in int8_baseline / int4_baseline too, which made the "baseline" rows of
                 # an A/B carry MoDiff and moved them by +25 ms/step. A baseline must stay a baseline.

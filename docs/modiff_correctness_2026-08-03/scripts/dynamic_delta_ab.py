@@ -59,9 +59,24 @@ def build(mode, calib, delta_mode):
 
 
 def latent(runner, model, sampler):
+    # Reset EVERY MoDiff-bearing family, not just the convs. This used to reset r8/r4 only, which
+    # was sufficient while the conv path was the only one carrying temporal state. It stopped being
+    # sufficient when MODIFF_LINEAR defaulted to 1 (2026-08-06): the 42 attention qkv/proj then hold
+    # an a_hat/o_hat cache too, and a leftover cache does not degrade gracefully -- measured, a run
+    # after an unreset run returns an ALL-NaN latent. Every protocol built on this harness discards
+    # run 1 as warm-up and measures run 2, so a partial reset here corrupts exactly the run that
+    # gets recorded. Each entry is a no-op when its family is absent or not in MoDiff mode.
     from integration.kernels.int4_optimized import reset_modiff_state as r4
     from integration.kernels.int8_optimized import reset_modiff_state as r8
-    for r in (r8, r4):
+    resets = [r8, r4]
+    for mod, name in (("integration.kernels.int8_linear", "reset_modiff_state_linear"),
+                      ("integration.kernels.wxax_linear", "reset_wxax_modiff"),
+                      ("integration.kernels.modiff_attention", "reset_attention_modiff")):
+        try:
+            resets.append(getattr(__import__(mod, fromlist=[name]), name))
+        except Exception:
+            pass
+    for r in resets:
         try:
             r(model.model.diffusion_model)
         except Exception:

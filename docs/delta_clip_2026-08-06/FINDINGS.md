@@ -394,6 +394,85 @@ protocol in this directory discards run 1 as warm-up, that is what a sweep would
 `_reset_wxax_modiff_safe` is now called at all 5 per-sample reset sites. Verified with no env vars
 set and only the code's own reset: 42/42 `modiff=True`, three consecutive runs finite.
 
+## The paper's own configuration, swept over A, and what strict alignment costs
+
+The paper's prescription, as this repo characterises it in five parts: W8 weights with low-bit
+activations (the claim is W8A4/W8A3); a dynamic delta quantizer recomputed every step (Thm 4.3 assumes
+dynamic explicitly "to avoid clipping error"); `A(.)` is any linear operator, so the attention
+projections are in scope; a 5-round t=T warm-up (Appendix D.5); and channel-wise activation scales.
+Four are expressible here. **Channel-wise is not implemented -- this datapath is per-tensor** -- so
+every number below is a pessimistic bound on the paper, most of all at A4/A3.
+
+`scripts/act_bit_sweep.py` unmodified, with `MODIFF_DELTA_REFRESH=1`, `MODIFF_LINEAR=1`,
+`MODIFF_WARMUP_STEPS=5`, `MODIFF_DELTA_CLIP=1.0` (`data/act_bit_sweep_paper_cfg.json`):
+
+| A | levels | PTQ baseline | MoDiff (paper cfg) | gain | vs conv-only K=1 | ratio | wins |
+|---|---|---|---|---|---|---|---|
+| A8 | 255 | 0.2566 | **0.0474** | 5.41x | 0.0601 | **0.789x** | **3/3** |
+| A7 | 127 | 0.2579 | **0.0481** | 5.36x | 0.0594 | **0.811x** | **3/3** |
+| A6 | 63 | 0.3184 | **0.0502** | 6.34x | 0.0633 | 0.794x | 2/3 |
+| A5 | 31 | 0.7357 | **0.0678** | 10.85x | 0.0677 | 1.001x | 2/3 |
+| A4 | 15 | 0.8071 | **0.1428** | 5.65x | 0.1461 | 0.978x | 2/3 |
+| A3 | 7 | 0.9314 | **0.4200** | 2.22x | 0.4202 | 1.000x | 2/3 |
+| A2 | 3 | 0.9366 | **0.7078** | 1.32x | 0.7069 | 1.001x | 2/3 |
+
+Control: the baseline arm moves by 0.9993-1.0002x across all seven rows -- it never receives
+projection MoDiff by construction, so any movement there would mean the treatment had leaked.
+
+**The projections only pay where the conv path is already good.** A8/A7 are real 3/3 gains of 21%/19%;
+A6 points the same way at 2/3; **A5 and below are exactly nothing** (1.001x, 0.978x, 1.000x, 1.001x,
+none better than 2/3). At A4 the conv path's own error dominates and the projections vanish into it.
+That is the mirror image of the clip, which does nothing at A8 and everything at A4/A3.
+
+### Combining them changes nothing (`scripts/paper_plus_clip.py`)
+
+The obvious hypothesis was that the clip, by removing the conv-path error, would un-mask the
+projections at A4/A3. It does not. All arms in one process against one set of per-seed fp16
+references, K=1:
+
+| config | conv only | conv+proj | ratio | wins |
+|---|---|---|---|---|
+| A4 r=1.0 | 0.1463 | 0.1428 | 0.976x | 2/3 |
+| A4 r=0.40 | **0.0790** | 0.0801 | 1.014x | 1/3 |
+| A3 r=1.0 | 0.4201 | 0.4199 | 1.000x | 2/3 |
+| A3 r=0.20 | **0.1427** | 0.1431 | 1.003x | 1/3 |
+
+Four rows, no 3/3, and slightly *worse* once the clip is on. The clip meanwhile is 3/3 in both arms:
+conv-only A4 0.1463 → 0.0790 (0.540x) and A3 0.4201 → 0.1427 (0.340x); with projections 0.561x and
+0.341x. **The entire A4/A3 gain is the clip; the projections contribute zero there.**
+
+### Speed, all configurations (batch 128, DDIM 200, A40, 3 warmups + 5 repeats)
+
+| datapath | ms/step | vs fp16 | CV |
+|---|---|---|---|
+| fp16 | 106.98 | 1.00x | — |
+| int8 PTQ (MoDiff off) | 73.41 | 1.46x | 0.35% |
+| K=4, conv only, r=1.0 | 77.38 | 1.38x | 0.33% |
+| K=4, conv+proj, r=1.0 | 103.25 | 1.04x | 0.11% |
+| K=1, conv only, r=1.0 | 83.85 | 1.28x | 0.36% |
+| **K=1, conv+proj, r=1.0 — the paper's configuration** | **109.67** | **0.98x** | 0.15% |
+| **K=1, conv only, A4 r=0.40 — best quality** | **83.41** | **1.28x** | 0.36% |
+
+Decomposed: K=4 → K=1 costs **+6.46 ms** (the documented estimate was +4.93, so 1.5 ms optimistic);
+the projections cost **+25.82 ms**; the clip costs **−0.52 ms**, i.e. free at production batch, which
+until now had only been shown at batch 8 where a bandwidth-bound change understates its cost 5x.
+
+**Strict alignment and usefulness point in opposite directions.** The paper's four expressible
+requirements together give A4 = 0.1428 at 0.98x fp16 -- slower than fp16, so the quantization buys no
+speed at all. The single requirement the paper explicitly rules out, the clip, gives A4 = 0.0790 at
+1.28x fp16: **1.8x better quality and 31% faster than the aligned configuration** (A3: 0.1427 vs
+0.4200, 2.9x better). Ranking the paper's requirements by what they are worth here: low-bit
+activations, keep; per-step scale recompute, +6.46 ms for a gain the clip already subsumes;
+all-linear-operators, +25.82 ms for nothing at A4/A3; no-clip, the costliest requirement of the four.
+
+What strict alignment still needs, beyond this: **channel-wise activation scales**, whose difficulty
+depends on a reading of the paper this repo cannot settle -- per *input* channel is the conv reduction
+dimension, so the scale sits inside the sum and is neither foldable into the output epilogue nor into
+the weights (the existing `smooth_inv` folds into weights only because it is STATIC; a per-step scale
+would require requantizing 70 layers' weights every step). Per row/token is foldable and is a bounded
+three-kernel change. And **FID rather than relL2**, which needs the LSUN LMDB re-downloaded and the
+10k-sample stores regenerated after the container reset.
+
 ## Code changes
 
 Measurement scripts (`clip_probe.py`, `clip_e2e.py`, `clip_e2e_paired.py`, `accum_probe.py`,
