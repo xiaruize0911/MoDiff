@@ -268,6 +268,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "W8A8 Linear + fused bias + optional residual in the epilogue (empty tensor = skip); removes the separate bias/residual add");
     m.def("gemm_w4a4_awq_bias_res", &gemm_w4a4_awq_bias_res,
           "W4A4 Linear + fused bias + optional residual in the epilogue (empty tensor = skip)");
+    m.def("gemm_w8a8_awq_o_hat_out_i8", &gemm_w8a8_awq_o_hat_out_i8,
+          "MoDiff dual output: advance fp16 o_hat (Eq 9, bias-free) and return int8 codes of "
+          "o_hat+bias in one pass, so a MoDiff'd projection can still feed an int8 consumer");
     m.def("gemm_w8a8_awq_out_i8", &gemm_w8a8_awq_out_i8,
           "W8A8 Linear, INT8 output (output-fusion): same mainloop, epilogue requantizes to int8 with "
           "inv_out_scale[N]=127/absmax_col -> C[M,N] int8; halves the output write");

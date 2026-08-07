@@ -1,0 +1,113 @@
+[
+  {
+    "config": "int8 PTQ (MoDiff off)",
+    "mode": "int8_baseline",
+    "modiff_linear": "0",
+    "n_quant_convs": 140,
+    "conv_calls": {
+      "from_int8": 3100
+    },
+    "conv_layers_using": {
+      "gn_fused": 0,
+      "modulated": 0,
+      "first_step": 0,
+      "standard": 0,
+      "forward": 0,
+      "mod_static_silu": 0,
+      "modiff_silu_resid": 0,
+      "from_int8": 62,
+      "from_int8_dual": 0,
+      "to_int8": 0
+    },
+    "attn_blocks": 21,
+    "attn_qout_eligible": 21,
+    "wxax_projections": 42,
+    "wxax_modiff": 0,
+    "wxax_out_i8": 0,
+    "qout_gate_terms_block0": {
+      "fuse_proj_quant": true,
+      "fq_frozen2": true,
+      "proj_type": "QuantLinearWxAx",
+      "proj_use_bias_res": true,
+      "proj_a_scale_set": true,
+      "proj_calib": false,
+      "proj_bits_match": true
+    }
+  },
+  {
+    "config": "conv MoDiff",
+    "mode": "int8",
+    "modiff_linear": "0",
+    "n_quant_convs": 140,
+    "conv_calls": {
+      "forward": 166,
+      "first_step": 70,
+      "gn_fused": 3038,
+      "modulated": 96
+    },
+    "conv_layers_using": {
+      "gn_fused": 62,
+      "modulated": 8,
+      "first_step": 70,
+      "standard": 0,
+      "forward": 70,
+      "mod_static_silu": 0,
+      "modiff_silu_resid": 0,
+      "from_int8": 0,
+      "from_int8_dual": 0,
+      "to_int8": 0
+    },
+    "attn_blocks": 21,
+    "attn_qout_eligible": 21,
+    "wxax_projections": 42,
+    "wxax_modiff": 0,
+    "wxax_out_i8": 0,
+    "qout_gate_terms_block0": {
+      "fuse_proj_quant": true,
+      "fq_frozen2": true,
+      "proj_type": "QuantLinearWxAx",
+      "proj_use_bias_res": true,
+      "proj_a_scale_set": true,
+      "proj_calib": false,
+      "proj_bits_match": true
+    }
+  },
+  {
+    "config": "conv+proj MoDiff (current default)",
+    "mode": "int8",
+    "modiff_linear": "1",
+    "n_quant_convs": 140,
+    "conv_calls": {
+      "forward": 166,
+      "first_step": 70,
+      "gn_fused": 3038,
+      "modulated": 96
+    },
+    "conv_layers_using": {
+      "gn_fused": 62,
+      "modulated": 8,
+      "first_step": 70,
+      "standard": 0,
+      "forward": 70,
+      "mod_static_silu": 0,
+      "modiff_silu_resid": 0,
+      "from_int8": 0,
+      "from_int8_dual": 0,
+      "to_int8": 0
+    },
+    "attn_blocks": 21,
+    "attn_qout_eligible": 0,
+    "wxax_projections": 42,
+    "wxax_modiff": 42,
+    "wxax_out_i8": 0,
+    "qout_gate_terms_block0": {
+      "fuse_proj_quant": true,
+      "fq_frozen2": true,
+      "proj_type": "QuantLinearWxAx",
+      "proj_use_bias_res": false,
+      "proj_a_scale_set": true,
+      "proj_calib": false,
+      "proj_bits_match": true
+    }
+  }
+]

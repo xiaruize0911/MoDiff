@@ -403,6 +403,12 @@ torch::Tensor gemm_w4a4_awq_o_hat(torch::Tensor A, torch::Tensor B, torch::Tenso
 torch::Tensor gemm_w8a8_awq_bias_res(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale, int64_t n_out, torch::Tensor bias, torch::Tensor residual);
 torch::Tensor gemm_w4a4_awq_bias_res(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale, int64_t K, int64_t n_out, torch::Tensor bias, torch::Tensor residual);
 torch::Tensor gemm_w8a8_awq_out_i8(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale, torch::Tensor inv_out_scale);
+// MoDiff DUAL output: advances the fp16 o_hat state (Eq 9, bias-free) AND returns int8 codes of
+// o_hat+bias, in one pass. Lets a MoDiff'd projection keep feeding an int8 consumer (flash), which
+// the single-output variants made mutually exclusive. a_scale is a 1-element float32 DEVICE tensor.
+torch::Tensor gemm_w8a8_awq_o_hat_out_i8(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale,
+                                        torch::Tensor a_scale, int64_t n_out, torch::Tensor o_hat,
+                                        torch::Tensor bias, torch::Tensor inv_out_scale);
 torch::Tensor gemm_w8a8_awq_out_i8_bias_nout(
     torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale,
     torch::Tensor inv_out_scale, torch::Tensor bias, int64_t n_out);

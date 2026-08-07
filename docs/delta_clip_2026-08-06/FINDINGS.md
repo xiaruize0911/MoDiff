@@ -473,6 +473,83 @@ would require requantizing 70 layers' weights every step). Per row/token is fold
 three-kernel change. And **FID rather than relL2**, which needs the LSUN LMDB re-downloaded and the
 10k-sample stores regenerated after the container reset.
 
+## The fusion deficit: audited, profiled, and one of three parts fixed
+
+Prompted by the observation that the speedup looked too small. It was, and the profile says why.
+
+**Which fused paths engage** (`scripts/fusion_audit.py`, counted by wrapping the real dispatch targets):
+
+| config | convs | attention |
+|---|---|---|
+| int8 PTQ | 62 on `forward_from_int8` | **21/21** qout-fused |
+| conv MoDiff | 62 on `forward_gn_fused_modiff`, 8 on the unfused `_forward_modulated` | **21/21** qout-fused |
+| conv+proj MoDiff | same convs | **0/21** |
+
+The gate term that flips is `proj._use_bias_res`, which `wxax_linear.py` sets as
+`_HAS_BIAS_RES and not modiff and not self._out_i8`. One `not modiff` disqualifies all 21 blocks.
+(Reading `_qout_eligible()` before a sampling run reports 0/21 for *every* config, because it also
+requires `_fq_frozen2` — the flash scales must have frozen. The audit reads it after the run.)
+
+**What that costs** (`scripts/fusion_profile.py`, torch profiler, batch 128, per-kernel self time):
+
+| kernel | conv MoDiff → conv+proj | what it is |
+|---|---|---|
+| `gemm_w8a8_kernel_awq` | 3.60 → 15.89 | the projections' GEMM, now with the o_hat RMW |
+| `group_norm_silu_nhwc_kernel` | 0 → 5.94 | **GN+SiLU with the quantize stripped out** |
+| `static_quantize_and_update_ahat_..._vec2` | 0 → 5.52 | the delta quantize, now its own pass |
+| `delta_absmax_fp16_kernel` | 0 → 3.97 | the dynamic scale, now its own pass |
+| `awq_out_i8<1>`/`<2>` | 5.58 → 0 | the int8-output epilogue, gone |
+| 2 × `vectorized_elementwise` | 0 → 4.80 | o_hat/residual adds that were in epilogues |
+
+So roughly two thirds of the +25.9 ms is collapsed fusion, not the irreducible a_hat/o_hat bandwidth
+Stage 3.3 identified. **This corrects a claim made earlier in this session** — that the dominant term
+was state traffic and no epilogue could remove it. For the projections that is not what the profile
+shows.
+
+### Part 1, landed: GN + delta-quantize + a_hat in one kernel for the qkv
+
+`group_norm_silu_delta_quantize_nhwc` (i.e. `gn_apply_delta_quantize_flat_vec2_kernel`) already does
+this pattern and already serves 62 conv layers; it had simply never been wired to the attention qkv.
+`_qkv_from_gn_modiff_fused` wires it, returning None on any unmet precondition so seeding and every
+ineligible shape fall through to the existing path. The a_hat view is free: `[b*T, c]` row-major is
+byte-identical to a channels_last `[b, c, H, W]`.
+
+Measured, batch 128: **103.25 → 99.58 ms/step (1.04x → 1.07x fp16)**, i.e. 3.67 ms recovered — far
+less than the 10-12 ms the profile suggested, because that kernel is much less efficient on the
+attention's `C192/T1024` shape than on conv shapes. Quality moves the wrong way slightly: A8
+0.0508 → 0.0530, A4/r=1.0 0.1665 → 0.1711, A4/r=0.40 0.0826 → 0.0840. That is a real numerical
+difference, not noise — the two control arms in the same process reproduce bit-identically
+(`shipped` A8 0.0607 with per-seed `[0.0380,0.0921]`; `proj:conv1d` 0.0480) — and most likely comes
+from the fused kernel computing GN statistics with a different reduction order than PyTorch's.
+
+### Part 2, kernel verified, NOT wired: the dual-output epilogue
+
+`gemm_w8a8_awq_o_hat_out_i8` advances the fp16 o_hat state (Eq 9, bias-free) **and** returns int8
+codes of `o_hat + bias`, in one pass — so a MoDiff'd projection can still feed an int8 consumer, which
+the single-output variants made mutually exclusive. Verified against the reference sequence (existing
+o_hat GEMM → PyTorch quantize): `o_hat` max|diff| 1.953e-03 (2 fp16 ulp at |o_hat|~1), int8 codes
+max|diff| 1 with 0.6% of elements differing and none by more than 1. `a_scale` is dereferenced inside
+the kernel from a 1-element device tensor; the first version of the wrapper synchronised to read it to
+the host, which is the 8400-syncs-per-sample mistake this codebase has paid for twice.
+
+**It contributes 0 ms so far, because parts 2 and 3 turn out to be coupled.** Every int8-qkv-consuming
+flash entry point in the tree is a `_qout` variant — the non-qout siblings were deleted in the
+2026-08-01 dead-code pass — and `_qout` means flash emits the *proj*-quantized output, which under
+MoDiff must be `Q(attn_out - a_hat_proj)`. So the intermediate configuration (int8 qkv → flash → fp16
+proj) no longer exists, and the dual-output GEMM cannot be used until part 3 lands.
+
+### Part 3, not started: a_hat-aware flash qout
+
+`flash_attn_int8_qi8packed_kv_static_qout` must emit `Q(attn_out - a_hat_proj)` and update
+`a_hat_proj`. The conv path's GN kernel is precedent for the pattern, but there is a new problem:
+the dynamic delta scale needs an absmax over the delta, and the flash kernel only produces attn_out
+at the moment it writes. The conv path solves this by reusing the scale a previous step published
+(`MODIFF_DELTA_REFRESH` / `report_next`), so that mechanism has to move onto the flash path too, or a
+one-step-stale scale has to be accepted. Known constraint to add when this is next rebuilt: the
+dual-output kernel pairs adjacent columns for the o_hat `__half2` access, so it assumes `n_out` is
+even — true for qkv (`3C`) and therefore unreachable today, but it wants a `TORCH_CHECK` rather than
+silence.
+
 ## Code changes
 
 Measurement scripts (`clip_probe.py`, `clip_e2e.py`, `clip_e2e_paired.py`, `accum_probe.py`,

@@ -884,7 +884,11 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
             # qkv Linear (which pays quantize_act_int8 as its own launch). Reachable mainly for
             # blocks the fp16 fused_gn_qkv branch above doesn't cover (T%128!=0 or c%8!=0, e.g.
             # hd48/T64) and during the qkv scale calibration window.
-            qkv = self._qkv_from_gn(x, b, T, c, nh, hd)
+            # Explicit None test, not `or`: these are tensors, and `or` invokes __bool__ on a
+            # multi-element tensor -- "Boolean value of Tensor with more than one value is ambiguous".
+            qkv = self._qkv_from_gn_modiff_fused(x, b, T, c, nh, hd)
+            if qkv is None:
+                qkv = self._qkv_from_gn(x, b, T, c, nh, hd)
         if T < 64:
             self._observe_small_int8_scales(qkv)
         # ---- Score path (QKᵀ + softmax + AV): fused int8/int4 flash (scores in SRAM) when the
@@ -899,6 +903,75 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
             a = self._score_path(qkv, use_flash)                         # [b,nh,T,hd] head-major
             out_tok = self._proj_with_residual(a, x_in_tok, b, T, c)     # proj (+bias +residual), fused
         return out_tok.reshape(b, H, W, c).permute(0, 3, 1, 2)
+
+    def _qkv_from_gn_modiff_fused(self, x, b, T, c, nh, hd):
+        """GN + delta-quantize + a_hat update in ONE kernel for a MoDiff qkv. None if not applicable.
+
+        With MODIFF_LINEAR=1 the qkv projection needs Q(GN(x) - a_hat), not Q(GN(x)), so the fused
+        GN+quantize kernel this path used (group_norm_silu_quantize_nhwc) no longer fits and the whole
+        chain degrades into three separate full-tensor passes. Profiled at batch 128 (see
+        docs/delta_clip_2026-08-06/data/fusion_profile.json), those three cost:
+
+            group_norm_silu_nhwc_kernel                          5.94 ms   GN+SiLU, quantize stripped out
+            delta_absmax_fp16_kernel                             3.97 ms   the dynamic delta scale
+            static_quantize_and_update_ahat_..._half_cache_vec2   5.52 ms   quantize + a_hat write
+                                                                -------
+                                                                15.43 ms
+
+        The kernel that does all three at once already exists and is already in production on the conv
+        path -- group_norm_silu_delta_quantize_nhwc, i.e. gn_apply_delta_quantize_flat_vec2_kernel,
+        which serves 62 conv layers for 8.85 ms total. It was simply never wired to the attention qkv.
+
+        Layout is why this is a view and not a copy: a_hat is [M, K] = [b*T, c] row-major, which is
+        byte-identical to a channels_last [b, c, H, W] (both are NHWC-physical), so the 4D view the GN
+        kernel requires shares storage with the 2D buffer the projection owns. The int8 codes come back
+        NHWC too, so the flattening back to [b*T, c] for the GEMM is also free.
+
+        The GEMM is unchanged: gemm_w8a8_awq_o_hat already runs on this path, and its epilogue contract
+        (o_hat accumulate, THEN bias, THEN residual) is what keeps the temporal state bias-free.
+
+        Returns None -- falling through to the unfused path -- whenever a precondition is unmet, which
+        includes the un-seeded first modulated step. Seeding stays with QuantLinearWxAx.forward so
+        there is exactly one place that establishes a_hat/o_hat.
+        """
+        qkv = self.qkv
+        if (_QuantLinearWxAx is None or not isinstance(qkv, _QuantLinearWxAx)
+                or not getattr(qkv, "modiff", False) or qkv.bits != 8
+                or x.dtype != torch.float16
+                or not hasattr(_mc, "group_norm_silu_delta_quantize_nhwc")
+                or not hasattr(_mc, "gemm_w8a8_awq_o_hat")):
+            return None
+        # Un-seeded (first modulated step) or a shape change: let the projection's own forward seed.
+        if qkv.a_hat is None or qkv.o_hat is None or qkv.a_hat.shape[0] != b * T:
+            return None
+        # int4 pads K for the AWQ layout; the 4D view below assumes width == c, so skip if padded.
+        if qkv._awqt_K != qkv.in_features or qkv.in_features != c:
+            return None
+        gw, gb = self._gn_params(x.dtype)
+        if gw is None or gb is None:
+            return None
+        if not x.is_contiguous(memory_format=torch.channels_last):
+            x = x.contiguous(memory_format=torch.channels_last)
+        qkv._ensure_modiff_bufs(x)
+        # [b*T, c] -> channels_last [b, c, H, W], sharing storage. H*W == T, and H is not passed in,
+        # so recover it from x rather than assuming a square latent.
+        Himg, Wimg = x.shape[2], x.shape[3]
+        a_hat4 = qkv.a_hat.view(b, Himg, Wimg, c).permute(0, 3, 1, 2)
+        if a_hat4.shape != x.shape:
+            return None
+        e32 = qkv._empty_f32
+        codes = _mc.group_norm_silu_delta_quantize_nhwc(
+            x, gw, gb, a_hat4, self.norm.num_groups, self.norm.eps,
+            False,                                   # apply_silu: attention GN has no SiLU
+            qkv._scale, e32, e32, e32,               # scale (dynamic mode overwrites it), smooth, mod
+            qkv._absmax, qkv._scale, qkv._inv_scale, qkv._retire,
+            float(qkv.Q), False, 1.0)                # Q_level, report_next, safety
+        codes2d = codes.permute(0, 2, 3, 1).reshape(b * T, c)
+        out = _mc.gemm_w8a8_awq_o_hat(
+            codes2d, qkv.qweight, qkv.w_scale, qkv._inv_scale, qkv.out_features,
+            qkv.o_hat, qkv._empty_h,                 # qkv has no residual
+            qkv.bias if qkv.bias is not None else qkv._empty_h)
+        return out.reshape(b, T, nh, 3, hd)
 
     def _qout_eligible(self):
         """True when the frozen flash path can emit the proj-quantized output directly (item B):

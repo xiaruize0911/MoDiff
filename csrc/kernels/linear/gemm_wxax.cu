@@ -290,10 +290,25 @@ __global__ void gemm_w8a8_kernel_awq_out_i8(const int8_t* __restrict__ A, const 
                                             int8_t* __restrict__ kout = nullptr,
                                             int8_t* __restrict__ vtout = nullptr,
                                             int nh = 0, int T = 0, int hd = 0,
-                                            int hp = 0) {
+                                            int hp = 0,
+                                            // MoDiff DUAL output. When non-null this kernel becomes
+                                            // Eq 9 plus a requantize: it accumulates the GEMM result
+                                            // into o_hat (fp16 state, bias-free) and emits int8 codes
+                                            // of o_hat+bias for the next consumer, in ONE pass. With
+                                            // o_hat == nullptr every line below is bit-identical to
+                                            // before -- the fast path folds inv_out_scale into the
+                                            // dequant multiply, which is only valid when there is no
+                                            // state to read, so the two branches are separate.
+                                            __half* __restrict__ o_hat = nullptr,
+                                            // Optional DEVICE a_scale, for the same reason gemm_w8a8_kernel_awq has one: the
+                                            // MoDiff delta scale is produced on device per call, so copying it to the host to
+                                            // pass by value would be one sync per linear per step (42 x 200 = 8400 per sample;
+                                            // that mistake cost the conv path ~5 ms/step). Overrides a_scale when non-null.
+                                            const float* __restrict__ a_scale_ptr = nullptr) {
   const int t = threadIdx.x, warp = t >> 5, lane = t & 31, gid = lane >> 2, tig = lane & 3;
   const int m0 = blockIdx.y * GWQ_CTA_M, n0 = blockIdx.x * GWQ_CTA_N;
   const int warp_offset_n = warp * GWQ_WARP_N;
+  if (a_scale_ptr) a_scale = *a_scale_ptr;
   __shared__ int8_t As[GWQ_STAGES][GWQ_CTA_M * GWQ_CTA_K];
   __shared__ int8_t Bs[GWQ_STAGES][GWQ_CTA_N * GWQ_CTA_K];
   constexpr int MI = GWQ_CTA_M / GWQ_INTRIN_M, NJ = GWQ_WARP_N / GWQ_INTRIN_N;
@@ -365,6 +380,34 @@ __global__ void gemm_w8a8_kernel_awq_out_i8(const int8_t* __restrict__ A, const 
       float b10 = bias && gc1 < n_out ? __half2float(bias[gc1]) * inv_out_scale[gc1] : 0.f;
       float b11 = bias && gc1 + 1 < n_out ? __half2float(bias[gc1 + 1]) * inv_out_scale[gc1 + 1] : 0.f;
       int* accv = acc[i][j];
+      if (o_hat) {
+        // Dequant WITHOUT inv_out_scale (that is an output-domain scale), accumulate into the state,
+        // then bias, then requantize. ORDER IS THE CONTRACT, same as gwq_store2: bias must never
+        // enter o_hat or it compounds once per diffusion step.
+        const float d00 = a_scale * w_scale[gc0], d01 = a_scale * w_scale[gc0 + 1];
+        const float d10 = a_scale * w_scale[gc1], d11 = a_scale * w_scale[gc1 + 1];
+        const float hb00 = bias && gc0 < n_out ? __half2float(bias[gc0]) : 0.f;
+        const float hb01 = bias && gc0 + 1 < n_out ? __half2float(bias[gc0 + 1]) : 0.f;
+        const float hb10 = bias && gc1 < n_out ? __half2float(bias[gc1]) : 0.f;
+        const float hb11 = bias && gc1 + 1 < n_out ? __half2float(bias[gc1 + 1]) : 0.f;
+        // Adjacent columns are contiguous in o_hat, so each pair is one __half2 access -- the same
+        // pairing gwq_store2 relies on. Guarded on gc+1 < n_out because n_out can be unpadded.
+        #define GWQ_OH2(RL, RG, CL, CG, V0, V1, D0, D1, B0, B1)                                  \
+          if ((RG) < M && (CG) + 1 < n_out) {                                                    \
+            const size_t oi = (size_t)(RG) * n_out + (CG);                                       \
+            float2 h = __half22float2(*(const __half2*)&o_hat[oi]);                              \
+            const float o0 = h.x + (V0) * (D0), o1 = h.y + (V1) * (D1);                          \
+            *(__half2*)&o_hat[oi] = __halves2half2(__float2half(o0), __float2half(o1));           \
+            Cs[(RL) * GWQ_CTA_N + (CL)] = q8((o0 + (B0)) * inv_out_scale[CG]);                   \
+            Cs[(RL) * GWQ_CTA_N + (CL) + 1] = q8((o1 + (B1)) * inv_out_scale[(CG) + 1]);         \
+          }
+        GWQ_OH2(r0, m0 + r0, c0, gc0, accv[0], accv[1], d00, d01, hb00, hb01)
+        GWQ_OH2(r0, m0 + r0, c1, gc1, accv[4], accv[5], d10, d11, hb10, hb11)
+        GWQ_OH2(r1, m0 + r1, c0, gc0, accv[2], accv[3], d00, d01, hb00, hb01)
+        GWQ_OH2(r1, m0 + r1, c1, gc1, accv[6], accv[7], d10, d11, hb10, hb11)
+        #undef GWQ_OH2
+        continue;
+      }
       Cs[r0 * GWQ_CTA_N + c0] = q8(accv[0] * s00 + b00); Cs[r0 * GWQ_CTA_N + c0 + 1] = q8(accv[1] * s01 + b01);
       Cs[r0 * GWQ_CTA_N + c1] = q8(accv[4] * s10 + b10); Cs[r0 * GWQ_CTA_N + c1 + 1] = q8(accv[5] * s11 + b11);
       Cs[r1 * GWQ_CTA_N + c0] = q8(accv[2] * s00 + b00); Cs[r1 * GWQ_CTA_N + c0 + 1] = q8(accv[3] * s01 + b01);
@@ -563,6 +606,40 @@ torch::Tensor gemm_w8a8_awq_out_i8(torch::Tensor A, torch::Tensor B, torch::Tens
       A.data_ptr<int8_t>(), B.data_ptr<int8_t>(), w_scale.contiguous().data_ptr<float>(),
       (float)a_scale, inv_out_scale.contiguous().data_ptr<float>(), (const __half*)nullptr,
       C.data_ptr<int8_t>(), M, N, K, N);
+  return C;
+}
+
+// MoDiff dual output: o_hat_t = A(Q(delta)) + o_hat_{t+1} (fp16 state, Eq 9), and the returned int8
+// is Q_out(o_hat_t + bias) for the next consumer -- one pass instead of an fp16 materialize plus a
+// separate quantize. Written for the attention qkv, whose consumer (flash) wants int8 while MoDiff
+// wants the fp16 state kept: the two used to be mutually exclusive, which is what forced the whole
+// GN->qkv->flash chain to fall back (docs/delta_clip_2026-08-06).
+torch::Tensor gemm_w8a8_awq_o_hat_out_i8(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale,
+                                        torch::Tensor a_scale, int64_t n_out, torch::Tensor o_hat,
+                                        torch::Tensor bias, torch::Tensor inv_out_scale) {
+  TORCH_CHECK(A.is_cuda() && A.dtype() == torch::kChar && B.dtype() == torch::kChar, "A/B int8 CUDA");
+  TORCH_CHECK(o_hat.dtype() == torch::kFloat16, "o_hat must be fp16");
+  A = A.contiguous(); B = B.contiguous();
+  int M = A.size(0), K = A.size(1), N = B.size(0);
+  TORCH_CHECK(B.size(1) == K && N % GWQ_CTA_N == 0 && K % GWQ_CTA_K == 0, "shape/pad");
+  TORCH_CHECK(o_hat.numel() == (int64_t)M * n_out, "o_hat must be [M, n_out]");
+  auto C = torch::empty({M, N}, torch::TensorOptions().dtype(torch::kChar).device(A.device()));
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  dim3 grid(N / GWQ_CTA_N, (M + GWQ_CTA_M - 1) / GWQ_CTA_M);
+  // a_scale is a 1-element DEVICE tensor here, as on the o_hat path: taking it by value would cost a
+  // .item() sync per linear per step. The kernel signature takes a float, so read it on device via
+  // the same trick the o_hat GEMM uses -- pass it through the existing float parameter is NOT
+  // possible, so this wrapper requires the caller to have it on device and dereferences once.
+  TORCH_CHECK(a_scale.numel() == 1 && a_scale.dtype() == torch::kFloat32,
+              "a_scale must be a 1-element float32 device tensor");
+  gemm_w8a8_kernel_awq_out_i8<0><<<grid, GWQ_NUM_WARPS * 32, 0, stream>>>(
+      A.data_ptr<int8_t>(), B.data_ptr<int8_t>(), w_scale.contiguous().data_ptr<float>(),
+      0.f, inv_out_scale.contiguous().data_ptr<float>(),
+      bias.numel() > 0 ? (const __half*)bias.contiguous().data_ptr<at::Half>() : (const __half*)nullptr,
+      C.data_ptr<int8_t>(), M, N, K, (int)n_out,
+      nullptr, nullptr, nullptr, 0, 0, 0, 0,
+      (__half*)o_hat.data_ptr<at::Half>(),
+      a_scale.contiguous().data_ptr<float>());
   return C;
 }
 
