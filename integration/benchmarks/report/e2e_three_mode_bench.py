@@ -178,7 +178,12 @@ def main():
             # not a misconfiguration. Folded into `expected` rather than dropping the guard, because
             # the failure it exists to catch (qkv/proj left as plain nn.Linear) is still caught by
             # the type assertion below.
-            if os.environ.get("MODIFF_LINEAR") == "1":
+            # Ask the MODULE, not the environment. MODIFF_LINEAR=1 is global but only reaches modes on
+            # benchmark_ldm's is_modiff whitelist, so a baseline arm in the same process keeps its
+            # fused epilogue and is correctly 21/21. Reading the env var made this guard fire on
+            # int8_baseline ("21/21 qout-eligible but expected 0") -- the guard was right that the
+            # configuration differed, it just blamed the wrong arm.
+            if any(bool(getattr(b.proj, "modiff", False)) for b in blks):
                 expected = 0
             qkv_t, proj_t = type(blks[0].qkv).__name__, type(blks[0].proj).__name__
             route = {"attn_blocks": len(blks), "qout_eligible": elig, "expected_eligible": expected,

@@ -1,0 +1,16 @@
+{
+  "batch": 128,
+  "steps": 12,
+  "module_counts": {
+    "conv": 140,
+    "attn": 21,
+    "proj": 42
+  },
+  "total_gpu_ms_per_step": 235.73991383333342,
+  "inclusive_ms_per_step": {
+    "conv": 50.11724341666686,
+    "attn": 46.22908741666665,
+    "proj": 9.369071000000005
+  },
+  "attn_excluding_projections_ms_per_step": 36.860016416666646
+}

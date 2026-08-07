@@ -550,6 +550,65 @@ dual-output kernel pairs adjacent columns for the o_hat `__half2` access, so it 
 even — true for qkv (`3C`) and therefore unreachable today, but it wants a `TORCH_CHECK` rather than
 silence.
 
+## Component attribution: two defects, and the method that replaces this one
+
+Asked for a per-component profile of the K=1 full-MoDiff datapath (conv vs attention vs projections).
+`scripts/component_profile.py` produced numbers twice and both runs were invalid. Recording that here
+because the failures are more useful than the numbers.
+
+**Defect 1 -- module forward hooks miss the fused conv path.** The first version scoped each family
+with `register_forward_pre_hook`. 62 of the 70 MoDiff conv layers are invoked by the ResBlock calling
+`forward_gn_fused_modiff` DIRECTLY, bypassing `__call__`, so the hook never fires for them: conv was
+charged **5.55 ms** of a 191 ms step. Fixed by wrapping the methods the fusion audit had already shown
+to be live; conv then read 50.12 ms.
+
+**Defect 2 -- the total double-counted, and `ProfilerActivity.CPU` inflated everything.** The corrected
+run still reported **235.74 ms/step against a measured 106.30**. Two causes: the `total` summed
+`self_device_time_total` over *every* entry including the `MODIFF::` scopes, which carry the device
+time of the kernels inside them, so those were counted twice; and `ProfilerActivity.CPU` records every
+aten op, which is both expensive and stalls the CPU's kernel queueing. **More repetitions cannot fix
+either** -- they reduce variance, not bias. Both are patched in the script but the patch is UNVERIFIED
+(not re-run), and the script says so at the top.
+
+What the invalid run still supports, as shape only: conv (50.12) ≈ attention-including-projections
+(46.23), projections alone 9.37, attention math 36.86. Absolute values and shares are not usable --
+the three scopes sum to 41% of the reported total.
+
+**The one solid inference is a contradiction.** The projections' own time is ~9.4 ms, but turning
+projection MoDiff on costs **+25.8 ms** end to end. The difference is not in the projections; it is in
+what they break -- the GN fusion collapsing, the qkv int8-output epilogue going away, the o_hat state
+traffic. That agrees with the kernel-level profile, which independently attributed about two thirds of
+the +25.8 ms to lost fusion.
+
+### Replacement method, agreed 2026-08-07: differential timing + Perfetto
+
+**A. Differential timing** for the component question. Do not ask "how long did this component take";
+ask "how much does the whole change when this component changes" -- e.g. `MODIFF_QUANT_ATTN=0` reverts
+attention to fp16 and the e2e delta is its marginal contribution. This uses only clean wall-clock
+measurement (CV ≤ 0.2%) with no profiler in the loop, so it has no instrumentation bias. It measures a
+marginal, not an absolute, and components interact -- but the +25.8-vs-9.4 result above shows the
+interaction IS the thing worth finding, and absolute attribution hides it.
+
+**B/C. Perfetto trace with offline bucketing** for the kernel-level composition, the way
+`docs/perfetto_traces_2026-08-03` already does it: trace once, bucket offline. Much lower overhead than
+in-Python `record_function`, and the bucket rules can be revised without re-running.
+`kernel_suites_bench.suite_of()` already maps kernels to conv / linear / attention / norm_quantize.
+
+Also fixed here: `e2e_three_mode_bench`'s route check decided its expected qout-eligible count from the
+GLOBAL `MODIFF_LINEAR`, but that variable only reaches modes on benchmark_ldm's `is_modiff` whitelist,
+so a baseline arm in the same process correctly keeps its fused epilogue and the guard fired on it
+("int8_baseline: 21/21 qout-eligible but expected 0"). It now asks `proj.modiff` per mode. Verified:
+`int8_baseline` 21/21 expected 21, `int8` 0/21 expected 0, in one process.
+
+Speed re-measured with the fixed guard, batch 128 / DDIM 200, CV ≤ 0.18%: fp16 105.84, int8 PTQ 73.60
+(1.44x), int8 + full MoDiff at K=1 **106.30 (1.00x fp16)**. That reproduces the 109.67 from the earlier
+run to within 3.1%, i.e. inside the same-script cross-process floor, and the conclusion stands: the
+paper's full datapath is exactly as fast as fp16 here, with the quantization speedup entirely spent.
+
+`scripts/modiff_gate.py` was deleted on request. It had been fault-injection verified (a 100x-too-small
+delta scale tripped two independent checks, exit 1); if a tripwire for silent MoDiff degeneration is
+wanted again, that shape worked and git history has it.
+
 ## Code changes
 
 Measurement scripts (`clip_probe.py`, `clip_e2e.py`, `clip_e2e_paired.py`, `accum_probe.py`,
