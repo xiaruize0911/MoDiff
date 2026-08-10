@@ -34,26 +34,28 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // Two overloads each, rather than py::arg defaults: pybind11 does not inherit C++ default
     // arguments, and this file annotates no argument names anywhere. Registering the short form
     // first keeps every existing 4-argument caller (integration/, analysis_*/ and ~8 archived
-    // docs/*/scripts) working untouched, while the 5-argument form takes the code ceiling.
+    // docs/*/scripts) working untouched, while the 5-argument form names the datapath's
+    // activation bit-width (a4). It replaced a `float code_ceiling` -- a magnitude, which a caller
+    // could pass plausibly and wrongly; the short form's implicit `false` is A8, as it always was.
     m.def("step1_static_quantize_fprop",
           [](torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor scale_buf,
              torch::Tensor smooth_inv) {
-              return step1_static_quantize_fprop(x, a_hat_cache, scale_buf, smooth_inv, -1.0f);
+              return step1_static_quantize_fprop(x, a_hat_cache, scale_buf, smooth_inv, false);
           },
           "Fused static-scale subtract + dequant + quantize for INT8 step 1");
     m.def("step1_static_quantize_fprop", &step1_static_quantize_fprop,
-          "Same, with an explicit symmetric code ceiling (Q_b; <= 0 means the legacy 127). Required "
-          "for a clip ratio to saturate rather than just refine the grid -- see "
+          "Same, plus the datapath's activation bit-width (a4: true => saturate at 7, false => 127). "
+          "Required for a reused scale to saturate rather than just refine the grid -- see "
           "docs/delta_clip_2026-08-06/FINDINGS.md");
     m.def("step1_static_quantize_fprop_silu",
           [](torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor scale_buf,
              torch::Tensor smooth_inv) {
-              return step1_static_quantize_fprop_silu(x, a_hat_cache, scale_buf, smooth_inv, -1.0f);
+              return step1_static_quantize_fprop_silu(x, a_hat_cache, scale_buf, smooth_inv, false);
           },
           "Same as step1_static_quantize_fprop but applies SiLU to x inline (FP16 a_hat_cache only) -- "
           "fuses a ResBlock's activation function into the quantize step");
     m.def("step1_static_quantize_fprop_silu", &step1_static_quantize_fprop_silu,
-          "Same, with an explicit symmetric code ceiling (Q_b; <= 0 means the legacy 127)");
+          "Same, plus the datapath's activation bit-width (a4: true => saturate at 7, false => 127)");
     m.def("step1_quantize_pack_int4_fprop", &step1_quantize_pack_int4_fprop, "Fused sub_absmax_scale + dequant + quantize+pack for INT4 step 1");
     m.def("step1_static_quantize_pack_int4_fprop", &step1_static_quantize_pack_int4_fprop, "Fused static-scale subtract + dequant + quantize+pack for INT4 step 1");
     m.def("step1_static_quantize_noahat_fprop", &step1_static_quantize_noahat_fprop, "cache-free static int8 quantize (baseline conv, no a_hat)");
@@ -123,6 +125,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "Fused FP32 [N*L,C,1,1] channels-last → FP16 [N,C,L] (K7+K8 fusion)");
     m.def("fp16_ncw_delta_to_int8_cl", &fp16_ncw_delta_to_int8_cl,
           "Fused FP16 [N,C,L] → INT8 [N*L,C,1,1] CL with MoDiff delta subtract+quantize (K1+K2+K3 fusion)");
+    m.def("unpack_int4_to_int8_cl", &unpack_int4_to_int8_cl,
+          "packed-INT4 -> INT8 widening, NHWC-physical. Value-preserving (a nibble code becomes "
+          "the same int8 code), so the consumer's dequant alpha is unchanged. Lets W8A4 route its "
+          "activation through int4 STORAGE -- where 4 bits is a property of the format rather than "
+          "of a clamp parameter -- and still feed the int8-weight GEMM, which no mixed s8xs4 MMA "
+          "exists for.");
     m.def("cat2_channels_last_fp16", &cat2_channels_last_fp16,
           "Specialized vectorized 2-tensor channels-last FP16 concat along dim=1 (replaces torch.cat for UNetModel's decoder skip-concat)");
 
@@ -169,19 +177,41 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
               return group_norm_silu_delta_quantize_nhwc(
                   x, weight, bias, a_hat_cache, num_groups, eps, apply_silu, scale, smooth_inv,
                   mod_scale, mod_shift, absmax_buf, scale_out, inv_scale_out, retire_count,
-                  Q_level, report_next, safety, -1.0);
+                  Q_level, report_next, safety, false);
           },
           "MoDiff-fused GroupNorm(+mod)+SiLU + INT8 temporal-delta quantize + in-place a_hat "
           "update (fuses the modiff GN+step1_static_quantize_fprop_silu two-kernel pass). Pass "
           "empty absmax_buf/scale_out/inv_scale_out/retire_count for the static scale, or real "
           "1-element buffers for the dynamic per-call scale (adds one reduction pass, cannot clip)");
     m.def("group_norm_silu_delta_quantize_nhwc", &group_norm_silu_delta_quantize_nhwc,
-          "Same, with a trailing symmetric code ceiling (Q_b; <= 0 means the legacy 127). Q_level "
-          "sets the NEXT step's scale, this sets where THIS step's codes saturate -- a clip ratio is "
+          "Same, with a trailing a4 flag naming the datapath's activation bit-width. Q_level sets the "
+          "NEXT step's scale, a4 sets where THIS step's codes saturate (7 vs 127) -- a reused scale is "
           "exactly where the two differ (docs/delta_clip_2026-08-06/FINDINGS.md)");
-    m.def("group_norm_silu_delta_quantize_resize_nhwc", &group_norm_silu_delta_quantize_resize_nhwc,
+    // 14-argument form first, so existing callers and tests are untouched; see the step1_* note above.
+    m.def("group_norm_silu_delta_quantize_resize_nhwc",
+          [](torch::Tensor x, torch::Tensor weight, torch::Tensor bias, int64_t num_groups,
+             double eps, bool apply_silu, torch::Tensor scale, torch::Tensor smooth_inv,
+             torch::Tensor mod_scale, torch::Tensor mod_shift, int64_t k_pad, int64_t resize,
+             bool pack, torch::Tensor a_hat_cache) {
+              auto empty_f32 = torch::empty({0}, torch::TensorOptions()
+                                                     .dtype(torch::kFloat32).device(x.device()));
+              auto empty_i32 = torch::empty({0}, torch::TensorOptions()
+                                                     .dtype(torch::kInt32).device(x.device()));
+              return group_norm_silu_delta_quantize_resize_nhwc(
+                  x, weight, bias, num_groups, eps, apply_silu, scale, smooth_inv, mod_scale,
+                  mod_shift, k_pad, resize, pack, a_hat_cache,
+                  empty_f32, empty_f32, empty_f32, empty_i32, 127.0, false, 1.0, false);
+          },
           "MoDiff-fused GroupNorm(+mod)+SiLU + 2x resize + temporal-delta quantize + in-place "
-          "a_hat update (the updown ResBlocks' fusion, previously modiff-excluded)");
+          "a_hat update (the updown ResBlocks' fusion, previously modiff-excluded). Static scale.");
+    m.def("group_norm_silu_delta_quantize_resize_nhwc", &group_norm_silu_delta_quantize_resize_nhwc,
+          "Same, plus the dynamic-scale contract of the non-resize sibling: real 1-element "
+          "absmax_buf/scale_out/inv_scale_out/retire_count make the kernel measure this call's "
+          "delta range instead of being handed a scale, so a REFRESH step can stay fused. "
+          "report_next=false runs a separate reduction-only pass (fresh scale, used immediately); "
+          "true publishes for a later step from the quantize pass at no extra pass. The trailing "
+          "a4 flag names the datapath, so THIS call's codes saturate at 7 or 127 -- which Q_level always "
+          "agrees with now that the clip ratio is retired, and stops agreeing on a reused scale.");
     m.def("group_norm_silu_delta_quantize_pack_nhwc", &group_norm_silu_delta_quantize_pack_nhwc,
           "MoDiff-fused GroupNorm(+mod)+SiLU + INT4 delta-quantize+pack + in-place a_hat update "
           "(int4 counterpart; requires even channels-per-group). Same static/dynamic scale "

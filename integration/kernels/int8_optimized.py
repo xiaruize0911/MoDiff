@@ -163,31 +163,44 @@ class OptimizedInt8Conv2d(nn.Module):
         #: A first-run measurement reverses this ranking and is how an earlier version of this
         #: comment came to claim, wrongly, that static beat dynamic at W8A8.
         self.delta_dynamic = os.environ.get("MODIFF_DELTA_MODE", "dynamic").lower() != "static"
-        #: Deliberate-clipping ratio for dynamic mode: the scale becomes Q/(ratio*max|delta|), so
-        #: ratio=1.0 is pure absmax (cannot clip) and ratio<1.0 trades a finer grid for clipping
-        #: everything above `ratio` of the observed range.
+        #: `MODIFF_DELTA_CLIP` (deliberate-clipping ratio: scale = Q/(ratio*max|delta|), so
+        #: ratio < 1 traded a finer grid for clipping the top of the observed range) is RETIRED.
+        #: Q_level is now Q_b, full stop. Refused rather than ignored, because an archived script
+        #: that sets it was measuring something this code no longer does, and silently returning
+        #: absmax numbers under a clip label is the kind of defect this tree has paid for twice.
         #:
-        #: Measured (steady state, real checkpoint, latent relL2 vs fp16, 2026-08-04):
+        #: What it measured, kept here so the retirement is not a loss of the result. Steady state,
+        #: real checkpoint, latent relL2 vs fp16 (2026-08-04):
         #:     ratio    1.00    0.70    0.50    0.35    0.25    0.15    0.10
         #:     W8A8   0.0393  0.0490  0.0556  0.0616  0.0924  0.1504  0.1973
         #:     W4A4   0.4571  0.4275  0.4501  0.4199  0.4459  0.4829  0.5307
-        #: W8A8 is cleanly monotone: any deliberate clipping hurts, so 1.0 is optimal and is the
-        #: default. W4A4 is flat within noise between 0.35 and 1.0 (0.42-0.46) and only degrades
-        #: below 0.25; 1.0 is within ~9% of the best point there, so one default serves both and
-        #: the knob is left for tuning rather than needed for it.
+        #: W8A8 is cleanly monotone -- any deliberate clipping hurts, so the default 1.0 was already
+        #: optimal there and nothing is lost. W4A4 is flat within noise from 0.35 to 1.0. The one
+        #: place it genuinely bought something was W8A4, where docs/act_bits_2026-08-05 measured
+        #: r=0.40 at 0.086 against r=1.0's 0.183; that option goes away with this knob.
+        #: Full sweeps and figures: docs/delta_clip_2026-08-06/, docs/act_bits_2026-08-05/.
+        _clip = os.environ.get("MODIFF_DELTA_CLIP")
+        if _clip is not None and float(_clip) != 1.0:
+            raise ValueError(
+                f"MODIFF_DELTA_CLIP={_clip}: the clip ratio was retired. Q_level is Q_b now, so "
+                f"this would be silently ignored rather than applied. The sweeps it produced are "
+                f"in docs/delta_clip_2026-08-06/ and docs/act_bits_2026-08-05/.")
+        #: Activation precision for this W8 datapath: 8 (W8A8, the shipped mode) or 4 (W8A4, the
+        #: paper's own configuration). Those are the only two this class supports; W4A4 is Int4Conv.
         #:
-        #: Implemented by passing Q/ratio as the kernels' Q_level, since they compute
-        #: scale = Q_level/absmax -- no kernel support needed.
-        self.delta_clip_ratio = float(os.environ.get("MODIFF_DELTA_CLIP", "1.0"))
-        #: Activation precision for this W8 datapath, as the symmetric code ceiling Q = 2^(b-1)-1:
-        #: 127 = A8 (default, the shipped mode), 63 = A7, 31 = A6, 15 = A5, 7 = A4, 3 = A3, 1 = A2.
+        #: This used to be `MODIFF_ACT_Q`, a free symmetric ceiling that also accepted 63/31/15/3/1
+        #: (A7/A6/A5/A3/A2) for the 2026-08-05 sweep. Those intermediate widths are gone: they were a
+        #: research instrument for one report, they are not configurations anything ships, and every
+        #: one of them was a distinct value that a quantize call site could pass wrongly. `act_bits`
+        #: is the bit-width; `act_q` below is derived from it, in one place.
+        #: The sweep's data and conclusions are unaffected and still in docs/act_bits_2026-08-05/.
         #:
         #: This is a QUALITY instrument, not a speed one. Activations keep their int8 container and
         #: the GEMM stays W8A8, so a low setting costs nothing and saves nothing -- a real A4
         #: datapath needs int4 tensor cores, which require BOTH operands at 4 bits. What it does
         #: buy is the paper's actual configuration: MoDiff's claim is W8A4/W8A3, and until this knob
-        #: existed the only way to measure it was to abuse MODIFF_DELTA_CLIP (Q_level = 127/ratio),
-        #: which moved the delta grid and left the t=T activation grid at A8.
+        #: existed the only way to measure it was to abuse the (now retired) MODIFF_DELTA_CLIP
+        #: as Q_level = 127/ratio, which moved the delta grid and left the t=T grid at A8.
         #:
         #: Applied in two places, which together cover every activation the conv path quantizes:
         #:   * the dynamic delta quantizer's Q_level (Q/ratio), so Q(a_t - a_hat) gets b bits;
@@ -204,10 +217,19 @@ class OptimizedInt8Conv2d(nn.Module):
         #: b-bit quantizer would saturate. That makes the baseline arm slightly optimistic, i.e. it
         #: understates rather than overstates MoDiff's advantage.
         #:
-        #: Controls: Q=127 reproduces the shipped numbers exactly (relL2 0.039 MoDiff / 0.238
+        #: Controls: A8 reproduces the shipped numbers exactly (relL2 0.039 MoDiff / 0.238
         #: baseline at batch 8, DDIM 50, real ckpt, steady state), which is how the plumbing is
         #: checked -- see docs/act_bits_2026-08-05/.
-        self.act_q = float(os.environ.get("MODIFF_ACT_Q", "127"))
+        _ab = int(os.environ.get("MODIFF_ACT_BITS", "8"))
+        if _ab not in (4, 8):
+            raise ValueError(
+                f"MODIFF_ACT_BITS={_ab}: this datapath supports 8 (W8A8) or 4 (W8A4). The "
+                f"intermediate widths that MODIFF_ACT_Q used to accept were retired -- see the "
+                f"comment above and docs/act_bits_2026-08-05/ for their measurements.")
+        self.act_bits = _ab
+        #: Q_b = 2^(b-1)-1, derived from act_bits and never set independently, so the scale the
+        #: reduction builds and the limit the quantize kernel saturates at cannot disagree.
+        self.act_q = 127.0 if _ab == 8 else 7.0
         #: Recompute the dynamic delta scale every Nth modulated step, reusing it in between.
         #: 1 = exact (recompute every step). See _delta_should_refresh for the mechanism.
         #:
@@ -396,13 +418,27 @@ class OptimizedInt8Conv2d(nn.Module):
         between, cutting the reduction cost to 1/K.
 
         The reused scale can clip when the range grows between refreshes; pair it with
-        `MODIFF_DELTA_CLIP` < 1, which coarsens the grid on refresh steps and so leaves headroom.
+        the `a4` datapath limit, which saturates those codes at Q_b instead of letting them
+        through at up to 127. (The `MODIFF_DELTA_CLIP` that used to leave headroom here is retired.)
 
         step_count is 1 on the first modulated step, so `(step_count - 1) % K == 0` always refreshes
         there -- required, since `_scale_buf` holds nothing valid before the first refresh.
         """
         k = self.delta_refresh
         return k <= 1 or ((self.step_count - 1) % k) == 0
+
+    def _ensure_delta_dyn_bufs(self, device):
+        """Allocate the 4 reduction buffers the dynamic delta scale needs.
+
+        _ensure_state_buffers already does this, but it is keyed on the conv's own input tensor and
+        the updown fusion never materializes one -- it hands the kernel the PRE-resize activation.
+        So the resize path needs a device-only init. Same name and contract as Int4Conv's.
+        """
+        if self._scale_buf is None or self._scale_buf.device != device:
+            self._scale_buf = torch.empty(1, device=device, dtype=torch.float32)
+            self._inv_scale_buf = torch.empty(1, device=device, dtype=torch.float32)
+            self._absmax_buf = torch.zeros(1, device=device, dtype=torch.float32)
+            self._retire_count = torch.zeros(1, device=device, dtype=torch.int32)
 
     def _empty_f32_arg(self, device):
         """Cached 0-element fp32 tensor, the "not supplied" sentinel for the GN kernels'
@@ -451,27 +487,31 @@ class OptimizedInt8Conv2d(nn.Module):
                 and self._delta_should_refresh())
 
     @property
-    def _delta_code_ceiling(self) -> float:
-        """Where the delta quantizer's codes saturate, or -1 to keep the kernels' literal 127.
+    def _delta_a4(self) -> bool:
+        """Whether this layer's delta quantizer is on the 4-bit datapath (codes saturate at 7).
 
-        `act_q` in dynamic mode, -1 in static mode, and the asymmetry is deliberate.
+        THE ONE PLACE that answers "how many bits is this activation". It replaced a
+        `_delta_code_ceiling` returning a magnitude (`act_q`, or -1 for "use the kernel's literal
+        127"), which every quantize call site had to remember to pass -- and the updown resize
+        fusion did not, so those eight layers ran at 127 while the other 62 ran at act_q for
+        months. A bool derived here, threaded from here, has no value to get wrong.
 
-        In dynamic mode the scale is `Q_level/absmax` with `Q_level = act_q/clip`, so at clip 1.0 no
-        code can exceed `act_q` and passing it changes nothing. It starts to matter in exactly two
-        places, both of which are the quantizer failing to honour its own bit width:
+        Only `dynamic` mode is a4. The asymmetry is deliberate and unchanged: in static mode the
+        scale is the calibrated Q_b/range rather than this call's absmax, and letting a delta above
+        the calibrated range keep resolution instead of saturating is load-bearing for the published
+        baseline comparison (it favours the baseline arm). Changing that belongs to its own
+        measurement.
+
+        In dynamic mode at clip 1.0 the scale is already `Q_b/absmax`, so no code can exceed Q_b and
+        this changes nothing. It starts to matter in exactly two places, both of them the quantizer
+        failing to honour its own bit width:
           * clip < 1, whose whole purpose is to make the top (1-clip) of the range saturate. Without
-            a ceiling it did not saturate at all below A8 -- the knob was a finer grid, not a clip.
+            it there was no saturation at all below A8 -- the knob was a finer grid, not a clip.
           * MODIFF_DELTA_REFRESH > 1, where a scale measured up to K-1 steps ago is reused and the
-            delta's range may have grown since. Those codes are supposed to clip at act_q; clamped
-            at 127 instead, an "A4" layer can emit a code of 100 on 3 of every 4 steps.
-
-        Static mode keeps -1 on purpose. There the scale is the calibrated Q_b/range, which is not
-        built from this call's absmax, and the 127 ceiling is what lets a delta above the calibrated
-        range keep resolution instead of saturating. That behaviour is load-bearing for the published
-        baseline comparison (it is the asymmetry documented in MODIFF_ACT_Q's comment, and it
-        favours the baseline arm), so changing it belongs to its own measurement, not to this one.
+            delta's range may have grown since. Those codes are supposed to clip at Q_b; clamped at
+            127 instead, an "A4" layer can emit a code of 100 on 3 of every 4 steps.
         """
-        return float(self.act_q) if self.delta_dynamic else -1.0
+        return bool(self.delta_dynamic and self.act_bits == 4)
 
     def _delta_gn_dynamic_args(self, device):
         """The six trailing arguments of group_norm_silu_delta_quantize[_pack]_nhwc.
@@ -482,15 +522,15 @@ class OptimizedInt8Conv2d(nn.Module):
         gn_delta_absmax_flat_kernel. In dynamic mode the conv alpha must come from
         `_inv_scale_buf` (which that kernel writes), not from the table.
 
-        The trailing element is the code ceiling (see `_delta_code_ceiling`). Note the Q_level in
-        these tuples and that ceiling are different quantities: Q_level/absmax is the SCALE the
-        kernel will publish for a later step, the ceiling is where THIS call's codes saturate, and a
-        clip ratio is exactly the case where they stop agreeing.
+        The trailing element is the datapath's bit-width flag (see `_delta_a4`). Note the Q_level in
+        these tuples and that flag are different quantities: Q_level/absmax is the SCALE the
+        kernel will publish for a later step, a4 fixes where THIS call's codes saturate, and a clip
+        ratio is exactly the case where they stop agreeing.
         """
         if not self.delta_dynamic:
             e = self._empty_f32_arg(device)
-            return e, e, e, e, 127.0, False, 1.0, -1.0
-        ceil = self._delta_code_ceiling
+            return e, e, e, e, 127.0, False, 1.0, False
+        a4 = self._delta_a4
         if self._delta_report_on():
             # Free reporting: the quantize kernel quantizes with the pair currently in force (the
             # caller passes it as `scale`, and the conv reads its alpha) while publishing the next
@@ -498,18 +538,18 @@ class OptimizedInt8Conv2d(nn.Module):
             pub_s, pub_i = self._pub_scale_pair(device)
             self._scale_pair_b = not self._scale_pair_b
             return (self._absmax_buf, pub_s, pub_i,
-                    self._retire_count, self.act_q / self.delta_clip_ratio,
-                    True, self.delta_report_safety, ceil)
+                    self._retire_count, self.act_q,
+                    True, self.delta_report_safety, a4)
         if not self._delta_should_refresh():
             # Reuse the last measured scale: pass empty reduction buffers so the kernel skips its
             # absmax pass entirely. The caller hands it `_scale_buf` as the scale to quantize with,
             # which still holds the value the last refresh wrote there. This is the case the ceiling
             # matters most for: that scale is up to K-1 steps old, so the delta may have outgrown it.
             e = self._empty_f32_arg(device)
-            return e, e, e, e, 127.0, False, 1.0, ceil
+            return e, e, e, e, 127.0, False, 1.0, a4
         self._delta_seeded = True      # this pass publishes a scale the next step can ride on
         return (self._absmax_buf, self._scale_buf, self._inv_scale_buf,
-                self._retire_count, self.act_q / self.delta_clip_ratio, False, 1.0, ceil)
+                self._retire_count, self.act_q, False, 1.0, a4)
 
     def _delta_scale_args(self, device, x=None, fused_silu=False):
         """(quantize_scale, conv_alpha) as 1-element device views for the current step.
@@ -542,7 +582,7 @@ class OptimizedInt8Conv2d(nn.Module):
                     modiff_cutlass.delta_absmax_fp16(
                         x, self.a_hat_cache, self._absmax_buf, self._scale_buf,
                         self._inv_scale_buf, self._retire_count,
-                        self.act_q / self.delta_clip_ratio, self._smooth_inv_flat, fused_silu)
+                        self.act_q, self._smooth_inv_flat, fused_silu)
                 return self._scale_buf.view(1), self._inv_scale_buf.view(1)
             # GN-fused caller: the kernel discovers the scale itself, so return a valid but
             # unused pair. Deliberately skips the missing-calibration warning below -- dynamic
@@ -827,7 +867,7 @@ class OptimizedInt8Conv2d(nn.Module):
             self.a_hat_cache,
             d_scale,
             self._smooth_inv_flat,
-            self._delta_code_ceiling,
+            self._delta_a4,
         )
         profiler.stop("MoDiff INT8 Static Step1 (fused SiLU)", p_step1)
         if self._delta_calib:
@@ -948,7 +988,7 @@ class OptimizedInt8Conv2d(nn.Module):
 
         p_step1 = profiler.start("MoDiff INT8 Static Step1 (fused SiLU)")
         x_int8 = modiff_cutlass.step1_static_quantize_fprop_silu(
-            x, self.a_hat_cache, d_scale, self._smooth_inv_flat, self._delta_code_ceiling)
+            x, self.a_hat_cache, d_scale, self._smooth_inv_flat, self._delta_a4)
         profiler.stop("MoDiff INT8 Static Step1 (fused SiLU)", p_step1)
         if self._delta_calib:
             self._observe_delta_codes(x_int8)
@@ -1481,7 +1521,7 @@ class OptimizedInt8Conv2d(nn.Module):
                 self.a_hat_cache,
                 d_scale,
                 self._smooth_inv_flat,
-                self._delta_code_ceiling,
+                self._delta_a4,
             )
             profiler.stop("MoDiff INT8 Static Step1", p_step1)
             if self._delta_calib:
@@ -1506,12 +1546,12 @@ class OptimizedInt8Conv2d(nn.Module):
         p_step1 = profiler.start("MoDiff INT8 Fused Step1")
         # Q_level, not a literal 127: this path is the uncalibrated / non-GN-fusable sibling of
         # _delta_gn_dynamic_args, and it hardcoded 127 while those honoured the knobs. That made
-        # MODIFF_DELTA_CLIP (and now MODIFF_ACT_Q) silently partial -- whichever conv layers fell
+        # MODIFF_ACT_BITS silently partial -- whichever conv layers fell
         # through to the plain modulated path kept an 8-bit delta grid while the rest changed.
         x_int8 = modiff_cutlass.step1_quantize_fprop(
             x, self.a_hat_cache, self._residual_buf,
             self._absmax_buf, self._scale_buf, self._inv_scale_buf,
-            self._retire_count, self.act_q / self.delta_clip_ratio, self._smooth_inv_flat
+            self._retire_count, self.act_q, self._smooth_inv_flat
         )
         profiler.stop("MoDiff INT8 Fused Step1", p_step1)
 

@@ -245,10 +245,10 @@ class OptimizedInt4Conv2d(nn.Module):
         #: only 4 bits to spend, clipping and coarseness both bite harder than at int8, so
         #: `dynamic` matters more here than it does for W8A8.
         self.delta_dynamic = os.environ.get("MODIFF_DELTA_MODE", "dynamic").lower() != "static"
-        #: See OptimizedInt8Conv2d.delta_clip_ratio for the measured sweep. At W4A4 the curve is
-        #: flat within noise from 0.35 to 1.0 (relL2 0.42-0.46) and degrades below 0.25, so the
-        #: 1.0 default is fine and the knob is for tuning, not correctness.
-        self.delta_clip_ratio = float(os.environ.get("MODIFF_DELTA_CLIP", "1.0"))
+        #: `MODIFF_DELTA_CLIP` is RETIRED -- see OptimizedInt8Conv2d for the sweep it produced and
+        #: why setting it now raises instead of being ignored. At W4A4 it cost nothing to remove:
+        #: the curve was flat within noise from 0.35 to 1.0 (relL2 0.42-0.46). The int8 class does
+        #: the raising, and every W4A4 run constructs those too, so this class does not repeat it.
         #: See OptimizedInt8Conv2d._delta_should_refresh -- recompute the dynamic scale every Nth
         #: modulated step, reuse it in between. 1 = exact.
         #: 4. See OptimizedInt8Conv2d.delta_refresh: K=1 is the paper's formulation and was tried as
@@ -605,7 +605,7 @@ class OptimizedInt4Conv2d(nn.Module):
             if x is not None and self._delta_should_refresh():
                 modiff_cutlass.delta_absmax_fp16(
                     x, self.a_hat_cache, self._absmax_buf, self._scale_buf, self._inv_scale_buf,
-                    self._retire_count, self.Q_DELTA / self.delta_clip_ratio,
+                    self._retire_count, self.Q_DELTA,
                     self._smooth_inv_flat, fused_silu)
             return self._scale_buf.view(1), self._inv_scale_buf.view(1)
         # Static mode: prefer the per-step delta table when it has been calibrated. Falling back to
@@ -643,14 +643,14 @@ class OptimizedInt4Conv2d(nn.Module):
             # The quantize kernel both quantizes with the published scale and publishes the next
             # one: no separate absmax pass at all.
             return (self._absmax_buf, self._scale_buf, self._inv_scale_buf,
-                    self._retire_count, self.Q_DELTA / self.delta_clip_ratio,
+                    self._retire_count, self.Q_DELTA,
                     True, self.delta_report_safety)
         if not self._delta_should_refresh():
             # Reuse the last measured scale; empty buffers make the kernel skip its absmax pass.
             return e, e, e, e, self.Q_DELTA, False, 1.0
         self._delta_seeded = True      # this pass publishes a scale the next window can ride on
         return (self._absmax_buf, self._scale_buf, self._inv_scale_buf,
-                self._retire_count, self.Q_DELTA / self.delta_clip_ratio, False, 1.0)
+                self._retire_count, self.Q_DELTA, False, 1.0)
 
     def _can_fuse_input_silu(self, x: torch.Tensor) -> bool:
         """See OptimizedInt8Conv2d._can_fuse_input_silu for the rationale."""

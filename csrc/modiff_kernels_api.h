@@ -74,17 +74,19 @@ torch::Tensor step1_quantize_no_ahat_fprop(
     torch::Tensor absmax_buf, torch::Tensor scale_buf, torch::Tensor inv_scale_buf,
     torch::Tensor retire_count, float Q_level, torch::Tensor smooth_inv);
 
-// code_ceiling: symmetric code ceiling, i.e. Q_b for a b-bit activation datapath. <= 0 keeps the
-// literal 127 these kernels clamped at before the parameter existed, so an un-migrated caller and
-// every caller at clip ratio 1.0 stay bit-identical. Needed for a clip ratio to actually clip --
-// see docs/delta_clip_2026-08-06/FINDINGS.md.
+// a4: the activation bit-width of this datapath (true => 4 bits, Q_b = 7; false => 8, Q_b = 127).
+// It replaced a `float code_ceiling`. The ceiling was a magnitude, so its failure mode was a
+// plausible-but-wrong number -- pass 127, or forget the argument, and a 4-bit layer silently stayed
+// 8-bit, which is exactly what group_norm_silu_delta_quantize_resize_nhwc did until 2026-08-10. A
+// bool has no such value to get wrong, and the saturation limit is now derived inside each kernel
+// from the datapath it was told it is on. Saturating at Q_b rather than 127 is what a reused
+// (MODIFF_DELTA_REFRESH > 1) scale depends on once the delta has outgrown it -- see
+// docs/delta_clip_2026-08-06/FINDINGS.md, whose clip ratio is itself now retired.
 torch::Tensor step1_static_quantize_fprop(
-    torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor scale_buf, torch::Tensor smooth_inv,
-    float code_ceiling = -1.0f);
+    torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor scale_buf, torch::Tensor smooth_inv, bool a4 = false);
 
 torch::Tensor step1_static_quantize_fprop_silu(
-    torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor scale_buf, torch::Tensor smooth_inv,
-    float code_ceiling = -1.0f);
+    torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor scale_buf, torch::Tensor smooth_inv, bool a4 = false);
 
 torch::Tensor step1_quantize_pack_int4_fprop(
     torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor residual_buf,
@@ -291,6 +293,13 @@ torch::Tensor conv2d_int4_fprop_o_hat_residual(
 torch::Tensor fp16_ncw_to_fp32_cl(torch::Tensor src, int N, int C, int L);
 torch::Tensor fp32_cl_to_fp16_ncw(torch::Tensor src, int N, int C, int L);
 torch::Tensor fp16_ncw_delta_to_int8_cl(torch::Tensor x, torch::Tensor a_hat, torch::Tensor scale_t, int N, int C, int L);
+// packed-INT4 -> INT8 widening, NHWC-physical. Value-preserving (a nibble code becomes the same
+// int8 code), so the consumer's dequant `alpha` is unchanged. This is what lets W8A4 route its
+// activation through int4 STORAGE -- where 4 bits is a property of the format, not of a clamp --
+// and feed the int8 weight GEMM anyway. See the kernel header for why no mixed s8xs4 MMA exists.
+torch::Tensor unpack_int4_to_int8_cl(torch::Tensor packed, int64_t N, int64_t C,
+                                     int64_t H, int64_t W);
+
 torch::Tensor cat2_channels_last_fp16(torch::Tensor a, torch::Tensor b);
 
 // ---- csrc/kernels/norm/group_norm_silu.cu ----
@@ -344,15 +353,23 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc(
     torch::Tensor mod_scale, torch::Tensor mod_shift,
     torch::Tensor absmax_buf, torch::Tensor scale_out, torch::Tensor inv_scale_out,
     torch::Tensor retire_count, double Q_level, bool report_next, double safety,
-    double code_ceiling_in = -1.0);
+    bool a4 = false);
 // MoDiff twin of group_norm_silu_quantize_resize_nhwc: fuses GN(+mod)(+SiLU)+2x resize+delta
 // quantize+in-place a_hat for the eight updown ResBlocks, which get no fusion otherwise.
+// The trailing eight arguments are the same dynamic-scale contract as the non-resize sibling
+// above: empty absmax_buf/scale_out/inv_scale_out/retire_count => static (the original
+// behaviour), real 1-element buffers => the scale is measured here. Without them the kernel
+// could not serve a refresh step, so the caller declined on every one of them -- which at
+// MODIFF_DELTA_REFRESH=1 is every step, i.e. the fusion never fired.
 torch::Tensor group_norm_silu_delta_quantize_resize_nhwc(
     torch::Tensor x, torch::Tensor weight, torch::Tensor bias,
     int64_t num_groups, double eps, bool apply_silu,
     torch::Tensor scale, torch::Tensor smooth_inv,
     torch::Tensor mod_scale, torch::Tensor mod_shift,
-    int64_t k_pad, int64_t resize, bool pack, torch::Tensor a_hat_cache);
+    int64_t k_pad, int64_t resize, bool pack, torch::Tensor a_hat_cache,
+    torch::Tensor absmax_buf, torch::Tensor scale_out, torch::Tensor inv_scale_out,
+    torch::Tensor retire_count, double Q_level, bool report_next, double safety,
+    bool a4);
 
 torch::Tensor group_norm_silu_delta_quantize_pack_nhwc(
     torch::Tensor x, torch::Tensor weight, torch::Tensor bias, torch::Tensor a_hat_cache,

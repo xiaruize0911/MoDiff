@@ -370,6 +370,37 @@ def _prequant_gn_conv(x, gn, conv, mod_scale=None, mod_shift=None, residual=None
         return conv.forward_from_int8(q, residual=residual)
 
 
+#: Read at call time, not at import, so an in-process A/B can flip it between arms.
+def _updown_fuse_refresh():
+    return os.environ.get("MODIFF_UPDOWN_FUSE_REFRESH", "1") == "1"
+
+
+class _UpdownFuseRefreshFlag:
+    """Truthy iff the fusion should cover dynamic refresh steps. A live view of the env var
+    rather than a snapshot, so `os.environ[...] = "0"` takes effect on the next call."""
+    def __bool__(self):
+        return _updown_fuse_refresh()
+
+
+_UPDOWN_FUSE_REFRESH = _UpdownFuseRefreshFlag()
+
+
+def _delta_gn_dynamic_args_any(conv, device, is_int4):
+    """The 8 trailing dynamic-scale arguments of group_norm_silu_delta_quantize_resize_nhwc,
+    from whichever accessor this conv class provides.
+
+    int8 (`_delta_gn_dynamic_args`) already returns all 8. int4 (`_delta_gn_dynamic_args_i4`)
+    returns 7 -- it has no bit-width flag to return, because packed-int4 storage saturates at 7 by
+    the format itself and its sibling kernel group_norm_silu_delta_quantize_pack_nhwc therefore
+    takes no such argument. False is correct here for the same reason: on the PACK path the resize
+    kernel derives its limit from PACK, so the flag is redundant rather than wrong, and the int4 arm
+    stays bit-identical to that sibling.
+    """
+    if is_int4:
+        return tuple(conv._delta_gn_dynamic_args_i4(device)) + (False,)
+    return tuple(conv._delta_gn_dynamic_args(device))
+
+
 def _prequant_gn_resize_conv_modiff(x, gn, h_upd, conv, mod_scale=None, mod_shift=None):
     """MoDiff twin of _prequant_gn_resize_conv: GN+SiLU+resize+delta-quantize+a_hat in ONE kernel.
 
@@ -382,10 +413,26 @@ def _prequant_gn_resize_conv_modiff(x, gn, h_upd, conv, mod_scale=None, mod_shif
     a_hat stays at the POST-resize (conv input) resolution, the same layout the unfused path uses,
     so this is a pure fusion.
 
-    Returns the conv output, or None to fall through. It deliberately declines on DYNAMIC refresh
-    steps: the fused kernel takes its scale as a device pointer but does not compute an absmax, so
-    on a step that must re-measure the delta range we let the unfused path run and do that. With the
-    default MODIFF_DELTA_REFRESH=4 that is one step in four; the other three fuse.
+    Returns the conv output, or None to fall through.
+
+    REFRESH STEPS (fixed 2026-08-10). This used to decline whenever the dynamic scale had to be
+    re-measured, because the kernel took its scale as a device pointer and computed no absmax. That
+    read as "one step in four falls back" -- but MODIFF_DELTA_REFRESH=1 is the paper's own
+    configuration, and there EVERY step is a refresh, so the fusion never fired at all and all
+    eight updown ResBlocks ran unfused. The 2026-08-07 traces show it plainly: 6/8 of these calls
+    fused at K=4 and 0/8 at K=1, with 8 `upsample_nearest2d` + 8 `avg_pool2d` + 8 standalone
+    `group_norm_silu_nhwc` launches in their place.
+
+    The kernel now carries the same dynamic-scale contract as the 62 other convs'
+    group_norm_silu_delta_quantize_nhwc, so this passes `_delta_gn_dynamic_args` straight through
+    and a refresh step stays fused: a reduction-only launch of the same kernel measures the range,
+    the quantizing launch consumes it. Two launches, but still one fewer full pass over `x` than
+    the unfused route, and no fp16 resized intermediate at all.
+
+    `MODIFF_UPDOWN_FUSE_REFRESH=0` restores the old decline. It exists because the win is small
+    enough (+0.46 ms/step over the eight shapes at batch 128) that cross-session drift is the same
+    order, so the honest measurement is an A/B in ONE process -- which needs both behaviours
+    available at once. It doubles as the revert switch.
     """
     if not (HAS_GN_SILU_DELTA_QUANTIZE_RESIZE and conv is not None):
         return None
@@ -395,14 +442,16 @@ def _prequant_gn_resize_conv_modiff(x, gn, h_upd, conv, mod_scale=None, mod_shif
         return None                       # t=T has no cache to subtract yet
     if not getattr(conv, 'use_cutlass', False) or getattr(conv, 'groups', 1) != 1:
         return None
-    # Dynamic mode: only fuse on steps that reuse the retained scale (see the docstring). And only
-    # once that retained scale actually exists -- the reduction buffers are allocated by the
-    # unfused path, so the first modulated step (which is always a refresh) must run there first.
+    # Dynamic mode needs the conv's four reduction buffers. _ensure_state_buffers allocates them,
+    # but it is keyed on the conv's own input tensor and this fusion never materializes one -- it
+    # hands the kernel the PRE-resize activation -- so allocate them here. Idempotent, and the only
+    # reason this path used to require that an unfused step had run first.
     if getattr(conv, 'delta_dynamic', False):
-        if conv._delta_should_refresh():
-            return None
-        if getattr(conv, '_scale_buf', None) is None or getattr(conv, '_inv_scale_buf', None) is None:
-            return None
+        if not _UPDOWN_FUSE_REFRESH and conv._delta_should_refresh():
+            return None                   # pre-2026-08-10 behaviour; see the docstring
+        if getattr(conv, '_scale_buf', None) is None and not _UPDOWN_FUSE_REFRESH:
+            return None                   # the old path relied on an unfused step running first
+        conv._ensure_delta_dyn_bufs(x.device)
     try:
         from ldm.modules.diffusionmodules.openaimodel import Upsample, Downsample
     except ImportError:
@@ -442,9 +491,13 @@ def _prequant_gn_resize_conv_modiff(x, gn, h_upd, conv, mod_scale=None, mod_shif
     w, b = gn._cast_params(x.dtype)
     d_scale, d_alpha = (conv._delta_scale_args_i4(x.device) if is_int4
                         else conv._delta_scale_args(x.device))
+    # ORDER MATTERS, and it is the same order forward_gn_fused_modiff uses: read the pair currently
+    # IN FORCE first, because _delta_gn_dynamic_args flips it on a reporting step. On a separate-pass
+    # refresh step the pair in force IS what the reduction launch writes into, so the conv's alpha
+    # (d_alpha) picks up the freshly measured value; on a reporting step it is the previous window's,
+    # which is exactly what that mode quantizes with.
+    dyn = _delta_gn_dynamic_args_any(conv, x.device, is_int4)
     if getattr(conv, 'delta_dynamic', False):
-        # Use the pair currently IN FORCE, not _scale_buf unconditionally -- free reporting
-        # double-buffers the published scale (see OptimizedInt8Conv2d._scale_pair_b).
         cur = conv._cur_scale_pair() if hasattr(conv, '_cur_scale_pair') else (
             conv._scale_buf, conv._inv_scale_buf)
         d_scale, d_alpha = cur[0].view(1), cur[1].view(1)
@@ -461,7 +514,7 @@ def _prequant_gn_resize_conv_modiff(x, gn, h_upd, conv, mod_scale=None, mod_shif
         ms2d = sh2d = x.new_empty(0)
 
     x_q = modiff_cutlass.group_norm_silu_delta_quantize_resize_nhwc(
-        x, w, b, ng, eps, True, d_scale, smooth_inv, ms2d, sh2d, 0, direction, is_int4, ah)
+        x, w, b, ng, eps, True, d_scale, smooth_inv, ms2d, sh2d, 0, direction, is_int4, ah, *dyn)
     if conv._delta_calib:
         conv._observe_delta_absmax() if is_int4 else conv._observe_delta_codes(x_q)
     return (conv._conv_from_int4_o_hat(x_q, Ho, Wo, d_alpha) if is_int4

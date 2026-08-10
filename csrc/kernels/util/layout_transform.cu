@@ -657,3 +657,100 @@ torch::Tensor cat2_channels_last_fp16(torch::Tensor a, torch::Tensor b) {
     );
     return out;
 }
+
+
+// -----------------------------------------------------------------------------
+//   Op:       packed-INT4 -> INT8 widening, NHWC-physical
+//   Inputs:   packed  int8 [N, Ho, Wo, C/2] (or any buffer whose bytes are NHWC-physical with
+//                    Kpad/2 bytes per spatial position), the nibble layout every int4 quantize
+//                    kernel in this tree writes: byte c/2 holds channel c in the LOW nibble and
+//                    channel c+1 in the HIGH nibble, each a signed 4-bit two's-complement code
+//             C       logical channel count (even)
+//   Outputs:  int8 [N, C, Ho, Wo] channels_last, codes sign-extended to 8 bits
+//   Computes: value-preserving widening. A nibble code q in [-7,7] becomes the int8 q, so the
+//             GEMM's `alpha` (the reciprocal of the scale that produced q) is UNCHANGED and the
+//             dequantized result is bit-identical to what an int4 GEMM would have produced.
+//
+//   Why this exists: W8A4 -- int8 weights, 4-bit activations -- has no hardware path. Both int4
+//   tensor-core MMAs take BOTH operands at 4 bits, and no mainstream ISA has a mixed s8xs4 MMA, so
+//   the activation cannot be fed to a GEMM as nibbles alongside int8 weights. Routing the
+//   activation through int4 STORAGE and widening it here makes the 4-bitness a property of the
+//   format rather than of a clamp parameter: a nibble physically cannot hold a code above 7, so
+//   there is nothing left for a code ceiling to enforce. That is what retires `clamp_code`.
+//
+//   UNREFERENCED, AND THE REASON IS THE FINDING (see the DEAD-CODE POLICY at the top of
+//   csrc/modiff_kernels_api.h, which keeps a kernel only on exactly these grounds). Built and
+//   verified 2026-08-10 to answer whether W8A4 should route its activation through int4 storage
+//   rather than an int8 container with a code ceiling. Both halves were measured:
+//     * EQUIVALENCE: pack+widen vs the int8 quantize at Q_b=7 is BIT-IDENTICAL, on all ten cases
+//       including the scale-4x-too-fine regime that is the only place the two could differ (a stale
+//       MODIFF_DELTA_REFRESH>1 scale, or a clip ratio below 1). So it changes no number.
+//     * COST: +4.74 ms/step at batch 128 over the 70 conv layers -- 4.5% of the ~105 ms/step the
+//       configuration runs at, and 3.8x the 1.24 ms the updown fusion had just recovered.
+//   Paying 4.5% for a bit-identical re-encoding was refused. W8A4 instead names its datapath with
+//   the `a4` bool the quantize kernels now take, which gets the same "4 bits is not a magnitude a
+//   caller can pass wrongly" property for nothing. Kept because the equivalence result is what
+//   makes that choice defensible, and rebuilding this to re-derive it would cost a rebuild plus a
+//   GPU hour. Harness: integration/tests/bench_unpack_int4_widen.py.
+//
+//   Cost detail: one extra pass over the activation (read C/2 bytes, write C). W8A4 was already a
+//   quality-only configuration -- "not a speed configuration on any hardware"
+//   (docs/act_bits_2026-08-05/FINDINGS.md) -- which is why the trade was worth measuring at all.
+//
+//   Constraints: C even; `packed` contiguous with kpad_bytes (>= C/2) bytes per spatial position.
+// -----------------------------------------------------------------------------
+__global__ void unpack_int4_to_int8_cl_kernel(
+    const int8_t* __restrict__ packed,
+    int8_t* __restrict__ out,
+    long num_positions,          // N * Ho * Wo
+    int C,
+    int kpad_bytes               // bytes per spatial position in `packed` (>= C/2)
+) {
+    const int pairs_per_pos = C / 2;
+    const long total_pairs = num_positions * (long)pairs_per_pos;
+    for (long idx = blockIdx.x * (long)blockDim.x + threadIdx.x; idx < total_pairs;
+         idx += (long)blockDim.x * gridDim.x) {
+        const long pos = idx / pairs_per_pos;
+        const int pair = (int)(idx % pairs_per_pos);
+        const uint8_t b = (uint8_t)packed[pos * (long)kpad_bytes + pair];
+        // Sign-extend each nibble: 0..7 stay, 8..15 map to -8..-1. The quantizers clamp at +-7 so
+        // -8 is unreachable in practice, but decoding it correctly costs nothing and keeps this a
+        // faithful inverse of the packing rather than a partial one.
+        int lo = (int)(b & 0x0F); if (lo > 7) lo -= 16;
+        int hi = (int)((b >> 4) & 0x0F); if (hi > 7) hi -= 16;
+        // Adjacent output channels are adjacent bytes in NHWC, so this is one aligned 2-byte store.
+        const long o = pos * (long)C + 2 * pair;
+        out[o]     = (int8_t)lo;
+        out[o + 1] = (int8_t)hi;
+    }
+}
+
+torch::Tensor unpack_int4_to_int8_cl(torch::Tensor packed, int64_t N, int64_t C,
+                                     int64_t H, int64_t W) {
+    // This translation unit does not include common.cuh, so the checks are spelled out the way
+    // every other entry point here spells them.
+    TORCH_CHECK(packed.is_cuda(), "unpack_int4_to_int8_cl: packed must be a CUDA tensor");
+    TORCH_CHECK(packed.is_contiguous(), "unpack_int4_to_int8_cl: packed must be contiguous");
+    TORCH_CHECK(packed.scalar_type() == torch::kInt8,
+                "unpack_int4_to_int8_cl: packed must be int8 (nibble pairs)");
+    TORCH_CHECK(C % 2 == 0, "unpack_int4_to_int8_cl: C must be even");
+    const long num_positions = (long)N * H * W;
+    TORCH_CHECK(num_positions > 0, "unpack_int4_to_int8_cl: empty shape");
+    TORCH_CHECK(packed.numel() % num_positions == 0,
+                "unpack_int4_to_int8_cl: packed numel must divide by N*H*W");
+    const long kpad_bytes = packed.numel() / num_positions;
+    TORCH_CHECK(kpad_bytes >= C / 2,
+                "unpack_int4_to_int8_cl: packed has fewer than C/2 bytes per position");
+
+    auto out = torch::empty({N, C, H, W},
+        packed.options().memory_format(at::MemoryFormat::ChannelsLast));
+    const long total_pairs = num_positions * (C / 2);
+    const int block = 256;
+    const int grid = (int)std::min<long>((total_pairs + block - 1) / block, 2147483647L);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    unpack_int4_to_int8_cl_kernel<<<grid, block, 0, stream>>>(
+        packed.data_ptr<int8_t>(), out.data_ptr<int8_t>(),
+        num_positions, (int)C, (int)kpad_bytes);
+    C10_CUDA_CHECK(cudaGetLastError());
+    return out;
+}

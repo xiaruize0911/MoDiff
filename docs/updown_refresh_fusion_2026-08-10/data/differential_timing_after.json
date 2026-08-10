@@ -1,0 +1,310 @@
+{
+ "gpu": "NVIDIA A40",
+ "torch": "2.4.1+cu124",
+ "batch": 128,
+ "steps": 200,
+ "repeats": 3,
+ "warmups": 2,
+ "base_env": {
+  "MODIFF_QUANT_LINEAR": "1",
+  "MODIFF_QUANT_ATTN": "1",
+  "MODIFF_QUANT_ATTN_STATIC": "1",
+  "MODIFF_QATTN_FLASH": "1",
+  "MODIFF_FLASH_GATE": "on",
+  "MODIFF_QUANT_ATTN_ALLT": "0",
+  "MODIFF_LINEAR_OUT_I8": "0",
+  "MODIFF_FUSE_PROJ_QUANT": "1",
+  "MODIFF_LINEAR": "1",
+  "MODIFF_DELTA_REFRESH": "1",
+  "MODIFF_DELTA_CLIP": "1.0",
+  "MODIFF_ACT_Q": "127",
+  "MODIFF_DELTA_MODE": "dynamic",
+  "MODIFF_WARMUP_STEPS": "5"
+ },
+ "arms": {
+  "int8_ptq": {
+   "mode": "int8_baseline",
+   "delta_from": null,
+   "why": "quantized, no MoDiff anywhere; the qout epilogue is live on all 21 blocks",
+   "env": {
+    "MODIFF_ACT_Q": "127",
+    "MODIFF_DELTA_CLIP": "1.0",
+    "MODIFF_DELTA_MODE": "dynamic",
+    "MODIFF_DELTA_REFRESH": "1",
+    "MODIFF_FLASH_GATE": "on",
+    "MODIFF_FUSE_PROJ_QUANT": "1",
+    "MODIFF_LINEAR": "0",
+    "MODIFF_LINEAR_OUT_I8": "0",
+    "MODIFF_QATTN_FLASH": "1",
+    "MODIFF_QUANT_ATTN": "1",
+    "MODIFF_QUANT_ATTN_ALLT": "0",
+    "MODIFF_QUANT_ATTN_STATIC": "1",
+    "MODIFF_QUANT_LINEAR": "1",
+    "MODIFF_WARMUP_STEPS": "5"
+   },
+   "hook": null,
+   "route_check": {
+    "attn_blocks": 21,
+    "attn_class": "QuantizedStandardAttentionBlock",
+    "qout_eligible": 21,
+    "wxax": 42,
+    "wxax_modiff": 0,
+    "wxax_out_i8": 0,
+    "wxax_bias_res": 42,
+    "int8_convs": 140,
+    "conv_modiff_on": 0,
+    "conv_delta_refresh": [
+     1
+    ]
+   },
+   "stats": {
+    "n": 3,
+    "mean": 14620978.841145834,
+    "median": 14636635.7421875,
+    "stdev": 72907.70515813383,
+    "sem": 42093.28319904644,
+    "cv_pct": 0.498651328001102,
+    "min": 14541514.6484375,
+    "max": 14684786.1328125,
+    "spread_pct": 0.9788552977515552,
+    "ci95_half": 181127.39760549684,
+    "ci95_lo": 14439851.443540337,
+    "ci95_hi": 14802106.238751331,
+    "iqr": 0.0,
+    "samples": [
+     14541514.6484,
+     14636635.7422,
+     14684786.1328
+    ]
+   },
+   "stability": "tight",
+   "wall_us_per_batch": 14636635.7421875,
+   "wall_mean_us": 14620978.841145834,
+   "wall_stdev_us": 72907.70515813383,
+   "wall_cv_pct": 0.498651328001102,
+   "wall_all_us": [
+    14541514.6,
+    14636635.7,
+    14684786.1
+   ],
+   "wall_spread_pct": 0.9852583299525449,
+   "ms_per_step": 73.1831787109375,
+   "ms_per_sample": 114.34871673583984,
+   "speedup_vs_fp16": null
+  },
+  "modiff_conv_k1": {
+   "mode": "int8",
+   "delta_from": "modiff_conv_k4",
+   "why": "+ per-step delta scale (K=4 -> K=1)",
+   "env": {
+    "MODIFF_ACT_Q": "127",
+    "MODIFF_DELTA_CLIP": "1.0",
+    "MODIFF_DELTA_MODE": "dynamic",
+    "MODIFF_DELTA_REFRESH": "1",
+    "MODIFF_FLASH_GATE": "on",
+    "MODIFF_FUSE_PROJ_QUANT": "1",
+    "MODIFF_LINEAR": "0",
+    "MODIFF_LINEAR_OUT_I8": "0",
+    "MODIFF_QATTN_FLASH": "1",
+    "MODIFF_QUANT_ATTN": "1",
+    "MODIFF_QUANT_ATTN_ALLT": "0",
+    "MODIFF_QUANT_ATTN_STATIC": "1",
+    "MODIFF_QUANT_LINEAR": "1",
+    "MODIFF_WARMUP_STEPS": "5"
+   },
+   "hook": null,
+   "route_check": {
+    "attn_blocks": 21,
+    "attn_class": "QuantizedStandardAttentionBlock",
+    "qout_eligible": 21,
+    "wxax": 42,
+    "wxax_modiff": 0,
+    "wxax_out_i8": 0,
+    "wxax_bias_res": 42,
+    "int8_convs": 140,
+    "conv_modiff_on": 140,
+    "conv_delta_refresh": [
+     1
+    ]
+   },
+   "stats": {
+    "n": 3,
+    "mean": 16620772.786458334,
+    "median": 16631560.546875,
+    "stdev": 32508.10799819257,
+    "sem": 18768.564903601906,
+    "cv_pct": 0.19558722338517456,
+    "min": 16584242.1875,
+    "max": 16646515.625,
+    "spread_pct": 0.3744293106139154,
+    "ci95_half": 80761.134780199,
+    "ci95_lo": 16540011.651678136,
+    "ci95_hi": 16701533.921238532,
+    "iqr": 0.0,
+    "samples": [
+     16584242.1875,
+     16631560.5469,
+     16646515.625
+    ]
+   },
+   "stability": "tight",
+   "wall_us_per_batch": 16631560.546875,
+   "wall_mean_us": 16620772.786458334,
+   "wall_stdev_us": 32508.10799819257,
+   "wall_cv_pct": 0.19558722338517456,
+   "wall_all_us": [
+    16584242.2,
+    16631560.5,
+    16646515.6
+   ],
+   "wall_spread_pct": 0.37549763682863485,
+   "ms_per_step": 83.157802734375,
+   "ms_per_sample": 129.93406677246094,
+   "speedup_vs_fp16": null
+  },
+  "modiff_full_k1": {
+   "mode": "int8",
+   "delta_from": "modiff_conv_k1",
+   "why": "+ MoDiff on the 42 attention projections -- the paper's full datapath, and the BASE below",
+   "env": {
+    "MODIFF_ACT_Q": "127",
+    "MODIFF_DELTA_CLIP": "1.0",
+    "MODIFF_DELTA_MODE": "dynamic",
+    "MODIFF_DELTA_REFRESH": "1",
+    "MODIFF_FLASH_GATE": "on",
+    "MODIFF_FUSE_PROJ_QUANT": "1",
+    "MODIFF_LINEAR": "1",
+    "MODIFF_LINEAR_OUT_I8": "0",
+    "MODIFF_QATTN_FLASH": "1",
+    "MODIFF_QUANT_ATTN": "1",
+    "MODIFF_QUANT_ATTN_ALLT": "0",
+    "MODIFF_QUANT_ATTN_STATIC": "1",
+    "MODIFF_QUANT_LINEAR": "1",
+    "MODIFF_WARMUP_STEPS": "5"
+   },
+   "hook": null,
+   "route_check": {
+    "attn_blocks": 21,
+    "attn_class": "QuantizedStandardAttentionBlock",
+    "qout_eligible": 0,
+    "wxax": 42,
+    "wxax_modiff": 42,
+    "wxax_out_i8": 0,
+    "wxax_bias_res": 0,
+    "int8_convs": 140,
+    "conv_modiff_on": 140,
+    "conv_delta_refresh": [
+     1
+    ]
+   },
+   "stats": {
+    "n": 3,
+    "mean": 21100434.895833332,
+    "median": 21109494.140625,
+    "stdev": 16635.21546982847,
+    "sem": 9604.346129532894,
+    "cv_pct": 0.07883825879396161,
+    "min": 21081236.328125,
+    "max": 21110574.21875,
+    "spread_pct": 0.13897960050373515,
+    "ci95_half": 41327.501395380044,
+    "ci95_lo": 21059107.394437954,
+    "ci95_hi": 21141762.39722871,
+    "iqr": 0.0,
+    "samples": [
+     21081236.3281,
+     21110574.2188,
+     21109494.1406
+    ]
+   },
+   "stability": "tight",
+   "wall_us_per_batch": 21109494.140625,
+   "wall_mean_us": 21100434.895833332,
+   "wall_stdev_us": 16635.21546982847,
+   "wall_cv_pct": 0.07883825879396161,
+   "wall_all_us": [
+    21081236.3,
+    21110574.2,
+    21109494.1
+   ],
+   "wall_spread_pct": 0.13916589221031403,
+   "ms_per_step": 105.547470703125,
+   "ms_per_sample": 164.9179229736328,
+   "delta_ms_per_step": 22.389667968750004,
+   "ratio_vs_base": 1.2692431405416966,
+   "speedup_vs_fp16": null
+  },
+  "modiff_full_k4": {
+   "mode": "int8",
+   "delta_from": "modiff_full_k1",
+   "why": "the same full datapath at K=4, so the projections' cost can be read at both refreshes",
+   "env": {
+    "MODIFF_ACT_Q": "127",
+    "MODIFF_DELTA_CLIP": "1.0",
+    "MODIFF_DELTA_MODE": "dynamic",
+    "MODIFF_DELTA_REFRESH": "4",
+    "MODIFF_FLASH_GATE": "on",
+    "MODIFF_FUSE_PROJ_QUANT": "1",
+    "MODIFF_LINEAR": "1",
+    "MODIFF_LINEAR_OUT_I8": "0",
+    "MODIFF_QATTN_FLASH": "1",
+    "MODIFF_QUANT_ATTN": "1",
+    "MODIFF_QUANT_ATTN_ALLT": "0",
+    "MODIFF_QUANT_ATTN_STATIC": "1",
+    "MODIFF_QUANT_LINEAR": "1",
+    "MODIFF_WARMUP_STEPS": "5"
+   },
+   "hook": null,
+   "route_check": {
+    "attn_blocks": 21,
+    "attn_class": "QuantizedStandardAttentionBlock",
+    "qout_eligible": 0,
+    "wxax": 42,
+    "wxax_modiff": 42,
+    "wxax_out_i8": 0,
+    "wxax_bias_res": 0,
+    "int8_convs": 140,
+    "conv_modiff_on": 140,
+    "conv_delta_refresh": [
+     4
+    ]
+   },
+   "stats": {
+    "n": 3,
+    "mean": 19983178.385416668,
+    "median": 19998976.5625,
+    "stdev": 29533.98175126933,
+    "sem": 17051.452314336842,
+    "cv_pct": 0.14779421562298944,
+    "min": 19949105.46875,
+    "max": 20001453.125,
+    "spread_pct": 0.2617516755740235,
+    "ci95_half": 73372.39930859143,
+    "ci95_lo": 19909805.986108076,
+    "ci95_hi": 20056550.78472526,
+    "iqr": 0.0,
+    "samples": [
+     19949105.4688,
+     19998976.5625,
+     20001453.125
+    ]
+   },
+   "stability": "tight",
+   "wall_us_per_batch": 19998976.5625,
+   "wall_mean_us": 19983178.385416668,
+   "wall_stdev_us": 29533.98175126933,
+   "wall_cv_pct": 0.14779421562298944,
+   "wall_all_us": [
+    19949105.5,
+    19998976.6,
+    20001453.1
+   ],
+   "wall_spread_pct": 0.2624060328519586,
+   "ms_per_step": 99.9948828125,
+   "ms_per_sample": 156.24200439453125,
+   "delta_ms_per_step": -5.552587890625006,
+   "ratio_vs_base": 0.947392506389444,
+   "speedup_vs_fp16": null
+  }
+ }
+}

@@ -37,8 +37,6 @@
 // dynamic_quantize_int8_fprop / dynamic_quantize_pack_int4_fprop below.
 #include "modiff_kernels_api.h"
 
-// For clamp_code(), the code ceiling the static-scale delta kernels below take as a parameter
-// instead of the literal 127.0f they used to clamp at.
 #include "common.cuh"
 
 // Scalar-load helper so the static-scale half-cache kernels below can be
@@ -253,10 +251,19 @@ __global__ void static_quantize_and_update_ahat_kernel_int8(
     const float* __restrict__ smooth_inv,
     int num_channels,
     int num_elements,
-    float code_ceiling
+    // Activation bit-width of THIS datapath, not a magnitude. It replaced a
+    // `float code_ceiling`, whose failure mode was a plausible-but-wrong number: pass 127
+    // (or forget the argument) on a 4-bit layer and it silently stayed 8-bit, which is what
+    // the updown resize kernel did for months. A bool has no such value to get wrong, and
+    // the saturation limit below is now a property of the datapath rather than an argument.
+    bool a4
 ) {
     float scale = *scale_ptr;
     float inv_scale = 1.0f / scale;
+    // Q_b for this datapath: 7 at 4 bits, 127 at 8. A code above it must SATURATE -- which is
+    // what a delta that outgrew a reused scale (MODIFF_DELTA_REFRESH > 1) depends on. The clip
+    // ratio that used to be the other reason is retired -- see OptimizedInt8Conv2d.
+    const float lim = a4 ? 7.0f : 127.0f;
     int idx4 = blockIdx.x * blockDim.x + threadIdx.x;
     int base = idx4 * 4;
 
@@ -277,10 +284,10 @@ __global__ void static_quantize_and_update_ahat_kernel_int8(
         float r2 = x_v.z - c_v.z;
         float r3 = x_v.w - c_v.w;
 
-        float q0 = clamp_code(roundf(r0 * scale), code_ceiling, 127.0f);
-        float q1 = clamp_code(roundf(r1 * scale), code_ceiling, 127.0f);
-        float q2 = clamp_code(roundf(r2 * scale), code_ceiling, 127.0f);
-        float q3 = clamp_code(roundf(r3 * scale), code_ceiling, 127.0f);
+        float q0 = fmaxf(-lim, fminf(lim, roundf(r0 * scale)));
+        float q1 = fmaxf(-lim, fminf(lim, roundf(r1 * scale)));
+        float q2 = fmaxf(-lim, fminf(lim, roundf(r2 * scale)));
+        float q3 = fmaxf(-lim, fminf(lim, roundf(r3 * scale)));
 
         c_v.x += q0 * inv_scale;
         c_v.y += q1 * inv_scale;
@@ -298,7 +305,7 @@ __global__ void static_quantize_and_update_ahat_kernel_int8(
                 xval *= smooth_inv[i % num_channels];
             }
             float r = xval - a_hat_cache[i];
-            float q = clamp_code(roundf(r * scale), code_ceiling, 127.0f);
+            float q = fmaxf(-lim, fminf(lim, roundf(r * scale)));
             a_hat_cache[i] += q * inv_scale;
             output_int8[i] = (int8_t)q;
         }
@@ -317,10 +324,19 @@ __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache(
     const float* __restrict__ smooth_inv,
     int num_channels,
     int num_elements,
-    float code_ceiling
+    // Activation bit-width of THIS datapath, not a magnitude. It replaced a
+    // `float code_ceiling`, whose failure mode was a plausible-but-wrong number: pass 127
+    // (or forget the argument) on a 4-bit layer and it silently stayed 8-bit, which is what
+    // the updown resize kernel did for months. A bool has no such value to get wrong, and
+    // the saturation limit below is now a property of the datapath rather than an argument.
+    bool a4
 ) {
     float scale = *scale_ptr;
     float inv_scale = 1.0f / scale;
+    // Q_b for this datapath: 7 at 4 bits, 127 at 8. A code above it must SATURATE -- which is
+    // what a delta that outgrew a reused scale (MODIFF_DELTA_REFRESH > 1) depends on. The clip
+    // ratio that used to be the other reason is retired -- see OptimizedInt8Conv2d.
+    const float lim = a4 ? 7.0f : 127.0f;
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
     for (int i = idx; i < num_elements; i += blockDim.x * gridDim.x) {
@@ -329,7 +345,7 @@ __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache(
             xval *= smooth_inv[i % num_channels];
         }
         float cache = __half2float(a_hat_cache[i]);
-        float q = clamp_code(roundf((xval - cache) * scale), code_ceiling, 127.0f);
+        float q = fmaxf(-lim, fminf(lim, roundf((xval - cache) * scale)));
         a_hat_cache[i] = __float2half_rn(cache + q * inv_scale);
         output_int8[i] = static_cast<int8_t>(q);
     }
@@ -351,10 +367,19 @@ __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache_vec2(
     const float* __restrict__ smooth_inv,
     int num_channels,
     int num_elements,
-    float code_ceiling
+    // Activation bit-width of THIS datapath, not a magnitude. It replaced a
+    // `float code_ceiling`, whose failure mode was a plausible-but-wrong number: pass 127
+    // (or forget the argument) on a 4-bit layer and it silently stayed 8-bit, which is what
+    // the updown resize kernel did for months. A bool has no such value to get wrong, and
+    // the saturation limit below is now a property of the datapath rather than an argument.
+    bool a4
 ) {
     float scale = *scale_ptr;
     float inv_scale = 1.0f / scale;
+    // Q_b for this datapath: 7 at 4 bits, 127 at 8. A code above it must SATURATE -- which is
+    // what a delta that outgrew a reused scale (MODIFF_DELTA_REFRESH > 1) depends on. The clip
+    // ratio that used to be the other reason is retired -- see OptimizedInt8Conv2d.
+    const float lim = a4 ? 7.0f : 127.0f;
     const int stride = blockDim.x * gridDim.x;
 
     for (int base = 2 * (blockIdx.x * blockDim.x + threadIdx.x); base < num_elements; base += 2 * stride) {
@@ -366,8 +391,8 @@ __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache_vec2(
                 xv.x *= sm.x; xv.y *= sm.y;
             }
             float2 cache = half_cache_load2(a_hat_cache, base);
-            float q0 = clamp_code(roundf((xv.x - cache.x) * scale), code_ceiling, 127.0f);
-            float q1 = clamp_code(roundf((xv.y - cache.y) * scale), code_ceiling, 127.0f);
+            float q0 = fmaxf(-lim, fminf(lim, roundf((xv.x - cache.x) * scale)));
+            float q1 = fmaxf(-lim, fminf(lim, roundf((xv.y - cache.y) * scale)));
             half_cache_store2(a_hat_cache, base, make_float2(cache.x + q0 * inv_scale, cache.y + q1 * inv_scale));
             output_int8[base] = static_cast<int8_t>(q0);
             output_int8[base + 1] = static_cast<int8_t>(q1);
@@ -376,7 +401,7 @@ __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache_vec2(
             float xval = load_as_float(x, base);
             if (smooth_inv != nullptr) xval *= smooth_inv[base % num_channels];
             float cache = __half2float(a_hat_cache[base]);
-            float q = clamp_code(roundf((xval - cache) * scale), code_ceiling, 127.0f);
+            float q = fmaxf(-lim, fminf(lim, roundf((xval - cache) * scale)));
             a_hat_cache[base] = __float2half_rn(cache + q * inv_scale);
             output_int8[base] = static_cast<int8_t>(q);
         }
@@ -398,10 +423,19 @@ __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache_silu(
     const float* __restrict__ smooth_inv,
     int num_channels,
     int num_elements,
-    float code_ceiling
+    // Activation bit-width of THIS datapath, not a magnitude. It replaced a
+    // `float code_ceiling`, whose failure mode was a plausible-but-wrong number: pass 127
+    // (or forget the argument) on a 4-bit layer and it silently stayed 8-bit, which is what
+    // the updown resize kernel did for months. A bool has no such value to get wrong, and
+    // the saturation limit below is now a property of the datapath rather than an argument.
+    bool a4
 ) {
     float scale = *scale_ptr;
     float inv_scale = 1.0f / scale;
+    // Q_b for this datapath: 7 at 4 bits, 127 at 8. A code above it must SATURATE -- which is
+    // what a delta that outgrew a reused scale (MODIFF_DELTA_REFRESH > 1) depends on. The clip
+    // ratio that used to be the other reason is retired -- see OptimizedInt8Conv2d.
+    const float lim = a4 ? 7.0f : 127.0f;
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
     for (int i = idx; i < num_elements; i += blockDim.x * gridDim.x) {
@@ -410,7 +444,7 @@ __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache_silu(
             xval *= smooth_inv[i % num_channels];
         }
         float cache = __half2float(a_hat_cache[i]);
-        float q = clamp_code(roundf((xval - cache) * scale), code_ceiling, 127.0f);
+        float q = fmaxf(-lim, fminf(lim, roundf((xval - cache) * scale)));
         a_hat_cache[i] = __float2half_rn(cache + q * inv_scale);
         output_int8[i] = static_cast<int8_t>(q);
     }
@@ -428,10 +462,19 @@ __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache_silu_vec2
     const float* __restrict__ smooth_inv,
     int num_channels,
     int num_elements,
-    float code_ceiling
+    // Activation bit-width of THIS datapath, not a magnitude. It replaced a
+    // `float code_ceiling`, whose failure mode was a plausible-but-wrong number: pass 127
+    // (or forget the argument) on a 4-bit layer and it silently stayed 8-bit, which is what
+    // the updown resize kernel did for months. A bool has no such value to get wrong, and
+    // the saturation limit below is now a property of the datapath rather than an argument.
+    bool a4
 ) {
     float scale = *scale_ptr;
     float inv_scale = 1.0f / scale;
+    // Q_b for this datapath: 7 at 4 bits, 127 at 8. A code above it must SATURATE -- which is
+    // what a delta that outgrew a reused scale (MODIFF_DELTA_REFRESH > 1) depends on. The clip
+    // ratio that used to be the other reason is retired -- see OptimizedInt8Conv2d.
+    const float lim = a4 ? 7.0f : 127.0f;
     const int stride = blockDim.x * gridDim.x;
 
     for (int base = 2 * (blockIdx.x * blockDim.x + threadIdx.x); base < num_elements; base += 2 * stride) {
@@ -444,8 +487,8 @@ __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache_silu_vec2
                 xv.x *= sm.x; xv.y *= sm.y;
             }
             float2 cache = half_cache_load2(a_hat_cache, base);
-            float q0 = clamp_code(roundf((xv.x - cache.x) * scale), code_ceiling, 127.0f);
-            float q1 = clamp_code(roundf((xv.y - cache.y) * scale), code_ceiling, 127.0f);
+            float q0 = fmaxf(-lim, fminf(lim, roundf((xv.x - cache.x) * scale)));
+            float q1 = fmaxf(-lim, fminf(lim, roundf((xv.y - cache.y) * scale)));
             half_cache_store2(a_hat_cache, base, make_float2(cache.x + q0 * inv_scale, cache.y + q1 * inv_scale));
             output_int8[base] = static_cast<int8_t>(q0);
             output_int8[base + 1] = static_cast<int8_t>(q1);
@@ -453,7 +496,7 @@ __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache_silu_vec2
             float xval = silu_f(load_as_float(x, base));
             if (smooth_inv != nullptr) xval *= smooth_inv[base % num_channels];
             float cache = __half2float(a_hat_cache[base]);
-            float q = clamp_code(roundf((xval - cache) * scale), code_ceiling, 127.0f);
+            float q = fmaxf(-lim, fminf(lim, roundf((xval - cache) * scale)));
             a_hat_cache[base] = __float2half_rn(cache + q * inv_scale);
             output_int8[base] = static_cast<int8_t>(q);
         }
@@ -1396,11 +1439,12 @@ torch::Tensor step1_quantize_no_ahat_fprop(
 //   Inputs:   x FP32 or FP16 [N,C,H,W]; a_hat_cache FP32 or FP16 [same] (in-place);
 //             scale_buf FP32 [1] precomputed calibration scale; smooth_inv FP32 [C] (empty = skip)
 //   Outputs:  INT8 [same shape as x]; a_hat_cache updated in place
-//   Computes: residual = (x*smooth_inv) - a_hat_cache; q = clamp(round(residual*scale), -ceil, ceil);
-//             a_hat_cache += q/scale; out = q, where ceil = code_ceiling if > 0 else 127.
-//             code_ceiling is what makes a CLIP ratio possible: with scale = Q_b/(r*absmax) the top
-//             (1-r) of the range must saturate at +-Q_b, and clamping at 127 instead lets it through
-//             (docs/delta_clip_2026-08-06). Pass Q_b; <=0 keeps the pre-parameter behaviour
+//   Computes: residual = (x*smooth_inv) - a_hat_cache; q = clamp(round(residual*scale), -Q_b, Q_b);
+//             a_hat_cache += q/scale; out = q, with Q_b = 7 when a4 else 127.
+//             The saturation is what makes a CLIP ratio possible: with scale = Q_b/(r*absmax) the
+//             top (1-r) of the range must saturate at +-Q_b, and clamping at 127 on a 4-bit layer
+//             lets it through instead (docs/delta_clip_2026-08-06). `a4` names the datapath, so
+//             there is no ceiling VALUE a caller can get wrong -- only which datapath this is
 //   Fuses:    subtract + quantize + cache-update in one launch (no absmax reduction — the scale
 //             is a constant). FP16-cache path reads fp16 x directly, upconverting in registers
 //             (avoids a full fp32 copy of x)
@@ -1412,7 +1456,12 @@ torch::Tensor step1_static_quantize_fprop(
     torch::Tensor a_hat_cache,
     torch::Tensor scale_buf,
     torch::Tensor smooth_inv,
-    float code_ceiling
+    // Activation bit-width of THIS datapath, not a magnitude. It replaced a
+    // `float code_ceiling`, whose failure mode was a plausible-but-wrong number: pass 127
+    // (or forget the argument) on a 4-bit layer and it silently stayed 8-bit, which is what
+    // the updown resize kernel did for months. A bool has no such value to get wrong, and
+    // the saturation limit below is now a property of the datapath rather than an argument.
+    bool a4
 ) {
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
@@ -1447,7 +1496,7 @@ torch::Tensor step1_static_quantize_fprop(
                     smooth_ptr,
                     num_channels,
                     num_elements,
-                    code_ceiling
+                    a4
                 );
             } else {
                 static_quantize_and_update_ahat_kernel_int8_half_cache<__half><<<grid_size, block_size, 0, stream>>>(
@@ -1458,7 +1507,7 @@ torch::Tensor step1_static_quantize_fprop(
                     smooth_ptr,
                     num_channels,
                     num_elements,
-                    code_ceiling
+                    a4
                 );
             }
         } else {
@@ -1471,7 +1520,7 @@ torch::Tensor step1_static_quantize_fprop(
                     smooth_ptr,
                     num_channels,
                     num_elements,
-                    code_ceiling
+                    a4
                 );
             } else {
                 static_quantize_and_update_ahat_kernel_int8_half_cache<float><<<grid_size, block_size, 0, stream>>>(
@@ -1482,7 +1531,7 @@ torch::Tensor step1_static_quantize_fprop(
                     smooth_ptr,
                     num_channels,
                     num_elements,
-                    code_ceiling
+                    a4
                 );
             }
         }
@@ -1495,7 +1544,7 @@ torch::Tensor step1_static_quantize_fprop(
             smooth_ptr,
             num_channels,
             num_elements,
-            code_ceiling
+            a4
         );
     }
 
@@ -1514,8 +1563,8 @@ torch::Tensor step1_static_quantize_fprop(
 //             smooth_inv FP32 [C] (empty = skip)
 //   Outputs:  INT8 [same shape as x]; a_hat_cache updated in place
 //   Computes: xs = SiLU(x)*smooth_inv; residual = xs - a_hat_cache;
-//             q = clamp(round(residual*scale), -ceil, ceil); a_hat_cache += q/scale; out = q
-//             (ceil = code_ceiling if > 0, else 127)
+//             q = clamp(round(residual*scale), -Q_b, Q_b); a_hat_cache += q/scale; out = q
+//             (Q_b = 7 when a4 else 127, derived from the datapath rather than passed as a value)
 //   Fuses:    SiLU + subtract + quantize + cache-update (removes a separate full-tensor
 //             F.silu(x) pass)
 //   Constraints: FP16 a_hat_cache only (TORCH_CHECK) — the calibrated production path
@@ -1525,7 +1574,12 @@ torch::Tensor step1_static_quantize_fprop_silu(
     torch::Tensor a_hat_cache,
     torch::Tensor scale_buf,
     torch::Tensor smooth_inv,
-    float code_ceiling
+    // Activation bit-width of THIS datapath, not a magnitude. It replaced a
+    // `float code_ceiling`, whose failure mode was a plausible-but-wrong number: pass 127
+    // (or forget the argument) on a 4-bit layer and it silently stayed 8-bit, which is what
+    // the updown resize kernel did for months. A bool has no such value to get wrong, and
+    // the saturation limit below is now a property of the datapath rather than an argument.
+    bool a4
 ) {
     TORCH_CHECK(a_hat_cache.scalar_type() == torch::kFloat16,
                 "step1_static_quantize_fprop_silu: only implemented for FP16 a_hat_cache");
@@ -1560,7 +1614,7 @@ torch::Tensor step1_static_quantize_fprop_silu(
                 smooth_ptr,
                 num_channels,
                 num_elements,
-                code_ceiling
+                a4
             );
         } else {
             static_quantize_and_update_ahat_kernel_int8_half_cache_silu<__half><<<grid_size, block_size, 0, stream>>>(
@@ -1571,7 +1625,7 @@ torch::Tensor step1_static_quantize_fprop_silu(
                 smooth_ptr,
                 num_channels,
                 num_elements,
-                code_ceiling
+                a4
             );
         }
     } else {
@@ -1584,7 +1638,7 @@ torch::Tensor step1_static_quantize_fprop_silu(
                 smooth_ptr,
                 num_channels,
                 num_elements,
-                code_ceiling
+                a4
             );
         } else {
             static_quantize_and_update_ahat_kernel_int8_half_cache_silu<float><<<grid_size, block_size, 0, stream>>>(
@@ -1595,7 +1649,7 @@ torch::Tensor step1_static_quantize_fprop_silu(
                 smooth_ptr,
                 num_channels,
                 num_elements,
-                code_ceiling
+                a4
             );
         }
     }

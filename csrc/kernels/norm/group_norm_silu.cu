@@ -59,6 +59,15 @@ __device__ __forceinline__ void gn_store2(__half* p, long i, float2 v) {
     reinterpret_cast<__half2*>(p)[i >> 1] = __float22half2_rn(v);
 }
 
+// Forward declaration only. The definition, and the measurements that motivate it, live further
+// down next to the flat delta-quantize kernels that introduced it. The resize delta kernel is
+// defined above those and reports its delta range through the same helper, so it needs the
+// declaration here.
+__device__ __forceinline__ void gn_report_delta_absmax(
+    float local_max, float* __restrict__ sdata, float* __restrict__ absmax_buf,
+    float* __restrict__ next_scale_out, float* __restrict__ next_inv_out,
+    unsigned int* __restrict__ retire_count, float Q_level, float safety);
+
 template <typename T>
 __global__ void group_norm_silu_nhwc_kernel(
     const T* __restrict__ X,      // [N, H, W, C] physical (channels_last NCHW logical)
@@ -1217,6 +1226,25 @@ __global__ void group_norm_silu_quantize_resize_nhwc_kernel(
 // which computes one code and stores it four times -- the delta must be formed and quantized once
 // per output position. The loop still grids over INPUT positions (so the GN affine and SiLU are
 // evaluated once, as in the baseline); only the subtract/quantize/update is done four times.
+//
+// DYNAMIC SCALE (added 2026-08-10). Originally this kernel took its scale as a device pointer and
+// nothing else, so it could not serve a step that has to MEASURE the delta range. The caller
+// therefore declined on every refresh step -- which at MODIFF_DELTA_REFRESH=1, i.e. the paper's
+// own configuration, is every step, so the fusion never fired at all and the eight updown
+// ResBlocks fell back to a standalone resize + separate delta-quantize (measured 0/8 fused at K=1
+// against 6/8 at K=4, docs/component_attribution_2026-08-07). Two additions fix that, both
+// mirroring what group_norm_silu_delta_quantize_nhwc already does for the other 62 convs:
+//
+//   * `reduce_only` turns this same kernel into its own reduction-only twin -- identical GN, mod,
+//     SiLU, SmoothQuant, resize and a_hat arithmetic, but it stores nothing and instead reduces
+//     max|delta| and publishes Q_level/absmax through gn_report_delta_absmax. Sharing one body
+//     rather than writing a second kernel is what guarantees the measured range is the range the
+//     quantize pass then sees; a hand-copied twin would drift the first time either changed.
+//   * on a quantizing pass, the same reduce-and-publish runs for free at the end (report_next),
+//     so the separate pass can be skipped entirely where the caller wants that trade.
+//
+// The delta is reduced BEFORE the clamp, so the report is the true range rather than a clipped
+// lower bound -- the same convention as gn_apply_delta_quantize_flat_vec2_kernel.
 template <typename TIn, bool FAST_REDUCE, bool UP, bool PACK>
 __global__ void group_norm_silu_delta_quantize_resize_nhwc_kernel(
     const TIn* __restrict__ X,
@@ -1234,7 +1262,23 @@ __global__ void group_norm_silu_delta_quantize_resize_nhwc_kernel(
     float eps,
     bool apply_silu,
     int Kpad,                      // padded row width in CHANNELS (>= C, even); == C for no padding
-    int W                          // INPUT width, needed to map hw -> (h, w) for the resize
+    int W,                         // INPUT width, needed to map hw -> (h, w) for the resize
+    // Activation bit-width of THIS datapath, not a magnitude. It replaced a
+    // `float code_ceiling`, whose failure mode was a plausible-but-wrong number: pass 127
+    // (or forget the argument, which THIS kernel did until 2026-08-10) and a 4-bit layer
+    // silently stayed 8-bit. A bool has no such value to get wrong; the saturation limit
+    // is derived from the datapath below.
+    bool a4,
+    // --- delta-range reporting (absmax_buf == nullptr => none, the original behaviour) ---
+    float* __restrict__ absmax_buf,      // [1], 0 on entry (self-resetting)
+    float* __restrict__ next_scale_out,  // [1] out: Q_level/(safety*absmax)
+    float* __restrict__ next_inv_out,    // [1] out: its reciprocal (the conv's CUTLASS alpha)
+    unsigned int* __restrict__ retire_count,  // [1], 0 on entry (self-resetting)
+    float Q_level,
+    float safety,
+    // reduce_only: measure the range and publish, store NOTHING -- neither codes nor a_hat.
+    // scale_ptr is not dereferenced, which is what lets this pass run BEFORE the step has a scale.
+    bool reduce_only
 ) {
     const int CPG = C / G;
     const long group_size = (long)CPG * HW;
@@ -1325,8 +1369,11 @@ __global__ void group_norm_silu_delta_quantize_resize_nhwc_kernel(
     __syncthreads();
     const float mean = mean_s;
     const float inv_std = inv_std_s;
-    const float scale = *scale_ptr;
+    // Not dereferenced on the reduction pass: it runs precisely when no scale for this step
+    // exists yet, and scale_ptr may be pointing at an uninitialised buffer.
+    const float scale = reduce_only ? 1.0f : *scale_ptr;
     const float inv_scale = 1.0f / scale;   // a_hat += q * inv_scale, MoDiff Eq 10
+    float local_delta_max = 0.0f;           // max |delta| seen by this thread, pre-clamp
 
     const int HALF_CPG = CPG / 2;
     const int Wi = W, Hi = (int)(HW / W);
@@ -1363,7 +1410,7 @@ __global__ void group_norm_silu_delta_quantize_resize_nhwc_kernel(
             const int c_global0 = c_start + 2 * cpair;
             float o0, o1;
             compute_pair(hw, c_global0, o0, o1);
-            const float lim = PACK ? 7.0f : 127.0f;
+            const float lim = (PACK || a4) ? 7.0f : 127.0f;
             const int h = (int)(hw / Wi), w = (int)(hw % Wi);
             // The four output positions share this input value but NOT its a_hat entry, so the
             // delta is formed and quantized four times. compute_pair ran once.
@@ -1375,8 +1422,12 @@ __global__ void group_norm_silu_delta_quantize_resize_nhwc_kernel(
                     const long ci = (long)n * HW_OUT * C + hw_out * (long)C + c_global0;
                     const float c0 = __half2float(a_hat_cache[ci]);
                     const float c1 = __half2float(a_hat_cache[ci + 1]);
-                    const float q0 = fmaxf(-lim, fminf(lim, roundf((o0 - c0) * scale)));
-                    const float q1 = fmaxf(-lim, fminf(lim, roundf((o1 - c1) * scale)));
+                    const float d0 = o0 - c0, d1 = o1 - c1;
+                    // Reduced BEFORE the clamp, so the report is the true delta range.
+                    local_delta_max = fmaxf(local_delta_max, fmaxf(fabsf(d0), fabsf(d1)));
+                    if (reduce_only) continue;
+                    const float q0 = fmaxf(-lim, fminf(lim, roundf(d0 * scale)));
+                    const float q1 = fmaxf(-lim, fminf(lim, roundf(d1 * scale)));
                     a_hat_cache[ci]     = __float2half_rn(c0 + q0 * inv_scale);
                     a_hat_cache[ci + 1] = __float2half_rn(c1 + q1 * inv_scale);
                     const int8_t i0 = (int8_t)q0, i1 = (int8_t)q1;
@@ -1409,12 +1460,16 @@ __global__ void group_norm_silu_delta_quantize_resize_nhwc_kernel(
                 }
             a0 *= 0.25f;                                   // average BEFORE quantizing
             a1 *= 0.25f;
-            const float lim = PACK ? 7.0f : 127.0f;
+            const float lim = (PACK || a4) ? 7.0f : 127.0f;
             const long ci = (long)n * HW_OUT * C + hwo * (long)C + c_global0;
             const float c0 = __half2float(a_hat_cache[ci]);
             const float c1 = __half2float(a_hat_cache[ci + 1]);
-            const float q0 = fmaxf(-lim, fminf(lim, roundf((a0 - c0) * scale)));
-            const float q1 = fmaxf(-lim, fminf(lim, roundf((a1 - c1) * scale)));
+            const float d0 = a0 - c0, d1 = a1 - c1;
+            // Reduced BEFORE the clamp, so the report is the true delta range.
+            local_delta_max = fmaxf(local_delta_max, fmaxf(fabsf(d0), fabsf(d1)));
+            if (reduce_only) continue;
+            const float q0 = fmaxf(-lim, fminf(lim, roundf(d0 * scale)));
+            const float q1 = fmaxf(-lim, fminf(lim, roundf(d1 * scale)));
             a_hat_cache[ci]     = __float2half_rn(c0 + q0 * inv_scale);
             a_hat_cache[ci + 1] = __float2half_rn(c1 + q1 * inv_scale);
             const int8_t i0 = (int8_t)q0, i1 = (int8_t)q1;
@@ -1428,7 +1483,7 @@ __global__ void group_norm_silu_delta_quantize_resize_nhwc_kernel(
     }
 
     if constexpr (PACK) {
-        if (g == 0 && Kpad > C) {
+        if (!reduce_only && g == 0 && Kpad > C) {
             const int tail_bytes = KpadH - C / 2;
             for (long idx = threadIdx.x; idx < HW_OUT * (long)tail_bytes; idx += blockDim.x) {
                 const long hw = idx / tail_bytes;
@@ -1437,6 +1492,12 @@ __global__ void group_norm_silu_delta_quantize_resize_nhwc_kernel(
             }
         }
     }
+
+    // Every thread reaches this: the loops above are block-strided and nothing returns early, so
+    // the __syncthreads() inside the helper is safe. absmax_buf == nullptr makes it a no-op (and
+    // it returns before its first barrier, uniformly across the grid).
+    gn_report_delta_absmax(local_delta_max, sdata, absmax_buf, next_scale_out, next_inv_out,
+                           retire_count, Q_level, safety);
 }
 
 
@@ -1668,6 +1729,12 @@ torch::Tensor group_norm_silu_quantize_resize_nhwc(
 //   Constraints: as the baseline twin, plus a_hat_cache fp16 with N*C*Ho*Wo elements. The scale
 //             is a device pointer, so it works with the static per-step table and with the
 //             retained dynamic scale alike.
+//   Dynamic: pass real 1-element absmax_buf/scale_out/inv_scale_out/retire_count to have the
+//             per-call scale discovered here instead of supplied. With report_next=false that is
+//             a separate reduction-only launch of this same kernel followed by the quantizing one
+//             (a fresh scale, used immediately -- what the other 62 convs do by default); with
+//             report_next=true the quantizing launch publishes for a later step at no extra pass.
+//             All four empty => static, the original behaviour, bit-identical.
 // -----------------------------------------------------------------------------
 torch::Tensor group_norm_silu_delta_quantize_resize_nhwc(
     torch::Tensor x, torch::Tensor weight, torch::Tensor bias,
@@ -1675,7 +1742,10 @@ torch::Tensor group_norm_silu_delta_quantize_resize_nhwc(
     torch::Tensor scale, torch::Tensor smooth_inv,
     torch::Tensor mod_scale, torch::Tensor mod_shift,
     int64_t k_pad, int64_t resize, bool pack,
-    torch::Tensor a_hat_cache          // fp16, POST-resize shape, updated in place
+    torch::Tensor a_hat_cache,         // fp16, POST-resize shape, updated in place
+    torch::Tensor absmax_buf, torch::Tensor scale_out, torch::Tensor inv_scale_out,
+    torch::Tensor retire_count, double Q_level, bool report_next, double safety,
+    bool a4
 ) {
     CHECK_CUDA(x);
     CHECK_CONTIGUOUS(x);
@@ -1723,10 +1793,36 @@ torch::Tensor group_norm_silu_delta_quantize_resize_nhwc(
                 "gn_delta_quantize_resize: a_hat_cache must have N*C*Ho*Wo elements (post-resize)");
     __half* cache_ptr = reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>());
 
+    // Dynamic scale, exactly as group_norm_silu_delta_quantize_nhwc defines it:
+    //   dynamic -- a reduction-only launch measures THIS call's delta range and publishes
+    //              Q_level/absmax into scale_out, which the quantizing launch then reads. The
+    //              range is fresh and used immediately. Costs one extra pass.
+    //   report  -- no extra pass; the quantizing launch reduces the range it is already computing
+    //              and publishes it for a LATER step, quantizing meanwhile with `scale` as given.
+    const bool have_bufs = absmax_buf.numel() > 0;
+    const bool dynamic = have_bufs && !report_next;
+    const bool report = have_bufs && report_next;
+    if (have_bufs) {
+        TORCH_CHECK(scale_out.numel() > 0 && inv_scale_out.numel() > 0 && retire_count.numel() > 0,
+                    "gn_delta_quantize_resize: dynamic mode needs absmax_buf, scale_out, "
+                    "inv_scale_out and retire_count together");
+        TORCH_CHECK(absmax_buf.scalar_type() == torch::kFloat32
+                        && scale_out.scalar_type() == torch::kFloat32
+                        && inv_scale_out.scalar_type() == torch::kFloat32,
+                    "gn_delta_quantize_resize: absmax_buf/scale_out/inv_scale_out must be fp32");
+        TORCH_CHECK(retire_count.scalar_type() == torch::kInt32,
+                    "gn_delta_quantize_resize: retire_count must be int32");
+    }
+    float* absmax_ptr = have_bufs ? absmax_buf.data_ptr<float>() : nullptr;
+    float* nscale_ptr = have_bufs ? scale_out.data_ptr<float>() : nullptr;
+    float* ninv_ptr = have_bufs ? inv_scale_out.data_ptr<float>() : nullptr;
+    unsigned int* retire_ptr =
+        have_bufs ? (unsigned int*)retire_count.data_ptr<int>() : nullptr;
+
     // gn_load2 is overloaded for `const float*` and `const __half*` only, so the fp16 launch has
     // to reinterpret at::Half -- instantiating the kernel on at::Half itself does not compile.
-#define MODIFF_GNDQR_LAUNCH(T, ATT, UPV, PK)                                                 \
-    group_norm_silu_delta_quantize_resize_nhwc_kernel<T, true, UPV, PK>                           \
+#define MODIFF_GNDQR_LAUNCH(T, ATT, UPV, PK, SCALEP, AMAX, NSC, NIV, RET, RONLY)             \
+    group_norm_silu_delta_quantize_resize_nhwc_kernel<T, true, UPV, PK>                     \
         <<<grid, block, shmem, stream>>>(                                                   \
             reinterpret_cast<const T*>(x.data_ptr<ATT>()),                                  \
             reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),                               \
@@ -1735,18 +1831,38 @@ torch::Tensor group_norm_silu_delta_quantize_resize_nhwc(
             reinterpret_cast<const T*>(bias.data_ptr<ATT>()),                               \
             has_mod ? reinterpret_cast<const T*>(mod_scale.data_ptr<ATT>()) : nullptr,      \
             has_mod ? reinterpret_cast<const T*>(mod_shift.data_ptr<ATT>()) : nullptr,      \
-            scale.data_ptr<float>(), smooth_ptr, C, HW, (int)num_groups, (float)eps,        \
-            apply_silu, Kpad, W)
-#define MODIFF_GNDQR_DISPATCH(T, ATT)                                                        \
+            (SCALEP), smooth_ptr, C, HW, (int)num_groups, (float)eps,                       \
+            apply_silu, Kpad, W, a4,                                              \
+            (AMAX), (NSC), (NIV), (RET), (float)Q_level, (float)safety, (RONLY))
+#define MODIFF_GNDQR_DISPATCH(T, ATT, SCALEP, AMAX, NSC, NIV, RET, RONLY)                    \
     do {                                                                                    \
-        if (up &&  pack) MODIFF_GNDQR_LAUNCH(T, ATT, true,  true);                           \
-        if (up && !pack) MODIFF_GNDQR_LAUNCH(T, ATT, true,  false);                          \
-        if (!up &&  pack) MODIFF_GNDQR_LAUNCH(T, ATT, false, true);                          \
-        if (!up && !pack) MODIFF_GNDQR_LAUNCH(T, ATT, false, false);                         \
+        if (up &&  pack) MODIFF_GNDQR_LAUNCH(T, ATT, true,  true,  SCALEP, AMAX, NSC, NIV, RET, RONLY); \
+        if (up && !pack) MODIFF_GNDQR_LAUNCH(T, ATT, true,  false, SCALEP, AMAX, NSC, NIV, RET, RONLY); \
+        if (!up &&  pack) MODIFF_GNDQR_LAUNCH(T, ATT, false, true,  SCALEP, AMAX, NSC, NIV, RET, RONLY); \
+        if (!up && !pack) MODIFF_GNDQR_LAUNCH(T, ATT, false, false, SCALEP, AMAX, NSC, NIV, RET, RONLY); \
+    } while (0)
+#define MODIFF_GNDQR_BOTH(SCALEP, AMAX, NSC, NIV, RET, RONLY)                                \
+    do {                                                                                    \
+        if (x.scalar_type() == torch::kFloat32)                                             \
+            MODIFF_GNDQR_DISPATCH(float, float, SCALEP, AMAX, NSC, NIV, RET, RONLY);        \
+        else                                                                                \
+            MODIFF_GNDQR_DISPATCH(__half, at::Half, SCALEP, AMAX, NSC, NIV, RET, RONLY);    \
     } while (0)
 
-    if (x.scalar_type() == torch::kFloat32) MODIFF_GNDQR_DISPATCH(float, float);
-    else                                    MODIFF_GNDQR_DISPATCH(__half, at::Half);
+    if (dynamic) {
+        // Reduction-only: same body, stores nothing, publishes Q_level/absmax into scale_out.
+        // `scale` is not read, so it may legitimately be an uninitialised buffer here.
+        MODIFF_GNDQR_BOTH(nullptr, absmax_ptr, nscale_ptr, ninv_ptr, retire_ptr, true);
+        C10_CUDA_CHECK(cudaGetLastError());
+    }
+    // The quantizing launch. In `dynamic` it reads the scale the pass above just wrote (and must
+    // NOT report again, or it would re-run the election and overwrite that scale mid-step); in
+    // `report` it quantizes with the caller's scale and publishes for a later step.
+    const float* scale_ptr_eff = dynamic ? (const float*)nscale_ptr : scale.data_ptr<float>();
+    MODIFF_GNDQR_BOTH(scale_ptr_eff,
+                      report ? absmax_ptr : nullptr, report ? nscale_ptr : nullptr,
+                      report ? ninv_ptr : nullptr, report ? retire_ptr : nullptr, false);
+#undef MODIFF_GNDQR_BOTH
 #undef MODIFF_GNDQR_DISPATCH
 #undef MODIFF_GNDQR_LAUNCH
     C10_CUDA_CHECK(cudaGetLastError());
@@ -2350,12 +2466,21 @@ __global__ void gn_apply_delta_quantize_flat_kernel(
     const float* __restrict__ smooth_inv, // [C] or nullptr
     int C, int G, long sample_stride, long num_elements, bool apply_silu,
     // Symmetric code ceiling; <= 0 means the 127 this kernel used to clamp at unconditionally.
-    // Only differs from 127 when a clip ratio is in force -- see clamp_code in common.cuh.
-    float code_ceiling
+    // Only differs from 127 on a 4-bit datapath (a4), which is the only case where a delta that
+    // outgrew a reused scale has anything to saturate against.
+    // Activation bit-width of THIS datapath, not a magnitude. It replaced a
+    // `float code_ceiling`, whose failure mode was a plausible-but-wrong number: pass 127
+    // (or forget the argument, which THIS kernel did until 2026-08-10) and a 4-bit layer
+    // silently stayed 8-bit. A bool has no such value to get wrong; the saturation limit
+    // is derived from the datapath below.
+    bool a4
 ) {
     const int CPG = C / G;
     const float scale = *scale_ptr;
     const float inv_scale = 1.0f / scale;
+    // Q_b for this datapath: 7 at 4 bits, 127 at 8. Derived, not passed, so it cannot
+    // disagree with the bit-width the scale was built for.
+    const float a4_lim = a4 ? 7.0f : 127.0f;
     for (long i = (long)blockIdx.x * blockDim.x + threadIdx.x; i < num_elements;
          i += (long)blockDim.x * gridDim.x) {
         int c = (int)(i % C);
@@ -2377,7 +2502,7 @@ __global__ void gn_apply_delta_quantize_flat_kernel(
         float out = apply_silu ? gns_silu(normed_h) : normed_h;
         if (smooth_inv != nullptr) out *= smooth_inv[c];
         float cache = __half2float(a_hat_cache[i]);
-        float q = clamp_code(roundf((out - cache) * scale), code_ceiling, 127.0f);
+        float q = fmaxf(-a4_lim, fminf(a4_lim, roundf((out - cache) * scale)));
         a_hat_cache[i] = __float2half_rn(cache + q * inv_scale);
         Yq[i] = (int8_t)q;
     }
@@ -2593,13 +2718,21 @@ __global__ void gn_apply_delta_quantize_flat_vec2_kernel(
     // Symmetric code ceiling for THIS step's quantization; <= 0 means the 127 this kernel used
     // to clamp at unconditionally. Distinct from Q_level above, which sets the NEXT step's
     // scale: Q_level/absmax is a scale, code_ceiling is where codes saturate, and a clip ratio
-    // is exactly the case where the two stop agreeing (see clamp_code in common.cuh).
-    float code_ceiling
+    // is exactly the case where the two stop agreeing.
+    // Activation bit-width of THIS datapath, not a magnitude. It replaced a
+    // `float code_ceiling`, whose failure mode was a plausible-but-wrong number: pass 127
+    // (or forget the argument, which THIS kernel did until 2026-08-10) and a 4-bit layer
+    // silently stayed 8-bit. A bool has no such value to get wrong; the saturation limit
+    // is derived from the datapath below.
+    bool a4
 ) {
     extern __shared__ float sdata[];
     const int CPG = C / G;
     const float scale = *scale_ptr;
     const float inv_scale = 1.0f / scale;
+    // Q_b for this datapath: 7 at 4 bits, 127 at 8. Derived, not passed, so it cannot
+    // disagree with the bit-width the scale was built for.
+    const float a4_lim = a4 ? 7.0f : 127.0f;
     float local_max = 0.0f;
     const long stride = (long)blockDim.x * gridDim.x;
     for (long base = 2 * ((long)blockIdx.x * blockDim.x + threadIdx.x);
@@ -2631,8 +2764,8 @@ __global__ void gn_apply_delta_quantize_flat_vec2_kernel(
         const float d0 = o0 - cache.x, d1 = o1 - cache.y;
         // Reduced BEFORE the clamp, so the report is the true delta range, not a clipped lower bound.
         local_max = fmaxf(local_max, fmaxf(fabsf(d0), fabsf(d1)));
-        float q0 = clamp_code(roundf(d0 * scale), code_ceiling, 127.0f);
-        float q1 = clamp_code(roundf(d1 * scale), code_ceiling, 127.0f);
+        float q0 = fmaxf(-a4_lim, fminf(a4_lim, roundf(d0 * scale)));
+        float q1 = fmaxf(-a4_lim, fminf(a4_lim, roundf(d1 * scale)));
         gn_store2(a_hat_cache, base, make_float2(cache.x + q0 * inv_scale, cache.y + q1 * inv_scale));
         int8_t i0 = (int8_t)q0, i1 = (int8_t)q1;
         reinterpret_cast<int16_t*>(Yq)[base >> 1] =
@@ -2678,9 +2811,8 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc(
     // Only matters when the scale is deliberately larger than Q_b/absmax -- which is what a clip
     // ratio is, and why the ratio was not a clip below A8 before this existed
     // (docs/delta_clip_2026-08-06/FINDINGS.md).
-    double code_ceiling_in
+    bool a4
 ) {
-    const float code_ceiling = (float)code_ceiling_in;
     CHECK_CUDA(x);
     CHECK_CONTIGUOUS(x);
     TORCH_CHECK(x.dim() == 4, "group_norm_silu_delta_quantize_nhwc expects a 4D [N, C, H, W] tensor");
@@ -2817,7 +2949,7 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc(
                 report ? scale_out.data_ptr<float>() : nullptr,
                 report ? inv_scale_out.data_ptr<float>() : nullptr,
                 report ? (unsigned int*)retire_count.data_ptr<int>() : nullptr,
-                (float)Q_level, (float)safety, code_ceiling);
+                (float)Q_level, (float)safety, a4);
         } else {
             gn_apply_delta_quantize_flat_kernel<float><<<agrid_scalar, ablock, 0, stream>>>(
                 x.data_ptr<float>(), cache_ptr, reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
@@ -2826,7 +2958,7 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc(
                 has_mod ? mod_shift.data_ptr<float>() : nullptr,
                 mean.data_ptr<float>(), inv_std.data_ptr<float>(),
                 scale_ptr_eff, smooth_ptr,
-                C, (int)num_groups, sample_stride, num_elements, apply_silu, code_ceiling);
+                C, (int)num_groups, sample_stride, num_elements, apply_silu, a4);
         }
     } else {
         if (use_vec2) {
@@ -2845,7 +2977,7 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc(
                 report ? scale_out.data_ptr<float>() : nullptr,
                 report ? inv_scale_out.data_ptr<float>() : nullptr,
                 report ? (unsigned int*)retire_count.data_ptr<int>() : nullptr,
-                (float)Q_level, (float)safety, code_ceiling);
+                (float)Q_level, (float)safety, a4);
         } else {
             gn_apply_delta_quantize_flat_kernel<__half><<<agrid_scalar, ablock, 0, stream>>>(
                 reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), cache_ptr,
@@ -2856,7 +2988,7 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc(
                 has_mod ? reinterpret_cast<const __half*>(mod_shift.data_ptr<at::Half>()) : nullptr,
                 mean.data_ptr<float>(), inv_std.data_ptr<float>(),
                 scale_ptr_eff, smooth_ptr,
-                C, (int)num_groups, sample_stride, num_elements, apply_silu, code_ceiling);
+                C, (int)num_groups, sample_stride, num_elements, apply_silu, a4);
         }
     }
     return yq;
