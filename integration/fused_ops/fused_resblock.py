@@ -385,6 +385,16 @@ class _UpdownFuseRefreshFlag:
 _UPDOWN_FUSE_REFRESH = _UpdownFuseRefreshFlag()
 
 
+class _UpdownA4Flag:
+    """Truthy iff the updown fusion should honour the conv's activation bit-width. Live view of
+    MODIFF_UPDOWN_A4 so an in-process A/B can flip it between arms; see the call site."""
+    def __bool__(self):
+        return os.environ.get("MODIFF_UPDOWN_A4", "1") == "1"
+
+
+_UPDOWN_A4 = _UpdownA4Flag()
+
+
 def _delta_gn_dynamic_args_any(conv, device, is_int4):
     """The 8 trailing dynamic-scale arguments of group_norm_silu_delta_quantize_resize_nhwc,
     from whichever accessor this conv class provides.
@@ -398,7 +408,16 @@ def _delta_gn_dynamic_args_any(conv, device, is_int4):
     """
     if is_int4:
         return tuple(conv._delta_gn_dynamic_args_i4(device)) + (False,)
-    return tuple(conv._delta_gn_dynamic_args(device))
+    args = tuple(conv._delta_gn_dynamic_args(device))
+    if not _UPDOWN_A4:
+        # MODIFF_UPDOWN_A4=0 forces these eight layers back to the int8 store's literal 127, which
+        # is what they did before 2026-08-10: this kernel took no ceiling, so it clamped at 127
+        # while the other 62 convs honoured act_q. It exists as the CONTROL for measuring what that
+        # defect was worth -- the before-arm cannot otherwise be reproduced, since the code is gone.
+        # Only observable at MODIFF_ACT_BITS=4 with MODIFF_DELTA_REFRESH>1; see
+        # docs/updown_refresh_fusion_2026-08-10/.
+        args = args[:-1] + (False,)
+    return args
 
 
 def _prequant_gn_resize_conv_modiff(x, gn, h_upd, conv, mod_scale=None, mod_shift=None):

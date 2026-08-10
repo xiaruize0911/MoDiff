@@ -237,6 +237,76 @@ gone. The sweep tables are preserved in `OptimizedInt8Conv2d`'s comment as well 
 `docs/delta_clip_2026-08-06/`, so if W8A4 quality becomes the bottleneck this is the first thing to
 reach back for.
 
+## Quality: what the `a4` correction is worth, and why the answer is "nothing measurable"
+
+The `a4` change alters numerics on the K>1 reuse path for those eight layers, which no timing run can
+speak to. Measured with the paired-seed relL2 protocol
+(`integration/tests/quality_updown_a4_paired.py`, batch 8, DDIM 50, real checkpoint, relL2 against
+the same-seed fp16 latent, run 1 discarded per arm because the attention blocks self-calibrate).
+
+**The two arms had to be isolated with a flag.** At K>1 the pre-commit code differed in TWO ways at
+once — the fusion declined on refresh steps (6/8 fused at K=4) *and* the fused ones ignored the
+ceiling. Comparing against the old code would measure both. So the fusion is held ON in both arms and
+only `MODIFF_UPDOWN_A4` moves; `=0` clamps those eight layers at 127, which is what they did before.
+The before-arm cannot be reproduced otherwise, since that code is gone.
+
+**Direction was predicted before running**, and is in the script's docstring: clamping at 127 lets a
+4-bit layer keep resolution a true 4-bit quantizer would discard, so the *defective* arm should look
+better — the same flattering commit `3be1986` found on the other 62 layers. A correction that makes
+the number worse is the correct outcome.
+
+### Controls: both bit-identical
+
+| control | result | why it must be |
+|---|---|---|
+| W8A8, K=4 | **exactly identical**, 3/3 seeds | `act_q` is 127, so `a4` is False in both arms |
+| W8A4, K=1 | **exactly identical**, 3/3 seeds | scale is `Q_b/absmax`, so no code can exceed `Q_b` |
+
+The K=1 row being *exactly* identical rather than approximately is the strongest confirmation in this
+section: the ceiling only has something to clamp once a scale has gone stale.
+
+### The effect: the 3-seed answer was noise, and the 8-seed run flipped its sign
+
+| seeds | corrected/defective mean | corrected wins |
+|---|---:|---:|
+| 3 (1234, 5678, 9012) | 1.061× (worse) | 1/3 |
+| **8** | **0.967× (better)** | **5/8** |
+
+Per seed at 8 seeds, W8A4 / K=4:
+
+| | 1234 | 5678 | 9012 | 3141 | 2718 | 1618 | 4669 | 8080 | mean |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| clamp 127 | 0.1439 | 0.1309 | 0.1747 | 0.1403 | 0.1045 | 0.1976 | 0.1485 | 0.1484 | 0.1486 |
+| clamp Q_b | 0.1487 | 0.1398 | 0.1695 | 0.1135 | 0.0983 | 0.1641 | 0.1778 | 0.1381 | 0.1437 |
+| diff | +3.3% | +6.8% | −3.0% | −19.1% | −5.9% | −17.0% | +19.7% | −6.9% | **−2.8%** |
+
+Paired per-seed difference: **−2.75% ± 4.49% (SEM)**, stdev 12.70%. The interval straddles zero, so
+**the effect is not resolved** — this protocol cannot see it at 8 seeds, in either direction.
+
+### The noise floor, measured rather than assumed
+
+The two runs share three seeds and the identical configuration, so their disagreement *is* the
+instrument's reproducibility:
+
+| arm | 1234 | 5678 | 9012 |
+|---|---|---|---|
+| clamp 127 | 0.1581 → 0.1439 (−8.9%) | 0.1294 → 0.1309 (+1.2%) | 0.1496 → **0.1747 (+16.7%)** |
+| clamp Q_b | 0.1429 → 0.1487 (+4.0%) | 0.1399 → 0.1398 (−0.0%) | 0.1810 → 0.1695 (−6.4%) |
+
+Same config, same seed, up to **±17%** apart. The effect under test is 2.8% on the mean. That is the
+whole result: the measurement is not inconclusive because too few seeds were run, it is inconclusive
+because the effect is an order of magnitude below what batch 8 / DDIM 50 can resolve. `docs/act_bits_2026-08-05`
+already warned of 10–30% run-to-run variation here; this quantifies it for this configuration. Eight
+seeds gives SEM 4.5%, so resolving 3% would need roughly 50+ seeds, or a larger batch and step count.
+
+### Conclusion
+
+**The `a4` correction has no quality cost this protocol can detect**, and the change stands on
+correctness grounds: those eight layers now honour the same bit-width as the other 62, which is what
+`MODIFF_ACT_BITS=4` claims. The 3-seed table is left in `data/quality_a4_paired.json` deliberately —
+it read 1.061× / 1-of-3 and would have supported "the correction costs 6%", which the 8-seed run
+refutes. Three seeds is not enough for an effect this size, and that is worth not rediscovering.
+
 ## Regression checks
 
 * `integration/tests/test_gn_resize_fusion.py` — the *baseline* resize kernel is untouched:
@@ -261,7 +331,9 @@ size — the `int8_ptq` control above is the reason.
 ## Open
 
 1. **`MODIFF_DELTA_REPORT=1` at K=1** now fuses too and pays the cheaper static cost. Its quality
-   cost is already measured at K=4 but not at K=1 with this fusion live.
+   cost is already measured at K=4 but not at K=1 with this fusion live -- and note from the section
+   above that a batch-8 / DDIM-50 paired sweep cannot resolve anything under ~10%, so that
+   measurement needs a bigger budget than the one used here.
 2. **W8A4 quality without the clip.** The r=0.40 option is gone; whether anything cheaper recovers
    that 0.086 is unmeasured.
 3. **The environment is only partly provisioned.** `omegaconf`, `einops`,

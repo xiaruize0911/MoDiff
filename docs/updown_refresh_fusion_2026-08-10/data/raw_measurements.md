@@ -151,3 +151,31 @@ PASS
 PASS
 ```
 
+
+## `quality_updown_a4_paired` (3 seeds, all three cases)
+
+```
+=== W8A8, K=4  (control: must be identical) ===
+         arm |      1234      5678      9012 |     mean
+---------------------------------------------------------
+   clamp 127 |    0.0385    0.0170    0.0929 |   0.0495
+   clamp Q_b |    0.0385    0.0170    0.0929 |   0.0495
+corrected/defective mean:  1.000x   corrected wins 0/3 seeds   worst per-seed move +0.0%
+  -> BIT-IDENTICAL across the two arms
+wrote docs/updown_refresh_fusion_2026-08-10/data/quality_a4_paired.json
+```
+
+## `quality_updown_a4_paired --only 'K=4  (the effect)' --seeds x8`
+
+```
+ok
+batch 8, DDIM 50, seeds [1234, 5678, 9012, 3141, 2718, 1618, 4669, 8080], real checkpoint, NVIDIA A40
+relL2 vs the SAME-seed fp16 latent; run 1 discarded per arm (attention self-calibrates)
+=== W8A4, K=4  (the effect) ===
+         arm |      1234      5678      9012      3141      2718      1618      4669      8080 |     mean
+-----------------------------------------------------------------------------------------------------------
+   clamp 127 |    0.1439    0.1309    0.1747    0.1403    0.1045    0.1976    0.1485    0.1484 |   0.1486
+   clamp Q_b |    0.1487    0.1398    0.1695    0.1135    0.0983    0.1641    0.1778    0.1381 |   0.1437
+corrected/defective mean:  0.967x   corrected wins 5/8 seeds   worst per-seed move +19.7%
+wrote docs/updown_refresh_fusion_2026-08-10/data/quality_a4_paired_8seeds.json
+```
