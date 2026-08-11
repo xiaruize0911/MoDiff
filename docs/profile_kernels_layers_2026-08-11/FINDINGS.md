@@ -236,6 +236,25 @@ steps, and PTQ has no warm-up to amortise.
    Worth ~4.60 ms of `attn_quantize` plus part of the +4.04 elementwise. This is now the largest
    open item, ahead of the GN-stats epilogue fusion, and unlike that one it needs no CUTLASS work.
 
+   **Checked further, and the weight permutation is not needed either.** The qkv weight in this tree
+   is ALREADY stored interleaved: `_qkv_from_gn_modiff_fused` ends `return out.reshape(b, T, nh, 3,
+   hd)` and the fp16 `fused_gn_qkv` path does the same, so the GEMM's column order is `(nh, 3, hd)`
+   and the int8 output reshapes into the packed flash buffer with no data movement at all. The
+   obstacle predicted one iteration earlier does not exist.
+
+   **The three scales line up too, with no kernel change.** `flash_attn_int8_packed_vt` takes `sq_c`
+   and `sk_c` as scalar dequant constants and `sv` per-channel; the `out_i8` GEMM family takes
+   `_inv_out_scale` as `[N_pad]`, i.e. **per column**. So one 3C-long vector — `1/sq_c` on the q
+   columns, `1/sk_c` on the k columns, `1/sv[hd_i]` on the v columns — expresses exactly what flash
+   expects. The frozen values already exist as `_fq_sqc` / `_fq_skc` / `_fq_svv` once `_fq_frozen2`.
+
+   So the wiring is: `gemm_w8a8_awq_o_hat_out_i8` (advances fp16 o_hat, emits int8 at the per-column
+   scale) -> reshape (free) -> `flash_attn_int8_packed_vt` -> proj as today, with the three `aq_*`
+   kernels gone. **Not implemented.** What remains unverified is the dual-output GEMM's exact
+   signature and whether it accepts a per-column out scale or only the scalar `a_scale` its
+   `TORCH_CHECK`s mention — that is the next thing to read, and it decides whether this is a wiring
+   job or needs the out-scale plumbed through.
+
 4. **No W8A4 or W4A4 trace arm.** `differential_timing.py`'s CONFIGS has neither, so the per-kernel
    table covers W8A8 only. The layer table suggests W8A4 would be redundant; W4A4 would not be.
 5. **70 of 140 quantized conv modules are never called** during sampling (`fusion_audit.py` now
