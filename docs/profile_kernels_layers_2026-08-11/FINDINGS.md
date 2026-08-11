@@ -214,7 +214,29 @@ steps, and PTQ has no warm-up to amortise.
    a residual bucket. Not done here.
 2. **The PTQ attn/proj split**, which needs `_flash_proj_qout` instrumented to separate the
    projection GEMM from the score path.
-3. **No W8A4 or W4A4 trace arm.** `differential_timing.py`'s CONFIGS has neither, so the per-kernel
+3. **The `aq_*` trio (4.60 ms) is NOT blocked on Part 3, and the recorded blocker is stale.**
+   `docs/delta_clip_2026-08-06` says "every int8-qkv-consuming flash entry point in the tree is a
+   `_qout` variant -- the non-qout siblings were deleted in the 2026-08-01 dead-code pass", and
+   concludes the dual-output GEMM cannot be used until an a_hat-aware flash qout lands. Checked
+   2026-08-11: three non-`_qout` int8 entry points are still exported and declared --
+   `flash_attn_int8_vt`, `flash_attn_int8_vt_static`, and `flash_attn_int8_packed_vt(qkv, sv, hd_pad,
+   sq_c, sk_c, softmax_scale)`. That last one consumes the **packed int8 qkv** and returns fp16, which
+   is exactly the "int8 qkv -> flash -> fp16 proj" configuration the note says no longer exists. The
+   2026-08-01 pass removed the three `qpacked_kv_static*` non-qout siblings (as
+   `modiff_kernels_api.h`'s own dead-code note records), not these.
+
+   So the path is open: `gemm_w8a8_awq_o_hat_out_i8` is already built and verified with **zero call
+   sites**, and it emits int8 codes of `o_hat + bias` while advancing the fp16 o_hat state. One layout
+   obstacle remains and it looks solvable for free: the GEMM's natural column order is
+   `(3, nh, hd)` (q|k|v concatenated) while the packed flash buffer wants `(nh, 3, hd)`. **Permuting
+   the qkv weight rows at construction** makes the GEMM emit the interleaved order directly, at no
+   runtime cost. Not attempted yet, and `n_out = 3C` is even so the dual-output kernel's `__half2`
+   pairing constraint is satisfied.
+
+   Worth ~4.60 ms of `attn_quantize` plus part of the +4.04 elementwise. This is now the largest
+   open item, ahead of the GN-stats epilogue fusion, and unlike that one it needs no CUTLASS work.
+
+4. **No W8A4 or W4A4 trace arm.** `differential_timing.py`'s CONFIGS has neither, so the per-kernel
    table covers W8A8 only. The layer table suggests W8A4 would be redundant; W4A4 would not be.
-4. **70 of 140 quantized conv modules are never called** during sampling (`fusion_audit.py` now
+5. **70 of 140 quantized conv modules are never called** during sampling (`fusion_audit.py` now
    reports `n_conv_modules` and `n_conv_layers_called` separately). Unexplained.
