@@ -67,6 +67,14 @@ def kernel_hashes(so_path):
         # Strip the /*addr*/ and /*hex*/ comment columns: they encode position, not semantics, and
         # shift when an unrelated kernel earlier in the same TU changes size.
         body = re.sub(r"/\*[0-9a-fx]*\*/", "", line).strip()
+        # Also normalise long hex literals. SASS prints BRANCH TARGETS as absolute addresses in the
+        # operand text, not in the comment columns, so they move when the fatbin is laid out
+        # differently -- which happens when the object ORDER changes even if no code did. Family 1
+        # exposed this: moving two quantize files flagged fp16_ncw_to_fp32_cl_kernel, which lives in
+        # layout_transform.cu, a translation unit that was neither edited nor recompiled. Four or more
+        # hex digits is an address; short immediates stay in the hash. The cost is that a genuine
+        # change to a >=4-digit immediate constant would be masked.
+        body = re.sub(r"0x[0-9a-f]{4,}", "0xADDR", body)
         if body:
             acc.append(body)
     flush()
