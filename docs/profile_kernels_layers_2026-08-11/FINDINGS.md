@@ -202,6 +202,99 @@ directly inside `_flash_proj_qout`, not through `QuantLinearWxAx.forward`, so it
 attn bucket and `proj` reads 0.0. The "attn net of proj" subtraction the other rows get is a no-op
 there. **The attn column is not comparable across the PTQ row and the rest.**
 
+## 4. Every remaining fusion, attempted and measured
+
+The profile above names three fusion candidates worth 8.9 ms between them. All three were then built
+far enough to measure, and **all three are refuted** — none by a design argument, each by a number.
+Recording that here because the candidates read plausible on paper and the estimates were mine.
+
+| candidate | ceiling | verdict | measured |
+|---|---:|---|---|
+| `aq_*` route (a): fp16 → flash | 4.60 | **18.0 ms slower** | 121.25 vs 103.23 ms/step, paired on one model |
+| `aq_*` route (b): int8 → flash | 4.60 | **raises; no eligible shape** | hd=24 fails cp.async, hd=48 fails mma eligibility |
+| GN stats → conv epilogue | 4.30 | **6.5× slower, nondeterministic** | 30.83 vs 4.75 ms/step weighted; `det=False` |
+
+### `aq_*` route (a): quantize-on-load is not quantize-once
+
+`flash_attn_int8_packed_vt` branches on its packed qkv's dtype — `kHalf` quantizes on load, `int8`
+gathers. Handing it the MoDiff path's fp16 qkv therefore deletes the three `aq_*` kernels with no GEMM
+change and no new calibration, since those kernels already quantize this exact tensor with the same
+frozen `_fq_sqc`/`_fq_skc`/`_fq_svv`.
+
+It is 18.0 ms slower. **Flash re-reads k and v for every query block**, so "quantize on load" means
+quantize O(T/block) times rather than once. Quantize-once-then-gather is *why* those three kernels
+exist; their presence read like an artefact of MoDiff forcing fp16 output, and it is a deliberate
+choice that predates it. The docstring said as much — `int8 → gather` versus `fp16 → quantize` names
+which side does work per read.
+
+### `aq_*` route (b): the producer was never the problem
+
+Route (b) feeds int8 instead, taking the gather path. Its foundation is sound and verified standalone
+(`integration/tests/test_qkv_o_hat_out_i8.py`): `gemm_w8a8_awq_o_hat_out_i8` advances the fp16 o_hat
+state and emits per-column-scaled int8 equal to `quantize(o_hat GEMM)` at every real qkv width, to
+within one code. The wiring is equally sound — the GEMM's column order is already `(nh, 3, hd)` so the
+reshape into the packed flash buffer moves no data, and the returned dtype serves as the route marker
+so `_forward_routes` branches before `_resolve_flash` sees a non-fp16 tensor.
+
+It does not run. Two kernel constraints, both found by running it:
+
+* **`hd % 16 == 0`** — the int8 gather loads per-token bytes with `cp.async`, which needs 16-byte
+  alignment. This model's heads are `hd = C/nh` = 24, 48, 96 for C = 192, 384, 768. **hd=24 is out, and
+  hd24/T1024 is the dominant block.** The fp16 path has no such limit at 2 bytes/element, which is
+  exactly why route (a) ran everywhere and this cannot.
+* **"mma-eligible shapes only"** — with `hd % 16` satisfied, hd=48 is still rejected by a second,
+  narrower restriction.
+
+So neither int8 attention width in this model can take the gather path. **I spent four iterations
+treating this as a wiring problem**, refining a specification — layout ✓, scales ✓, signature ✓ — that
+was correct about everything except whether the destination accepts the shapes. Checking the consumer's
+constraints when I first verified the producer's layout would have found both in one read.
+
+### GN stats → epilogue: the footprint was costed, the reduction was not
+
+Prototyped standalone on the verified 128×128 tile grid (`gn_stats_from_tiles` in
+`csrc/kernels/norm/group_norm_silu.cu`), accumulating per-`(n, group)` sum/sumsq in shared memory and
+writing per-tile slots — what an EVT auxiliary-output node would do, without CUTLASS.
+
+| shape | prototype | shipped | ratio |
+|---|---:|---:|---:|
+| 192×32×32 ×14 | 542.7 µs | 476.2 | 1.14× |
+| 384×32×32 ×4 | 1439.0 | 771.5 | 1.87× |
+| 768×16×16 ×4 | 1277.3 | 416.6 | 3.07× |
+| 768×4×4 ×10 | 237.0 | 52.5 | **4.51×** |
+| **weighted/step** | **30.83 ms** | **4.75** | **6.5×** |
+
+Plus `det=False` on every shape. The arithmetic is right (max rel err 1.4e-3 vs an fp32 reference), so
+this is cost and determinism, not correctness — and both trace to two lines of shared `atomicAdd` per
+element: 23–56 slots with 256 threads contending, and float `atomicAdd` being order-dependent.
+
+Two things worth keeping from this. First, **I wrote in that kernel that shared atomics were safe
+because they are "block-local, so the cross-block order that made ALT=2 nondeterministic cannot
+arise". That is false** — block-local float `atomicAdd` is still order-nondeterministic within the
+block — and I asserted it next to the one mechanism in that file a prior experiment had already been
+rejected for. Corrected in place.
+
+Second, the design document was optimistic because it costed the accumulator's **footprint** (56 pairs,
+448 B, worked out carefully) and never its **reduction**. That was the wrong quantity to check first.
+The concept is not strictly dead — in a real epilogue each fragment sits in registers with a known
+`(n, g)`, so a warp-level tree reduction could replace the atomics — but it must beat a 6.5× gap while
+paying on top of the conv's existing epilogue work, against contention that is structural: few slots,
+many threads, worst exactly where the tensors are small.
+
+### What this leaves
+
+**There is no remaining cheap fusion.** What is left needs new kernels rather than wiring: a flash
+entry point accepting int8 at hd=24, or a tree-reduction epilogue node that beats 4.75 ms. Both are
+authoring jobs with the target now quantified, which is more than they had before.
+
+The session's actual gains, by contrast, were both scheduling and plumbing rather than fusion:
+
+| landed | gain | verification |
+|---|---:|---|
+| K=1 updown resize fusion | **+0.85 ms** | e2e net of drift; +0.93 at kernel level, two instruments 0.08 ms apart |
+| projection refresh schedule | **+2.81 ms** | three instruments within 0.15 ms; prediction made from the trace before coding |
+| `out_i8` padding bug | correctness | 254 → 1 max code diff at the padded width, aligned widths unchanged as control |
+
 ## Figures
 
 `plots/*.png`, all regenerated by `scripts/make_plots.py` from `data/` with no GPU. They are
