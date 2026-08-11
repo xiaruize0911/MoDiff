@@ -36,7 +36,8 @@ weaker than the other, is what produced this.
 | `aq_*` route (a): fp16 → flash | 4.60 | refuted 2026-08-11 | 18.0 ms slower (quantize-on-load, per k/v re-read) |
 | `aq_*` route (b): int8 → flash, hd=48 | 1.47 | **landed on 10/21 blocks** | **+0.79 ms/step** |
 | `aq_*` route (b): hd=24 via an 8 B loader | 3.13 | **refuted** | 2.11× the mma kernel vs a 1.44× break-even, −0.907 ms/block |
-| GN stats → conv epilogue | 4.30 | refuted 2026-08-11 | 6.5× slower, nondeterministic |
+| GN stats → conv epilogue, shared atomics | 4.30 | refuted 2026-08-11 | 6.5× slower, nondeterministic |
+| GN stats → conv epilogue, warp tree | 4.30 | **mechanism viable, margin is not** | 0.96× shipped and deterministic — too thin to justify the EVT node |
 
 ## Stage 0: the pre-check, because the score kernel changes too
 
@@ -305,7 +306,15 @@ now refuses that combination instead of silently replacing the dataset.
 2. ~~hd=24 needs the 8-byte loader.~~ **Built and refuted** — see above. The loader stays as a
    diagnostic path; `attn_quantize`'s last 3.13 ms needs a gather that beats the mma kernel at
    T=1024, which is a new kernel rather than a wider load.
-3. **Quality is unresolved, not clean.** ±2.5% per-seed swings at 3 seeds. If route (b) is ever made
+3. **Stage C of the GN-stats design is NOT unblocked** by the 0.96×. What would change that is a
+   reduction that wins on `768×4×4` (still 1.54×) rather than only in the weighted average, since a
+   real epilogue pays this on top of its existing work rather than instead of a separate launch.
+4. **Part 3 (the a_hat-aware flash qout epilogue) is not started.** Its ceiling is 6.7 ms but its
+   first gate is a numerics decision, not code: the delta scale has to come from a previous step's
+   `report_next` or be accepted one step stale, and the relL2 cost of stale has to be measured before
+   any kernel is written. Note also it only pays at A8/A7 — at A4 the projections are already a
+   0.976×/1.014× proposition.
+5. **Quality is unresolved, not clean.** ±2.5% per-seed swings at 3 seeds. If route (b) is ever made
    default rather than opt-in, that needs more seeds — the 8-seed lesson from `docs/act_bits_2026-08-05`
    applies (a 3-seed mean there reversed sign at 8).
 4. **The environment had to be re-provisioned.** `omegaconf`, `einops`, `pytorch-lightning==1.4.2`,
