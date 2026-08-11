@@ -78,6 +78,15 @@ def kernel_hashes(so_path):
         # Strip the /*addr*/ and /*hex*/ comment columns: they encode position, not semantics, and
         # shift when an unrelated kernel earlier in the same TU changes size.
         body = re.sub(r"/\*[0-9a-fx]*\*/", "", line).strip()
+        # Collapse whitespace runs to one space. cuobjdump right-pads the operand column to align
+        # every instruction's /* encoding */ comment to the SAME column across the WHOLE dump, so
+        # that padding's width depends on the longest mnemonic/operand text anywhere in the binary --
+        # not on this kernel. Family 1b hit this: adding code to quantize.cu (new kernels appended
+        # after existing ones) left three untouched kernels' SOURCE byte-identical but shifted their
+        # padding by one space, which a whitespace-sensitive hash reports as changed code. Confirmed
+        # by diffing raw SASS for quant_attn_out_int4_pack_kernel across the two builds: every line
+        # differed only in the run of spaces before "/*".
+        body = re.sub(r"\s+", " ", body)
         # Also normalise long hex literals. SASS prints BRANCH TARGETS as absolute addresses in the
         # operand text, not in the comment columns, so they move when the fatbin is laid out
         # differently -- which happens when the object ORDER changes even if no code did. Family 1

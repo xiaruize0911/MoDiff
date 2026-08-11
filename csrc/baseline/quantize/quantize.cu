@@ -590,3 +590,858 @@ torch::Tensor quantize_attn_out_int4_pack(torch::Tensor a, double a_scale, int64
       1.f / (float)a_scale, nh, T, hd, Kpad, nout);
   return out;
 }
+
+// ================================================================================================
+// COPIED from csrc/modiff/quantize/delta_quantize.cu (family 1b, 2026-08-12). These are also used
+// by MoDiff-side code that stays in that file, so they are duplicated here rather than shared
+// across trees -- see csrc/README.md. The host function and the __global__ kernel are marked
+// `static` so they cannot collide with the exported originals at link time; the two are otherwise
+// byte-identical to their twins and should stay that way.
+// ================================================================================================
+
+// COPY of load_as_float
+__device__ __forceinline__ float load_as_float(const float* p, int i) { return p[i]; }
+__device__ __forceinline__ float load_as_float(const __half* p, int i) { return __half2float(p[i]); }
+
+// COPY of load_as_float2
+__device__ __forceinline__ float2 load_as_float2(const float* p, int i) {
+    return reinterpret_cast<const float2*>(p)[i >> 1];
+}
+__device__ __forceinline__ float2 load_as_float2(const __half* p, int i) {
+    return __half22float2(reinterpret_cast<const __half2*>(p)[i >> 1]);
+}
+
+// COPY of avgpool4_as_stored
+// Bit-exact reproduction of ATen's avg_pool2d(kernel_size=2, stride=2, padding=0) forward for a
+// single 2x2 non-overlapping window: sums the 4 window elements as float in (kh,kw) row-major
+// order, scales by 0.25f, then -- ONLY when T_IN is half-precision storage -- rounds that sum
+// through __half (round-to-nearest-even, matching what avg_pool2d actually writes to its fp16
+// output tensor) before handing it back out as float. Verified against a real
+// nn.AvgPool2d(2,2).cuda() fp16 forward: this reproduces it bit-for-bit (torch.equal), not just
+// approximately, which is the same bar every other kernel in this file is held to.
+template <typename T_IN> __device__ __forceinline__ float avgpool4_as_stored(float sum);
+template <> __device__ __forceinline__ float avgpool4_as_stored<__half>(float sum) {
+    return __half2float(__float2half_rn(sum));
+}
+template <> __device__ __forceinline__ float avgpool4_as_stored<float>(float sum) { return sum; }
+
+// COPY of sub_absmax_scale_kernel
+// Fused: residual = x - a_hat_cache (with optional SmoothQuant), absmax reduction
+// over the whole tensor, then scale = Q_level/max(absmax,eps) and its inverse.
+// Replaces 6 separate kernel launches (sub, abs, amax, clamp, div, div) with one
+// cooperative kernel using atomic float-max + a block-retirement counter to elect
+// a single "last" block to finalize the scale.
+//
+// a_hat_cache and residual are independently nullable, subsuming what used to be
+// a separate near-duplicate kernel (quantize.cu's absmax_scale_kernel) for the
+// cache-free baseline case:
+//   a_hat_cache == nullptr -> no cache to subtract, "residual" is just x itself
+//                             (still smoothed if smooth_inv is set)
+//   residual == nullptr    -> pure reduction, nothing to materialize (this is
+//                             exactly what the baseline path needs: it only wants
+//                             scale/inv_scale, and quantizing straight from x
+//                             costs nothing extra since x is already resident)
+// Both null is the baseline case (compute_dynamic_scale); both non-null is the
+// original MoDiff dynamic case (sub_absmax_scale).
+static __global__ void sub_absmax_scale_kernel(
+    const float* __restrict__ x,
+    const float* __restrict__ a_hat_cache,   // nullptr => baseline, no cache to subtract
+    float* __restrict__ residual,            // nullptr => don't materialize, reduction only
+    float* __restrict__ absmax_buf,     // Must be 0 on entry (self-resetting)
+    float* __restrict__ scale_out,      // Q_level / max(absmax, eps)
+    float* __restrict__ inv_scale_out,  // max(absmax, eps) / Q_level  (CUTLASS alpha)
+    unsigned int* __restrict__ retire_count, // Must be 0 on entry (self-resetting)
+    const float* __restrict__ smooth_inv,  // Per-channel SmoothQuant inverse (NULL=skip)
+    int num_channels,                    // C for NHWC channel indexing
+    float Q_level,                      // 7.0 for INT4, 127.0 for INT8
+    int num_elements
+) {
+    extern __shared__ float sdata[];
+
+    int tid = threadIdx.x;
+    int num_threads = blockDim.x * gridDim.x;
+
+    // Step 1: Compute residual (with optional SmoothQuant) and find thread-local abs max
+    float local_max = 0.0f;
+    int num_elements4 = num_elements / 4;
+    // Vectorized loop: process 4 elements at a time
+    for (int i4 = blockIdx.x * blockDim.x + tid; i4 < num_elements4; i4 += num_threads) {
+        float4 x_v = reinterpret_cast<const float4*>(x)[i4];
+        // Fused SmoothQuant: x_smooth = x * smooth_inv[channel]
+        if (smooth_inv != nullptr) {
+            int ch = (i4 * 4) % num_channels;
+            x_v.x *= smooth_inv[ch];
+            x_v.y *= smooth_inv[ch + 1];
+            x_v.z *= smooth_inv[ch + 2];
+            x_v.w *= smooth_inv[ch + 3];
+        }
+        float4 r_v;
+        if (a_hat_cache != nullptr) {
+            float4 c_v = reinterpret_cast<const float4*>(a_hat_cache)[i4];
+            r_v.x = x_v.x - c_v.x;
+            r_v.y = x_v.y - c_v.y;
+            r_v.z = x_v.z - c_v.z;
+            r_v.w = x_v.w - c_v.w;
+        } else {
+            r_v = x_v;
+        }
+        if (residual != nullptr) {
+            reinterpret_cast<float4*>(residual)[i4] = r_v;
+        }
+        local_max = fmaxf(local_max, fmaxf(fmaxf(fabsf(r_v.x), fabsf(r_v.y)),
+                                            fmaxf(fabsf(r_v.z), fabsf(r_v.w))));
+    }
+    // Scalar tail for remaining elements
+    int tail_start = num_elements4 * 4;
+    for (int i = tail_start + blockIdx.x * blockDim.x + tid; i < num_elements; i += num_threads) {
+        float xval = x[i];
+        if (smooth_inv != nullptr) {
+            xval *= smooth_inv[i % num_channels];
+        }
+        float r = (a_hat_cache != nullptr) ? (xval - a_hat_cache[i]) : xval;
+        if (residual != nullptr) {
+            residual[i] = r;
+        }
+        local_max = fmaxf(local_max, fabsf(r));
+    }
+
+    // Step 2: Block-level reduction in shared memory
+    sdata[tid] = local_max;
+    __syncthreads();
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (tid < s) sdata[tid] = fmaxf(sdata[tid], sdata[tid + s]);
+        __syncthreads();
+    }
+
+    if (tid == 0) {
+        // Step 3: Atomic float max across blocks (CAS-based)
+        float val = sdata[0];
+        unsigned int* addr = (unsigned int*)absmax_buf;
+        unsigned int old = *addr, assumed;
+        do {
+            assumed = old;
+            old = atomicCAS(addr, assumed,
+                __float_as_uint(fmaxf(val, __uint_as_float(assumed))));
+        } while (assumed != old);
+
+        // Step 4: Count completed blocks; last block computes + writes scale
+        __threadfence();  // Ensure atomicCAS is visible before counting
+        unsigned int ticket = atomicAdd(retire_count, 1u);
+        if (ticket == gridDim.x - 1) {
+            float absmax = *absmax_buf;
+            float am = fmaxf(absmax, 1e-6f);
+            *scale_out = Q_level / am;
+            *inv_scale_out = am / Q_level;
+            // Self-reset for next invocation (safe: next kernel starts after this one)
+            *absmax_buf = 0.0f;
+            *retire_count = 0;
+        }
+    }
+}
+
+// COPY of sub_absmax_scale
+// C++ wrapper: performs subtraction + absmax reduction + scale computation in one kernel.
+// Outputs: residual, scale_out (Q/max), inv_scale_out (max/Q = CUTLASS alpha).
+// absmax_buf and retire_count must be persistent, initialized to 0 (kernel self-resets).
+//   Op:       MoDiff temporal-delta residual + absmax + dynamic-scale (shared reduction)
+//   Inputs:   x FP32 [N,C,H,W]; a_hat_cache FP32 [same] MoDiff cache; residual FP32 [same]
+//             out buffer; absmax_buf FP32 [1] (init 0, self-reset); scale_out FP32 [1] out;
+//             inv_scale_out FP32 [1] out; retire_count int32 [1] (init 0, self-reset);
+//             Q_level float (7.0 int4 / 127.0 int8); smooth_inv FP32 [C] per-channel
+//             SmoothQuant inverse (empty = skip)
+//   Outputs:  residual = (x*smooth_inv) - a_hat_cache; scale_out = Q_level/max(absmax,1e-6);
+//             inv_scale_out = max(absmax,1e-6)/Q_level (CUTLASS alpha)
+//   Computes: temporal delta of x against the cache, then the per-tensor dynamic scale
+//             from the delta's absmax
+//   Fuses:    6 elementwise launches (sub, abs, amax, clamp, div, div) into one cooperative
+//             kernel (atomic float-max + block-retirement counter elects the last block to
+//             finalize the scale); no host sync
+//   Constraints: absmax_buf & retire_count must be 0 on entry (self-resetting); with
+//                smooth_inv the float4 quads assume num_channels % 4 == 0
+//   vs fp16:  n/a (quantization / layout / MoDiff-caching support op — no fp16 equivalent; these are the overhead ops that fusion tries to hide)
+static void sub_absmax_scale(
+    torch::Tensor x,
+    torch::Tensor a_hat_cache,
+    torch::Tensor residual,
+    torch::Tensor absmax_buf,      // 1-element float32, init 0
+    torch::Tensor scale_out,       // 1-element float32 output
+    torch::Tensor inv_scale_out,   // 1-element float32 output
+    torch::Tensor retire_count,    // 1-element int32, init 0
+    float Q_level,
+    torch::Tensor smooth_inv       // Per-channel SmoothQuant inverse (empty = skip)
+) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    int num_elements = x.numel();
+    int block_size = 256;
+    int grid_size = min((num_elements + block_size - 1) / block_size, 1024);
+
+    // Determine smooth_inv pointer and num_channels
+    const float* smooth_ptr = nullptr;
+    int num_channels = 0;
+    if (smooth_inv.numel() > 0) {
+        smooth_ptr = smooth_inv.data_ptr<float>();
+        num_channels = smooth_inv.numel();
+    }
+
+    sub_absmax_scale_kernel<<<grid_size, block_size, block_size * sizeof(float), stream>>>(
+        x.data_ptr<float>(),
+        a_hat_cache.data_ptr<float>(),
+        residual.data_ptr<float>(),
+        absmax_buf.data_ptr<float>(),
+        scale_out.data_ptr<float>(),
+        inv_scale_out.data_ptr<float>(),
+        (unsigned int*)retire_count.data_ptr<int>(),
+        smooth_ptr,
+        num_channels,
+        Q_level,
+        num_elements
+    );
+}
+
+// ================================================================================================
+// Family 1b of the csrc/ datapath split (2026-08-12). Moved out of
+// csrc/modiff/quantize/delta_quantize.cu -- every function below is a *_noahat / *_no_ahat variant
+// that carries no PERSISTED MoDiff state (it never writes a_hat back), so it belongs to the
+// baseline datapath. Two of them (step1_quantize_no_ahat_fprop,
+// step1_quantize_pack_int4_no_ahat_fprop) still READ an a_hat_cache argument to form a residual --
+// see the COPY block below for how that dependency is resolved.
+// ================================================================================================
+
+// Same quantization as above, but does NOT touch a_hat_cache. Used by the
+// "_no_ahat" step1 wrappers where the caller manages the cache update itself
+// (or intentionally skips it, e.g. for a one-off/no-caching baseline run).
+__global__ void quantize_only_int8_kernel(
+    const float* __restrict__ residual,
+    int8_t* __restrict__ output_int8,
+    const float* __restrict__ scale_ptr,
+    int num_elements
+) {
+    float scale = *scale_ptr;
+    int idx4 = blockIdx.x * blockDim.x + threadIdx.x;
+    int base = idx4 * 4;
+
+    if (base + 3 < num_elements) {
+        float4 r_v = reinterpret_cast<const float4*>(residual)[idx4];
+
+        float q0 = fmaxf(-127.0f, fminf(127.0f, roundf(r_v.x * scale)));
+        float q1 = fmaxf(-127.0f, fminf(127.0f, roundf(r_v.y * scale)));
+        float q2 = fmaxf(-127.0f, fminf(127.0f, roundf(r_v.z * scale)));
+        float q3 = fmaxf(-127.0f, fminf(127.0f, roundf(r_v.w * scale)));
+
+        reinterpret_cast<int32_t*>(output_int8)[idx4] =
+            ((unsigned char)(int8_t)q0) | ((unsigned char)(int8_t)q1 << 8) |
+            ((unsigned char)(int8_t)q2 << 16) | ((unsigned char)(int8_t)q3 << 24);
+    } else {
+        for (int i = base; i < num_elements; i++) {
+            float r = residual[i];
+            float q = fmaxf(-127.0f, fminf(127.0f, roundf(r * scale)));
+            output_int8[i] = (int8_t)q;
+        }
+    }
+}
+
+// INT4 variant of quantize_only_int8_kernel: quantize + pack, no cache update.
+__global__ void quantize_pack_only_kernel_int4(
+    const float* __restrict__ residual,
+    int8_t* __restrict__ output_packed,
+    const float* __restrict__ scale_ptr,
+    int num_elements
+) {
+    float scale = *scale_ptr;
+    int idx4 = blockIdx.x * blockDim.x + threadIdx.x;
+    int base = idx4 * 4;
+
+    if (base + 3 < num_elements) {
+        float4 r_v = reinterpret_cast<const float4*>(residual)[idx4];
+
+        float q0 = fmaxf(-7.0f, fminf(7.0f, roundf(r_v.x * scale)));
+        float q1 = fmaxf(-7.0f, fminf(7.0f, roundf(r_v.y * scale)));
+        float q2 = fmaxf(-7.0f, fminf(7.0f, roundf(r_v.z * scale)));
+        float q3 = fmaxf(-7.0f, fminf(7.0f, roundf(r_v.w * scale)));
+
+        int8_t b0 = ((int8_t)q0 & 0x0F) | (((int8_t)q1 & 0x0F) << 4);
+        int8_t b1 = ((int8_t)q2 & 0x0F) | (((int8_t)q3 & 0x0F) << 4);
+        reinterpret_cast<int16_t*>(output_packed)[idx4] = (uint16_t)(uint8_t)b0 | ((uint16_t)(uint8_t)b1 << 8);
+    } else {
+        for (int i = base; i < num_elements; i += 2) {
+            float q0 = fmaxf(-7.0f, fminf(7.0f, roundf(residual[i] * scale)));
+            float q1 = 0.0f;
+            if (i + 1 < num_elements) {
+                q1 = fmaxf(-7.0f, fminf(7.0f, roundf(residual[i + 1] * scale)));
+            }
+            output_packed[i / 2] = (((int8_t)q0 & 0x0F) | ((((int8_t)q1 & 0x0F) << 4)));
+        }
+    }
+}
+
+// ---- TRUE cache-free static quantize (baseline, NO a_hat): same as the *_update_ahat kernels
+// above but without the a_hat read/subtract/write. Baseline conv doesn't do temporal caching, so
+// residual = x - a_hat collapses to x; dropping a_hat removes the a_hat read+write + the zero-fill.
+template <typename T_IN>
+__global__ void static_quantize_int8_noahat_kernel(
+    const T_IN* __restrict__ x, int8_t* __restrict__ output_int8,
+    const float* __restrict__ scale_ptr, const float* __restrict__ smooth_inv,
+    int num_channels, int num_elements) {
+    float scale = *scale_ptr;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    for (int i = idx; i < num_elements; i += blockDim.x * gridDim.x) {
+        float xval = load_as_float(x, i);
+        if (smooth_inv != nullptr) xval *= smooth_inv[i % num_channels];
+        float q = fmaxf(-127.0f, fminf(127.0f, roundf(xval * scale)));
+        output_int8[i] = static_cast<int8_t>(q);
+    }
+}
+
+// Vectorized (half2/float2) counterpart of static_quantize_int8_noahat_kernel. Pair-major
+// grid-stride loop with an inline single-element epilogue for odd num_elements, same technique
+// as static_quantize_and_update_ahat_kernel_int8_half_cache_vec2 above. Requires
+// num_channels % 2 == 0 for the smooth_inv fast path (not a new risk -- same argument as that
+// kernel: base is always even here, so base % num_channels is even too when num_channels is
+// even, so a pair never straddles a channel boundary); the caller only dispatches here when
+// that holds. Packs the 2 output int8 codes into one int16_t store.
+template <typename T_IN>
+__global__ void static_quantize_int8_noahat_vec2_kernel(
+    const T_IN* __restrict__ x, int8_t* __restrict__ output_int8,
+    const float* __restrict__ scale_ptr, const float* __restrict__ smooth_inv,
+    int num_channels, int num_elements) {
+    float scale = *scale_ptr;
+    const int stride = blockDim.x * gridDim.x;
+
+    for (int base = 2 * (blockIdx.x * blockDim.x + threadIdx.x); base < num_elements; base += 2 * stride) {
+        if (base + 1 < num_elements) {
+            float2 xv = load_as_float2(x, base);
+            if (smooth_inv != nullptr) {
+                int c0 = base % num_channels;
+                float2 sm = *reinterpret_cast<const float2*>(&smooth_inv[c0]);
+                xv.x *= sm.x; xv.y *= sm.y;
+            }
+            int8_t q0 = (int8_t)fmaxf(-127.0f, fminf(127.0f, roundf(xv.x * scale)));
+            int8_t q1 = (int8_t)fmaxf(-127.0f, fminf(127.0f, roundf(xv.y * scale)));
+            reinterpret_cast<int16_t*>(output_int8)[base >> 1] =
+                (int16_t)(((unsigned char)q0) | (((unsigned char)q1) << 8));
+        } else {
+            float xval = load_as_float(x, base);
+            if (smooth_inv != nullptr) xval *= smooth_inv[base % num_channels];
+            float q = fmaxf(-127.0f, fminf(127.0f, roundf(xval * scale)));
+            output_int8[base] = static_cast<int8_t>(q);
+        }
+    }
+}
+
+template <typename T_IN>
+__global__ void static_quantize_pack_int4_noahat_kernel(
+    const T_IN* __restrict__ x, int8_t* __restrict__ output_packed,
+    const float* __restrict__ scale_ptr, const float* __restrict__ smooth_inv,
+    int num_channels, int num_elements) {
+    float scale = *scale_ptr;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    for (int base = idx * 2; base < num_elements; base += stride * 2) {
+        float x0 = load_as_float(x, base);
+        if (smooth_inv != nullptr) x0 *= smooth_inv[base % num_channels];
+        float q0 = fmaxf(-7.0f, fminf(7.0f, roundf(x0 * scale)));
+        float q1 = 0.0f;
+        if (base + 1 < num_elements) {
+            float x1 = load_as_float(x, base + 1);
+            if (smooth_inv != nullptr) x1 *= smooth_inv[(base + 1) % num_channels];
+            q1 = fmaxf(-7.0f, fminf(7.0f, roundf(x1 * scale)));
+        }
+        output_packed[base / 2] =
+            (static_cast<int8_t>(q0) & 0x0F) | ((static_cast<int8_t>(q1) & 0x0F) << 4);
+    }
+}
+
+// Vectorized (half2/float2) counterpart of static_quantize_pack_int4_noahat_kernel. The scalar
+// kernel above is already pair-major (base = idx*2); this only widens the per-pair load from
+// two independent scalar accesses to one vectorized half2/float2 access -- same technique as
+// static_quantize_pack_and_update_ahat_kernel_int4_half_cache_vec2 above. Same num_channels % 2
+// == 0 gate rationale.
+template <typename T_IN>
+__global__ void static_quantize_pack_int4_noahat_vec2_kernel(
+    const T_IN* __restrict__ x, int8_t* __restrict__ output_packed,
+    const float* __restrict__ scale_ptr, const float* __restrict__ smooth_inv,
+    int num_channels, int num_elements) {
+    float scale = *scale_ptr;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    for (int base = idx * 2; base < num_elements; base += stride * 2) {
+        if (base + 1 < num_elements) {
+            float2 xv = load_as_float2(x, base);
+            if (smooth_inv != nullptr) {
+                int c0 = base % num_channels;
+                float2 sm = *reinterpret_cast<const float2*>(&smooth_inv[c0]);
+                xv.x *= sm.x; xv.y *= sm.y;
+            }
+            float q0 = fmaxf(-7.0f, fminf(7.0f, roundf(xv.x * scale)));
+            float q1 = fmaxf(-7.0f, fminf(7.0f, roundf(xv.y * scale)));
+            output_packed[base / 2] =
+                (static_cast<int8_t>(q0) & 0x0F) | ((static_cast<int8_t>(q1) & 0x0F) << 4);
+        } else {
+            float x0 = load_as_float(x, base);
+            if (smooth_inv != nullptr) x0 *= smooth_inv[base % num_channels];
+            float q0 = fmaxf(-7.0f, fminf(7.0f, roundf(x0 * scale)));
+            output_packed[base / 2] = static_cast<int8_t>(q0) & 0x0F;
+        }
+    }
+}
+
+// Dynamic INT8, but a_hat_cache is left untouched (caller manages the cache itself).
+//   Op:       MoDiff temporal-delta quantize (dynamic int8), NO cache write — benchmark-only
+//   Inputs:   same as step1_quantize_fprop (x, a_hat_cache, residual_buf, absmax_buf,
+//             scale_buf, inv_scale_buf, retire_count, Q_level, smooth_inv)
+//   Outputs:  INT8 [same shape as x]; a_hat_cache NOT modified
+//   Computes: residual = (x*smooth_inv) - a_hat_cache; scale = 127/absmax(residual);
+//             out = clamp(round(residual*scale), -127, 127)
+//   Fuses:    sub_absmax_scale + quantize (skips the a_hat write to isolate its cost in
+//             microbenchmarks). Still READS a_hat_cache to form the residual — NOT a
+//             cache-free substitute; for that use dynamic_quantize_int8_fprop
+//   Constraints: absmax_buf & retire_count 0 on entry (self-reset)
+//   vs fp16:  n/a (quantization / layout / MoDiff-caching support op — no fp16 equivalent; these are the overhead ops that fusion tries to hide)
+torch::Tensor step1_quantize_no_ahat_fprop(
+    torch::Tensor x,
+    torch::Tensor a_hat_cache,
+    torch::Tensor residual_buf,
+    torch::Tensor absmax_buf,
+    torch::Tensor scale_buf,
+    torch::Tensor inv_scale_buf,
+    torch::Tensor retire_count,
+    float Q_level,
+    torch::Tensor smooth_inv
+) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    sub_absmax_scale(x, a_hat_cache, residual_buf, absmax_buf, scale_buf, inv_scale_buf, retire_count, Q_level, smooth_inv);
+
+    auto x_int8 = torch::empty_like(x, torch::TensorOptions().dtype(torch::kInt8));
+    int num_elements = x.numel();
+    int block_size = 256;
+    int num_work_items = (num_elements + 3) / 4;
+    int grid_size = (num_work_items + block_size - 1) / block_size;
+
+    quantize_only_int8_kernel<<<grid_size, block_size, 0, stream>>>(
+        residual_buf.data_ptr<float>(),
+        x_int8.data_ptr<int8_t>(),
+        scale_buf.data_ptr<float>(),
+        num_elements
+    );
+
+    return x_int8;
+}
+
+// Dynamic INT4 without a_hat_cache update (caller manages the cache itself).
+//   Op:       MoDiff temporal-delta quantize (dynamic int4) + pack, NO cache write — benchmark-only
+//   Inputs:   same as step1_quantize_pack_int4_fprop (x, a_hat_cache, residual_buf, absmax_buf,
+//             scale_buf, inv_scale_buf, retire_count, Q_level, smooth_inv)
+//   Outputs:  INT8 [N,H,W,C/2] packed int4; a_hat_cache NOT modified
+//   Computes: residual = (x*smooth_inv) - a_hat_cache; scale = 7/absmax(residual);
+//             out = pack(clamp(round(residual*scale), -7, 7))
+//   Fuses:    sub_absmax_scale + quantize + nibble-pack (skips the a_hat write). Still READS
+//             a_hat_cache — NOT a cache-free substitute; for that use dynamic_quantize_pack_int4_fprop
+//   Constraints: absmax_buf & retire_count 0 on entry (self-reset)
+//   vs fp16:  n/a (quantization / layout / MoDiff-caching support op — no fp16 equivalent; these are the overhead ops that fusion tries to hide)
+torch::Tensor step1_quantize_pack_int4_no_ahat_fprop(
+    torch::Tensor x,
+    torch::Tensor a_hat_cache,
+    torch::Tensor residual_buf,
+    torch::Tensor absmax_buf,
+    torch::Tensor scale_buf,
+    torch::Tensor inv_scale_buf,
+    torch::Tensor retire_count,
+    float Q_level,
+    torch::Tensor smooth_inv
+) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    sub_absmax_scale(x, a_hat_cache, residual_buf, absmax_buf, scale_buf, inv_scale_buf, retire_count, Q_level, smooth_inv);
+
+    int num_input = x.numel();
+    int num_output = num_input / 2;
+    auto x_packed = torch::empty({num_output}, torch::TensorOptions().dtype(torch::kInt8).device(x.device()));
+
+    int block_size = 256;
+    int num_work_items = (num_input + 3) / 4;
+    int grid_size = (num_work_items + block_size - 1) / block_size;
+
+    quantize_pack_only_kernel_int4<<<grid_size, block_size, 0, stream>>>(
+        residual_buf.data_ptr<float>(),
+        x_packed.data_ptr<int8_t>(),
+        scale_buf.data_ptr<float>(),
+        num_input
+    );
+
+    int N = x.size(0);
+    int C = x.size(1);
+    int H = x.size(2);
+    int W = x.size(3);
+    return x_packed.view({N, H, W, C / 2});
+}
+
+// Cache-free static int8 quantize (baseline conv): fp16/fp32 x + static scale (+optional smooth),
+// NO a_hat. Bit-identical output to step1_static_quantize_fprop(x, a_hat=0, scale) but without the
+// a_hat read/write + the caller's per-call a_hat zero-fill. Output int8, same shape/layout as x.
+torch::Tensor step1_static_quantize_noahat_fprop(
+    torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    auto x_int8 = torch::empty_like(x, torch::TensorOptions().dtype(torch::kInt8));
+    int num_elements = x.numel();
+    int block_size = 256;
+    int num_work_items = (num_elements + 3) / 4;
+    int grid_size = (num_work_items + block_size - 1) / block_size;
+    const float* smooth_ptr = (smooth_inv.numel() > 0) ? smooth_inv.data_ptr<float>() : nullptr;
+    int num_channels = (smooth_inv.numel() > 0) ? (int)smooth_inv.numel() : (int)x.size(1);
+    // Vec2 fast path requires num_channels % 2 == 0 for the smooth_inv half2 load -- see
+    // step1_static_quantize_fprop's identical gate. Right-size the grid for the 2-wide step.
+    const bool use_vec2 = (num_channels % 2 == 0);
+    const int num_work_items_vec2 = (num_elements + 1) / 2;
+    const int grid_size_vec2 = (num_work_items_vec2 + block_size - 1) / block_size;
+    if (x.scalar_type() == torch::kHalf) {
+        if (use_vec2) {
+            static_quantize_int8_noahat_vec2_kernel<__half><<<grid_size_vec2, block_size, 0, stream>>>(
+                reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), x_int8.data_ptr<int8_t>(),
+                scale_buf.data_ptr<float>(), smooth_ptr, num_channels, num_elements);
+        } else {
+            static_quantize_int8_noahat_kernel<__half><<<grid_size, block_size, 0, stream>>>(
+                reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), x_int8.data_ptr<int8_t>(),
+                scale_buf.data_ptr<float>(), smooth_ptr, num_channels, num_elements);
+        }
+    } else {
+        if (use_vec2) {
+            static_quantize_int8_noahat_vec2_kernel<float><<<grid_size_vec2, block_size, 0, stream>>>(
+                x.data_ptr<float>(), x_int8.data_ptr<int8_t>(),
+                scale_buf.data_ptr<float>(), smooth_ptr, num_channels, num_elements);
+        } else {
+            static_quantize_int8_noahat_kernel<float><<<grid_size, block_size, 0, stream>>>(
+                x.data_ptr<float>(), x_int8.data_ptr<int8_t>(),
+                scale_buf.data_ptr<float>(), smooth_ptr, num_channels, num_elements);
+        }
+    }
+    return x_int8;
+}
+
+// Cache-free static int4 quantize+pack (baseline conv): fp16/fp32 x + static scale (+optional
+// smooth), NO a_hat. Output packed int8 [N,H,W,C/2] (same layout as step1_static_quantize_pack_int4_fprop).
+torch::Tensor step1_static_quantize_pack_int4_noahat_fprop(
+    torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv) {
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    int num_input = x.numel();
+    int num_output = num_input / 2;
+    auto x_packed = torch::empty({num_output}, torch::TensorOptions().dtype(torch::kInt8).device(x.device()));
+    int block_size = 256;
+    int num_work_items = (num_input + 3) / 4;
+    int grid_size = (num_work_items + block_size - 1) / block_size;
+    const float* smooth_ptr = (smooth_inv.numel() > 0) ? smooth_inv.data_ptr<float>() : nullptr;
+    int num_channels = (smooth_inv.numel() > 0) ? (int)smooth_inv.numel() : (int)x.size(1);
+    // See step1_static_quantize_pack_int4_fprop for the use_vec2 gate rationale.
+    const bool use_vec2 = (num_channels % 2 == 0);
+    const int num_work_items_vec2 = (num_input + 1) / 2;
+    const int grid_size_vec2 = (num_work_items_vec2 + block_size - 1) / block_size;
+    if (x.scalar_type() == torch::kHalf) {
+        if (use_vec2) {
+            static_quantize_pack_int4_noahat_vec2_kernel<__half><<<grid_size_vec2, block_size, 0, stream>>>(
+                reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), x_packed.data_ptr<int8_t>(),
+                scale_buf.data_ptr<float>(), smooth_ptr, num_channels, num_input);
+        } else {
+            static_quantize_pack_int4_noahat_kernel<__half><<<grid_size, block_size, 0, stream>>>(
+                reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), x_packed.data_ptr<int8_t>(),
+                scale_buf.data_ptr<float>(), smooth_ptr, num_channels, num_input);
+        }
+    } else {
+        if (use_vec2) {
+            static_quantize_pack_int4_noahat_vec2_kernel<float><<<grid_size_vec2, block_size, 0, stream>>>(
+                x.data_ptr<float>(), x_packed.data_ptr<int8_t>(),
+                scale_buf.data_ptr<float>(), smooth_ptr, num_channels, num_input);
+        } else {
+            static_quantize_pack_int4_noahat_kernel<float><<<grid_size, block_size, 0, stream>>>(
+                x.data_ptr<float>(), x_packed.data_ptr<int8_t>(),
+                scale_buf.data_ptr<float>(), smooth_ptr, num_channels, num_input);
+        }
+    }
+    int N = x.size(0), C = x.size(1), H = x.size(2), W = x.size(3);
+    return x_packed.view({N, H, W, C / 2});
+}
+
+// ---- Upsample(nearest, 2x) + static quantize fusion (baseline conv, NO a_hat): fold the
+// Upsample.forward -> F.interpolate(scale_factor=2, mode="nearest") pass into the following
+// conv's quantize prologue. Nearest 2x upsample repeats each source pixel into a 2x2 block, so
+// this reads the SMALL pre-upsample [N,C,H,W] tensor once and writes the LARGE quantized
+// [N,C,2H,2W] output directly with 2x2-repeat addressing -- the intermediate fp16
+// [N,C,2H,2W] upsampled tensor (what F.interpolate would materialize, then the plain
+// static_quantize_*_noahat_kernel would re-read) is never allocated. Per-element quantize math
+// is copy-pasted from static_quantize_int8_noahat_kernel / static_quantize_pack_int4_noahat_kernel
+// (same scale/smooth_inv/clamp), just reading through the repeat-by-2 address instead of `x[i]`
+// directly -- so output is bit-identical to F.interpolate(x) -> static_quantize_*_noahat_kernel.
+template <typename T_IN>
+__global__ void upsample2x_quantize_noahat_kernel(
+    const T_IN* __restrict__ x, int8_t* __restrict__ output_int8,
+    const float* __restrict__ scale_ptr, const float* __restrict__ smooth_inv,
+    int C, int H, int W, int num_channels, long num_elements_out,
+    // MoDiff, opt-in: subtract a_hat before quantizing and advance it in place. nullptr keeps the
+    // baseline behaviour BIT-IDENTICALLY (cache reads as 0 and nothing is stored), so one kernel
+    // serves both modes -- no cloned MoDiff twin. The loop already grids over OUTPUT elements,
+    // which is what makes this work: nearest-2x upsample gives each output position its own a_hat
+    // entry, and a clone gridding over input positions would have had to quantize four times.
+    __half* __restrict__ a_hat_cache) {
+    float scale = *scale_ptr;
+    const float inv_scale = 1.0f / scale;
+    const int Wo = W * 2, Ho = H * 2;
+    long idx = (long)blockIdx.x * blockDim.x + threadIdx.x;
+    for (long i = idx; i < num_elements_out; i += (long)blockDim.x * gridDim.x) {
+        int c = (int)(i % C);
+        long rest = i / C;
+        int wo = (int)(rest % Wo);
+        long rest2 = rest / Wo;
+        int ho = (int)(rest2 % Ho);
+        long n = rest2 / Ho;
+        int hi = ho >> 1, wi = wo >> 1;
+        long i_in = ((n * H + hi) * (long)W + wi) * C + c;
+        float xval = load_as_float(x, (int)i_in);
+        if (smooth_inv != nullptr) xval *= smooth_inv[c % num_channels];
+        const float cache = (a_hat_cache != nullptr) ? __half2float(a_hat_cache[i]) : 0.0f;
+        float q = fmaxf(-127.0f, fminf(127.0f, roundf((xval - cache) * scale)));
+        if (a_hat_cache != nullptr) a_hat_cache[i] = __float2half_rn(cache + q * inv_scale);
+        output_int8[i] = static_cast<int8_t>(q);
+    }
+}
+
+template <typename T_IN>
+__global__ void upsample2x_quantize_pack_noahat_kernel(
+    const T_IN* __restrict__ x, int8_t* __restrict__ output_packed,
+    const float* __restrict__ scale_ptr, const float* __restrict__ smooth_inv,
+    int C, int H, int W, int num_channels, long num_elements_out,
+    __half* __restrict__ a_hat_cache) {   // nullptr => baseline, bit-identical (see int8 sibling)
+    float scale = *scale_ptr;
+    const float inv_scale = 1.0f / scale;
+    const int Wo = W * 2, Ho = H * 2;
+    long idx = (long)blockIdx.x * blockDim.x + threadIdx.x;
+    long stride = (long)blockDim.x * gridDim.x;
+    for (long base = idx * 2; base < num_elements_out; base += stride * 2) {
+        int c0 = (int)(base % C);
+        long rest = base / C;
+        int wo = (int)(rest % Wo);
+        long rest2 = rest / Wo;
+        int ho = (int)(rest2 % Ho);
+        long n = rest2 / Ho;
+        int hi = ho >> 1, wi = wo >> 1;
+        long pix_in = (n * H + hi) * (long)W + wi;
+        float x0 = load_as_float(x, (int)(pix_in * C + c0));
+        if (smooth_inv != nullptr) x0 *= smooth_inv[c0 % num_channels];
+        const float c_0 = (a_hat_cache != nullptr) ? __half2float(a_hat_cache[base]) : 0.0f;
+        float q0 = fmaxf(-7.0f, fminf(7.0f, roundf((x0 - c_0) * scale)));
+        if (a_hat_cache != nullptr) a_hat_cache[base] = __float2half_rn(c_0 + q0 * inv_scale);
+        float q1 = 0.0f;
+        if (base + 1 < num_elements_out) {
+            float x1 = load_as_float(x, (int)(pix_in * C + c0 + 1));
+            if (smooth_inv != nullptr) x1 *= smooth_inv[(c0 + 1) % num_channels];
+            const float c_1 = (a_hat_cache != nullptr) ? __half2float(a_hat_cache[base + 1]) : 0.0f;
+            q1 = fmaxf(-7.0f, fminf(7.0f, roundf((x1 - c_1) * scale)));
+            if (a_hat_cache != nullptr)
+                a_hat_cache[base + 1] = __float2half_rn(c_1 + q1 * inv_scale);
+        }
+        output_packed[base / 2] = (static_cast<int8_t>(q0) & 0x0F) | ((static_cast<int8_t>(q1) & 0x0F) << 4);
+    }
+}
+
+// Op: fused Upsample(nearest,2x) + cache-free static int8 quantize (baseline conv, no a_hat).
+// Inputs: x FP16/FP32 [N,C,H,W] channels_last (pre-upsample); scale_buf FP32 [1]; smooth_inv FP32 [C] (empty = skip).
+// Output: INT8 [N,C,2H,2W] channels_last -- feeds the Upsample.conv's conv2d_int*_evt_* directly.
+torch::Tensor upsample2x_quantize_noahat_fprop(
+    torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv,
+    torch::Tensor a_hat_cache) {
+    // Name kept for pybind/API compatibility (csrc/modiff_kernels_api.h notes the _noahat spelling
+    // is load-bearing); an EMPTY a_hat_cache is the no-a_hat baseline it was named for.
+    TORCH_CHECK(x.dim() == 4, "upsample2x_quantize_noahat_fprop: x must be [N,C,H,W]");
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    int N = x.size(0), C = x.size(1), H = x.size(2), W = x.size(3);
+    auto options = torch::TensorOptions().dtype(torch::kInt8).device(x.device()).memory_format(torch::MemoryFormat::ChannelsLast);
+    auto y = torch::empty({N, C, H * 2, W * 2}, options);
+    long num_elements_out = (long)N * C * H * 2 * W * 2;
+    int block_size = 256;
+    int grid_size = (int)std::min<long>((num_elements_out + block_size - 1) / block_size, 2147483647L);
+    const float* smooth_ptr = (smooth_inv.numel() > 0) ? smooth_inv.data_ptr<float>() : nullptr;
+    int num_channels = (smooth_inv.numel() > 0) ? (int)smooth_inv.numel() : C;
+    __half* cache_ptr = nullptr;
+    if (a_hat_cache.numel() > 0) {
+        TORCH_CHECK(a_hat_cache.scalar_type() == torch::kHalf,
+                    "upsample2x_quantize_noahat_fprop: a_hat_cache must be fp16");
+        TORCH_CHECK(a_hat_cache.numel() == num_elements_out,
+                    "upsample2x_quantize_noahat_fprop: a_hat_cache must be POST-upsample sized "
+                    "(N*C*2H*2W)");
+        cache_ptr = reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>());
+    }
+    if (x.scalar_type() == torch::kHalf) {
+        upsample2x_quantize_noahat_kernel<__half><<<grid_size, block_size, 0, stream>>>(
+            reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), y.data_ptr<int8_t>(),
+            scale_buf.data_ptr<float>(), smooth_ptr, C, H, W, num_channels, num_elements_out,
+            cache_ptr);
+    } else {
+        upsample2x_quantize_noahat_kernel<float><<<grid_size, block_size, 0, stream>>>(
+            x.data_ptr<float>(), y.data_ptr<int8_t>(),
+            scale_buf.data_ptr<float>(), smooth_ptr, C, H, W, num_channels, num_elements_out,
+            cache_ptr);
+    }
+    return y;
+}
+
+// int4-packed counterpart of upsample2x_quantize_noahat_fprop. Output packed int8 [N,2H,2W,C/2]
+// (same layout convention as step1_static_quantize_pack_int4_noahat_fprop). Requires C%2==0
+// (channel-pair packing), matching every other int4 quantize kernel in this file.
+torch::Tensor upsample2x_quantize_pack_noahat_fprop(
+    torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv,
+    torch::Tensor a_hat_cache) {
+    TORCH_CHECK(x.dim() == 4, "upsample2x_quantize_pack_noahat_fprop: x must be [N,C,H,W]");
+    int N = x.size(0), C = x.size(1), H = x.size(2), W = x.size(3);
+    TORCH_CHECK(C % 2 == 0, "upsample2x_quantize_pack_noahat_fprop: C must be even for int4 packing");
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    long num_elements_out = (long)N * C * H * 2 * W * 2;
+    long num_output = num_elements_out / 2;
+    auto x_packed = torch::empty({num_output}, torch::TensorOptions().dtype(torch::kInt8).device(x.device()));
+    int block_size = 256;
+    long num_work_items = (num_elements_out + 3) / 4;
+    int grid_size = (int)std::min<long>((num_work_items + block_size - 1) / block_size, 2147483647L);
+    const float* smooth_ptr = (smooth_inv.numel() > 0) ? smooth_inv.data_ptr<float>() : nullptr;
+    int num_channels = (smooth_inv.numel() > 0) ? (int)smooth_inv.numel() : C;
+    __half* cache_ptr = nullptr;
+    if (a_hat_cache.numel() > 0) {
+        TORCH_CHECK(a_hat_cache.scalar_type() == torch::kHalf,
+                    "upsample2x_quantize_pack_noahat_fprop: a_hat_cache must be fp16");
+        TORCH_CHECK(a_hat_cache.numel() == num_elements_out,
+                    "upsample2x_quantize_pack_noahat_fprop: a_hat_cache must be POST-upsample sized");
+        cache_ptr = reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>());
+    }
+    if (x.scalar_type() == torch::kHalf) {
+        upsample2x_quantize_pack_noahat_kernel<__half><<<grid_size, block_size, 0, stream>>>(
+            reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), x_packed.data_ptr<int8_t>(),
+            scale_buf.data_ptr<float>(), smooth_ptr, C, H, W, num_channels, num_elements_out, cache_ptr);
+    } else {
+        upsample2x_quantize_pack_noahat_kernel<float><<<grid_size, block_size, 0, stream>>>(
+            x.data_ptr<float>(), x_packed.data_ptr<int8_t>(),
+            scale_buf.data_ptr<float>(), smooth_ptr, C, H, W, num_channels, num_elements_out, cache_ptr);
+    }
+    return x_packed.view({N, H * 2, W * 2, C / 2});
+}
+
+// Op: fused Downsample(avg_pool,2x2,stride2) + cache-free static int8 quantize (baseline conv, no
+// a_hat). Mirrors upsample2x_quantize_noahat_kernel's structure and the fusion rationale in its
+// header comment above, but for the *down* transition: reads the LARGE pre-pool [N,C,H,W] tensor
+// once, computes each output pixel's 2x2 average directly (via avgpool4_as_stored, bit-exact to
+// nn.AvgPool2d's fp16 output), and quantizes -- never materializing the fp16 pooled [N,C,H/2,W/2]
+// intermediate that Downsample.forward would otherwise write and the plain
+// static_quantize_*_noahat_kernel would re-read.
+template <typename T_IN>
+__global__ void avgpool2x_quantize_noahat_kernel(
+    const T_IN* __restrict__ x, int8_t* __restrict__ output_int8,
+    const float* __restrict__ scale_ptr, const float* __restrict__ smooth_inv,
+    int C, int H, int W, int num_channels, long num_elements_out) {
+    float scale = *scale_ptr;
+    const int Wo = W / 2, Ho = H / 2;
+    long idx = (long)blockIdx.x * blockDim.x + threadIdx.x;
+    for (long i = idx; i < num_elements_out; i += (long)blockDim.x * gridDim.x) {
+        int c = (int)(i % C);
+        long rest = i / C;
+        int wo = (int)(rest % Wo);
+        long rest2 = rest / Wo;
+        int ho = (int)(rest2 % Ho);
+        long n = rest2 / Ho;
+        int hi = ho * 2, wi = wo * 2;
+        long row0 = (n * H + hi) * (long)W + wi;
+        long row1 = (n * H + hi + 1) * (long)W + wi;
+        float sum = load_as_float(x, (int)(row0 * C + c)) + load_as_float(x, (int)((row0 + 1) * C + c))
+                  + load_as_float(x, (int)(row1 * C + c)) + load_as_float(x, (int)((row1 + 1) * C + c));
+        float xval = avgpool4_as_stored<T_IN>(sum * 0.25f);
+        if (smooth_inv != nullptr) xval *= smooth_inv[c % num_channels];
+        float q = fmaxf(-127.0f, fminf(127.0f, roundf(xval * scale)));
+        output_int8[i] = static_cast<int8_t>(q);
+    }
+}
+
+template <typename T_IN>
+__global__ void avgpool2x_quantize_pack_noahat_kernel(
+    const T_IN* __restrict__ x, int8_t* __restrict__ output_packed,
+    const float* __restrict__ scale_ptr, const float* __restrict__ smooth_inv,
+    int C, int H, int W, int num_channels, long num_elements_out) {
+    float scale = *scale_ptr;
+    const int Wo = W / 2, Ho = H / 2;
+    long idx = (long)blockIdx.x * blockDim.x + threadIdx.x;
+    long stride = (long)blockDim.x * gridDim.x;
+    for (long base = idx * 2; base < num_elements_out; base += stride * 2) {
+        int c0 = (int)(base % C);
+        long rest = base / C;
+        int wo = (int)(rest % Wo);
+        long rest2 = rest / Wo;
+        int ho = (int)(rest2 % Ho);
+        long n = rest2 / Ho;
+        int hi = ho * 2, wi = wo * 2;
+        long row0 = (n * H + hi) * (long)W + wi;
+        long row1 = (n * H + hi + 1) * (long)W + wi;
+        float sum0 = load_as_float(x, (int)(row0 * C + c0)) + load_as_float(x, (int)((row0 + 1) * C + c0))
+                   + load_as_float(x, (int)(row1 * C + c0)) + load_as_float(x, (int)((row1 + 1) * C + c0));
+        float x0 = avgpool4_as_stored<T_IN>(sum0 * 0.25f);
+        if (smooth_inv != nullptr) x0 *= smooth_inv[c0 % num_channels];
+        float q0 = fmaxf(-7.0f, fminf(7.0f, roundf(x0 * scale)));
+        float q1 = 0.0f;
+        if (base + 1 < num_elements_out) {
+            int c1 = c0 + 1;
+            float sum1 = load_as_float(x, (int)(row0 * C + c1)) + load_as_float(x, (int)((row0 + 1) * C + c1))
+                       + load_as_float(x, (int)(row1 * C + c1)) + load_as_float(x, (int)((row1 + 1) * C + c1));
+            float x1 = avgpool4_as_stored<T_IN>(sum1 * 0.25f);
+            if (smooth_inv != nullptr) x1 *= smooth_inv[c1 % num_channels];
+            q1 = fmaxf(-7.0f, fminf(7.0f, roundf(x1 * scale)));
+        }
+        output_packed[base / 2] = (static_cast<int8_t>(q0) & 0x0F) | ((static_cast<int8_t>(q1) & 0x0F) << 4);
+    }
+}
+
+// Op: fused Downsample(avg_pool,2x2) + cache-free static int8 quantize (baseline conv, no a_hat).
+// Inputs: x FP16/FP32 [N,C,H,W] channels_last (pre-pool, LARGE); scale_buf FP32 [1]; smooth_inv FP32 [C] (empty = skip).
+// Output: INT8 [N,C,H/2,W/2] channels_last -- feeds the downsample ResBlock's in_conv directly.
+torch::Tensor avgpool2x_quantize_noahat_fprop(
+    torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv) {
+    TORCH_CHECK(x.dim() == 4, "avgpool2x_quantize_noahat_fprop: x must be [N,C,H,W]");
+    int N = x.size(0), C = x.size(1), H = x.size(2), W = x.size(3);
+    TORCH_CHECK(H % 2 == 0 && W % 2 == 0, "avgpool2x_quantize_noahat_fprop: H,W must be even");
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    auto options = torch::TensorOptions().dtype(torch::kInt8).device(x.device()).memory_format(torch::MemoryFormat::ChannelsLast);
+    auto y = torch::empty({N, C, H / 2, W / 2}, options);
+    long num_elements_out = (long)N * C * (H / 2) * (W / 2);
+    int block_size = 256;
+    int grid_size = (int)std::min<long>((num_elements_out + block_size - 1) / block_size, 2147483647L);
+    const float* smooth_ptr = (smooth_inv.numel() > 0) ? smooth_inv.data_ptr<float>() : nullptr;
+    int num_channels = (smooth_inv.numel() > 0) ? (int)smooth_inv.numel() : C;
+    if (x.scalar_type() == torch::kHalf) {
+        avgpool2x_quantize_noahat_kernel<__half><<<grid_size, block_size, 0, stream>>>(
+            reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), y.data_ptr<int8_t>(),
+            scale_buf.data_ptr<float>(), smooth_ptr, C, H, W, num_channels, num_elements_out);
+    } else {
+        avgpool2x_quantize_noahat_kernel<float><<<grid_size, block_size, 0, stream>>>(
+            x.data_ptr<float>(), y.data_ptr<int8_t>(),
+            scale_buf.data_ptr<float>(), smooth_ptr, C, H, W, num_channels, num_elements_out);
+    }
+    return y;
+}
+
+// int4-packed counterpart of avgpool2x_quantize_noahat_fprop. Output packed int8 [N,H/2,W/2,C/2]
+// (same layout convention as upsample2x_quantize_pack_noahat_fprop). Requires C%2==0.
+torch::Tensor avgpool2x_quantize_pack_noahat_fprop(
+    torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv) {
+    TORCH_CHECK(x.dim() == 4, "avgpool2x_quantize_pack_noahat_fprop: x must be [N,C,H,W]");
+    int N = x.size(0), C = x.size(1), H = x.size(2), W = x.size(3);
+    TORCH_CHECK(H % 2 == 0 && W % 2 == 0, "avgpool2x_quantize_pack_noahat_fprop: H,W must be even");
+    TORCH_CHECK(C % 2 == 0, "avgpool2x_quantize_pack_noahat_fprop: C must be even for int4 packing");
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    long num_elements_out = (long)N * C * (H / 2) * (W / 2);
+    long num_output = num_elements_out / 2;
+    auto x_packed = torch::empty({num_output}, torch::TensorOptions().dtype(torch::kInt8).device(x.device()));
+    int block_size = 256;
+    long num_work_items = (num_elements_out + 3) / 4;
+    int grid_size = (int)std::min<long>((num_work_items + block_size - 1) / block_size, 2147483647L);
+    const float* smooth_ptr = (smooth_inv.numel() > 0) ? smooth_inv.data_ptr<float>() : nullptr;
+    int num_channels = (smooth_inv.numel() > 0) ? (int)smooth_inv.numel() : C;
+    if (x.scalar_type() == torch::kHalf) {
+        avgpool2x_quantize_pack_noahat_kernel<__half><<<grid_size, block_size, 0, stream>>>(
+            reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), x_packed.data_ptr<int8_t>(),
+            scale_buf.data_ptr<float>(), smooth_ptr, C, H, W, num_channels, num_elements_out);
+    } else {
+        avgpool2x_quantize_pack_noahat_kernel<float><<<grid_size, block_size, 0, stream>>>(
+            x.data_ptr<float>(), x_packed.data_ptr<int8_t>(),
+            scale_buf.data_ptr<float>(), smooth_ptr, C, H, W, num_channels, num_elements_out);
+    }
+    return x_packed.view({N, H / 2, W / 2, C / 2});
+}

@@ -138,28 +138,36 @@ The `dequant_accumulate*` four are STATE by body but **two of them have no Pytho
 | `step1_static_quantize_pack_int4_fprop` **(dual)** | `static_quantize_pack_and_update_ahat_kernel_int4*` |
 | `step1_static_quantize_pack_int4_fprop_silu` | `..._int4_half_cache_silu` |
 
-**Eight functions in the MoDiff file look baseline by name. SIX of them are; two are not.** Attempted
-2026-08-12 (family 1b) and reverted, because the compiler found the difference:
+**Family 1b: DONE (2026-08-12).** All eight `*_noahat` / `*_no_ahat` functions now live in
+`baseline/quantize/quantize.cu`, with their private kernels moved and every shared dependency
+**copied** rather than referenced across trees:
 
-*Cleanly separable — no a_hat, no MoDiff helper (6):* `step1_static_quantize_noahat_fprop`
-(`static_quantize_int8_noahat[_vec2]_kernel`), `step1_static_quantize_pack_int4_noahat_fprop`,
-`upsample2x_quantize_noahat_fprop` and `_pack_`, `avgpool2x_quantize_noahat_fprop` and `_pack_`.
-Their 8 kernels are launched by nothing else, so they MOVE rather than copy. `avgpool4_as_stored`
-(a `__device__ __forceinline__` template trio) is needed by the avgpool pair and must be **copied**.
+*Moved verbatim, no shared dependency (6):* `step1_static_quantize_noahat_fprop`
+(`static_quantize_int8_noahat[_vec2]_kernel`), `step1_static_quantize_pack_int4_noahat_fprop`
+(`static_quantize_pack_int4_noahat[_vec2]_kernel`), `upsample2x_quantize_noahat_fprop` and `_pack_`,
+`avgpool2x_quantize_noahat_fprop` and `_pack_`.
 
-*NOT separable as-is (2):* `step1_quantize_no_ahat_fprop` and `step1_quantize_pack_int4_no_ahat_fprop`.
-Despite the name each **takes an `a_hat_cache` argument** and calls the MoDiff host function
-`sub_absmax_scale(x, a_hat_cache, ...)`. "no_ahat" describes only the quantize step not subtracting
-a_hat; the scale computation is still the MoDiff one. Copying `sub_absmax_scale` into `baseline/` would
-duplicate an **exported host symbol** and fail to link, so this is the plan's "deep sharing" stop
-condition rather than something to force.
+*Moved, with a copied dependency (2):* `step1_quantize_no_ahat_fprop` and
+`step1_quantize_pack_int4_no_ahat_fprop`. Each takes an `a_hat_cache` argument and calls the MoDiff
+host function `sub_absmax_scale`. Chosen resolution — option (a) from the prior note, per the
+explicit instruction to duplicate every reused function rather than leave a cross-tree reference:
+`sub_absmax_scale` and `sub_absmax_scale_kernel` are **copied** into `baseline/quantize.cu` as
+`static` (file-local) twins; the originals stay in `modiff/delta_quantize.cu`, unchanged and still
+exported under their own names. `load_as_float`/`load_as_float2` (generic device helpers used by
+both MoDiff-side and baseline-side kernels) and `avgpool4_as_stored` are copied the same way.
 
-Three ways out, none of them free, to decide before retrying 1b: (a) copy `sub_absmax_scale` into
-`baseline/` as a file-local `static` helper — no symbol collision, one more twin to keep in sync;
-(b) leave those two in `modiff/` and note that the baseline path reaches into it — honest but the trees
-stay coupled; (c) find out whether their callers ever pass a real `a_hat_cache`, since if they always
-pass an empty or zero tensor the argument and the helper call can go, which is a behaviour change and
-needs its own measurement.
+Verified: both dual functions checked bit-exact against a hand-computed reference
+(`x - a_hat_cache` → absmax scale → quantize) with a **real, non-zero** `a_hat_cache` — this is
+stronger than the SASS-identity gate alone, since it exercises the copied `sub_absmax_scale` path
+with actual state rather than only proving the move didn't touch instruction bytes.
+
+**A parser lesson from getting the SASS gate right on this family, twice.** First, `cuobjdump`
+attributes per-fatbin boundary text to the preceding kernel — fixed by keeping only lines that carry
+the `/*addr*/`/`/*encoding*/` comment columns. Second (found while landing 1b): `cuobjdump`
+**right-pads every instruction's comment column to a width shared across the whole dump**, so adding
+code anywhere in the file can shift an unrelated, byte-identical kernel's padding by one space. Fixed
+by collapsing whitespace runs before hashing. Both are recorded in `test_sass_golden.py`'s comments
+so a third instance of "kernel X changed" is diagnosed by rereading that file first, not re-derived.
 
 **A consequence worth acting on later, not now.** The baseline already *has*
 `step1_static_quantize_noahat_fprop`, yet `int8_optimized.py:1362` calls the a_hat variant with a zero
