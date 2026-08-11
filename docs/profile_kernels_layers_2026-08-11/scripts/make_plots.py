@@ -54,6 +54,31 @@ def ms(v):
     return v["ms_per_step"] if isinstance(v, dict) else (v or 0.0)
 
 
+def plot_e2e(out):
+    """Whole-model ms/step and speedup, from the profiler-free differential harness."""
+    d = load(os.path.join(DATA, "differential_timing_canonical.json"))
+    f = load(os.path.join(DATA, "differential_timing_fp16.json"))
+    fp16 = f["arms"]["fp16"]["stats"]["median"] / 1e3 / f["steps"]
+    arms = [a for a in ARMS if a in d["arms"]]
+    vals = [d["arms"][a]["stats"]["median"] / 1e3 / d["steps"] for a in arms]
+    fig, ax = plt.subplots(figsize=(9.6, 4.8))
+    ax.bar([SHORT[a] for a in arms], vals, color=BLUE, width=0.6)
+    for i, v in enumerate(vals):
+        ax.text(i, v * 1.012, f"{v:.1f}\n{fp16 / v:.3f}x", ha="center", va="bottom",
+                color=INK2, fontsize=9)
+    ax.axhline(fp16, color=ORANGE, linewidth=1.6, linestyle="--")
+    ax.text(len(vals) - 0.45, fp16, f"  fp16 {fp16:.1f}", color=ORANGE, va="bottom", fontsize=9)
+    ax.set_ylabel("ms/step (profiler-free, 200 steps x 5 repeats)")
+    ax.set_title("End to end, batch 128, A40", loc="left")
+    ax.grid(axis="y", color=GRID, linewidth=0.8)
+    ax.set_axisbelow(True)
+    ax.set_ylim(0, max(vals + [fp16]) * 1.25)
+    fig.tight_layout()
+    fig.savefig(out, dpi=170)
+    plt.close(fig)
+    return out
+
+
 def plot_buckets(tb, out):
     """Stacked kernel-bucket ms/step per arm. The whole step, by what the kernel DOES."""
     cfgs = [a for a in ARMS if a in tb["configs"]]
@@ -194,7 +219,7 @@ def plot_kinds(prof, out):
 
 def main():
     os.makedirs(PLOTS, exist_ok=True)
-    made = []
+    made = [plot_e2e(os.path.join(PLOTS, "e2e_speedup.png"))]
     tb_p = os.path.join(DATA, "trace_buckets.json")
     if os.path.exists(tb_p):
         tb = load(tb_p)

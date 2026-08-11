@@ -26,3 +26,10 @@ PHASE2_PLAN.md
 /benchmark_output
 /.venv-cu124
 docs/**/trace/
+
+# Report figures ARE part of the report. `*.png` above keeps generated samples and scratch images
+# out, but it also silently dropped six plots from the 2026-08-11 profile commit -- `git add <dir>`
+# reported success and the FINDINGS shipped with dangling image links. Every docs/*/plots/ figure is
+# reproducible from its scripts/make_plots.py, but a report whose figures only exist on the machine
+# that made them is not a report.
+!docs/**/plots/*.png
