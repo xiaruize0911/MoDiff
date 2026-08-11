@@ -36,7 +36,11 @@ DEV = "cuda"
 #: (C, T, expect_int8_ok, why) at nh=8, the churches attention shapes. b is small: this checks
 #: acceptance, not speed.
 CASES = [
-    (192, 1024, False, "hd=24 -> 24 B/token, int8 cp.async needs 16 B alignment"),
+    # hd=24 became LEGAL on 2026-08-12 (8-byte cp.async staging) and is still not USED: measured at
+    # 2.11x the mma kernel against a 1.44x break-even, i.e. -0.907 ms per block. Legality and
+    # profitability are separate questions and this test only answers the first; the second lives in
+    # _qkv_i8_ok's hd%16 condition and in docs/aq_fusion_2026-08-12.
+    (192, 1024, True, "hd=24 -> 24 B/token: legal via 8 B cp.async, but SLOWER, so not used"),
     (384, 256, True, "hd=48, hd_pad=64: every constraint satisfied"),
     (384, 64, True, "hd=48 at the smallest eligible T"),
     (768, 16, False, "hd=96 -> hd_pad=128 > FA_MMA_MAXHD, and T%64 != 0"),
@@ -89,8 +93,8 @@ def main():
         for line in bad:
             print("  -", line)
         return 1
-    print("PASS -- 2 of the 4 attention shapes take the int8 gather path (hd=48, T=256 and T=64), "
-          "which is 10 of the model's 21 blocks.")
+    print("PASS -- 3 of the 4 attention shapes are LEGAL on the int8 gather path; the 10 hd=48 blocks "
+          "are the ones where it is also FASTER, and hd=24 is legal-but-slower by 0.907 ms/block.")
     return 0
 
 

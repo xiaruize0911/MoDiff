@@ -46,11 +46,20 @@ def load(name):
         return json.load(f)
 
 
-def plot_kernel(out):
-    """Per shape: what arm U spends on aq_* + mma flash, against arm P's single gather kernel."""
-    d = load("bench_packed_vs_unpacked.json")
+def plot_kernel(out, fname="bench_packed_vs_unpacked.json", title=None, brk=None):
+    """Per shape: what arm U spends on aq_* + mma flash, against arm P's single gather kernel.
+
+    Called twice: once on the 16-byte-only data (hd=24 rejected, the state route (b) shipped in) and
+    once on the 8-byte-loader data (hd=24 legal and losing). `brk` labels the break-even ratio per
+    shape, which is what each bar has to be read against.
+    """
+    d = load(fname)
+    if d is None:
+        return False
     rows = d["rows"]
-    labels = [f"C{r['C']}\nT{r['T']}, hd{r['hd']}" for r in rows]
+    labels = [f"C{r['C']}\nT{r['T']}, hd{r['hd']}"
+              + (f"\nbreak-even {brk[r['hd']]:.2f}x" if brk and r["hd"] in brk else "")
+              for r in rows]
     x = range(len(rows))
     fig, ax = plt.subplots(figsize=(8.4, 4.6))
     w = 0.34
@@ -66,19 +75,24 @@ def plot_kernel(out):
             continue
         ax.bar(i + w / 2, r["p_ms"], w, color=BLUE, label="arm P: packed gather" if i == 1 else None)
         net = r["u_total_ms"] - r["p_ms"]
-        ax.text(i + w / 2, r["p_ms"] * 1.02, f"{net:+.3f}\n{r['p_over_u_flash']:.2f}x flash",
-                ha="center", va="bottom", color=INK2, fontsize=8)
+        tall = r["p_ms"] > 0.8 * max(max(aq[k] + fl[k] for k in range(len(rows))),
+                                     max(q["p_ms"] or 0 for q in rows))
+        ax.text(i + w / 2, r["p_ms"] * (0.97 if tall else 1.02),
+                f"{net:+.3f}\n{r['p_over_u_flash']:.2f}x flash", ha="center",
+                va="top" if tall else "bottom", color="white" if tall else INK2, fontsize=8)
     ax.set_xticks(list(x))
     ax.set_xticklabels(labels)
     ax.set_ylabel(f"ms per call, batch {d['batch']} (median of {d['iters']})")
-    ax.set_title("Route (b) at the kernel level: the quantize it removes vs the gather it pays for",
-                 loc="left")
+    ax.set_title(title or "Route (b) at the kernel level: the quantize it removes vs the gather it "
+                 "pays for", loc="left")
     ax.grid(axis="y", color=GRID, linewidth=0.8)
     ax.set_axisbelow(True)
     ax.legend(loc="upper right")
+    ax.set_ylim(0, max([a + f for a, f in zip(aq, fl)] + [r["p_ms"] or 0 for r in rows]) * 1.20)
     fig.tight_layout()
     fig.savefig(out, dpi=170)
     plt.close(fig)
+    return True
 
 
 def plot_e2e(out):
@@ -293,13 +307,19 @@ def plot_trace(out):
 
 def main():
     os.makedirs(PLOTS, exist_ok=True)
-    plot_kernel(os.path.join(PLOTS, "00_packed_vs_unpacked.png"))
+    plot_kernel(os.path.join(PLOTS, "00_packed_vs_unpacked.png"),
+                brk={48: 2.00})
     plot_e2e(os.path.join(PLOTS, "01_e2e_arms.png"))
     plot_paired(os.path.join(PLOTS, "02_paired_ab.png"))
     if not plot_quality(os.path.join(PLOTS, "03_quality_paired.png")):
         print("NOTE: data/quality_route_b.json absent -- 03_quality_paired.png not written")
     if not plot_trace(os.path.join(PLOTS, "04_trace_terms.png")):
         print("NOTE: data/trace_buckets_qkvi8.json absent -- 04_trace_terms.png not written")
+    if not plot_kernel(os.path.join(PLOTS, "05_loader_width.png"),
+                       "bench_packed_vs_unpacked_load8.json",
+                       "With the 8-byte cp.async loader: hd=24 becomes legal, and loses",
+                       brk={24: 1.44, 48: 2.00}):
+        print("NOTE: data/bench_packed_vs_unpacked_load8.json absent -- 05 not written")
     print("wrote plots to", PLOTS)
     return 0
 

@@ -1067,10 +1067,15 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         THREE constraints, and the gate needs all of them because the int8 branch in _forward_routes
         RAISES rather than falling back once this returns True:
 
-          * hd % 16 == 0 -- the int8 gather loads per-token bytes with cp.async, which needs 16-byte
-            alignment. hd = C/nh is 24, 48, 96 here, so hd=24 is out and hd24/T1024 is the dominant
-            block. The fp16 path has no such limit at 2 bytes/element, which is why route (a) ran
-            everywhere and this cannot.
+          * hd % 16 == 0 -- a MEASURED performance gate since 2026-08-12, no longer a legality one.
+            The kernel grew an 8-byte cp.async staging variant so hd=24 (24 B/token) is now legal, and
+            it LOSES: 2.930 ms against production's 2.023 at T=1024/batch 128, i.e. 2.11x the mma
+            kernel against a 1.44x break-even, about -4.5 ms/step over the 5 blocks. Narrow
+            transactions plus the .ca path (cp.async.cg is 16-byte only) cost more than the aq_*
+            passes they would delete, and T=1024 re-reads k/v far more often than T=64 does. Keeping
+            the condition as hd%16 rather than adding a separate flag because hd=24 is the only
+            8-but-not-16 width in this model, so the two are the same set here. Do not widen it
+            without re-running integration/tests/bench_flash_packed_vs_unpacked.py.
           * _flash_shape_ok -- the same hd<=48 / T%64 constraint _resolve_flash applies. Without it
             this gate admitted the six hd=96/T=16 blocks, whose hd_pad=128 exceeds FA_MMA_MAXHD; the
             resulting "mma-eligible shapes only" was mis-recorded as hd=48 failing, which made route

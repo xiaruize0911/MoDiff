@@ -34,7 +34,8 @@ weaker than the other, is what produced this.
 | candidate | ceiling | verdict | measured |
 |---|---:|---|---|
 | `aq_*` route (a): fp16 → flash | 4.60 | refuted 2026-08-11 | 18.0 ms slower (quantize-on-load, per k/v re-read) |
-| `aq_*` route (b): int8 → flash | 4.60 | **landed on 10/21 blocks** | **+0.79 ms/step**; hd=24 (3.13 ms) still needs an 8 B loader |
+| `aq_*` route (b): int8 → flash, hd=48 | 1.47 | **landed on 10/21 blocks** | **+0.79 ms/step** |
+| `aq_*` route (b): hd=24 via an 8 B loader | 3.13 | **refuted** | 2.11× the mma kernel vs a 1.44× break-even, −0.907 ms/block |
 | GN stats → conv epilogue | 4.30 | refuted 2026-08-11 | 6.5× slower, nondeterministic |
 
 ## Stage 0: the pre-check, because the score kernel changes too
@@ -142,14 +143,37 @@ kernel-level finding that the codes are identical and only the fp16 accumulation
 A note on a comparison NOT made: route (a)'s recorded 0.01710 is an **arm-to-arm** relL2, while these
 are relL2-vs-fp16. They are different quantities and were kept off the same axis.
 
-## What this leaves on the table
+## hd=24: the 8-byte loader was built, and it is refuted
 
-`attn_quantize` was 4.603 ms/step. Route (b) reaches the part belonging to the 10 hd=48 blocks; the
-5 hd=24/T=1024 blocks hold **~3.13 ms** and are blocked by one line — `EPC = 16 / sizeof(TIn)` at
-`flash_attn_int8.cu:836`, which makes `CPT = hd/16` and rejects 24 B/token. hd=24 is 3×8 B, so an
-8-byte `cp.async` variant covers it. Break-even there is tighter: under **1.44×** the mma kernel's
-time, against 1.80×/1.49× measured for the 16 B path at hd=48 — so it is not a foregone conclusion,
-and hd=48 (where both widths work) is the control that decides whether narrow transactions cost.
+The remaining 5 hd=24/T=1024 blocks held ~3.13 ms of `aq_*`, blocked by one line —
+`EPC = 16 / sizeof(TIn)`, which makes `CPT = hd/16` and rejects 24 B/token. So the kernel got a
+`LOAD_B` template parameter (16 or 8) and a `cp.async.ca` 8-byte staging path (`.ca` because `.cg` is
+only legal at 16 bytes), and `check_packed` was widened to `hd % 8 == 0`.
+
+**It works and it loses.** At T=1024, batch 128:
+
+| | ms | vs mma flash | break-even | net |
+|---|---:|---:|---:|---:|
+| production (aq_* 0.632 + mma 1.391) | 2.023 | — | — | — |
+| 8 B packed gather | **2.930** | **2.11×** | 1.44× | **−0.907 per block** |
+
+About **−4.5 ms/step** over the 5 blocks if it were wired. Two reasons, both structural: the narrow
+transactions go through L1 (`.cg` is 16-byte-only, so `.ca` is forced), and T=1024 re-reads k and v
+16× more often than T=64 does, so the gather is paid on every re-read while the `aq_*` quantize is
+paid once. The ratio ordering across the three shapes — 1.50× at T=64, 1.85× at T=256, 2.11× at
+T=1024 — is the same T-dependence that made route (a) lose, arriving through a different door.
+
+![loader width](plots/05_loader_width.png)
+
+**Kept in the tree, default off, exactly like route (a).** The loader is correct — hd=24 matches an
+fp32 reference at 4.56e-3 against production's 4.53e-3, is deterministic over 10 launches, and does
+not read past `hd` into the padded tail (`integration/tests/test_flash_packed_load8.py`). What ships
+it off is `_qkv_i8_ok`'s `hd % 16 == 0`, which is **now a measured performance gate rather than a
+legality one**, and says so in the code. The 16-byte path is untouched: hd=48's arm-U-vs-arm-P relL2
+is 5.51e-06 before and after the refactor, to the last digit.
+
+So `attn_quantize`'s remaining ~3.13 ms is not reachable by making the gather legal. It would need a
+gather that is cheaper than the mma kernel at T=1024, which is a different kernel, not a wider load.
 
 ## Reproducing
 
@@ -163,6 +187,7 @@ python docs/component_attribution_2026-08-07/scripts/differential_timing.py \
     --arms modiff_full_k4_projk4,modiff_full_k4_projk4_qkvi8 --steps 200 --repeats 5 \
     --output docs/aq_fusion_2026-08-12/data/differential_timing_qkvi8.json   # ~7 min
 python integration/tests/quality_route_b_paired.py                       # ~12 min
+python integration/tests/test_flash_packed_load8.py                      # ~2 min, the 8 B loader
 python docs/component_attribution_2026-08-07/scripts/trace_configs.py \
     --batch 128 --steps 8 --configs modiff_full_k4_projk4_qkvi8          # ~3 min
 python docs/component_attribution_2026-08-07/scripts/bucket_traces.py \
@@ -178,8 +203,9 @@ now refuses that combination instead of silently replacing the dataset.
 
 1. ~~No trace arm.~~ **Done** — see the attribution section. Predicted −1.9 / +1.1, measured
    −1.65 / +0.90, plus a +0.31 GEMM term that was not predicted at all.
-2. **hd=24 needs the 8-byte loader** (~3.13 ms, break-even 1.44×) — the largest remaining item in
-   this bucket and the only one that does not need CUTLASS.
+2. ~~hd=24 needs the 8-byte loader.~~ **Built and refuted** — see above. The loader stays as a
+   diagnostic path; `attn_quantize`'s last 3.13 ms needs a gather that beats the mma kernel at
+   T=1024, which is a new kernel rather than a wider load.
 3. **Quality is unresolved, not clean.** ±2.5% per-seed swings at 3 seeds. If route (b) is ever made
    default rather than opt-in, that needs more seeds — the 8-seed lesson from `docs/act_bits_2026-08-05`
    applies (a 3-seed mean there reversed sign at 8).

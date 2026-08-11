@@ -71,6 +71,27 @@ __device__ __forceinline__ void modiff_cp_async_cg(uint32_t smem_int_ptr,
                "r"(smem_int_ptr), "l"(src), "n"(cp_size));
 }
 
+// 8-byte cp.async, for tensors whose per-token bytes are a multiple of 8 but not of 16.
+//
+// `.ca` and not `.cg`: the cache-global qualifier is only legal at cp-size 16, so a narrower copy has
+// to go through L1. That is the cost of this path, and the reason it is not the default.
+//
+// Why it exists: the int8 packed flash gather addresses each (head, q|k|v) slice at
+// `(h * 3 + j) * hd` elements, so with hd = 24 the odd slices land on 8-byte-but-not-16-byte
+// boundaries and a 16 B cp.async is illegal however the loop is written. hd = 24 is this model's
+// dominant attention width (5 blocks at T=1024), so the alternative to 8 B copies is not using the
+// gather path there at all. See docs/aq_fusion_2026-08-12.
+__device__ __forceinline__ void modiff_cp_async_ca8(uint32_t smem_int_ptr,
+                                                    const uint2* __restrict__ src, bool mask) {
+  const int cp_size = 8;
+  asm volatile("{"
+               "  .reg .pred p;"
+               "  setp.ne.b32 p, %0, 0;"
+               "  @p cp.async.ca.shared.global" MODIFF_L2_CACHEHINT(64) " [%1], [%2], %3;"
+               "}" ::"r"((int)mask),
+               "r"(smem_int_ptr), "l"(src), "n"(cp_size));
+}
+
 // ---- softmax/requantize primitives, hand-written because the CUDA library versions cost
 // extra instructions that show up clearly in the SASS census of the flash kernels. ----
 

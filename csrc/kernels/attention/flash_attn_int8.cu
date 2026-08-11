@@ -781,7 +781,12 @@ __device__ __forceinline__ int8_t mfp_stage(int8_t x, float /*inv*/) { return x;
 // WORSE), which the per-block autotune then correctly refused to use -- so the fusion it exists
 // to provide (folding the Q/K/V quantize into flash's staging, worth the 724 us S3+quant pass)
 // was never actually available.
-template <typename TIn, int HD_PAD>
+// LOAD_B is the cp.async transaction width in BYTES for the raw K/V staging: 16 normally, 8 when the
+// per-token byte count is a multiple of 8 but not 16 (int8 at hd=24). It changes only how many chunks
+// each token is copied in -- not the smem layout, not the quantize, not the mma -- so the two widths
+// must produce bit-identical output at any shape where both are legal. hd=48 is that shape, and
+// integration/tests/test_flash_packed_load8.py asserts exactly that.
+template <typename TIn, int HD_PAD, int LOAD_B = 16>
 __global__ void flash_attn_int8_packed_mma_kernel(
     const TIn* __restrict__ qkv, const float* __restrict__ sv,
     __half* __restrict__ out, int N, int H, int T, int hd, int hd_pad_rt,
@@ -833,8 +838,8 @@ __global__ void flash_attn_int8_packed_mma_kernel(
   constexpr int nkt = HD_PAD / 32;
   const int NNT = FA_MMA_BC / 8;                 // QKᵀ N-tiles
   const int NKV = T / FA_MMA_BC;                 // key tiles (T % BC == 0 on the mma path)
-  const int EPC = 16 / (int)sizeof(TIn);         // elems per 16B cp.async chunk (8 half / 16 int8)
-  const int CPT = hd / EPC;                      // chunks per token (hd*sizeof(TIn) % 16 == 0, host-gated)
+  const int EPC = LOAD_B / (int)sizeof(TIn);     // elems per chunk (16B: 8 half / 16 int8; 8B: 8 int8)
+  const int CPT = hd / EPC;                      // chunks per token (hd*sizeof(TIn) % LOAD_B == 0, host-gated)
   // Same instruction-count folds as the other two mma kernels (see the FA_LOG2E block in
   // flash_attn_int8_mma_kernel_t). This path uses calibrated STATIC scales, so the whole
   // dequant chain collapses to one compile-time-invariant constant in log2 units.
@@ -873,10 +878,17 @@ __global__ void flash_attn_int8_packed_mma_kernel(
     TIn* Vd = Vraw + (size_t)buf * FA_MMA_BC * hd;
     for (int c = threadIdx.x; c < FA_MMA_BC * CPT; c += blockDim.x) {
       int j = c / CPT, off = (c % CPT) * EPC, gj = kt + j;
-      modiff_cp_async_cg(modiff_smem_ptr(&Kd[j * hd + off]),
-                         (const uint4*)(kh + (size_t)gj * pkT + off), gj < T);
-      modiff_cp_async_cg(modiff_smem_ptr(&Vd[j * hd + off]),
-                         (const uint4*)(vh + (size_t)gj * pkT + off), gj < T);
+      if (LOAD_B == 16) {
+        modiff_cp_async_cg(modiff_smem_ptr(&Kd[j * hd + off]),
+                           (const uint4*)(kh + (size_t)gj * pkT + off), gj < T);
+        modiff_cp_async_cg(modiff_smem_ptr(&Vd[j * hd + off]),
+                           (const uint4*)(vh + (size_t)gj * pkT + off), gj < T);
+      } else {
+        modiff_cp_async_ca8(modiff_smem_ptr(&Kd[j * hd + off]),
+                            (const uint2*)(kh + (size_t)gj * pkT + off), gj < T);
+        modiff_cp_async_ca8(modiff_smem_ptr(&Vd[j * hd + off]),
+                            (const uint2*)(vh + (size_t)gj * pkT + off), gj < T);
+      }
     }
     __pipeline_commit();
   };
@@ -2184,7 +2196,7 @@ torch::Tensor flash_attn_int8_vt_static_qout(
 //      round-trip. sv is f32 [hd] (per-channel V dequant). Dispatch on qkv.dtype(). ----
 // HD_PAD is a template arg so the kernel's smem/registers are exact (see the kernel header);
 // run_flash_packed keeps the old runtime-hd_pad signature and dispatches, so callers are unchanged.
-template <typename TIn, int HD_PAD>
+template <typename TIn, int HD_PAD, int LOAD_B = 16>
 static inline void run_flash_packed_t(const TIn* qkv, const float* sv, __half* out, int8_t* out_q,
                                     int N, int H, int T, int hd, int hd_pad,
                                     float sq_c, float sk_c, float softmax_scale, float q_inv, float k_inv,
@@ -2207,7 +2219,8 @@ static inline void run_flash_packed_t(const TIn* qkv, const float* sv, __half* o
     cudaGetDevice(&dev);
     cudaDeviceGetAttribute(&optin, cudaDevAttrMaxSharedMemoryPerBlockOptin, dev);
     cudaFuncAttributes fa{};
-    const void* fn = reinterpret_cast<const void*>(&flash_attn_int8_packed_mma_kernel<TIn, HD_PAD>);
+    const void* fn = reinterpret_cast<const void*>(
+        &flash_attn_int8_packed_mma_kernel<TIn, HD_PAD, LOAD_B>);
     if (cudaFuncGetAttributes(&fa, fn) == cudaSuccess) {
       const int req = optin - (int)fa.sharedSizeBytes;
       if (req > 48 * 1024)
@@ -2217,7 +2230,7 @@ static inline void run_flash_packed_t(const TIn* qkv, const float* sv, __half* o
     return true;
   }();
   (void)smem_optin;
-  flash_attn_int8_packed_mma_kernel<TIn, HD_PAD><<<grid, FA_MMA_WARPS * 32, smem, stream>>>(
+  flash_attn_int8_packed_mma_kernel<TIn, HD_PAD, LOAD_B><<<grid, FA_MMA_WARPS * 32, smem, stream>>>(
       qkv, sv, out, N, H, T, hd, hd_pad, sq_c, sk_c, softmax_scale, q_inv, k_inv,
       out_q, proj_inv_scale, qout_stride);
 }
@@ -2229,6 +2242,22 @@ static inline void run_flash_packed(const TIn* qkv, const float* sv, __half* out
                                     int N, int H, int T, int hd, int hd_pad,
                                     float sq_c, float sk_c, float softmax_scale, float q_inv, float k_inv,
                                     float proj_inv_scale, int qout_stride, cudaStream_t stream) {
+  // Narrow staging when the per-token bytes are 8- but not 16-aligned. int8 hd=24 is the only shape
+  // in this model that lands here (hd_pad=32), and it is the one worth 3.13 ms/step of aq_* passes.
+  // The predicate is on BYTES, not on hd, so fp16 never takes this path: at 2 B/element hd=24 is 48
+  // bytes and already 16-aligned.
+  const int tok_bytes = hd * (int)sizeof(TIn);
+  if (tok_bytes % 16 != 0 && tok_bytes % 8 == 0) {
+    if (hd_pad <= 32)
+      run_flash_packed_t<TIn, 32, 8>(qkv, sv, out, out_q, N, H, T, hd, hd_pad, sq_c, sk_c,
+                                     softmax_scale, q_inv, k_inv, proj_inv_scale, qout_stride,
+                                     stream);
+    else
+      run_flash_packed_t<TIn, 64, 8>(qkv, sv, out, out_q, N, H, T, hd, hd_pad, sq_c, sk_c,
+                                     softmax_scale, q_inv, k_inv, proj_inv_scale, qout_stride,
+                                     stream);
+    return;
+  }
   if (hd_pad <= 32)
     run_flash_packed_t<TIn, 32>(qkv, sv, out, out_q, N, H, T, hd, hd_pad, sq_c, sk_c,
                                 softmax_scale, q_inv, k_inv, proj_inv_scale, qout_stride, stream);
@@ -2250,8 +2279,13 @@ static inline void check_packed(torch::Tensor qkv, torch::Tensor sv, int64_t hd_
   TORCH_CHECK(hd_pad <= FA_MMA_MAXHD && (T % (FA_MMA_WARPS * FA_MMA_BR)) == 0 && (hd % 8) == 0
               && (FA_MMA_BC * hd_pad) % 16 == 0, "flash_attn_int8_packed: mma-eligible shapes only");
   const int elem = (qkv.dtype() == torch::kHalf) ? 2 : 1;
-  TORCH_CHECK((hd * elem) % 16 == 0, "flash_attn_int8_packed: per-token bytes (hd*sizeof) must be a "
-              "multiple of 16 for cp.async (fp16 always ok; int8 needs hd%16==0)");
+  // 8, not 16: run_flash_packed dispatches an 8-byte cp.async staging variant when the per-token
+  // bytes are 8- but not 16-aligned, which is what lets int8 hd=24 take the gather path at all. The
+  // per-head slice base is `(h*3 + j) * hd` elements, so 8-alignment of hd*sizeof is exactly the
+  // condition for every address in the loop to be legal. Widened from 16 on 2026-08-12; the 16-byte
+  // path itself is unchanged and still handles every shape it handled before.
+  TORCH_CHECK((hd * elem) % 8 == 0, "flash_attn_int8_packed: per-token bytes (hd*sizeof) must be a "
+              "multiple of 8 for cp.async (fp16 always ok; int8 needs hd%8==0)");
 }
 
 torch::Tensor flash_attn_int8_packed_vt(torch::Tensor qkv, torch::Tensor sv, int64_t hd_pad,
