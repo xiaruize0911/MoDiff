@@ -623,7 +623,14 @@ torch::Tensor gemm_w8a8_awq_o_hat_out_i8(torch::Tensor A, torch::Tensor B, torch
   int M = A.size(0), K = A.size(1), N = B.size(0);
   TORCH_CHECK(B.size(1) == K && N % GWQ_CTA_N == 0 && K % GWQ_CTA_K == 0, "shape/pad");
   TORCH_CHECK(o_hat.numel() == (int64_t)M * n_out, "o_hat must be [M, n_out]");
-  auto C = torch::empty({M, N}, torch::TensorOptions().dtype(torch::kChar).device(A.device()));
+  // [M, n_out], NOT [M, N]. The store loop writes `C[(m0+row) * n_out + n0 + col]` -- an UNPADDED row
+  // stride -- so allocating at the padded width N made the two disagree whenever n_out != N, and the
+  // codes scattered. Measured before the fix (integration/tests/test_qkv_o_hat_out_i8.py): at
+  // n_out=576 padded to 640, 81.6% of codes wrong with max|diff| 254, while the two 128-aligned
+  // shapes were correct to within 1. o_hat was right throughout, because it already indexed at
+  // n_out. Allocating unpadded also matches gemm_w8a8_awq_o_hat's return shape, so the caller needs
+  // no slice and there is no uninitialised tail to slice off.
+  auto C = torch::empty({M, n_out}, torch::TensorOptions().dtype(torch::kChar).device(A.device()));
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
   dim3 grid(N / GWQ_CTA_N, (M + GWQ_CTA_M - 1) / GWQ_CTA_M);
   // a_scale is a 1-element DEVICE tensor here, as on the o_hat path: taking it by value would cost a
