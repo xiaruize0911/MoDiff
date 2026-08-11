@@ -98,6 +98,31 @@ twice and report a believable ~0:
 `5.00` in the ON arm is the 5 hd=24 blocks keeping the old path — the shape split, visible in a
 counter rather than inferred.
 
+## Where the time actually goes: three terms, not one
+
+The net is a trade, and only a trace separates the sides (`trace_configs.py` on the new arm,
+`bucket_traces.py --output data/trace_buckets_qkvi8.json`, 8 steps, batch 128):
+
+| term | ms/step | calls/step |
+|---|---:|---|
+| `attn_quantize` bucket removed | **+1.65** | `aq_qtok_*_vec2` 10 → 0, `aq_vquant_*` 15 → 5 |
+| `attention` bucket paid back | **−0.90** | `flash_attn_int8_mma_kernel_t` 15 → 5, `flash_attn_int8_packed_mma_kernel` 0 → 10 |
+| qkv GEMM identity change | **+0.31** | plain `awq` 42 → 32, `awq_out_i8` 0 → 10 |
+| sum of the three | **+1.05** | against the paired A/B's +0.79 |
+
+![trace terms](plots/04_trace_terms.png)
+
+The third term was not predicted: writing int8 instead of fp16 out of the qkv GEMM is worth **+0.31 ms**
+on its own, which is why the kernel microbenchmark (which times only the quantize and the score path)
+under-predicted the ceiling while still landing the net exactly.
+
+**Do not read the trace total.** It says −2.47 ms/step, three times the measured effect, because
+buckets route (b) cannot touch moved too: `conv` −0.92 at identical call counts (35 → 35),
+`norm_quantize` −0.11, `elementwise` −0.21. The two captures are separate 8-step processes minutes
+apart, so that is drift, and it is larger than half the effect being measured. Same limit
+`docs/profile_kernels_layers_2026-08-11` states for its own tables: shares and named kernels within a
+capture, never totals across captures. The +0.79 comes from the paired A/B for exactly this reason.
+
 ## Quality: not resolved at 3 seeds, and the instrument can show a null
 
 Paired seeds, batch 8, DDIM 50, each arm against the same per-seed fp16 latent:
@@ -138,6 +163,10 @@ python docs/component_attribution_2026-08-07/scripts/differential_timing.py \
     --arms modiff_full_k4_projk4,modiff_full_k4_projk4_qkvi8 --steps 200 --repeats 5 \
     --output docs/aq_fusion_2026-08-12/data/differential_timing_qkvi8.json   # ~7 min
 python integration/tests/quality_route_b_paired.py                       # ~12 min
+python docs/component_attribution_2026-08-07/scripts/trace_configs.py \
+    --batch 128 --steps 8 --configs modiff_full_k4_projk4_qkvi8          # ~3 min
+python docs/component_attribution_2026-08-07/scripts/bucket_traces.py \
+    --output docs/aq_fusion_2026-08-12/data/trace_buckets_qkvi8.json     # offline
 python docs/aq_fusion_2026-08-12/scripts/make_plots.py                   # offline, free
 ```
 
@@ -147,9 +176,8 @@ now refuses that combination instead of silently replacing the dataset.
 
 ## Open
 
-1. **No trace arm.** `attn_quantize` should drop by ~1.9 ms and `attention` rise by ~1.1 ms; the
-   three instruments here measure the NET only. `trace_configs.py` + `bucket_traces.py` on
-   `modiff_full_k4_projk4_qkvi8` would separate them, and the arm is already in `CONFIGS`. Not run.
+1. ~~No trace arm.~~ **Done** — see the attribution section. Predicted −1.9 / +1.1, measured
+   −1.65 / +0.90, plus a +0.31 GEMM term that was not predicted at all.
 2. **hd=24 needs the 8-byte loader** (~3.13 ms, break-even 1.44×) — the largest remaining item in
    this bucket and the only one that does not need CUTLASS.
 3. **Quality is unresolved, not clean.** ±2.5% per-seed swings at 3 seeds. If route (b) is ever made

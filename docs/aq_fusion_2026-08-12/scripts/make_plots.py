@@ -228,6 +228,69 @@ def plot_quality(out):
     return True
 
 
+def plot_trace(out):
+    """Where the time went, per kernel, from the bucketed Perfetto traces.
+
+    The net (+0.79) is three terms pulling against each other, and only a trace can show them apart.
+    What this figure deliberately does NOT show is the trace TOTAL: the two captures are separate
+    8-step processes minutes apart, and buckets route (b) cannot touch (conv -0.92, norm_quantize
+    -0.11) moved by more than half the effect. That is capture drift, and it is why the headline
+    number comes from the paired A/B instead. Read shares and named kernels here, never totals --
+    the same limit docs/profile_kernels_layers_2026-08-11 states for its own tables.
+    """
+    d = load("trace_buckets_qkvi8.json")
+    if d is None:
+        return False
+    a = d["configs"]["modiff_full_k4_projk4"]
+    b = d["configs"]["modiff_full_k4_projk4_qkvi8"]
+
+    def kms(c, prefix):
+        """Sum every kernel whose name STARTS WITH prefix.
+
+        Not an exact-key lookup: bucket_traces keys the plain GEMM by its full C++ signature
+        ("gemm_w8a8_kernel_awq(signed char const*, ...") and an exact match silently returns 0.0,
+        which put this figure's GEMM term at -3.92 instead of +0.31 -- the out_i8 half counted and
+        the plain half not. Prefix, and assert something matched.
+        """
+        hit = [v["ms_per_step"] for n, v in c["kernels"].items() if n.startswith(prefix)]
+        assert hit, f"no kernel matching {prefix!r} in {c.get('config', '?')}"
+        return sum(hit)
+
+    # The plain and out_i8 GEMMs are ONE term: route (b) moves 10 of the 42 qkv/proj GEMM calls from
+    # the plain variant to the int8-output one, so counting either alone is meaningless.
+    gemm_a = kms(a, "gemm_w8a8_kernel_awq")
+    gemm_b = kms(b, "gemm_w8a8_kernel_awq")
+    terms = [
+        ("aq_* quantize\nremoved", a["buckets"]["attn_quantize"]["ms_per_step"]
+         - b["buckets"]["attn_quantize"]["ms_per_step"], AQ_GOLD),
+        ("packed gather\npaid back", -(b["buckets"]["attention"]["ms_per_step"]
+                                       - a["buckets"]["attention"]["ms_per_step"]), ROSE),
+        ("qkv GEMM\nplain -> out_i8", gemm_a - gemm_b, ORANGE),
+    ]
+    fig, ax = plt.subplots(figsize=(7.6, 4.5))
+    labels = [t[0] for t in terms] + ["sum of the\nthree terms", "paired A/B\n(the number)"]
+    vals = [t[1] for t in terms]
+    vals += [sum(vals), load("ab_route_b.json")["paired_median"]]
+    colors = [t[2] for t in terms] + [INK3, BLUE]
+    ax.bar(labels, vals, color=colors, width=0.6)
+    ax.axhline(0, color=INK2, linewidth=1.0)
+    for i, v in enumerate(vals):
+        ax.text(i, v + (0.03 if v >= 0 else -0.03), f"{v:+.2f}", ha="center",
+                va="bottom" if v >= 0 else "top", color=INK2, fontsize=9)
+    ax.set_ylabel("ms/step recovered (positive = faster)")
+    ax.set_title("What route (b) trades, per kernel, batch 128", loc="left")
+    ax.grid(axis="y", color=GRID, linewidth=0.8)
+    ax.set_axisbelow(True)
+    ax.text(0.01, 0.03, "trace attributes the terms; it does not measure the total "
+                        "(unrelated buckets drift ~1 ms between captures)",
+            transform=ax.transAxes, color=INK3, fontsize=8)
+    ax.set_ylim(min(vals) - 0.45, max(vals) + 0.35)
+    fig.tight_layout()
+    fig.savefig(out, dpi=170)
+    plt.close(fig)
+    return True
+
+
 def main():
     os.makedirs(PLOTS, exist_ok=True)
     plot_kernel(os.path.join(PLOTS, "00_packed_vs_unpacked.png"))
@@ -235,6 +298,8 @@ def main():
     plot_paired(os.path.join(PLOTS, "02_paired_ab.png"))
     if not plot_quality(os.path.join(PLOTS, "03_quality_paired.png")):
         print("NOTE: data/quality_route_b.json absent -- 03_quality_paired.png not written")
+    if not plot_trace(os.path.join(PLOTS, "04_trace_terms.png")):
+        print("NOTE: data/trace_buckets_qkvi8.json absent -- 04_trace_terms.png not written")
     print("wrote plots to", PLOTS)
     return 0
 
