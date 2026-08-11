@@ -64,6 +64,17 @@ def kernel_hashes(so_path):
             continue
         if name is None:
             continue
+        # ONLY instruction lines. cuobjdump's listing puts per-fatbin headers ("Fatbin elf code:",
+        # "code for sm_86", compression notes) BETWEEN kernels, and a parser that accumulates
+        # everything up to the next "Function :" attributes those lines to the kernel that precedes
+        # them -- so the LAST kernel of each translation unit absorbs the boundary text, and its hash
+        # moves whenever the object ORDER changes even though its code did not. That is exactly what
+        # family 1 hit: moving two quantize files flagged fp16_ncw_to_fp32_cl_kernel (in a TU that was
+        # neither edited nor recompiled) and quantize_and_update_ahat_kernel, two boundary kernels.
+        # Real instruction lines always carry the /*addr*/ /*encoding*/ comment columns; nothing else
+        # does, so that is the filter.
+        if "/*" not in line:
+            continue
         # Strip the /*addr*/ and /*hex*/ comment columns: they encode position, not semantics, and
         # shift when an unrelated kernel earlier in the same TU changes size.
         body = re.sub(r"/\*[0-9a-fx]*\*/", "", line).strip()
