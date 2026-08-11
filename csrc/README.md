@@ -49,6 +49,20 @@ That is a deliberate trade:
 * **also against**: compile time and `.so` size grow roughly with the duplicated families. The build
   is ~2–3 min with `ninja`; without `ninja` torch falls back to a serial backend and it is >20 min.
 
+## Build-cost baseline (2026-08-12, pre-migration)
+
+Recorded so the `conv/` family's duplicated CUTLASS instantiations can be costed against something
+rather than asserted:
+
+| | value |
+|---|---|
+| clean `python setup.py build_ext --inplace`, 12 CUDA TUs, `ninja` present | **246 s** |
+| `modiff_cutlass...so` | 26,480,696 B (25.3 MiB) |
+| `build/` | 83 MB |
+| device kernels in the binary | 279 unique (289 `Function` entries; 10 templates instantiated in two TUs) |
+
+Without `ninja` the same build is >20 min: torch falls back to a serial backend. Check for it first.
+
 ## Classification: 130 exported kernels
 
 | class | count | rule | destination |
