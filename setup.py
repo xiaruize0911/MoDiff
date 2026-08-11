@@ -27,8 +27,10 @@ setup(
             sources=[
                 'csrc/pybind.cpp',
                 # quantize: activation quantize + MoDiff temporal-delta quantize
-                'csrc/kernels/quantize/quantize.cu',
-                'csrc/kernels/quantize/modiff_delta_quantize.cu',
+                # family 1 of the csrc split (2026-08-12): quantize/ now lives in the two
+                # per-datapath trees. See csrc/README.md for the boundary rule.
+                'csrc/baseline/quantize/quantize.cu',
+                'csrc/modiff/quantize/delta_quantize.cu',
                 # conv: W8A8/W4A4 int conv (CUTLASS implicit GEMM) + shared epilogue
                 'csrc/kernels/conv/conv_epilogue.cu',
                 'csrc/kernels/conv/conv2d_int8.cu',
