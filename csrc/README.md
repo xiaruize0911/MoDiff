@@ -33,10 +33,28 @@ whether the kernel touches MoDiff's cross-timestep state:
 
 ### The dual-purpose kernels, and why they get copied
 
-38 exported kernels touch that state, and about a dozen of them are **one entry point serving both
-paths**: the state tensor is optional, and passing an empty tensor turns the MoDiff kernel into the
-baseline one. `step1_static_quantize_fprop` is the clearest case — the conv delta path and the
-projection delta path both call it, and so does the baseline quantize.
+38 exported kernels touch that state. Which of them are genuinely dual was settled from the **call
+sites**, not the signatures (verified 2026-08-12):
+
+| kernel | MoDiff caller | baseline caller | verdict |
+|---|---|---|---|
+| `step1_static_quantize_fprop` | `wxax_linear.py:243` (`self.a_hat`), `int8_optimized.py:1519` (`self.a_hat_cache`) | `int8_optimized.py:1362` — **passes `self._zero_ahat_buf`** | **dual** |
+| `step1_static_quantize_pack_int4_fprop` | `wxax_linear.py`, `int4_optimized.py` | same zero-buffer pattern | **dual** |
+| `step1_quantize_fprop`, `_pack_int4_fprop` | `int8_optimized.py`, `int4_optimized.py` | — | check at migration |
+| `step1_static_quantize_fprop_silu`, `_pack_int4_fprop_silu` | `int8/int4_optimized.py` | — | check at migration |
+| `dequant_accumulate_and_return_int8` / `_int4` | `int8_linear.py`, `int4_linear.py` | — | check at migration |
+| `dequant_accumulate_int8` / `_int4` | none found | none found | **no Python caller at all** |
+
+**How the baseline fakes it, and what that means for the copy.** The baseline conv path does not pass an
+*empty* state tensor — it passes a **zero** `a_hat` buffer and lets the kernel subtract it. So the
+baseline copy could drop the parameter and the subtraction entirely, which would also stop it reading a
+zero buffer it does not need. **That is an optimization, not a move**, and it would change that kernel's
+SASS, so the migration keeps the copy byte-identical and leaves the saving as a separate, measurable
+change. Recorded here rather than done silently.
+
+Two of the four `dequant_accumulate*` exports have **no Python caller anywhere** in `integration/` or
+`docs/`. They are candidates for deletion rather than duplication; confirm against `pybind.cpp` before
+removing, since the export manifest will flag the change either way.
 
 Those are **duplicated, one copy per tree, with the tree in the name** (`modiff_*` / `baseline_*`).
 That is a deliberate trade:
