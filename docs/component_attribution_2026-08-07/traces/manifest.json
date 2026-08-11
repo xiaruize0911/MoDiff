@@ -126,48 +126,6 @@
    "hook": null
   },
   {
-   "config": "int8_ptq",
-   "mode": "int8_baseline",
-   "delta_from": null,
-   "why": "quantized, no MoDiff anywhere; the qout epilogue is live on all 21 blocks",
-   "file": "int8_ptq_b128_s8.json.gz",
-   "events": 39273,
-   "gz_mb": 0.67,
-   "steps": 8,
-   "batch": 128,
-   "route_check": {
-    "attn_blocks": 21,
-    "attn_class": "QuantizedStandardAttentionBlock",
-    "qout_eligible": 21,
-    "wxax": 42,
-    "wxax_modiff": 0,
-    "wxax_out_i8": 0,
-    "wxax_bias_res": 42,
-    "int8_convs": 140,
-    "conv_modiff_on": 0,
-    "conv_delta_refresh": [
-     1
-    ]
-   },
-   "env": {
-    "MODIFF_ACT_Q": "127",
-    "MODIFF_DELTA_CLIP": "1.0",
-    "MODIFF_DELTA_MODE": "dynamic",
-    "MODIFF_DELTA_REFRESH": "1",
-    "MODIFF_FLASH_GATE": "on",
-    "MODIFF_FUSE_PROJ_QUANT": "1",
-    "MODIFF_LINEAR": "0",
-    "MODIFF_LINEAR_OUT_I8": "0",
-    "MODIFF_QATTN_FLASH": "1",
-    "MODIFF_QUANT_ATTN": "1",
-    "MODIFF_QUANT_ATTN_ALLT": "0",
-    "MODIFF_QUANT_ATTN_STATIC": "1",
-    "MODIFF_QUANT_LINEAR": "1",
-    "MODIFF_WARMUP_STEPS": "5"
-   },
-   "hook": null
-  },
-  {
    "config": "modiff_conv_k4",
    "mode": "int8",
    "delta_from": "int8_ptq",
@@ -336,19 +294,63 @@
    "hook": null
   },
   {
+   "config": "int8_ptq",
+   "mode": "int8_baseline",
+   "delta_from": null,
+   "why": "quantized, no MoDiff anywhere; the qout epilogue is live on all 21 blocks",
+   "file": "int8_ptq_b128_s8.json.gz",
+   "events": 39436,
+   "gz_mb": 0.68,
+   "steps": 8,
+   "batch": 128,
+   "route_check": {
+    "attn_blocks": 21,
+    "attn_class": "QuantizedStandardAttentionBlock",
+    "qout_eligible": 21,
+    "attn_qkv_i8": 0,
+    "wxax": 42,
+    "wxax_modiff": 0,
+    "wxax_out_i8": 0,
+    "wxax_bias_res": 42,
+    "int8_convs": 140,
+    "conv_modiff_on": 0,
+    "conv_delta_refresh": [
+     1
+    ]
+   },
+   "env": {
+    "MODIFF_ACT_Q": "127",
+    "MODIFF_DELTA_CLIP": "1.0",
+    "MODIFF_DELTA_MODE": "dynamic",
+    "MODIFF_DELTA_REFRESH": "1",
+    "MODIFF_FLASH_GATE": "on",
+    "MODIFF_FUSE_PROJ_QUANT": "1",
+    "MODIFF_LINEAR": "0",
+    "MODIFF_LINEAR_OUT_I8": "0",
+    "MODIFF_QATTN_FLASH": "1",
+    "MODIFF_QUANT_ATTN": "1",
+    "MODIFF_QUANT_ATTN_ALLT": "0",
+    "MODIFF_QUANT_ATTN_STATIC": "1",
+    "MODIFF_QUANT_LINEAR": "1",
+    "MODIFF_WARMUP_STEPS": "5"
+   },
+   "hook": null
+  },
+  {
    "config": "modiff_full_k4_projk4",
    "mode": "int8",
    "delta_from": "modiff_full_k4",
    "why": "K=4 on the convs AND on the 42 projections; the projections' unconditional absmax was the last K-independent term (docs/profile_kernels_layers_2026-08-11)",
    "file": "modiff_full_k4_projk4_b128_s8.json.gz",
-   "events": 70537,
-   "gz_mb": 1.26,
+   "events": 70569,
+   "gz_mb": 1.28,
    "steps": 8,
    "batch": 128,
    "route_check": {
     "attn_blocks": 21,
     "attn_class": "QuantizedStandardAttentionBlock",
     "qout_eligible": 0,
+    "attn_qkv_i8": 0,
     "wxax": 42,
     "wxax_modiff": 42,
     "wxax_out_i8": 0,
@@ -383,8 +385,8 @@
    "delta_from": "modiff_full_k4_projk4",
    "why": "route (b) on top of both refresh schedules: int8 qkv -> flash gather on the 10 hd=48 blocks",
    "file": "modiff_full_k4_projk4_qkvi8_b128_s8.json.gz",
-   "events": 65004,
-   "gz_mb": 1.16,
+   "events": 64969,
+   "gz_mb": 1.17,
    "steps": 8,
    "batch": 128,
    "route_check": {

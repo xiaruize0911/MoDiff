@@ -194,19 +194,29 @@ is the correct end state and it is cheap to verify, since both compute the same 
 
 ## Speed, from the current committed measurements
 
-**End to end, batch 128, A40, 200 steps × 5 repeats, profiler-free**
-(`docs/profile_kernels_layers_2026-08-11/data/`, `docs/aq_fusion_2026-08-12/data/`):
+**End to end, batch 128, A40, 200 steps × 5 repeats, profiler-free.** Re-measured post-split in one
+process: `docs/postsplit_benchmark_2026-08-12/`.
+
+⚠️ **Do not subtract two rows of this table to get a delta.** The absolute column is session-relative to
+~1.3 ms — two runs in the same container agree to 0.21 ms, runs a day apart differ by ~1.3 (measured, see
+that report). The earlier version of this table mixed two runs and implied 4.09 ms for the projection
+refresh when the paired-A/B value is +2.81. Deltas come from `ab_*` paired A/B scripts, which alternate
+arms inside one process.
 
 | arm | ms/step | vs fp16 |
 |---|---:|---:|
-| fp16 (autocast on) | 106.09 | 1.000× |
-| **W8A8 PTQ — baseline tree only** | **73.31** | **1.447×** |
-| MoDiff conv only, K=4 | 77.33 | 1.372× |
-| MoDiff conv only, K=1 | 83.01 | 1.278× |
-| MoDiff conv+proj, K=1 (the paper's datapath) | 105.42 | 1.006× |
-| MoDiff conv+proj, K=4 | 99.73 | 1.064× |
-| … + projection refresh schedule (opt-in) | 95.64 | 1.109× |
-| … + route (b) qkv int8→flash (opt-in) | **94.88** | **1.118×** |
+| fp16 (autocast on) | 104.30 | 1.000× |
+| **W8A8 PTQ — baseline tree only** | **71.80** | **1.453×** |
+| MoDiff conv only, K=4 | 76.09 | 1.371× |
+| MoDiff conv only, K=1 | 81.66 | 1.277× |
+| MoDiff conv+proj, K=1 (the paper's datapath) | 104.01 | 1.003× |
+| MoDiff conv+proj, K=4 | 98.45 | 1.059× |
+| … + projection refresh schedule (opt-in) | 95.68 | 1.090× |
+| … + route (b) qkv int8→flash (opt-in) | **95.09** | **1.097×** |
+
+The gains those last two arms represent, from paired A/B (the trustworthy instrument):
+**+2.81 ms** for the projection refresh and **+0.79 ms** for route (b). This run's within-process
+deltas confirm both at +2.77 and +0.59.
 
 **Per bucket, batch 128** (bucketed Perfetto trace, `docs/aq_fusion_2026-08-12/data/trace_buckets_qkvi8.json`,
 last arm above, 91.55 ms/step of GPU time):
