@@ -1,0 +1,1311 @@
+{
+ "gn_attn_rate_ms_per_call": 0.0981217857142857,
+ "pairs": {
+  "modiff_conv_k1 -> modiff_full_k1": {
+   "target_family": "lin",
+   "conv_drift_pct": 1.1073165433570107,
+   "conv_evt_ms": [
+    26.030779249999995,
+    25.742536125
+   ],
+   "launch_inventory": {
+    "gn_apply_delta_quantize_flat": [
+     62.0,
+     83.0
+    ],
+    "gn_delta_absmax_flat": [
+     62.0,
+     83.0
+    ],
+    "gn_stats_partials": [
+     62.0,
+     83.0
+    ],
+    "gn_stats_reduce_partials": [
+     62.0,
+     83.0
+    ],
+    "static_quantize_and_update_ahat": [
+     8.0,
+     29.0
+    ],
+    "delta_absmax_fp16": [
+     8.0,
+     29.0
+    ],
+    "gemm_w8a8_kernel_awq(": [
+     21.0,
+     42.0
+    ]
+   }
+  },
+  "modiff_conv_k4 -> modiff_full_k4": {
+   "target_family": "lin",
+   "conv_drift_pct": 2.5417912775327256,
+   "conv_evt_ms": [
+    26.1659565,
+    25.500872499999993
+   ],
+   "launch_inventory": {
+    "gn_apply_delta_quantize_flat": [
+     62.0,
+     83.0
+    ],
+    "gn_delta_absmax_flat": [
+     15.5,
+     36.5
+    ],
+    "gn_stats_partials": [
+     62.0,
+     83.0
+    ],
+    "gn_stats_reduce_partials": [
+     62.0,
+     83.0
+    ],
+    "static_quantize_and_update_ahat": [
+     2.0,
+     23.0
+    ],
+    "delta_absmax_fp16": [
+     0,
+     21.0
+    ],
+    "gemm_w8a8_kernel_awq(": [
+     21.0,
+     42.0
+    ]
+   }
+  },
+  "int8_ptq -> ptq_no_projquant": {
+   "target_family": "attn",
+   "conv_drift_pct": 0.3348104812818138,
+   "conv_evt_ms": [
+    24.91902275,
+    25.00245425
+   ],
+   "launch_inventory": {
+    "gemm_w8a8_kernel_awq(": [
+     21.0,
+     42.0
+    ]
+   }
+  }
+ },
+ "excluded": [
+  "base_no_conv_modiff"
+ ],
+ "configs": {
+  "fp16": {
+   "gpu_ms_per_step": 102.35160674999999,
+   "wall_ms_per_step": 105.938720703125,
+   "families": {
+    "conv": 87.46924425,
+    "attn": 11.357351999999997,
+    "lin": 2.8388395,
+    "unattributed": 0.686171
+   },
+   "families_wall_scaled": {
+    "conv": 90.53477645297613,
+    "attn": 11.755392803885591,
+    "lin": 2.938332230055578,
+    "unattributed": 0.7102192162077025
+   },
+   "wall_scale": 1.0350469725588847,
+   "attn_plus_lin": 14.196191499999998,
+   "shares_pct": {
+    "conv": 85.45957120502167,
+    "attn": 11.096408117696694,
+    "lin": 2.77361498284442,
+    "unattributed": 0.6704056944372297
+   },
+   "split_base": null,
+   "split_target": null,
+   "sum_check": 1.4210854715202004e-14,
+   "detail": [
+    [
+     "cutlass__5x_cudnn::Kernel",
+     "conv",
+     32.14158362499999,
+     "sole"
+    ],
+    [
+     "group_norm_silu_nhwc_kernel",
+     "conv",
+     19.154423750000003,
+     "sole"
+    ],
+    [
+     "pytorch_flash::flash_fwd_kernel",
+     "attn",
+     11.357351999999997,
+     "sole"
+    ],
+    [
+     "at::native::elementwise_kernel",
+     "conv",
+     8.501324875000014,
+     "sole (no differential base)"
+    ],
+    [
+     "_ZN7cutlass6KernelINS_4conv6kernel38ImplicitGemmConvolutionFusionPerSampleINS1_11threadblock33ImplicitGemmFpropFusionMultistageINS_4gemm9GemmShapeILi128ELi256ELi32EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi32EEENS_6half_tENS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi32ELi128EEELi256ENSH_ILi4ELi8EEELi8EEENS_12AlignedArrayISC_Li8ELi16EEEEENSF_11threadblock25RegularTileAccessIteratorISB_SC_NSD_37RowMajorTensorOpMultiplicandCrosswiseILi16ELi32EEELi0ESK_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedINSA_ILi32ELi256EEESC_SE_NSG_INSH_ILi32ELi256EEELi256ESJ_Li8EEESM_Lb0EEENSP_ISX_SC_NSD_40ColumnMajorTensorOpMultiplicandCrosswiseILi16ELi32EEELi1ESZ_Li16EEELSV_1ENS4_39PredicatedScaleBiasVectorAccessIteratorINSA_ILi1ELi32EEESC_NSD_8RowMajorEEENSO_36RegularScaleBiasVectorAccessIteratorIS15_SC_S16_EELSV_0ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi32EEESC_SR_SC_S12_fS16_NS1C_17MmaTensorOpPolicyINST_3MmaINS7_ILi16ELi8ELi16EEELi32ESC_S16_SC_NSD_11ColumnMajorEfS16_NST_13OpMultiplyAddEEENSA_ILi1ELi1EEEEELi1ELb0EbEENSA_ILi0ELi0EEES1O_Li1EEENS1C_21ScaleBiasTileIteratorINSA_ILi64ELi32EEESC_S16_NSA_ILi16ELi16EEENS1C_35MmaTensorOpMultiplicandTileIteratorINSH_ILi32ELi64EEELNS6_7OperandE0ESC_NSD_29TensorOpMultiplicandCrosswiseILi16ELi32EEENSH_ILi16ELi16EEELi1ELi32ELi1EE6PolicyELi32ELi1EEELi3EbEENS_8epilogue11threadblock8EpilogueIS8_S1N_Li1ENS24_22PredicatedTileIteratorINS24_26OutputTileOptimalThreadMapINS24_15OutputTileShapeILi256ELi8ELi2ELi1ELi1EEENS28_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEESC_Lb0ENSD_9NoPermuteELb0EEENS23_4warp24FragmentIteratorTensorOpIS1E_S1H_fNS_5ArrayIfLi4ELb1EEES16_EENS2E_25TileIteratorTensorOpMixedIS1E_S1H_fLi32ELi16ELi8ELi8ELb0EEENS24_23SharedLoadIteratorMixedINS2B_18CompactedThreadMapEfLi32ELi16ELi8ELi8ELb0EEENS23_6thread17LinearCombinationISC_Li8EffLNS2O_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ESC_EENSA_ILi0ELi8EEELi2ELi1EEENS1A_30GemmIdentityThreadblockSwizzleILi1EEELNS1_8OperatorE0ENS1_17Conv2dProblemSizeEEEEEvNT_6ParamsE",
+     "conv",
+     5.412961374999999,
+     "sole"
+    ],
+    [
+     "at::native::unrolled_elementwise_kernel",
+     "conv",
+     5.361498750000003,
+     "sole"
+    ],
+    [
+     "at::native::vectorized_elementwise_kernel",
+     "conv",
+     4.928768499999995,
+     "sole (no differential base)"
+    ],
+    [
+     "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize256x128x32_stage3_warpsize4x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "conv",
+     2.94338975,
+     "sole"
+    ],
+    [
+     "at::native::(anonymous namespace)::upsample_nearest2d_nhwc_out_frame",
+     "conv",
+     2.535892,
+     "sole"
+    ],
+    [
+     "ampere_fp16_s1688gemm_fp16_128x128_ldg8_relu_f2f_tn",
+     "lin",
+     1.403922125,
+     "sole"
+    ],
+    [
+     "cat2_channels_last_fp16_kernel(__half const*, __half const*, __half*, long, int, int)",
+     "conv",
+     1.1521689999999996,
+     "sole"
+    ],
+    [
+     "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x64x32_stage4_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "conv",
+     1.0106923749999999,
+     "sole"
+    ],
+    [
+     "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x64x32_stage5_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "conv",
+     0.9733802499999998,
+     "sole"
+    ],
+    [
+     "at::native::(anonymous namespace)::avg_pool2d_out_cuda_frame_nhwc",
+     "conv",
+     0.9201280000000003,
+     "sole"
+    ],
+    [
+     "gn_accum_kernel(__half const*, float*, float*, int, int, int, int)",
+     "conv",
+     0.866664,
+     "sole"
+    ],
+    [
+     "cutlass::Kernel2",
+     "unattributed",
+     0.671607,
+     "sole"
+    ],
+    [
+     "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize96x128x32_stage4_warpsize2x2x1_tensor16x8x16_kernel",
+     "lin",
+     0.4591865,
+     "sole"
+    ],
+    [
+     "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_t1r1s1_execute_kernel__5x_cudnn",
+     "conv",
+     0.45751450000000005,
+     "sole"
+    ],
+    [
+     "ampere_fp16_s16816gemm_fp16_256x128_ldg8_relu_f2f_stages_32x3_tn",
+     "lin",
+     0.41484537499999996,
+     "sole"
+    ],
+    [
+     "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x64_stage3_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "conv",
+     0.337305625,
+     "sole"
+    ],
+    [
+     "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x32_stage4_warpsize4x1x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "conv",
+     0.24122512499999998,
+     "sole"
+    ],
+    [
+     "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize32x32x64_stage6_warpsize2x2x1_tensor16x8x16_kernel",
+     "lin",
+     0.16420400000000007,
+     "sole"
+    ],
+    [
+     "at::native::(anonymous namespace)::RowwiseMomentsCUDAKernel",
+     "conv",
+     0.158704625,
+     "sole"
+    ],
+    [
+     "ampere_fp16_s16816gemm_fp16_64x64_sliced1x2_ldg8_relu_f2f_stages_64x5_tn",
+     "lin",
+     0.14868425000000002,
+     "sole"
+    ]
+   ]
+  },
+  "int8_ptq": {
+   "gpu_ms_per_step": 69.752914625,
+   "wall_ms_per_step": 73.6092919921875,
+   "families": {
+    "conv": 49.7498465,
+    "attn": 10.890925500000005,
+    "lin": 9.099622500000002,
+    "unattributed": 0.012520125
+   },
+   "families_wall_scaled": {
+    "conv": 52.500329158611216,
+    "attn": 11.49304397536006,
+    "lin": 9.6027065424032,
+    "unattributed": 0.013212315813013761
+   },
+   "wall_scale": 1.0552862541718842,
+   "attn_plus_lin": 19.990548000000008,
+   "shares_pct": {
+    "conv": 71.32296444881351,
+    "attn": 15.61357766704219,
+    "lin": 13.045508634184907,
+    "unattributed": 0.017949249959388344
+   },
+   "split_base": null,
+   "split_target": null,
+   "sum_check": 0.0,
+   "detail": [
+    [
+     "group_norm_silu_quantize_nhwc_vec2_kernel",
+     "gn_shared",
+     16.45024124999999,
+     "conv 14.39 / attn 2.06"
+    ],
+    [
+     "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2R_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2U_S2U_EEELi1ES2Q_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2U_S2K_iEEELb1EEEEEES30_EEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE",
+     "conv",
+     13.871854875,
+     "sole"
+    ],
+    [
+     "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS2D_IS2P_JNS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2R_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2U_S2U_EEELi1ES2Q_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2U_S2K_iEEELb1EEEEEES30_EEENS1J_14VisitorAuxLoadIS2G_S1S_S2L_EEEEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE",
+     "conv",
+     11.047167875,
+     "sole"
+    ],
+    [
+     "flash_attn_int8_mma_kernel_t",
+     "attn",
+     8.483498750000006,
+     "sole"
+    ],
+    [
+     "gemm_w8a8_kernel_awq_out_i8",
+     "lin",
+     5.249915500000001,
+     "sole"
+    ],
+    [
+     "gemm_w8a8_kernel_awq(signed char const*, signed char const*, float const*, float, __half*, int, int, int, int, __half const*, __half const*, __half*, float const*)",
+     "lin",
+     3.281163750000001,
+     "sole"
+    ],
+    [
+     "at::native::elementwise_kernel",
+     "conv",
+     2.3941096250000022,
+     "sole (no differential base)"
+    ],
+    [
+     "cat2_channels_last_fp16_kernel(__half const*, __half const*, __half*, long, int, int)",
+     "conv",
+     1.9277211250000001,
+     "sole"
+    ],
+    [
+     "at::native::(anonymous namespace)::upsample_nearest2d_nhwc_out_frame",
+     "conv",
+     1.241698,
+     "sole"
+    ],
+    [
+     "at::native::unrolled_elementwise_kernel",
+     "conv",
+     0.9954043750000002,
+     "sole"
+    ],
+    [
+     "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x64x32_stage5_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "conv",
+     0.96570475,
+     "sole"
+    ],
+    [
+     "group_norm_silu_quantize_resize_nhwc_kernel",
+     "conv",
+     0.8650128749999999,
+     "sole"
+    ],
+    [
+     "at::native::(anonymous namespace)::avg_pool2d_out_cuda_frame_nhwc",
+     "conv",
+     0.45478224999999994,
+     "sole"
+    ],
+    [
+     "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_t1r1s1_execute_kernel__5x_cudnn",
+     "conv",
+     0.45085025,
+     "sole"
+    ],
+    [
+     "flash_attn_int8_qi8packed_small_qout_kernel",
+     "attn",
+     0.34686925,
+     "sole"
+    ],
+    [
+     "at::native::vectorized_elementwise_kernel",
+     "conv",
+     0.2845093750000002,
+     "sole (no differential base)"
+    ],
+    [
+     "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x32_stage4_warpsize4x1x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "conv",
+     0.238477,
+     "sole"
+    ],
+    [
+     "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize96x128x32_stage4_warpsize2x2x1_tensor16x8x16_kernel",
+     "lin",
+     0.163213,
+     "sole"
+    ],
+    [
+     "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize32x32x64_stage6_warpsize2x2x1_tensor16x8x16_kernel",
+     "lin",
+     0.16183687499999996,
+     "sole"
+    ],
+    [
+     "at::native::(anonymous namespace)::RowwiseMomentsCUDAKernel",
+     "conv",
+     0.15785249999999995,
+     "sole"
+    ],
+    [
+     "ampere_fp16_s16816gemm_fp16_64x64_sliced1x2_ldg8_relu_f2f_stages_64x5_tn",
+     "lin",
+     0.15734487500000002,
+     "sole"
+    ],
+    [
+     "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "conv",
+     0.14642837500000003,
+     "sole"
+    ],
+    [
+     "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x64x32_stage4_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "conv",
+     0.129248625,
+     "sole"
+    ],
+    [
+     "sm80_xmma_fprop_implicit_gemm_indexed_wo_smem_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x16_stage1_warpsize4x1x1_g1_tensor16x8x16_aligna4_alignc8_execute_kernel__5x_cudnn",
+     "conv",
+     0.09596437499999999,
+     "sole"
+    ]
+   ]
+  },
+  "modiff_conv_k4": {
+   "gpu_ms_per_step": 73.879020625,
+   "wall_ms_per_step": 77.5003955078125,
+   "families": {
+    "conv": 53.774820125000005,
+    "attn": 10.927594749999997,
+    "lin": 9.164329375,
+    "unattributed": 0.012276375
+   },
+   "families_wall_scaled": {
+    "conv": 56.410734641475564,
+    "attn": 11.463239603199534,
+    "lin": 9.613543129265922,
+    "unattributed": 0.012878133871475123
+   },
+   "wall_scale": 1.0490176352119516,
+   "attn_plus_lin": 20.091924125,
+   "shares_pct": {
+    "conv": 72.78767323940822,
+    "attn": 14.791201423022382,
+    "lin": 12.404508475439743,
+    "unattributed": 0.016616862129660917
+   },
+   "split_base": null,
+   "split_target": null,
+   "sum_check": 0.0,
+   "detail": [
+    [
+     "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS1J_14VisitorAuxLoadIS2G_S1S_S2L_EENS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2T_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2W_S2W_EEELi1ES2S_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2W_S2K_iEEELb1EEEEEEEEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE",
+     "conv",
+     14.258309750000004,
+     "sole"
+    ],
+    [
+     "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS2D_IS2M_JNS2D_IS2P_JNS1J_14VisitorAuxLoadIS2G_S1S_S2L_EENS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2T_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2W_S2W_EEELi1ES2S_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2W_S2K_iEEELb1EEEEEEEEEEEES2R_EEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE",
+     "conv",
+     11.907646749999998,
+     "sole"
+    ],
+    [
+     "flash_attn_int8_mma_kernel_t",
+     "attn",
+     8.516579374999997,
+     "sole"
+    ],
+    [
+     "gn_apply_delta_quantize_flat_vec2_kernel",
+     "conv",
+     8.269498624999997,
+     "sole (no differential base)"
+    ],
+    [
+     "gemm_w8a8_kernel_awq_out_i8",
+     "lin",
+     5.2894166249999985,
+     "sole"
+    ],
+    [
+     "gn_stats_partials_chanmajor_kernel",
+     "conv",
+     3.617424749999998,
+     "sole (no differential base)"
+    ],
+    [
+     "gemm_w8a8_kernel_awq(signed char const*, signed char const*, float const*, float, __half*, int, int, int, int, __half const*, __half const*, __half*, float const*)",
+     "lin",
+     3.3053313750000015,
+     "sole"
+    ],
+    [
+     "group_norm_silu_delta_quantize_resize_nhwc_kernel",
+     "conv",
+     2.5899674999999998,
+     "sole"
+    ],
+    [
+     "at::native::elementwise_kernel",
+     "conv",
+     2.394967125000005,
+     "sole (no differential base)"
+    ],
+    [
+     "group_norm_silu_quantize_nhwc_vec2_kernel",
+     "gn_shared",
+     2.07229725,
+     "conv 0.01 / attn 2.06"
+    ],
+    [
+     "cat2_channels_last_fp16_kernel(__half const*, __half const*, __half*, long, int, int)",
+     "conv",
+     1.937724125,
+     "sole"
+    ],
+    [
+     "gn_delta_absmax_flat_vec2_kernel",
+     "conv",
+     1.5794956250000012,
+     "sole (no differential base)"
+    ],
+    [
+     "at::native::(anonymous namespace)::upsample_nearest2d_nhwc_out_frame",
+     "conv",
+     1.5601833749999998,
+     "sole"
+    ],
+    [
+     "at::native::unrolled_elementwise_kernel",
+     "conv",
+     1.3948861250000029,
+     "sole"
+    ],
+    [
+     "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x64x32_stage5_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "conv",
+     0.96657225,
+     "sole"
+    ],
+    [
+     "at::native::(anonymous namespace)::avg_pool2d_out_cuda_frame_nhwc",
+     "conv",
+     0.5707823749999997,
+     "sole"
+    ],
+    [
+     "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_t1r1s1_execute_kernel__5x_cudnn",
+     "conv",
+     0.452629875,
+     "sole"
+    ],
+    [
+     "group_norm_silu_nhwc_kernel",
+     "conv",
+     0.40259800000000007,
+     "sole"
+    ],
+    [
+     "gn_stats_reduce_partials_kernel(float const*, float const*, float*, float*, int, long, float, int)",
+     "conv",
+     0.36712925000000046,
+     "sole (no differential base)"
+    ],
+    [
+     "flash_attn_int8_qi8packed_small_qout_kernel",
+     "attn",
+     0.3504578750000001,
+     "sole"
+    ],
+    [
+     "static_quantize_and_update_ahat_kernel_int8_half_cache_vec2",
+     "conv",
+     0.31308137500000005,
+     "sole (no differential base)"
+    ],
+    [
+     "at::native::vectorized_elementwise_kernel",
+     "conv",
+     0.2986277499999999,
+     "sole (no differential base)"
+    ],
+    [
+     "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x32_stage4_warpsize4x1x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "conv",
+     0.252797125,
+     "sole"
+    ],
+    [
+     "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize96x128x32_stage4_warpsize2x2x1_tensor16x8x16_kernel",
+     "lin",
+     0.16528099999999998,
+     "sole"
+    ]
+   ]
+  },
+  "modiff_conv_k1": {
+   "gpu_ms_per_step": 80.20244349999997,
+   "wall_ms_per_step": 84.165888671875,
+   "families": {
+    "conv": 60.13955562499999,
+    "attn": 10.898925999999998,
+    "lin": 9.151846000000003,
+    "unattributed": 0.012115875000000002
+   },
+   "families_wall_scaled": {
+    "conv": 63.111532798994894,
+    "attn": 11.43752923636303,
+    "lin": 9.604112019082622,
+    "unattributed": 0.01271461743447198
+   },
+   "wall_scale": 1.0494180102115596,
+   "attn_plus_lin": 20.050772000000002,
+   "shares_pct": {
+    "conv": 74.98469248633306,
+    "attn": 13.589269259608033,
+    "lin": 11.410931638261129,
+    "unattributed": 0.015106615797809211
+   },
+   "split_base": null,
+   "split_target": null,
+   "sum_check": 2.842170943040401e-14,
+   "detail": [
+    [
+     "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS1J_14VisitorAuxLoadIS2G_S1S_S2L_EENS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2T_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2W_S2W_EEELi1ES2S_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2W_S2K_iEEELb1EEEEEEEEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE",
+     "conv",
+     14.185291749999994,
+     "sole"
+    ],
+    [
+     "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS2D_IS2M_JNS2D_IS2P_JNS1J_14VisitorAuxLoadIS2G_S1S_S2L_EENS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2T_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2W_S2W_EEELi1ES2S_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2W_S2K_iEEELb1EEEEEEEEEEEES2R_EEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE",
+     "conv",
+     11.845487499999999,
+     "sole"
+    ],
+    [
+     "flash_attn_int8_mma_kernel_t",
+     "attn",
+     8.490082749999997,
+     "sole"
+    ],
+    [
+     "gn_apply_delta_quantize_flat_vec2_kernel",
+     "conv",
+     8.253446624999997,
+     "sole (no differential base)"
+    ],
+    [
+     "gn_delta_absmax_flat_vec2_kernel",
+     "conv",
+     6.304320999999999,
+     "sole (no differential base)"
+    ],
+    [
+     "gemm_w8a8_kernel_awq_out_i8",
+     "lin",
+     5.265444500000004,
+     "sole"
+    ],
+    [
+     "gn_stats_partials_chanmajor_kernel",
+     "conv",
+     3.611446625,
+     "sole (no differential base)"
+    ],
+    [
+     "gemm_w8a8_kernel_awq(signed char const*, signed char const*, float const*, float, __half*, int, int, int, int, __half const*, __half const*, __half*, float const*)",
+     "lin",
+     3.320158874999999,
+     "sole"
+    ],
+    [
+     "at::native::(anonymous namespace)::upsample_nearest2d_nhwc_out_frame",
+     "conv",
+     2.4897633749999994,
+     "sole"
+    ],
+    [
+     "at::native::elementwise_kernel",
+     "conv",
+     2.388051625000002,
+     "sole (no differential base)"
+    ],
+    [
+     "group_norm_silu_quantize_nhwc_vec2_kernel",
+     "gn_shared",
+     2.0605575,
+     "conv 0.00 / attn 2.06"
+    ],
+    [
+     "cat2_channels_last_fp16_kernel(__half const*, __half const*, __half*, long, int, int)",
+     "conv",
+     1.9294482500000008,
+     "sole"
+    ],
+    [
+     "group_norm_silu_nhwc_kernel",
+     "conv",
+     1.6196757499999996,
+     "sole"
+    ],
+    [
+     "at::native::unrolled_elementwise_kernel",
+     "conv",
+     1.5357803750000047,
+     "sole"
+    ],
+    [
+     "static_quantize_and_update_ahat_kernel_int8_half_cache_vec2",
+     "conv",
+     1.218085625,
+     "sole (no differential base)"
+    ],
+    [
+     "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x64x32_stage5_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "conv",
+     0.965080375,
+     "sole"
+    ],
+    [
+     "at::native::(anonymous namespace)::avg_pool2d_out_cuda_frame_nhwc",
+     "conv",
+     0.9103678749999997,
+     "sole"
+    ],
+    [
+     "delta_absmax_fp16_kernel",
+     "conv",
+     0.9043317499999997,
+     "sole (no differential base)"
+    ],
+    [
+     "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_t1r1s1_execute_kernel__5x_cudnn",
+     "conv",
+     0.45163800000000004,
+     "sole"
+    ],
+    [
+     "gn_stats_reduce_partials_kernel(float const*, float const*, float*, float*, int, long, float, int)",
+     "conv",
+     0.36448925000000026,
+     "sole (no differential base)"
+    ],
+    [
+     "flash_attn_int8_qi8packed_small_qout_kernel",
+     "attn",
+     0.3482857499999999,
+     "sole"
+    ],
+    [
+     "at::native::vectorized_elementwise_kernel",
+     "conv",
+     0.29809824999999973,
+     "sole (no differential base)"
+    ],
+    [
+     "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x32_stage4_warpsize4x1x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "conv",
+     0.239733,
+     "sole"
+    ],
+    [
+     "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize96x128x32_stage4_warpsize2x2x1_tensor16x8x16_kernel",
+     "lin",
+     0.16448087500000003,
+     "sole"
+    ]
+   ]
+  },
+  "modiff_full_k1": {
+   "gpu_ms_per_step": 102.61773137499999,
+   "wall_ms_per_step": 106.592724609375,
+   "families": {
+    "conv": 59.75251387500001,
+    "attn": 13.390380750000002,
+    "lin": 29.462624875000024,
+    "unattributed": 0.012211874999999999
+   },
+   "families_wall_scaled": {
+    "conv": 62.06708305527218,
+    "attn": 13.909069598152831,
+    "lin": 30.603887042617824,
+    "unattributed": 0.012684913332202489
+   },
+   "wall_scale": 1.0387359297571004,
+   "attn_plus_lin": 42.85300562500002,
+   "shares_pct": {
+    "conv": 58.228254585597945,
+    "attn": 13.04879826378836,
+    "lin": 28.711046794957493,
+    "unattributed": 0.011900355656249762
+   },
+   "split_base": "modiff_conv_k1",
+   "split_target": "lin",
+   "sum_check": 5.684341886080802e-14,
+   "detail": [
+    [
+     "gemm_w8a8_kernel_awq(signed char const*, signed char const*, float const*, float, __half*, int, int, int, int, __half const*, __half const*, __half*, float const*)",
+     "lin",
+     14.800730875000001,
+     "sole"
+    ],
+    [
+     "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS1J_14VisitorAuxLoadIS2G_S1S_S2L_EENS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2T_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2W_S2W_EEELi1ES2S_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2W_S2K_iEEELb1EEEEEEEEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE",
+     "conv",
+     14.007714874999998,
+     "sole"
+    ],
+    [
+     "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS2D_IS2M_JNS2D_IS2P_JNS1J_14VisitorAuxLoadIS2G_S1S_S2L_EENS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2T_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2W_S2W_EEELi1ES2S_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2W_S2K_iEEELb1EEEEEEEEEEEES2R_EEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE",
+     "conv",
+     11.734821250000005,
+     "sole"
+    ],
+    [
+     "gn_apply_delta_quantize_flat_vec2_kernel",
+     "split",
+     10.739292125000013,
+     "conv 8.25 / lin 2.49"
+    ],
+    [
+     "flash_attn_int8_mma_kernel_t",
+     "attn",
+     8.536729750000003,
+     "sole"
+    ],
+    [
+     "gn_delta_absmax_flat_vec2_kernel",
+     "split",
+     8.219795375,
+     "conv 6.30 / lin 1.92"
+    ],
+    [
+     "gn_stats_partials_chanmajor_kernel",
+     "split",
+     4.729403125,
+     "conv 3.61 / lin 1.12"
+    ],
+    [
+     "at::native::elementwise_kernel",
+     "split",
+     4.151895750000006,
+     "conv 2.39 / lin 1.76"
+    ],
+    [
+     "static_quantize_and_update_ahat_kernel_int8_half_cache_vec2",
+     "split",
+     3.745945749999999,
+     "conv 1.22 / lin 2.53"
+    ],
+    [
+     "delta_absmax_fp16_kernel",
+     "split",
+     2.746067874999999,
+     "conv 0.90 / lin 1.84"
+    ],
+    [
+     "at::native::vectorized_elementwise_kernel",
+     "split",
+     2.6177478749999996,
+     "conv 0.30 / lin 2.32"
+    ],
+    [
+     "at::native::(anonymous namespace)::upsample_nearest2d_nhwc_out_frame",
+     "conv",
+     2.447563374999999,
+     "sole"
+    ],
+    [
+     "cat2_channels_last_fp16_kernel(__half const*, __half const*, __half*, long, int, int)",
+     "conv",
+     1.9250371250000005,
+     "sole"
+    ],
+    [
+     "aq_vquant_trans_packed_tiled_vec2_kernel",
+     "attn",
+     1.8071031250000003,
+     "sole"
+    ],
+    [
+     "aq_qtok_packed_static_qk_flat_kernel",
+     "attn",
+     1.79158025,
+     "sole"
+    ],
+    [
+     "group_norm_silu_nhwc_kernel",
+     "conv",
+     1.5946188750000005,
+     "sole"
+    ],
+    [
+     "at::native::unrolled_elementwise_kernel",
+     "conv",
+     1.5287575000000047,
+     "sole"
+    ],
+    [
+     "aq_qtok_packed_static_qk_vec2_kernel",
+     "attn",
+     0.9889455,
+     "sole"
+    ],
+    [
+     "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x64x32_stage5_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "conv",
+     0.9654197500000001,
+     "sole"
+    ],
+    [
+     "at::native::(anonymous namespace)::avg_pool2d_out_cuda_frame_nhwc",
+     "conv",
+     0.8969880000000001,
+     "sole"
+    ],
+    [
+     "gn_stats_reduce_partials_kernel(float const*, float const*, float*, float*, int, long, float, int)",
+     "split",
+     0.4975063750000004,
+     "conv 0.36 / lin 0.13"
+    ],
+    [
+     "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_t1r1s1_execute_kernel__5x_cudnn",
+     "conv",
+     0.44820237500000004,
+     "sole"
+    ],
+    [
+     "pytorch_flash::flash_fwd_kernel",
+     "attn",
+     0.266022125,
+     "sole"
+    ],
+    [
+     "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x32_stage4_warpsize4x1x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "conv",
+     0.241813,
+     "sole"
+    ]
+   ]
+  },
+  "ptq_no_projquant": {
+   "gpu_ms_per_step": 76.71938475,
+   "wall_ms_per_step": 80.273779296875,
+   "families": {
+    "conv": 49.93472487499999,
+    "attn": 17.397725875,
+    "lin": 9.374617875,
+    "unattributed": 0.012316124999999999
+   },
+   "families_wall_scaled": {
+    "conv": 52.24819120914449,
+    "attn": 18.203759215590964,
+    "lin": 9.808942143403845,
+    "unattributed": 0.012886728735695765
+   },
+   "wall_scale": 1.0463298103661474,
+   "attn_plus_lin": 26.772343749999997,
+   "shares_pct": {
+    "conv": 65.08749390746384,
+    "attn": 22.67709253885798,
+    "lin": 12.219360081612228,
+    "unattributed": 0.016053472065937026
+   },
+   "split_base": "int8_ptq",
+   "split_target": "attn",
+   "sum_check": -1.4210854715202004e-14,
+   "detail": [
+    [
+     "group_norm_silu_quantize_nhwc_vec2_kernel",
+     "gn_shared",
+     16.53807737499999,
+     "conv 14.48 / attn 2.06"
+    ],
+    [
+     "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2R_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2U_S2U_EEELi1ES2Q_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2U_S2K_iEEELb1EEEEEES30_EEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE",
+     "conv",
+     13.913895499999992,
+     "sole"
+    ],
+    [
+     "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS2D_IS2P_JNS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2R_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2U_S2U_EEELi1ES2Q_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2U_S2K_iEEELb1EEEEEES30_EEENS1J_14VisitorAuxLoadIS2G_S1S_S2L_EEEEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE",
+     "conv",
+     11.08855875000001,
+     "sole"
+    ],
+    [
+     "flash_attn_int8_mma_kernel_t",
+     "attn",
+     8.60664325,
+     "sole"
+    ],
+    [
+     "gemm_w8a8_kernel_awq(signed char const*, signed char const*, float const*, float, __half*, int, int, int, int, __half const*, __half const*, __half*, float const*)",
+     "lin",
+     7.455133749999999,
+     "sole"
+    ],
+    [
+     "at::native::elementwise_kernel",
+     "split",
+     4.181841250000003,
+     "conv 2.39 / attn 1.79"
+    ],
+    [
+     "cat2_channels_last_fp16_kernel(__half const*, __half const*, __half*, long, int, int)",
+     "conv",
+     1.9287725000000007,
+     "sole"
+    ],
+    [
+     "aq_vquant_trans_packed_tiled_vec2_kernel",
+     "attn",
+     1.8168718749999997,
+     "sole"
+    ],
+    [
+     "aq_qtok_packed_static_qk_flat_kernel",
+     "attn",
+     1.791612125,
+     "sole"
+    ],
+    [
+     "quant_act_int8_kernel(__half const*, signed char*, float, long)",
+     "lin",
+     1.348341375,
+     "sole"
+    ],
+    [
+     "at::native::(anonymous namespace)::upsample_nearest2d_nhwc_out_frame",
+     "conv",
+     1.24819375,
+     "sole"
+    ],
+    [
+     "at::native::unrolled_elementwise_kernel",
+     "conv",
+     0.9951692499999999,
+     "sole"
+    ],
+    [
+     "aq_qtok_packed_static_qk_vec2_kernel",
+     "attn",
+     0.9813766249999999,
+     "sole"
+    ],
+    [
+     "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x64x32_stage5_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "conv",
+     0.9647005000000002,
+     "sole"
+    ],
+    [
+     "group_norm_silu_quantize_resize_nhwc_kernel",
+     "conv",
+     0.8656957499999999,
+     "sole"
+    ],
+    [
+     "at::native::(anonymous namespace)::avg_pool2d_out_cuda_frame_nhwc",
+     "conv",
+     0.45736962499999995,
+     "sole"
+    ],
+    [
+     "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_t1r1s1_execute_kernel__5x_cudnn",
+     "conv",
+     0.4511577500000001,
+     "sole"
+    ],
+    [
+     "at::native::vectorized_elementwise_kernel",
+     "split",
+     0.37051737499999954,
+     "conv 0.28 / attn 0.09"
+    ],
+    [
+     "pytorch_flash::flash_fwd_kernel",
+     "attn",
+     0.266924875,
+     "sole"
+    ],
+    [
+     "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x32_stage4_warpsize4x1x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "conv",
+     0.24178899999999998,
+     "sole"
+    ],
+    [
+     "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize96x128x32_stage4_warpsize2x2x1_tensor16x8x16_kernel",
+     "lin",
+     0.16552087499999998,
+     "sole"
+    ],
+    [
+     "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize32x32x64_stage6_warpsize2x2x1_tensor16x8x16_kernel",
+     "lin",
+     0.16197674999999997,
+     "sole"
+    ],
+    [
+     "at::native::(anonymous namespace)::RowwiseMomentsCUDAKernel",
+     "conv",
+     0.15755287500000004,
+     "sole"
+    ],
+    [
+     "ampere_fp16_s16816gemm_fp16_64x64_sliced1x2_ldg8_relu_f2f_stages_64x5_tn",
+     "lin",
+     0.15694100000000005,
+     "sole"
+    ]
+   ]
+  },
+  "modiff_full_k4": {
+   "gpu_ms_per_step": 95.65479612499998,
+   "wall_ms_per_step": 99.807890625,
+   "families": {
+    "conv": 52.92723849999999,
+    "attn": 13.34346675,
+    "lin": 29.369951124999996,
+    "unattributed": 0.014139750000000001
+   },
+   "families_wall_scaled": {
+    "conv": 55.22520819957776,
+    "attn": 13.922807050908075,
+    "lin": 30.645121711565366,
+    "unattributed": 0.014753662948804327
+   },
+   "wall_scale": 1.043417524977763,
+   "attn_plus_lin": 42.713417875,
+   "shares_pct": {
+    "conv": 55.331505208411734,
+    "attn": 13.949605550946966,
+    "lin": 30.704107179968133,
+    "unattributed": 0.014782060673175687
+   },
+   "split_base": "modiff_conv_k4",
+   "split_target": "lin",
+   "sum_check": 1.4210854715202004e-14,
+   "detail": [
+    [
+     "gemm_w8a8_kernel_awq(signed char const*, signed char const*, float const*, float, __half*, int, int, int, int, __half const*, __half const*, __half*, float const*)",
+     "lin",
+     14.784543124999988,
+     "sole"
+    ],
+    [
+     "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS1J_14VisitorAuxLoadIS2G_S1S_S2L_EENS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2T_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2W_S2W_EEELi1ES2S_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2W_S2K_iEEELb1EEEEEEEEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE",
+     "conv",
+     13.886891999999996,
+     "sole"
+    ],
+    [
+     "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS2D_IS2M_JNS2D_IS2P_JNS1J_14VisitorAuxLoadIS2G_S1S_S2L_EENS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2T_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2W_S2W_EEELi1ES2S_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2W_S2K_iEEELb1EEEEEEEEEEEES2R_EEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE",
+     "conv",
+     11.613980499999995,
+     "sole"
+    ],
+    [
+     "gn_apply_delta_quantize_flat_vec2_kernel",
+     "split",
+     10.707743250000007,
+     "conv 8.27 / lin 2.44"
+    ],
+    [
+     "flash_attn_int8_mma_kernel_t",
+     "attn",
+     8.492124375,
+     "sole"
+    ],
+    [
+     "gn_stats_partials_chanmajor_kernel",
+     "split",
+     4.7116696250000025,
+     "conv 3.62 / lin 1.09"
+    ],
+    [
+     "at::native::elementwise_kernel",
+     "split",
+     4.131917375000001,
+     "conv 2.39 / lin 1.74"
+    ],
+    [
+     "gn_delta_absmax_flat_vec2_kernel",
+     "split",
+     3.5185508750000003,
+     "conv 1.58 / lin 1.94"
+    ],
+    [
+     "static_quantize_and_update_ahat_kernel_int8_half_cache_vec2",
+     "split",
+     2.84144725,
+     "conv 0.31 / lin 2.53"
+    ],
+    [
+     "at::native::vectorized_elementwise_kernel",
+     "split",
+     2.6222178749999996,
+     "conv 0.30 / lin 2.32"
+    ],
+    [
+     "group_norm_silu_delta_quantize_resize_nhwc_kernel",
+     "conv",
+     2.583979375,
+     "sole"
+    ],
+    [
+     "cat2_channels_last_fp16_kernel(__half const*, __half const*, __half*, long, int, int)",
+     "conv",
+     1.924746375000001,
+     "sole"
+    ],
+    [
+     "delta_absmax_fp16_kernel",
+     "split",
+     1.8399715000000005,
+     "conv 0.00 / lin 1.84"
+    ],
+    [
+     "aq_vquant_trans_packed_tiled_vec2_kernel",
+     "attn",
+     1.8090984999999995,
+     "sole"
+    ],
+    [
+     "aq_qtok_packed_static_qk_flat_kernel",
+     "attn",
+     1.790958375,
+     "sole"
+    ],
+    [
+     "at::native::(anonymous namespace)::upsample_nearest2d_nhwc_out_frame",
+     "conv",
+     1.51810575,
+     "sole"
+    ],
+    [
+     "at::native::unrolled_elementwise_kernel",
+     "conv",
+     1.3811782500000012,
+     "sole"
+    ],
+    [
+     "aq_qtok_packed_static_qk_vec2_kernel",
+     "attn",
+     0.98854575,
+     "sole"
+    ],
+    [
+     "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x64x32_stage5_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "conv",
+     0.571484625,
+     "sole"
+    ],
+    [
+     "at::native::(anonymous namespace)::avg_pool2d_out_cuda_frame_nhwc",
+     "conv",
+     0.5547887499999998,
+     "sole"
+    ],
+    [
+     "gn_stats_reduce_partials_kernel(float const*, float const*, float*, float*, int, long, float, int)",
+     "split",
+     0.5008337500000005,
+     "conv 0.37 / lin 0.13"
+    ],
+    [
+     "group_norm_silu_nhwc_kernel",
+     "conv",
+     0.390148625,
+     "sole"
+    ],
+    [
+     "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x64x32_stage4_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "conv",
+     0.37467662499999993,
+     "sole"
+    ],
+    [
+     "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_t1r1s1_execute_kernel__5x_cudnn",
+     "conv",
+     0.36401275,
+     "sole"
+    ]
+   ]
+  }
+ }
+}

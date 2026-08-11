@@ -1,0 +1,339 @@
+{
+ "gpu": "NVIDIA A40",
+ "torch": "2.4.1+cu124",
+ "traces": [
+  {
+   "config": "ptq_no_projquant",
+   "mode": "int8_baseline",
+   "delta_from": "int8_ptq",
+   "why": "kills the flash qout epilogue where it IS engaged -> what Part 3 could recover",
+   "file": "ptq_no_projquant_b128_s8.json.gz",
+   "events": 53361,
+   "gz_mb": 0.95,
+   "steps": 8,
+   "batch": 128,
+   "route_check": {
+    "attn_blocks": 21,
+    "attn_class": "QuantizedStandardAttentionBlock",
+    "qout_eligible": 0,
+    "wxax": 42,
+    "wxax_modiff": 0,
+    "wxax_out_i8": 0,
+    "wxax_bias_res": 42,
+    "int8_convs": 140,
+    "conv_modiff_on": 0,
+    "conv_delta_refresh": [
+     1
+    ]
+   },
+   "env": {
+    "MODIFF_ACT_Q": "127",
+    "MODIFF_DELTA_CLIP": "1.0",
+    "MODIFF_DELTA_MODE": "dynamic",
+    "MODIFF_DELTA_REFRESH": "1",
+    "MODIFF_FLASH_GATE": "on",
+    "MODIFF_FUSE_PROJ_QUANT": "0",
+    "MODIFF_LINEAR": "0",
+    "MODIFF_LINEAR_OUT_I8": "0",
+    "MODIFF_QATTN_FLASH": "1",
+    "MODIFF_QUANT_ATTN": "1",
+    "MODIFF_QUANT_ATTN_ALLT": "0",
+    "MODIFF_QUANT_ATTN_STATIC": "1",
+    "MODIFF_QUANT_LINEAR": "1",
+    "MODIFF_WARMUP_STEPS": "5"
+   },
+   "hook": null
+  },
+  {
+   "config": "base_no_conv_modiff",
+   "mode": "int8",
+   "delta_from": "modiff_full_k1",
+   "why": "convs stay int8 but drop the temporal delta path",
+   "file": "base_no_conv_modiff_b128_s8.json.gz",
+   "events": 75268,
+   "gz_mb": 1.36,
+   "steps": 8,
+   "batch": 128,
+   "route_check": {
+    "attn_blocks": 21,
+    "attn_class": "QuantizedStandardAttentionBlock",
+    "qout_eligible": 0,
+    "wxax": 42,
+    "wxax_modiff": 42,
+    "wxax_out_i8": 0,
+    "wxax_bias_res": 0,
+    "int8_convs": 140,
+    "conv_modiff_on": 0,
+    "conv_delta_refresh": [
+     1
+    ]
+   },
+   "env": {
+    "MODIFF_ACT_Q": "127",
+    "MODIFF_DELTA_CLIP": "1.0",
+    "MODIFF_DELTA_MODE": "dynamic",
+    "MODIFF_DELTA_REFRESH": "1",
+    "MODIFF_FLASH_GATE": "on",
+    "MODIFF_FUSE_PROJ_QUANT": "1",
+    "MODIFF_LINEAR": "1",
+    "MODIFF_LINEAR_OUT_I8": "0",
+    "MODIFF_QATTN_FLASH": "1",
+    "MODIFF_QUANT_ATTN": "1",
+    "MODIFF_QUANT_ATTN_ALLT": "0",
+    "MODIFF_QUANT_ATTN_STATIC": "1",
+    "MODIFF_QUANT_LINEAR": "1",
+    "MODIFF_WARMUP_STEPS": "5"
+   },
+   "hook": "_no_conv_modiff"
+  },
+  {
+   "config": "fp16",
+   "mode": "fp16",
+   "delta_from": null,
+   "why": "reference",
+   "file": "fp16_b128_s8.json.gz",
+   "events": 66184,
+   "gz_mb": 1.17,
+   "steps": 8,
+   "batch": 128,
+   "route_check": {
+    "attn_blocks": 21,
+    "attn_class": "TokenMajorAttentionBlock",
+    "wxax": 0,
+    "wxax_modiff": 0,
+    "wxax_out_i8": 0,
+    "wxax_bias_res": 0,
+    "int8_convs": 0,
+    "conv_modiff_on": 0,
+    "conv_delta_refresh": []
+   },
+   "env": {
+    "MODIFF_ACT_Q": "127",
+    "MODIFF_DELTA_CLIP": "1.0",
+    "MODIFF_DELTA_MODE": "dynamic",
+    "MODIFF_DELTA_REFRESH": "1",
+    "MODIFF_FLASH_GATE": "on",
+    "MODIFF_FUSE_PROJ_QUANT": "1",
+    "MODIFF_LINEAR": "0",
+    "MODIFF_LINEAR_OUT_I8": "0",
+    "MODIFF_QATTN_FLASH": "1",
+    "MODIFF_QUANT_ATTN": "0",
+    "MODIFF_QUANT_ATTN_ALLT": "0",
+    "MODIFF_QUANT_ATTN_STATIC": "1",
+    "MODIFF_QUANT_LINEAR": "0",
+    "MODIFF_WARMUP_STEPS": "5"
+   },
+   "hook": null
+  },
+  {
+   "config": "int8_ptq",
+   "mode": "int8_baseline",
+   "delta_from": null,
+   "why": "quantized, no MoDiff anywhere; the qout epilogue is live on all 21 blocks",
+   "file": "int8_ptq_b128_s8.json.gz",
+   "events": 39273,
+   "gz_mb": 0.67,
+   "steps": 8,
+   "batch": 128,
+   "route_check": {
+    "attn_blocks": 21,
+    "attn_class": "QuantizedStandardAttentionBlock",
+    "qout_eligible": 21,
+    "wxax": 42,
+    "wxax_modiff": 0,
+    "wxax_out_i8": 0,
+    "wxax_bias_res": 42,
+    "int8_convs": 140,
+    "conv_modiff_on": 0,
+    "conv_delta_refresh": [
+     1
+    ]
+   },
+   "env": {
+    "MODIFF_ACT_Q": "127",
+    "MODIFF_DELTA_CLIP": "1.0",
+    "MODIFF_DELTA_MODE": "dynamic",
+    "MODIFF_DELTA_REFRESH": "1",
+    "MODIFF_FLASH_GATE": "on",
+    "MODIFF_FUSE_PROJ_QUANT": "1",
+    "MODIFF_LINEAR": "0",
+    "MODIFF_LINEAR_OUT_I8": "0",
+    "MODIFF_QATTN_FLASH": "1",
+    "MODIFF_QUANT_ATTN": "1",
+    "MODIFF_QUANT_ATTN_ALLT": "0",
+    "MODIFF_QUANT_ATTN_STATIC": "1",
+    "MODIFF_QUANT_LINEAR": "1",
+    "MODIFF_WARMUP_STEPS": "5"
+   },
+   "hook": null
+  },
+  {
+   "config": "modiff_conv_k4",
+   "mode": "int8",
+   "delta_from": "int8_ptq",
+   "why": "+ conv MoDiff at the shipped refresh; the pre-2026-08-06 default",
+   "file": "modiff_conv_k4_b128_s8.json.gz",
+   "events": 54129,
+   "gz_mb": 0.95,
+   "steps": 8,
+   "batch": 128,
+   "route_check": {
+    "attn_blocks": 21,
+    "attn_class": "QuantizedStandardAttentionBlock",
+    "qout_eligible": 21,
+    "wxax": 42,
+    "wxax_modiff": 0,
+    "wxax_out_i8": 0,
+    "wxax_bias_res": 42,
+    "int8_convs": 140,
+    "conv_modiff_on": 140,
+    "conv_delta_refresh": [
+     4
+    ]
+   },
+   "env": {
+    "MODIFF_ACT_Q": "127",
+    "MODIFF_DELTA_CLIP": "1.0",
+    "MODIFF_DELTA_MODE": "dynamic",
+    "MODIFF_DELTA_REFRESH": "4",
+    "MODIFF_FLASH_GATE": "on",
+    "MODIFF_FUSE_PROJ_QUANT": "1",
+    "MODIFF_LINEAR": "0",
+    "MODIFF_LINEAR_OUT_I8": "0",
+    "MODIFF_QATTN_FLASH": "1",
+    "MODIFF_QUANT_ATTN": "1",
+    "MODIFF_QUANT_ATTN_ALLT": "0",
+    "MODIFF_QUANT_ATTN_STATIC": "1",
+    "MODIFF_QUANT_LINEAR": "1",
+    "MODIFF_WARMUP_STEPS": "5"
+   },
+   "hook": null
+  },
+  {
+   "config": "modiff_conv_k1",
+   "mode": "int8",
+   "delta_from": "modiff_conv_k4",
+   "why": "+ per-step delta scale (K=4 -> K=1)",
+   "file": "modiff_conv_k1_b128_s8.json.gz",
+   "events": 55809,
+   "gz_mb": 0.99,
+   "steps": 8,
+   "batch": 128,
+   "route_check": {
+    "attn_blocks": 21,
+    "attn_class": "QuantizedStandardAttentionBlock",
+    "qout_eligible": 21,
+    "wxax": 42,
+    "wxax_modiff": 0,
+    "wxax_out_i8": 0,
+    "wxax_bias_res": 42,
+    "int8_convs": 140,
+    "conv_modiff_on": 140,
+    "conv_delta_refresh": [
+     1
+    ]
+   },
+   "env": {
+    "MODIFF_ACT_Q": "127",
+    "MODIFF_DELTA_CLIP": "1.0",
+    "MODIFF_DELTA_MODE": "dynamic",
+    "MODIFF_DELTA_REFRESH": "1",
+    "MODIFF_FLASH_GATE": "on",
+    "MODIFF_FUSE_PROJ_QUANT": "1",
+    "MODIFF_LINEAR": "0",
+    "MODIFF_LINEAR_OUT_I8": "0",
+    "MODIFF_QATTN_FLASH": "1",
+    "MODIFF_QUANT_ATTN": "1",
+    "MODIFF_QUANT_ATTN_ALLT": "0",
+    "MODIFF_QUANT_ATTN_STATIC": "1",
+    "MODIFF_QUANT_LINEAR": "1",
+    "MODIFF_WARMUP_STEPS": "5"
+   },
+   "hook": null
+  },
+  {
+   "config": "modiff_full_k1",
+   "mode": "int8",
+   "delta_from": "modiff_conv_k1",
+   "why": "+ MoDiff on the 42 attention projections -- the paper's full datapath, and the BASE below",
+   "file": "modiff_full_k1_b128_s8.json.gz",
+   "events": 73161,
+   "gz_mb": 1.32,
+   "steps": 8,
+   "batch": 128,
+   "route_check": {
+    "attn_blocks": 21,
+    "attn_class": "QuantizedStandardAttentionBlock",
+    "qout_eligible": 0,
+    "wxax": 42,
+    "wxax_modiff": 42,
+    "wxax_out_i8": 0,
+    "wxax_bias_res": 0,
+    "int8_convs": 140,
+    "conv_modiff_on": 140,
+    "conv_delta_refresh": [
+     1
+    ]
+   },
+   "env": {
+    "MODIFF_ACT_Q": "127",
+    "MODIFF_DELTA_CLIP": "1.0",
+    "MODIFF_DELTA_MODE": "dynamic",
+    "MODIFF_DELTA_REFRESH": "1",
+    "MODIFF_FLASH_GATE": "on",
+    "MODIFF_FUSE_PROJ_QUANT": "1",
+    "MODIFF_LINEAR": "1",
+    "MODIFF_LINEAR_OUT_I8": "0",
+    "MODIFF_QATTN_FLASH": "1",
+    "MODIFF_QUANT_ATTN": "1",
+    "MODIFF_QUANT_ATTN_ALLT": "0",
+    "MODIFF_QUANT_ATTN_STATIC": "1",
+    "MODIFF_QUANT_LINEAR": "1",
+    "MODIFF_WARMUP_STEPS": "5"
+   },
+   "hook": null
+  },
+  {
+   "config": "modiff_full_k4",
+   "mode": "int8",
+   "delta_from": "modiff_full_k1",
+   "why": "the same full datapath at K=4, so the projections' cost can be read at both refreshes",
+   "file": "modiff_full_k4_b128_s8.json.gz",
+   "events": 71481,
+   "gz_mb": 1.29,
+   "steps": 8,
+   "batch": 128,
+   "route_check": {
+    "attn_blocks": 21,
+    "attn_class": "QuantizedStandardAttentionBlock",
+    "qout_eligible": 0,
+    "wxax": 42,
+    "wxax_modiff": 42,
+    "wxax_out_i8": 0,
+    "wxax_bias_res": 0,
+    "int8_convs": 140,
+    "conv_modiff_on": 140,
+    "conv_delta_refresh": [
+     4
+    ]
+   },
+   "env": {
+    "MODIFF_ACT_Q": "127",
+    "MODIFF_DELTA_CLIP": "1.0",
+    "MODIFF_DELTA_MODE": "dynamic",
+    "MODIFF_DELTA_REFRESH": "4",
+    "MODIFF_FLASH_GATE": "on",
+    "MODIFF_FUSE_PROJ_QUANT": "1",
+    "MODIFF_LINEAR": "1",
+    "MODIFF_LINEAR_OUT_I8": "0",
+    "MODIFF_QATTN_FLASH": "1",
+    "MODIFF_QUANT_ATTN": "1",
+    "MODIFF_QUANT_ATTN_ALLT": "0",
+    "MODIFF_QUANT_ATTN_STATIC": "1",
+    "MODIFF_QUANT_LINEAR": "1",
+    "MODIFF_WARMUP_STEPS": "5"
+   },
+   "hook": null
+  }
+ ]
+}
