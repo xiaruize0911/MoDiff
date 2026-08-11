@@ -101,7 +101,28 @@ unconditionally). That reproduces the 2026-08-07 finding from a fresh trace.
 > 21.00 → 5.25 is exactly 21/4, so each arm proves it is the arm it claims. This matches the +2.8 ms
 > predicted from the trace above before the code was written.
 >
-> `modiff_full_k4` therefore goes 99.73 → ~96.9 ms/step, 1.064× → **1.095× fp16**. The knob
+> **Confirmed by two further instruments, and by a prediction made before the run.** A named arm
+> `modiff_full_k4_projk4` was added to `differential_timing.py` (rather than left as an env var a
+> reader has to know to set — that is how this number and a fresh clone's behaviour drifted apart
+> once already), then re-measured and re-traced:
+>
+> | instrument | gain |
+> |---|---:|
+> | in-process paired A/B | +2.81 ms |
+> | Perfetto trace, `delta_quantize` | **−2.71 ms** |
+> | differential, named arm | **−2.66 ms** (99.59 → 96.93, CV 0.079%) |
+>
+> All within 0.15 ms. The kernel-level check is the part that could have failed: the prediction was
+> `delta_quantize` 18.70 → ~15.9 with **nothing else moving**, because a refresh schedule changes how
+> often the absmax pass runs, not what any kernel does. Measured 15.99, and every other bucket flat to
+> within 0.18 ms — `attn_quantize` exactly 4.59 → 4.59.
+>
+> `modiff_full_k4` therefore goes 99.73 → **96.93 ms/step, 1.064× → 1.094× fp16**. The plot bar is
+> labelled `(opt-in)`: the knob defaults to 1 and its quality is unverified, so a bar reading like the
+> others would imply a shipped configuration.
+>
+> **No quantize kernel was fused by this.** `attn_quantize` is unchanged at 4.59 and `norm_quantize` at
+> ~9.0; the three `aq_*` kernels and the GN stats pass are both still there. This is a scheduling win. The knob
 > **DEFAULTS TO 1, i.e. off**: it changes numerics on reuse steps (a scale up to K-1 steps old, which
 > is what the conv path's code ceiling exists for), and the quality question is NOT settled — the
 > batch-8 / DDIM-50 paired-seed protocol cannot resolve effects below ~10%

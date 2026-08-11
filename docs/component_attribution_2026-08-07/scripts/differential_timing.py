@@ -129,6 +129,15 @@ ARMS = [
      "+ MoDiff on the 42 attention projections -- the paper's full datapath, and the BASE below"),
     ("modiff_full_k4", "modiff_full_k1", "int8", {"MODIFF_DELTA_REFRESH": "4"}, None,
      "the same full datapath at K=4, so the projections' cost can be read at both refreshes"),
+    # Added 2026-08-11. A NAMED ARM rather than an env var a reader has to know to set: without one,
+    # the report's figures and a fresh clone's behaviour drift apart, which is what happened when the
+    # +2.81 ms lived only in prose. MODIFF_LINEAR_DELTA_REFRESH gives the 42 projections the schedule
+    # the convs have had; it defaults to 1 (off) because it changes numerics on reuse steps, so this
+    # arm documents a deliberately non-default configuration and its label says so.
+    ("modiff_full_k4_projk4", "modiff_full_k4", "int8",
+     {"MODIFF_DELTA_REFRESH": "4", "MODIFF_LINEAR_DELTA_REFRESH": "4"}, None,
+     "K=4 on the convs AND on the 42 projections; the projections' unconditional absmax was the "
+     "last K-independent term (docs/profile_kernels_layers_2026-08-11)"),
 
     # ---- knockouts from modiff_full_k1 ----
     ("base_no_qattn", "modiff_full_k1", "int8", {"MODIFF_QUANT_ATTN": "0"}, None,

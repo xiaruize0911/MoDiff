@@ -35,10 +35,14 @@ plt.rcParams.update({
 })
 
 ARMS = ["fp16", "int8_ptq", "modiff_conv_k4", "modiff_conv_k1",
-        "modiff_full_k4", "modiff_full_k1"]
+        "modiff_full_k4", "modiff_full_k1", "modiff_full_k4_projk4"]
 SHORT = {"fp16": "fp16", "int8_ptq": "W8A8 PTQ", "modiff_conv_k4": "conv K=4",
          "modiff_conv_k1": "conv K=1", "modiff_full_k4": "conv+proj K=4",
-         "modiff_full_k1": "conv+proj K=1"}
+         "modiff_full_k1": "conv+proj K=1",
+         # NON-DEFAULT: MODIFF_LINEAR_DELTA_REFRESH=4. The label says so, because the knob defaults
+         # to 1 and its quality is unverified -- a bar that reads like the others would imply a
+         # shipped configuration.
+         "modiff_full_k4_projk4": "conv+proj K=4\n+proj K=4 (opt-in)"}
 BUCKET_COLOR = {"conv": BLUE, "norm_quantize": AQUA, "delta_quantize": PLUM,
                 "linear_gemm": ORANGE, "attention": ROSE, "attn_quantize": "#c08a2e",
                 "elementwise": INK3, "quantize": "#5aa9c4", "other": "#c9c7c1"}
@@ -59,8 +63,16 @@ def plot_e2e(out):
     d = load(os.path.join(DATA, "differential_timing_canonical.json"))
     f = load(os.path.join(DATA, "differential_timing_fp16.json"))
     fp16 = f["arms"]["fp16"]["stats"]["median"] / 1e3 / f["steps"]
-    arms = [a for a in ARMS if a in d["arms"]]
-    vals = [d["arms"][a]["stats"]["median"] / 1e3 / d["steps"] for a in arms]
+    ms_by_arm = {k: a["stats"]["median"] / 1e3 / d["steps"] for k, a in d["arms"].items()}
+    extra = os.path.join(DATA, "differential_timing_projk4.json")
+    if os.path.exists(extra):
+        e = load(extra)
+        # Its modiff_full_k4 re-measures an arm canonical already has (99.59 vs 99.73, 0.14 apart),
+        # which is the run-to-run check; keep canonical's so the older bars stay as published.
+        for k, a in e["arms"].items():
+            ms_by_arm.setdefault(k, a["stats"]["median"] / 1e3 / e["steps"])
+    arms = [a for a in ARMS if a in ms_by_arm]
+    vals = [ms_by_arm[a] for a in arms]
     fig, ax = plt.subplots(figsize=(9.6, 4.8))
     ax.bar([SHORT[a] for a in arms], vals, color=BLUE, width=0.6)
     for i, v in enumerate(vals):

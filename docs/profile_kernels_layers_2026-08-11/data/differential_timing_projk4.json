@@ -1,0 +1,176 @@
+{
+ "gpu": "NVIDIA A40",
+ "torch": "2.4.1+cu124",
+ "batch": 128,
+ "steps": 200,
+ "repeats": 5,
+ "warmups": 3,
+ "base_env": {
+  "MODIFF_QUANT_LINEAR": "1",
+  "MODIFF_QUANT_ATTN": "1",
+  "MODIFF_QUANT_ATTN_STATIC": "1",
+  "MODIFF_QATTN_FLASH": "1",
+  "MODIFF_FLASH_GATE": "on",
+  "MODIFF_QUANT_ATTN_ALLT": "0",
+  "MODIFF_LINEAR_OUT_I8": "0",
+  "MODIFF_FUSE_PROJ_QUANT": "1",
+  "MODIFF_LINEAR": "1",
+  "MODIFF_DELTA_REFRESH": "1",
+  "MODIFF_DELTA_CLIP": "1.0",
+  "MODIFF_ACT_Q": "127",
+  "MODIFF_DELTA_MODE": "dynamic",
+  "MODIFF_WARMUP_STEPS": "5"
+ },
+ "arms": {
+  "modiff_full_k4": {
+   "mode": "int8",
+   "delta_from": "modiff_full_k1",
+   "why": "the same full datapath at K=4, so the projections' cost can be read at both refreshes",
+   "env": {
+    "MODIFF_ACT_Q": "127",
+    "MODIFF_DELTA_CLIP": "1.0",
+    "MODIFF_DELTA_MODE": "dynamic",
+    "MODIFF_DELTA_REFRESH": "4",
+    "MODIFF_FLASH_GATE": "on",
+    "MODIFF_FUSE_PROJ_QUANT": "1",
+    "MODIFF_LINEAR": "1",
+    "MODIFF_LINEAR_OUT_I8": "0",
+    "MODIFF_QATTN_FLASH": "1",
+    "MODIFF_QUANT_ATTN": "1",
+    "MODIFF_QUANT_ATTN_ALLT": "0",
+    "MODIFF_QUANT_ATTN_STATIC": "1",
+    "MODIFF_QUANT_LINEAR": "1",
+    "MODIFF_WARMUP_STEPS": "5"
+   },
+   "hook": null,
+   "route_check": {
+    "attn_blocks": 21,
+    "attn_class": "QuantizedStandardAttentionBlock",
+    "qout_eligible": 0,
+    "wxax": 42,
+    "wxax_modiff": 42,
+    "wxax_out_i8": 0,
+    "wxax_bias_res": 0,
+    "int8_convs": 140,
+    "conv_modiff_on": 140,
+    "conv_delta_refresh": [
+     4
+    ]
+   },
+   "stats": {
+    "n": 5,
+    "mean": 19909015.234375,
+    "median": 19918707.03125,
+    "stdev": 47783.02484463088,
+    "sem": 21369.218344631194,
+    "cv_pct": 0.24000697313309843,
+    "min": 19831615.234375,
+    "max": 19958349.609375,
+    "spread_pct": 0.6362580402491455,
+    "ci95_half": 59320.95012469619,
+    "ci95_lo": 19849694.284250304,
+    "ci95_hi": 19968336.184499696,
+    "iqr": 78291.9921875,
+    "samples": [
+     19831615.2344,
+     19903277.3438,
+     19918707.0312,
+     19958349.6094,
+     19933126.9531
+    ]
+   },
+   "stability": "tight",
+   "wall_us_per_batch": 19918707.03125,
+   "wall_mean_us": 19909015.234375,
+   "wall_stdev_us": 47783.02484463088,
+   "wall_cv_pct": 0.24000697313309843,
+   "wall_all_us": [
+    19831615.2,
+    19903277.3,
+    19918707.0,
+    19958349.6,
+    19933127.0
+   ],
+   "wall_spread_pct": 0.6390522078117258,
+   "ms_per_step": 99.59353515625,
+   "ms_per_sample": 155.61489868164062,
+   "speedup_vs_fp16": null
+  },
+  "modiff_full_k4_projk4": {
+   "mode": "int8",
+   "delta_from": "modiff_full_k4",
+   "why": "K=4 on the convs AND on the 42 projections; the projections' unconditional absmax was the last K-independent term (docs/profile_kernels_layers_2026-08-11)",
+   "env": {
+    "MODIFF_ACT_Q": "127",
+    "MODIFF_DELTA_CLIP": "1.0",
+    "MODIFF_DELTA_MODE": "dynamic",
+    "MODIFF_DELTA_REFRESH": "4",
+    "MODIFF_FLASH_GATE": "on",
+    "MODIFF_FUSE_PROJ_QUANT": "1",
+    "MODIFF_LINEAR": "1",
+    "MODIFF_LINEAR_OUT_I8": "0",
+    "MODIFF_QATTN_FLASH": "1",
+    "MODIFF_QUANT_ATTN": "1",
+    "MODIFF_QUANT_ATTN_ALLT": "0",
+    "MODIFF_QUANT_ATTN_STATIC": "1",
+    "MODIFF_QUANT_LINEAR": "1",
+    "MODIFF_WARMUP_STEPS": "5"
+   },
+   "hook": null,
+   "route_check": {
+    "attn_blocks": 21,
+    "attn_class": "QuantizedStandardAttentionBlock",
+    "qout_eligible": 0,
+    "wxax": 42,
+    "wxax_modiff": 42,
+    "wxax_out_i8": 0,
+    "wxax_bias_res": 0,
+    "int8_convs": 140,
+    "conv_modiff_on": 140,
+    "conv_delta_refresh": [
+     4
+    ]
+   },
+   "stats": {
+    "n": 5,
+    "mean": 19382999.609375,
+    "median": 19386396.484375,
+    "stdev": 15406.940895048903,
+    "sem": 6890.19343333016,
+    "cv_pct": 0.0794868761571713,
+    "min": 19359761.71875,
+    "max": 19397824.21875,
+    "spread_pct": 0.19633612688504293,
+    "ci95_half": 19127.176970924524,
+    "ci95_lo": 19363872.432404075,
+    "ci95_hi": 19402126.786345925,
+    "iqr": 28130.859375,
+    "samples": [
+     19359761.7188,
+     19376408.2031,
+     19386396.4844,
+     19394607.4219,
+     19397824.2188
+    ]
+   },
+   "stability": "tight",
+   "wall_us_per_batch": 19386396.484375,
+   "wall_mean_us": 19382999.609375,
+   "wall_stdev_us": 15406.940895048903,
+   "wall_cv_pct": 0.0794868761571713,
+   "wall_all_us": [
+    19359761.7,
+    19376408.2,
+    19386396.5,
+    19394607.4,
+    19397824.2
+   ],
+   "wall_spread_pct": 0.1966062421271246,
+   "ms_per_step": 96.931982421875,
+   "ms_per_sample": 151.4562225341797,
+   "delta_ms_per_step": -2.661552734374993,
+   "ratio_vs_base": 0.9732758483751044,
+   "speedup_vs_fp16": null
+  }
+ }
+}
