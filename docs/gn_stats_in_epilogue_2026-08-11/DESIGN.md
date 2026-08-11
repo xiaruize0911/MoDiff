@@ -84,9 +84,44 @@ consumes:
 part_sum, part_sumsq : float[N * G * NBLK]      // NBLK = number of M-tiles, not min(HW,32)
 ```
 
-with tile `t` writing slot `[((n * G) + g) * NBLK + t]`. `NBLK` becomes the conv's M-tile count,
-which the host knows from the problem size and the chosen tile shape. `gn_stats_reduce_partials` takes
-`nblocks` as an argument already, so it needs no change.
+with tile `t` writing slot `[((n * G) + g) * NBLK + t]`. `NBLK` becomes the conv's tile count, which
+the host knows from the problem size and the tile shape. `gn_stats_reduce_partials` takes `nblocks` as
+an argument already, so it needs no change.
+
+**`NBLK` cannot be the M-tile count alone.** A group straddles an N-tile boundary whenever `128 % CPG
+!= 0`, which is every width here, so two different N-tiles contribute to the same `(n, g)` and would
+collide in one slot. `NBLK = n_tiles_m * n_tiles_n` fixes that without atomics — but it makes the
+buffer absurd, and this is a design problem found while sizing it rather than while running it:
+
+| C | H·W | M-tiles | N-tiles | naive `part_sum` | `x` itself |
+|---:|---:|---:|---:|---:|---:|
+| 192 | 1024 | 1024 | 2 | **33.6 MB** | 50.3 MB |
+| 384 | 256 | 256 | 3 | 12.6 MB | 25.2 MB |
+| 768 | 16 | 16 | 6 | 1.6 MB | 3.1 MB |
+
+Two buffers of that size, allocated per conv call, against a 50 MB activation. The *written* bytes are
+negligible — each tile touches at most 56 `(n,g)` pairs, so ~377 KB across the whole 192-channel
+launch — but the allocation and the `gn_stats_reduce_partials` sweep are over the dense extent, and the
+reduce pass currently costs 0.50 ms reading a buffer sized `min(HW, 32)` per group. Dense-sizing it
+this way would make the reduce pass cost more than the 4.75 ms it is supposed to help remove.
+
+Three ways out, in the order I would try them:
+
+1. **`NBLK = n_tiles_m` with N-tile collisions removed by construction.** For `HW >= 128` an M-tile
+   lies within one `n`, so `tile_m` already determines `n` and the slot only needs to distinguish
+   N-tiles *for the groups that straddle*. Padding `CPG` up to a divisor of 128 is not available (`CPG`
+   is `C/32`, fixed by the model), but assigning each straddling group wholly to its lower N-tile and
+   having that tile read the few columns beyond its own boundary is — a small extra load, no collision,
+   no extra slots.
+2. **Compact slots.** Write `[t * MAX_PAIRS + pair]` with `MAX_PAIRS = 56`, plus the `(n,g)` key, and
+   have the reduce pass scatter. Buffer becomes `n_tiles * 56 * 2` floats — 917 KB at the worst shape.
+   Costs the reduce pass an indirection.
+3. **Give up on the low-resolution layers.** `HW >= 128` covers the layers where the time actually is
+   (`plots/layers.png`); the `HW = 16` and `64` shapes are the cheap ones. A fusion that only fires at
+   high resolution is worth most of the ceiling.
+
+Option 1 looks right and cheapest. It has to be settled before the prototype, because the prototype's
+slot arithmetic IS the thing being validated.
 
 **Per-tile slots, never atomics.** `MODIFF_GN_STATS_ALT=2` tried an atomic GN reduction and was
 measured 1.7× *slower* than the group-major tree **and nondeterministic** — two replays of one seed
@@ -155,6 +190,7 @@ combined with a partial along M (`EVTColumnReduction` and friends are single-axi
   per-thread fragment reduction into that array costs more than the 4.75 ms pass it replaces.
 * `max_code_diff > 1` from the reduction-order change, unexplained.
 * Any nondeterminism.
+* The partials buffer not admitting option 1 or 2 above, forcing the dense sizing.
 * The 68-site figure not holding once the producer of each GN input is enumerated per site rather
   than inferred from kernel call counts. That enumeration has NOT been done — 68 is `83 − 15`, an
   arithmetic bound, not a per-site audit. `fusion_audit.py` is the place to add it.
