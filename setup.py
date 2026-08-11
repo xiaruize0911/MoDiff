@@ -47,7 +47,9 @@ setup(
                 'csrc/kernels/attention/attn_quant_gemm.cu',
                 'csrc/kernels/attention/flash_attn_int8.cu',
                 # util: NCHW<->NHWC / packing layout transforms
-                'csrc/kernels/util/layout_transform.cu',
+                # family 6 of the csrc split (2026-08-12)
+                'csrc/baseline/util/layout_transform.cu',
+                'csrc/modiff/util/layout_transform.cu',
             ],
             include_dirs=[
                 os.path.join(CUTLASS_PATH, 'include'),

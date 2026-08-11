@@ -108,7 +108,7 @@ first while the pattern is still cheap to change.
 | 3 | `norm/` | `group_norm_silu.cu` (11), `fused_gn_qkv.cu` (3) | both | `*_delta_quantize_*` and `gn_stats_from_tiles` → modiff; `group_norm_silu*`, `fused_gn_qkv` → baseline |
 | 4 | `conv/` | `conv2d_int8.cu` (13), `conv2d_int4.cu` (12), `conv2d_evt.cu` (9) | both | `_o_hat*` → modiff, `_no_ohat*` → baseline; the CUTLASS instantiations get copied, which is where compile time doubles |
 | 5 | `attention/` | `flash_attn_int8.cu` (25), `attn_quant_gemm.cu` (11) | mostly baseline | no flash kernel carries state. MoDiff's involvement is which *entry point* it may use: `_qout` variants are unusable under MoDiff (the epilogue and the o_hat state are mutually exclusive), and `flash_attn_int8_packed_vt` is what route (b) feeds int8 into |
-| 6 | `util/` | `layout_transform.cu` (5) | both | `fp16_ncw_delta_to_int8_cl` → modiff, rest → baseline |
+| 6 | `util/` | **DONE** — `baseline/util/layout_transform.cu` (460 L, 4 exports), `modiff/util/layout_transform.cu` (324 L, 1 export) | `fp16_ncw_delta_to_int8_cl` + its 4 delta kernels moved; nothing shared but the `TILE_T` #define. SASS gate passed with **no re-baseline** — a true pure move |
 
 `setup.py`'s source list and `pybind.cpp` change with each step; `modiff_kernels_api.h` splits into
 `baseline/api.h` + `modiff/api.h` last, once nothing else moves.
