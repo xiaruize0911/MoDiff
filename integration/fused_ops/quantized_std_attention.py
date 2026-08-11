@@ -895,6 +895,44 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         # fixed route selects it; else fp16 MATH SDPA. INT8 always selects quantized flash when
         # eligible; any remaining automatic selection here belongs only to the INT4 experiment. ----
         use_flash = self._resolve_flash(qkv, T)
+        # ROUTE (a), MoDiff only, opt-in via MODIFF_FUSE_QKV_PACKED=1.
+        #
+        # Under MoDiff the qkv GEMM must emit fp16 (o_hat is fp16 state), which makes all 21 blocks
+        # qout-ineligible, which brings back three `aq_*` re-quantize passes -- 4.60 ms/step of the
+        # `attn_quantize` bucket that is 0.00 in every non-MoDiff arm
+        # (docs/profile_kernels_layers_2026-08-11).
+        #
+        # `flash_attn_int8_packed_vt` branches on the dtype of its packed qkv: kHalf runs
+        # run_flash_packed<__half>, which quantizes ON LOAD, and int8 runs the gather. Feeding it the
+        # fp16 qkv therefore removes the three aq_* passes with no GEMM change at all, and needs no
+        # new calibration -- the aq_* kernels it replaces already quantize this exact tensor with
+        # _fq_sqc / _fq_skc / _fq_svv, so it moves where the quantize happens, not what it computes.
+        #
+        # MEASURED AND REFUTED, 2026-08-11: batch 128, 200 steps, paired on one model, this is
+        # 121.25 vs 103.23 ms/step -- **18.0 ms SLOWER**, against a 4.60 ms bucket it was meant to
+        # remove. The reasoning missed that flash RE-READS k and v for every query block, so
+        # "quantize on load" means quantize O(T/block) times rather than once. Quantize-once-then-
+        # gather is why the aq_* kernels exist at all; this route pays their cost repeatedly instead.
+        #
+        # That makes the int8 input the only viable form -- it takes the GATHER path -- which is
+        # route (b): gemm_w8a8_awq_o_hat_out_i8 emitting per-column-scaled int8 straight into this
+        # same entry point. Its foundation is verified in integration/tests/test_qkv_o_hat_out_i8.py.
+        # Kept OFF and kept HERE because the measurement is the argument for (b); deleting it would
+        # leave (b) looking like an arbitrary choice between two routes rather than the only one.
+        #
+        # (Latent relL2 between the arms was 0.01710, larger than the "tiny" predicted from identical
+        # scales. Not chased: the route is refuted on speed, so the number has no consumer.)
+        if (use_flash and not self._qout_eligible() and self.bits == 8
+                and os.environ.get("MODIFF_FUSE_QKV_PACKED") == "1"
+                and getattr(self, "_fq_frozen2", False)
+                and _mc is not None and hasattr(_mc, "flash_attn_int8_packed_vt")
+                and qkv.dtype == torch.float16 and getattr(self, "_fq_svv", None) is not None):
+            hd_pad = ((hd + 31) // 32) * 32
+            a = _mc.flash_attn_int8_packed_vt(
+                qkv.contiguous(), self._fq_svv[:hd].contiguous().float(), hd_pad,
+                float(self._fq_sqc), float(self._fq_skc), self.scale)
+            out_tok = self._proj_with_residual(a, x_in_tok, b, T, c)
+            return out_tok.reshape(b, H, W, c).permute(0, 3, 1, 2)
         if use_flash and self._qout_eligible():
             # Fused flash+proj: flash emits the proj-quantized token-major output directly (no fp16
             # attn-output materialize, no separate quantize_attn_out pass) -> gemm_wXaX_awq_bias_res.
