@@ -138,12 +138,28 @@ The `dequant_accumulate*` four are STATE by body but **two of them have no Pytho
 | `step1_static_quantize_pack_int4_fprop` **(dual)** | `static_quantize_pack_and_update_ahat_kernel_int4*` |
 | `step1_static_quantize_pack_int4_fprop_silu` | `..._int4_half_cache_silu` |
 
-**And eight BASELINE functions that live in the MoDiff file today** — they go to `baseline/`, with their
-kernels: `step1_quantize_no_ahat_fprop` (`quantize_only_int8_kernel`),
-`step1_static_quantize_noahat_fprop` (`static_quantize_int8_noahat[_vec2]_kernel`),
-`step1_static_quantize_pack_int4_noahat_fprop`, `step1_quantize_pack_int4_no_ahat_fprop`
-(`quantize_pack_only_kernel_int4`), `upsample2x_quantize_noahat_fprop` and `_pack_`,
-`avgpool2x_quantize_noahat_fprop` and `_pack_`.
+**Eight functions in the MoDiff file look baseline by name. SIX of them are; two are not.** Attempted
+2026-08-12 (family 1b) and reverted, because the compiler found the difference:
+
+*Cleanly separable — no a_hat, no MoDiff helper (6):* `step1_static_quantize_noahat_fprop`
+(`static_quantize_int8_noahat[_vec2]_kernel`), `step1_static_quantize_pack_int4_noahat_fprop`,
+`upsample2x_quantize_noahat_fprop` and `_pack_`, `avgpool2x_quantize_noahat_fprop` and `_pack_`.
+Their 8 kernels are launched by nothing else, so they MOVE rather than copy. `avgpool4_as_stored`
+(a `__device__ __forceinline__` template trio) is needed by the avgpool pair and must be **copied**.
+
+*NOT separable as-is (2):* `step1_quantize_no_ahat_fprop` and `step1_quantize_pack_int4_no_ahat_fprop`.
+Despite the name each **takes an `a_hat_cache` argument** and calls the MoDiff host function
+`sub_absmax_scale(x, a_hat_cache, ...)`. "no_ahat" describes only the quantize step not subtracting
+a_hat; the scale computation is still the MoDiff one. Copying `sub_absmax_scale` into `baseline/` would
+duplicate an **exported host symbol** and fail to link, so this is the plan's "deep sharing" stop
+condition rather than something to force.
+
+Three ways out, none of them free, to decide before retrying 1b: (a) copy `sub_absmax_scale` into
+`baseline/` as a file-local `static` helper — no symbol collision, one more twin to keep in sync;
+(b) leave those two in `modiff/` and note that the baseline path reaches into it — honest but the trees
+stay coupled; (c) find out whether their callers ever pass a real `a_hat_cache`, since if they always
+pass an empty or zero tensor the argument and the helper call can go, which is a behaviour change and
+needs its own measurement.
 
 **A consequence worth acting on later, not now.** The baseline already *has*
 `step1_static_quantize_noahat_fprop`, yet `int8_optimized.py:1362` calls the a_hat variant with a zero
