@@ -19,6 +19,19 @@ os.chdir(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 sys.path.insert(0, os.getcwd())
 import torch, modiff_cutlass as mc
 
+# NARROWED 2026-08-11, not yet fixed. gemm_wxax.cu's out_i8 store:
+#   * o_hat is indexed `(size_t)RG * n_out + CG` -- the UNPADDED stride, which is correct, and matches
+#     this test measuring o_hat right (6.1e-5) even on the shape whose codes are wrong.
+#   * the codes do NOT go straight to C. They land in a shared staging buffer as
+#     `Cs[RL * GWQ_CTA_N + CL]`, and something later copies Cs -> C. The corruption must be in that
+#     copy's row stride (C is allocated [M, N] with N = B.size(0) = n_pad, so a copy written at an
+#     n_out stride would scatter exactly like this), or in the padded columns themselves: the store is
+#     guarded on `CG + 1 < n_out`, so columns at or beyond n_out are never written to Cs and carry
+#     UNINITIALISED shared memory into C. This test slices [:, :n_out], so uninitialised tail alone
+#     would not explain 82% -- which is why the stride is the stronger suspect.
+# Reading the Cs -> C copy is the next step. Not patched here: editing a store loop on a partial
+# reading is how a silent wrong-bytes bug gets shipped, which is the thing this file exists to prevent.
+
 DEV = "cuda"
 
 
