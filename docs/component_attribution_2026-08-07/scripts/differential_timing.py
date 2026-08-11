@@ -107,6 +107,10 @@ def _no_conv_modiff(model):
     return lambda: None
 
 
+#: The canonical dataset: every arm, read by committed figures in several reports. A subset run may
+#: not write here -- see the guard in main().
+DEFAULT_OUTPUT = "docs/component_attribution_2026-08-07/data/differential_timing.json"
+
 #: (label, base it is a delta from, mode, env overrides, post-setup hook, why)
 ARMS = [
     # The three explicit zeros are load-bearing and the first run of this script got them wrong.
@@ -138,6 +142,18 @@ ARMS = [
      {"MODIFF_DELTA_REFRESH": "4", "MODIFF_LINEAR_DELTA_REFRESH": "4"}, None,
      "K=4 on the convs AND on the 42 projections; the projections' unconditional absmax was the "
      "last K-independent term (docs/profile_kernels_layers_2026-08-11)"),
+
+    # Added 2026-08-12. Route (b): the dual-output qkv GEMM emits int8 straight into flash's gather
+    # path, so the three aq_* re-quantize kernels disappear on the 10 hd=48 blocks. NOT the whole
+    # 4.60 ms attn_quantize bucket -- the 5 hd=24 blocks are ineligible (24 B/token vs the int8
+    # gather's 16 B cp.async), and the packed kernel is 1.8x/1.5x the mma kernel's time, so it pays
+    # part of the saving back. Kernel microbenchmark predicted +0.79 ms/step and the paired A/B
+    # measured +0.79 (integration/tests/bench_flash_packed_vs_unpacked.py, ab_route_b_qkv_i8.py).
+    # Opt-in, like the projection refresh above, and for the same reason: it changes the score kernel.
+    ("modiff_full_k4_projk4_qkvi8", "modiff_full_k4_projk4", "int8",
+     {"MODIFF_DELTA_REFRESH": "4", "MODIFF_LINEAR_DELTA_REFRESH": "4",
+      "MODIFF_FUSE_QKV_I8": "1"}, None,
+     "route (b) on top of both refresh schedules: int8 qkv -> flash gather on the 10 hd=48 blocks"),
 
     # ---- knockouts from modiff_full_k1 ----
     ("base_no_qattn", "modiff_full_k1", "int8", {"MODIFF_QUANT_ATTN": "0"}, None,
@@ -179,6 +195,12 @@ def route_check(model, mode):
     r["attn_class"] = type(blks[0]).__name__ if blks else None
     if blks and hasattr(blks[0], "_qout_eligible"):
         r["qout_eligible"] = sum(bool(b._qout_eligible()) for b in blks)
+    # Route (b) eligibility. `_qkv_i8_ok` also takes T, which is a per-forward quantity no module
+    # stores, so this passes the T of each block's own resolution: hd<=48 means T in {256, 64} here,
+    # both T%64==0, so the shape half of the gate is decided by head_dim alone in THIS model. Stated
+    # rather than assumed, because the previous version of that gate was wrong in exactly this area.
+    if blks and hasattr(blks[0], "_qkv_i8_ok"):
+        r["attn_qkv_i8"] = sum(bool(b._qkv_i8_ok(256)) for b in blks)
     try:
         from integration.kernels.wxax_linear import QuantLinearWxAx
         wx = [m for m in unet.modules() if isinstance(m, QuantLinearWxAx)]
@@ -230,6 +252,11 @@ def _assert_route(label, mode, over, rc):
             want(rc["qout_eligible"] == 0, "qout epilogue should be disabled")
         elif quant_lin:
             want(rc["qout_eligible"] == 21, "qout epilogue should be live on all 21 blocks")
+    # Route (b) must be live on exactly the 10 hd=48 blocks when asked for and nowhere otherwise.
+    # An arm that silently declined would time production twice and report a believable ~0.
+    if "attn_qkv_i8" in rc:
+        want(rc["attn_qkv_i8"] == (10 if over.get("MODIFF_FUSE_QKV_I8") == "1" else 0),
+             "route (b) should be live on 10 of 21 blocks iff MODIFF_FUSE_QKV_I8=1")
 
 
 def run_arm(arm, a):
@@ -308,12 +335,22 @@ def main():
     ap.add_argument("--repeats", type=int, default=5)
     ap.add_argument("--warmups", type=int, default=3)
     ap.add_argument("--arms", default="", help="comma-separated subset of labels")
-    ap.add_argument("--output",
-                    default="docs/component_attribution_2026-08-07/data/differential_timing.json")
+    ap.add_argument("--output", default=DEFAULT_OUTPUT)
     a = ap.parse_args()
 
     want = [x.strip() for x in a.arms.split(",") if x.strip()]
     arms = [x for x in ARMS if not want or x[0] in want]
+
+    # A subset run writing to the default path REPLACES the canonical dataset with two arms, which
+    # is a committed file several reports' figures read. It happened on 2026-08-12 and the only
+    # symptom was `make_plots.py` losing bars. Refuse instead: the caller has to name the file, and
+    # a full run (no --arms) keeps working exactly as before.
+    if want and a.output == DEFAULT_OUTPUT:
+        sys.exit(f"--arms is a SUBSET run and would overwrite the canonical {DEFAULT_OUTPUT}, "
+                 f"which holds all {len(ARMS)} arms and is read by committed figures.\n"
+                 f"Pass an explicit --output, e.g.\n"
+                 f"  --output docs/<your-report>/data/differential_timing_"
+                 f"{want[0].replace('/', '_')}.json")
 
     out = {"gpu": torch.cuda.get_device_name(0), "torch": torch.__version__,
            "batch": a.batch, "steps": a.steps, "repeats": a.repeats, "warmups": a.warmups,

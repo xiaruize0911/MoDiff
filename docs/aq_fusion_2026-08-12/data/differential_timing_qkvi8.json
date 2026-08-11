@@ -1,0 +1,178 @@
+{
+ "gpu": "NVIDIA A40",
+ "torch": "2.4.1+cu124",
+ "batch": 128,
+ "steps": 200,
+ "repeats": 5,
+ "warmups": 3,
+ "base_env": {
+  "MODIFF_QUANT_LINEAR": "1",
+  "MODIFF_QUANT_ATTN": "1",
+  "MODIFF_QUANT_ATTN_STATIC": "1",
+  "MODIFF_QATTN_FLASH": "1",
+  "MODIFF_FLASH_GATE": "on",
+  "MODIFF_QUANT_ATTN_ALLT": "0",
+  "MODIFF_LINEAR_OUT_I8": "0",
+  "MODIFF_FUSE_PROJ_QUANT": "1",
+  "MODIFF_LINEAR": "1",
+  "MODIFF_DELTA_REFRESH": "1",
+  "MODIFF_DELTA_CLIP": "1.0",
+  "MODIFF_ACT_Q": "127",
+  "MODIFF_DELTA_MODE": "dynamic",
+  "MODIFF_WARMUP_STEPS": "5"
+ },
+ "arms": {
+  "modiff_full_k4_projk4": {
+   "mode": "int8",
+   "delta_from": "modiff_full_k4",
+   "why": "K=4 on the convs AND on the 42 projections; the projections' unconditional absmax was the last K-independent term (docs/profile_kernels_layers_2026-08-11)",
+   "env": {
+    "MODIFF_ACT_Q": "127",
+    "MODIFF_DELTA_CLIP": "1.0",
+    "MODIFF_DELTA_MODE": "dynamic",
+    "MODIFF_DELTA_REFRESH": "4",
+    "MODIFF_FLASH_GATE": "on",
+    "MODIFF_FUSE_PROJ_QUANT": "1",
+    "MODIFF_LINEAR": "1",
+    "MODIFF_LINEAR_OUT_I8": "0",
+    "MODIFF_QATTN_FLASH": "1",
+    "MODIFF_QUANT_ATTN": "1",
+    "MODIFF_QUANT_ATTN_ALLT": "0",
+    "MODIFF_QUANT_ATTN_STATIC": "1",
+    "MODIFF_QUANT_LINEAR": "1",
+    "MODIFF_WARMUP_STEPS": "5"
+   },
+   "hook": null,
+   "route_check": {
+    "attn_blocks": 21,
+    "attn_class": "QuantizedStandardAttentionBlock",
+    "qout_eligible": 0,
+    "attn_qkv_i8": 0,
+    "wxax": 42,
+    "wxax_modiff": 42,
+    "wxax_out_i8": 0,
+    "wxax_bias_res": 0,
+    "int8_convs": 140,
+    "conv_modiff_on": 140,
+    "conv_delta_refresh": [
+     4
+    ]
+   },
+   "stats": {
+    "n": 5,
+    "mean": 19119721.09375,
+    "median": 19127767.578125,
+    "stdev": 35851.656809766115,
+    "sem": 16033.348346526054,
+    "cv_pct": 0.1875114005794027,
+    "min": 19058251.953125,
+    "max": 19150253.90625,
+    "spread_pct": 0.4809863605317735,
+    "ci95_half": 44508.57500995632,
+    "ci95_lo": 19075212.518740043,
+    "ci95_hi": 19164229.668759957,
+    "iqr": 53209.9609375,
+    "samples": [
+     19058251.9531,
+     19123957.0312,
+     19127767.5781,
+     19138375.0,
+     19150253.9062
+    ]
+   },
+   "stability": "tight",
+   "wall_us_per_batch": 19127767.578125,
+   "wall_mean_us": 19119721.09375,
+   "wall_stdev_us": 35851.656809766115,
+   "wall_cv_pct": 0.1875114005794027,
+   "wall_all_us": [
+    19058252.0,
+    19123957.0,
+    19127767.6,
+    19138375.0,
+    19150253.9
+   ],
+   "wall_spread_pct": 0.4827407747115776,
+   "ms_per_step": 95.638837890625,
+   "ms_per_sample": 149.43568420410156,
+   "speedup_vs_fp16": null
+  },
+  "modiff_full_k4_projk4_qkvi8": {
+   "mode": "int8",
+   "delta_from": "modiff_full_k4_projk4",
+   "why": "route (b) on top of both refresh schedules: int8 qkv -> flash gather on the 10 hd=48 blocks",
+   "env": {
+    "MODIFF_ACT_Q": "127",
+    "MODIFF_DELTA_CLIP": "1.0",
+    "MODIFF_DELTA_MODE": "dynamic",
+    "MODIFF_DELTA_REFRESH": "4",
+    "MODIFF_FLASH_GATE": "on",
+    "MODIFF_FUSE_PROJ_QUANT": "1",
+    "MODIFF_LINEAR": "1",
+    "MODIFF_LINEAR_OUT_I8": "0",
+    "MODIFF_QATTN_FLASH": "1",
+    "MODIFF_QUANT_ATTN": "1",
+    "MODIFF_QUANT_ATTN_ALLT": "0",
+    "MODIFF_QUANT_ATTN_STATIC": "1",
+    "MODIFF_QUANT_LINEAR": "1",
+    "MODIFF_WARMUP_STEPS": "5"
+   },
+   "hook": null,
+   "route_check": {
+    "attn_blocks": 21,
+    "attn_class": "QuantizedStandardAttentionBlock",
+    "qout_eligible": 0,
+    "attn_qkv_i8": 10,
+    "wxax": 42,
+    "wxax_modiff": 42,
+    "wxax_out_i8": 0,
+    "wxax_bias_res": 0,
+    "int8_convs": 140,
+    "conv_modiff_on": 140,
+    "conv_delta_refresh": [
+     4
+    ]
+   },
+   "stats": {
+    "n": 5,
+    "mean": 18974502.734375,
+    "median": 18975027.34375,
+    "stdev": 13545.723280297785,
+    "sem": 6057.831611829457,
+    "cv_pct": 0.0713890818111285,
+    "min": 18953275.390625,
+    "max": 18990527.34375,
+    "spread_pct": 0.19632094568374925,
+    "ci95_half": 16816.540554438572,
+    "ci95_lo": 18957686.193820562,
+    "ci95_hi": 18991319.274929438,
+    "iqr": 21395.5078125,
+    "samples": [
+     18979611.3281,
+     18974072.2656,
+     18990527.3438,
+     18975027.3438,
+     18953275.3906
+    ]
+   },
+   "stability": "tight",
+   "wall_us_per_batch": 18975027.34375,
+   "wall_mean_us": 18974502.734375,
+   "wall_stdev_us": 13545.723280297785,
+   "wall_cv_pct": 0.0713890818111285,
+   "wall_all_us": [
+    18979611.3,
+    18974072.3,
+    18990527.3,
+    18975027.3,
+    18953275.4
+   ],
+   "wall_spread_pct": 0.19654625576445858,
+   "ms_per_step": 94.87513671875,
+   "ms_per_sample": 148.24240112304688,
+   "delta_ms_per_step": -0.7637011718749989,
+   "ratio_vs_base": 0.9920147380633337,
+   "speedup_vs_fp16": null
+  }
+ }
+}

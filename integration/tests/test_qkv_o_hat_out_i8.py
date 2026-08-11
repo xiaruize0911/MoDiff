@@ -19,18 +19,13 @@ os.chdir(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 sys.path.insert(0, os.getcwd())
 import torch, modiff_cutlass as mc
 
-# NARROWED 2026-08-11, not yet fixed. gemm_wxax.cu's out_i8 store:
-#   * o_hat is indexed `(size_t)RG * n_out + CG` -- the UNPADDED stride, which is correct, and matches
-#     this test measuring o_hat right (6.1e-5) even on the shape whose codes are wrong.
-#   * the codes do NOT go straight to C. They land in a shared staging buffer as
-#     `Cs[RL * GWQ_CTA_N + CL]`, and something later copies Cs -> C. The corruption must be in that
-#     copy's row stride (C is allocated [M, N] with N = B.size(0) = n_pad, so a copy written at an
-#     n_out stride would scatter exactly like this), or in the padded columns themselves: the store is
-#     guarded on `CG + 1 < n_out`, so columns at or beyond n_out are never written to Cs and carry
-#     UNINITIALISED shared memory into C. This test slices [:, :n_out], so uninitialised tail alone
-#     would not explain 82% -- which is why the stride is the stronger suspect.
-# Reading the Cs -> C copy is the next step. Not patched here: editing a store loop on a partial
-# reading is how a silent wrong-bytes bug gets shipped, which is the thing this file exists to prevent.
+# FIXED 2026-08-11 in abca34d, and this test is what found it. The out_i8 store wrote the codes at an
+# UNPADDED row stride into an allocation made at the PADDED width, so they scattered whenever
+# n_out != n_pad: at n_out=576 padded to 640, 81.6% of codes were wrong with max|diff| 254, while the
+# two 128-aligned shapes were correct to within 1. o_hat was right throughout, because it already
+# indexed at n_out. The fix allocates C as [M, n_out] -- which also matches gemm_w8a8_awq_o_hat's
+# return shape, so the caller needs no slice and there is no uninitialised padded tail to read.
+# The 576 row below is the regression guard; keep it.
 
 DEV = "cuda"
 

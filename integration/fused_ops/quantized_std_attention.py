@@ -392,13 +392,25 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         with _SDPA_CTX():
             return F.scaled_dot_product_attention(q, k, v, scale=self.scale)
 
+    def _flash_shape_ok(self, T):
+        """The flash mma kernels' shape constraint: head_dim <= 48 (FA_MMA_MAXHD=64 after padding)
+        and T % 64 == 0 (FA_MMA_WARPS * FA_MMA_BR).
+
+        ONE definition, used by every gate that feeds a flash entry point. `_qkv_i8_ok` used to
+        re-derive its own weaker version (`head_dim % 16 == 0` alone), which admitted the hd=96
+        blocks -- shapes the flash kernel rejects with "mma-eligible shapes only" and that never ran
+        flash in the first place. That divergence is what made route (b) look structurally impossible
+        when it was a missing condition. Constraints asserted in
+        integration/tests/test_flash_packed_int8_shapes.py."""
+        return self.head_dim <= 48 and (T % 64) == 0
+
     def _resolve_flash(self, qkv, T):
         """Decide whether this block runs the fused flash score path. Base eligibility is the
         flash kernel's constraint (head_dim<=48, T%64==0); beyond that the gate is a pure
         on/off rollback switch for BOTH bit widths. The runtime A/B that used to live here
         (_autotune_flash) is gone: it was only ever reachable through the INT4 gate-string bug
         described in __init__, and it timed two routes inside a production forward."""
-        eligible = (_HAS_FLASH and self.head_dim <= 48 and (T % 64) == 0)
+        eligible = _HAS_FLASH and self._flash_shape_ok(T)
         return eligible and self._flash_gate == "on"
 
     def _ensure_route1(self, device, SHIFT):
@@ -1034,7 +1046,7 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         #
         # The GEMM's column order is already (nh, 3, hd) -- the reshape below is the same one the fp16
         # path does -- so the int8 output IS the packed flash buffer with no data movement.
-        if (self._qkv_i8_ok() and _mc is not None
+        if (self._qkv_i8_ok(T) and _mc is not None
                 and hasattr(_mc, "gemm_w8a8_awq_o_hat_out_i8")):
             inv_out = self._qkv_inv_out_scale(qkv, nh, hd)
             if inv_out is not None:
@@ -1049,24 +1061,31 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
             qkv.bias if qkv.bias is not None else qkv._empty_h)
         return out.reshape(b, T, nh, 3, hd)
 
-    def _qkv_i8_ok(self):
-        """Route (b) eligibility: int8 block, frozen flash scales, opt-in."""
-        # hd % 16 == 0 is a HARD kernel constraint, not a preference: flash_attn_int8_packed's int8
-        # gather loads per-token bytes with cp.async, which needs 16-byte alignment. Its fp16 path has
-        # no such limit (2 bytes/element), which is why route (a) ran at every shape and this one
-        # cannot. Measured consequence: this model's heads are hd = C/nh = 24, 48, 96 for C = 192, 384,
-        # 768 -- so hd=24 is INELIGIBLE, and hd=24/T1024 is the dominant block. Falling through here
-        # rather than raising is the point; the fp16 o_hat GEMM below handles the rest unchanged.
-        # KNOWN INCOMPLETE, 2026-08-11. With hd%16 satisfied the kernel then rejects with
-        # "mma-eligible shapes only" -- a SECOND, narrower shape restriction I have not enumerated.
-        # So route (b) does not currently run on any block of this model: hd=24 fails the cp.async
-        # alignment and hd=48 fails the mma eligibility. The gate stays default-OFF and this comment
-        # is the warning: enabling it raises, it does not fall back. Kept rather than reverted because
-        # the wiring itself is correct and verified standalone (test_qkv_o_hat_out_i8.py) -- what is
-        # missing is a flash entry point that accepts int8 at THIS model's head dims, which is a
-        # kernel question, not a plumbing one.
+    def _qkv_i8_ok(self, T):
+        """Route (b) eligibility: int8 block, a flash-eligible shape, frozen scales, opt-in.
+
+        THREE constraints, and the gate needs all of them because the int8 branch in _forward_routes
+        RAISES rather than falling back once this returns True:
+
+          * hd % 16 == 0 -- the int8 gather loads per-token bytes with cp.async, which needs 16-byte
+            alignment. hd = C/nh is 24, 48, 96 here, so hd=24 is out and hd24/T1024 is the dominant
+            block. The fp16 path has no such limit at 2 bytes/element, which is why route (a) ran
+            everywhere and this cannot.
+          * _flash_shape_ok -- the same hd<=48 / T%64 constraint _resolve_flash applies. Without it
+            this gate admitted the six hd=96/T=16 blocks, whose hd_pad=128 exceeds FA_MMA_MAXHD; the
+            resulting "mma-eligible shapes only" was mis-recorded as hd=48 failing, which made route
+            (b) look impossible on every shape. Those blocks never ran flash at all.
+          * frozen scales -- _fq_sqc/_fq_skc/_fq_svv are what the GEMM's per-column out scale is
+            built from, so the calibration window must be over.
+
+        Net: the 10 hd=48 blocks (T=256 and T=64) take this route. Measured worth on those shapes,
+        with the aq_* kernels removed and the packed gather kernel paying part of it back:
+        +0.79 ms/step at batch 128 (integration/tests/bench_flash_packed_vs_unpacked.py), against
+        1.80x and 1.49x of the mma kernel's time and a 2.0x break-even.
+        """
         return (os.environ.get("MODIFF_FUSE_QKV_I8") == "1" and self.bits == 8
                 and (self.head_dim % 16) == 0
+                and self._flash_shape_ok(T)
                 and getattr(self, "_fq_frozen2", False)
                 and getattr(self, "_fq_svv", None) is not None
                 and hasattr(_mc, "flash_attn_int8_packed_vt"))

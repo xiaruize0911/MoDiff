@@ -1,0 +1,41 @@
+{
+ "gpu": "NVIDIA A40",
+ "batch": 128,
+ "steps": 200,
+ "k": 4,
+ "proj_k": 4,
+ "repeats": 4,
+ "on_ms": [
+  94.538837890625,
+  94.685869140625,
+  94.963701171875,
+  94.766533203125
+ ],
+ "off_ms": [
+  95.336005859375,
+  95.459267578125,
+  95.4937109375,
+  95.617255859375
+ ],
+ "pairs": [
+  0.7971679687500028,
+  0.773398437499992,
+  0.530009765624996,
+  0.8507226562500136
+ ],
+ "on_median": 94.726201171875,
+ "off_median": 95.47648925781249,
+ "paired_median": 0.7852832031249974,
+ "prediction_ms": 0.79,
+ "counts_on": {
+  "gemm_w8a8_awq_o_hat_out_i8": 10.0,
+  "quantize_attn_qkv_packed_static": 5.0,
+  "flash_attn_int8_packed_vt": 10.0
+ },
+ "counts_off": {
+  "gemm_w8a8_awq_o_hat_out_i8": 0.0,
+  "quantize_attn_qkv_packed_static": 15.0,
+  "flash_attn_int8_packed_vt": 0.0
+ },
+ "warnings": []
+}
