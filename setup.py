@@ -67,8 +67,13 @@ setup(
                 # Absolute paths: ninja runs compile commands from the build-temp dir, so
                 # relative include dirs (e.g. 'csrc') fail to resolve after the csrc/ reorg
                 # moved the .cu sources into subdirectories.
-                os.path.abspath('csrc'),                 # common.cuh, modiff_kernels_api.h
-                os.path.abspath('csrc/kernels/common'),  # mma_int8.cuh (shared by linear + attention)
+                # Only csrc/ itself, for modiff_kernels_api.h (included by pybind.cpp and by
+                # modiff/quantize/delta_quantize.cu). Every OTHER shared header is now included by
+                # explicit relative path from within a tree ("../common/common.cuh") or from the
+                # same directory ("conv_epilogue.cuh"), so there is deliberately no global include
+                # dir that could let one tree resolve the other tree's copy. The old
+                # -I csrc/kernels/common is gone with csrc/kernels/ itself.
+                os.path.abspath('csrc'),
             ],
             extra_compile_args={
                 'cxx': ['-O3', '-std=c++17'],

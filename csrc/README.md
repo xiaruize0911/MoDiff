@@ -5,16 +5,26 @@ without the other in the way:
 
 ```
 csrc/
-├── baseline/     W8A8 / W4A4 post-training quantization. No temporal state.
-├── modiff/       MoDiff: the temporal delta datapath (a_hat / o_hat carried across timesteps).
-├── kernels/      NOT YET MIGRATED -- the original mixed tree. Shrinks as families move out.
-├── pybind.cpp            every Python entry point
-└── modiff_kernels_api.h  C++ declarations for all of them
+├── baseline/     W8A8 / W4A4 post-training quantization. No temporal state. 11 .cu, 110 exports.
+│   ├── common/{common.cuh, mma_int8.cuh}      duplicated device headers
+│   ├── attention/{flash_attn_int8, attn_quant_gemm}.cu
+│   ├── conv/{conv2d_int8, conv2d_int4, conv2d_evt, conv_epilogue}.cu (+ 2 duplicated headers)
+│   ├── linear/gemm_wxax.cu   norm/{group_norm_silu, fused_gn_qkv}.cu (+ 2 duplicated headers)
+│   └── quantize/quantize.cu  util/layout_transform.cu
+├── modiff/       MoDiff: the temporal delta datapath (a_hat / o_hat across timesteps). 8 .cu, 29 exports.
+│   ├── common/{common.cuh, mma_int8.cuh}      duplicated device headers
+│   ├── conv/{conv2d_int8, conv2d_int4, conv2d_evt, conv_epilogue}.cu (+ 2 duplicated headers)
+│   ├── linear/gemm_wxax.cu   norm/group_norm_silu.cu (+ 2 duplicated headers)
+│   └── quantize/delta_quantize.cu  util/layout_transform.cu
+├── pybind.cpp            every Python entry point -- the ONE file where both datapaths meet
+└── modiff_kernels_api.h  C++ declarations for all of them (deliberately NOT split; see below)
 ```
 
-**Migration status (2026-08-12): skeleton and shared headers in place, no kernel family moved yet.**
-`kernels/` is still the tree that builds. The per-family plan and the classification that drives it are
-below; nothing here is aspirational except where it says NOT YET MIGRATED.
+**Migration status (2026-08-12): COMPLETE. All six families migrated; `csrc/kernels/` is deleted.**
+Every `.cu` now lives in exactly one tree, and each tree compiles against its own copy of the shared
+device headers. Verified by poisoning `baseline/common/mma_int8.cuh` with an `#error` and confirming
+that only the two baseline translation units that include it failed, while `modiff/linear/gemm_wxax.cu`
+compiled clean against its own copy — the copies are load-bearing, not decoration.
 
 ## What separates the two datapaths
 
@@ -110,8 +120,14 @@ first while the pattern is still cheap to change.
 | 5 | `attention/` | **DONE** — both files whole to `baseline/attention/` (2777 + 1144 L, 36 exports) | **0 of 36 host fns reference `a_hat`/`o_hat`** — attention is stateless in both datapaths, so nothing was duplicated and nothing went to `modiff/`. Each file carries a DATAPATH NOTE explaining that MoDiff's involvement is *which entry point it may call* (`_qout` unusable under MoDiff; `packed_vt` is route (b)'s), decided in Python. SASS gate passed with **no re-baseline** |
 | 6 | `util/` | **DONE** — `baseline/util/layout_transform.cu` (460 L, 4 exports), `modiff/util/layout_transform.cu` (324 L, 1 export) | `fp16_ncw_delta_to_int8_cl` + its 4 delta kernels moved; nothing shared but the `TILE_T` #define. SASS gate passed with **no re-baseline** — a true pure move |
 
-`setup.py`'s source list and `pybind.cpp` change with each step; `modiff_kernels_api.h` splits into
-`baseline/api.h` + `modiff/api.h` last, once nothing else moves.
+**`modiff_kernels_api.h` is deliberately NOT split.** It was attempted and reverted. The partition
+itself is exact — scanning the definitions in each tree gives 110 declarations owned by `baseline/`,
+29 by `modiff/`, and zero overlap — but it is a declaration-only header included by `pybind.cpp`, and
+`pybind.cpp` is already the single place where both datapaths' entry points meet. Splitting it buys
+documentation while risking a silently dropped declaration, which would remove an export without any
+compile error. The `test_export_manifest.py` gate would catch that, but the trade is still poor: no
+code moves, and one more file to keep in sync. `csrc/common.cuh` at the top level WAS deleted, since
+after the migration nothing included it (every `.cu` uses its own tree's `common/common.cuh`).
 
 ## Family 1 work order: `quantize/`
 
@@ -207,6 +223,13 @@ last arm above, 91.55 ms/step of GPU time):
 
 Read shares within a column and named kernels within a capture — **not** totals across captures.
 Two captures of the same arm minutes apart drift ~1 ms on buckets nothing touched.
+
+**Post-migration re-measurement (2026-08-12), the evidence that the split changed no behaviour:**
+the route (b) paired A/B reads **+0.71 ms/step** (stdev 0.073) against the pre-split **+0.79 ± 0.14**,
+and the ON arm sits at **94.60 ms/step** against the recorded **94.88** — both inside run-to-run noise,
+with all three kernel counters exact (10 / 5 / 10 ON, 0 / 15 / 0 OFF). Together with the per-kernel SASS
+gate (279/279 identical) and the export manifest (130/130), that is the whole claim: same code, same
+numbers, in two trees instead of one.
 
 > Superseded numbers: this file used to quote 123.0 ms/step and 1.54× from 2026-07-20. Five reports
 > have corrected that since (the harness's fp16 baseline was running fp32/tf32; the delta quantizer

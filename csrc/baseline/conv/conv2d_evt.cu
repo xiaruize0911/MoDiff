@@ -23,7 +23,7 @@
 #include "cutlass/gemm/gemm.h"
 
 #include "implicit_gemm_conv_evt.h"
-#include "common.cuh"
+#include "../common/common.cuh"
 
 namespace {
 using cutlass::layout::TensorNHWC;
