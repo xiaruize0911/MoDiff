@@ -46,8 +46,10 @@ setup(
                 'csrc/baseline/linear/gemm_wxax.cu',
                 'csrc/modiff/linear/gemm_wxax.cu',
                 # attention: W8A8/W4A4 materialized attention + fused int8/int4 flash
-                'csrc/kernels/attention/attn_quant_gemm.cu',
-                'csrc/kernels/attention/flash_attn_int8.cu',
+                # family 5 of the csrc split (2026-08-12): attention is stateless in both
+                # datapaths, so the whole family is baseline. See the file headers.
+                'csrc/baseline/attention/attn_quant_gemm.cu',
+                'csrc/baseline/attention/flash_attn_int8.cu',
                 # util: NCHW<->NHWC / packing layout transforms
                 # family 6 of the csrc split (2026-08-12)
                 'csrc/baseline/util/layout_transform.cu',

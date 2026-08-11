@@ -27,8 +27,29 @@
 #include <cuda_pipeline_primitives.h>
 #include <torch/extension.h>
 
-#include "common.cuh"
-#include "mma_int8.cuh"
+#include "../common/common.cuh"
+#include "../common/mma_int8.cuh"
+
+// ---------------------------------------------------------------------------------------------
+// DATAPATH NOTE (family 5 of the csrc/ split, 2026-08-12). This file lives in baseline/ because NO
+// kernel here carries MoDiff's cross-timestep state -- verified mechanically: 0 of the host
+// functions in this file reference a_hat or o_hat. Attention is stateless in both datapaths.
+//
+// MoDiff's involvement is therefore not about which kernels exist, but about WHICH ENTRY POINT it is
+// allowed to call, and that is decided in Python (integration/fused_ops/quantized_std_attention.py):
+//
+//   * the `*_qout` variants are UNUSABLE under MoDiff. That epilogue writes the proj-quantized int8
+//     output directly, which is mutually exclusive with keeping the fp16 o_hat state the projection
+//     GEMM needs -- `_use_bias_res` is literally `... and not modiff`. Under MoDiff all 21 blocks
+//     report qout_eligible == 0.
+//   * `flash_attn_int8_packed_vt` is the entry point route (b) feeds int8 into, after the qkv GEMM
+//     emits int8 at a per-column scale (docs/aq_fusion_2026-08-12: +0.79 ms/step on the 10 hd=48
+//     blocks). Its int8 gather path needs hd%16==0 for 16-byte cp.async; the 8-byte LOAD_B variant
+//     makes hd=24 legal but 2.11x slower, so it stays unused.
+//   * Part 3, if it is ever built, is an a_hat-aware `_qout` epilogue -- that WOULD introduce a
+//     state-carrying attention kernel and would belong in modiff/. It does not exist yet.
+// ---------------------------------------------------------------------------------------------
+
 
 #define MODIFF_FA_MAX_HD 96      // max padded head_dim in the churches UNet (hd=96)
 #define MODIFF_FA_THREADS 128
