@@ -361,6 +361,8 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc(
 // behaviour), real 1-element buffers => the scale is measured here. Without them the kernel
 // could not serve a refresh step, so the caller declined on every one of them -- which at
 // MODIFF_DELTA_REFRESH=1 is every step, i.e. the fusion never fired.
+std::vector<torch::Tensor> gn_stats_from_tiles(torch::Tensor x, int64_t num_groups,
+                                               int64_t Mt, int64_t Nt);
 torch::Tensor group_norm_silu_delta_quantize_resize_nhwc(
     torch::Tensor x, torch::Tensor weight, torch::Tensor bias,
     int64_t num_groups, double eps, bool apply_silu,

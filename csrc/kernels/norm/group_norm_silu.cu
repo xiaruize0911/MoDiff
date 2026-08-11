@@ -2307,6 +2307,103 @@ __global__ void gn_finalize_sumsq_kernel(const float* __restrict__ sum, const fl
     }
 }
 
+// =========================================================================
+// PROTOTYPE (Stage A of docs/gn_stats_in_epilogue_2026-08-11). Not wired to anything.
+//
+// Mimics what a conv EVT epilogue would do if it emitted the GroupNorm partial sums as an auxiliary
+// output: grid the tensor exactly as the conv's 128x128 threadblock tiles do (verified shape,
+// conv2d_evt.cu instantiates GemmShape<128,128,128>), and have each tile accumulate per-(n, group)
+// sum/sumsq into shared memory before writing its own slot.
+//
+// The question it exists to answer is NOT "does it fit" -- the accumulator is at most 56 (n,g) pairs,
+// 448 B, worked out in the design doc. It is whether the per-thread scatter into that shared array
+// costs less than the 4.75 ms/step full read (gn_stats_partials_chanmajor) it would replace.
+//
+// ANSWER, 2026-08-11: not like this. Weighted over the model's conv-output shapes the prototype is
+// 30.83 ms/step against 4.75, worst at the shapes with fewest slots (768x4x4: 4.51x), and
+// nondeterministic. The arithmetic is right (max rel err 1.4e-3 vs an fp32 reference), so this is a
+// cost and determinism result, not a correctness one.
+//
+// WHAT IT DOES AND DOES NOT REFUTE. It refutes the SCATTER-VIA-SHARED-ATOMICS implementation, which is
+// what a straightforward epilogue node would reach for. It does not by itself refute the concept: in a
+// real EVT epilogue each thread's fragment is already in registers with a known (n, g), so a warp-level
+// tree reduction per group could replace the atomics entirely. But note the gap is 6.5x and the
+// epilogue version pays its reduction ON TOP of the conv's existing epilogue work, so a tree version
+// has to beat a large margin, and the contention it must avoid is structural: few slots, many threads.
+// Kept unreferenced on the dead-code policy's one admissible ground -- the reason it is unused is the
+// finding. Harness: the numbers above are reproducible from the kernel plus group_norm_silu_nhwc.
+//
+// Slots are per (tile_m, tile_n), never atomics: MODIFF_GN_STATS_ALT=2 measured an atomic GN
+// reduction 1.7x slower AND nondeterministic (1.27e-1 latent drift between replays of one seed).
+template <typename TIn>
+__global__ void gn_stats_from_tiles_kernel(
+    const TIn* __restrict__ X, float* __restrict__ part_sum, float* __restrict__ part_sumsq,
+    int C, long HW, int G, int Mt, int Nt, int n_tiles_n, long M) {
+  extern __shared__ float sacc[];                 // [2 * PAIRS], sum then sumsq
+  const int CPG = C / G;
+  const int tm = blockIdx.x, tn = blockIdx.y;
+  const long m0 = (long)tm * Mt;
+  const int  n0 = tn * Nt;
+  // (n, g) range this tile can touch. Derived per tile, because along M a tile spans several samples
+  // once HW < Mt, and along N it straddles groups whenever Nt % CPG != 0 -- both true in this model.
+  const int n_first = (int)(m0 / HW), n_last = (int)(min(m0 + Mt - 1, M - 1) / HW);
+  const int g_first = n0 / CPG, g_last = min(n0 + Nt - 1, C - 1) / CPG;
+  const int ng = n_last - n_first + 1, gg = g_last - g_first + 1;
+  const int PAIRS = ng * gg;
+  for (int i = threadIdx.x; i < 2 * PAIRS; i += blockDim.x) sacc[i] = 0.f;
+  __syncthreads();
+  const long rows = min((long)Mt, M - m0);
+  const int cols = min(Nt, C - n0);
+  for (long idx = threadIdx.x; idx < rows * cols; idx += blockDim.x) {
+    const long r = idx / cols;  const int cc = (int)(idx % cols);
+    const long m = m0 + r;      const int c = n0 + cc;
+    const float v = gn_load(X, m * (long)C + c);
+    const int slot = ((int)(m / HW) - n_first) * gg + (c / CPG - g_first);
+    // MEASURED AND REFUTED. These two shared atomics are why this prototype fails both gates, and the
+    // comment that used to sit here -- "block-local, so the cross-block order that made ALT=2
+    // nondeterministic cannot arise" -- was simply WRONG. Block-local float atomicAdd is still
+    // order-nondeterministic WITHIN the block, and the test measured det=False on every shape.
+    // They are also slow: with only ~23-56 slots, 256 threads contend on a handful of shared
+    // addresses and serialize. 30.83 ms/step weighted against the 4.75 ms pass this was meant to
+    // replace -- 6.5x the wrong way, on shapes where the arithmetic is right (max rel err 1.4e-3).
+    atomicAdd(&sacc[slot], v);
+    atomicAdd(&sacc[PAIRS + slot], v * v);
+  }
+  __syncthreads();
+  const long nblk = (long)gridDim.x * n_tiles_n;
+  const long slot0 = (long)tm * n_tiles_n + tn;
+  for (int i = threadIdx.x; i < PAIRS; i += blockDim.x) {
+    const int nn = n_first + i / gg, g = g_first + i % gg;
+    const long o = ((long)nn * G + g) * nblk + slot0;
+    part_sum[o] = sacc[i];  part_sumsq[o] = sacc[PAIRS + i];
+  }
+}
+
+std::vector<torch::Tensor> gn_stats_from_tiles(torch::Tensor x, int64_t num_groups,
+                                               int64_t Mt, int64_t Nt) {
+  CHECK_CUDA(x);
+  const int N = x.size(0), C = x.size(1);
+  const long HW = (long)x.size(2) * x.size(3), M = (long)N * HW;
+  const int tm = (int)((M + Mt - 1) / Mt), tn = (int)((C + Nt - 1) / Nt);
+  auto o = torch::TensorOptions().dtype(torch::kFloat32).device(x.device());
+  auto ps = torch::zeros({(long)N * num_groups * tm * tn}, o);
+  auto pq = torch::zeros({(long)N * num_groups * tm * tn}, o);
+  // Worst case over this model's shapes is 56 pairs (design doc); 256 is slack, not a guess.
+  const size_t shmem = 2 * 256 * sizeof(float);
+  dim3 grid((unsigned)tm, (unsigned)tn);
+  auto st = at::cuda::getCurrentCUDAStream();
+  if (x.scalar_type() == torch::kFloat32)
+    gn_stats_from_tiles_kernel<float><<<grid, 256, shmem, st>>>(
+        x.data_ptr<float>(), ps.data_ptr<float>(), pq.data_ptr<float>(),
+        C, HW, (int)num_groups, (int)Mt, (int)Nt, tn, M);
+  else
+    gn_stats_from_tiles_kernel<__half><<<grid, 256, shmem, st>>>(
+        reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), ps.data_ptr<float>(),
+        pq.data_ptr<float>(), C, HW, (int)num_groups, (int)Mt, (int)Nt, tn, M);
+  C10_CUDA_CHECK(cudaGetLastError());
+  return {ps, pq};
+}
+
 static void gn_launch_group_stats(
     const torch::Tensor& x, int N, int C, long HW, int num_groups, double eps,
     torch::Tensor& mean, torch::Tensor& inv_std

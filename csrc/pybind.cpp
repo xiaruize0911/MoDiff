@@ -216,6 +216,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "MoDiff-fused GroupNorm(+mod)+SiLU + INT4 delta-quantize+pack + in-place a_hat update "
           "(int4 counterpart; requires even channels-per-group). Same static/dynamic scale "
           "contract as the INT8 sibling, Q_level 7.0");
+    m.def("gn_stats_from_tiles", &gn_stats_from_tiles,
+          "PROTOTYPE: GroupNorm per-(n,group) partial sums produced on the conv EVT tile grid. "
+          "Stage A of docs/gn_stats_in_epilogue_2026-08-11 -- measures whether the scatter into "
+          "shared costs less than the 4.75 ms/step pass it would replace.");
     m.def("fused_gn_qkv", &fused_gn_qkv, "Fused GroupNorm->qkv (per-sample scale/bias mainloop fusion)");
     m.def("fused_gn_qkv_i8evt", &fused_gn_qkv_i8evt, "Fused GroupNorm->qkv, int8 output via fp32-bias/int8-clamp EVT epilogue (signed-qkv-correct)");
 
