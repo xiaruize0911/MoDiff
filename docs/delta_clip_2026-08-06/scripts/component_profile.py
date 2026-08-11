@@ -1,9 +1,14 @@
 """Per-COMPONENT time attribution for K=1 full MoDiff: conv vs attention vs the projections.
 
-STATUS: the two defects found on 2026-08-07 are patched below but the patch is UNVERIFIED --
-the script has not been re-run since. Treat any absolute number it prints as suspect until
-the total it reports agrees with the e2e bench (~106 ms/step at batch 128, K=1, full MoDiff).
-The recommended replacement is differential timing plus a Perfetto trace; see FINDINGS.
+STATUS: SUPERSEDED, and still unverified -- the patch below was never re-run. Do not quote any
+number this script prints. The replacement landed 2026-08-07 and answers the same question with
+no profiler in the measured region: docs/component_attribution_2026-08-07 (differential wall
+clock, plus a trace bucketed offline). Its two methods agree to 0.01 ms/step on the projection
+delta, against this script's factor-of-2.2 error (235.74 reported, 106.30 measured).
+
+Kept in the tree because its two defects are worth not repeating: module forward hooks miss the
+62 convs the ResBlock dispatches directly, and summing self_device_time_total over record_function
+scopes double-counts the kernels inside them.
 
 `fusion_profile.py` buckets by kernel NAME, which cannot separate the components: both the conv
 modulated path and the wxax projections call `step1_static_quantize_fprop` and `delta_absmax_fp16`, so
