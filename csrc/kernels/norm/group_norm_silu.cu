@@ -2339,8 +2339,26 @@ template <typename TIn>
 __global__ void gn_stats_from_tiles_kernel(
     const TIn* __restrict__ X, float* __restrict__ part_sum, float* __restrict__ part_sumsq,
     int C, long HW, int G, int Mt, int Nt, int n_tiles_n, long M) {
-  extern __shared__ float sacc[];                 // [2 * PAIRS], sum then sumsq
+  // [2 * WARPS * (PAIRS+1)]: sum then sumsq, PRIVATE PER WARP, one trailing sentinel slot per warp.
+  //
+  // Rewritten 2026-08-12. The first version accumulated with two shared atomicAdd per element into a
+  // single [2*PAIRS] array, and failed both of its gates: 30.83 ms/step against the 4.75 ms pass it
+  // replaces (6.5x the wrong way) and det=False on every shape. Both came from the same place --
+  // 23-56 slots with 256 threads contending, and float atomicAdd being order-dependent.
+  //
+  // This version has NO atomics. Each element is reduced within its warp among exactly the lanes that
+  // share its (n, g) slot -- `__match_any_sync` finds them, a masked butterfly sums them -- and only
+  // that group's leader lane touches shared memory, in its own warp's private slot array. The
+  // cross-warp sum is then a fixed w = 0..WARPS-1 loop. Every addition happens in a fixed order, so
+  // determinism is structural rather than hoped for.
+  //
+  // Coalescing is preserved: the element loop still walks row-major, so consecutive lanes read
+  // consecutive channels. A slot-outer loop would have been simpler but reads only CPG (6..48)
+  // contiguous floats per row, which is worse exactly where C is smallest.
+  extern __shared__ float sacc[];
   const int CPG = C / G;
+  const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
+  const int WARPS = (int)(blockDim.x >> 5);
   const int tm = blockIdx.x, tn = blockIdx.y;
   const long m0 = (long)tm * Mt;
   const int  n0 = tn * Nt;
@@ -2350,24 +2368,60 @@ __global__ void gn_stats_from_tiles_kernel(
   const int g_first = n0 / CPG, g_last = min(n0 + Nt - 1, C - 1) / CPG;
   const int ng = n_last - n_first + 1, gg = g_last - g_first + 1;
   const int PAIRS = ng * gg;
-  for (int i = threadIdx.x; i < 2 * PAIRS; i += blockDim.x) sacc[i] = 0.f;
+  const int SLOTS = PAIRS + 1;                    // +1: the sentinel the tail iteration writes into
+  float* wsum = sacc;                             // [WARPS * SLOTS]
+  float* wsq = sacc + (long)WARPS * SLOTS;        // [WARPS * SLOTS]
+  for (int i = threadIdx.x; i < 2 * WARPS * SLOTS; i += blockDim.x) sacc[i] = 0.f;
   __syncthreads();
   const long rows = min((long)Mt, M - m0);
   const int cols = min(Nt, C - n0);
-  for (long idx = threadIdx.x; idx < rows * cols; idx += blockDim.x) {
-    const long r = idx / cols;  const int cc = (int)(idx % cols);
-    const long m = m0 + r;      const int c = n0 + cc;
-    const float v = gn_load(X, m * (long)C + c);
-    const int slot = ((int)(m / HW) - n_first) * gg + (c / CPG - g_first);
-    // MEASURED AND REFUTED. These two shared atomics are why this prototype fails both gates, and the
-    // comment that used to sit here -- "block-local, so the cross-block order that made ALT=2
-    // nondeterministic cannot arise" -- was simply WRONG. Block-local float atomicAdd is still
-    // order-nondeterministic WITHIN the block, and the test measured det=False on every shape.
-    // They are also slow: with only ~23-56 slots, 256 threads contend on a handful of shared
-    // addresses and serialize. 30.83 ms/step weighted against the 4.75 ms pass this was meant to
-    // replace -- 6.5x the wrong way, on shapes where the arithmetic is right (max rel err 1.4e-3).
-    atomicAdd(&sacc[slot], v);
-    atomicAdd(&sacc[PAIRS + slot], v * v);
+  // Every lane runs the SAME number of iterations, out-of-range ones carrying v=0 and the sentinel
+  // slot. Uniform trip count is what makes the full 0xffffffff mask below correct -- taking
+  // __activemask() instead would be reading a value the compiler is free to change under
+  // reconvergence, which is the class of bug this kernel already paid for once.
+  const long total = rows * cols;
+  const long iters = (total + blockDim.x - 1) / blockDim.x;
+  for (long it = 0; it < iters; ++it) {
+    const long idx = it * blockDim.x + threadIdx.x;
+    const bool ok = idx < total;
+    float v = 0.f;
+    int slot = PAIRS;                             // sentinel
+    if (ok) {
+      const long r = idx / cols;  const int cc = (int)(idx % cols);
+      const long m = m0 + r;      const int c = n0 + cc;
+      v = gn_load(X, m * (long)C + c);
+      slot = ((int)(m / HW) - n_first) * gg + (c / CPG - g_first);
+    }
+    // Segmented reduction over the lanes sharing `slot`. `__match_any_sync` gives a bit per such lane.
+    //
+    // An INCLUSIVE SCAN upward (Hillis-Steele) rather than a `__shfl_down_sync` halving tree, and the
+    // reason is SPEED, not correctness. Both forms were built and measured: the down-shift tree is
+    // equally accurate (5.5e-7 against an fp32 reference, same as this) and ~9% slower per shape, which
+    // is the difference between 1.04x the shipped pass -- still losing -- and 0.95x. An earlier
+    // comment here claimed the down-shift form dropped and double-counted lanes; that was wrong, and
+    // the 10.4% error it cited came from a test feeding this kernel a contiguous NCHW tensor when it
+    // reads channels_last.
+    //
+    // The scan is correct here because equal slots within a warp are always CONTIGUOUS: lanes take
+    // consecutive `idx`, so they walk consecutive channels, and a warp spans at most one row boundary
+    // (cols >= 64 > 32 for every tile in this model) across which the group index necessarily changes
+    // (cols > CPG). Contiguity is what makes the single test "is lane-off in my group?" sufficient:
+    // if it is, every lane between us is too, so the partial it carries is entirely mine to absorb.
+    const unsigned mask = __match_any_sync(0xffffffffu, slot);
+    float s = v, q = v * v;
+#pragma unroll
+    for (int off = 1; off < 32; off <<= 1) {
+      const float os = __shfl_up_sync(0xffffffffu, s, off);
+      const float oq = __shfl_up_sync(0xffffffffu, q, off);
+      if (lane >= off && ((mask >> (lane - off)) & 1u)) { s += os; q += oq; }
+    }
+    // After an inclusive scan the segment total sits in its HIGHEST lane, so that lane writes. Groups
+    // have distinct slots by construction, so no two writers collide in this iteration, and the array
+    // belongs to this warp alone -- no atomic, and a fixed addition order.
+    if (lane == (31 - __clz(mask)) && slot != PAIRS) {
+      wsum[warp * SLOTS + slot] += s;
+      wsq[warp * SLOTS + slot] += q;
+    }
   }
   __syncthreads();
   const long nblk = (long)gridDim.x * n_tiles_n;
@@ -2375,7 +2429,11 @@ __global__ void gn_stats_from_tiles_kernel(
   for (int i = threadIdx.x; i < PAIRS; i += blockDim.x) {
     const int nn = n_first + i / gg, g = g_first + i % gg;
     const long o = ((long)nn * G + g) * nblk + slot0;
-    part_sum[o] = sacc[i];  part_sumsq[o] = sacc[PAIRS + i];
+    // Fixed order, w ascending: the one place the warps' partials meet, and the reason the whole
+    // kernel is bit-reproducible across launches.
+    float s = 0.f, q = 0.f;
+    for (int w = 0; w < WARPS; ++w) { s += wsum[w * SLOTS + i]; q += wsq[w * SLOTS + i]; }
+    part_sum[o] = s;  part_sumsq[o] = q;
   }
 }
 
@@ -2388,16 +2446,20 @@ std::vector<torch::Tensor> gn_stats_from_tiles(torch::Tensor x, int64_t num_grou
   auto o = torch::TensorOptions().dtype(torch::kFloat32).device(x.device());
   auto ps = torch::zeros({(long)N * num_groups * tm * tn}, o);
   auto pq = torch::zeros({(long)N * num_groups * tm * tn}, o);
-  // Worst case over this model's shapes is 56 pairs (design doc); 256 is slack, not a guess.
-  const size_t shmem = 2 * 256 * sizeof(float);
+  // Per-WARP private slots now, so the buffer is 2 * WARPS * (PAIRS + 1) rather than 2 * PAIRS.
+  // Worst case over this model's shapes is 56 pairs (design doc), +1 sentinel, x 8 warps x 2 arrays =
+  // 912 floats = 3.6 KB. 256 pairs of slack is kept for the same reason it was before -- the bound is
+  // this model's, not the kernel's -- and 3.6 KB was never the constraint; the atomics were.
+  const int GNS_THREADS = 256, GNS_WARPS = GNS_THREADS / 32;
+  const size_t shmem = 2 * (size_t)GNS_WARPS * 257 * sizeof(float);
   dim3 grid((unsigned)tm, (unsigned)tn);
   auto st = at::cuda::getCurrentCUDAStream();
   if (x.scalar_type() == torch::kFloat32)
-    gn_stats_from_tiles_kernel<float><<<grid, 256, shmem, st>>>(
+    gn_stats_from_tiles_kernel<float><<<grid, GNS_THREADS, shmem, st>>>(
         x.data_ptr<float>(), ps.data_ptr<float>(), pq.data_ptr<float>(),
         C, HW, (int)num_groups, (int)Mt, (int)Nt, tn, M);
   else
-    gn_stats_from_tiles_kernel<__half><<<grid, 256, shmem, st>>>(
+    gn_stats_from_tiles_kernel<__half><<<grid, GNS_THREADS, shmem, st>>>(
         reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), ps.data_ptr<float>(),
         pq.data_ptr<float>(), C, HW, (int)num_groups, (int)Mt, (int)Nt, tn, M);
   C10_CUDA_CHECK(cudaGetLastError());

@@ -219,6 +219,54 @@ quantize itself runs on every step whatever the schedule.
 So the target for any future projection-side fusion is 5.03 ms, not 8.8, and it is the quantize+`a_hat`
 write, not the scale computation. That is the same work Part 3 would move into the flash qout epilogue.
 
+## GN stats in the conv epilogue, second attempt: Stage A now passes, and that is not yet a win
+
+The 2026-08-11 prototype failed on the reduction, not the footprint: two shared `atomicAdd` per element
+into 23–56 slots with 256 contending threads, giving 6.5× the shipped pass and `det=False` everywhere.
+Rewritten with **no atomics**: `__match_any_sync` groups the lanes sharing an `(n, group)` slot, a
+masked inclusive scan sums each group, the group's top lane writes to its own warp's private slots, and
+the warps are summed in a fixed `w = 0..7` order.
+
+| shape | count | tree | shipped | atomics (08-11) | tree/shipped | max rel err | det |
+|---|--:|---:|---:|---:|---:|---:|---|
+| 192×32×32 | 14 | 425.1 | 476.2 | 542.7 | **0.89×** | 5.7e-07 | ok |
+| 384×32×32 | 4 | 771.0 | 771.5 | 1439.0 | 1.00× | 4.0e-07 | ok |
+| 768×16×16 | 4 | 405.5 | 416.6 | 1277.3 | 0.97× | 5.7e-07 | ok |
+| 768×4×4 | 10 | 80.8 | 52.5 | 237.0 | **1.54×** | 2.6e-07 | ok |
+| count-weighted | | **11.47 ms** | 11.94 | 20.83 | **0.96×** | | |
+
+![gn stats](plots/06_gn_stats_reduction.png)
+
+All three Stage A gates met: correct to 2.6–5.7e-07, **deterministic on every shape** (the gate the
+last attempt failed, and the one this rewrite was for), and 1.82× faster than the atomics version —
+enough to cross from 1.74× the shipped pass to 0.96×.
+
+**But 0.96× is not a reason to start Stage C.** The design's ceiling was 4.30 ms of the 4.75 ms pass, and
+that assumed the reduction was free; a replacement that costs 96% of what it removes returns ~4% of the
+pass, before the EVT node pays for anything. And `768×4×4` is still **1.54×** — worst exactly where the
+tensors are small and the slot count is high, which is the same shape-dependence the atomics version had
+(4.51× there). In a real epilogue this work is on top of the conv's existing epilogue, not instead of a
+standalone launch, so the honest reading is: the *mechanism* is now viable and the *margin* is not.
+
+### Two corrections to my own work here
+
+**The 10.4% error I first measured was my test, not the kernel.** These GN kernels index `X[m*C + c]`
+over `m ∈ [0, N·H·W)`, i.e. they read **channels_last**; the test handed them a contiguous NCHW tensor.
+That does not crash and loses no element — it reads each one exactly once into the *wrong* `(n, group)`
+bucket, which is why total mass matched to four digits (3010.3 vs 3010.3) while individual buckets were
+off ±10%. Mass conserved with buckets wrong is the signature of a permutation, and I nearly attributed
+it to the reduction instead.
+
+**And the down-shift tree was not broken.** I replaced a `__shfl_down_sync` halving tree with the upward
+scan and wrote in the kernel that the tree "double-counted some lanes and dropped others". Built and
+measured both: the down-shift form is equally accurate (5.5e-07) and ~9% slower — which is the whole
+difference between 1.04× (losing) and 0.96× (winning), so the choice does matter, but for speed. The
+false claim is corrected in place.
+
+**Also fixed: the test's error metric.** It divided by the *signed* per-group sum, which is centred near
+zero, so a kernel accurate to 2.5e-07 reported 1e+03. `sumsq` (strictly positive) keeps a plain relative
+error; `sum` is normalised by `sqrt(sumsq)`, the scale a sum of that many terms actually has.
+
 ## Reproducing
 
 ```bash
@@ -232,6 +280,7 @@ python docs/component_attribution_2026-08-07/scripts/differential_timing.py \
     --output docs/aq_fusion_2026-08-12/data/differential_timing_qkvi8.json   # ~7 min
 python integration/tests/quality_route_b_paired.py                       # ~12 min
 python integration/tests/test_flash_packed_load8.py                      # ~2 min, the 8 B loader
+python integration/tests/bench_gn_stats_tiles.py --batch 128              # ~1 min, GN-stats gates
 python docs/component_attribution_2026-08-07/scripts/trace_configs.py \
     --batch 128 --steps 8 --configs modiff_full_k4_projk4_qkvi8          # ~3 min
 python docs/component_attribution_2026-08-07/scripts/bucket_traces.py \

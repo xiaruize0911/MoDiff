@@ -305,6 +305,47 @@ def plot_trace(out):
     return True
 
 
+def plot_gn_stats(out):
+    """Per shape: the tree reduction against the pass it replaces and against the atomics attempt.
+
+    Per-shape bars rather than the weighted total alone, because the weighted total (0.96x) hides the
+    thing that decides whether Stage C is worth starting: 768x4x4 is still 1.54x, worst exactly where
+    the tensors are small -- the same shape-dependence the atomics version had at 4.51x.
+    """
+    d = load("gn_stats_tree.json")
+    if d is None:
+        return False
+    rows = d["rows"]
+    labels = [f"{r['C']}\n{r['H']}x{r['W']}\n(x{r['count']})" for r in rows]
+    x = list(range(len(rows)))
+    w = 0.26
+    fig, ax = plt.subplots(figsize=(8.6, 4.6))
+    ax.bar([i - w for i in x], [r["shipped_us"] for r in rows], w, color=INK3, label="shipped pass")
+    ax.bar(x, [r["tree_us"] for r in rows], w, color=AQUA, label="tree reduction (this)")
+    ax.bar([i + w for i in x], [r["atomics_us"] for r in rows], w, color=PLUM,
+           label="shared atomics (2026-08-11)")
+    for i, r in enumerate(rows):
+        ratio = r["tree_us"] / r["shipped_us"]
+        ax.text(i, r["tree_us"] * 1.03, f"{ratio:.2f}x", ha="center", va="bottom",
+                color=ROSE if ratio > 1 else AQUA, fontsize=9)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
+    ax.set_ylabel(f"us per launch, batch {d['batch']}")
+    wm = d["weighted_ms"]
+    ax.set_title(f"GN stats from conv tiles: weighted {wm['tree']:.2f} ms vs shipped "
+                 f"{wm['shipped']:.2f} ({d['tree_over_shipped']:.2f}x), "
+                 f"atomics {wm['atomics']:.2f}", loc="left")
+    ax.grid(axis="y", color=GRID, linewidth=0.8)
+    ax.set_axisbelow(True)
+    ax.legend(loc="upper right")
+    fig.tight_layout()
+    fig.text(0.01, 0.006, "deterministic on every shape; the atomics version was not, which is the "
+             "gate this rewrite exists for", color=INK3, fontsize=8)
+    fig.savefig(out, dpi=170)
+    plt.close(fig)
+    return True
+
+
 def main():
     os.makedirs(PLOTS, exist_ok=True)
     plot_kernel(os.path.join(PLOTS, "00_packed_vs_unpacked.png"),
@@ -320,6 +361,8 @@ def main():
                        "With the 8-byte cp.async loader: hd=24 becomes legal, and loses",
                        brk={24: 1.44, 48: 2.00}):
         print("NOTE: data/bench_packed_vs_unpacked_load8.json absent -- 05 not written")
+    if not plot_gn_stats(os.path.join(PLOTS, "06_gn_stats_reduction.png")):
+        print("NOTE: data/gn_stats_tree.json absent -- 06_gn_stats_reduction.png not written")
     print("wrote plots to", PLOTS)
     return 0
 

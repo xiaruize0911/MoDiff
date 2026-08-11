@@ -1,0 +1,63 @@
+{
+ "gpu": "NVIDIA A40",
+ "batch": 128,
+ "groups": 32,
+ "tile": [
+  128,
+  128
+ ],
+ "rows": [
+  {
+   "C": 192,
+   "H": 32,
+   "W": 32,
+   "count": 14,
+   "tree_us": 425.0880032777786,
+   "shipped_us": 476.2,
+   "atomics_us": 542.7,
+   "max_rel_err": 5.660060651280219e-07,
+   "deterministic": true
+  },
+  {
+   "C": 384,
+   "H": 32,
+   "W": 32,
+   "count": 4,
+   "tree_us": 770.9920108318329,
+   "shipped_us": 771.5,
+   "atomics_us": 1439.0,
+   "max_rel_err": 3.980379972290393e-07,
+   "deterministic": true
+  },
+  {
+   "C": 768,
+   "H": 16,
+   "W": 16,
+   "count": 4,
+   "tree_us": 405.5360108613968,
+   "shipped_us": 416.6,
+   "atomics_us": 1277.3,
+   "max_rel_err": 5.685971018465352e-07,
+   "deterministic": true
+  },
+  {
+   "C": 768,
+   "H": 4,
+   "W": 4,
+   "count": 10,
+   "tree_us": 80.76800033450127,
+   "shipped_us": 52.5,
+   "atomics_us": 237.0,
+   "max_rel_err": 2.569589696577168e-07,
+   "deterministic": true
+  }
+ ],
+ "weighted_ms": {
+  "tree": 11.465024136006832,
+  "shipped": 11.944199999999999,
+  "atomics": 20.833
+ },
+ "tree_over_shipped": 0.959882129904626,
+ "atomics_over_shipped": 1.7441938346645236,
+ "beats_shipped": true
+}
