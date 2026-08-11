@@ -113,6 +113,45 @@ first while the pattern is still cheap to change.
 `setup.py`'s source list and `pybind.cpp` change with each step; `modiff_kernels_api.h` splits into
 `baseline/api.h` + `modiff/api.h` last, once nothing else moves.
 
+## Family 1 work order: `quantize/`
+
+Generated from the sources (host function → the `__global__` kernels it launches), so the split is a
+move-list rather than a judgement call. `STATE` = the body references `a_hat`/`o_hat`.
+
+**`kernels/quantize/quantize.cu` → `baseline/quantize/quantize.cu`** — all 10 host functions, verbatim:
+`quantize_and_pack`, `scale_quantize_and_pack`, `scale_quantize_int8`, `dequant_bias_i8`,
+`quantize_attn_out_int8`, `quantize_attn_out_int4_pack`, and the four `dequant_accumulate*`.
+The `dequant_accumulate*` four are STATE by body but **two of them have no Python caller at all**
+(`_int8`, `_int4`); the two `_and_return_` ones are called from `int8_linear.py` / `int4_linear.py`.
+
+**`kernels/quantize/modiff_delta_quantize.cu` (19 host fns, 24 kernels) splits in two.** To `modiff/`:
+
+| host fn | launches |
+|---|---|
+| `sub_absmax_scale`, `compute_dynamic_scale` | `sub_absmax_scale_kernel` |
+| `delta_absmax_fp16` | `delta_absmax_fp16_kernel` |
+| `dynamic_quantize_int8_fprop`, `dynamic_quantize_pack_int4_fprop` | (compose the above) |
+| `step1_quantize_fprop` | `quantize_and_update_ahat_kernel` |
+| `step1_static_quantize_fprop` **(dual)** | `static_quantize_and_update_ahat_kernel_int8*` |
+| `step1_static_quantize_fprop_silu` | `..._int8_half_cache_silu` |
+| `step1_quantize_pack_int4_fprop` | `quantize_pack_and_update_ahat_kernel_int4` |
+| `step1_static_quantize_pack_int4_fprop` **(dual)** | `static_quantize_pack_and_update_ahat_kernel_int4*` |
+| `step1_static_quantize_pack_int4_fprop_silu` | `..._int4_half_cache_silu` |
+
+**And eight BASELINE functions that live in the MoDiff file today** — they go to `baseline/`, with their
+kernels: `step1_quantize_no_ahat_fprop` (`quantize_only_int8_kernel`),
+`step1_static_quantize_noahat_fprop` (`static_quantize_int8_noahat[_vec2]_kernel`),
+`step1_static_quantize_pack_int4_noahat_fprop`, `step1_quantize_pack_int4_no_ahat_fprop`
+(`quantize_pack_only_kernel_int4`), `upsample2x_quantize_noahat_fprop` and `_pack_`,
+`avgpool2x_quantize_noahat_fprop` and `_pack_`.
+
+**A consequence worth acting on later, not now.** The baseline already *has*
+`step1_static_quantize_noahat_fprop`, yet `int8_optimized.py:1362` calls the a_hat variant with a zero
+buffer instead. If that call site simply used the existing no-ahat kernel, the dual set for this family
+would drop to zero and no duplication would be needed at all. That is a behaviour change (a different
+kernel runs, with different SASS), so it is out of scope for a migration gated on SASS identity — but it
+is the correct end state and it is cheap to verify, since both compute the same thing when `a_hat == 0`.
+
 ## Speed, from the current committed measurements
 
 **End to end, batch 128, A40, 200 steps × 5 repeats, profiler-free**
