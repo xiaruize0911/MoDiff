@@ -104,7 +104,7 @@ first while the pattern is still cheap to change.
 | # | family | now | split | notes |
 |--:|---|---|---|---|
 | 1 | `quantize/` | `quantize.cu` (10 host fns), `modiff_delta_quantize.cu` (19) | `baseline/quantize/`, `modiff/quantize/` | already nearly split by file; **holds most of the dual set** (`step1_*`) |
-| 2 | `linear/` | `gemm_wxax.cu` (19) | both | `*_o_hat`, `*_o_hat_out_i8` → modiff; plain/`bias_res`/`out_i8` → baseline |
+| 2 | `linear/` | **DONE** — `baseline/linear/gemm_wxax.cu` (1508 L, 16 exports), `modiff/linear/gemm_wxax.cu` (795 L, 3 exports) | the 3 `*_o_hat*` host fns moved; the 3 GEMM kernels + `GWQ_*` constants + `gwq_s2r_A/B`/`gwq_store2` **copied** as `static` (the kernels are dual-purpose — baseline launches them with `o_hat == nullptr`) |
 | 3 | `norm/` | `group_norm_silu.cu` (11), `fused_gn_qkv.cu` (3) | both | `*_delta_quantize_*` and `gn_stats_from_tiles` → modiff; `group_norm_silu*`, `fused_gn_qkv` → baseline |
 | 4 | `conv/` | `conv2d_int8.cu` (13), `conv2d_int4.cu` (12), `conv2d_evt.cu` (9) | both | `_o_hat*` → modiff, `_no_ohat*` → baseline; the CUTLASS instantiations get copied, which is where compile time doubles |
 | 5 | `attention/` | `flash_attn_int8.cu` (25), `attn_quant_gemm.cu` (11) | mostly baseline | no flash kernel carries state. MoDiff's involvement is which *entry point* it may use: `_qout` variants are unusable under MoDiff (the epilogue and the o_hat state are mutually exclusive), and `flash_attn_int8_packed_vt` is what route (b) feeds int8 into |

@@ -27,8 +27,8 @@
 #include <cuda_pipeline_primitives.h>
 #include <torch/extension.h>
 
-#include "common.cuh"
-#include "mma_int8.cuh"
+#include "../common/common.cuh"
+#include "../common/mma_int8.cuh"
 
 // ---- fused fp16 -> int8 / packed-int4 activation quantize (static per-tensor scale) ----
 __global__ void quant_act_int8_kernel(const __half* __restrict__ x, int8_t* __restrict__ out,
@@ -609,46 +609,6 @@ torch::Tensor gemm_w8a8_awq_out_i8(torch::Tensor A, torch::Tensor B, torch::Tens
   return C;
 }
 
-// MoDiff dual output: o_hat_t = A(Q(delta)) + o_hat_{t+1} (fp16 state, Eq 9), and the returned int8
-// is Q_out(o_hat_t + bias) for the next consumer -- one pass instead of an fp16 materialize plus a
-// separate quantize. Written for the attention qkv, whose consumer (flash) wants int8 while MoDiff
-// wants the fp16 state kept: the two used to be mutually exclusive, which is what forced the whole
-// GN->qkv->flash chain to fall back (docs/delta_clip_2026-08-06).
-torch::Tensor gemm_w8a8_awq_o_hat_out_i8(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale,
-                                        torch::Tensor a_scale, int64_t n_out, torch::Tensor o_hat,
-                                        torch::Tensor bias, torch::Tensor inv_out_scale) {
-  TORCH_CHECK(A.is_cuda() && A.dtype() == torch::kChar && B.dtype() == torch::kChar, "A/B int8 CUDA");
-  TORCH_CHECK(o_hat.dtype() == torch::kFloat16, "o_hat must be fp16");
-  A = A.contiguous(); B = B.contiguous();
-  int M = A.size(0), K = A.size(1), N = B.size(0);
-  TORCH_CHECK(B.size(1) == K && N % GWQ_CTA_N == 0 && K % GWQ_CTA_K == 0, "shape/pad");
-  TORCH_CHECK(o_hat.numel() == (int64_t)M * n_out, "o_hat must be [M, n_out]");
-  // [M, n_out], NOT [M, N]. The store loop writes `C[(m0+row) * n_out + n0 + col]` -- an UNPADDED row
-  // stride -- so allocating at the padded width N made the two disagree whenever n_out != N, and the
-  // codes scattered. Measured before the fix (integration/tests/test_qkv_o_hat_out_i8.py): at
-  // n_out=576 padded to 640, 81.6% of codes wrong with max|diff| 254, while the two 128-aligned
-  // shapes were correct to within 1. o_hat was right throughout, because it already indexed at
-  // n_out. Allocating unpadded also matches gemm_w8a8_awq_o_hat's return shape, so the caller needs
-  // no slice and there is no uninitialised tail to slice off.
-  auto C = torch::empty({M, n_out}, torch::TensorOptions().dtype(torch::kChar).device(A.device()));
-  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-  dim3 grid(N / GWQ_CTA_N, (M + GWQ_CTA_M - 1) / GWQ_CTA_M);
-  // a_scale is a 1-element DEVICE tensor here, as on the o_hat path: taking it by value would cost a
-  // .item() sync per linear per step. The kernel signature takes a float, so read it on device via
-  // the same trick the o_hat GEMM uses -- pass it through the existing float parameter is NOT
-  // possible, so this wrapper requires the caller to have it on device and dereferences once.
-  TORCH_CHECK(a_scale.numel() == 1 && a_scale.dtype() == torch::kFloat32,
-              "a_scale must be a 1-element float32 device tensor");
-  gemm_w8a8_kernel_awq_out_i8<0><<<grid, GWQ_NUM_WARPS * 32, 0, stream>>>(
-      A.data_ptr<int8_t>(), B.data_ptr<int8_t>(), w_scale.contiguous().data_ptr<float>(),
-      0.f, inv_out_scale.contiguous().data_ptr<float>(),
-      bias.numel() > 0 ? (const __half*)bias.contiguous().data_ptr<at::Half>() : (const __half*)nullptr,
-      C.data_ptr<int8_t>(), M, N, K, (int)n_out,
-      nullptr, nullptr, nullptr, 0, 0, 0, 0,
-      (__half*)o_hat.data_ptr<at::Half>(),
-      a_scale.contiguous().data_ptr<float>());
-  return C;
-}
 
 torch::Tensor gemm_w8a8_awq_out_i8_bias_nout(
     torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale,
@@ -810,67 +770,6 @@ torch::Tensor gemm_w8a8_awq_nout(torch::Tensor A, torch::Tensor B, torch::Tensor
   return C;
 }
 
-//   Op:       Linear W8A8 GEMM + fused bias + optional residual (attention proj / qkv path)
-//   Inputs:   A int8 [M,K]; B int8 [N,K] (N%128); w_scale f32 [N]; a_scale f64; n_out i64 (even, <=N);
-//             bias fp16 [n_out] or empty; residual fp16 [M,n_out] or empty
-//   Outputs:  C fp16 [M,n_out] = dequant(A.B)*a_scale*w_scale[n] + bias[n] + residual[m,n]
-//   Fuses:    dequant + bias add + residual add in the GEMM epilogue -> removes the separate
-//             `out + bias` and `x + proj(out)` elementwise-add kernels (the residual-add glue).
-// -----------------------------------------------------------------------------
-//   Op:       Linear W8A8 GEMM + MoDiff o_hat accumulate (attention qkv / proj on the modulated path)
-//   Inputs:   A int8 [M,K] the quantized DELTA codes; B int8 [N,K]; w_scale fp32 [N]; a_scale the
-//             reciprocal of the scale that quantized A; n_out; o_hat fp16 [M,n_out] modified in
-//             place; residual fp16 [M,n_out] or empty
-//   Outputs:  o_hat advanced to o_hat_t (Eq 9, bias- and residual-free), and RETURNS
-//             o_hat_t + bias + residual -- what the next layer consumes.
-//   Computes: o_hat_t = A(Q(a_t - a_hat_{t+1})) * a_scale * w_scale[n] + o_hat_{t+1}
-//   Fuses:    the accumulate into the GEMM epilogue, replacing three full-tensor PyTorch launches
-//             per linear per step (dequant, add, store). That overhead -- measured +10.9 ms/step at
-//             batch 8 -- is the ONLY reason MoDiff on the Linear layers was off by default; the
-//             method itself is correct there since Bug 2 was fixed (int4 latent relL2 0.4571 ->
-//             0.4220 with it on).
-//   Constraints: bias and residual are applied to the RETURNED tensor only, never to o_hat -- see
-//             gwq_store2, where the accumulate deliberately precedes them.
-// -----------------------------------------------------------------------------
-torch::Tensor gemm_w8a8_awq_o_hat(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale,
-                                  torch::Tensor a_scale, int64_t n_out, torch::Tensor o_hat,
-                                  torch::Tensor residual, torch::Tensor bias) {
-  TORCH_CHECK(a_scale.numel() == 1 && a_scale.dtype() == torch::kFloat32,
-              "a_scale must be a 1-element fp32 DEVICE tensor (no host sync on the hot path)");
-  TORCH_CHECK(A.is_cuda() && A.dtype() == torch::kChar && B.dtype() == torch::kChar, "A/B int8 CUDA");
-  A = A.contiguous(); B = B.contiguous();
-  int M = A.size(0), K = A.size(1), N = B.size(0);
-  TORCH_CHECK(B.size(1) == K, "K mismatch");
-  TORCH_CHECK(N % GWQ_CTA_N == 0 && K % GWQ_CTA_K == 0, "N%128==0, K%64==0");
-  TORCH_CHECK(n_out > 0 && n_out <= N && n_out % 2 == 0, "n_out even in (0,N]");
-  TORCH_CHECK(o_hat.dtype() == torch::kHalf && o_hat.numel() == (int64_t)M * n_out,
-              "o_hat must be fp16 [M,n_out]");
-  __half* op = reinterpret_cast<__half*>(o_hat.contiguous().data_ptr<at::Half>());
-  const __half* rp = nullptr;
-  const __half* bp = nullptr;
-  if (residual.numel()) {
-    TORCH_CHECK(residual.numel() == (int64_t)M * n_out && residual.dtype() == torch::kHalf,
-                "residual fp16 [M,n_out]");
-    rp = reinterpret_cast<const __half*>(residual.contiguous().data_ptr<at::Half>());
-  }
-  if (bias.numel()) {
-    TORCH_CHECK(bias.numel() == n_out && bias.dtype() == torch::kHalf, "bias fp16 [n_out]");
-    bp = reinterpret_cast<const __half*>(bias.contiguous().data_ptr<at::Half>());
-  }
-  // C is ALWAYS produced: it is o_hat_t + bias + residual, i.e. what the next layer consumes.
-  // Returning o_hat itself would force the caller to add bias to the state tensor in place.
-  auto C = torch::empty({M, (int)n_out},
-                        torch::TensorOptions().dtype(torch::kFloat16).device(A.device()));
-  __half* cp = reinterpret_cast<__half*>(C.data_ptr<at::Half>());
-  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-  dim3 grid(N / GWQ_CTA_N, (M + GWQ_CTA_M - 1) / GWQ_CTA_M);
-  gemm_w8a8_kernel_awq<<<grid, GWQ_NUM_WARPS * 32, 0, stream>>>(
-      A.data_ptr<int8_t>(), B.data_ptr<int8_t>(), w_scale.contiguous().data_ptr<float>(),
-      0.f, cp, M, N, K, (int)n_out, bp, rp, op,
-      a_scale.contiguous().data_ptr<float>());
-  C10_CUDA_CHECK(cudaGetLastError());
-  return C;
-}
 
 torch::Tensor gemm_w8a8_awq_bias_res(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale,
                                      int64_t n_out, torch::Tensor bias, torch::Tensor residual) {
@@ -998,57 +897,6 @@ __global__ void gemm_w4a4_kernel_awq(const int8_t* __restrict__ A, const int8_t*
   }
 }
 
-//   Op:       Linear W4A4 GEMM (production int4 Linear entry point)
-//   Inputs:   A int8 [M, K/2] packed int4 (2 per byte, quantized activation); B int8 [N, K/2] packed
-//             int4 (weight, one row per output channel); w_scale f32 [N] (per-channel); a_scale f64
-//             (per-tensor scalar); K i64 = logical (unpacked) K
-//   Outputs:  C fp16 [M, N]
-//   Computes: C[m,n] = (A[m,:].B[n,:] over K int4 elems) * a_scale * w_scale[n]
-//   Fuses:    fp16 dequant epilogue (int32 accumulator * a_scale * w_scale[n] -> fp16)
-//   Constraints: A/B packed-int4 CUDA (kChar); N%128==0, K%128==0 (pad B/w_scale at the call site)
-//   vs fp16:  W8A8 GEMM ~1.46x / W4A4 ~1.83x vs fp16 F.linear on churches qkv/proj shapes (b128),
-//             GEMM-only i.e. activation-quantize fused upstream. With a standalone activation quantize
-//             the win is erased (int8 ~0.99x, int4 ~0.78x). Wins biggest at K>=384 (int4 up to 2.66x);
-//             weakest at K=192.
-// INT4 twin. Same contract; Kb is the packed K (two int4 per byte), handled by the kernel.
-torch::Tensor gemm_w4a4_awq_o_hat(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale,
-                                  torch::Tensor a_scale, int64_t n_out, torch::Tensor o_hat,
-                                  torch::Tensor residual, torch::Tensor bias) {
-  TORCH_CHECK(a_scale.numel() == 1 && a_scale.dtype() == torch::kFloat32,
-              "a_scale must be a 1-element fp32 DEVICE tensor (no host sync on the hot path)");
-  TORCH_CHECK(A.is_cuda() && A.dtype() == torch::kChar && B.dtype() == torch::kChar, "A/B int8 CUDA");
-  A = A.contiguous(); B = B.contiguous();
-  int M = A.size(0), Kb = A.size(1), N = B.size(0);
-  TORCH_CHECK(B.size(1) == Kb, "Kb mismatch");
-  TORCH_CHECK(n_out > 0 && n_out <= N && n_out % 2 == 0, "n_out even in (0,N]");
-  TORCH_CHECK(o_hat.dtype() == torch::kHalf && o_hat.numel() == (int64_t)M * n_out,
-              "o_hat must be fp16 [M,n_out]");
-  __half* op = reinterpret_cast<__half*>(o_hat.contiguous().data_ptr<at::Half>());
-  const __half* rp = nullptr;
-  const __half* bp = nullptr;
-  if (residual.numel()) {
-    TORCH_CHECK(residual.numel() == (int64_t)M * n_out && residual.dtype() == torch::kHalf,
-                "residual fp16 [M,n_out]");
-    rp = reinterpret_cast<const __half*>(residual.contiguous().data_ptr<at::Half>());
-  }
-  if (bias.numel()) {
-    TORCH_CHECK(bias.numel() == n_out && bias.dtype() == torch::kHalf, "bias fp16 [n_out]");
-    bp = reinterpret_cast<const __half*>(bias.contiguous().data_ptr<at::Half>());
-  }
-  // C is ALWAYS produced: it is o_hat_t + bias + residual, i.e. what the next layer consumes.
-  // Returning o_hat itself would force the caller to add bias to the state tensor in place.
-  auto C = torch::empty({M, (int)n_out},
-                        torch::TensorOptions().dtype(torch::kFloat16).device(A.device()));
-  __half* cp = reinterpret_cast<__half*>(C.data_ptr<at::Half>());
-  cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-  dim3 grid(N / GWQ_CTA_N, (M + GWQ_CTA_M - 1) / GWQ_CTA_M);
-  gemm_w4a4_kernel_awq<<<grid, GWQ_NUM_WARPS * 32, 0, stream>>>(
-      A.data_ptr<int8_t>(), B.data_ptr<int8_t>(), w_scale.contiguous().data_ptr<float>(),
-      0.f, cp, M, N, Kb, (int)n_out, bp, rp, op,
-      a_scale.contiguous().data_ptr<float>());
-  C10_CUDA_CHECK(cudaGetLastError());
-  return C;
-}
 
 torch::Tensor gemm_w4a4_awq(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale, int64_t K) {
   TORCH_CHECK(A.is_cuda() && A.dtype() == torch::kChar && B.dtype() == torch::kChar, "A/B packed int4 CUDA");

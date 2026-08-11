@@ -40,7 +40,9 @@ setup(
                 'csrc/kernels/norm/group_norm_silu.cu',
                 'csrc/kernels/norm/fused_gn_qkv.cu',
                 # linear: W8A8/W4A4 Linear GEMM (own AWQ-tiling port + vendored AWQ)
-                'csrc/kernels/linear/gemm_wxax.cu',
+                # family 2 of the csrc split (2026-08-12)
+                'csrc/baseline/linear/gemm_wxax.cu',
+                'csrc/modiff/linear/gemm_wxax.cu',
                 # attention: W8A8/W4A4 materialized attention + fused int8/int4 flash
                 'csrc/kernels/attention/attn_quant_gemm.cu',
                 'csrc/kernels/attention/flash_attn_int8.cu',
