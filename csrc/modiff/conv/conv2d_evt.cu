@@ -1,3 +1,23 @@
+// ============================================================================================
+// MoDiff EVT-fused conv2d epilogue: the D2 fusion. Baseline twin (D1): csrc/baseline/conv/conv2d_evt.cu
+//
+//   D2 (MoDiff): o_hat[elem] += acc*alpha*weight_scale[k]  (in place, fp16);
+//                out = o_hat_new + residual[elem] -> fp16  (dual store)
+//                replaces conv2d_intX_fprop_o_hat_residual's fp32 conv_out round-trip.
+//
+// weight_scale/bias are FP32 [K], matching the fp32 accumulate of the scale_accumulate kernels, so
+// D2's o_hat stays BIT-EXACT against the unfused path. alpha is read on-device from a 1-elem fp32
+// tensor (no host sync).
+//
+// Family 4 of the csrc/ datapath split (2026-08-12). run_d1 and the two *_evt_bias_residual_fp16
+// exports stay baseline; run_d2 / run_d2nr and the four *_evt_o_hat* exports are here.
+//
+// The EVT type machinery (the anonymous-namespace preamble: Evt<> struct, the I8/I4 aliases, the
+// Swizzle/alignment constants) and make_problem are COPIED, because both trees' drivers need them.
+// They sit in an anonymous namespace in both files, so the duplication cannot collide at link time.
+// KEEP THEM IDENTICAL to the baseline twin -- D2's o_hat is bit-exact against the unfused path only
+// as long as the type parameters match. See csrc/README.md.
+// ============================================================================================
 // EVT-fused conv2d fprop epilogues (SM80), driven by the custom EVT-capable conv kernel driver
 // (implicit_gemm_conv_evt.h). CUTLASS 4.6.1 has no EVT-on-conv path, so these hand-assemble an
 // Sm80 Epilogue Visitor Tree onto the int8/int4 conv Mma and drive it with modiff::
@@ -25,6 +45,7 @@
 #include "implicit_gemm_conv_evt.h"
 #include "common.cuh"
 
+// ---- COPY of the anonymous-namespace EVT preamble ----
 namespace {
 using cutlass::layout::TensorNHWC;
 using Arch = cutlass::arch::Sm80;
@@ -98,43 +119,6 @@ using I4Def = typename cutlass::conv::kernel::DefaultConv2dFprop<
     cutlass::conv::IteratorAlgorithm::kOptimized, cutlass::conv::StrideSupport::kStrided>::Kernel;
 using I4 = Evt<I4Def, cutlass::gemm::GemmShape<128,128,128>, cutlass::gemm::GemmShape<64,64,128>>;
 
-template <class EvtT, class ElemAB>
-void run_d1(ElemAB* xp, ElemAB* wp, const float* alpha_ptr, ES* wsp, ES* biasp, EC* resp, EC* outp,
-            cutlass::conv::Conv2dProblemSize const& problem, int C, int R, int S, int K,
-            int64_t M, int64_t ldK, cudaStream_t stream) {
-  ES z(0); EC ze(0);
-  // bias broadcast is null-guarded (RowBroadcast fills null_default=0 when ptr==null); residual
-  // AuxLoad is NOT null-guarded, so a residual-free conv uses the EVTD1nr tree (no AuxLoad node).
-  using LN = TensorNHWC;
-  typename EvtT::KernelD1::TensorRefA refA{xp, LN({C, problem.W*C, problem.H*problem.W*C})};
-  typename EvtT::KernelD1::TensorRefB refB{wp, LN({C, S*C, R*S*C})};
-  if (resp != nullptr) {
-    typename EvtT::EVTD1::Arguments ep{
-      { { { { {}, {{ECompute(0)}, {alpha_ptr}, {}}, {} },
-            {wsp, z, {cute::_0{}, cute::_1{}, (int32_t)K}}, {} },
-          {biasp, z, {cute::_0{}, cute::_1{}, (int32_t)K}}, {} },          // +bias (null->0)
-        {resp, ze, {ldK, cute::_1{}, M*K}}, {} },                          // +residual
-      {outp, {ldK, cute::_1{}, M*K}} };
-    typename EvtT::OpD1::Arguments args{problem, refA, refB, ep};
-    typename EvtT::OpD1 op;
-    TORCH_CHECK(op.can_implement(args) == cutlass::Status::kSuccess, "evt d1 can_implement");
-    auto ws = torch::empty({(long)op.get_workspace_size(args)}, torch::TensorOptions().dtype(torch::kByte).device(torch::kCUDA));
-    TORCH_CHECK(op.initialize(args, ws.data_ptr(), stream) == cutlass::Status::kSuccess, "evt d1 init");
-    TORCH_CHECK(op(stream) == cutlass::Status::kSuccess, "evt d1 run");
-  } else {
-    typename EvtT::EVTD1nr::Arguments ep{
-      { { { {}, {{ECompute(0)}, {alpha_ptr}, {}}, {} },
-          {wsp, z, {cute::_0{}, cute::_1{}, (int32_t)K}}, {} },
-        {biasp, z, {cute::_0{}, cute::_1{}, (int32_t)K}}, {} },            // +bias (null->0)
-      {outp, {ldK, cute::_1{}, M*K}} };
-    typename EvtT::OpD1nr::Arguments args{problem, refA, refB, ep};
-    typename EvtT::OpD1nr op;
-    TORCH_CHECK(op.can_implement(args) == cutlass::Status::kSuccess, "evt d1nr can_implement");
-    auto ws = torch::empty({(long)op.get_workspace_size(args)}, torch::TensorOptions().dtype(torch::kByte).device(torch::kCUDA));
-    TORCH_CHECK(op.initialize(args, ws.data_ptr(), stream) == cutlass::Status::kSuccess, "evt d1nr init");
-    TORCH_CHECK(op(stream) == cutlass::Status::kSuccess, "evt d1nr run");
-  }
-}
 
 template <class EvtT, class ElemAB>
 void run_d2(ElemAB* xp, ElemAB* wp, const float* alpha_ptr, ES* wsp, EC* ohatp, EC* resp, EC* outp,
@@ -191,6 +175,7 @@ void run_d2nr(ElemAB* xp, ElemAB* wp, const float* alpha_ptr, ES* wsp, EC* ohatp
   TORCH_CHECK(op(stream) == cutlass::Status::kSuccess, "evt d2nr run");
 }
 
+// ---- COPY of make_problem ----
 cutlass::conv::Conv2dProblemSize make_problem(int N, int H, int W, int C, int K, int R, int S,
                                               int sh, int sw, int ph, int pw, int dh, int dw,
                                               int& P, int& Q) {
@@ -199,48 +184,10 @@ cutlass::conv::Conv2dProblemSize make_problem(int N, int H, int W, int C, int K,
   return cutlass::conv::Conv2dProblemSize({N,H,W,C},{K,R,S,C},{ph,pw,ph,pw},{sh,sw},{dh,dw},
                                           {N,P,Q,K}, cutlass::conv::Mode::kCrossCorrelation, 1);
 }
+
 } // namespace
 
-// ---- host entry points ----
-torch::Tensor conv2d_int8_evt_bias_residual_fp16(
-    torch::Tensor input, torch::Tensor weight, torch::Tensor inv_scale, torch::Tensor weight_scales,
-    torch::Tensor bias, torch::Tensor residual, torch::Tensor output,
-    int sh, int sw, int ph, int pw, int dh, int dw) {
-  CHECK_CUDA(output); CHECK_CONTIGUOUS(output);
-  TORCH_CHECK(output.scalar_type() == torch::kFloat16, "output fp16");
-  // int8 input is logical [N,C,H,W] channels_last (matches conv2d_int8_fprop's dim extraction).
-  int N=input.size(0),C=input.size(1),H=input.size(2),W=input.size(3),K=weight.size(0),R=weight.size(1),S=weight.size(2);
-  int P,Q; auto problem = make_problem(N,H,W,C,K,R,S,sh,sw,ph,pw,dh,dw,P,Q);
-  int64_t M=(int64_t)N*P*Q, ldK=K;
-  run_d1<I8,int8_t>(
-      input.data_ptr<int8_t>(), weight.data_ptr<int8_t>(), inv_scale.data_ptr<float>(),
-      weight_scales.data_ptr<float>(),
-      bias.numel()? bias.data_ptr<float>() : nullptr,
-      residual.numel()? reinterpret_cast<EC*>(residual.data_ptr<at::Half>()) : nullptr,
-      reinterpret_cast<EC*>(output.data_ptr<at::Half>()), problem, C,R,S,K,M,ldK,
-      at::cuda::getCurrentCUDAStream());
-  return output;
-}
-
-torch::Tensor conv2d_int4_evt_bias_residual_fp16(
-    torch::Tensor input, torch::Tensor weight_packed, torch::Tensor inv_scale, torch::Tensor weight_scales,
-    torch::Tensor bias, torch::Tensor residual, torch::Tensor output,
-    int sh, int sw, int ph, int pw, int dh, int dw) {
-  CHECK_CUDA(output); CHECK_CONTIGUOUS(output);
-  TORCH_CHECK(output.scalar_type() == torch::kFloat16, "output fp16");
-  // int4 input is logical [N,H,W,C_packed] contiguous; C_logical = 2*C_packed (matches conv2d_int4_fprop).
-  int N=input.size(0),H=input.size(1),W=input.size(2),C=2*weight_packed.size(3),K=weight_packed.size(0),R=weight_packed.size(1),S=weight_packed.size(2);
-  int P,Q; auto problem = make_problem(N,H,W,C,K,R,S,sh,sw,ph,pw,dh,dw,P,Q);
-  int64_t M=(int64_t)N*P*Q, ldK=K;
-  run_d1<I4,cutlass::int4b_t>(
-      (cutlass::int4b_t*)input.data_ptr(), (cutlass::int4b_t*)weight_packed.data_ptr(), inv_scale.data_ptr<float>(),
-      weight_scales.data_ptr<float>(),
-      bias.numel()? bias.data_ptr<float>() : nullptr,
-      residual.numel()? reinterpret_cast<EC*>(residual.data_ptr<at::Half>()) : nullptr,
-      reinterpret_cast<EC*>(output.data_ptr<at::Half>()), problem, C,R,S,K,M,ldK,
-      at::cuda::getCurrentCUDAStream());
-  return output;
-}
+// ---- host entry points (moved) ----
 
 torch::Tensor conv2d_int8_evt_o_hat_residual(
     torch::Tensor input, torch::Tensor weight, torch::Tensor inv_scale, torch::Tensor weight_scales,

@@ -32,10 +32,16 @@ setup(
                 'csrc/baseline/quantize/quantize.cu',
                 'csrc/modiff/quantize/delta_quantize.cu',
                 # conv: W8A8/W4A4 int conv (CUTLASS implicit GEMM) + shared epilogue
-                'csrc/kernels/conv/conv_epilogue.cu',
-                'csrc/kernels/conv/conv2d_int8.cu',
-                'csrc/kernels/conv/conv2d_int4.cu',
-                'csrc/kernels/conv/conv2d_evt.cu',
+                # family 4 of the csrc split (2026-08-12). The CUTLASS conv Op instantiations
+                # are duplicated across the two trees -- this is where build time grows.
+                'csrc/baseline/conv/conv_epilogue.cu',
+                'csrc/baseline/conv/conv2d_int8.cu',
+                'csrc/baseline/conv/conv2d_int4.cu',
+                'csrc/baseline/conv/conv2d_evt.cu',
+                'csrc/modiff/conv/conv_epilogue.cu',
+                'csrc/modiff/conv/conv2d_int8.cu',
+                'csrc/modiff/conv/conv2d_int4.cu',
+                'csrc/modiff/conv/conv2d_evt.cu',
                 # norm: GroupNorm(+SiLU)(+quantize) and fused GroupNorm->qkv
                 # family 3 of the csrc split (2026-08-12)
                 'csrc/baseline/norm/group_norm_silu.cu',

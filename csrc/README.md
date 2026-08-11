@@ -74,9 +74,9 @@ rather than asserted:
 
 | | value |
 |---|---|
-| clean `python setup.py build_ext --inplace`, 12 CUDA TUs, `ninja` present | **246 s** |
-| `modiff_cutlass...so` | 26,480,696 B (25.3 MiB) |
-| `build/` | 83 MB |
+| clean `python setup.py build_ext --inplace`, `ninja` present | **246 s** pre-split (12 TUs) → **480 s** post-split (20 TUs), **1.95×** |
+| `modiff_cutlass...so` | 26,480,696 B pre-split → 27,116,888 B post-split (**+2.4%**) |
+| `build/` | 83 MB → 92 MB |
 | device kernels in the binary | 279 unique (289 `Function` entries; 10 templates instantiated in two TUs) |
 
 Without `ninja` the same build is >20 min: torch falls back to a serial backend. Check for it first.
@@ -106,7 +106,7 @@ first while the pattern is still cheap to change.
 | 1 | `quantize/` | `quantize.cu` (10 host fns), `modiff_delta_quantize.cu` (19) | `baseline/quantize/`, `modiff/quantize/` | already nearly split by file; **holds most of the dual set** (`step1_*`) |
 | 2 | `linear/` | **DONE** — `baseline/linear/gemm_wxax.cu` (1508 L, 16 exports), `modiff/linear/gemm_wxax.cu` (795 L, 3 exports) | the 3 `*_o_hat*` host fns moved; the 3 GEMM kernels + `GWQ_*` constants + `gwq_s2r_A/B`/`gwq_store2` **copied** as `static` (the kernels are dual-purpose — baseline launches them with `o_hat == nullptr`) |
 | 3 | `norm/` | **DONE** — `baseline/norm/{group_norm_silu,fused_gn_qkv}.cu` (1551 + 436 L, 10 exports), `modiff/norm/group_norm_silu.cu` (2033 L, 4 exports) | **zero shared kernels**: 16 kernels + `gn_launch_group_stats` reach only from the delta entry points, 6 kernels + the two `*_impl` helpers only from baseline. Only the small dtype-dispatch helpers (`gn_load`/`gn_load2`/`gn_store2`, `gns_silu`, `gn_report_delta_absmax`) are copied. SASS gate passed with **no re-baseline** |
-| 4 | `conv/` | `conv2d_int8.cu` (13), `conv2d_int4.cu` (12), `conv2d_evt.cu` (9) | both | `_o_hat*` → modiff, `_no_ohat*` → baseline; the CUTLASS instantiations get copied, which is where compile time doubles |
+| 4 | `conv/` | **DONE** — `baseline/conv/` (4 files, 2325 L) + `modiff/conv/` (4 files, 1033 L) | the 8 `*_o_hat*` exports moved; **the int8 and int4 CUTLASS conv Op instantiations, `conv2d_intX_fprop`, the EVT preamble and `make_problem` are COPIED**. Cost measured: clean build **246 s → 480 s (1.95×)**, `.so` 26,480,696 → 27,116,888 B (+2.4%), `build/` 83 → 92 MB |
 | 5 | `attention/` | **DONE** — both files whole to `baseline/attention/` (2777 + 1144 L, 36 exports) | **0 of 36 host fns reference `a_hat`/`o_hat`** — attention is stateless in both datapaths, so nothing was duplicated and nothing went to `modiff/`. Each file carries a DATAPATH NOTE explaining that MoDiff's involvement is *which entry point it may call* (`_qout` unusable under MoDiff; `packed_vt` is route (b)'s), decided in Python. SASS gate passed with **no re-baseline** |
 | 6 | `util/` | **DONE** — `baseline/util/layout_transform.cu` (460 L, 4 exports), `modiff/util/layout_transform.cu` (324 L, 1 export) | `fp16_ncw_delta_to_int8_cl` + its 4 delta kernels moved; nothing shared but the `TILE_T` #define. SASS gate passed with **no re-baseline** — a true pure move |
 

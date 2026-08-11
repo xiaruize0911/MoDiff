@@ -59,7 +59,7 @@
 #include "cutlass/conv/device/implicit_gemm_convolution.h"
 #include "cutlass/conv/kernel/default_conv2d_fprop.h"
 
-#include "common.cuh"
+#include "../common/common.cuh"
 #include "conv_epilogue.cuh"
 
 // Architecture: Ampere (Sm80)
@@ -516,139 +516,7 @@ torch::Tensor conv2d_int8_dequant_fp16_tuned(
   return output;
 }
 
-// conv2d_int8_fprop, then o_hat_cache += raw_output * weight_scales[channel].
-//   Inputs:   input int8 [N,C,H,W] cl; weight int8 [K,R,S,C]; inv_scale fp32 (1-elem alpha);
-//             weight_scales fp32 [K] (per-channel); o_hat_cache fp16 or fp32 [N,K,H_out,W_out]
-//             cl (in-place accumulate target); stride/pad/dilation.
-//   Outputs:  o_hat_cache (returned, in place) += int32_accum * inv_scale * weight_scale[ch].
-//   Fuses:    per-channel weight-scale dequant + MoDiff o_hat cache accumulate (separate
-//             scale_accumulate[_half] kernel after the raw fprop).
-//   Constraints: o_hat_cache fp16 or fp32; weight_scales.numel()==K.
-torch::Tensor conv2d_int8_fprop_o_hat(
-    torch::Tensor input,
-    torch::Tensor weight,
-    torch::Tensor inv_scale,      // scalar tensor for CUTLASS alpha
-    torch::Tensor weight_scales,  // per-channel vector
-    torch::Tensor o_hat_cache,    // in-place output accumulate target
-    int stride_h, int stride_w,
-    int padding_h, int padding_w,
-    int dilation_h, int dilation_w
-) {
-    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-    auto empty_bias = torch::empty({0}, torch::TensorOptions().device(input.device()));
 
-    auto conv_out = conv2d_int8_fprop(
-        input, weight, inv_scale, empty_bias,
-        stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w
-    );
-
-    int num_elements = conv_out.numel();
-    int num_channels = weight_scales.numel();
-    int block_size = 256;
-    int num_work_items = (num_elements + 3) / 4;
-    int grid_size = (num_work_items + block_size - 1) / block_size;
-
-    // FP16 cache support cuts resident MoDiff cache memory/bandwidth while
-    // preserving the existing FP32 path for dynamic/un-calibrated runs.
-    if (o_hat_cache.scalar_type() == torch::kFloat16) {
-        // Vec2 fast path requires num_channels % 2 == 0 (see conv_epilogue.cu's header
-        // comment on the channel-boundary hazard -- same reasoning as the float4 gate,
-        // one step down in width). Right-size the grid for the 2-wide step.
-        if (num_channels % 2 == 0) {
-            int grid_size_vec2 = (((num_elements + 1) / 2) + block_size - 1) / block_size;
-            scale_accumulate_half_cache_vec2_kernel<<<grid_size_vec2, block_size, 0, stream>>>(
-                conv_out.data_ptr<float>(),
-                weight_scales.data_ptr<float>(),
-                reinterpret_cast<__half*>(o_hat_cache.data_ptr<at::Half>()),
-                num_elements,
-                num_channels
-            );
-        } else {
-            scale_accumulate_half_cache_kernel<<<grid_size, block_size, 0, stream>>>(
-                conv_out.data_ptr<float>(),
-                weight_scales.data_ptr<float>(),
-                reinterpret_cast<__half*>(o_hat_cache.data_ptr<at::Half>()),
-                num_elements,
-                num_channels
-            );
-        }
-    } else {
-        scale_accumulate_kernel<<<grid_size, block_size, 0, stream>>>(
-            conv_out.data_ptr<float>(),
-            weight_scales.data_ptr<float>(),
-            o_hat_cache.data_ptr<float>(),
-            num_elements,
-            num_channels
-        );
-    }
-
-    // Return o_hat_cache itself for identical graph tracking
-    return o_hat_cache;
-}
-
-// Same as conv2d_int8_fprop_o_hat (o_hat_cache += conv*weight_scale[ch]), but ALSO
-// writes `output` = (updated o_hat_cache) + residual, fusing the ResBlock skip-add
-// into the accumulate pass (removes the trailing aten::add on the modiff path).
-// o_hat_cache must be fp16; residual/output fp16 channels_last matching the conv
-// output. The cache write is byte-identical to conv2d_int8_fprop_o_hat, so temporal
-// evolution is unchanged; only `output` carries the residual. Returns `output`.
-//   Constraints: o_hat_cache/residual/output fp16; residual & output shape == conv out.
-torch::Tensor conv2d_int8_fprop_o_hat_residual(
-    torch::Tensor input,
-    torch::Tensor weight,
-    torch::Tensor inv_scale,
-    torch::Tensor weight_scales,
-    torch::Tensor o_hat_cache,    // in-place accumulate target (fp16)
-    torch::Tensor residual,       // fp16 channels_last, per-element skip
-    torch::Tensor output,         // fp16 channels_last, preallocated
-    int stride_h, int stride_w,
-    int padding_h, int padding_w,
-    int dilation_h, int dilation_w
-) {
-    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-    auto empty_bias = torch::empty({0}, torch::TensorOptions().device(input.device()));
-    auto conv_out = conv2d_int8_fprop(
-        input, weight, inv_scale, empty_bias,
-        stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w
-    );
-
-    TORCH_CHECK(o_hat_cache.scalar_type() == torch::kFloat16,
-                "conv2d_int8_fprop_o_hat_residual: o_hat_cache must be float16");
-    CHECK_CUDA(residual); CHECK_CUDA(output);
-    TORCH_CHECK(residual.scalar_type() == torch::kFloat16 && output.scalar_type() == torch::kFloat16,
-                "conv2d_int8_fprop_o_hat_residual: residual/output must be float16");
-    TORCH_CHECK(residual.numel() == conv_out.numel() && output.numel() == conv_out.numel(),
-                "conv2d_int8_fprop_o_hat_residual: residual/output size must match conv output");
-
-    int num_elements = conv_out.numel();
-    int num_channels = weight_scales.numel();
-    int block_size = 256;
-    int grid_size = (num_elements + block_size - 1) / block_size;
-
-    if (num_channels % 2 == 0) {
-        int grid_size_vec2 = (((num_elements + 1) / 2) + block_size - 1) / block_size;
-        scale_accumulate_residual_half_cache_vec2_kernel<<<grid_size_vec2, block_size, 0, stream>>>(
-            conv_out.data_ptr<float>(),
-            weight_scales.data_ptr<float>(),
-            reinterpret_cast<__half*>(o_hat_cache.data_ptr<at::Half>()),
-            reinterpret_cast<const __half*>(residual.data_ptr<at::Half>()),
-            reinterpret_cast<__half*>(output.data_ptr<at::Half>()),
-            num_elements,
-            num_channels
-        );
-    } else {
-        scale_accumulate_residual_half_cache_kernel<<<grid_size, block_size, 0, stream>>>(
-            conv_out.data_ptr<float>(),
-            weight_scales.data_ptr<float>(),
-            reinterpret_cast<__half*>(o_hat_cache.data_ptr<at::Half>()),
-            reinterpret_cast<const __half*>(residual.data_ptr<at::Half>()),
-            reinterpret_cast<__half*>(output.data_ptr<at::Half>()),
-            num_elements,
-            num_channels
-        );
-    }
-    return output;
-}
 
 // conv2d_int8_fprop, then output = raw_output * weight_scales[channel], written
 // into a caller-provided buffer (still allocates its own intermediate raw
