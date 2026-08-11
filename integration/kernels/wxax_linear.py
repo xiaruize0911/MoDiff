@@ -74,6 +74,25 @@ class QuantLinearWxAx(nn.Module):
         self._amax = 0.0
         self.a_hat = None                                      # MoDiff temporal caches (modiff mode)
         self.o_hat = None
+        #: Recompute the dynamic delta scale every Kth modulated step, reuse it in between -- the
+        #: mechanism OptimizedInt8Conv2d.delta_refresh has had all along, which never reached here.
+        #:
+        #: MEASURED PREMISE (docs/profile_kernels_layers_2026-08-11): the `delta_quantize` kernel
+        #: bucket moves +4.7 ms/step going K=4 -> K=1 at conv-only AND +4.7 at conv+proj, i.e. the
+        #: projections' contribution is K-INDEPENDENT, because `delta_absmax_fp16` below runs
+        #: unconditionally. The projections' own scale recomputation is 1.84 ms/step (`proj`, via
+        #: delta_absmax_fp16) plus ~1.9 (`qkv`, via the GN-fused kernel's absmax) = ~3.7 ms/step, and
+        #: a K=4 schedule should remove about three quarters of it -- the same ratio the conv path
+        #: gets (its gn_delta_absmax drops 8.24 -> 3.54 ms at K=4).
+        #:
+        #: DEFAULT 1, i.e. OFF, i.e. the pre-existing behaviour bit for bit. This changes numerics on
+        #: reuse steps -- a scale up to K-1 steps old, which is exactly what the conv path's code
+        #: ceiling was added for -- so it ships as a knob to be measured, not as a default. Note the
+        #: paired-seed protocol at batch 8 / DDIM 50 cannot resolve effects below ~10%
+        #: (docs/updown_refresh_fusion_2026-08-10), so a quality verdict here needs a bigger budget
+        #: than the a4 measurement used.
+        self.delta_refresh = max(1, int(os.environ.get("MODIFF_LINEAR_DELTA_REFRESH", "1")))
+        self._step = 0
         # Scratch for the fused MoDiff path (lazily sized on first modulated call).
         self._absmax = self._scale = self._inv_scale = self._retire = None
         self._empty_f32 = None
@@ -96,9 +115,23 @@ class QuantLinearWxAx(nn.Module):
     def set_a_scale(self, s):
         self.a_scale = float(s)
 
+    def _delta_should_refresh(self) -> bool:
+        """Whether this modulated step re-measures the delta scale, or reuses the last one.
+
+        Same shape as OptimizedInt8Conv2d._delta_should_refresh: `_step` is 1 on the first modulated
+        call, so `(step - 1) % K == 0` always refreshes there -- required, since `_scale` holds
+        nothing valid before the first refresh.
+        """
+        k = self.delta_refresh
+        return k <= 1 or ((self._step - 1) % k) == 0
+
     def reset_modiff(self):
         self.a_hat = None
         self.o_hat = None
+        # The schedule restarts with the caches. Leaving _step running across samples would make the
+        # first modulated step of sample 2 a REUSE step, quantizing against a scale measured for a
+        # different trajectory -- and _scale would be stale rather than merely old.
+        self._step = 0
 
     def _gemm(self, xf, a_scale):
         """xf: fp16 [M,K] -> fp16 [M,N] (quantize + AWQ-tiling int GEMM). Zero-pad the
@@ -197,8 +230,15 @@ class QuantLinearWxAx(nn.Module):
             # Dynamic per-call delta scale. Q_level is passed as the int8/int4 code ceiling, and the
             # kernel writes scale = Q/max|delta| plus its reciprocal, so the quantize below cannot
             # clip. Same choice as the conv path, and for the same measured reason.
-            _mc.delta_absmax_fp16(xq_in, self.a_hat, self._absmax, self._scale, self._inv_scale,
-                                  self._retire, float(self.Q), self._empty_f32, False)
+            #
+            # On a REUSE step this whole pass is skipped and `_scale`/`_inv_scale` keep the value the
+            # last refresh wrote there -- they are persistent buffers, so no state has to be carried
+            # by hand. `step_count`-equivalent is `_step`, incremented here rather than in forward(),
+            # so the non-modulated seeding call does not advance the schedule.
+            self._step += 1
+            if self._delta_should_refresh():
+                _mc.delta_absmax_fp16(xq_in, self.a_hat, self._absmax, self._scale, self._inv_scale,
+                                      self._retire, float(self.Q), self._empty_f32, False)
             if self.bits == 8:
                 codes = _mc.step1_static_quantize_fprop(xq_in, self.a_hat, self._scale,
                                                         self._empty_f32)

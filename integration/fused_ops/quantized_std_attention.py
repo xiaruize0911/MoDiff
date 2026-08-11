@@ -960,11 +960,23 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         if a_hat4.shape != x.shape:
             return None
         e32 = qkv._empty_f32
+        # Refresh schedule, same as the projection's own path. Passing EMPTY reduction buffers makes
+        # the kernel skip its absmax pass entirely and quantize with whatever `qkv._scale` already
+        # holds -- which on a reuse step is the value the last refresh wrote. That is the same
+        # contract the conv path uses (_delta_gn_dynamic_args returns empties on a reuse step), so
+        # this needs no kernel change.
+        #
+        # `_step` is advanced HERE and not in QuantLinearWxAx.forward, because on this fused path the
+        # projection's forward never runs -- the GN kernel and the o_hat GEMM are called directly.
+        # Advancing it in both places would double-count and halve the effective K.
+        qkv._step += 1
+        dyn = ((qkv._absmax, qkv._scale, qkv._inv_scale, qkv._retire)
+               if qkv._delta_should_refresh() else (e32, e32, e32, e32))
         codes = _mc.group_norm_silu_delta_quantize_nhwc(
             x, gw, gb, a_hat4, self.norm.num_groups, self.norm.eps,
             False,                                   # apply_silu: attention GN has no SiLU
             qkv._scale, e32, e32, e32,               # scale (dynamic mode overwrites it), smooth, mod
-            qkv._absmax, qkv._scale, qkv._inv_scale, qkv._retire,
+            *dyn,
             float(qkv.Q), False, 1.0)                # Q_level, report_next, safety
         codes2d = codes.permute(0, 2, 3, 1).reshape(b * T, c)
         out = _mc.gemm_w8a8_awq_o_hat(

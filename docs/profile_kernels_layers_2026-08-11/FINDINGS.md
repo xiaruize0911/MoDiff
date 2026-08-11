@@ -87,6 +87,27 @@ the refresh rate moved the score kernels at all.
 `MODIFF_DELTA_REFRESH` never reaches them (`QuantLinearWxAx.forward` recomputes its delta scale
 unconditionally). That reproduces the 2026-08-07 finding from a fresh trace.
 
+> **Acted on, same day.** `MODIFF_LINEAR_DELTA_REFRESH` gives the 42 projections the schedule the
+> convs have had all along. Paired A/B on ONE model object — `delta_refresh` is a plain attribute, so
+> both arms share the model and there is no drift term (`integration/tests/ab_linear_refresh.py`,
+> batch 128, 200 steps, 4 paired repeats, conv K=4 throughout):
+>
+> | arm | ms/step | `delta_absmax_fp16` calls/step |
+> |---|---:|---:|
+> | proj K=4 | **96.58** | 5.25 |
+> | proj K=1 (before) | 99.38 | 21.00 |
+>
+> Paired: +3.02, +2.86, +2.73, +2.76 → **median +2.81 ms/step, SEM 0.067, resolved.** The call count
+> 21.00 → 5.25 is exactly 21/4, so each arm proves it is the arm it claims. This matches the +2.8 ms
+> predicted from the trace above before the code was written.
+>
+> `modiff_full_k4` therefore goes 99.73 → ~96.9 ms/step, 1.064× → **1.095× fp16**. The knob
+> **DEFAULTS TO 1, i.e. off**: it changes numerics on reuse steps (a scale up to K-1 steps old, which
+> is what the conv path's code ceiling exists for), and the quality question is NOT settled — the
+> batch-8 / DDIM-50 paired-seed protocol cannot resolve effects below ~10%
+> (docs/updown_refresh_fusion_2026-08-10), so a verdict needs a larger budget than the `a4`
+> measurement used. Speed is measured; quality is open.
+
 **Projection MoDiff costs +22.4 ms and only 6.1 of it is the GEMM.** `conv K=1 → full K=1`:
 `linear_gemm` +6.14, `delta_quantize` +8.79, `attn_quantize` +4.60, `elementwise` +4.04.
 Per kernel, the `aq_*` re-quantize passes (+4.60 across three kernels) exist only because turning
