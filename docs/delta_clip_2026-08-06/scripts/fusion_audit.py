@@ -15,8 +15,19 @@ Counts, per config, by wrapping the real methods and tallying calls on one sampl
   linear          QuantLinearWxAx.modiff    MoDiff on the 42 attention projections
                   _out_i8                   the fused int8-output path on those projections
 
+  updown paths    _prequant_gn_resize_conv_modiff / _prequant_gn_resize_conv (added 2026-08-10)
+
 A layer taking _forward_modulated when it could have taken the GN-fused path is unfused work. The
 point of the table is to find out how many there are and whether the count changes with the config.
+
+THE UPDOWN ROW EXISTS BECAUSE ITS ABSENCE HID A BUG FOR MONTHS. The eight updown ResBlocks are not
+dispatched through any conv METHOD -- FusedResBlock.forward calls the module-level
+_prequant_gn_resize_conv_modiff directly, falling back to the baseline twin and then to an unfused
+resize+GN+quantize triple. Wrapping conv methods therefore could not see them, and
+_prequant_gn_resize_conv_modiff declined on every dynamic refresh step, which at
+MODIFF_DELTA_REFRESH=1 is EVERY step: 0/8 fused, with this audit reporting nothing amiss. Those
+three functions are module globals resolved at call time, so patching the module attribute catches
+them. See docs/updown_refresh_fusion_2026-08-10/.
 """
 
 import json
@@ -34,25 +45,71 @@ import torch                                                                    
 import dynamic_delta_ab as H                                                    # noqa: E402
 
 OUT = os.environ.get("FA_OUT", "docs/delta_clip_2026-08-06/data/fusion_audit.json")
-#: (label, mode, MODIFF_LINEAR)
-CONFIGS = [("int8 PTQ (MoDiff off)", "int8_baseline", "0"),
-           ("conv MoDiff", "int8", "0"),
-           ("conv+proj MoDiff (current default)", "int8", "1")]
+#: (label, mode, MODIFF_LINEAR, act_bits, delta_refresh). K is in the surface because the updown
+#: fusion is K-dependent -- that dependence is the bug the updown row was added to make visible.
+CONFIGS = [("W8A8 PTQ (MoDiff off)",        "int8_baseline", "0", 8, 4),
+           ("W8A8 conv-only  K=4",          "int8",          "0", 8, 4),
+           ("W8A8 conv-only  K=1",          "int8",          "0", 8, 1),
+           ("W8A8 conv+proj  K=4",          "int8",          "1", 8, 4),
+           ("W8A8 conv+proj  K=1",          "int8",          "1", 8, 1),
+           ("W8A4 conv+proj  K=1",          "int8",          "1", 4, 1),
+           ("W4A4 conv-only  K=4",          "int4",          "0", 8, 4),
+           ("W4A4 conv+proj  K=4",          "int4",          "1", 8, 4)]
 
 
-def audit(label, mode, lin):
+def audit(label, mode, lin, act_bits=8, refresh=4):
     os.environ["MODIFF_LINEAR"] = lin
-    os.environ["MODIFF_ACT_Q"], os.environ["MODIFF_DELTA_CLIP"] = "127", "1.0"
+    # MODIFF_ACT_Q and MODIFF_DELTA_CLIP were retired 2026-08-10. ACT_Q is simply no longer read
+    # (setting it here would have been a silent no-op); CLIP now RAISES on anything but 1.0, so it
+    # is not set at all. Activation width comes from MODIFF_ACT_BITS in {8, 4}.
+    os.environ["MODIFF_ACT_BITS"] = str(act_bits)
+    os.environ.pop("MODIFF_DELTA_CLIP", None)
+    os.environ["MODIFF_DELTA_REFRESH"] = str(refresh)
+    import integration.fused_ops.fused_resblock as FR
+    updown = Counter()
+    originals = {}
+    for name in ("_prequant_gn_resize_conv_modiff", "_prequant_gn_resize_conv"):
+        fn = getattr(FR, name)
+        originals[name] = fn
+
+        def wrap(fn=fn, name=name):
+            def inner(*a, **kw):
+                out = fn(*a, **kw)
+                updown[f"{name}:calls"] += 1
+                updown[f"{name}:{'fused' if out is not None else 'declined'}"] += 1
+                return out
+            return inner
+        setattr(FR, name, wrap())
+
     r, m, s = H.build(mode, None if mode == "fp16" else H.CALIB["int8"], "dynamic")
     unet = m.model.diffusion_model
 
+    # BOTH conv classes. This scan used to name only OptimizedInt8Conv2d, so every int4 config
+    # reported "quantized convs: 0" and an empty fusion column while 70 Int4Conv layers were in fact
+    # running -- the same failure mode as the updown blind spot above: an audit that cannot see a
+    # path reports nothing wrong with it. Int4Conv carries the same method names.
+    # NOT wrapped in try/except. The first attempt at this imported a class named `Int4Conv`, which
+    # does not exist -- the class is OptimizedInt4Conv2d -- and a bare except swallowed the
+    # ImportError, so int4 configs kept reporting "quantized convs: 0" exactly as before the fix was
+    # supposedly applied. In an audit whose whole purpose is to find paths nobody is looking at, a
+    # silently skipped import is the bug it is meant to catch. Let it raise.
     from integration.kernels.int8_optimized import OptimizedInt8Conv2d
+    from integration.kernels.int4_optimized import OptimizedInt4Conv2d
+    conv_types = (OptimizedInt8Conv2d, OptimizedInt4Conv2d)
     calls = Counter()
     keys = ("gn_fused", "modulated", "first_step", "standard", "forward", "mod_static_silu",
-            "modiff_silu_resid", "from_int8", "from_int8_dual", "to_int8")
+            "modiff_silu_resid", "from_int8", "from_int8_dual", "to_int8",
+            "from_int4", "from_int4_dual", "to_int4")
     layers_hit = {k: set() for k in keys}
 
-    convs = [mod for mod in unet.modules() if isinstance(mod, OptimizedInt8Conv2d)]
+    # Deduplicated by id, because unet.modules() yields a module once per parent that references it.
+    # NOTE, and this is measured rather than explained: even after dedup the walk finds 140 quantized
+    # conv MODULES while only 70 are ever called (every config's per-layer column reads 70 layers).
+    # I first wrote this dedup believing 140 was a double count of 70; it is not, the number did not
+    # move. Why 70 of 140 modules are never invoked during sampling is OPEN -- do not read
+    # n_conv_modules as the layer count, read n_conv_layers_called.
+    convs = list({id(mod): mod for mod in unet.modules()
+                  if isinstance(mod, conv_types)}.values())
     for i, mod in enumerate(convs):
         for meth, key in (("forward_gn_fused_modiff", "gn_fused"),
                           ("_forward_modulated", "modulated"),
@@ -63,7 +120,12 @@ def audit(label, mode, lin):
                           ("forward_modiff_fused_silu_residual", "modiff_silu_resid"),
                           ("forward_from_int8", "from_int8"),
                           ("forward_from_int8_dual", "from_int8_dual"),
-                          ("forward_to_int8", "to_int8")):
+                          ("forward_to_int8", "to_int8"),
+                          # Int4Conv's equivalents; getattr returns None on the int8 class and
+                          # vice versa, so one table serves both.
+                          ("forward_from_int4", "from_int4"),
+                          ("forward_from_int4_dual", "from_int4_dual"),
+                          ("forward_to_int4", "to_int4")):
             fn = getattr(mod, meth, None)
             if fn is None:
                 continue
@@ -101,8 +163,27 @@ def audit(label, mode, lin):
                     "proj_calib": bool(getattr(proj, "_calib", False)),
                     "proj_bits_match": getattr(proj, "bits", None) == getattr(b0, "bits", None)}
 
+    for name, fn in originals.items():
+        setattr(FR, name, fn)
+    # Reported per FORWARD with seeding kept separate, not as one average over all forwards. An
+    # average mixes two different things: the steady state, where all 8 blocks either fuse or do
+    # not, and the a_hat seeding forwards, where the MoDiff path MUST fall back because there is no
+    # cache to subtract yet. Averaging them gave "7.71 of 8 fused", which reads as a partial
+    # failure when the truth is "8 of 8, on every forward that is not a seeding forward".
+    n_calls = updown.get("_prequant_gn_resize_conv_modiff:calls", 0)
+    fwd = n_calls // 8 if n_calls else 0
+    mf = updown.get("_prequant_gn_resize_conv_modiff:fused", 0) // 8
+    bf = updown.get("_prequant_gn_resize_conv:fused", 0) // 8
+    bd = updown.get("_prequant_gn_resize_conv:declined", 0) // 8
     row = {"config": label, "mode": mode, "modiff_linear": lin,
-           "n_quant_convs": len(convs),
+           "act_bits": act_bits, "delta_refresh": refresh,
+           "updown_calls": dict(updown),
+           "updown": {"forwards": fwd, "blocks": 8,
+                      "modiff_fused_forwards": mf, "baseline_fused_forwards": bf,
+                      "unfused_forwards": bd,
+                      "all8_every_nonseeding_forward": (mf + bf + bd) == fwd and bd <= 2},
+           "n_conv_modules": len(convs),
+           "n_conv_layers_called": len({i for v in layers_hit.values() for i in v}),
            "conv_calls": dict(calls),
            "conv_layers_using": {k: len(v) for k, v in layers_hit.items()},
            "attn_blocks": len(attn), "attn_qout_eligible": qout,
@@ -117,23 +198,28 @@ def audit(label, mode, lin):
 
 def main():
     os.environ["MODIFF_DELTA_REPORT"] = "0"
-    os.environ["MODIFF_DELTA_REFRESH"] = os.environ.get("MODIFF_DELTA_REFRESH", "4")
     print(f"batch {H.BATCH}, DDIM {H.STEPS} -> each conv is called {H.STEPS} times per run\n",
           flush=True)
     rows = []
-    for label, mode, lin in CONFIGS:
-        row = audit(label, mode, lin)
+    for label, mode, lin, ab, k in CONFIGS:
+        row = audit(label, mode, lin, ab, k)
         rows.append(row)
         print(f"=== {label} ===", flush=True)
-        print(f"  quantized convs: {row['n_quant_convs']}", flush=True)
+        print(f"  conv modules: {row['n_conv_modules']}, "
+              f"of which CALLED: {row['n_conv_layers_called']}", flush=True)
         for k in ("forward", "gn_fused", "modulated", "first_step", "standard",
-                  "mod_static_silu", "modiff_silu_resid", "from_int8", "from_int8_dual", "to_int8"):
+                  "mod_static_silu", "modiff_silu_resid", "from_int8", "from_int8_dual", "to_int8",
+                  "from_int4", "from_int4_dual", "to_int4"):
             n_layers = row["conv_layers_using"].get(k, 0)
             n_calls = row["conv_calls"].get(k, 0)
             if n_layers or n_calls:
                 print(f"    {k:12s} {n_layers:3d} layers, {n_calls:6d} calls", flush=True)
         print(f"  attention: {row['attn_qout_eligible']}/{row['attn_blocks']} qout-eligible "
               f"(fused int8-out epilogue)   gate: {row['qout_gate_terms_block0']}", flush=True)
+        u = row["updown"]
+        print(f"  updown: 8/8 blocks fused on  {u['modiff_fused_forwards']:3d} modiff + "
+              f"{u['baseline_fused_forwards']:3d} baseline  of {u['forwards']} forwards; "
+              f"{u['unfused_forwards']} unfused (a_hat seeding)", flush=True)
         print(f"  projections: {row['wxax_projections']} wxax, {row['wxax_modiff']} modiff, "
               f"{row['wxax_out_i8']} with fused int8-out\n", flush=True)
         with open(OUT, "w") as f:

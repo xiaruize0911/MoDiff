@@ -1,0 +1,177 @@
+# Kernel and layer profile of the six shipped arms, and an e2e table to hang them on
+
+2026-08-11. Three measurements of the same six configurations, at three granularities, with each
+instrument's own error reported rather than asserted:
+
+| granularity | instrument | authoritative for | NOT authoritative for |
+|---|---|---|---|
+| whole model | `differential_timing.py`, profiler-free wall clock, 200 steps × 5 repeats | ms/step and speedup | anything below the step |
+| per kernel | Perfetto trace, bucketed offline | which CUDA kernel, and how much | which *layer* — one kernel serves many |
+| per layer | CUDA events on the live dispatch targets | which layer, as a **share** | absolute ms — coverage is 0.64–0.88 |
+
+The three do not sum to each other and are not meant to. The per-kernel trace covers 94–97% of the
+step; the per-layer events cover 64–88%. Subtracting one table from the other is a mistake.
+
+Batch 128, LSUN-churches, real checkpoint, A40.
+
+## 1. End to end (`data/differential_timing_canonical.json`, `_fp16.json`)
+
+200 steps, 5 repeats, 3 warm-ups. fp16 measured in its own process, which is required: the fp16 arm
+otherwise inherits `MODIFF_QUANT_LINEAR=1` from the shared base env and quietly converts 79
+`nn.Linear` to W8A8 while still reporting a plausible "fp16" number (docs/component_attribution_2026-08-07).
+
+| arm | ms/step | vs fp16 | CV% |
+|---|---:|---:|---:|
+| fp16 | 106.09 | 1.000× | 0.199 |
+| `int8_ptq` — W8A8 PTQ, no MoDiff | **73.31** | **1.447×** | 0.324 |
+| `modiff_conv_k4` — conv-only, K=4 | 77.33 | 1.372× | 0.108 |
+| `modiff_conv_k1` — conv-only, K=1 | 83.01 | 1.278× | 0.084 |
+| `modiff_full_k4` — conv+proj, K=4 | 99.73 | 1.064× | 0.066 |
+| `modiff_full_k1` — conv+proj, K=1, the paper's config | **105.42** | **1.006×** | 0.143 |
+
+Change from 2026-08-07, whose only code difference is the updown refresh fusion
+(docs/updown_refresh_fusion_2026-08-10). `int8_ptq` contains no MoDiff resize path, so its −0.30 is
+session drift and the rest is read net of it:
+
+| arm | raw Δ | net of drift |
+|---|---:|---:|
+| `modiff_conv_k1` | −1.15 | **−0.85** |
+| `modiff_full_k1` | −1.17 | **−0.87** |
+| `modiff_conv_k4` | −0.17 | +0.13 |
+| `modiff_full_k4` | −0.07 | +0.23 |
+
+**K=1 gains ~0.85 ms; K=4 gains nothing measurable.** This CORRECTS the +0.40 ± 0.20 ms reported for
+K=4 in docs/updown_refresh_fusion_2026-08-10 from an in-process paired A/B. That A/B's four repeats
+were +0.70/+0.50/+0.28/+0.30 — a visible downward trend, flagged at the time as noisier than the K=1
+figure, and it does not reproduce here. K=4 should have gained little by construction: the fusion was
+already firing 6/8 there, and the fix only adds the two refresh forwards.
+
+## 2. Per kernel (`data/trace_buckets.json`, `plots/kernel_buckets.png`)
+
+GPU ms/step by what the kernel does. `trace/wall` is 0.943–0.970 across the six, so the trace
+accounts for 94–97% of the step everywhere and in the same direction — which is what makes the
+*differences* trustworthy even though the totals run ~4% short (the gap is GPU idle between kernels
+plus the DDIM scheduler math the traced steps do not include).
+
+| bucket | fp16 | int8_ptq | conv K=4 | conv K=1 | full K=4 | full K=1 |
+|---|---:|---:|---:|---:|---:|---:|
+| conv | 44.19 | 27.37 | 28.49 | 28.38 | 28.02 | 28.00 |
+| norm_quantize | 20.25 | 17.72 | 9.84 | 10.53 | 8.99 | 9.72 |
+| delta_quantize | 0.00 | 0.00 | 9.90 | 14.61 | 18.70 | 23.40 |
+| linear_gemm | 2.84 | 9.21 | 9.23 | 9.22 | 15.35 | 15.36 |
+| attention | 11.37 | 8.91 | 8.90 | 8.87 | 8.86 | 8.84 |
+| attn_quantize | 0.00 | 0.00 | 0.00 | 0.00 | 4.59 | 4.60 |
+| elementwise | 23.43 | 7.35 | 7.72 | 7.71 | 11.74 | 11.75 |
+| other | 0.69 | 0.01 | 0.01 | 0.01 | 0.01 | 0.01 |
+| **total (trace)** | **102.76** | **70.56** | **74.09** | **79.33** | **96.28** | **101.69** |
+| trace/wall | 0.970 | 0.959 | 0.956 | 0.943 | 0.965 | 0.954 |
+
+Three readings.
+
+**Quantization buys conv and spends it on delta.** conv falls 44.19 → 27.37 (−16.8) going to int8
+PTQ, and `delta_quantize` climbs from 0 to 23.40 at full K=1. The `attention` bucket is flat at
+8.84–8.91 across all five quantized arms — nothing anyone did to the projections, the conv path or
+the refresh rate moved the score kernels at all.
+
+**`delta_quantize` is the K knob, and only for conv.** 9.90 → 14.61 at conv-only (K=4 → K=1) and
+18.70 → 23.40 at conv+proj: both +4.7, i.e. the projections' contribution is K-independent, because
+`MODIFF_DELTA_REFRESH` never reaches them (`QuantLinearWxAx.forward` recomputes its delta scale
+unconditionally). That reproduces the 2026-08-07 finding from a fresh trace.
+
+**Projection MoDiff costs +22.4 ms and only 6.1 of it is the GEMM.** `conv K=1 → full K=1`:
+`linear_gemm` +6.14, `delta_quantize` +8.79, `attn_quantize` +4.60, `elementwise` +4.04.
+`plots/kernel_delta_proj.png` shows this per kernel: the `aq_*` re-quantize passes (+4.60 across
+three kernels) exist only because turning MoDiff on the projections makes all 21 attention blocks
+qout-ineligible, so the flash epilogue that used to absorb them goes away.
+
+### The updown fix, visible at kernel level
+
+Same arm, same trace method, against 2026-08-07 — the fusion is the only code change between them:
+
+| bucket | 08-07 | now | Δ |
+|---|---:|---:|---:|
+| norm_quantize | 6.98 | 9.72 | **+2.74** |
+| delta_quantize | 25.45 | 23.40 | **−2.06** |
+| elementwise | 13.57 | 11.75 | **−1.83** |
+| conv | 27.85 | 28.00 | +0.15 |
+| **net** | | | **−0.93** |
+
+The eight updown ResBlocks now run `group_norm_silu_delta_quantize_resize_nhwc_kernel` (4.30 ms/step,
+0.00 before the fix at K=1) in place of a standalone GroupNorm, an unfused `upsample_nearest2d` /
+`avg_pool2d`, and a separate delta-absmax pass. norm_quantize absorbs the fused kernel; delta_quantize
+and elementwise lose what it replaced. **−0.93 ms at kernel level against −0.85 ms net e2e** — two
+independent instruments on the same change, agreeing to 0.08 ms.
+
+## 3. Per layer (`data/profile_layers.json`, `plots/layers.png`, `plots/layer_kinds.png`)
+
+CUDA events on the real dispatch targets. This is neither of the two per-component profiles
+docs/component_attribution_2026-08-07 rejected: not `register_forward_pre_hook` (which missed 62 of
+70 MoDiff convs, because the ResBlock calls `forward_gn_fused_modiff` directly and never enters
+`__call__`), and not `ProfilerActivity.CPU` + summed `self_device_time_total` (which double counted
+scopes and inflated the total 2.2×). Only LEAF dispatch targets are timed — `forward` is deliberately
+excluded because it wraps the others.
+
+ms/step, 200 steps:
+
+| config | conv | updown | attn (score) | proj (42) | coverage |
+|---|---:|---:|---:|---:|---:|
+| W8A8 PTQ | 22.9 | 4.0 | 20.1 | 0.0 | 0.643 |
+| W8A8 conv-only | 41.2 | 6.8 | 20.2 | 0.0 | 0.851 |
+| W8A8 conv+proj | 40.7 | 6.7 | 34.5 | 8.9 | 0.883 |
+| W8A4 conv+proj | 40.4 | 6.7 | 34.4 | 8.8 | 0.883 |
+| W4A4 conv+proj | 28.9 | 4.7 | 23.4 | 27.2 | 0.882 |
+
+**conv MoDiff is 1.8× the PTQ conv** (22.9 → 41.2): a_hat/o_hat state traffic plus the delta
+quantize, and `plots/layers.png` shows it is not uniform — cost concentrates in the high-resolution
+input blocks (0–10) and output blocks (55–70), while the low-resolution middle is nearly free.
+
+**W8A4 and W8A8 are the same datapath.** 40.4 vs 40.7 conv, 34.4 vs 34.5 attn. The activation width
+is a clamp, not a different kernel, which is why no separate W8A4 trace arm was run — that is a
+judgement from this table, not a measurement.
+
+**W4A4's projections cost 27.2 ms**, 3× W8A8's 8.9. That is the int4 projections' o_hat traffic, and
+it is what the 2026-08-10 image review was seeing: at W4A4, `MODIFF_LINEAR=1` versus `=0` was the
+difference between recognisable churches and fog (cross-batch mean|Δ| 16.7/255 against a 0.45
+pipeline noise floor), while at W8A8 and W8A4 the two were visually indistinguishable.
+
+### Two limits on this table, and they bind
+
+**Coverage 0.643–0.883.** 12–36% of the step is outside the timed dispatchers — ResBlock arithmetic,
+`x_upd`, elementwise glue. Read shares within a column; do not read the totals, and do not compare
+them to the trace totals above.
+
+**The PTQ row's attn is gross, the others are net.** Under PTQ the projection GEMM is invoked
+directly inside `_flash_proj_qout`, not through `QuantLinearWxAx.forward`, so its time lands in the
+attn bucket and `proj` reads 0.0. The "attn net of proj" subtraction the other rows get is a no-op
+there. **The attn column is not comparable across the PTQ row and the rest.**
+
+## Reproducing
+
+```bash
+python docs/component_attribution_2026-08-07/scripts/differential_timing.py \
+    --arms int8_ptq,modiff_conv_k4,modiff_full_k4,modiff_conv_k1,modiff_full_k1 \
+    --steps 200 --batch 128 --repeats 5 --warmups 3          # ~30 min
+python docs/component_attribution_2026-08-07/scripts/differential_timing.py --arms fp16 ...  # alone
+python docs/component_attribution_2026-08-07/scripts/trace_configs.py --batch 128 --steps 8
+python docs/component_attribution_2026-08-07/scripts/bucket_traces.py
+python integration/tests/profile_layers_and_model.py --batch 128 --steps 200   # ~15 min
+python docs/profile_kernels_layers_2026-08-11/scripts/make_plots.py            # offline, free
+```
+
+**Use `--steps 200` for the layer profile.** At 20 steps it reported 132.0 ms/step for
+`conv+proj K=4` against the true 99.73 — a 32% error, and only on the MoDiff arms, which is what gave
+it away (PTQ agreed to 2%). Fitting `ms(S) = A + C/S` over S ∈ {20, 50, 100, 200} on one model gives
+C = 633 ms of fixed per-sample overhead (≈ 5 `MODIFF_WARMUP_STEPS` × 127 ms) and A = 99.77 — against
+the differential harness's 99.73, a 0.04 ms agreement. Short runs amortise the warm-up over too few
+steps, and PTQ has no warm-up to amortise.
+
+## Open
+
+1. **Coverage.** Closing the per-layer table's 12–36% gap needs the ResBlock's own `forward` timed as
+   a residual bucket. Not done here.
+2. **The PTQ attn/proj split**, which needs `_flash_proj_qout` instrumented to separate the
+   projection GEMM from the score path.
+3. **No W8A4 or W4A4 trace arm.** `differential_timing.py`'s CONFIGS has neither, so the per-kernel
+   table covers W8A8 only. The layer table suggests W8A4 would be redundant; W4A4 would not be.
+4. **70 of 140 quantized conv modules are never called** during sampling (`fusion_audit.py` now
+   reports `n_conv_modules` and `n_conv_layers_called` separately). Unexplained.

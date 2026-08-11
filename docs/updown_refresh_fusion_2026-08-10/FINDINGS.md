@@ -114,10 +114,19 @@ differenced against the OFF immediately after it (`integration/tests/ab_updown_f
 | | ON (fix) | OFF (before) | paired delta | fused/step ON → OFF |
 |---|---:|---:|---:|---|
 | **K=1** | 105.32 | 106.56 | **+1.24 ± 0.13** | 8.00 → 0.00 |
-| **K=4** | 99.60 | 99.99 | **+0.40 ± 0.20** | 8.00 → 6.00 |
+| **K=4** | 99.60 | 99.99 | ~~+0.40 ± 0.20~~ **RETRACTED** | 8.00 → 6.00 |
 
-All four paired repeats are positive at both K, so **K=4 is not a regression** — that reading was
-drift-estimation noise. Two things make this trustworthy where the cross-session table was not: each
+> **Correction, 2026-08-11.** The K=4 row does not hold. Re-measured at 200 steps / 5 repeats /
+> 3 warm-ups, `modiff_full_k4` moved −0.07 ms and `modiff_conv_k4` −0.17 against a −0.30 drift
+> control, i.e. **nothing measurable** (docs/profile_kernels_layers_2026-08-11). The four paired
+> repeats behind +0.40 were +0.70/+0.50/+0.28/+0.30 — a visible downward trend, noted below as
+> noisier than the K=1 figure, and it should not have been reported as a positive result. K=4 was
+> always expected to gain little: the fusion already fired 6/8 there, so the fix adds only the two
+> refresh forwards. **The K=1 result is unaffected** and reproduces in both methods (+1.24 paired
+> in-process, −0.85 net of drift cross-session).
+
+All four paired repeats are positive at both K, so K=4 is at least not a regression — but see the
+correction above: it is not an improvement either. Two things make this trustworthy where the cross-session table was not: each
 arm counts the fused entry, so it provably *is* the arm it claims; and both OFF arms reproduce the
 historical baselines (106.56 vs 106.59, 99.99 vs 99.81), which says the revert flag is faithful.
 

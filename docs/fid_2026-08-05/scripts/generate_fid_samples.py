@@ -42,37 +42,81 @@ ap.add_argument("--batch", type=int, default=128)
 ap.add_argument("--steps", type=int, default=50)
 ap.add_argument("--out", default="/workspace/fid")
 ap.add_argument("--modes", default="fp16,int8_baseline,int8,int4_baseline,int4")
+#: the experiment surface: every precision as PTQ baseline, conv-only MoDiff (_l0) and
+#: conv+projection MoDiff (_l1). Pass --modes all for it.
 ap.add_argument("--seed0", type=int, default=20260805)
+ap.add_argument("--linear", type=int, default=0, choices=(0, 1),
+                help="MODIFF_LINEAR for the MoDiff arms: whether the 42 attention projections carry "
+                     "a_hat/o_hat too. 0 (default) is conv-only MoDiff and reproduces the 2026-08-05 "
+                     "run; 1 is the datapath that became the default on 2026-08-06. Baselines and "
+                     "fp16 always get 0 -- temporal state in a PTQ arm would stop it being one.")
 ap.add_argument("--decode-chunk", type=int, default=32,
                 help="images per decode_first_stage call; bounds the VAE activation peak")
 a = ap.parse_args()
 
 CALIB = {"int8": "integration/calibration/int8_calibration_realckpt.pt",
          "int4": "integration/calibration/int4_calibration_realckpt.pt"}
-#: mode key -> (folder name, delta mode). The MoDiff modes ship dynamic; baselines have no delta.
-SPEC = {"fp16": ("fp16", "static"),
-        "int8_baseline": ("int8_baseline", "static"),
-        "int8": ("int8_modiff", "dynamic"),
-        "int4_baseline": ("int4_baseline", "static"),
-        "int4": ("int4_modiff", "dynamic")}
+#: mode key -> (folder name, delta mode, activation bits). The MoDiff modes ship dynamic; baselines
+#: have no delta. Activation bits added 2026-08-10: 8 is what every original entry ran at, so those
+#: rows are unchanged, and w8a4* are the new W8A4 configuration -- the paper's own claim, which had
+#: no FID row because MODIFF_ACT_Q was a sweep knob rather than a mode. W4A4's 4 bits come from its
+#: int4 datapath, not from this field, so int4* stay 8 here (Int4Conv ignores it).
+#: The 4th field is MODIFF_LINEAR: whether the 42 attention projections carry a_hat/o_hat too.
+#: None means "take it from --linear", which is what the legacy keys did.
+#:
+#: The _l0 / _l1 pairs are FIRST-CLASS MODES, not a flag, because conv-only and conv+projection
+#: MoDiff are two different methods rather than one method with a tuning knob -- and measured
+#: 2026-08-10 they are not even close at W4A4, where L1 recovers structure L0 loses entirely
+#: (cross-batch mean|delta| 16.7/255 against a 0.45 pipeline noise floor) while being visually
+#: indistinguishable at W8A8 and W8A4. Separate folders so both can be reviewed side by side and
+#: neither overwrites the other. The un-suffixed legacy keys are kept so the 2026-08-05 FID run and
+#: the /workspace/fid folders it produced still reproduce byte for byte.
+SPEC = {"fp16": ("fp16", "static", 8, 0),
+        "int8_baseline": ("int8_baseline", "static", 8, 0),
+        "int8_l0": ("int8_modiff_l0", "dynamic", 8, 0),
+        "int8_l1": ("int8_modiff_l1", "dynamic", 8, 1),
+        "w8a4_baseline": ("w8a4_baseline", "static", 4, 0),
+        "w8a4_l0": ("w8a4_modiff_l0", "dynamic", 4, 0),
+        "w8a4_l1": ("w8a4_modiff_l1", "dynamic", 4, 1),
+        "int4_baseline": ("int4_baseline", "static", 8, 0),
+        "int4_l0": ("int4_modiff_l0", "dynamic", 8, 0),
+        "int4_l1": ("int4_modiff_l1", "dynamic", 8, 1),
+        # legacy keys: folder and behaviour exactly as before, --linear still applies
+        "int8": ("int8_modiff", "dynamic", 8, None),
+        "w8a4": ("w8a4_modiff", "dynamic", 4, None),
+        "int4": ("int4_modiff", "dynamic", 8, None)}
+#: w8a4* run the int8 datapath; only the activation bit-width differs.
+BASE_MODE = {"w8a4_baseline": "int8_baseline", "w8a4": "int8",
+             "w8a4_l0": "int8", "w8a4_l1": "int8",
+             "int8_l0": "int8", "int8_l1": "int8",
+             "int4_l0": "int4", "int4_l1": "int4"}
 
 
-def build(mode, delta_mode):
+def build(mode, delta_mode, act_bits=8, linear=None):
     import integration.benchmarks.benchmark_ldm as B
     import kernel_suites_bench as ks
-    ks.set_env(mode)
+    base = BASE_MODE.get(mode, mode)
+    ks.set_env(base)
     os.environ["MODIFF_DELTA_MODE"] = delta_mode
     os.environ["MODIFF_DELTA_REFRESH"] = "4"
-    os.environ["MODIFF_DELTA_CLIP"] = "1.0"
     os.environ["MODIFF_DELTA_REPORT"] = "0"
-    os.environ["MODIFF_LINEAR"] = "0"
-    calib = None if mode == "fp16" else CALIB["int4" if "int4" in mode else "int8"]
+    # MODIFF_LINEAR follows the arm, not the flag alone. --linear 1 asks for MoDiff on the 42
+    # attention projections, which only means anything where MoDiff is on at all: giving a PTQ
+    # baseline an a_hat/o_hat cache would stop it being a baseline, so the comparison would no
+    # longer be MoDiff-vs-PTQ. Tied to delta_mode for that reason.
+    want_lin = a.linear if linear is None else linear
+    os.environ["MODIFF_LINEAR"] = "1" if (want_lin and delta_mode == "dynamic") else "0"
+    # MODIFF_ACT_BITS replaced MODIFF_ACT_Q on 2026-08-10 and accepts only 8 or 4. MODIFF_DELTA_CLIP
+    # was retired in the same pass and now RAISES on anything but 1.0, so it is no longer set here.
+    os.environ["MODIFF_ACT_BITS"] = str(act_bits)
+    os.environ.pop("MODIFF_DELTA_CLIP", None)
+    calib = None if base == "fp16" else CALIB["int4" if "int4" in base else "int8"]
     runner = B.BenchmarkRunner(
         config_path="configs/latent-diffusion/lsun_churches-ldm-kl-8.yaml",
         ckpt_path="models/ldm/lsun_churches256/model.ckpt",
         output_dir=f"{a.out}/tmp_out", batch_size=a.batch, steps=a.steps,
         shape=(4, 32, 32), calibration_path=calib)
-    model, sampler = runner._setup_model(mode)
+    model, sampler = runner._setup_model(base)
     return runner, model, sampler
 
 
@@ -111,16 +155,21 @@ def sample_batch(runner, model, sampler, n, seed):
 
 
 def main():
-    for mode in [m.strip() for m in a.modes.split(",") if m.strip()]:
-        folder, dm = SPEC[mode]
+    ALL = ("fp16,int8_baseline,int8_l0,int8_l1,w8a4_baseline,w8a4_l0,w8a4_l1,"
+           "int4_baseline,int4_l0,int4_l1")
+    modes = ALL if a.modes.strip() == "all" else a.modes
+    for mode in [m.strip() for m in modes.split(",") if m.strip()]:
+        folder, dm, ab, lin = SPEC[mode]
         d = os.path.join(a.out, folder)
         os.makedirs(d, exist_ok=True)
         have = len([f for f in os.listdir(d) if f.endswith(".png")])
         if have >= a.n:
             print(f"[{folder}] already has {have} images, skipping", flush=True)
             continue
-        print(f"=== {mode} -> {d}  (delta={dm}, {a.n} images, {a.steps} steps)", flush=True)
-        runner, model, sampler = build(mode, dm)
+        print(f"=== {mode} -> {d}  (delta={dm}, A{ab}, LINEAR={lin if lin is not None else a.linear}, "
+              f"{a.n} images, {a.steps} steps)",
+              flush=True)
+        runner, model, sampler = build(mode, dm, ab, lin)
 
         reset(model)
         sample_batch(runner, model, sampler, min(a.batch, 16), a.seed0 - 1)   # warm-up, discarded

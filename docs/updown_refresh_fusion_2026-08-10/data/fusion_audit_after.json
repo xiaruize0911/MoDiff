@@ -1,0 +1,455 @@
+[
+  {
+    "config": "W8A8 PTQ (MoDiff off)",
+    "mode": "int8_baseline",
+    "modiff_linear": "0",
+    "act_bits": 8,
+    "delta_refresh": 4,
+    "updown_calls": {
+      "_prequant_gn_resize_conv_modiff:calls": 440,
+      "_prequant_gn_resize_conv_modiff:declined": 440,
+      "_prequant_gn_resize_conv:calls": 440,
+      "_prequant_gn_resize_conv:fused": 440
+    },
+    "updown": {
+      "forwards": 55,
+      "blocks": 8,
+      "modiff_fused_forwards": 0,
+      "baseline_fused_forwards": 55,
+      "unfused_forwards": 0,
+      "all8_every_nonseeding_forward": true
+    },
+    "n_quant_convs": 140,
+    "conv_calls": {
+      "from_int8": 3100
+    },
+    "conv_layers_using": {
+      "gn_fused": 0,
+      "modulated": 0,
+      "first_step": 0,
+      "standard": 0,
+      "forward": 0,
+      "mod_static_silu": 0,
+      "modiff_silu_resid": 0,
+      "from_int8": 62,
+      "from_int8_dual": 0,
+      "to_int8": 0,
+      "from_int4": 0,
+      "from_int4_dual": 0,
+      "to_int4": 0
+    },
+    "attn_blocks": 21,
+    "attn_qout_eligible": 21,
+    "wxax_projections": 42,
+    "wxax_modiff": 0,
+    "wxax_out_i8": 0,
+    "qout_gate_terms_block0": {
+      "fuse_proj_quant": true,
+      "fq_frozen2": true,
+      "proj_type": "QuantLinearWxAx",
+      "proj_use_bias_res": true,
+      "proj_a_scale_set": true,
+      "proj_calib": false,
+      "proj_bits_match": true
+    }
+  },
+  {
+    "config": "W8A8 conv-only  K=4",
+    "mode": "int8",
+    "modiff_linear": "0",
+    "act_bits": 8,
+    "delta_refresh": 4,
+    "updown_calls": {
+      "_prequant_gn_resize_conv_modiff:calls": 440,
+      "_prequant_gn_resize_conv_modiff:declined": 16,
+      "_prequant_gn_resize_conv:calls": 16,
+      "_prequant_gn_resize_conv:declined": 16,
+      "_prequant_gn_resize_conv_modiff:fused": 424
+    },
+    "updown": {
+      "forwards": 55,
+      "blocks": 8,
+      "modiff_fused_forwards": 53,
+      "baseline_fused_forwards": 0,
+      "unfused_forwards": 2,
+      "all8_every_nonseeding_forward": true
+    },
+    "n_quant_convs": 140,
+    "conv_calls": {
+      "forward": 70,
+      "first_step": 70,
+      "gn_fused": 3038
+    },
+    "conv_layers_using": {
+      "gn_fused": 62,
+      "modulated": 0,
+      "first_step": 70,
+      "standard": 0,
+      "forward": 70,
+      "mod_static_silu": 0,
+      "modiff_silu_resid": 0,
+      "from_int8": 0,
+      "from_int8_dual": 0,
+      "to_int8": 0,
+      "from_int4": 0,
+      "from_int4_dual": 0,
+      "to_int4": 0
+    },
+    "attn_blocks": 21,
+    "attn_qout_eligible": 21,
+    "wxax_projections": 42,
+    "wxax_modiff": 0,
+    "wxax_out_i8": 0,
+    "qout_gate_terms_block0": {
+      "fuse_proj_quant": true,
+      "fq_frozen2": true,
+      "proj_type": "QuantLinearWxAx",
+      "proj_use_bias_res": true,
+      "proj_a_scale_set": true,
+      "proj_calib": false,
+      "proj_bits_match": true
+    }
+  },
+  {
+    "config": "W8A8 conv-only  K=1",
+    "mode": "int8",
+    "modiff_linear": "0",
+    "act_bits": 8,
+    "delta_refresh": 1,
+    "updown_calls": {
+      "_prequant_gn_resize_conv_modiff:calls": 440,
+      "_prequant_gn_resize_conv_modiff:declined": 16,
+      "_prequant_gn_resize_conv:calls": 16,
+      "_prequant_gn_resize_conv:declined": 16,
+      "_prequant_gn_resize_conv_modiff:fused": 424
+    },
+    "updown": {
+      "forwards": 55,
+      "blocks": 8,
+      "modiff_fused_forwards": 53,
+      "baseline_fused_forwards": 0,
+      "unfused_forwards": 2,
+      "all8_every_nonseeding_forward": true
+    },
+    "n_quant_convs": 140,
+    "conv_calls": {
+      "forward": 70,
+      "first_step": 70,
+      "gn_fused": 3038
+    },
+    "conv_layers_using": {
+      "gn_fused": 62,
+      "modulated": 0,
+      "first_step": 70,
+      "standard": 0,
+      "forward": 70,
+      "mod_static_silu": 0,
+      "modiff_silu_resid": 0,
+      "from_int8": 0,
+      "from_int8_dual": 0,
+      "to_int8": 0,
+      "from_int4": 0,
+      "from_int4_dual": 0,
+      "to_int4": 0
+    },
+    "attn_blocks": 21,
+    "attn_qout_eligible": 21,
+    "wxax_projections": 42,
+    "wxax_modiff": 0,
+    "wxax_out_i8": 0,
+    "qout_gate_terms_block0": {
+      "fuse_proj_quant": true,
+      "fq_frozen2": true,
+      "proj_type": "QuantLinearWxAx",
+      "proj_use_bias_res": true,
+      "proj_a_scale_set": true,
+      "proj_calib": false,
+      "proj_bits_match": true
+    }
+  },
+  {
+    "config": "W8A8 conv+proj  K=4",
+    "mode": "int8",
+    "modiff_linear": "1",
+    "act_bits": 8,
+    "delta_refresh": 4,
+    "updown_calls": {
+      "_prequant_gn_resize_conv_modiff:calls": 440,
+      "_prequant_gn_resize_conv_modiff:declined": 16,
+      "_prequant_gn_resize_conv:calls": 16,
+      "_prequant_gn_resize_conv:declined": 16,
+      "_prequant_gn_resize_conv_modiff:fused": 424
+    },
+    "updown": {
+      "forwards": 55,
+      "blocks": 8,
+      "modiff_fused_forwards": 53,
+      "baseline_fused_forwards": 0,
+      "unfused_forwards": 2,
+      "all8_every_nonseeding_forward": true
+    },
+    "n_quant_convs": 140,
+    "conv_calls": {
+      "forward": 70,
+      "first_step": 70,
+      "gn_fused": 3038
+    },
+    "conv_layers_using": {
+      "gn_fused": 62,
+      "modulated": 0,
+      "first_step": 70,
+      "standard": 0,
+      "forward": 70,
+      "mod_static_silu": 0,
+      "modiff_silu_resid": 0,
+      "from_int8": 0,
+      "from_int8_dual": 0,
+      "to_int8": 0,
+      "from_int4": 0,
+      "from_int4_dual": 0,
+      "to_int4": 0
+    },
+    "attn_blocks": 21,
+    "attn_qout_eligible": 0,
+    "wxax_projections": 42,
+    "wxax_modiff": 42,
+    "wxax_out_i8": 0,
+    "qout_gate_terms_block0": {
+      "fuse_proj_quant": true,
+      "fq_frozen2": true,
+      "proj_type": "QuantLinearWxAx",
+      "proj_use_bias_res": false,
+      "proj_a_scale_set": true,
+      "proj_calib": false,
+      "proj_bits_match": true
+    }
+  },
+  {
+    "config": "W8A8 conv+proj  K=1",
+    "mode": "int8",
+    "modiff_linear": "1",
+    "act_bits": 8,
+    "delta_refresh": 1,
+    "updown_calls": {
+      "_prequant_gn_resize_conv_modiff:calls": 440,
+      "_prequant_gn_resize_conv_modiff:declined": 16,
+      "_prequant_gn_resize_conv:calls": 16,
+      "_prequant_gn_resize_conv:declined": 16,
+      "_prequant_gn_resize_conv_modiff:fused": 424
+    },
+    "updown": {
+      "forwards": 55,
+      "blocks": 8,
+      "modiff_fused_forwards": 53,
+      "baseline_fused_forwards": 0,
+      "unfused_forwards": 2,
+      "all8_every_nonseeding_forward": true
+    },
+    "n_quant_convs": 140,
+    "conv_calls": {
+      "forward": 70,
+      "first_step": 70,
+      "gn_fused": 3038
+    },
+    "conv_layers_using": {
+      "gn_fused": 62,
+      "modulated": 0,
+      "first_step": 70,
+      "standard": 0,
+      "forward": 70,
+      "mod_static_silu": 0,
+      "modiff_silu_resid": 0,
+      "from_int8": 0,
+      "from_int8_dual": 0,
+      "to_int8": 0,
+      "from_int4": 0,
+      "from_int4_dual": 0,
+      "to_int4": 0
+    },
+    "attn_blocks": 21,
+    "attn_qout_eligible": 0,
+    "wxax_projections": 42,
+    "wxax_modiff": 42,
+    "wxax_out_i8": 0,
+    "qout_gate_terms_block0": {
+      "fuse_proj_quant": true,
+      "fq_frozen2": true,
+      "proj_type": "QuantLinearWxAx",
+      "proj_use_bias_res": false,
+      "proj_a_scale_set": true,
+      "proj_calib": false,
+      "proj_bits_match": true
+    }
+  },
+  {
+    "config": "W8A4 conv+proj  K=1",
+    "mode": "int8",
+    "modiff_linear": "1",
+    "act_bits": 4,
+    "delta_refresh": 1,
+    "updown_calls": {
+      "_prequant_gn_resize_conv_modiff:calls": 440,
+      "_prequant_gn_resize_conv_modiff:declined": 16,
+      "_prequant_gn_resize_conv:calls": 16,
+      "_prequant_gn_resize_conv:declined": 16,
+      "_prequant_gn_resize_conv_modiff:fused": 424
+    },
+    "updown": {
+      "forwards": 55,
+      "blocks": 8,
+      "modiff_fused_forwards": 53,
+      "baseline_fused_forwards": 0,
+      "unfused_forwards": 2,
+      "all8_every_nonseeding_forward": true
+    },
+    "n_quant_convs": 140,
+    "conv_calls": {
+      "forward": 70,
+      "first_step": 70,
+      "gn_fused": 3038
+    },
+    "conv_layers_using": {
+      "gn_fused": 62,
+      "modulated": 0,
+      "first_step": 70,
+      "standard": 0,
+      "forward": 70,
+      "mod_static_silu": 0,
+      "modiff_silu_resid": 0,
+      "from_int8": 0,
+      "from_int8_dual": 0,
+      "to_int8": 0,
+      "from_int4": 0,
+      "from_int4_dual": 0,
+      "to_int4": 0
+    },
+    "attn_blocks": 21,
+    "attn_qout_eligible": 0,
+    "wxax_projections": 42,
+    "wxax_modiff": 42,
+    "wxax_out_i8": 0,
+    "qout_gate_terms_block0": {
+      "fuse_proj_quant": true,
+      "fq_frozen2": true,
+      "proj_type": "QuantLinearWxAx",
+      "proj_use_bias_res": false,
+      "proj_a_scale_set": true,
+      "proj_calib": false,
+      "proj_bits_match": true
+    }
+  },
+  {
+    "config": "W4A4 conv-only  K=4",
+    "mode": "int4",
+    "modiff_linear": "0",
+    "act_bits": 8,
+    "delta_refresh": 4,
+    "updown_calls": {
+      "_prequant_gn_resize_conv_modiff:calls": 440,
+      "_prequant_gn_resize_conv_modiff:declined": 16,
+      "_prequant_gn_resize_conv:calls": 16,
+      "_prequant_gn_resize_conv:declined": 16,
+      "_prequant_gn_resize_conv_modiff:fused": 424
+    },
+    "updown": {
+      "forwards": 55,
+      "blocks": 8,
+      "modiff_fused_forwards": 53,
+      "baseline_fused_forwards": 0,
+      "unfused_forwards": 2,
+      "all8_every_nonseeding_forward": true
+    },
+    "n_quant_convs": 140,
+    "conv_calls": {
+      "forward": 70,
+      "first_step": 70,
+      "gn_fused": 3038
+    },
+    "conv_layers_using": {
+      "gn_fused": 62,
+      "modulated": 0,
+      "first_step": 70,
+      "standard": 0,
+      "forward": 70,
+      "mod_static_silu": 0,
+      "modiff_silu_resid": 0,
+      "from_int8": 0,
+      "from_int8_dual": 0,
+      "to_int8": 0,
+      "from_int4": 0,
+      "from_int4_dual": 0,
+      "to_int4": 0
+    },
+    "attn_blocks": 21,
+    "attn_qout_eligible": 21,
+    "wxax_projections": 42,
+    "wxax_modiff": 0,
+    "wxax_out_i8": 0,
+    "qout_gate_terms_block0": {
+      "fuse_proj_quant": true,
+      "fq_frozen2": false,
+      "proj_type": "QuantLinearWxAx",
+      "proj_use_bias_res": true,
+      "proj_a_scale_set": true,
+      "proj_calib": false,
+      "proj_bits_match": true
+    }
+  },
+  {
+    "config": "W4A4 conv+proj  K=4",
+    "mode": "int4",
+    "modiff_linear": "1",
+    "act_bits": 8,
+    "delta_refresh": 4,
+    "updown_calls": {
+      "_prequant_gn_resize_conv_modiff:calls": 440,
+      "_prequant_gn_resize_conv_modiff:declined": 16,
+      "_prequant_gn_resize_conv:calls": 16,
+      "_prequant_gn_resize_conv:declined": 16,
+      "_prequant_gn_resize_conv_modiff:fused": 424
+    },
+    "updown": {
+      "forwards": 55,
+      "blocks": 8,
+      "modiff_fused_forwards": 53,
+      "baseline_fused_forwards": 0,
+      "unfused_forwards": 2,
+      "all8_every_nonseeding_forward": true
+    },
+    "n_quant_convs": 140,
+    "conv_calls": {
+      "forward": 70,
+      "first_step": 70,
+      "gn_fused": 3038
+    },
+    "conv_layers_using": {
+      "gn_fused": 62,
+      "modulated": 0,
+      "first_step": 70,
+      "standard": 0,
+      "forward": 70,
+      "mod_static_silu": 0,
+      "modiff_silu_resid": 0,
+      "from_int8": 0,
+      "from_int8_dual": 0,
+      "to_int8": 0,
+      "from_int4": 0,
+      "from_int4_dual": 0,
+      "to_int4": 0
+    },
+    "attn_blocks": 21,
+    "attn_qout_eligible": 0,
+    "wxax_projections": 42,
+    "wxax_modiff": 42,
+    "wxax_out_i8": 0,
+    "qout_gate_terms_block0": {
+      "fuse_proj_quant": true,
+      "fq_frozen2": false,
+      "proj_type": "QuantLinearWxAx",
+      "proj_use_bias_res": false,
+      "proj_a_scale_set": true,
+      "proj_calib": false,
+      "proj_bits_match": true
+    }
+  }
+]

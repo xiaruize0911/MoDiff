@@ -1,0 +1,97 @@
+{
+ "gpu": "NVIDIA A40",
+ "torch": "2.4.1+cu124",
+ "batch": 128,
+ "steps": 200,
+ "repeats": 5,
+ "warmups": 3,
+ "base_env": {
+  "MODIFF_QUANT_LINEAR": "1",
+  "MODIFF_QUANT_ATTN": "1",
+  "MODIFF_QUANT_ATTN_STATIC": "1",
+  "MODIFF_QATTN_FLASH": "1",
+  "MODIFF_FLASH_GATE": "on",
+  "MODIFF_QUANT_ATTN_ALLT": "0",
+  "MODIFF_LINEAR_OUT_I8": "0",
+  "MODIFF_FUSE_PROJ_QUANT": "1",
+  "MODIFF_LINEAR": "1",
+  "MODIFF_DELTA_REFRESH": "1",
+  "MODIFF_DELTA_CLIP": "1.0",
+  "MODIFF_ACT_Q": "127",
+  "MODIFF_DELTA_MODE": "dynamic",
+  "MODIFF_WARMUP_STEPS": "5"
+ },
+ "arms": {
+  "fp16": {
+   "mode": "fp16",
+   "delta_from": null,
+   "why": "reference",
+   "env": {
+    "MODIFF_ACT_Q": "127",
+    "MODIFF_DELTA_CLIP": "1.0",
+    "MODIFF_DELTA_MODE": "dynamic",
+    "MODIFF_DELTA_REFRESH": "1",
+    "MODIFF_FLASH_GATE": "on",
+    "MODIFF_FUSE_PROJ_QUANT": "1",
+    "MODIFF_LINEAR": "0",
+    "MODIFF_LINEAR_OUT_I8": "0",
+    "MODIFF_QATTN_FLASH": "1",
+    "MODIFF_QUANT_ATTN": "0",
+    "MODIFF_QUANT_ATTN_ALLT": "0",
+    "MODIFF_QUANT_ATTN_STATIC": "1",
+    "MODIFF_QUANT_LINEAR": "0",
+    "MODIFF_WARMUP_STEPS": "5"
+   },
+   "hook": null,
+   "route_check": {
+    "attn_blocks": 21,
+    "attn_class": "TokenMajorAttentionBlock",
+    "wxax": 0,
+    "wxax_modiff": 0,
+    "wxax_out_i8": 0,
+    "wxax_bias_res": 0,
+    "int8_convs": 0,
+    "conv_modiff_on": 0,
+    "conv_delta_refresh": []
+   },
+   "stats": {
+    "n": 5,
+    "mean": 21208878.90625,
+    "median": 21218859.375,
+    "stdev": 42202.274611943314,
+    "sem": 18873.43096748376,
+    "cv_pct": 0.19898399532804542,
+    "min": 21144710.9375,
+    "max": 21251136.71875,
+    "spread_pct": 0.5015622158059568,
+    "ci95_half": 52392.644365734915,
+    "ci95_lo": 21156486.261884265,
+    "ci95_hi": 21261271.550615735,
+    "iqr": 76126.953125,
+    "samples": [
+     21144710.9375,
+     21191929.6875,
+     21218859.375,
+     21237757.8125,
+     21251136.7188
+    ]
+   },
+   "stability": "tight",
+   "wall_us_per_batch": 21218859.375,
+   "wall_mean_us": 21208878.90625,
+   "wall_stdev_us": 42202.274611943314,
+   "wall_cv_pct": 0.19898399532804542,
+   "wall_all_us": [
+    21144710.9,
+    21191929.7,
+    21218859.4,
+    21237757.8,
+    21251136.7
+   ],
+   "wall_spread_pct": 0.5033210506616792,
+   "ms_per_step": 106.094296875,
+   "ms_per_sample": 165.7723388671875,
+   "speedup_vs_fp16": 1.0
+  }
+ }
+}
