@@ -889,6 +889,15 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
             qkv = self._qkv_from_gn_modiff_fused(x, b, T, c, nh, hd)
             if qkv is None:
                 qkv = self._qkv_from_gn(x, b, T, c, nh, hd)
+        if qkv is not None and qkv.dtype == torch.int8:
+            # Route (b) emitted the packed int8 qkv directly. Straight to flash's gather path; no
+            # aq_* pass, no fp16 qkv ever materialised.
+            hd_pad = ((hd + 31) // 32) * 32
+            a = _mc.flash_attn_int8_packed_vt(
+                qkv.contiguous(), self._fq_svv[:hd].contiguous().float(), hd_pad,
+                float(self._fq_sqc), float(self._fq_skc), self.scale)
+            out_tok = self._proj_with_residual(a, x_in_tok, b, T, c)
+            return out_tok.reshape(b, H, W, c).permute(0, 3, 1, 2)
         if T < 64:
             self._observe_small_int8_scales(qkv)
         # ---- Score path (QKᵀ + softmax + AV): fused int8/int4 flash (scores in SRAM) when the
@@ -1017,11 +1026,74 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
             *dyn,
             float(qkv.Q), False, 1.0)                # Q_level, report_next, safety
         codes2d = codes.permute(0, 2, 3, 1).reshape(b * T, c)
+        # ROUTE (b): one pass advances the fp16 o_hat state AND emits per-column-scaled int8, which
+        # flash_attn_int8_packed_vt consumes on its GATHER path -- the three aq_* re-quantize kernels
+        # (4.60 ms/step) disappear. Route (a), feeding the same entry point fp16, was measured 18.0 ms
+        # SLOWER because flash re-reads k/v per query block and its kHalf path re-quantizes on every
+        # load; see the refutation at the branch in _forward_routes. int8 is the only viable form.
+        #
+        # The GEMM's column order is already (nh, 3, hd) -- the reshape below is the same one the fp16
+        # path does -- so the int8 output IS the packed flash buffer with no data movement.
+        if (self._qkv_i8_ok() and _mc is not None
+                and hasattr(_mc, "gemm_w8a8_awq_o_hat_out_i8")):
+            inv_out = self._qkv_inv_out_scale(qkv, nh, hd)
+            if inv_out is not None:
+                oi8 = _mc.gemm_w8a8_awq_o_hat_out_i8(
+                    codes2d, qkv.qweight, qkv.w_scale, qkv._inv_scale, qkv.out_features,
+                    qkv.o_hat, qkv.bias if qkv.bias is not None else qkv._empty_h, inv_out)
+                # [M, out_features] since the 2026-08-11 allocation fix -- no padded tail to slice.
+                return oi8.reshape(b, T, nh, 3, hd)
         out = _mc.gemm_w8a8_awq_o_hat(
             codes2d, qkv.qweight, qkv.w_scale, qkv._inv_scale, qkv.out_features,
             qkv.o_hat, qkv._empty_h,                 # qkv has no residual
             qkv.bias if qkv.bias is not None else qkv._empty_h)
         return out.reshape(b, T, nh, 3, hd)
+
+    def _qkv_i8_ok(self):
+        """Route (b) eligibility: int8 block, frozen flash scales, opt-in."""
+        # hd % 16 == 0 is a HARD kernel constraint, not a preference: flash_attn_int8_packed's int8
+        # gather loads per-token bytes with cp.async, which needs 16-byte alignment. Its fp16 path has
+        # no such limit (2 bytes/element), which is why route (a) ran at every shape and this one
+        # cannot. Measured consequence: this model's heads are hd = C/nh = 24, 48, 96 for C = 192, 384,
+        # 768 -- so hd=24 is INELIGIBLE, and hd=24/T1024 is the dominant block. Falling through here
+        # rather than raising is the point; the fp16 o_hat GEMM below handles the rest unchanged.
+        # KNOWN INCOMPLETE, 2026-08-11. With hd%16 satisfied the kernel then rejects with
+        # "mma-eligible shapes only" -- a SECOND, narrower shape restriction I have not enumerated.
+        # So route (b) does not currently run on any block of this model: hd=24 fails the cp.async
+        # alignment and hd=48 fails the mma eligibility. The gate stays default-OFF and this comment
+        # is the warning: enabling it raises, it does not fall back. Kept rather than reverted because
+        # the wiring itself is correct and verified standalone (test_qkv_o_hat_out_i8.py) -- what is
+        # missing is a flash entry point that accepts int8 at THIS model's head dims, which is a
+        # kernel question, not a plumbing one.
+        return (os.environ.get("MODIFF_FUSE_QKV_I8") == "1" and self.bits == 8
+                and (self.head_dim % 16) == 0
+                and getattr(self, "_fq_frozen2", False)
+                and getattr(self, "_fq_svv", None) is not None
+                and hasattr(_mc, "flash_attn_int8_packed_vt"))
+
+    def _qkv_inv_out_scale(self, qkv, nh, hd):
+        """[N_pad] f32 reciprocal output scales, at the interleaved (nh, 3, hd) column stride.
+
+        Column c belongs to q/k/v by `(c // hd) % 3`, and within v to head-channel `c % hd`. Built
+        once and cached: it depends only on the frozen flash scales. Padded columns get 1.0, which the
+        GEMM never writes now that its allocation is [M, n_out].
+        """
+        cached = getattr(self, "_qkv_inv_out", None)
+        if cached is not None and cached.numel() == qkv._awqt_N:
+            return cached
+        try:
+            sv = self._fq_svv[:hd].float()
+            inv = torch.ones(qkv._awqt_N, device=qkv.qweight.device, dtype=torch.float32)
+            c = torch.arange(3 * hd * nh, device=inv.device)
+            which, ch = (c // hd) % 3, c % hd
+            per = torch.where(which == 0, 1.0 / float(self._fq_sqc),
+                              torch.where(which == 1, 1.0 / float(self._fq_skc),
+                                          1.0 / sv.to(inv.device)[ch]))
+            inv[:3 * hd * nh] = per.float()
+            self._qkv_inv_out = inv.contiguous()
+            return self._qkv_inv_out
+        except Exception:
+            return None
 
     def _qout_eligible(self):
         """True when the frozen flash path can emit the proj-quantized output directly (item B):
