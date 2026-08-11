@@ -175,6 +175,50 @@ is 5.51e-06 before and after the refactor, to the last digit.
 So `attn_quantize`'s remaining ~3.13 ms is not reachable by making the gather legal. It would need a
 gather that is cheaper than the mma kernel at T=1024, which is a different kernel, not a wider load.
 
+## The projection delta path, re-quantified — and the +8.8 ms figure is stale
+
+Every report so far attributed the delta kernels arithmetically: `gn_apply` runs 83×/step, the conv
+column says 62, so 21 must be the qkv. `fusion_audit.py` now wraps the kernels and records the
+**immediate Python caller** instead (one frame lookup per call), so the split is observed:
+
+| kernel | caller | calls |
+|---|---|---:|
+| `group_norm_silu_delta_quantize_nhwc` | `int8_optimized.py:forward_gn_fused_modiff` | 62 convs |
+| `group_norm_silu_delta_quantize_nhwc` | `quantized_std_attention.py:_qkv_from_gn_modiff_fused` | **21 qkv** |
+| `delta_absmax_fp16` | `wxax_linear.py:forward` | 21 proj |
+| `step1_static_quantize_fprop` | `wxax_linear.py:forward` | 21 proj |
+| `group_norm_silu_delta_quantize_resize_nhwc` | `fused_resblock.py:_prequant_gn_resize_conv_modiff` | 8 updown |
+
+The inference was right — 62 + 21 = 83 — and it is now an audit. Wrapping the kernel rather than the
+callers matters: `_qkv_from_gn_modiff_fused` returns `None` at seven preconditions before reaching the
+kernel, so counting method entries would over-count the qkv side.
+
+**Read that table as "which caller", not as "calls per step".** The script's own per-step figures
+(60.76, 22.26) divide per-FORWARD counts by `STEPS`, and the UNet runs 55 forwards for a 50-step
+sample: the 62 convs take a *different method* on the seeding forwards (62 × 49 = 3038 `gn_fused`
+calls) than the 21 qkv do (21 × 53 = 1113). Steady-state per-step counts come from the trace.
+
+### What is actually left, measured rather than proportioned
+
+The often-quoted "+8.8 ms of `delta_quantize` on the projections" predates the refresh schedule that
+landed 2026-08-11. Splitting it by *measured arm increments* rather than by call-count share
+(`modiff_conv_k1` → `modiff_full_k1`, which adds MoDiff to the 42 projections and changes nothing else):
+
+| term | kernel | ms/step | how obtained |
+|---|---|---:|---|
+| qkv absmax | `gn_delta_absmax_flat_vec2` | +1.91 | arm increment, 62 → 83 calls |
+| qkv apply | `gn_apply_delta_quantize_flat_vec2` | **+2.50** | arm increment, 62 → 83 calls |
+| proj absmax | `delta_absmax_fp16` | +1.85 | absent at conv_k1 |
+| proj apply | `static_quantize_and_update_ahat` | **+2.53** | absent at conv_k1 |
+
+Sum 8.79, which is where +8.8 came from. **The two absmax terms are already gone**: at
+`modiff_full_k4_projk4` they read 2.07 and 0.46, because the refresh schedule stopped recomputing them
+every step. What remains is the two **apply** terms — **~5.03 ms/step, and K-independent**, since the
+quantize itself runs on every step whatever the schedule.
+
+So the target for any future projection-side fusion is 5.03 ms, not 8.8, and it is the quantize+`a_hat`
+write, not the scale computation. That is the same work Part 3 would move into the flash qout epilogue.
+
 ## Reproducing
 
 ```bash
@@ -192,8 +236,14 @@ python docs/component_attribution_2026-08-07/scripts/trace_configs.py \
     --batch 128 --steps 8 --configs modiff_full_k4_projk4_qkvi8          # ~3 min
 python docs/component_attribution_2026-08-07/scripts/bucket_traces.py \
     --output docs/aq_fusion_2026-08-12/data/trace_buckets_qkvi8.json     # offline
+FA_ONLY="conv+proj  K=4" FA_OUT=docs/aq_fusion_2026-08-12/data/fusion_audit_sites.json \
+    python docs/delta_clip_2026-08-06/scripts/fusion_audit.py             # ~6 min, per-caller audit
 python docs/aq_fusion_2026-08-12/scripts/make_plots.py                   # offline, free
 ```
+
+`FA_ONLY` is new and refuses to write to the canonical `fusion_audit.json`, for the same reason
+`differential_timing.py` now refuses a subset run: one question should not cost eight sampling runs,
+and a filtered run must not replace the eight-config dataset.
 
 **`--output` is not optional on a subset run.** The first attempt omitted it and overwrote the
 canonical 12-arm `differential_timing.json`, which committed figures read. `differential_timing.py`

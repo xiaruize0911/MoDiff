@@ -1,0 +1,132 @@
+[
+  {
+    "config": "W8A8 conv+proj  K=4",
+    "mode": "int8",
+    "modiff_linear": "1",
+    "act_bits": 8,
+    "delta_refresh": 4,
+    "updown_calls": {
+      "_prequant_gn_resize_conv_modiff:calls": 440,
+      "_prequant_gn_resize_conv_modiff:declined": 16,
+      "_prequant_gn_resize_conv:calls": 16,
+      "_prequant_gn_resize_conv:declined": 16,
+      "_prequant_gn_resize_conv_modiff:fused": 424
+    },
+    "updown": {
+      "forwards": 55,
+      "blocks": 8,
+      "modiff_fused_forwards": 53,
+      "baseline_fused_forwards": 0,
+      "unfused_forwards": 2,
+      "all8_every_nonseeding_forward": true
+    },
+    "n_conv_modules": 140,
+    "n_conv_layers_called": 70,
+    "conv_calls": {
+      "forward": 70,
+      "first_step": 70,
+      "gn_fused": 3038
+    },
+    "conv_layers_using": {
+      "gn_fused": 62,
+      "modulated": 0,
+      "first_step": 70,
+      "standard": 0,
+      "forward": 70,
+      "mod_static_silu": 0,
+      "modiff_silu_resid": 0,
+      "from_int8": 0,
+      "from_int8_dual": 0,
+      "to_int8": 0,
+      "from_int4": 0,
+      "from_int4_dual": 0,
+      "to_int4": 0
+    },
+    "delta_kernel_sites_per_step": {
+      "delta_absmax_fp16 <- int8_optimized.py:_delta_scale_args": 1.24,
+      "delta_absmax_fp16 <- wxax_linear.py:forward": 22.26,
+      "group_norm_silu_delta_quantize_nhwc <- int8_optimized.py:forward_gn_fused_modiff": 60.76,
+      "group_norm_silu_delta_quantize_nhwc <- quantized_std_attention.py:_qkv_from_gn_modiff_fused": 22.26,
+      "group_norm_silu_delta_quantize_resize_nhwc <- fused_resblock.py:_prequant_gn_resize_conv_modiff": 8.48,
+      "step1_static_quantize_fprop <- int8_optimized.py:_forward_modulated": 4.96,
+      "step1_static_quantize_fprop <- wxax_linear.py:forward": 22.26
+    },
+    "attn_blocks": 21,
+    "attn_qout_eligible": 0,
+    "wxax_projections": 42,
+    "wxax_modiff": 42,
+    "wxax_out_i8": 0,
+    "qout_gate_terms_block0": {
+      "fuse_proj_quant": true,
+      "fq_frozen2": true,
+      "proj_type": "QuantLinearWxAx",
+      "proj_use_bias_res": false,
+      "proj_a_scale_set": true,
+      "proj_calib": false,
+      "proj_bits_match": true
+    }
+  },
+  {
+    "config": "W4A4 conv+proj  K=4",
+    "mode": "int4",
+    "modiff_linear": "1",
+    "act_bits": 8,
+    "delta_refresh": 4,
+    "updown_calls": {
+      "_prequant_gn_resize_conv_modiff:calls": 440,
+      "_prequant_gn_resize_conv_modiff:declined": 16,
+      "_prequant_gn_resize_conv:calls": 16,
+      "_prequant_gn_resize_conv:declined": 16,
+      "_prequant_gn_resize_conv_modiff:fused": 424
+    },
+    "updown": {
+      "forwards": 55,
+      "blocks": 8,
+      "modiff_fused_forwards": 53,
+      "baseline_fused_forwards": 0,
+      "unfused_forwards": 2,
+      "all8_every_nonseeding_forward": true
+    },
+    "n_conv_modules": 140,
+    "n_conv_layers_called": 70,
+    "conv_calls": {
+      "forward": 70,
+      "first_step": 70,
+      "gn_fused": 3038
+    },
+    "conv_layers_using": {
+      "gn_fused": 62,
+      "modulated": 0,
+      "first_step": 70,
+      "standard": 0,
+      "forward": 70,
+      "mod_static_silu": 0,
+      "modiff_silu_resid": 0,
+      "from_int8": 0,
+      "from_int8_dual": 0,
+      "to_int8": 0,
+      "from_int4": 0,
+      "from_int4_dual": 0,
+      "to_int4": 0
+    },
+    "delta_kernel_sites_per_step": {
+      "delta_absmax_fp16 <- int4_optimized.py:_delta_scale_args_i4": 1.24,
+      "delta_absmax_fp16 <- wxax_linear.py:forward": 44.52,
+      "group_norm_silu_delta_quantize_resize_nhwc <- fused_resblock.py:_prequant_gn_resize_conv_modiff": 8.48
+    },
+    "attn_blocks": 21,
+    "attn_qout_eligible": 0,
+    "wxax_projections": 42,
+    "wxax_modiff": 42,
+    "wxax_out_i8": 0,
+    "qout_gate_terms_block0": {
+      "fuse_proj_quant": true,
+      "fq_frozen2": false,
+      "proj_type": "QuantLinearWxAx",
+      "proj_use_bias_res": false,
+      "proj_a_scale_set": true,
+      "proj_calib": false,
+      "proj_bits_match": true
+    }
+  }
+]

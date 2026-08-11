@@ -81,6 +81,36 @@ def audit(label, mode, lin, act_bits=8, refresh=4):
             return inner
         setattr(FR, name, wrap())
 
+    # ---- PER-SITE attribution of the delta kernels, added 2026-08-12 ----
+    #
+    # Every report so far has attributed these by ARITHMETIC: gn_apply runs 83 times/step, the conv
+    # column says 62, so 21 must be the qkv. That inference is right here, but it is an inference, and
+    # docs/gn_stats_in_epilogue_2026-08-11 lists exactly this kind of bound ("68 is 83 - 15") as one of
+    # its own stop conditions. So attribute by the IMMEDIATE PYTHON CALLER instead: one frame lookup
+    # per call, ~4k calls per run, and the answer is observed rather than derived.
+    #
+    # Wrapping the kernel and not the callers is deliberate: `_qkv_from_gn_modiff_fused` can return
+    # None at seven different preconditions before reaching the kernel, so counting method entries
+    # would over-count the qkv side by however often it declines.
+    import modiff_cutlass as _mcaudit
+    delta_sites = Counter()
+    delta_originals = {}
+    for kname in ("group_norm_silu_delta_quantize_nhwc", "delta_absmax_fp16",
+                  "step1_static_quantize_fprop", "group_norm_silu_delta_quantize_resize_nhwc"):
+        fn = getattr(_mcaudit, kname, None)
+        if fn is None:
+            continue
+        delta_originals[kname] = fn
+
+        def wrapk(fn=fn, kname=kname):
+            def inner(*a, **kw):
+                f = sys._getframe(1)
+                site = f"{kname} <- {os.path.basename(f.f_code.co_filename)}:{f.f_code.co_name}"
+                delta_sites[site] += 1
+                return fn(*a, **kw)
+            return inner
+        setattr(_mcaudit, kname, wrapk())
+
     r, m, s = H.build(mode, None if mode == "fp16" else H.CALIB["int8"], "dynamic")
     unet = m.model.diffusion_model
 
@@ -165,6 +195,8 @@ def audit(label, mode, lin, act_bits=8, refresh=4):
 
     for name, fn in originals.items():
         setattr(FR, name, fn)
+    for kname, fn in delta_originals.items():
+        setattr(_mcaudit, kname, fn)
     # Reported per FORWARD with seeding kept separate, not as one average over all forwards. An
     # average mixes two different things: the steady state, where all 8 blocks either fuse or do
     # not, and the a_hat seeding forwards, where the MoDiff path MUST fall back because there is no
@@ -186,6 +218,9 @@ def audit(label, mode, lin, act_bits=8, refresh=4):
            "n_conv_layers_called": len({i for v in layers_hit.values() for i in v}),
            "conv_calls": dict(calls),
            "conv_layers_using": {k: len(v) for k, v in layers_hit.items()},
+           # calls per STEP, so it lines up with the trace tables (which are all per step) rather
+           # than with this script's per-run totals.
+           "delta_kernel_sites_per_step": {k: v / H.STEPS for k, v in sorted(delta_sites.items())},
            "attn_blocks": len(attn), "attn_qout_eligible": qout,
            "wxax_projections": len(wx),
            "wxax_modiff": sum(bool(getattr(x, "modiff", False)) for x in wx),
@@ -198,10 +233,19 @@ def audit(label, mode, lin, act_bits=8, refresh=4):
 
 def main():
     os.environ["MODIFF_DELTA_REPORT"] = "0"
+    # FA_ONLY selects a substring of the labels: each config is a full sampling run, so answering one
+    # question ("which caller runs gn_apply?") should not cost eight of them. Unset = all eight, as
+    # before. Writing to a different FA_OUT is the caller's job when they filter, since a partial run
+    # would otherwise replace the committed eight-config dataset.
+    only = os.environ.get("FA_ONLY", "")
+    configs = [c for c in CONFIGS if not only or only in c[0]]
+    if only and OUT.endswith("docs/delta_clip_2026-08-06/data/fusion_audit.json"):
+        sys.exit(f"FA_ONLY={only!r} is a subset run and would overwrite the canonical {OUT}. "
+                 f"Set FA_OUT to a path in your own report directory.")
     print(f"batch {H.BATCH}, DDIM {H.STEPS} -> each conv is called {H.STEPS} times per run\n",
           flush=True)
     rows = []
-    for label, mode, lin, ab, k in CONFIGS:
+    for label, mode, lin, ab, k in configs:
         row = audit(label, mode, lin, ab, k)
         rows.append(row)
         print(f"=== {label} ===", flush=True)
@@ -214,6 +258,10 @@ def main():
             n_calls = row["conv_calls"].get(k, 0)
             if n_layers or n_calls:
                 print(f"    {k:12s} {n_layers:3d} layers, {n_calls:6d} calls", flush=True)
+        if row.get("delta_kernel_sites_per_step"):
+            print("  delta kernels, per step, BY CALLER (observed, not inferred):", flush=True)
+            for site, n in row["delta_kernel_sites_per_step"].items():
+                print(f"    {n:6.2f}  {site}", flush=True)
         print(f"  attention: {row['attn_qout_eligible']}/{row['attn_blocks']} qout-eligible "
               f"(fused int8-out epilogue)   gate: {row['qout_gate_terms_block0']}", flush=True)
         u = row["updown"]
