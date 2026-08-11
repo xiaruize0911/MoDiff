@@ -39,7 +39,7 @@
 #include "cutlass/epilogue/threadblock/epilogue_with_visitor_callbacks.h"
 #include "cutlass/conv/device/implicit_gemm_convolution.h"
 
-#include "common.cuh"
+#include "../common/common.cuh"
 #include "implicit_gemm_fusion_persample.h"
 #include "implicit_gemm_fusion_persample_evt.h"
 

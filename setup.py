@@ -37,8 +37,10 @@ setup(
                 'csrc/kernels/conv/conv2d_int4.cu',
                 'csrc/kernels/conv/conv2d_evt.cu',
                 # norm: GroupNorm(+SiLU)(+quantize) and fused GroupNorm->qkv
-                'csrc/kernels/norm/group_norm_silu.cu',
-                'csrc/kernels/norm/fused_gn_qkv.cu',
+                # family 3 of the csrc split (2026-08-12)
+                'csrc/baseline/norm/group_norm_silu.cu',
+                'csrc/baseline/norm/fused_gn_qkv.cu',
+                'csrc/modiff/norm/group_norm_silu.cu',
                 # linear: W8A8/W4A4 Linear GEMM (own AWQ-tiling port + vendored AWQ)
                 # family 2 of the csrc split (2026-08-12)
                 'csrc/baseline/linear/gemm_wxax.cu',
