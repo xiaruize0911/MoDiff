@@ -152,7 +152,28 @@ than the guarantee is worth. Emitting both files so it could be measured is what
 4. **4 of 70 layers have a delta range wider than their activation range** — all high-resolution
    `output_blocks` out_convs — so MoDiff buys nothing there. Median across the other 66 is **1.51 bits
    saved**.
-5. **No FID yet.** relL2 only. The metric plan calls for small-N FID on the winning configuration.
+5. **FID exists, but on the OLD scales.** I twice wrote "no FID yet" -- wrong.
+   `docs/fid_2026-08-05/data/fid.json` has all five modes at N=10000 against a real LSUN reference,
+   and `generate_fid_samples.py --linear` defaults to 0, so its `int8_modiff` row IS the conv-only
+   configuration Stage D just made the default:
+
+   | mode | FID vs real | FID vs fp16 |
+   |---|---:|---:|
+   | fp16 | 7.803 | 0 |
+   | W8A8 PTQ baseline | 16.366 | 6.394 |
+   | **W8A8 MoDiff (conv-only)** | **7.802** | **0.175** |
+   | W4A4 baseline | 277.96 | 277.98 |
+   | W4A4 MoDiff | 200.14 | 191.09 |
+
+   That is a stronger endorsement of Stage D than the relL2 evidence it was decided on: the new
+   default is FID-indistinguishable from fp16 while the PTQ baseline is 2.1x worse.
+
+   **What is genuinely missing is FID on the Q-DIFFUSION scales** -- that run used
+   `int8_calibration_realckpt.pt`. The open question is whether the baseline's 16.366 moves with the
+   2.29x relL2 improvement. If it does, W8A8 PTQ -- the fastest arm at 1.453x -- becomes quality
+   viable, and this project's headline ("every MoDiff arm is slower than PTQ") gains its missing
+   other half. The real-image reference is still on disk at /workspace/fid/real, so only the
+   generation has to be redone.
 6. **`int4` is untouched.** Everything here is W8A8.
 
 ## Reproducing
