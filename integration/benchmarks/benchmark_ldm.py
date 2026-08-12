@@ -1088,6 +1088,49 @@ class BenchmarkRunner:
 
         return total_time, generated, quant_memory_after_warmup
     
+#: Calibration files in PREFERENCE ORDER, best first. Resolved at run_mode() time when no explicit
+#: --calibration-path was given.
+#:
+#: The order is measured, not stylistic:
+#:   *_qdiff.pt     Q-Diffusion PTQ, symmetric absmax over 640 samples at 10 timesteps. Fake-quant
+#:                  A/B 2026-08-12: baseline relL2 0.2558 -> 0.1082, beating the absmax file on 3/3
+#:                  seeds, with clipped elements 0.220% -> 0.012%.
+#:                  (docs/qdiff_bridge_2026-08-12/data/act_fake_quant.json)
+#:   *_realckpt.pt  live absmax calibration against the real checkpoint. What every harness has
+#:                  explicitly passed. Its scale is mean(127/absmax_i), a mean of RECIPROCALS, which
+#:                  runs up to 14.5x too large on layers whose range swings across timesteps.
+#:   *.pt           derived from the 856-byte STUB checkpoint, and it was the auto-default until
+#:                  2026-08-12. docs/modiff_correctness_2026-08-03/FINDINGS.md:660-676 measures it at
+#:                  latent relL2 0.882 (int8) / 3.023 (int4) -- "worse than useless". Kept last only
+#:                  so a fresh container with no other file still runs.
+#:
+#: All of these are gitignored (.gitignore:6 *.pt) and regenerable; see
+#: docs/qdiff_bridge_2026-08-12/scripts/run_calibration.sh and recalibrate_real_ckpt.py.
+CALIBRATION_PREFERENCE = {
+    'int8': ['integration/calibration/int8_calibration_qdiff.pt',
+             'integration/calibration/int8_calibration_realckpt.pt',
+             'integration/calibration/int8_calibration.pt'],
+    'int4': ['integration/calibration/int4_calibration_realckpt.pt',
+             'integration/calibration/int4_calibration.pt'],
+}
+
+
+def _default_calibration_path(mode: str):
+    """First existing file in preference order, or the last entry so the error names a real path."""
+    if mode in ('int8', 'int8_baseline', 'int8_attn_modiff'):
+        cands = CALIBRATION_PREFERENCE['int8']
+    elif mode in ('int4', 'int4_baseline', 'int4_attn_modiff'):
+        cands = CALIBRATION_PREFERENCE['int4']
+    else:
+        return None
+    for c in cands:
+        if os.path.exists(c):
+            if c is not cands[0]:
+                print(f"  calibration: {c} (preferred {cands[0]} not present)")
+            return c
+    return cands[-1]
+
+
     def run_mode(self, mode: str, num_samples: int = 16, calibrate: bool = True, force_recalibrate: bool = False):
         """Run benchmark for a specific mode."""
         print(f"\n{'='*60}\n{mode.upper()}\n{'='*60}")
@@ -1095,10 +1138,7 @@ class BenchmarkRunner:
         # Determine calibration path if not explicitly provided
         original_calib_path = self.calibration_path
         if not self.calibration_path:
-            if mode in ('int8', 'int8_baseline', 'int8_attn_modiff'):
-                self.calibration_path = 'integration/calibration/int8_calibration.pt'
-            elif mode in ('int4', 'int4_baseline', 'int4_attn_modiff'):
-                self.calibration_path = 'integration/calibration/int4_calibration.pt'
+            self.calibration_path = _default_calibration_path(mode)
 
         # If forcing recalibration, ignore existing file during setup
         actual_calib_file = self.calibration_path

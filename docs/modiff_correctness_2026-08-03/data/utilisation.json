@@ -1,58 +1,34 @@
 {
-  "int8 | REAL ckpt: S=5 batch=2, no refinement (as shipped)": {
+  "int8_baseline | REAL ckpt: S=5 batch=2, no refinement (as shipped)": {
     "_smoothquant": {
       "in_conv": {
         "n": 35,
-        "identity": 0,
-        "smooth_max_median": 5.93414306640625,
+        "identity": 35,
+        "smooth_max_median": 1.0,
         "wint8_absmax_median": 127.0
       },
       "out_conv": {
         "n": 35,
-        "identity": 0,
-        "smooth_max_median": 7.655218601226807,
+        "identity": 35,
+        "smooth_max_median": 1.0,
         "wint8_absmax_median": 127.0
       }
-    },
-    "in_conv": {
-      "n": 35,
-      "median": 1150.6173154929056,
-      "max": 5977.270075873821,
-      "clipping": 35
-    },
-    "out_conv": {
-      "n": 35,
-      "median": 5398.424517506501,
-      "max": 23599.045313196257,
-      "clipping": 35
     }
   },
-  "int8 | REAL ckpt: horizon+batch matched + 1 refinement": {
+  "int8_baseline | REAL ckpt: horizon+batch matched + 1 refinement": {
     "_smoothquant": {
       "in_conv": {
         "n": 35,
-        "identity": 0,
-        "smooth_max_median": 6.849496364593506,
+        "identity": 35,
+        "smooth_max_median": 1.0,
         "wint8_absmax_median": 127.0
       },
       "out_conv": {
         "n": 35,
-        "identity": 0,
-        "smooth_max_median": 9.219351768493652,
+        "identity": 35,
+        "smooth_max_median": 1.0,
         "wint8_absmax_median": 127.0
       }
-    },
-    "in_conv": {
-      "n": 35,
-      "median": 712.7857496463184,
-      "max": 1403.0021397939126,
-      "clipping": 28
-    },
-    "out_conv": {
-      "n": 35,
-      "median": 1733.4212949711364,
-      "max": 10563.016645134194,
-      "clipping": 35
     }
   }
 }

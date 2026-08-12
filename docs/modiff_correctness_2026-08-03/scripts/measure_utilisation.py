@@ -32,6 +32,11 @@ from integration.utils import attention_identity_guard as guard
 
 STEPS = int(os.environ.get("MU_STEPS", "20"))
 BATCH = int(os.environ.get("MU_BATCH", "4"))
+#: Added 2026-08-12. With MU_CALIB_PATH set, LOAD that calibration file instead of deriving one live
+#: with _calibrate_int8. Needed to score an externally-produced scale file (the Q-Diffusion export in
+#: docs/qdiff_bridge_2026-08-12/) on the instrument that measures clipping, which is the whole point
+#: of replacing the scales. Unset = the original live-calibration behaviour, unchanged.
+CALIB_PATH = os.environ.get("MU_CALIB_PATH") or None
 UTIL = collections.defaultdict(list)
 
 
@@ -59,10 +64,16 @@ def run(mode, calib_steps, calib_batch, refine=1):
         config_path="configs/latent-diffusion/lsun_churches-ldm-kl-8.yaml",
         ckpt_path="models/ldm/lsun_churches256/model.ckpt",
         output_dir="docs/modiff_correctness_2026-08-03/tmp_out",
-        batch_size=BATCH, steps=STEPS, shape=(4, 32, 32), calibration_path=None)
+        batch_size=BATCH, steps=STEPS, shape=(4, 32, 32), calibration_path=CALIB_PATH)
     model, sampler = runner._setup_model(mode)
-    runner._calibrate_int8(model, sampler, num_runs=2, calib_steps=calib_steps,
-                           calib_batch=calib_batch, refine_rounds=refine)
+    if CALIB_PATH is None:
+        runner._calibrate_int8(model, sampler, num_runs=2, calib_steps=calib_steps,
+                               calib_batch=calib_batch, refine_rounds=refine)
+    else:
+        n = sum(1 for c in model.modules() if isinstance(c, OptimizedInt8Conv2d) and c.is_calibrated)
+        print(f"  MU_CALIB_PATH={CALIB_PATH}: {n} convs calibrated from file, no live calibration")
+        if n != 70:
+            raise SystemExit(f"expected 70 calibrated convs from the file, got {n}")
     # Start the measured run from a FRESH MoDiff state, as a real run does (run_mode resets before
     # sampling). Without this the production sample continues from whatever a_hat/o_hat the
     # calibration pass left behind, so o_hat keeps accumulating and the activations read ~4x larger
@@ -104,7 +115,16 @@ def main():
     out = {}
     configs = [("REAL ckpt: S=5 batch=2, no refinement (as shipped)", 5, 2, 0),
                ("REAL ckpt: horizon+batch matched + 1 refinement", None, None, 1)]
-    for mode in ("int8",):
+    # MU_MODES added 2026-08-12, and the result is a limitation worth recording rather than a
+    # feature. int8_baseline is the arm where the static activation scale governs EVERY step (under
+    # MoDiff it governs only t=T, so an "int8" clipping count overstates a mismatch the kernel never
+    # suffers at t<T) -- but this instrument CANNOT measure it. In baseline mode the SiLU and
+    # Upsample fusions feed the convs pre-quantized int8 codes via forward_from_int8, and install()
+    # deliberately records only floating-point inputs, so UTIL comes back empty and no in_conv /
+    # out_conv rows are emitted. The docstring's instrumentation note is the reason.
+    # For baseline-arm scale quality use the fake-quant harness instead:
+    # docs/qdiff_bridge_2026-08-12/scripts/act_fake_quant.py.
+    for mode in os.environ.get("MU_MODES", "int8").split(","):
         for tag, cs, cb, rf in configs:
             r = run(mode, cs, cb, rf)
             key = f"{mode} | {tag}"

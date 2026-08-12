@@ -36,8 +36,14 @@ import torch
 STEPS = int(os.environ.get("AB_STEPS", "50"))
 BATCH = int(os.environ.get("AB_BATCH", "8"))
 SEED = 1234
-CALIB = {"int8": "integration/calibration/int8_calibration_realckpt.pt",
-         "int4": "integration/calibration/int4_calibration_realckpt.pt"}
+#: Left pointing at the absmax file ON PURPOSE: every number this report has committed was measured
+#: against it, and silently switching would change what those numbers mean without re-measuring them.
+#: Set AB_CALIB8=integration/calibration/int8_calibration_qdiff.pt to score the Q-Diffusion scales
+#: (2026-08-12; benchmark_ldm.py now prefers that file for production runs).
+CALIB = {"int8": os.environ.get("AB_CALIB8",
+                                "integration/calibration/int8_calibration_realckpt.pt"),
+         "int4": os.environ.get("AB_CALIB4",
+                                "integration/calibration/int4_calibration_realckpt.pt")}
 TABLE = "integration/calibration/int8_delta_calibration.pt"
 
 

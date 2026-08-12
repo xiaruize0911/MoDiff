@@ -1,0 +1,59 @@
+{
+ "steps": 50,
+ "batch": 8,
+ "seeds": [
+  1234,
+  20260805,
+  777
+ ],
+ "summary": {
+  "baseline / shipped absmax": {
+   "mode": "int8_baseline",
+   "calib": "integration/calibration/int8_calibration_realckpt.pt",
+   "relL2": [
+    0.23758725821971893,
+    0.27005741000175476,
+    0.26159873604774475
+   ],
+   "relL2_mean": 0.2564144680897395,
+   "ms_per_step": 18.243022079986986
+  },
+  "baseline / qdiff": {
+   "mode": "int8_baseline",
+   "calib": "integration/calibration/int8_calibration_qdiff.pt",
+   "relL2": [
+    0.09860610216856003,
+    0.15259677171707153,
+    0.08437134325504303
+   ],
+   "relL2_mean": 0.11185807238022487,
+   "ms_per_step": 11.96454699995229
+  },
+  "MoDiff / shipped absmax": {
+   "mode": "int8",
+   "calib": "integration/calibration/int8_calibration_realckpt.pt",
+   "relL2": [
+    0.04618670791387558,
+    0.08768805116415024,
+    0.0362529382109642
+   ],
+   "relL2_mean": 0.05670923242966334,
+   "ms_per_step": 26.475290560047142
+  },
+  "MoDiff / qdiff": {
+   "mode": "int8",
+   "calib": "integration/calibration/int8_calibration_qdiff.pt",
+   "relL2": [
+    0.0408535972237587,
+    0.083772674202919,
+    0.03385293483734131
+   ],
+   "relL2_mean": 0.05282640208800634,
+   "ms_per_step": 20.490868519991636
+  }
+ },
+ "a7_prediction": {
+  "baseline_ratio": 2.36,
+  "modiff": "wash"
+ }
+}
