@@ -23,7 +23,17 @@ cd /workspace/MoDiff
 export PYTHONPATH=/workspace/MoDiff:/workspace/MoDiff/src/taming-transformers
 D=/workspace/MoDiff/docs/qdiff_bridge_2026-08-12
 CKPT=models/ldm/lsun_churches256/model.ckpt
+# THE PAPER'S OWN CALIBRATION SET, downloaded from the dataset the README points at
+# (huggingface.co/datasets/Weizhi98/MoDiff, cali_data/church.pt, 168 MB). The locally generated
+# residual file below is kept because every committed number in this report was measured against it;
+# CALI_PAPER=1 selects the reference one. They are not interchangeable: --generate residual samples
+# the fp16 model (it exits before `if opt.ptq:`), so the local file is an fp16 trajectory while the
+# paper's was produced by its own pipeline.
 CALI=$D/data/cali_churches_residual.pt
+if [ "${CALI_PAPER:-0}" = "1" ] && [ -f /workspace/cali_data/church.pt ]; then
+  CALI=/workspace/cali_data/church.pt
+  echo "using the paper's calibration set: $CALI"
+fi
 S=$(date +%s)
 
 COMMON="-r $CKPT --seed 1234 --no_ema -e 0.0 --custom_steps 50 --cali_st 10 --cali_n 64"
