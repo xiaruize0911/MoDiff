@@ -54,8 +54,15 @@ ap.add_argument("--decode-chunk", type=int, default=32,
                 help="images per decode_first_stage call; bounds the VAE activation peak")
 a = ap.parse_args()
 
-CALIB = {"int8": "integration/calibration/int8_calibration_realckpt.pt",
-         "int4": "integration/calibration/int4_calibration_realckpt.pt"}
+#: The 2026-08-05 run used the absmax files, and every FID number committed from it is keyed to
+#: them. FID_CALIB8 / FID_CALIB4 let a later run score a different calibration WITHOUT silently
+#: changing what those committed numbers mean -- e.g. the Q-Diffusion export
+#: (integration/calibration/int8_calibration_qdiff.pt), which improved baseline latent relL2 2.29x
+#: and whose FID consequence is untested. Defaults unchanged on purpose.
+CALIB = {"int8": os.environ.get("FID_CALIB8",
+                                "integration/calibration/int8_calibration_realckpt.pt"),
+         "int4": os.environ.get("FID_CALIB4",
+                                "integration/calibration/int4_calibration_realckpt.pt")}
 #: mode key -> (folder name, delta mode, activation bits). The MoDiff modes ship dynamic; baselines
 #: have no delta. Activation bits added 2026-08-10: 8 is what every original entry ran at, so those
 #: rows are unchanged, and w8a4* are the new W8A4 configuration -- the paper's own claim, which had
