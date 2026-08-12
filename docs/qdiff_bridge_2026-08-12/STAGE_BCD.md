@@ -1,6 +1,6 @@
-# Stage B and C: the QKV shape, and what warm-up costs
+# Stage B, C and D: the QKV shape, what warm-up costs, and dropping MoDiff from the Linears
 
-Two of the advisor's four asks from 2026-08-11, answered with measurements. A40, LSUN-churches.
+Three of the advisor's asks from 2026-08-11, answered with measurements. A40, LSUN-churches.
 
 ---
 
@@ -138,4 +138,65 @@ Data: `data/warmup_cost.json`.
 ```bash
 python docs/qdiff_bridge_2026-08-12/scripts/qkv_shape_bench.py --batch 128 --iters 50
 python docs/qdiff_bridge_2026-08-12/scripts/warmup_cost.py --steps 50 --batch 8 --pairs 4
+```
+
+---
+
+# Stage D — flip `MODIFF_LINEAR` off by default
+
+The advisor: *"如果说它会让它变慢，我们可以把 Linear 去掉，我以前试过，其实也还好。"* Done, in
+`benchmark_ldm.py`. **This is a real trade, not a free win**, so both halves are here.
+
+## The quality cost, re-measured on the corrected model
+
+The condition for flipping was that the quality comparison be re-made after recalibration — W4A4 was
+the setting where `MODIFF_LINEAR` was said to be visually load-bearing. DDIM 50, batch 8, 3 paired
+seeds, latent relL2 vs a per-seed fp16 reference:
+
+| configuration | ON (=1) | OFF (=0) | OFF/ON | seeds ON wins |
+|---|---:|---:|---:|---|
+| W8A8, qdiff scales | 0.0503 | 0.0612 | **1.22×** | **3/3** |
+| W8A8, shipped scales | 0.0530 | 0.0606 | 1.14× | 1/3 |
+| W4A4 | 0.3602 | 0.4176 | 1.16× | **3/3** |
+
+**A hypothesis going in was wrong, and it is worth recording.** I expected MoDiff-on-Linear to be
+partly *compensating* for the bad absmax activation scale, so that fixing the scale would shrink its
+benefit. It did not — the benefit **grew** (1.14× → 1.22×, and from 1/3 seeds to 3/3). This also
+reproduces the 2026-08-06 measurement closely (0.0607 → 0.0508 then, 0.0503 → 0.0612 now).
+
+## What turning it off buys
+
+* **1.059× → 1.371× vs fp16** — ~29% more throughput (differential timing, batch 128, 200 steps × 5
+  repeats, `docs/current_state_2026-08-12`).
+* **The fused int8-output epilogue on all 21 attention blocks.** `benchmark_ldm.py:751` asserted that
+  MoDiff sets `_out_i8 False` and disables it; this run **measured** it, and the flip moves
+  qout-eligible from **0/21 to 21/21**.
+* Stage B above: the int8 projection GEMM path is **0.86× cuBLAS fp16 at these shapes anyway** — a net
+  loss before MoDiff's delta traffic is counted at all.
+
+## Why the trade is judged worth taking
+
+At W8A8, **0.0612 is still inside the band a well-behaved 8-bit activation quantizer should occupy**
+(`docs/modiff_correctness_2026-08-03` calls 0.0393 exactly that). So this is 18% of an already-small
+error in exchange for 29% throughput and an unlocked fusion.
+
+The "recognisable churches vs fog" concern was always about **W4A4**, and there *both* arms are bad
+(0.36 and 0.42) — that configuration is not a recommendation either way.
+
+`MODIFF_LINEAR=1` restores the old behaviour. The default should be revisited if the linear MoDiff
+path ever gains a GEMM `o_hat`-accumulate epilogue, which would remove most of the speed cost.
+
+## No committed measurement changes meaning
+
+All four measurement harnesses set `MODIFF_LINEAR` **explicitly** per arm — `differential_timing.py`
+(in its per-arm env dicts), `profile_layers_and_model.py:218`, `profile_blocks.py:218`, and
+`dynamic_delta_ab.py` (which only mentions it in a comment). So no previously committed number
+silently changes. Verified end to end: with the env var unset, 42 wxax linears build at
+`modiff=False` and qout-eligible reads 21/21.
+
+Data: `data/linear_modiff_ab.json`. `ms_per_step` in that file is indicative only — arms are built
+sequentially in one process, and this A40 idles at 210 MHz (see Stage C).
+
+```bash
+python docs/qdiff_bridge_2026-08-12/scripts/linear_modiff_ab.py --steps 50 --seeds 3
 ```

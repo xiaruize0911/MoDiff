@@ -744,14 +744,37 @@ class BenchmarkRunner:
                 # projections), not baselines, so MODIFF_LINEAR=1 must reach their Linears as well.
                 # Without them in this tuple, asking for "MoDiff everywhere" silently left the 42
                 # wxax Linears un-modulated.
-                # DEFAULT FLIPPED TO 1 (2026-08-06), by explicit request, accepting the speed
-                # cost. What it buys and what it costs, both measured at batch 128 / DDIM 200:
-                # A8 latent relL2 0.0607 -> 0.0508 (0.84x, 3 of 3 paired seeds), and 77.4 -> 103.3
-                # ms/step, i.e. the int8 speedup drops from 1.38x fp16 to 1.04x. The cost is larger
-                # than "three extra launches per linear": MoDiff sets _out_i8 False, which disables
-                # the fused int8-output epilogue on all 21 attention blocks (0/21 qout-eligible).
-                # Revisit when the linear MoDiff path gains a GEMM o_hat-accumulate epilogue.
-                is_modiff = (os.environ.get("MODIFF_LINEAR", "1") == "1"
+                # DEFAULT FLIPPED BACK TO 0 (2026-08-12), reversing the 2026-08-06 flip to 1. This
+                # is a REAL TRADE, not a free win, so both halves are recorded.
+                #
+                # What turning it off COSTS -- re-measured on the Q-Diffusion-recalibrated model,
+                # DDIM 50 / batch 8 / 3 paired seeds (docs/qdiff_bridge_2026-08-12/):
+                #     W8A8 qdiff   relL2 0.0503 (on) -> 0.0612 (off)   +18%, off loses 3/3 seeds
+                #     W4A4         relL2 0.3602 (on) -> 0.4176 (off)   +16%, off loses 3/3 seeds
+                # A hypothesis going in was that MoDiff-on-Linear had been compensating for the bad
+                # absmax activation scale, so fixing the scale would shrink its benefit. It did not:
+                # the benefit GREW slightly (0.875x -> 0.821x). Reproduces the 2026-08-06 measurement
+                # (0.0607 -> 0.0508) closely.
+                #
+                # What turning it off BUYS:
+                #   * 1.059x -> 1.371x vs fp16 (differential timing, batch 128, 200 steps x 5
+                #     repeats, docs/current_state_2026-08-12) -- ~29% more throughput.
+                #   * the fused int8-output epilogue on ALL 21 attention blocks. MoDiff sets
+                #     _out_i8 False; measured here rather than assumed, qout-eligible goes 0/21 -> 21/21.
+                #   * Stage B: the int8 projection GEMM path is 0.86x cuBLAS fp16 at these shapes
+                #     ANYWAY -- a net loss before MoDiff's delta traffic is counted at all, because a
+                #     standalone quantize_act_int8 pass is 30% of it (47% on the C=192 proj).
+                #
+                # Why the trade is judged worth taking: 0.0612 is still inside the band a well-behaved
+                # 8-bit activation quantizer should occupy, so at W8A8 this is 18% of an already-small
+                # error for 29% throughput. The "recognisable churches vs fog" concern was always
+                # about W4A4, where BOTH arms (0.36 / 0.42) are bad and which is not a recommended
+                # configuration. The advisor independently reported (2026-08-11) having tried dropping
+                # MoDiff from the Linears before with no meaningful loss.
+                #
+                # Set MODIFF_LINEAR=1 to restore. Revisit the default if the linear MoDiff path ever
+                # gains a GEMM o_hat-accumulate epilogue, which would remove most of the speed cost.
+                is_modiff = (os.environ.get("MODIFF_LINEAR", "0") == "1"
                              and mode in ("int8", "int4",
                                           "int8_attn_modiff", "int4_attn_modiff"))
                 n_lin = convert_linears_to_wxax(model.model.diffusion_model, bits=lb, modiff=is_modiff)

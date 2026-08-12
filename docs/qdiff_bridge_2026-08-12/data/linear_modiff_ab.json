@@ -1,0 +1,110 @@
+{
+ "steps": 50,
+ "batch": 8,
+ "seeds": [
+  1234,
+  20260805,
+  777
+ ],
+ "results": {
+  "W8A8 qdiff, MODIFF_LINEAR=0": {
+   "mode": "int8",
+   "modiff_linear": "0",
+   "calib": "integration/calibration/int8_calibration_qdiff.pt",
+   "relL2": [
+    0.03955886885523796,
+    0.09432993084192276,
+    0.04981072619557381
+   ],
+   "relL2_mean": 0.06123317529757818,
+   "ms_per_step_indicative": 16.474262539995834,
+   "qout_eligible_blocks": 21
+  },
+  "W8A8 qdiff, MODIFF_LINEAR=1": {
+   "mode": "int8",
+   "modiff_linear": "1",
+   "calib": "integration/calibration/int8_calibration_qdiff.pt",
+   "relL2": [
+    0.03927801176905632,
+    0.08736279606819153,
+    0.02426566369831562
+   ],
+   "relL2_mean": 0.050302157178521156,
+   "ms_per_step_indicative": 24.41610264009796,
+   "qout_eligible_blocks": 0
+  },
+  "W8A8 shipped, MODIFF_LINEAR=0": {
+   "mode": "int8",
+   "modiff_linear": "0",
+   "calib": "integration/calibration/int8_calibration_realckpt.pt",
+   "relL2": [
+    0.03657398000359535,
+    0.09416204690933228,
+    0.051063209772109985
+   ],
+   "relL2_mean": 0.06059974556167921,
+   "ms_per_step_indicative": 16.351159180048853,
+   "qout_eligible_blocks": 21
+  },
+  "W8A8 shipped, MODIFF_LINEAR=1": {
+   "mode": "int8",
+   "modiff_linear": "1",
+   "calib": "integration/calibration/int8_calibration_realckpt.pt",
+   "relL2": [
+    0.03863758593797684,
+    0.09537939727306366,
+    0.025070663541555405
+   ],
+   "relL2_mean": 0.05302921558419863,
+   "ms_per_step_indicative": 20.221044840000104,
+   "qout_eligible_blocks": 0
+  },
+  "W4A4, MODIFF_LINEAR=0": {
+   "mode": "int4",
+   "modiff_linear": "0",
+   "calib": "integration/calibration/int4_calibration_realckpt.pt",
+   "relL2": [
+    0.4579819440841675,
+    0.39718112349510193,
+    0.3977305591106415
+   ],
+   "relL2_mean": 0.41763120889663696,
+   "ms_per_step_indicative": 15.689284359978046,
+   "qout_eligible_blocks": 21
+  },
+  "W4A4, MODIFF_LINEAR=1": {
+   "mode": "int4",
+   "modiff_linear": "1",
+   "calib": "integration/calibration/int4_calibration_realckpt.pt",
+   "relL2": [
+    0.3716757297515869,
+    0.3404022753238678,
+    0.36844244599342346
+   ],
+   "relL2_mean": 0.36017348368962604,
+   "ms_per_step_indicative": 27.679710619995603,
+   "qout_eligible_blocks": 0
+  }
+ },
+ "verdicts": {
+  "W8A8 qdiff": {
+   "off": 0.06123317529757818,
+   "on": 0.050302157178521156,
+   "ratio": 0.8214853620454114,
+   "on_wins_seeds": 3
+  },
+  "W8A8 shipped": {
+   "off": 0.06059974556167921,
+   "on": 0.05302921558419863,
+   "ratio": 0.8750732382238273,
+   "on_wins_seeds": 1
+  },
+  "W4A4": {
+   "off": 0.41763120889663696,
+   "on": 0.36017348368962604,
+   "ratio": 0.862419943761359,
+   "on_wins_seeds": 3
+  }
+ },
+ "note_ms": "ms_per_step_indicative is contaminated by build order and clock ramp; use docs/current_state_2026-08-12 differential timing for speed"
+}
