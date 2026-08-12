@@ -1,0 +1,61 @@
+#!/bin/bash
+# A3-A5: generate calibration data once, then derive activation scales and delta scales.
+#
+# THREE RUNS, and the split is not optional. Under --modulate, layer_reconstruction_modiff
+# initialises act_quantizer.delta from (cached_inps - cached_inps_prev) -- the step size of the
+# TEMPORAL DELTA -- and QuantModule.forward's `a_hat is None` branch never calls the activation
+# quantizer at all. So a --modulate run structurally CANNOT produce an activation scale, and a
+# non-modulate run cannot produce a delta scale. integration/ needs both: the baseline arm and
+# MoDiff's t=T step read static_input_scale, while MoDiff's t<T steps read the delta table.
+#
+# --no_ema on every run: integration/'s loader does not swap in EMA weights, and calibrating the
+# other network changes 70/70 conv weights (docs/.../data/assert_same_network.json).
+#
+# --cali_st MUST divide --custom_steps exactly. generate() computes interval = steps // cali_st then
+# indexes xs_lst[t // interval], so a non-divisor overruns the list. For custom_steps 50 the legal
+# values are 1, 2, 5, 10, 25, 50 -- and it must also be > 1, because get_train_samples takes a branch
+# at num_st == 1 that slices a dict.
+#
+# Distinct -l per run: logdir is derived from the checkpoint path, so runs would otherwise overwrite
+# each other's ckpt.pth.
+set -x
+cd /workspace/MoDiff
+export PYTHONPATH=/workspace/MoDiff:/workspace/MoDiff/src/taming-transformers
+D=/workspace/MoDiff/docs/qdiff_bridge_2026-08-12
+CKPT=models/ldm/lsun_churches256/model.ckpt
+CALI=$D/data/cali_churches_residual.pt
+S=$(date +%s)
+
+COMMON="-r $CKPT --seed 1234 --no_ema -e 0.0 --custom_steps 50 --cali_st 10 --cali_n 64"
+CAL="--ptq --quant_act --skip_weight_recon --weight_bit 8 --act_bit 8 \
+     --cali_data_path $CALI --cali_batch_size 32 --cali_iters_a 0 -n 1 --batch_size 1"
+
+# A3 -- one generation serves both arms: --generate residual writes xs/ts AND xs_prev/ts_prev, and
+# get_train_samples(with_prev=False) simply ignores the _prev halves.
+python scripts/sample_diffusion_ldm.py $COMMON --batch_size 32 \
+  --generate residual --cali_data_path $CALI \
+  -l $D/qdiff_runs/gen > $D/logs/gen.log 2>&1
+echo "A3 generate done $(( $(date +%s) - S ))s"
+
+# A4a -- activation scales, symmetric absmax. Bit-exactly integration's quantizer (symmetric,
+# zero_point 0, delta = absmax/127), so the export is lossless.
+# --a_sym REQUIRES --a_min_max: the 'mse' branch computes zero_point without checking self.sym while
+# sym sets n_levels=127, so quantize() clamps to [0,126] with zp~128 and the search optimises garbage.
+python scripts/sample_diffusion_ldm.py $COMMON $CAL --a_sym --a_min_max \
+  -l $D/qdiff_runs/act_sym > $D/logs/act_sym.log 2>&1
+echo "A4a act_sym done $(( $(date +%s) - S ))s"
+
+# A4b -- activation scales, asymmetric MSE. Keeps qdiff's 80-candidate clip search; the export has to
+# symmetrise, which costs up to ~1 bit on the one-sided post-SiLU activations all 70 convs consume.
+# Kept as a second arm so A7 can measure that cost instead of assuming it.
+python scripts/sample_diffusion_ldm.py $COMMON $CAL \
+  -l $D/qdiff_runs/act_mse > $D/logs/act_mse.log 2>&1
+echo "A4b act_mse done $(( $(date +%s) - S ))s"
+
+# A5 -- delta scales. --cali_min_max is what skips the LSQ loop; the min-max init from the full
+# calibration set runs before it regardless.
+python scripts/sample_diffusion_ldm.py $COMMON $CAL --a_sym --a_min_max \
+  --modulate --quant_mode qdiff --cali_min_max \
+  -l $D/qdiff_runs/delta > $D/logs/delta.log 2>&1
+echo "A5 delta done $(( $(date +%s) - S ))s"
+echo "ALL DONE in $(( $(date +%s) - S ))s"
