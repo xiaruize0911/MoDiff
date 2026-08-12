@@ -35,6 +35,8 @@ plt.rcParams.update({
 })
 
 CURRENT = "W8A8 conv+proj +projK4 +routeB"
+#: how to name it in prose -- the config key is a data key, not a label
+CURRENT_LABEL = "W8A8 MoDiff conv+proj, refresh K=4, int8 qkv"
 #: short labels for the right-hand per-configuration panel, in ladder order
 ORDER = [("W8A8 PTQ", "W8A8 PTQ"), ("W8A8 conv-only", "conv only"),
          ("W8A8 conv+proj", "conv+proj"), ("W8A8 conv+proj +projK4", "+ refresh K=4"),
@@ -77,6 +79,22 @@ def label_of(row, k):
     return f"{w}{c}"
 
 
+def uniq_labels(labels):
+    """The middle block holds two ResBlocks, so "mid0" would appear twice on the axis. Suffix any
+    repeated position with a/b so a bar can be identified from the figure alone."""
+    seen, out = {}, []
+    for x in labels:
+        seen[x] = seen.get(x, 0) + 1
+    n = {}
+    for x in labels:
+        if seen[x] == 1:
+            out.append(x)
+        else:
+            n[x] = n.get(x, 0) + 1
+            out.append(f"{x}{chr(96 + n[x])}")
+    return out
+
+
 def one_group(stem, title, color, pred, rows):
     cur = rows.get(CURRENT)
     if cur is None:
@@ -89,11 +107,21 @@ def one_group(stem, title, color, pred, rows):
     fig, (axl, axr) = plt.subplots(1, 2, figsize=(12.8, 4.4),
                                    gridspec_kw={"width_ratios": [1.45, 1]})
     axl.bar(range(len(keys)), vals, color=color, width=0.62)
+    # On a 27-bar axis every label collides with its neighbour, so label only the bars worth reading
+    # off the figure; the rest are in data/block_tables.md exactly.
+    cut = sorted(vals, reverse=True)[min(7, len(vals)) - 1] if len(keys) > 14 else -1.0
+    # Adjacent bars of near-equal height still collide even when only 7 are labelled (in1/in2 are
+    # 2.84 and 2.84), so stagger every other label upward on the dense axis.
+    hi = max(vals)
+    lab = 0
     for i, v in enumerate(vals):
-        axl.text(i, v * 1.012, f"{v:.2f}", ha="center", va="bottom", color=INK2,
-                 fontsize=7.5 if len(keys) > 14 else 8.5)
+        if v >= cut:
+            off = hi * 0.055 * (lab % 2) if len(keys) > 14 else 0.0
+            axl.text(i, v * 1.012 + off, f"{v:.2f}", ha="center", va="bottom", color=INK2,
+                     fontsize=8.0 if len(keys) > 14 else 8.5)
+            lab += 1
     axl.set_xticks(range(len(keys)))
-    axl.set_xticklabels([label_of(cur, k) for k in keys],
+    axl.set_xticklabels(uniq_labels([label_of(cur, k) for k in keys]),
                         fontsize=6.5 if len(keys) > 14 else 8.5,
                         rotation=90 if len(keys) > 14 else 0)
     axl.set_xlabel("UNet position (in = input block, mid = middle, out = output block)")
@@ -101,7 +129,7 @@ def one_group(stem, title, color, pred, rows):
     axl.set_title(f"{title} -- {sum(vals):.2f} ms/step", loc="left")
     axl.grid(axis="y", color=GRID, linewidth=0.8)
     axl.set_axisbelow(True)
-    axl.set_ylim(0, max(vals) * 1.20)
+    axl.set_ylim(0, max(vals) * 1.26)
 
     labs, tots, cols = [], [], []
     for cfg, short in ORDER:
@@ -126,7 +154,7 @@ def one_group(stem, title, color, pred, rows):
     axr.set_axisbelow(True)
     axr.set_xlim(0, max(tots) * 1.22)
     fig.suptitle(f"Batch 128, A40 -- block-level CUDA events, coverage {cur['sum_over_wall']:.3f}. "
-                 f"Left: {CURRENT}.", x=0.01, ha="left", fontsize=11)
+                 f"Left: {CURRENT_LABEL}.", x=0.01, ha="left", fontsize=11)
     fig.tight_layout(rect=(0, 0, 1, 0.92))
     fig.savefig(os.path.join(PLOTS, stem + ".png"), dpi=170)
     plt.close(fig)
@@ -142,12 +170,31 @@ def plot_summary(rows):
     cfgs = [(c, s) for c, s in ORDER if c in rows and rows[c].get("meta")]
     fig, ax = plt.subplots(figsize=(12.4, 5.0))
     bottom = [0.0] * len(cfgs)
+    named = {t for t, _, _ in types}
+
+    def is_type(mt, tname):
+        """fp16 never converts attention, so its 21 blocks come back as TokenMajorAttentionBlock
+        rather than QuantizedStandardAttentionBlock. They are the same blocks doing the same job and
+        belong in the same bar; only the class differs."""
+        if tname == "attention":
+            return mt == "attention" or "Attention" in str(mt)
+        return mt == tname
+
+    # fp16 never converts its attention, so those blocks come back as other:AttentionBlock. Without a
+    # catch-all its bar would be missing 20 ms and would silently look like the instrument had lost
+    # coverage rather than like a type this figure does not name.
+    types = types + [("__other__", "other block types", "#c9c7c1")]
     for tname, tlabel, col in types:
         vals = []
         for c, _ in cfgs:
             r = rows[c]
-            vals.append(sum(v for k, v in r["blocks"].items()
-                            if r["meta"].get(k, {}).get("type") == tname))
+            if tname == "__other__":
+                vals.append(sum(v for k, v in r["blocks"].items()
+                                if not any(is_type(r["meta"].get(k, {}).get("type"), t)
+                                           for t in named)))
+            else:
+                vals.append(sum(v for k, v in r["blocks"].items()
+                                if is_type(r["meta"].get(k, {}).get("type"), tname)))
         ax.bar(range(len(cfgs)), vals, bottom=bottom, color=col, width=0.6, label=tlabel)
         for i, v in enumerate(vals):
             if v > 3.0:
@@ -166,6 +213,7 @@ def plot_summary(rows):
     ax.grid(axis="y", color=GRID, linewidth=0.8)
     ax.set_axisbelow(True)
     ax.legend(fontsize=8.5, ncol=4, loc="upper left")
+    ax.set_xlim(-0.6, len(cfgs) - 0.4)
     ax.set_ylim(0, max(rows[c]["wall_ms_per_step"] for c, _ in cfgs) * 1.22)
     fig.tight_layout()
     fig.savefig(os.path.join(PLOTS, "09_block_types.png"), dpi=170)
@@ -205,12 +253,57 @@ def plot_head_tail(rows):
     return True
 
 
+def write_tables(rows, path):
+    """Emit every per-type table as markdown, so FINDINGS.md's numbers are regenerable rather than
+    transcribed. A reader who doubts a table can diff this file against the report."""
+    cur = rows.get(CURRENT)
+    if cur is None:
+        return None
+    cfgs = [(c, s_) for c, s_ in ORDER if c in rows]
+    out = ["# Per-block tables, generated by make_block_plots.py -- do not edit", ""]
+    out += ["## wall clock and coverage", "",
+            "| config | wall ms/step | instrumented | coverage |", "|---|---:|---:|---:|"]
+    for c, _ in cfgs:
+        r = rows[c]
+        out.append(f"| {c} | {r['wall_ms_per_step']:.2f} | {r['instrumented_ms_per_step']:.2f} | "
+                   f"{r['sum_over_wall']:.3f} |")
+    out.append("")
+    groups = [(t, p_) for _, t, _, p_ in GROUPS] + [
+        ("Head and tail", lambda m: m.get("type") in ("conv_in", "time_embed", "out_tail"))]
+    for title, pred in groups:
+        keys = [k for k, m in cur["meta"].items() if pred(m)]
+        keys.sort(key=lambda k: int(k[2:]) if k[:2] in ("rb", "at", "ot") and k[2:].isdigit()
+                  else 10**6)
+        if not keys:
+            continue
+        out += ["", f"## {title}  (n={len(keys)})", "",
+                "| block | in shape |" + "".join(f" {s_} |" for _, s_ in cfgs),
+                "|---|---|" + "---:|" * len(cfgs)]
+        for k in keys:
+            m = cur["meta"][k]
+            sh = m.get("in_shape", [])
+            shape = f"{sh[1]}ch {sh[-2]}x{sh[-1]}" if len(sh) == 4 else "x".join(map(str, sh))
+            pos = (f"{m.get('where')}{m.get('container')}" if m.get("container", -1) >= 0
+                   else m["type"])
+            cells = "".join(
+                f" {rows[c]['blocks'][k]:.2f} |" if k in rows[c]["blocks"] else " -- |"
+                for c, _ in cfgs)
+            out.append(f"| {pos} `{k}` | {shape} |{cells}")
+        tot = "".join(f" **{sum(rows[c]['blocks'].get(k, 0.0) for k in keys):.2f}** |"
+                      for c, _ in cfgs)
+        out.append(f"| **total** | |{tot}")
+    open(path, "w").write("\n".join(out) + "\n")
+    return path
+
+
 def main():
     rows = load()
     if not rows:
         print(f"NOTE: {SRC} absent -- run integration/tests/profile_blocks.py first")
         return 1
     os.makedirs(PLOTS, exist_ok=True)
+    tp = write_tables(rows, os.path.join(os.path.dirname(SRC), "block_tables.md"))
+    print(f"wrote {tp}" if tp else f"NOTE: no '{CURRENT}' row yet -- tables skipped")
     n = plot_summary(rows) + plot_head_tail(rows)
     for stem, title, color, pred in GROUPS:
         if one_group(stem, title, color, pred, rows):

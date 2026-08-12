@@ -22,4 +22,10 @@ echo "GAP2-capture done $(( $(date +%s) - S ))s"
 
 python docs/component_attribution_2026-08-07/scripts/bucket_traces.py \
   --output $D/data/trace_buckets_all.json >> $D/logs/trace.log 2>&1
+# (3) per-BLOCK profile: every UNet block at its own module boundary, 8 configs. A separate
+#     instrument from (1), not a finer version of it -- see profile_blocks.py's docstring.
+python integration/tests/profile_blocks.py --batch 128 --steps 200 \
+  --outdir $D > $D/logs/blocks.log 2>&1
+echo "GAP3 done $(( $(date +%s) - S ))s"
+
 echo "ALL DONE in $(( $(date +%s) - S ))s"

@@ -13,7 +13,7 @@ the instruments, not an inconsistency:
 | instrument | scope | what it is authoritative for |
 |---|---|---|
 | differential | whole model, profiler-free wall clock, 200 steps × 5 repeats | **e2e ms/step** |
-| block harness | CUDA events on every UNet block, covers 0.96–0.98 of the step | **where the step goes**, §5 |
+| block harness | CUDA events on every UNet block, covers 0.96–0.99 of the step | **where the step goes**, §5 |
 | layer harness | CUDA events on live dispatch targets, covers 0.63–0.89 of the step | **shares** per layer/block |
 | Perfetto trace | 8 steps, bucketed offline | **which CUDA kernel**, within one capture |
 
@@ -248,6 +248,152 @@ gather kernel on the hd=48 tiers.
 
 ---
 
+## 5. Per block type — every UNet block, all eight configurations
+
+![block types](plots/09_block_types.png)
+
+A second instrument, [`profile_blocks.py`](integration/tests/profile_blocks.py): CUDA events on every
+UNet block at its own module boundary rather than on leaf dispatch targets. **Coverage 0.961–0.990**
+against §3's 0.629–0.891, because the residual there is precisely the work that is not a conv, an
+attention route or a projection — ResBlock arithmetic, the emb path, the skip connections, the head
+and tail. Blocks are siblings in the UNet, never nested in each other, so unlike §3 this needs no
+subtraction to avoid double counting.
+
+Every number in this section regenerates into `data/block_tables.md`, which is written by the same
+script that draws the figures. **Do not add a row here to a row in §3** — a conv timed there runs
+inside a ResBlock timed here.
+
+| config | wall | coverage | ResBlock ×27 | ↓×4 | ↑×4 | Attention ×21 | conv_in | out tail | time_embed |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| fp16 | 105.95 | 0.966 | 52.42 | 4.03 | 16.94 | 26.02 | 0.45 | 2.23 | 0.31 |
+| W8A8 PTQ | 71.97 | 0.961 | 35.37 | 2.38 | 9.03 | 19.48 | 0.43 | 2.20 | 0.27 |
+| W8A8 conv-only | 79.39 | 0.965 | 38.63 | 2.97 | 12.31 | 19.68 | 0.45 | 2.21 | 0.38 |
+| W8A8 conv+proj | 101.64 | 0.988 | 38.25 | 2.93 | 12.21 | 44.00 | 0.46 | 2.20 | 0.41 |
+| W8A8 conv+proj, `DELTA_REFRESH=4` | 99.35 | 0.972 | 38.27 | 2.93 | 12.20 | 40.05 | 0.47 | 2.20 | 0.44 |
+| **W8A8 conv+proj, both flags** | **98.33** | **0.973** | **38.23** | **2.93** | **12.21** | **39.31** | **0.44** | **2.20** | **0.35** |
+| W8A4 conv+proj | 101.61 | 0.980 | 37.98 | 2.91 | 12.11 | 43.67 | 0.41 | 2.20 | 0.32 |
+| W4A4 conv+proj | 95.17 | 0.990 | 28.24 | 4.18 | 9.30 | 49.39 | 0.48 | 2.19 | 0.46 |
+
+**Two instruments agree where they should.** Block-level attention in the current configuration is
+**39.31**; §3's `attn` + `proj` for the same configuration is 31.98 + 7.48 = **39.46**. Those are
+independent measurements of the same scope, 0.15 ms apart. The ResBlock side deliberately does *not*
+agree: 53.37 here against §3's `conv` + `updown` = 46.77, and the **6.60 ms difference is the ResBlock's
+own arithmetic** — emb projection, skip connection, residual add — which the leaf harness cannot see.
+That difference is most of what §3's coverage gap was.
+
+**The whole project's economics, in one pair of rows.** Going fp16 → W8A8 PTQ takes ResBlocks from
+73.39 to 46.78 (**−26.6 ms**) and attention from 26.02 to 19.48 (**−6.5**). Turning MoDiff on then gives
+back **+6.6 in ResBlocks and +19.8 in attention**. Quantization's win is overwhelmingly a *ResBlock*
+win; MoDiff's cost is overwhelmingly an *attention* cost. They are not competing for the same budget.
+
+### 5a. ResBlock — 27 ordinary
+
+![resblock](plots/10_resblock.png)
+
+**38.23 ms/step, 39% of the step** and the largest single type. Cost is a clean function of feature-map
+resolution and nothing else:
+
+| resolution | blocks | ms/step | share of type |
+|---|--:|---:|---:|
+| 32×32 | 5 | **19.26** | **50%** |
+| 16×16 | 5 | 10.21 | 27% |
+| 8×8 | 5 | 3.69 | 10% |
+| 4×4 | 5 | 3.07 | 8% |
+| 2×2 | 7 | 2.01 | 5% |
+
+**Five blocks are half the type**: `out12` 5.35, `out14` 4.12, `out13` 4.10, `in1` and `in2` 2.84 each.
+`out12` at 5.35 ms is the second most expensive block in the model after `out11`'s upsampler. The
+twelve blocks at 4×4 or smaller cost 5.08 ms between them.
+
+### 5b. ResBlock — 4 downsampling
+
+![resblock down](plots/11_resblock_down.png)
+
+| block | shape | PTQ | conv-only | **current** | W4A4 | fp16 |
+|---|---|---:|---:|---:|---:|---:|
+| `in3` | 192ch 32×32 → 16×16 | 1.22 | 1.59 | **1.57** | 1.32 | 1.94 |
+| `in6` | 384ch 16×16 → 8×8 | 0.71 | 0.82 | **0.81** | 0.67 | 1.29 |
+| `in9` | 384ch 8×8 → 4×4 | 0.21 | 0.27 | **0.27** | 0.23 | 0.49 |
+| `in12` | 768ch 4×4 → 2×2 | 0.24 | 0.28 | **0.28** | **1.97** | 0.30 |
+| **total** | | **2.38** | **2.97** | **2.93** | **4.18** | **4.03** |
+
+The cheapest type at 3.0% of the step. It is also the **only conv-side type W4A4 makes slower** (4.18
+against W8A8's 2.93) — and that is not a uniform int4 effect: three of the four blocks are *faster* at
+W4A4, and the whole regression is **`in12` alone, 0.28 → 1.97, a 7× jump on one 768ch 4×4 → 2×2 block**.
+Worth a look if int4 is ever pursued; at 1.7 ms it is not why W4A4 is slower overall.
+
+### 5c. ResBlock — 4 upsampling, and the most expensive block in the model
+
+![resblock up](plots/12_resblock_up.png)
+
+| block | shape | PTQ | conv-only | **current** | W4A4 | fp16 |
+|---|---|---:|---:|---:|---:|---:|
+| `out2` | 768ch 2×2 → 4×4 | 0.47 | 0.54 | **0.53** | 0.37 | 0.67 |
+| `out5` | 768ch 4×4 → 8×8 | 1.26 | 1.46 | **1.44** | 1.02 | 2.36 |
+| `out8` | 384ch 8×8 → 16×16 | 1.63 | 2.13 | **2.11** | 1.67 | 3.09 |
+| **`out11`** | **384ch 16×16 → 32×32** | **5.67** | **8.18** | **8.13** | **6.24** | **10.83** |
+| **total** | | **9.03** | **12.31** | **12.21** | **9.30** | **16.94** |
+
+**`out11` at 8.13 ms/step is the single most expensive block in the UNet** — more than the largest
+attention block (5.00) and more than twice the largest individual conv layer (3.32). It alone is
+**8.3% of the whole step**, and the four upsampling blocks together are 12.4%.
+
+They are also where MoDiff's conv-side cost concentrates. PTQ → conv-only adds **+7.13 ms** across all
+35 ResBlocks, and **+3.28 of it (46%) lands on these four blocks**, which are 11% of the ResBlocks.
+`out11` alone takes **+2.51**, more than a third of the whole ResBlock-side increase. Nothing in this project has ever targeted them: §3's leaf harness folds all
+eight updown ResBlocks into one 6.75 ms `updown` key, which is both a different scope and small enough
+to look uninteresting.
+
+### 5d. Attention, by shape tier
+
+![hd24](plots/13_attn_hd24_T1024.png)
+![hd48 T256](plots/14_attn_hd48_T256.png)
+![hd48 T64](plots/15_attn_hd48_T64.png)
+![hd96](plots/16_attn_hd96.png)
+
+Whole blocks, projections included, so unlike §3's table these rows are like-for-like in every
+configuration:
+
+| tier | n | PTQ | conv+proj | `+REFRESH=4` | **both flags** | W4A4 | MoDiff cost |
+|---|--:|---:|---:|---:|---:|---:|---:|
+| hd24 T1024 | 5 | 12.93 | 26.51 | 24.92 | **24.91** | 32.71 | **+11.98** |
+| hd48 T256 | 5 | 4.33 | 11.28 | 10.46 | **10.07** | 11.39 | +5.74 |
+| hd48 T64 | 5 | 1.18 | 4.39 ‡ | 2.98 | **2.64** | 3.60 | +1.46 |
+| hd96 T16 | 5 | 0.96 | 1.65 | 1.53 | **1.53** | 1.54 | +0.57 |
+| hd96 T4 *(middle)* | 1 | 0.08 | 0.18 | 0.16 | **0.16** | 0.16 | +0.08 |
+| **total** | **21** | **19.48** | **44.00** | **40.05** | **39.31** | **49.39** | **+19.83** |
+
+‡ **One outlier, flagged rather than smoothed.** Block-level and leaf-level attention agree closely —
+totals differ by −0.08 and −0.14 ms on the `+REFRESH=4` and both-flags configurations, and every
+individual block agrees to 0.15 ms. The one exception is attention block 4 in the `conv+proj`
+configuration, which reads **1.80 here against 0.65 in §2** while its four tier-mates read normally.
+That single block is the entire 4.39-vs-3.25 gap in this row. It is a one-off in one config, not a
+tier property, and the `MoDiff cost` column is measured PTQ → current so it is unaffected.
+
+**MoDiff more than doubles attention** (19.48 → 39.31) and **60% of that increase is the five hd=24
+blocks**. Those five go from 12.93 to 24.91 — the tier the int8-qkv fusion cannot reach, the tier the
+8-byte loader lost on, and now also the tier carrying most of MoDiff's attention cost. Three
+independent lines of work all terminate at the same five blocks.
+
+W4A4 is *worse* than W8A8 on every attention tier, most sharply at hd24 (32.71 vs 24.91).
+
+### 5e. Head and tail — the three unquantized singletons
+
+![head and tail](plots/17_head_and_tail.png)
+
+| block | what | current | range across all 8 configs |
+|---|---|---:|---|
+| `out_tail` | GroupNorm + SiLU + conv 192→4 at 32×32 | 2.20 | 2.19–2.23 |
+| `conv_in` | conv 4→192 at 32×32 | 0.44 | 0.41–0.48 |
+| `time_embed` | Linear 192→768, SiLU, Linear 768→768 | 0.35 | 0.27–0.46 |
+
+**2.99 ms/step, 3.0% of the step, and flat across every configuration** — the total ranges 2.90–3.12
+over all eight arms, a 0.22 ms spread, with fp16 sitting mid-range at 2.98. All three are excluded from quantization by rule: `conv_in` has 4 input channels (the converter
+requires ≥ 32) and `out.2` is skipped by path prefix. `out_tail`'s 2.20 ms is more than the whole
+`attn_quantize` bucket in §4 and has never been examined.
+
+---
+
 ## What this data does NOT cover
 
 Stated so nobody reads a gap as a zero:
@@ -265,8 +411,9 @@ Stated so nobody reads a gap as a zero:
 
 ```bash
 bash docs/postsplit_benchmark_2026-08-12/scripts/run_all.sh    # e2e arms, ~33 min
-bash docs/current_state_2026-08-12/scripts/run_gaps.sh         # layers/blocks + all traces, ~13 min
-python docs/current_state_2026-08-12/scripts/make_plots.py     # these figures, offline
+bash docs/current_state_2026-08-12/scripts/run_gaps.sh         # layers, traces, blocks, ~24 min
+python docs/current_state_2026-08-12/scripts/make_plots.py     # figures 00-03, offline
+python docs/current_state_2026-08-12/scripts/make_block_plots.py   # figures 09-17, offline
 ```
 
 `plots/harness_auto/` holds the three figures `profile_layers_and_model.py` emits on its own; they are

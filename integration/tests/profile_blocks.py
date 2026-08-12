@@ -24,8 +24,11 @@ INSIDE the updown ResBlocks, which is why "updown" here means a ResBlock and not
 
 WHAT IS TIMED, and the block types it produces:
 
-  resblock       35 FusedResBlock, split into regular / downsample / upsample by `original.down|up`
-  attention      21 QuantizedStandardAttentionBlock, split into 4 shape tiers by (head_dim, T)
+  resblock       35 FusedResBlock: 27 ordinary + 4 downsampling + 4 upsampling, split by the
+                 spatial size each block actually produced (see classify() -- two earlier
+                 attempts at this were defeated by the graph)
+  attention      21 QuantizedStandardAttentionBlock, split into 5 shape tiers by (head_dim, T).
+                 fp16 never converts attention, so there they appear as TokenMajorAttentionBlock
   conv_in         1 input_blocks[0], a bare 4->192 conv, NOT quantized (in_channels < 32)
   time_embed      1 Linear(192,768) + SiLU + Linear(768,768), once per step, not per block
   out             1 GroupNorm + SiLU + conv(192->4), also not quantized (path starts with "out.")
@@ -78,6 +81,7 @@ class BlockTimer:
     def __init__(self):
         self.ev = {}
         self.shape = {}
+        self.oshape = {}
 
     def wrap(self, obj, name, key):
         fn = getattr(obj, name, None)
@@ -94,6 +98,8 @@ class BlockTimer:
             s.record()
             out = __fn(*a, **kw)
             e.record()
+            if __key not in self.oshape and torch.is_tensor(out):
+                self.oshape[__key] = list(out.shape)
             __ev.append((s, e))
             return out
         setattr(obj, name, inner)
@@ -123,10 +129,20 @@ def classify(unet):
             tn = type(child).__name__
             if isinstance(child, FR.FusedResBlock):
                 o = child.original
-                kind = ("resblock_down" if getattr(o, "down", False) else
-                        "resblock_up" if getattr(o, "up", False) else "resblock")
+                # Direction is resolved AFTER the run, from the measured in/out spatial size, and
+                # this is the third attempt at it -- the first two were both defeated by the graph:
+                #   * `o.down` / `o.up` do not exist. openaimodel.ResBlock collapses both into
+                #     `self.updown` and keeps the direction only in the TYPE of h_upd/x_upd
+                #     (openaimodel.py:239-244), so getattr returned the default for all 35.
+                #   * `type(h_upd).__name__ == "Upsample"` then missed every UP block, because
+                #     `convert_upsample_to_fused` (fused_resblock.py:1111) replaces each Upsample
+                #     with a FusedUpsample wrapper during setup. Downsample is not wrapped, so
+                #     that attempt found 4 down and 0 up -- a half-working classifier, which is
+                #     worse than a broken one because it looks right.
+                # Comparing the shapes the block actually produced cannot be defeated by a wrapper.
                 out.append((f"rb{len(out):03d}", child, "forward",
-                            {"type": kind, "where": where, "container": ci,
+                            {"type": "resblock", "updown": bool(getattr(child, "updown", False)),
+                             "where": where, "container": ci,
                              "channels": int(getattr(o, "channels", 0)),
                              "out_channels": int(getattr(o, "out_channels", 0))}))
             elif tn == "QuantizedStandardAttentionBlock":
@@ -231,7 +247,7 @@ def profile(label, mode, lin, act_bits, k, steps):
 
     H.SEED = 1234
     _, instr_ms = H.latent(r, m, s)
-    tot, cnt, shp = t.totals(), t.counts(), dict(t.shape)
+    tot, cnt, shp, osh = t.totals(), t.counts(), dict(t.shape), dict(t.oshape)
     del r, m, s
     torch.cuda.empty_cache()
 
@@ -239,6 +255,18 @@ def profile(label, mode, lin, act_bits, k, steps):
     for kk in meta:
         if kk in shp:
             meta[kk]["in_shape"] = shp[kk]
+        if kk in osh:
+            meta[kk]["out_shape"] = osh[kk]
+    # Resolve updown direction from the measured shapes -- see the note in classify().
+    for kk, mt in meta.items():
+        if not mt.get("updown"):
+            continue
+        i, o_ = mt.get("in_shape"), mt.get("out_shape")
+        if not (i and o_ and len(i) == 4 and len(o_) == 4):
+            mt["type"] = "resblock_updown_unresolved"
+            continue
+        mt["type"] = ("resblock_up" if o_[-1] > i[-1] else
+                      "resblock_down" if o_[-1] < i[-1] else "resblock")
     # attention tier = (head_dim, T). T comes from the recorded input [B, C, H, W] -> H*W.
     for kk, mt in meta.items():
         if mt.get("type") == "attention" and "in_shape" in mt:
