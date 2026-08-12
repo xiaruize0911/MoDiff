@@ -35,12 +35,19 @@ import dynamic_delta_ab as H                                               # noq
 SHIPPED = "integration/calibration/int8_calibration_realckpt.pt"
 QDIFF = "integration/calibration/int8_calibration_qdiff.pt"
 OUT = "docs/qdiff_bridge_2026-08-12/plots/sample_grid.png"
+OUT4 = "docs/qdiff_bridge_2026-08-12/plots/sample_grid_int4.png"
 
 #: (row label, mode, calibration, MODIFF_LINEAR)
 ARMS = [("fp16 reference", "fp16", None, "0"),
         ("W8A8 PTQ - shipped scales (relL2 0.2564)", "int8_baseline", SHIPPED, "0"),
         ("W8A8 PTQ - qdiff scales (relL2 0.1119)", "int8_baseline", QDIFF, "0"),
         ("W8A8 MoDiff conv-only - qdiff (new default)", "int8", QDIFF, "0")]
+
+#: W4A4 is 4-bit WEIGHTS as well as activations, and it was NOT recalibrated -- the Q-Diffusion export
+#: is int8-only, and the int4 file has a different shape ({"static_scale", "smooth_scale"}) because
+#: SmoothQuant is live there. Committed FID: 277.96 baseline / 200.14 MoDiff against fp16's 7.80.
+INT4_ARMS = [("W4A4 PTQ - NOT recalibrated (FID 277.96)", "int4_baseline", None, "0"),
+             ("W4A4 MoDiff conv-only - NOT recalibrated (FID 200.14)", "int4", None, "0")]
 
 
 def decode(model, lat, chunk=8):
@@ -64,15 +71,19 @@ def main():
     ap.add_argument("--steps", type=int, default=50)
     ap.add_argument("--seed", type=int, default=20260805)
     ap.add_argument("--cell", type=int, default=256)
+    ap.add_argument("--int4", action="store_true", help="append the two W4A4 rows")
     a = ap.parse_args()
     H.STEPS, H.BATCH, H.SEED = a.steps, a.n, a.seed
 
     rows = []
-    for label, mode, calib, lin in ARMS:
+    arms = ARMS + (INT4_ARMS if a.int4 else [])
+    for label, mode, calib, lin in arms:
         os.environ["MODIFF_LINEAR"] = lin
-        cal = calib or (None if mode == "fp16" else H.CALIB["int8"])
+        cal = calib or (None if mode == "fp16"
+                       else H.CALIB["int4" if "int4" in mode else "int8"])
         print(f"=== {label}", flush=True)
-        r, m, s = H.build(mode, cal, "static" if mode in ("fp16", "int8_baseline") else "dynamic")
+        dm = "static" if mode in ("fp16", "int8_baseline", "int4_baseline") else "dynamic"
+        r, m, s = H.build(mode, cal, dm)
         H.SEED = a.seed
         H.latent(r, m, s)                       # discard: attention self-calibration + clock ramp
         H.SEED = a.seed
@@ -97,9 +108,10 @@ def main():
                 im = im.resize((cell, cell), Image.LANCZOS)
             canvas.paste(im, (pad + i * (cell + pad), y))
         y += cell + pad
-    os.makedirs(os.path.dirname(OUT), exist_ok=True)
-    canvas.save(OUT, "PNG")
-    print(f"\nwrote {OUT}  ({W}x{Hh})")
+    dest = OUT4 if a.int4 else OUT
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    canvas.save(dest, "PNG")
+    print(f"\nwrote {dest}  ({W}x{Hh})")
 
     # Per-arm strips too: the grid is wide, and a single row is easier to look at closely.
     for label, arr in rows:
