@@ -1,0 +1,81 @@
+{
+ "seeds": [
+  1234,
+  20260805,
+  777
+ ],
+ "steps": 50,
+ "batch": 8,
+ "prior": {
+  "int4": {
+   "qdiff_constant": 1.0469,
+   "dynamic": 0.3577,
+   "ptq": 0.8642
+  },
+  "int8": {
+   "qdiff_constant": 0.052,
+   "dynamic": 0.0611,
+   "ptq": 0.1138
+  }
+ },
+ "results": {
+  "int4/qdiff_constant": {
+   "mean": 1.0433436632156372,
+   "relL2": [
+    1.0325003862380981,
+    1.0291424989700317,
+    1.0683881044387817
+   ],
+   "table": "integration/calibration/int4_delta_qdiff.pt",
+   "layers": 70
+  },
+  "int4/native_per-step": {
+   "mean": 14.378923734029135,
+   "relL2": [
+    14.483016014099121,
+    14.004829406738281,
+    14.64892578125
+   ],
+   "table": "integration/calibration/int4_delta_calibration.pt",
+   "layers": 70
+  },
+  "int8/qdiff_constant": {
+   "mean": 0.05263246471683184,
+   "relL2": [
+    0.03789752349257469,
+    0.07084736227989197,
+    0.04915250837802887
+   ],
+   "table": "integration/calibration/int8_delta_qdiff.pt",
+   "layers": 70
+  },
+  "int8/native_per-step": {
+   "mean": 0.053430293376247086,
+   "relL2": [
+    0.044897742569446564,
+    0.08702971041202545,
+    0.02836342714726925
+   ],
+   "table": "integration/calibration/int8_delta_calibration.pt",
+   "layers": 70
+  }
+ },
+ "verdict": {
+  "int8": {
+   "qdiff_constant": 0.05263246471683184,
+   "native_per_step": 0.053430293376247086,
+   "dynamic": 0.0611,
+   "ptq": 0.1138,
+   "perstep_over_constant": 1.015158489417276,
+   "perstep_over_dynamic": 0.8744728866816217
+  },
+  "int4": {
+   "qdiff_constant": 1.0433436632156372,
+   "native_per_step": 14.378923734029135,
+   "dynamic": 0.3577,
+   "ptq": 0.8642,
+   "perstep_over_constant": 13.78157958971311,
+   "perstep_over_dynamic": 40.19827714293859
+  }
+ }
+}

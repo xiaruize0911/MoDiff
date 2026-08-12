@@ -71,6 +71,7 @@ try:
         OptimizedInt8Conv2d,
         convert_model_to_optimized_int8,
         apply_static_scales,
+        apply_int8_delta_scales,
         enable_modiff_mode as enable_modiff_mode_int8,
         reset_modiff_state as reset_modiff_state_int8,
         set_calibrating as set_calibrating_int8,
@@ -109,6 +110,7 @@ try:
         enable_modiff_mode as enable_modiff_mode_int4,
         reset_modiff_state as reset_modiff_state_int4,
         apply_int4_static_scales,
+        apply_int4_delta_scales,
         export_int4_static_scales,
         set_standard_output_fp16 as set_int4_standard_output_fp16,
     )
@@ -314,75 +316,96 @@ def _reset_wxax_modiff_safe(model):
         pass
 
 
-#: Calibration files in PREFERENCE ORDER, best first. Resolved at run_mode() time when no explicit
-#: --calibration-path was given.
+#: STATIC Q-DIFFUSION is the shipped configuration, because it is the paper's.
 #:
-#: The order is measured, not stylistic:
-#:   *_qdiff.pt     Q-Diffusion PTQ, symmetric absmax. int8: fake-quant A/B 2026-08-12 takes baseline
-#:                  relL2 0.2558 -> 0.1082 on 3/3 seeds, clipped elements 0.220% -> 0.012%
-#:                  (docs/qdiff_bridge_2026-08-12/data/act_fake_quant.json). int4: calibrated at
-#:                  --weight_bit 4 --act_bit 4, and it wins for MoDiff ONLY -- see the int4 split.
-#:   *_nosmooth.pt  int4 only. _realckpt.pt's static scales re-emitted as bare floats, which is what
-#:                  turns SmoothQuant OFF (apply_int4_static_scales refolds smooth_scale only for
-#:                  dict-valued entries). Not a recalibration: the same 70 numbers, applied
-#:                  differently.
-#:   *_realckpt.pt  live absmax calibration against the real checkpoint. What every harness has
-#:                  explicitly passed. Its int8 scale is mean(127/absmax_i), a mean of RECIPROCALS,
-#:                  which runs up to 14.5x too large on layers whose range swings across timesteps.
+#: README:78 documents two reproduction paths for MoDiff, and this tree now follows the second:
+#:   quant_mode dynamic  no calibration set at all, activations quantized per call
+#:   quant_mode qdiff    calibrated static scales, --modulate --cali_min_max   <- THIS ONE
+#: Both take --modulate, so MoDiff's error-compensated modulation is on either way; what differs is
+#: where the activation and delta step sizes come from. Choosing qdiff means the ACTIVATION scale and
+#: the per-step DELTA table are both static and both Q-Diffusion-derived -- see
+#: DELTA_CALIBRATION_PREFERENCE below, which is the half that was never wired up.
+#:
+#: THIS COSTS QUALITY AND THE COST IS MEASURED, NOT ASSUMED. docs/qdiff_bridge_2026-08-12
+#: FINDINGS §2 graded the static delta table against the dynamic path at W8A8 and the static table
+#: lost 3.5-4.6x on 3/3 seeds (0.0317 / 0.0240 against 0.0069). Paper fidelity is the reason to pay
+#: it; if you want the best number instead, set MODIFF_DELTA_MODE=dynamic, which restores the
+#: previous default without touching these files.
+#:
+#: Activation files in PREFERENCE ORDER, best first. Resolved at run_mode() time when no explicit
+#: --calibration-path was given.
+#:   *_qdiff.pt     Q-Diffusion, symmetric absmax + min-max init, calibrated at the mode's own bit
+#:                  width. int8: fake-quant A/B takes baseline relL2 0.2558 -> 0.1082 on 3/3 seeds
+#:                  (data/act_fake_quant.json). int4: calibrated at --weight_bit 4 --act_bit 4.
+#:   *_realckpt.pt  live absmax calibration against the real checkpoint, with SmoothQuant folded.
+#:                  NOT Q-Diffusion, so it is a fallback only. Its int8 scale is
+#:                  mean(127/absmax_i), a mean of RECIPROCALS, up to 14.5x too large on layers
+#:                  whose range swings across timesteps.
 #:   *.pt           derived from the 856-byte STUB checkpoint, and it was the auto-default until
 #:                  2026-08-12. docs/modiff_correctness_2026-08-03/FINDINGS.md:660-676 measures it at
 #:                  latent relL2 0.882 (int8) / 3.023 (int4) -- "worse than useless". Kept last only
 #:                  so a fresh container with no other file still runs.
 #:
-#: int4 IS SPLIT BY MODE and int8 is not, because at 4 bits the two axes disagree about which file is
-#: best (docs/qdiff_bridge_2026-08-12/data/w4a4_ab.json, latent relL2, 3 seeds):
-#:
-#:                     shipped   no-smooth   qdiff sym
-#:       W4A4 PTQ       0.7119    0.4885      1.1945
-#:       W4A4 MoDiff    0.4200    0.3963      0.3398
-#:
-#: PTQ wants SmoothQuant off on the shipped scales; MoDiff wants the qdiff scales. Handing PTQ the
-#: qdiff file is a 1.7x REGRESSION, so no single int4 default carries both wins.
-#:
-#: The cost of splitting, stated rather than hidden: a PTQ-vs-MoDiff comparison run from defaults now
-#: varies the calibration file as well as the mode, so the "MoDiff rescues W4A4" gap reads 1.44x
-#: (0.4885 -> 0.3398) instead of the single-variable 1.70x (0.7119 -> 0.4200). Pass --calibration
-#: explicitly when the comparison, not the best available quality, is the point.
-#:
 #: All of these are gitignored (.gitignore:6 *.pt) and regenerable; see
-#: docs/qdiff_bridge_2026-08-12/scripts/run_calibration.sh, make_int4_defaults.py and
-#: recalibrate_real_ckpt.py.
+#: docs/qdiff_bridge_2026-08-12/scripts/run_calibration.sh and recalibrate_real_ckpt.py.
 CALIBRATION_PREFERENCE = {
     'int8': ['integration/calibration/int8_calibration_qdiff.pt',
              'integration/calibration/int8_calibration_realckpt.pt',
              'integration/calibration/int8_calibration.pt'],
-    #: MoDiff convs: int4, int4_attn_modiff.
     'int4': ['integration/calibration/int4_calibration_qdiff.pt',
              'integration/calibration/int4_calibration_realckpt.pt',
              'integration/calibration/int4_calibration.pt'],
-    #: PTQ convs: int4_baseline. Falls back to _realckpt.pt, i.e. the pre-2026-08-12 behaviour.
-    'int4_baseline': ['integration/calibration/int4_calibration_nosmooth.pt',
-                      'integration/calibration/int4_calibration_realckpt.pt',
-                      'integration/calibration/int4_calibration.pt'],
 }
+
+#: Per-step DELTA tables for the modulated steps (t<T), the other half of static Q-Diffusion.
+#:
+#: Until 2026-08-12 this had no equivalent at all: apply_int8_delta_scales and
+#: apply_int4_delta_scales existed with ZERO call sites in integration/, so the static delta table
+#: was never loaded even when the file was present. MODIFF_DELTA_MODE=static therefore ran on an
+#: UNCALIBRATED table -- the flag appeared to work and silently measured something else. Wired into
+#: _setup_model below.
+#:
+#:   *_delta_qdiff.pt   exported from a --modulate --quant_mode qdiff --cali_min_max run, i.e. the
+#:                      README:96 command. This is the paper's delta step size.
+#:   *_delta_calibration.pt   live absmax delta calibration. Not Q-Diffusion; fallback only.
+DELTA_CALIBRATION_PREFERENCE = {
+    'int8': ['integration/calibration/int8_delta_qdiff.pt',
+             'integration/calibration/int8_delta_calibration.pt'],
+    'int4': ['integration/calibration/int4_delta_qdiff.pt',
+             'integration/calibration/int4_delta_calibration.pt'],
+}
+
+
+def _pick(cands, label):
+    """First existing file in preference order, or None. Announces a fallback rather than hiding it."""
+    for c in cands:
+        if os.path.exists(c):
+            if c is not cands[0]:
+                print(f"  {label}: {c} (preferred {cands[0]} not present)")
+            return c
+    return None
 
 
 def _default_calibration_path(mode: str):
     """First existing file in preference order, or the last entry so the error names a real path."""
     if mode in ('int8', 'int8_baseline', 'int8_attn_modiff'):
         cands = CALIBRATION_PREFERENCE['int8']
-    elif mode in ('int4', 'int4_attn_modiff'):
+    elif mode in ('int4', 'int4_baseline', 'int4_attn_modiff'):
         cands = CALIBRATION_PREFERENCE['int4']
-    elif mode == 'int4_baseline':
-        cands = CALIBRATION_PREFERENCE['int4_baseline']
     else:
         return None
-    for c in cands:
-        if os.path.exists(c):
-            if c is not cands[0]:
-                print(f"  calibration: {c} (preferred {cands[0]} not present)")
-            return c
-    return cands[-1]
+    return _pick(cands, "calibration") or cands[-1]
+
+
+def _default_delta_path(mode: str):
+    """The per-step delta table for a MoDiff mode. None for the PTQ baselines, which have no
+    modulated steps, and None when no table exists -- the caller then leaves the layer
+    uncalibrated rather than pretending a table was loaded."""
+    if mode in ('int8', 'int8_attn_modiff'):
+        return _pick(DELTA_CALIBRATION_PREFERENCE['int8'], "delta table")
+    if mode in ('int4', 'int4_attn_modiff'):
+        return _pick(DELTA_CALIBRATION_PREFERENCE['int4'], "delta table")
+    return None
 
 
 class BenchmarkRunner:
@@ -392,7 +415,8 @@ class BenchmarkRunner:
                  batch_size: int = 4, steps: int = 50, shape: tuple = (4, 32, 32),
                  calibration_path: str = None, skip_attention: bool = False,
                  skip_resblock: bool = False, skip_groupnorm: bool = False,
-                 linear_backend: str = "fp16", linear_int_gemm_min_m: int = 64):
+                 linear_backend: str = "fp16", linear_int_gemm_min_m: int = 64,
+                 delta_calibration_path: str = None, auto_delta_table: bool = True):
         self.config_path = config_path
         self.ckpt_path = ckpt_path
         self.output_dir = output_dir
@@ -400,6 +424,13 @@ class BenchmarkRunner:
         self.steps = steps
         self.shape = shape
         self.calibration_path = calibration_path
+        #: per-step delta table for t<T; None resolves from DELTA_CALIBRATION_PREFERENCE
+        self.delta_calibration_path = delta_calibration_path
+        #: Set False by harnesses that load the delta table THEMSELVES and grade arms with it
+        #: deliberately absent -- docs/modiff_correctness_2026-08-03/scripts/dynamic_delta_ab.py
+        #: has a "static, table off" arm whose committed numbers mean "no table". Auto-loading
+        #: underneath it would keep the label and change the measurement.
+        self.auto_delta_table = auto_delta_table
         self.skip_attention = skip_attention
         self.skip_resblock = skip_resblock
         self.skip_groupnorm = skip_groupnorm
@@ -902,7 +933,46 @@ class BenchmarkRunner:
             print(f"Class-conditional model: latent shape -> {self.shape}, "
                   f"sampling class {getattr(self, 'sample_class', 0)}")
 
+        self._load_delta_table(model, mode)
         return model, DDIMSampler(model)
+
+    def _load_delta_table(self, model, mode):
+        """Load the per-step Q-Diffusion delta table for the modulated steps (t<T).
+
+        Here rather than in run_mode on purpose: every harness in docs/ drives _setup_model
+        directly, so resolving in run_mode would leave the static path unloaded in exactly the
+        measurements used to grade it -- which is how apply_int*_delta_scales came to have zero
+        call sites and MODIFF_DELTA_MODE=static came to measure an uncalibrated table.
+
+        Only under MODIFF_DELTA_MODE=static: the dynamic path derives its step size per call and
+        ignores static_delta_scale entirely, so loading a table there would be dead weight that
+        reads like a live setting.
+        """
+        if not self.auto_delta_table:
+            return 0
+        if os.environ.get("MODIFF_DELTA_MODE", "static").lower() != "static":
+            return 0
+        path = self.delta_calibration_path or _default_delta_path(mode)
+        if not path:
+            return 0
+        table = torch.load(path, map_location="cpu", weights_only=True)
+        if mode in ('int8', 'int8_attn_modiff') and HAS_INT8:
+            loaded = apply_int8_delta_scales(model.model.diffusion_model, table)
+        elif mode in ('int4', 'int4_attn_modiff') and HAS_INT4:
+            loaded = apply_int4_delta_scales(model.model.diffusion_model, table)
+        else:
+            return 0
+        # A delta table that matches nothing is the failure this whole path is prone to: the run
+        # still samples, on an uncalibrated static grid, and looks like a small regression.
+        if loaded == 0:
+            raise RuntimeError(
+                f"{path} matched 0 layers in mode {mode}. MODIFF_DELTA_MODE=static would then run "
+                f"on an uncalibrated delta grid, which samples fine and is silently wrong. Check "
+                f"the layer-name mapping, or set MODIFF_DELTA_MODE=dynamic.")
+        # Name the file, not the method: this line also prints for the absmax fallback, and calling
+        # that "Q-Diffusion" is how a run gets written up as something it was not.
+        print(f"✓ Loaded per-step delta table for {loaded} layers from {path}")
+        return loaded
 
     def _cond_kwargs(self, model, batch):
         """Extra sampler.sample kwargs: class-conditioning for class-conditional
@@ -1342,6 +1412,10 @@ def main():
     parser.add_argument('--force_recalibrate', action='store_true', help='Force regeneration of calibration scales')
     parser.add_argument('--calibration', type=str, default=None,
                        help='Path to static calibration file (e.g., integration/calibration/int8_calibration.pt)')
+    parser.add_argument('--delta_calibration', type=str, default=None,
+                       help='Path to the per-step Q-Diffusion delta table for the modulated steps. '
+                            'Default resolves from DELTA_CALIBRATION_PREFERENCE. Only read when '
+                            'MODIFF_DELTA_MODE=static (the default); the dynamic path ignores it.')
     parser.add_argument('--linear_backend', type=str, default='fp16',
                        choices=['fp16', 'int_gemm'],
                        help='Linear layer backend for INT8/INT4 modes. fp16 preserves old behavior; int_gemm uses true INT GEMM when large enough.')
@@ -1376,6 +1450,7 @@ def main():
         args.config, args.ckpt, args.output_dir,
         args.batch_size, args.steps, shape=(4, 32, 32),
         calibration_path=args.calibration,
+        delta_calibration_path=args.delta_calibration,
         skip_attention=args.no_attention,
         skip_resblock=args.no_resblock,
         skip_groupnorm=args.no_groupnorm,

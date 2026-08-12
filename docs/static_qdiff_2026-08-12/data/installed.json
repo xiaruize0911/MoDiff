@@ -1,0 +1,36 @@
+{
+ "plan": [
+  {
+   "src": "docs/qdiff_bridge_2026-08-12/data/qdiff_act_sym.pt",
+   "dst": "integration/calibration/int8_calibration_qdiff.pt",
+   "kind": "act",
+   "layers": 70,
+   "stat": "scale median 26.5637",
+   "problems": []
+  },
+  {
+   "src": "docs/qdiff_bridge_2026-08-12/data/qdiff_delta_flat.pt",
+   "dst": "integration/calibration/int8_delta_qdiff.pt",
+   "kind": "delta",
+   "layers": 70,
+   "stat": "steps [256], scale median 79.9434",
+   "problems": []
+  },
+  {
+   "src": "docs/qdiff_bridge_2026-08-12/data/qdiff_w4a4_sym.pt",
+   "dst": "integration/calibration/int4_calibration_qdiff.pt",
+   "kind": "act",
+   "layers": 70,
+   "stat": "scale median 1.8572",
+   "problems": []
+  },
+  {
+   "src": "docs/qdiff_bridge_2026-08-12/data/qdiff_w4a4_delta.pt",
+   "dst": "integration/calibration/int4_delta_qdiff.pt",
+   "kind": "delta",
+   "layers": 70,
+   "stat": "steps [256], scale median 3.8068",
+   "problems": []
+  }
+ ]
+}

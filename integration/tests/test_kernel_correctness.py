@@ -498,8 +498,7 @@ def _export_apply_check(kind):
 
     The gate bites on STATE EQUALITY, not on an accuracy margin. The original version asserted
     `apply_acc < legacy_acc - 0.05` to prove it could fail; that clause was removed on 2026-08-12
-    because this fixture cannot produce such a gap and the real network moves the other way. See
-    the comment at the assertion, and docs/smoothquant_fold_2026-08-12/FINDINGS.md."""
+    because this fixture cannot produce such a gap. See the comment at the assertion."""
     if kind == "int4":
         from integration.kernels.int4_optimized import (
             convert_model_to_optimized_int4 as convert, set_calibrating_int4 as set_calib,
@@ -562,10 +561,10 @@ def _export_apply_check(kind):
     #      uniform s cancels against the scale (see _apply_smoothquant), so folding it changes the
     #      4-bit weight error by 1.02x here against 1.22x on the real convs. The gap the clause
     #      demanded is 0.05; the fixture can produce ~0.002, in the other direction.
-    #   2. End to end it points the other way. Over 50 DDIM steps on the real checkpoint, 3 seeds,
-    #      NOT folding is better -- W4A4 PTQ 0.7121 -> 0.4823, MoDiff 0.4220 -> 0.3540 -- which is
-    #      why integration/'s int4 defaults now ship bare floats.
-    # docs/smoothquant_fold_2026-08-12/FINDINGS.md has both, with the mechanism decomposed.
+    #   2. The shipped int4 default does not fold either way. Q-Diffusion has no SmoothQuant, so
+    #      int4_calibration_qdiff.pt is bare floats and the production path takes the same
+    #      unfolded branch the "legacy" arm here is standing in for. A gate asserting the folded
+    #      path is better would be asserting against the configuration the tree runs.
     # The legacy path is still exercised for backward compatibility: it must LOAD and stay finite,
     # which is the part of the original intent that survives.
     legacy_ok = n_legacy == 1 and legacy_acc == legacy_acc and legacy_acc < float("inf")

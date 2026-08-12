@@ -45,6 +45,13 @@ CALIB = {"int8": os.environ.get("AB_CALIB8",
          "int4": os.environ.get("AB_CALIB4",
                                 "integration/calibration/int4_calibration_realckpt.pt")}
 TABLE = "integration/calibration/int8_delta_calibration.pt"
+#: OFF on purpose. benchmark_ldm gained an auto-loading delta table on 2026-08-12 (static
+#: Q-Diffusion is now the shipped default), and this harness grades a "static, table off" arm whose
+#: committed numbers mean exactly that. Auto-loading underneath it would keep the label and silently
+#: change the measurement -- the same class of defect as the stale reference file in
+#: docs/qdiff_bridge_2026-08-12/FINDINGS.md §7.4. Harnesses that WANT the shipped default set this
+#: True before calling build(), which is what docs/static_qdiff_2026-08-12 does.
+AUTO_DELTA_TABLE = False
 
 
 def build(mode, calib, delta_mode):
@@ -59,7 +66,8 @@ def build(mode, calib, delta_mode):
         config_path="configs/latent-diffusion/lsun_churches-ldm-kl-8.yaml",
         ckpt_path="models/ldm/lsun_churches256/model.ckpt",
         output_dir="docs/modiff_correctness_2026-08-03/tmp_out",
-        batch_size=BATCH, steps=STEPS, shape=(4, 32, 32), calibration_path=calib)
+        batch_size=BATCH, steps=STEPS, shape=(4, 32, 32), calibration_path=calib,
+        auto_delta_table=AUTO_DELTA_TABLE)
     model, sampler = runner._setup_model(mode)
     return runner, model, sampler
 

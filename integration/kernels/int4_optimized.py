@@ -238,13 +238,20 @@ class OptimizedInt4Conv2d(nn.Module):
         self.fuse_input_silu = False
 
         #: Delta-quantizer mode, W4A4. Same contract as OptimizedInt8Conv2d.delta_dynamic, with
-        #: Q=7 instead of 127. This path never had a static per-step delta table (Stage 1 was
-        #: int8-only), so `static` here means the temporal delta is quantized on the *activation*
-        #: grid -- the delta gets 15 levels spanning the whole activation range, and per the
-        #: paper's Theorem 4.3 that leaves the quantization error unchanged from baseline. With
-        #: only 4 bits to spend, clipping and coarseness both bite harder than at int8, so
-        #: `dynamic` matters more here than it does for W8A8.
-        self.delta_dynamic = os.environ.get("MODIFF_DELTA_MODE", "dynamic").lower() != "static"
+        #: Q=7 instead of 127. STATIC is the default since 2026-08-12 for paper fidelity, not
+        #: because it measures better -- see the int8 twin for the price and the one env var that
+        #: reverts it.
+        #:
+        #: `static` used to be a WEAKER thing here than at int8: this path had no per-step delta
+        #: table (Stage 1 was int8-only), so it fell back to quantizing the temporal delta on the
+        #: *activation* grid -- 15 levels spanning the whole activation range, which per the
+        #: paper's Theorem 4.3 leaves the quantization error unchanged from baseline, i.e. MoDiff
+        #: buys only error feedback. That fallback still exists and still warns, but it is no
+        #: longer what `static` means by default: int4_delta_qdiff.pt is now calibrated
+        #: (--modulate --quant_mode qdiff at 4 bits) and loaded by _load_delta_table. With only
+        #: 4 bits to spend, clipping and coarseness both bite harder than at int8, so the gap to
+        #: `dynamic` is wider here than at W8A8.
+        self.delta_dynamic = os.environ.get("MODIFF_DELTA_MODE", "static").lower() != "static"
         #: `MODIFF_DELTA_CLIP` is RETIRED -- see OptimizedInt8Conv2d for the sweep it produced and
         #: why setting it now raises instead of being ignored. At W4A4 it cost nothing to remove:
         #: the curve was flat within noise from 0.35 to 1.0 (relL2 0.42-0.46). The int8 class does
@@ -1475,32 +1482,19 @@ class OptimizedInt4Conv2d(nn.Module):
         _orig_weight already released), we fall back to that scale-only path rather than
         smoothing activations against unsmoothed weights, which would be strictly worse.
 
-        THAT ~2x DOES NOT GENERALISE TO THE TRAJECTORY, and at W4A4 it inverts. Whole
-        network, 50 DDIM steps, 3 seeds, the mismatched scale-only path is BETTER: latent
-        relL2 0.7119 -> 0.4885 (PTQ) and 0.4200 -> 0.3963 (MoDiff), with the sample grid
-        turning fog into cathedral structure (docs/qdiff_bridge_2026-08-12/FINDINGS.md
-        §5a/§5c). integration/'s int4 defaults therefore ship the scales as BARE FLOATS and
-        take this path on purpose — see benchmark_ldm.py:CALIBRATION_PREFERENCE. The two
-        measurements are of different things (one layer's first step against the whole
-        trajectory) and both stand; the trajectory is what production runs, so it decides.
+        SMOOTHQUANT IS NOT IN THE SHIPPED PATH ANY MORE, so this whole branch is now the
+        fallback rather than the norm. The tree follows the paper (README:96,
+        --modulate --quant_mode qdiff --cali_min_max), and Q-Diffusion has no SmoothQuant:
+        int4_calibration_qdiff.pt is therefore BARE FLOATS, which routes through
+        set_static_scale and leaves smoothing identity. This method still runs, exactly as
+        written, for the _realckpt.pt fallback and for any externally exported dict — the
+        semantics are unchanged, only which file the default resolves to.
 
-        WHY, now instrumented — and NOT for the reason first guessed. This docstring used to
-        offer a candidate: folding s widens each output channel's weight range, costing more
-        than the clipping it prevents. Folding does cost 1.215x weight error on 65/70 real
-        convs, but that is not the reason, because at matched scaling folding is 17% BETTER
-        (PTQ 0.7120 folded against 0.8622 unfolded, both without clipping). The float path
-        wins on CLIPPING: the smoothed-range scale is a median 5.13x too large for unsmoothed
-        input, which clips the peak of 43% of input channels and happens to land near 4-bit
-        clip-optimal. Size the scale correctly and PTQ regresses 0.4887 -> 0.8622.
-
-        And the two do not compose — fold + deliberate clipping loses to clipping alone at
-        every over-scale tested — because SmoothQuant EQUALISES the per-channel maxima, which
-        is exactly what makes clipping expensive: at the same over-scale it clips 90.5% of
-        channels against 51.9% unfolded. See docs/smoothquant_fold_2026-08-12/FINDINGS.md.
-
-        This method itself is unchanged: a dict entry still restores smoothing. The default
-        moved, not the semantics — and test_int4_export_apply now gates that on bit-exact
-        state restoration rather than on an accuracy margin its fixture cannot produce."""
+        Keep the ~2x above in proportion: it is ONE layer's first step on a synthetic conv.
+        test_int4_export_apply's fixture cannot even reproduce the effect (its per-channel
+        activation spread is 1.26 against the real checkpoint's 4.83, so its s is near
+        uniform and cancels), which is why that gate asserts bit-exact state restoration
+        rather than an accuracy margin."""
         can_refold = (smooth_scale is not None and self._orig_weight is not None
                       and self.in_channels % 2 == 0)
         if can_refold:

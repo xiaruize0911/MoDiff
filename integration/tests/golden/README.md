@@ -17,7 +17,7 @@ under it the old golden matched **bit-exactly**, which is the whole proof that n
     MODIFF_INT4_WSCALE=absmax python integration/tests/test_kernel_correctness.py   # was ALL PASS
 
 Refreshed against the shipped MSE rule (md5 `767a197d…` → `aa3d09f4…`); the absmax original is kept
-at `docs/smoothquant_fold_2026-08-12/data/int4_conv_golden_absmax_2026-07-27.pt`. A red gate detects
+at `docs/static_qdiff_2026-08-12/data/int4_conv_golden_absmax_2026-07-27.pt`. A red gate detects
 nothing, so leaving it red had a real cost: any *new* int4 conv regression in that week was invisible.
 
 ## Note: a missing golden currently passes
@@ -25,7 +25,9 @@ nothing, so leaving it red had a real cost: any *new* int4 conv regression in th
 `check_golden` creates a golden when the file is absent and returns a non-FAIL string, and these
 `.pt` files are gitignored (`.gitignore:6`). On a fresh clone the golden tests therefore pass
 vacuously on the first run. That is the same shape of hole as the `e2e_*_vacuous` files below, one
-level up. See `docs/smoothquant_fold_2026-08-12/FINDINGS.md` §7 for the two ways to close it.
+level up. Two ways to close it: commit the goldens behind a `.gitignore` negation (~1.5 MB, the
+precedent being `!docs/**/plots/*.png`), or make a missing golden FAIL with a "seed it with
+UPDATE_GOLDEN=1" message. Neither taken: both change every developer's first run.
 
 ## `e2e_*_vacuous.pt` — do not use as references
 

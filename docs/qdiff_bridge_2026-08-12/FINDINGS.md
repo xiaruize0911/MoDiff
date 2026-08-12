@@ -1,20 +1,28 @@
 # Q-Diffusion calibration: W8A8 fixed, W4A4 diagnosed but not fixed
 
+> **Later context.** This report graded Q-Diffusion calibration on quality alone and
+> recommended against the parts that lost. The tree then adopted static Q-Diffusion
+> wholesale for fidelity to the paper's own reproduction command, accepting the losses
+> this report measured. Where the two disagree, this one is the measurement and
+> [`static_qdiff_2026-08-12`](../static_qdiff_2026-08-12/FINDINGS.md) is the decision.
+
 **W8A8: the advisor's hypothesis is confirmed and the fix has landed.** Replacing the shipped
 activation scales with Q-Diffusion-derived ones takes the W8A8 baseline's latent relL2 from
 **0.2564 to 0.1119 — 2.29×** — on 3 of 3 seeds, measured on the real CUDA kernels. A
 fake-quantization harness predicted **2.36×** before any kernel ran.
 
-**W4A4: the bridge works on the MoDiff axis and not on the PTQ one, and §5 says what was ruled out.**
-Four candidate causes of the PTQ failure were each refuted by measurement. What did emerge is a free
-~32% win that has nothing to do with Q-Diffusion, a rendered identification of the failure mode — and
-two improvements that are now **landed as mode-split defaults** (§5e).
+**W4A4: every number in §5 was measured through a unit error, and §9.1 has the correction.** The
+int4 export emitted 127-based multipliers to a kernel that reads them as 7-based, so the activation
+grid was 18.1× too small and nearly everything railed at ±7. Four candidate causes were proposed and
+each refuted by measurement — correctly, because none of them was the cause. §5's *method* stands;
+its W4A4 conclusions do not. Re-measured in
+[`docs/static_qdiff_2026-08-12`](../static_qdiff_2026-08-12/FINDINGS.md).
 
 | | W8A8 | W4A4 |
 |---|---|---|
-| Q-Diffusion activation scales | **+2.29× on PTQ, shipped as default** | **PTQ: broken** (clipping, cause open) · **MoDiff: −16%, shipped as default** |
-| best available improvement | done | PTQ −32.3% (SmoothQuant off), MoDiff −16.1% (qdiff) — **both landed**, measured through the default path (§5e) |
-| static Q-Diffusion delta table | measured, **rejected** (3.5–4.6× worse than dynamic) | not attempted |
+| Q-Diffusion activation scales | **+2.29× on PTQ, shipped as default** | every W4A4 qdiff number below was measured through an **18.1× unit error** (§9.1) and is superseded |
+| best available improvement | done | measured but NOT shipped: PTQ −31% by turning SmoothQuant off (§5e, reverted as an un-designed accident) |
+| static Q-Diffusion delta table | measured **3.5–4.6× worse than dynamic**, and shipped anyway — it is the paper's | not attempted here; calibrated and shipped in `static_qdiff_2026-08-12` |
 
 All numbers: real LSUN-churches checkpoint, DDIM S=50, batch 8, seeds {1234, 20260805, 777}, latent
 relL2 vs a per-seed fp16 reference, at steady state (run 1 discarded).
@@ -190,57 +198,28 @@ instrument `_prequant_gn_conv` in `fused_resblock.py` — a module-level functio
 the layer harness wraps `_prequant_gn_resize_conv`. `int4_actual_ranges.py` is kept with its
 docstring rewritten to record the failure so it is not tried a third time.
 
-### 5e. Both wins are landed, and the default path is what was measured
+### 5e. The mode-split landing, and why it was reverted
 
-Landing them took **two** files, because §5a's table has different winners on the two axes and no
-single default carries both — handing PTQ the qdiff file is a 1.7× regression, not a smaller win.
+**Superseded on 2026-08-12. Read this section as history, not as the shipped configuration.**
 
-| mode | default calibration file | SmoothQuant | shipped | default | change |
-|---|---|---|---:|---:|---:|
-| `int4_baseline` (PTQ) | `int4_calibration_nosmooth.pt` | off | 0.7121 | **0.4823** | **−32.3%** |
-| `int4`, `int4_attn_modiff` (MoDiff) | `int4_calibration_qdiff.pt` | off | 0.4220 | **0.3540** | **−16.1%** |
+For a few hours the tree shipped a mode-split int4 default: PTQ on the shipped scales with
+SmoothQuant off (`int4_calibration_nosmooth.pt`, 0.7121 → 0.4823, −32.3%) and MoDiff on the qdiff
+scales (0.4220 → 0.3540, −16.1%), 3/3 seeds on both axes, measured through the resolver rather than
+a hand-passed path.
 
-3/3 seeds improved on both axes. Re-measured in this container rather than quoted: the shipped column
-reproduces §5a's 0.7119 / 0.4200 to within 0.5%, which is what makes the default column comparable to
-§5a's 0.4885 / 0.3398 — PTQ landed 1.3% better than the hand-passed run, MoDiff 4.2% worse.
+It was reverted because **the PTQ half was not a designed configuration**. Dropping `smooth_scale`
+from the file routes the loader down `set_static_scale`, a branch that exists for backward
+compatibility with the pre-`d77c516` bare-float format. The scale in the file is still the one
+derived from the *smoothed* range, so applying it to unsmoothed input over-scales by a median 5.13×
+and clips the peak of 43% of input channels — which happens to land near 4-bit clip-optimal. The
+win was real and reproducible, and it came from an accident nobody chose and nothing tuned.
 
-**The measurement resolves the default itself.** `w4a4_ab.py` passed each file explicitly, which
-grades files but cannot catch a default that never resolves to them — and it would not have: the
-resolver was unreachable when this started (§6). `w4a4_defaults_verify.py` calls
-`benchmark_ldm._default_calibration_path(mode)`, the same call `run_mode` makes, and gates on two
-things before any relL2: that the two int4 modes resolve to *different* files, and that all 70 of the
-file's layers arrive carrying the file's scale with the SmoothQuant state its format implies. A key
-the loader fails to match is invisible at runtime — the layer simply keeps `static_input_scale = 1.0`
-— so that is asserted per layer, not counted.
-
-`int4_calibration_realckpt.pt` is untouched, and both preference lists fall back to it. Every
-committed number that names it explicitly keeps meaning what it meant, and a container without the
-new files runs exactly as it did before.
-
-**The cost of the split, which is not free.** A PTQ-vs-MoDiff comparison run from defaults now varies
-the calibration file as well as the mode, so the "MoDiff rescues W4A4" gap reads 1.36×
-(0.4823 → 0.3540) instead of the single-variable 1.69× (0.7121 → 0.4220). Both are true answers to
-different questions; `--calibration` still pins one file when the comparison is the point.
-
-**A correction this forced.** `set_static_calibration`'s docstring said dropping `smooth_scale`
-"degrades it ~2×" and called the float path "strictly worse". That number is real, but it is *one
-layer's MoDiff first step* (d77c516), and it does not survive generalisation to the trajectory: over
-50 steps the float path wins on both axes. The docstring now carries both measurements and says which
-one decides the default.
-
-> **Superseded.** This section originally offered a candidate for *why* — that folding s widens each
-> output channel's weight range past what 15 levels can carry. That candidate was subsequently
-> instrumented and **refuted**: folding does cost 1.215× weight error, but at matched scaling it is
-> 17% *better*, and the nosmooth win is a clipping effect the smoothed-range scale produces by
-> accident. [`docs/smoothquant_fold_2026-08-12/FINDINGS.md`](../smoothquant_fold_2026-08-12/FINDINGS.md)
-> has the decomposition, and it also corrects §5c's reading of the qdiff range.
-
-The repo's own gate for that belief was **failing before this change and is now fixed**.
-`test_int4_export_apply` required the smoothing-restored path to beat the float path by >0.05 and read
-`apply=0.069, legacy=0.067` — inverted, on one random 256-channel conv. Re-run against a stashed tree
-at 21f33ff it printed byte-identical output, so it was inherited, not caused. It was not retuned: the
-fixture turns out to be inert (its per-channel activation spread is 1.26 against the real network's
-4.83), so the clause was replaced with bit-exact state restoration. §9.6.
+The tree now follows the paper instead: static Q-Diffusion for both the activation scale and the
+per-step delta table, `--modulate --quant_mode qdiff --cali_min_max` (README:96). That configuration
+also runs without SmoothQuant — Q-Diffusion has none, so its exports are bare floats — but for a
+stated reason rather than as a side effect of a deleted dict key. See
+[`docs/static_qdiff_2026-08-12/FINDINGS.md`](../static_qdiff_2026-08-12/FINDINGS.md) for what it
+costs.
 
 ## 6. What changed in the tree
 
@@ -327,20 +306,27 @@ in a second and would have caught it the moment it happened; nothing else in thi
 * W8A8 activation scales switched (2.29×), samples confirm it. `CALIBRATION_PREFERENCE` is in place
   and, since §6's class-body fix, actually reachable — when this line was first written the resolver
   it depends on was dead code, so the default was only half-landed.
-* **W4A4 PTQ: SmoothQuant off, 0.7121 → 0.4823 (−32.3%, 3/3 seeds)** — the default for
-  `int4_baseline`. The decision this was waiting on (mutate the shipped file, or add a flag) went a
-  third way: a second file plus a mode-keyed default, leaving `int4_calibration_realckpt.pt`
-  byte-identical. §5e.
-* **W4A4 MoDiff: qdiff scales, 0.4220 → 0.3540 (−16.1%, 3/3 seeds)** — the default for `int4` and
-  `int4_attn_modiff`.
+* **Static Q-Diffusion is the shipped configuration**, for both the activation scale and the
+  per-step delta table — the paper's `--modulate --quant_mode qdiff --cali_min_max`. This REPLACED
+  the mode-split default that briefly landed here; §5e keeps that as history and
+  [`docs/static_qdiff_2026-08-12/FINDINGS.md`](../static_qdiff_2026-08-12/FINDINGS.md) has the
+  switch and its cost.
 * `MODIFF_LINEAR` default off (Stage D) — costs 18% relL2, buys 29% throughput and unlocks the fused
   int8-output epilogue on 21/21 attention blocks (measured 0/21 → 21/21).
 
 **Open questions**
 
-1. **Why qdiff under-measures the W4A4 activation range by ~4×.** Four causes refuted. Needs
-   `_prequant_gn_conv` instrumented (§5d). Landing the MoDiff win does not close this: the PTQ arm
-   still gets 1.1945 from the qdiff file and is on the nosmooth file only because of it.
+1. ~~**Why qdiff under-measures the W4A4 activation range by ~4×.**~~ **RESOLVED, and the premise
+   was wrong: qdiff never under-measured it.** The export emitted `127/absmax` for every target,
+   which is the convention int8's `set_static_scale` wants (it applies `act_q/127` on load) but is
+   wrong by 127/7 = 18.1× for int4, whose `set_static_scale` does no rescale and whose kernel clamps
+   to ±7. So the file's median 33.694 was a *correct* 127-based reading of absmax 3.769 — against a
+   true 3.937 recovered independently from the shipped calibration — that the kernel then read as
+   absmax 0.208. Nearly every activation railed at ±7. That is §5c's "saturated blue and white
+   blobs", and it is why §5b's four calibration hypotheses were each refuted: none of them was the
+   problem, because the scales were the right scales in the wrong units. Fixed at the source
+   (`export_qdiff_scales.py:TARGET_Q`); §5b's and §5c's W4A4 qdiff numbers were all measured under
+   the 18× error and are superseded by `docs/static_qdiff_2026-08-12`.
 2. **Clipping at W8A8 is reduced, not eliminated.** Utilisation medians fall 5.2×/5.8× but stay above
    Q=127 and `out_conv` still clips 35/35. The plan's ≤5/35 target is **not met**.
 3. **FID on the Q-Diffusion scales.** `fid.json` has all five modes at N=10000 (fp16 7.803, W8A8 PTQ
@@ -354,15 +340,18 @@ in a second and would have caught it the moment it happened; nothing else in thi
 5. **The remaining ~2.4 ms in the projections is a fusion problem** (Stage B): the int8 GEMM is
    1.24× but a standalone `quantize_act_int8` pass makes the path a 0.86× net loss. The conv path and
    the landed int8-qkv fusion already solve this elsewhere.
-6. ~~**Three inherited test failures in `test_kernel_correctness.py`**~~ — **resolved**, see
-   [`docs/smoothquant_fold_2026-08-12/FINDINGS.md`](../smoothquant_fold_2026-08-12/FINDINGS.md).
+6. ~~**Three inherited test failures in `test_kernel_correctness.py`**~~ — **resolved**.
    `int4_conv` was a stale golden, attributable to `82af5bc`'s deliberate absmax → MSE weight-scale
-   change and proved by the `MODIFF_INT4_WSCALE=absmax` revert matching bit-exactly; refreshed. Both
-   `*_export_apply` gates asserted a 0.05 accuracy separation on a fixture that can only produce
-   ~0.002 of it, in the other direction — replaced with bit-exact state restoration plus an explicit
-   discriminator check. **That report also refutes §5e's candidate mechanism** and corrects §5c: the
-   true observed activation range, recovered independently from the shipped calibration, is 3.937,
-   so qdiff's 3.769 was not an under-estimate.
+   change and proved by the `MODIFF_INT4_WSCALE=absmax` revert matching bit-exactly; refreshed, with
+   the attribution in `integration/tests/golden/README.md`. Both `*_export_apply` gates asserted a
+   0.05 accuracy separation on a fixture that can only produce ~0.002 of it, in the other direction
+   — replaced with bit-exact state restoration plus an explicit discriminator check.
+7. **§5c's reading of the qdiff range does not survive.** The activation range the shipped
+   calibration itself observed, recovered as `act_max_c = s_c² · w_max_c` and gated by the fact that
+   `static_scale` is `7/max(act_max/s)` by construction (it returned 7.0000 on 70/70 layers), has a
+   median of **3.937** — so qdiff's 3.769 was very nearly the true absmax, not an under-estimate,
+   and "~14.8 is near the truth" is not supported. The saturated samples in §5c still need an
+   explanation; open question 1 is where it should come from.
 
 ## Reproducing
 
@@ -379,9 +368,10 @@ python docs/qdiff_bridge_2026-08-12/scripts/sample_grid.py            # W8A8 sam
 python docs/qdiff_bridge_2026-08-12/scripts/gen_cali_from_int4.py     # W4A4 pass-1 data
 python docs/qdiff_bridge_2026-08-12/scripts/w4a4_ab.py                # W4A4, 4 arms x 2 modes
 python docs/qdiff_bridge_2026-08-12/scripts/w4a4_sample_grid.py       # W4A4 samples
-python docs/qdiff_bridge_2026-08-12/scripts/make_int4_defaults.py     # 5e, install the defaults, ~1 s
-python docs/qdiff_bridge_2026-08-12/scripts/w4a4_defaults_verify.py   # 5e, measure what resolves
 ```
+
+The 5e scripts (`make_int4_defaults.py`, `w4a4_defaults_verify.py`) were deleted with the mode-split
+default they installed. `docs/static_qdiff_2026-08-12/scripts/` replaces them.
 
 Stage B (QKV shape), Stage C (warm-up cost) and Stage D (the `MODIFF_LINEAR` flip) are in
 [`STAGE_BCD.md`](STAGE_BCD.md).

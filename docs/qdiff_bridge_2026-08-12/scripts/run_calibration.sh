@@ -75,3 +75,29 @@ echo "A4a act_sym_a4 done $(( $(date +%s) - S ))s"
 python scripts/sample_diffusion_ldm.py $COMMON $CAL_A4 \
   -l $D/qdiff_runs/act_mse_a4 > $D/logs/act_mse_a4.log 2>&1
 echo "A4b act_mse_a4 done $(( $(date +%s) - S ))s"
+
+# --- added 2026-08-12: the W4A4 DELTA table, for static Q-Diffusion ------------------------------
+# The `delta` run above is weight_bit 8 / act_bit 8, so int4 had no per-step delta table at all --
+# `MODIFF_DELTA_MODE=static` at W4A4 fell back to quantizing the temporal delta on the full
+# activation grid, which per Theorem 4.3 leaves the error unchanged from baseline. Shipping static
+# Q-Diffusion (docs/static_qdiff_2026-08-12) needs this run.
+#
+# Flags = the w4a4_sym arm (4-bit weights AND activations, so the quantizer observes what the
+# deployed model actually produces) + the `delta` arm's --modulate --quant_mode qdiff
+# --cali_min_max, which is README:96's own reproduction command.
+CAL_W4A4="--ptq --quant_act --skip_weight_recon --weight_bit 4 --act_bit 4 \
+     --cali_data_path $CALI --cali_batch_size 32 --cali_iters_a 0 -n 1 --batch_size 1"
+python scripts/sample_diffusion_ldm.py $COMMON $CAL_W4A4 --a_sym --a_min_max \
+  --modulate --quant_mode qdiff --cali_min_max \
+  -l $D/qdiff_runs/w4a4_delta > $D/logs/w4a4_delta.log 2>&1
+echo "w4a4_delta done $(( $(date +%s) - S ))s"
+
+# Export both delta tables with --delta-head 0. The default head policy (clamp the first H steps to
+# min(qdiff_scale, act_scale/2)) is a measured LOSS -- FINDINGS §8, flat 0.0240 against H=2's 0.0317.
+python docs/qdiff_bridge_2026-08-12/scripts/export_qdiff_scales.py \
+  --run $D/qdiff_runs/delta --kind delta --target int8 --delta-head 0 \
+  --out $D/data/qdiff_delta_flat.pt
+python docs/qdiff_bridge_2026-08-12/scripts/export_qdiff_scales.py \
+  --run $D/qdiff_runs/w4a4_delta --kind delta --target int4 --delta-head 0 \
+  --out $D/data/qdiff_w4a4_delta.pt
+python docs/static_qdiff_2026-08-12/scripts/install_qdiff_defaults.py

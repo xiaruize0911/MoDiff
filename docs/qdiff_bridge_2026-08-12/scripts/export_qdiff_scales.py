@@ -40,6 +40,24 @@ SHIPPED_INT4 = "integration/calibration/int4_calibration_realckpt.pt"
 #: integration/kernels/int8_optimized.py's MODIFF_MAX_STEPS -- the delta table length it forward-fills
 MAX_STEPS = 256
 
+#: THE LEVEL COUNT EACH TARGET'S CONSUMER EXPECTS. to_multiplier emits 127/absmax, which is right
+#: for int8 and WRONG BY 127/7 = 18.1x for int4. Fixed 2026-08-12; here is the asymmetry it missed.
+#:
+#:   int8  set_static_scale (int8_optimized.py:1831) does `scale *= act_q/127`, so a 127-based value
+#:         is exactly what it wants, and end_delta_calibration builds its table as 127/absmax.
+#:   int4  set_static_scale (int4_optimized.py:1450) does NO such rescale -- it stores the float as
+#:         given -- and end_delta_calibration builds its table as Q_DELTA/absmax with Q_DELTA = 7.0.
+#:         The kernel clamps codes to [-7, 7]. So int4 wants a 7-based value.
+#:
+#: WHAT THE BUG COST. The int4 activation export read a median scale of 33.694. Intended as 127-based
+#: that is absmax 3.769 -- which is very nearly correct; act_max recovered independently from the
+#: shipped calibration has a median of 3.937. But the kernel reads it as 7-based, i.e. absmax 0.208,
+#: an assumed range 19x too small, so nearly every activation railed at +-7. That is the whole of
+#: FINDINGS §5c's "saturated blue and white blobs", and it is why §5b's four calibration hypotheses
+#: were each refuted: none of them was the problem. The scales were never the wrong scales, they were
+#: the right scales in the wrong units.
+TARGET_Q = {"int8": 127.0, "int4": 7.0}
+
 #: The ONLY two rename rules. FusedResBlock re-registers original.in_layers[-1] as .in_conv and
 #: original.out_layers[3] as .out_conv (fused_resblock.py:756,768); qdiff wraps in place and so reports
 #: the raw LDM path. Verified set-equal to the shipped 70 by scripts/smoke_qdiff.py.
@@ -91,10 +109,12 @@ def collect(ckpt_path):
 
 
 def to_multiplier(delta, zp, act_bit, sym):
-    """qdiff step size -> integration multiplier, always int8-normalised.
+    """qdiff step size -> integration multiplier, int8-normalised. --target int4 rescales after.
 
     set_static_scale (int8_optimized.py:1822) rescales by act_q/127 itself and end_delta_calibration
     hardcodes q=127, so emitting anything but the 127-based value double-applies the bit width.
+
+    THAT IS TRUE OF int8 ONLY, and assuming it held for int4 was a bug -- see TARGET_Q.
     """
     d = float(delta)
     n_levels = (2 ** (act_bit - 1) - 1) if sym else (2 ** act_bit)
@@ -164,6 +184,16 @@ def main():
                 "--act_tensor is wired to channel_wise (the opposite of its help text); "
                 "apply_static_scales cannot consume that.")
         kept[n] = to_multiplier(delta, zp, act_bit, sym)
+
+    # Into the CONSUMER's units. No-op for int8 (127/127); 7/127 for int4, whose set_static_scale
+    # and end_delta_calibration are both built on Q=7 and neither rescales on load. Applied before
+    # the shipped-ratio diagnostics below so those compare like with like -- reading them in mixed
+    # units is what made the int4 scales look plausible for a whole session.
+    q_rescale = TARGET_Q[a.target] / 127.0
+    if q_rescale != 1.0:
+        kept = {k: v * q_rescale for k, v in kept.items()}
+        print(f"  target {a.target}: rescaled 127-based multipliers by {q_rescale:.6f} "
+              f"(Q={TARGET_Q[a.target]:.0f})")
 
     # SMOOTHQUANT, and why the int4 export is bare floats rather than a dict.
     #

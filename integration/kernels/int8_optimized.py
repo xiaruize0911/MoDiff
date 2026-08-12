@@ -149,20 +149,29 @@ class OptimizedInt8Conv2d(nn.Module):
         #: The paper's Theorem 4.3 bound assumes the dynamic form ("to avoid clipping error"), so
         #: static is the engineering shortcut and dynamic is the faithful implementation.
         #:
-        #: Dynamic is the DEFAULT because it wins decisively. Real checkpoint, S=50, batch 8,
+        #: STATIC is the default since 2026-08-12, and it is NOT the better setting. It is the
+        #: paper's: README:96 reproduces MoDiff with --modulate --quant_mode qdiff --cali_min_max,
+        #: i.e. a calibrated static per-step delta table. Fidelity to that is the reason; the
+        #: numbers below are the price, and they are large. MODIFF_DELTA_MODE=dynamic restores the
+        #: better-measuring path in one env var and changes nothing else.
+        #:
+        #: Dynamic won decisively when it was the default. Real checkpoint, S=50, batch 8,
         #: latent relL2 vs fp16, measured at steady state (2026-08-04):
         #:     W8A8  baseline 0.2378 | MoDiff static 0.1878 | MoDiff dynamic 0.0393  (6.05x
         #:           better than baseline, 4.78x better than static)
         #:     W4A4  baseline 0.7837 | MoDiff static 0.7770 | MoDiff dynamic 0.4199  (1.87x
         #:           better than baseline; with a static scale MoDiff bought almost nothing)
-        #: Set MODIFF_DELTA_MODE=static for the pre-2026-08-04 behaviour.
+        #: Those static numbers predate the delta table being LOADABLE at all: until 2026-08-12
+        #: apply_int8_delta_scales had zero call sites, so "static" meant an uncalibrated grid.
+        #: benchmark_ldm.py:_load_delta_table now loads it, and the honest static-vs-dynamic
+        #: comparison is the one in docs/static_qdiff_2026-08-12/FINDINGS.md.
         #:
         #: "At steady state" is load-bearing. The quantized attention blocks self-calibrate over
         #: their first MODIFF_ATTN_CALIB_STEPS forwards, so the first sampling run after model
         #: construction is several x worse than the second (int8 dynamic: 0.2107 then 0.0393).
         #: A first-run measurement reverses this ranking and is how an earlier version of this
         #: comment came to claim, wrongly, that static beat dynamic at W8A8.
-        self.delta_dynamic = os.environ.get("MODIFF_DELTA_MODE", "dynamic").lower() != "static"
+        self.delta_dynamic = os.environ.get("MODIFF_DELTA_MODE", "static").lower() != "static"
         #: `MODIFF_DELTA_CLIP` (deliberate-clipping ratio: scale = Q/(ratio*max|delta|), so
         #: ratio < 1 traded a finer grid for clipping the top of the observed range) is RETIRED.
         #: Q_level is now Q_b, full stop. Refused rather than ignored, because an archived script
