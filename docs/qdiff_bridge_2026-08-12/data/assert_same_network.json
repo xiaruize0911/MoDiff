@@ -1,0 +1,361 @@
+{
+ "n_convs": 70,
+ "n_identical_noema": 70,
+ "n_identical_ema": 0,
+ "worst_ema_rel_l2": 0.13819585740566254,
+ "worst_ema_layer": "output_blocks.2.1.out_layers.3",
+ "premise_ok": true,
+ "ema_matters": true,
+ "per_layer_ema": [
+  {
+   "layer": "input_blocks.1.0.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.04088347777724266
+  },
+  {
+   "layer": "input_blocks.1.0.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.05046024173498154
+  },
+  {
+   "layer": "input_blocks.10.0.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.08769761025905609
+  },
+  {
+   "layer": "input_blocks.10.0.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.10750014334917068
+  },
+  {
+   "layer": "input_blocks.11.0.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.09904639422893524
+  },
+  {
+   "layer": "input_blocks.11.0.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.1157335489988327
+  },
+  {
+   "layer": "input_blocks.12.0.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.10209338366985321
+  },
+  {
+   "layer": "input_blocks.12.0.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.13064828515052795
+  },
+  {
+   "layer": "input_blocks.13.0.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.11952851712703705
+  },
+  {
+   "layer": "input_blocks.13.0.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.12820740044116974
+  },
+  {
+   "layer": "input_blocks.14.0.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.08846351504325867
+  },
+  {
+   "layer": "input_blocks.14.0.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.12754808366298676
+  },
+  {
+   "layer": "input_blocks.2.0.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.04413189738988876
+  },
+  {
+   "layer": "input_blocks.2.0.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.05128331854939461
+  },
+  {
+   "layer": "input_blocks.3.0.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.05931716412305832
+  },
+  {
+   "layer": "input_blocks.3.0.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.07381299883127213
+  },
+  {
+   "layer": "input_blocks.4.0.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.06275097280740738
+  },
+  {
+   "layer": "input_blocks.4.0.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.08035442233085632
+  },
+  {
+   "layer": "input_blocks.5.0.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.06874603033065796
+  },
+  {
+   "layer": "input_blocks.5.0.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.08214769512414932
+  },
+  {
+   "layer": "input_blocks.6.0.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.07756996154785156
+  },
+  {
+   "layer": "input_blocks.6.0.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.09430775791406631
+  },
+  {
+   "layer": "input_blocks.7.0.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.08097405731678009
+  },
+  {
+   "layer": "input_blocks.7.0.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.09844363480806351
+  },
+  {
+   "layer": "input_blocks.8.0.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.08256528526544571
+  },
+  {
+   "layer": "input_blocks.8.0.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.0991712436079979
+  },
+  {
+   "layer": "input_blocks.9.0.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.08736962080001831
+  },
+  {
+   "layer": "input_blocks.9.0.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.11864958703517914
+  },
+  {
+   "layer": "middle_block.0.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.08320237696170807
+  },
+  {
+   "layer": "middle_block.0.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.13245481252670288
+  },
+  {
+   "layer": "middle_block.2.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.08595386892557144
+  },
+  {
+   "layer": "middle_block.2.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.13508260250091553
+  },
+  {
+   "layer": "output_blocks.0.0.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.10668234527111053
+  },
+  {
+   "layer": "output_blocks.0.0.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.12377401441335678
+  },
+  {
+   "layer": "output_blocks.1.0.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.11061899363994598
+  },
+  {
+   "layer": "output_blocks.1.0.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.11885453760623932
+  },
+  {
+   "layer": "output_blocks.10.0.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.07089496403932571
+  },
+  {
+   "layer": "output_blocks.10.0.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.06987286359071732
+  },
+  {
+   "layer": "output_blocks.11.0.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.06810344010591507
+  },
+  {
+   "layer": "output_blocks.11.0.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.07130692154169083
+  },
+  {
+   "layer": "output_blocks.11.2.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.05332387983798981
+  },
+  {
+   "layer": "output_blocks.11.2.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.051023609936237335
+  },
+  {
+   "layer": "output_blocks.12.0.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.05217994749546051
+  },
+  {
+   "layer": "output_blocks.12.0.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.04718290641903877
+  },
+  {
+   "layer": "output_blocks.13.0.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.046722788363695145
+  },
+  {
+   "layer": "output_blocks.13.0.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.0441458486020565
+  },
+  {
+   "layer": "output_blocks.14.0.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.039202213287353516
+  },
+  {
+   "layer": "output_blocks.14.0.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.03896903246641159
+  },
+  {
+   "layer": "output_blocks.2.0.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.11945866048336029
+  },
+  {
+   "layer": "output_blocks.2.0.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.12703698873519897
+  },
+  {
+   "layer": "output_blocks.2.1.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.10428612679243088
+  },
+  {
+   "layer": "output_blocks.2.1.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.13819585740566254
+  },
+  {
+   "layer": "output_blocks.3.0.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.11400046199560165
+  },
+  {
+   "layer": "output_blocks.3.0.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.11673706769943237
+  },
+  {
+   "layer": "output_blocks.4.0.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.10497325658798218
+  },
+  {
+   "layer": "output_blocks.4.0.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.10468544811010361
+  },
+  {
+   "layer": "output_blocks.5.0.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.09559693187475204
+  },
+  {
+   "layer": "output_blocks.5.0.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.09497562050819397
+  },
+  {
+   "layer": "output_blocks.5.2.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.09075823426246643
+  },
+  {
+   "layer": "output_blocks.5.2.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.09965774416923523
+  },
+  {
+   "layer": "output_blocks.6.0.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.08924609422683716
+  },
+  {
+   "layer": "output_blocks.6.0.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.0861191675066948
+  },
+  {
+   "layer": "output_blocks.7.0.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.08399345725774765
+  },
+  {
+   "layer": "output_blocks.7.0.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.08291446417570114
+  },
+  {
+   "layer": "output_blocks.8.0.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.08229155093431473
+  },
+  {
+   "layer": "output_blocks.8.0.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.08148107677698135
+  },
+  {
+   "layer": "output_blocks.8.2.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.06817349046468735
+  },
+  {
+   "layer": "output_blocks.8.2.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.06942669302225113
+  },
+  {
+   "layer": "output_blocks.9.0.in_layers.2",
+   "identical": false,
+   "rel_l2": 0.0731860101222992
+  },
+  {
+   "layer": "output_blocks.9.0.out_layers.3",
+   "identical": false,
+   "rel_l2": 0.06952065974473953
+  }
+ ]
+}
