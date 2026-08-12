@@ -41,20 +41,25 @@ Batch 128, DDIM 200 steps, 2 warm-up runs discarded, median of 3 repeats.
 
 | mode | ms / step | ms / sample | vs fp16 | CV |
 |---|---:|---:|---:|---:|
-| fp16 | 105.62 | 165.03 | 1.000x | 0.15% |
-| W8A8 PTQ | 72.97 | 114.01 | **1.447x** | 0.19% |
-| W8A8 MoDiff | 74.65 | 116.64 | **1.415x** | 0.20% |
-| W4A4 PTQ | 59.04 | 92.25 | **1.789x** | 0.02% |
-| W4A4 MoDiff | 59.99 | 93.74 | **1.761x** | 0.08% |
+| fp16 | 105.59 | 164.98 | 1.000x | 0.17% |
+| W8A8 PTQ | 72.98 | 114.03 | **1.447x** | 0.19% |
+| W8A8 MoDiff | 74.47 | 116.36 | **1.418x** | 0.19% |
+| W4A4 PTQ | 58.80 | 91.87 | **1.796x** | 0.23% |
+| W4A4 MoDiff | 59.98 | 93.72 | **1.760x** | 0.01% |
 
-Every arm has CV ≤ 0.20%, so the ordering is not noise.
+Every arm has CV ≤ 0.23%, so the ordering is not noise.
 
-**MoDiff is nearly free in time**: 74.65 against its own baseline's 72.97 at 8 bits (+2.3%), 59.99
-against 59.04 at 4 bits (+1.6%). That is a property of the shipped static delta path — the step size
+**These were re-run after the `ba8b8c9` dequant fix and reproduce the pre-fix run to ≤0.41%** on
+every arm, inside twice each arm's CV. That is the expected result — these kernels have no
+data-dependent control flow, so a fix that changes values cannot change scheduling — and re-running
+is what turns "expected" into "checked".
+
+**MoDiff is nearly free in time**: 74.47 against its own baseline's 72.98 at 8 bits (+2.0%), 59.98
+against 58.80 at 4 bits (+2.0%). That is a property of the shipped static delta path — the step size
 comes from a table, so there is no per-call absmax reduction over the activation to pay for. The
 modulation costs an add and a cache read.
 
-**Four-bit is 1.24x faster than eight-bit** (59.04 against 72.97 on the PTQ arms). Whether that is
+**Four-bit is 1.24x faster than eight-bit** (58.80 against 72.98 on the PTQ arms). Whether that is
 worth having is §3's question, not this one's.
 
 ![e2e](plots/01_e2e_speed.png)
@@ -68,10 +73,10 @@ A/B in this tree uses, so these are the numbers to quote:
 
 | mode | relL2 vs fp16 | ms/step (batch 128) |
 |---|---:|---:|
-| W8A8 PTQ | 0.1140 | 72.97 |
-| W8A8 MoDiff | **0.0607** | 74.65 |
-| W4A4 PTQ | 0.8642 | 59.04 |
-| W4A4 MoDiff | 0.6122 | 59.99 |
+| W8A8 PTQ | 0.1140 | 72.98 |
+| W8A8 MoDiff | **0.0607** | 74.47 |
+| W4A4 PTQ | 0.8642 | 58.80 |
+| W4A4 MoDiff | 0.6122 | 59.98 |
 
 The scatter above uses the single-seed values measured alongside the sample grid (0.1630 / 0.0643 /
 0.8571 / 0.5906) so that each point grades the image it sits next to; the seed-to-seed spread is why
@@ -79,11 +84,11 @@ the table and the plot differ in the third decimal.
 
 Read together with §2 there are two usable operating points and one that is not:
 
-* **W8A8 MoDiff — 0.0607 at 1.415x.** The best fidelity of any quantized arm, for 2.3% more time
+* **W8A8 MoDiff — 0.0607 at 1.418x.** The best fidelity of any quantized arm, for 2.3% more time
   than its own baseline.
 * **W8A8 PTQ — 0.1140 at 1.447x.** Nearly twice the error of the MoDiff arm, at essentially the
   same speed.
-* **W4A4 — 1.79x, and neither arm is usable.** The PTQ arm is fog at 0.8642. MoDiff cuts that to
+* **W4A4 — 1.80x, and neither arm is usable.** The PTQ arm is fog at 0.8642. MoDiff cuts that to
   0.6122 and the samples show why — structure comes back — but 0.61 is not a shippable fidelity.
   The speed is real and the output is not.
 
@@ -144,17 +149,17 @@ Same batch and step count as §2, per-layer CUDA-event timing summed by kind.
 
 | config | wall ms/step | attributed | conv | updown | attn (score) | proj (42 linears) |
 |---|---:|---:|---:|---:|---:|---:|
-| fp16 | 105.3 | — | — | — | — | — |
-| **W8A8 PTQ** *(shipped)* | 72.8 | 46.4 | 22.6 | 3.9 | 19.9 | — |
-| **W8A8 conv-only** *(shipped MoDiff)* | 80.1 | 67.7 | 40.9 | 6.7 | 20.1 | — |
-| W8A8 conv+proj | 103.1 | 90.3 | 40.4 | 6.7 | 34.4 | 8.8 |
-| W8A8 conv+proj +projK4 | 100.2 | 87.7 | 40.5 | 6.7 | 32.9 | 7.5 |
-| W8A8 conv+proj +projK4 +routeB | 99.5 | 88.0 | 40.5 | 6.8 | 32.3 | 8.4 |
-| W8A4 conv+proj | 102.3 | 89.9 | 40.1 | 6.7 | 34.3 | 8.8 |
-| W4A4 conv+proj | 95.7 | 84.6 | 28.7 | 6.0 | 22.7 | 27.1 |
+| fp16 | 105.6 | — | — | — | — | — |
+| **W8A8 PTQ** *(shipped)* | 72.7 | 46.6 | 22.7 | 3.9 | 20.0 | — |
+| **W8A8 conv-only** *(shipped MoDiff)* | 80.1 | 67.9 | 41.0 | 6.8 | 20.1 | — |
+| W8A8 conv+proj | 102.5 | 90.3 | 40.4 | 6.7 | 34.4 | 8.8 |
+| W8A8 conv+proj +projK4 | 99.8 | 87.7 | 40.5 | 6.8 | 32.9 | 7.5 |
+| W8A8 conv+proj +projK4 +routeB | 99.3 | 87.8 | 40.5 | 6.8 | 32.3 | 8.2 |
+| W8A4 conv+proj | 102.1 | 89.9 | 40.1 | 6.7 | 34.3 | 8.8 |
+| W4A4 conv+proj | 95.5 | 84.3 | 28.7 | 5.8 | 22.7 | 27.1 |
 
-**Cross-check.** This harness and §2's are independent, and they agree: fp16 105.3 against 105.62,
-W8A8 PTQ 72.8 against 72.97.
+**Cross-check.** This harness and §2's are independent, and they agree: fp16 105.6 against 105.59,
+W8A8 PTQ 72.7 against 72.98. Re-run after `ba8b8c9`, these reproduce the pre-fix profile to ≤0.57%.
 
 **Only the first three rows are shipped configurations.** The `conv+proj` rows have
 `MODIFF_LINEAR=1`, which the tree defaults to `0`. They are here because the block profiler's grid
@@ -191,9 +196,9 @@ Share of profiled GPU kernel time:
 |---|---:|---:|---:|---:|---:|
 | fp16 | 46.5% | 20.2% | 11.0% | 18.7% | 3.6% |
 | W8A8 PTQ | 51.2% | 25.6% | 12.5% | 7.9% | 2.8% |
-| W8A8 MoDiff | 51.4% | 25.3% | 12.4% | 8.3% | 2.7% |
-| W4A4 PTQ | 39.7% | 32.3% | 14.8% | 9.8% | 3.4% |
-| W4A4 MoDiff | 42.1% | 29.9% | 14.5% | 10.2% | 3.3% |
+| W8A8 MoDiff | 51.5% | 25.2% | 12.3% | 8.3% | 2.7% |
+| W4A4 PTQ | 39.8% | 32.3% | 14.7% | 9.8% | 3.4% |
+| W4A4 MoDiff | 42.0% | 29.9% | 14.5% | 10.2% | 3.3% |
 
 Two things about how these buckets are built, because both were wrong in a first pass:
 
@@ -220,11 +225,11 @@ captured steps (ms per denoising step):
 
 | mode | conv | attention | linear | norm / quantize | other | signatures |
 |---|---:|---:|---:|---:|---:|---:|
-| fp16 | 54.75 | 12.94 | 6.12 | 18.59 | 7.67 | 84 |
-| W8A8 PTQ | 30.63 | 10.51 | 9.38 | 28.99 | 2.01 | 126 |
-| W8A8 MoDiff | 54.63 | 10.45 | 9.33 | 36.66 | 1.85 | 190 |
-| W4A4 PTQ | 17.07 | 10.19 | 8.50 | 29.26 | 2.01 | 126 |
-| W4A4 MoDiff | 30.72 | 10.21 | 8.49 | 35.13 | 1.85 | 190 |
+| fp16 | 54.65 | 12.99 | 5.80 | 18.55 | 7.66 | 84 |
+| W8A8 PTQ | 30.52 | 10.43 | 9.37 | 28.90 | 2.02 | 126 |
+| W8A8 MoDiff | 54.69 | 10.51 | 9.73 | 37.05 | 1.88 | 190 |
+| W4A4 PTQ | 17.08 | 10.18 | 8.52 | 29.24 | 2.01 | 126 |
+| W4A4 MoDiff | 30.83 | 10.25 | 8.70 | 35.18 | 1.86 | 190 |
 
 **Do not read the MoDiff rows as per-step totals.** They carry 190 signatures against the baselines'
 126 — roughly one extra per conv — because a MoDiff layer registers *both* a first-step entry and a
@@ -232,8 +237,8 @@ modulated-step entry, and those never both run on the same step. Summing them do
 is why conv appears to double while §2 measures MoDiff at +2%. The rows are comparable *within* a
 column, not as totals.
 
-Read that way: **the conv GEMM itself is where the bit width pays.** 30.63 → 17.07 ms going W8A8 →
-W4A4 on the PTQ arms, a 1.79x on the conv suite alone, which is the whole of the 1.79x e2e speedup.
+Read that way: **the conv GEMM itself is where the bit width pays.** 30.52 → 17.08 ms going W8A8 →
+W4A4 on the PTQ arms, a 1.79x on the conv suite alone, which is the whole of the 1.80x e2e speedup.
 Attention is flat at ~10.2–10.5 ms across every quantized arm — it is already int8-flash in all of
 them, so 4-bit buys nothing there — and `norm / quantize` is essentially flat too. Everything the
 4-bit path gains, it gains in the GEMM.
