@@ -425,6 +425,12 @@ def get_parser():
                         help="skip weight AdaRound (~20000 iters x 168 layers). Weights keep the "
                              "channel-wise MSE quantizer. The saved ckpt has no weight_quantizer.alpha "
                              "and cannot be reloaded with --resume; it is an activation-scale artifact.")
+    parser.add_argument("--w_sym", action="store_true",
+                        help="symmetric per-channel WEIGHT quantizer, matching integration's int4 "
+                             "scheme (per-output-channel symmetric MSE, Q=7). Required for a 4-bit "
+                             "activation calibration to transfer: asymmetric weights make a "
+                             "different network, and the activation ranges then do not describe the "
+                             "network consuming them.")
     parser.add_argument("--no_ema", action="store_true",
                         help="do NOT swap in EMA weights. Required when the scales will be consumed by "
                              "integration/, whose loader does not use EMA -- otherwise the two build "
@@ -561,7 +567,21 @@ if __name__ == "__main__":
     assert(not opt.cond)
     if opt.ptq:
         a_scale_method = 'mse' if not opt.a_min_max else 'max'
-        wq_params = {'n_bits': opt.weight_bit, 'channel_wise': True, 'scale_method': 'mse'}
+        # --w_sym added 2026-08-12. qdiff's default leaves symmetric=False, i.e. ASYMMETRIC
+        # per-channel weights with a zero_point. integration quantizes 4-bit weights
+        # per-output-channel SYMMETRIC MSE with Q=7 (int4_optimized.py:59). At 8 bits the resulting
+        # weight difference is negligible and the activation calibration transfers fine (measured:
+        # the bridge gave 2.29x on the W8A8 PTQ baseline). At 4 bits it is not: integration
+        # documents its own weight reconstruction error at 0.1254 median relative Frobenius, so
+        # asymmetric-vs-symmetric produces two genuinely different networks and the activation
+        # ranges measured on one do not describe the other. That is why the first W4A4 export
+        # measured 1.19/1.52 against a 0.4885 control.
+        #
+        # With --w_sym both sides are per-output-channel symmetric MSE at Q=7. Not bit-identical --
+        # qdiff searches 80 clip candidates against lp_loss(p=2.4), integration searches 13 against
+        # MSE -- so this narrows the mismatch rather than removing it, and the A/B is what decides.
+        wq_params = {'n_bits': opt.weight_bit, 'channel_wise': True, 'scale_method': 'mse',
+                     'symmetric': opt.w_sym}
         aq_params = {
             'n_bits': opt.act_bit, 'symmetric': opt.a_sym, 'channel_wise': opt.act_tensor, 
             'scale_method': a_scale_method, 'leaf_param': opt.quant_act, 'dynamic': (opt.quant_mode=="dynamic")

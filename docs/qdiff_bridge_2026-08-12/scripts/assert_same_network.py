@@ -18,24 +18,32 @@ WHAT THIS ASSERTS
   non-EMA build vs integration build : all 70 conv weights bit-identical  (this is the bridge premise)
   EMA build     vs integration build : NOT identical                      (this is why --no_ema exists)
 
-WHAT IT DOES NOT ASSERT, AND THIS TURNED OUT TO MATTER. It compares FP weights. For an activation
-calibration to transfer, the QUANTIZED networks must also match, because the activations the
-quantizer observes are the ones the quantized weights produce.
+WHAT IT DOES NOT ASSERT, AND WHY THE W4A4 BRIDGE FAILED ANYWAY.
 
-  W8A8: fine. 8-bit weight error is negligible, the two quantized nets are effectively the same
-        network, and the bridge delivered 2.29x on the PTQ baseline.
-  W4A4: NOT fine. integration quantizes 4-bit weights per-output-channel SYMMETRIC MSE
-        (int4_optimized.py:59, which documents 0.1254 median / 0.2609 worst relative Frobenius
-        error), while qdiff uses channel_wise MSE with symmetric defaulting to False, i.e.
-        ASYMMETRIC (sample_diffusion_ldm.py:564). Two different 4-bit networks.
+This compares FP weights, and passing it does NOT license the bridge at every bit width. Two
+explanations were tried for the W4A4 failure and only the second survived measurement:
 
-That is why the W4A4 qdiff scales measured 1.19 / 1.52 for PTQ against a 0.4885 control: qdiff
-reported the activation range of a different network, and it under-estimates. MoDiff is largely
-insulated because it reads the static scale only at t=T.
+  REFUTED -- "the quantized weights differ". integration uses per-output-channel SYMMETRIC MSE at
+  Q=7 (int4_optimized.py:59); qdiff defaulted to ASYMMETRIC. Plausible, and wrong: adding --w_sym so
+  both are symmetric per-channel MSE moved the assumed activation range only 3.769 -> 3.586 and the
+  PTQ relL2 not at all (1.1667 -> 1.2200). The weight scheme is not the cause.
 
-So passing this gate licenses the bridge at 8 bits and NOT at 4. A 4-bit bridge would need qdiff to
-carry integration's weight quantizer -- or, more cheaply, no bridge at all: fix the STATISTIC inside
-integration's own calibration, which is what actually mattered (absmax -> clip-optimal).
+  CONFIRMED -- the CALIBRATION DATA comes from the wrong trajectory. sample_diffusion_ldm.py's
+  --generate branch runs at :553 and exit()s at :565, BEFORE `if opt.ptq:` at :568, so the latents
+  it saves are the FP16 model's trajectory. integration's _calibrate_int8/_calibrate_int4 instead
+  call sampler.sample() on the model BEING calibrated, so they observe the quantized model's own
+  trajectory.
+
+    W8A8: the quantized trajectory tracks fp16 (relL2 ~0.11), so fp16 latents are representative and
+          qdiff's better statistic wins -- 2.29x on the PTQ baseline.
+    W4A4: the quantized trajectory DIVERGES (relL2 0.42-0.79). The activations the model actually
+          sees at run time are ~4x larger than what qdiff measured on fp16 latents (assumed range
+          3.6 against an optimum near 14.8), so the scale clips catastrophically: 1.19 against a
+          0.4885 control.
+
+So the bridge is valid exactly where quantization does not move the sampling trajectory. Making it
+work at 4 bits needs a two-pass bootstrap -- quantize with a rough scale, generate calibration data
+from THAT model, recalibrate -- not a better statistic.
 
 The second assertion matters as much as the first. If EMA turned out to be a no-op here, `--no_ema`
 would be dead code and the whole EMA concern would be a misreading -- better to find that out now than
