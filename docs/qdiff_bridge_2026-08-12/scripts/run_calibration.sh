@@ -29,6 +29,9 @@ S=$(date +%s)
 COMMON="-r $CKPT --seed 1234 --no_ema -e 0.0 --custom_steps 50 --cali_st 10 --cali_n 64"
 CAL="--ptq --quant_act --skip_weight_recon --weight_bit 8 --act_bit 8 \
      --cali_data_path $CALI --cali_batch_size 32 --cali_iters_a 0 -n 1 --batch_size 1"
+#: same, but the activation quantizer sees 4 bits during calibration
+CAL_A4="--ptq --quant_act --skip_weight_recon --weight_bit 8 --act_bit 4 \
+     --cali_data_path $CALI --cali_batch_size 32 --cali_iters_a 0 -n 1 --batch_size 1"
 
 # A3 -- one generation serves both arms: --generate residual writes xs/ts AND xs_prev/ts_prev, and
 # get_train_samples(with_prev=False) simply ignores the _prev halves.
@@ -59,3 +62,16 @@ python scripts/sample_diffusion_ldm.py $COMMON $CAL --a_sym --a_min_max \
   -l $D/qdiff_runs/delta > $D/logs/delta.log 2>&1
 echo "A5 delta done $(( $(date +%s) - S ))s"
 echo "ALL DONE in $(( $(date +%s) - S ))s"
+
+# --- added 2026-08-12: calibrate AT 4 bits ------------------------------------------------------
+# The A4 arms above were calibrated at --act_bit 8 and rescaled to 4 by set_static_scale's
+# act_q/127. That is correct for absmax (a range is a range) but WRONG for the MSE clip search,
+# which picks the optimum for a given level count: 255 levels tolerate far less clipping than 15.
+# Measured consequence: at A4 both qdiff exports lost to the shipped scale, whose ~2.9x inflation is
+# accidentally the more aggressive clip. These two runs let the search see 15 levels.
+python scripts/sample_diffusion_ldm.py $COMMON $CAL_A4 --a_sym --a_min_max \
+  -l $D/qdiff_runs/act_sym_a4 > $D/logs/act_sym_a4.log 2>&1
+echo "A4a act_sym_a4 done $(( $(date +%s) - S ))s"
+python scripts/sample_diffusion_ldm.py $COMMON $CAL_A4 \
+  -l $D/qdiff_runs/act_mse_a4 > $D/logs/act_mse_a4.log 2>&1
+echo "A4b act_mse_a4 done $(( $(date +%s) - S ))s"

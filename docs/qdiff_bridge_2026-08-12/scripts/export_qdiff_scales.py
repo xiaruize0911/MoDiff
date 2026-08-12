@@ -36,6 +36,7 @@ import torch                                                                # no
 import yaml                                                                 # noqa: E402
 
 SHIPPED_STATIC = "integration/calibration/int8_calibration_realckpt.pt"
+SHIPPED_INT4 = "integration/calibration/int4_calibration_realckpt.pt"
 #: integration/kernels/int8_optimized.py's MODIFF_MAX_STEPS -- the delta table length it forward-fills
 MAX_STEPS = 256
 
@@ -116,6 +117,8 @@ def main():
     ap.add_argument("--delta-head", type=int, default=2,
                     help="steps at the head of the delta table clamped to act_scale/2 "
                          "(provably non-clipping: |a_t - a_hat_t+1| <= 2*act_absmax). 0 = flat.")
+    ap.add_argument("--target", default="int8", choices=["int8", "int4"],
+                    help="which shipped key set to validate against, and which act_bit to expect")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
 
@@ -162,7 +165,30 @@ def main():
                 "apply_static_scales cannot consume that.")
         kept[n] = to_multiplier(delta, zp, act_bit, sym)
 
-    shipped = torch.load(SHIPPED_STATIC, map_location="cpu", weights_only=False)
+    # SMOOTHQUANT, and why the int4 export is bare floats rather than a dict.
+    #
+    # int4's shipped file is {name: {"static_scale", "smooth_scale"}} with smoothing LIVE
+    # (per-input-channel, 2.96-5.39); int8's is bare floats with smoothing identity. The kernel
+    # applies `x * smooth_inv` and THEN the scale, and int8_optimized.py:1616-1618 derives the
+    # shipped static_scale from the SMOOTHED range.
+    #
+    # qdiff has no SmoothQuant, so its delta measures the UNSMOOTHED activation. Grafting a qdiff
+    # static_scale onto the shipped smooth_scale would therefore be wrong by the per-channel smooth
+    # factor -- the scale would assume a smoothing that its calibration never saw. And qdiff cannot
+    # supply a smoothed range: it only reports a per-TENSOR delta, and asking for per-channel
+    # (--act_tensor, which confusingly sets channel_wise) produces a shape apply_*_static_scales
+    # cannot consume.
+    #
+    # So a qdiff int4 file is bare floats and SmoothQuant is off. That is SELF-CONSISTENT -- scale
+    # from unsmoothed range, applied unsmoothed -- but it bundles two changes against the shipped
+    # arm. The A/B therefore carries a control arm (shipped static_scale re-emitted as bare floats)
+    # to bound how much of any difference is SmoothQuant rather than calibration.
+    shipped = torch.load(SHIPPED_INT4 if a.target == "int4" else SHIPPED_STATIC,
+                         map_location="cpu", weights_only=False)
+    if a.target == "int4" and act_bit != 4:
+        raise SystemExit(f"REFUSED: --target int4 but the run calibrated at act_bit={act_bit}. "
+                         "An 8-bit-optimal clip rescaled to 15 levels is not clip-optimal; measured, "
+                         "it loses to the shipped scale (data/a4_clip_optimal_ab.json).")
     missing = sorted(set(shipped) - set(kept))
     extra = sorted(set(kept) - set(shipped))
     if missing or extra:
@@ -182,7 +208,9 @@ def main():
     # range swings across timesteps gets a wildly inflated scale. The worst layer is
     # middle_block.0.out_conv at 14.5x, deep in the net where the range swings most.
     # The [0.02, 50] band below is a unit-error guard, not a direction check.
-    rows = sorted(((k, kept[k], float(shipped[k]), kept[k] / float(shipped[k])) for k in kept),
+    def _old(v):
+        return float(v["static_scale"]) if isinstance(v, dict) else float(v)
+    rows = sorted(((k, kept[k], _old(shipped[k]), kept[k] / _old(shipped[k])) for k in kept),
                   key=lambda r: -abs(math.log(r[3])))
     print(f"\n  new/old ratio: min {min(r[3] for r in rows):.3f}  "
           f"median {sorted(r[3] for r in rows)[len(rows)//2]:.3f}  max {max(r[3] for r in rows):.3f}")

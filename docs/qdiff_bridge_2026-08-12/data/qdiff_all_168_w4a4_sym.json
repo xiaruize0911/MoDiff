@@ -1,0 +1,841 @@
+{
+ "kind": "static",
+ "run": "docs/qdiff_bridge_2026-08-12/qdiff_runs/w4a4_sym",
+ "act_bit": 4,
+ "a_sym": true,
+ "modulate": false,
+ "n_kept": 70,
+ "n_dropped": 98,
+ "kept": {
+  "input_blocks.1.0.in_conv": 29.062668045535403,
+  "input_blocks.1.0.out_conv": 50.43325094649046,
+  "input_blocks.2.0.in_conv": 27.18950884987321,
+  "input_blocks.2.0.out_conv": 29.21464001288199,
+  "input_blocks.3.0.in_conv": 40.04127604717595,
+  "input_blocks.3.0.out_conv": 31.405506970786966,
+  "input_blocks.4.0.in_conv": 24.960291233367006,
+  "input_blocks.4.0.out_conv": 39.532369346581646,
+  "input_blocks.5.0.in_conv": 24.247195330477908,
+  "input_blocks.5.0.out_conv": 67.1948374135512,
+  "input_blocks.6.0.in_conv": 30.498654167032267,
+  "input_blocks.6.0.out_conv": 39.98054647464616,
+  "input_blocks.7.0.in_conv": 29.424059937127684,
+  "input_blocks.7.0.out_conv": 127.17495142691929,
+  "input_blocks.8.0.in_conv": 32.87899137243489,
+  "input_blocks.8.0.out_conv": 75.47529845675673,
+  "input_blocks.9.0.in_conv": 40.0246171597378,
+  "input_blocks.9.0.out_conv": 37.23215834574037,
+  "input_blocks.10.0.in_conv": 36.566352030006044,
+  "input_blocks.10.0.out_conv": 33.28797044620822,
+  "input_blocks.11.0.in_conv": 33.920958371880424,
+  "input_blocks.11.0.out_conv": 86.07808469062941,
+  "input_blocks.12.0.in_conv": 59.082489229512674,
+  "input_blocks.12.0.out_conv": 39.173416599313335,
+  "input_blocks.13.0.in_conv": 38.47919268813389,
+  "input_blocks.13.0.out_conv": 34.65151083839132,
+  "input_blocks.14.0.in_conv": 38.08609150258195,
+  "input_blocks.14.0.out_conv": 249.59605576868313,
+  "middle_block.0.in_conv": 38.88159576142068,
+  "middle_block.0.out_conv": 203.21001683973827,
+  "middle_block.2.in_conv": 34.8661361232878,
+  "middle_block.2.out_conv": 289.2925072828663,
+  "output_blocks.0.0.in_conv": 40.39185711945469,
+  "output_blocks.0.0.out_conv": 30.700405763705337,
+  "output_blocks.1.0.in_conv": 35.38333589569887,
+  "output_blocks.1.0.out_conv": 49.179484588462756,
+  "output_blocks.2.0.in_conv": 33.467480323837066,
+  "output_blocks.2.0.out_conv": 54.88976944163836,
+  "output_blocks.2.1.in_conv": 27.53764161432103,
+  "output_blocks.2.1.out_conv": 69.94841954047044,
+  "output_blocks.3.0.in_conv": 28.86990993907908,
+  "output_blocks.3.0.out_conv": 41.114296772873196,
+  "output_blocks.4.0.in_conv": 30.588098410259196,
+  "output_blocks.4.0.out_conv": 26.45925258220328,
+  "output_blocks.5.0.in_conv": 27.009636061369328,
+  "output_blocks.5.0.out_conv": 25.773327612503284,
+  "output_blocks.5.2.in_conv": 35.47083224972296,
+  "output_blocks.5.2.out_conv": 15.707537634356285,
+  "output_blocks.6.0.in_conv": 26.865787595162566,
+  "output_blocks.6.0.out_conv": 18.614357849400367,
+  "output_blocks.7.0.in_conv": 29.959143259109066,
+  "output_blocks.7.0.out_conv": 32.479038751398974,
+  "output_blocks.8.0.in_conv": 26.675684549057472,
+  "output_blocks.8.0.out_conv": 46.89987794446514,
+  "output_blocks.8.2.in_conv": 32.96184294928939,
+  "output_blocks.8.2.out_conv": 31.943700338861266,
+  "output_blocks.9.0.in_conv": 24.899679753712796,
+  "output_blocks.9.0.out_conv": 37.45878406977499,
+  "output_blocks.10.0.in_conv": 25.35037422533734,
+  "output_blocks.10.0.out_conv": 61.38925778819295,
+  "output_blocks.11.0.in_conv": 29.186694228035293,
+  "output_blocks.11.0.out_conv": 53.00336877718212,
+  "output_blocks.11.2.in_conv": 27.836514307751404,
+  "output_blocks.11.2.out_conv": 13.552687234003793,
+  "output_blocks.12.0.in_conv": 29.203038932493516,
+  "output_blocks.12.0.out_conv": 41.48908085149271,
+  "output_blocks.13.0.in_conv": 33.98842077802701,
+  "output_blocks.13.0.out_conv": 27.029166421095713,
+  "output_blocks.14.0.in_conv": 23.17067574586416,
+  "output_blocks.14.0.out_conv": 28.11142524192284
+ },
+ "ratio_vs_shipped": {
+  "input_blocks.7.0.out_conv": 11.582543390690486,
+  "input_blocks.5.0.out_conv": 9.559764811406644,
+  "output_blocks.10.0.out_conv": 8.980719728598878,
+  "input_blocks.8.0.out_conv": 6.977292476400063,
+  "output_blocks.8.0.out_conv": 6.461941607226182,
+  "input_blocks.11.0.out_conv": 6.173981671689342,
+  "input_blocks.14.0.out_conv": 6.16260146715688,
+  "input_blocks.8.0.in_conv": 5.563724767548327,
+  "output_blocks.8.2.out_conv": 5.53299294306417,
+  "output_blocks.11.0.out_conv": 5.442235277755366,
+  "input_blocks.10.0.in_conv": 5.2103196670752085,
+  "input_blocks.1.0.in_conv": 5.204982670109962,
+  "input_blocks.2.0.in_conv": 5.202400204036676,
+  "output_blocks.3.0.out_conv": 5.157893025381605,
+  "output_blocks.13.0.in_conv": 5.139228893897842,
+  "middle_block.2.out_conv": 5.000172748397048,
+  "output_blocks.12.0.in_conv": 4.993301833862436,
+  "output_blocks.9.0.in_conv": 4.976253742415514,
+  "output_blocks.10.0.in_conv": 4.9468798105103176,
+  "output_blocks.9.0.out_conv": 4.939098018507465,
+  "output_blocks.12.0.out_conv": 4.931618988227767,
+  "output_blocks.14.0.in_conv": 4.830446193198299,
+  "input_blocks.12.0.in_conv": 4.665768160771753,
+  "output_blocks.11.0.in_conv": 4.488836431954051,
+  "input_blocks.3.0.in_conv": 4.478183137415855,
+  "output_blocks.5.2.in_conv": 4.43880128499264,
+  "input_blocks.1.0.out_conv": 4.198856001365913,
+  "middle_block.0.out_conv": 4.131515558049525,
+  "output_blocks.2.1.out_conv": 4.113979631758229,
+  "output_blocks.7.0.out_conv": 3.9841405894901194,
+  "output_blocks.8.2.in_conv": 3.842440413141482,
+  "input_blocks.6.0.in_conv": 3.8224371648854842,
+  "input_blocks.4.0.in_conv": 3.8200836141210597,
+  "output_blocks.7.0.in_conv": 3.8176512563461062,
+  "input_blocks.9.0.in_conv": 3.7856607090166423,
+  "output_blocks.5.0.out_conv": 3.765120962462916,
+  "output_blocks.8.0.in_conv": 3.7198690257541713,
+  "input_blocks.6.0.out_conv": 3.6466260570329236,
+  "input_blocks.2.0.out_conv": 3.6410132259777965,
+  "output_blocks.13.0.out_conv": 3.6402374439144296,
+  "output_blocks.4.0.out_conv": 3.6102949496390115,
+  "input_blocks.4.0.out_conv": 3.6075314548434463,
+  "input_blocks.7.0.in_conv": 3.586016672245629,
+  "input_blocks.10.0.out_conv": 3.5137011724028717,
+  "output_blocks.6.0.out_conv": 3.4430532271717107,
+  "input_blocks.5.0.in_conv": 3.426591846088198,
+  "input_blocks.12.0.out_conv": 3.3997563082444042,
+  "output_blocks.2.0.in_conv": 3.391786134942303,
+  "output_blocks.5.0.in_conv": 3.334116915967556,
+  "output_blocks.2.0.out_conv": 3.285960090233892,
+  "output_blocks.6.0.in_conv": 3.233400791647668,
+  "output_blocks.4.0.in_conv": 3.216195707416941,
+  "output_blocks.2.1.in_conv": 3.2101190864547533,
+  "input_blocks.13.0.in_conv": 3.20073536235843,
+  "output_blocks.1.0.in_conv": 3.1253810110804303,
+  "output_blocks.11.2.in_conv": 3.1018899657591725,
+  "input_blocks.11.0.in_conv": 3.0928742036669665,
+  "output_blocks.3.0.in_conv": 3.02157308361545,
+  "output_blocks.0.0.in_conv": 2.972583531204515,
+  "output_blocks.14.0.out_conv": 2.8899028610801376,
+  "output_blocks.5.2.out_conv": 2.8392017096154682,
+  "input_blocks.9.0.out_conv": 2.7563374899440833,
+  "input_blocks.14.0.in_conv": 2.6967557478467516,
+  "input_blocks.13.0.out_conv": 2.5438364285751702,
+  "output_blocks.1.0.out_conv": 2.4577069086704997,
+  "middle_block.0.in_conv": 2.3155085854983266,
+  "output_blocks.11.2.out_conv": 2.285870311702518,
+  "input_blocks.3.0.out_conv": 2.23330427423577,
+  "output_blocks.0.0.out_conv": 2.0964797534427815,
+  "middle_block.2.in_conv": 1.8110982882851117
+ },
+ "dropped": [
+  {
+   "raw_name": "time_embed.0",
+   "delta": 0.14284081757068634,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "time_embed.2",
+   "delta": 0.23676879703998566,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.0.0",
+   "delta": 0.7024823427200317,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.1.0.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.1.1.qkv",
+   "delta": 0.7624861598014832,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.1.1.proj_out",
+   "delta": 0.6553760170936584,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.2.0.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.2.1.qkv",
+   "delta": 0.8092842102050781,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.2.1.proj_out",
+   "delta": 0.38760802149772644,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.3.0.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.4.0.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.4.0.skip_connection",
+   "delta": 0.4174658954143524,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.4.1.qkv",
+   "delta": 0.6962619423866272,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.4.1.proj_out",
+   "delta": 0.3760968744754791,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.5.0.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.5.1.qkv",
+   "delta": 0.7522386312484741,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.5.1.proj_out",
+   "delta": 0.3198334574699402,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.6.0.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.7.0.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.7.1.qkv",
+   "delta": 0.568161129951477,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.7.1.proj_out",
+   "delta": 0.27538105845451355,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.8.0.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.8.1.qkv",
+   "delta": 0.5655271410942078,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.8.1.proj_out",
+   "delta": 0.25118446350097656,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.9.0.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.10.0.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.10.0.skip_connection",
+   "delta": 0.8559044599533081,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.10.1.qkv",
+   "delta": 0.36729374527931213,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.10.1.proj_out",
+   "delta": 0.18167303502559662,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.11.0.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.11.1.qkv",
+   "delta": 0.43654659390449524,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.11.1.proj_out",
+   "delta": 0.21010486781597137,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.12.0.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.13.0.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "input_blocks.14.0.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "middle_block.0.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "middle_block.1.qkv",
+   "delta": 0.41583552956581116,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "middle_block.1.proj_out",
+   "delta": 0.17257337272167206,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "middle_block.2.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.0.0.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.0.0.skip_connection",
+   "delta": 0.4135972857475281,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.1.0.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.1.0.skip_connection",
+   "delta": 0.40312910079956055,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.2.0.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.2.0.skip_connection",
+   "delta": 0.42414501309394836,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.2.1.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.3.0.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.3.0.skip_connection",
+   "delta": 0.6117038130760193,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.3.1.qkv",
+   "delta": 0.41930684447288513,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.3.1.proj_out",
+   "delta": 0.2558366656303406,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.4.0.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.4.0.skip_connection",
+   "delta": 1.0092979669570923,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.4.1.qkv",
+   "delta": 0.5103036165237427,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.4.1.proj_out",
+   "delta": 0.24957294762134552,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.5.0.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.5.0.skip_connection",
+   "delta": 1.0068038702011108,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.5.1.qkv",
+   "delta": 0.4922519624233246,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.5.1.proj_out",
+   "delta": 0.3754163384437561,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.5.2.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.6.0.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.6.0.skip_connection",
+   "delta": 1.5022588968276978,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.6.1.qkv",
+   "delta": 0.5931423306465149,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.6.1.proj_out",
+   "delta": 0.37772271037101746,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.7.0.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.7.0.skip_connection",
+   "delta": 1.4454076290130615,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.7.1.qkv",
+   "delta": 0.6230999231338501,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.7.1.proj_out",
+   "delta": 0.3329271674156189,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.8.0.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.8.0.skip_connection",
+   "delta": 1.1151074171066284,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.8.1.qkv",
+   "delta": 0.6423384547233582,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.8.1.proj_out",
+   "delta": 0.2905518710613251,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.8.2.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.9.0.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.9.0.skip_connection",
+   "delta": 1.1259009838104248,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.9.1.qkv",
+   "delta": 0.8097928166389465,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.9.1.proj_out",
+   "delta": 0.4871465563774109,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.10.0.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.10.0.skip_connection",
+   "delta": 1.147382140159607,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.10.1.qkv",
+   "delta": 0.8643922805786133,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.10.1.proj_out",
+   "delta": 0.3063557744026184,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.11.0.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.11.0.skip_connection",
+   "delta": 0.9009144902229309,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.11.1.qkv",
+   "delta": 0.8295150399208069,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.11.1.proj_out",
+   "delta": 0.36768007278442383,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.11.2.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.12.0.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.12.0.skip_connection",
+   "delta": 0.9100550413131714,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.12.1.qkv",
+   "delta": 1.017952561378479,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.12.1.proj_out",
+   "delta": 0.3463505208492279,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.13.0.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.13.0.skip_connection",
+   "delta": 0.7237605452537537,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.13.1.qkv",
+   "delta": 1.2639620304107666,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.13.1.proj_out",
+   "delta": 0.5752294659614563,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.14.0.emb_layers.1",
+   "delta": 0.2877698838710785,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.14.0.skip_connection",
+   "delta": 0.9246677160263062,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.14.1.qkv",
+   "delta": 1.1875417232513428,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "output_blocks.14.1.proj_out",
+   "delta": 0.41673892736434937,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  },
+  {
+   "raw_name": "out.2",
+   "delta": 0.8109291195869446,
+   "zero_point": 0.0,
+   "numel": 1,
+   "excluded_because": "not one of integration's 70 quantized convs"
+  }
+ ]
+}
