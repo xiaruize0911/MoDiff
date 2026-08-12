@@ -503,7 +503,27 @@ class OptimizedInt4Conv2d(nn.Module):
     #: A zero point would recover most of this properly rather than by saturation, and is worth a
     #: further 1.23x on top of the best clip -- see the plan's fix #2. This constant is the part that
     #: needs no format or kernel change.
-    ACT_CLIP_RATIO = float(os.environ.get("MODIFF_ACT_CLIP_RATIO", "1.0"))
+    #: Swept on the REAL kernels, both axes, 3 seeds
+    #: (docs/paper_repro_2026-08-12/data/act_clip_sweep_real.json):
+    #:
+    #:     ratio      1      2      3     4.5    6.7     10
+    #:     PTQ     .8647  .5482  .4968  .4692  .5312  .6373     <- clean U, minimum at 4.5
+    #:     MoDiff  .3090  .3176  .3074  .3095  .3121  .3361     <- flat, 1.09x across the sweep
+    #:
+    #: 4.5 is chosen for the PTQ axis and costs the MoDiff axis nothing, because MoDiff reads this
+    #: grid only at t=T and then refines a_hat with 5 warm-up rounds -- the same reason the
+    #: "paper leaves a_T unquantized" hypothesis came out per-seed identical. One constant serves
+    #: both; they do not need separate ratios.
+    #:
+    #: THIS ONLY HELPS HEAVY-TAILED DATA, and post-SiLU activations are heavy-tailed. On GAUSSIAN
+    #: data it is a straight loss, because there is no tail to trade away: test_int4_conv's synthetic
+    #: fixture (randn weights, randn input) goes 0.221 -> 0.340 at ratio 4.5, while the real network's
+    #: PTQ arm goes 0.8647 -> 0.4692. Both are correct. Do not "fix" the constant by reverting it
+    #: because a synthetic conv got worse -- that fixture has an |max|/|min| of 1.26 against the real
+    #: activations' 19.91, which is the whole reason clipping pays on one and not the other.
+    #: golden/int4_conv_res32_3x3.pt was refreshed for this change; MODIFF_ACT_CLIP_RATIO=1.0
+    #: reproduces the previous golden bit-exactly, which is how the attribution was proved.
+    ACT_CLIP_RATIO = float(os.environ.get("MODIFF_ACT_CLIP_RATIO", "4.5"))
 
     def _ensure_delta_dyn_bufs(self, device):
         """Allocate the 4 reduction buffers the dynamic delta scale needs.

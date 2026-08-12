@@ -20,6 +20,21 @@ Refreshed against the shipped MSE rule (md5 `767a197d…` → `aa3d09f4…`); th
 at `docs/static_qdiff_2026-08-12/data/int4_conv_golden_absmax_2026-07-27.pt`. A red gate detects
 nothing, so leaving it red had a real cost: any *new* int4 conv regression in that week was invisible.
 
+## `int4_conv_res32_3x3.pt` — refreshed again 2026-08-12 (ACT_CLIP_RATIO)
+
+`OptimizedInt4Conv2d.ACT_CLIP_RATIO` went 1.0 → 4.5: the int4 activation grid is now deliberately
+under-sized, which is worth 1.84x on the real network's W4A4 PTQ arm (0.8647 → 0.4692) because
+post-SiLU activations are heavy-tailed. This fixture is NOT — randn weights and randn input, with an
+|max|/|min| of 1.26 against the real activations' 19.91 — so it has no tail to trade away and gets
+*worse*, 0.221 → 0.340. Both numbers are correct; they are measuring different distributions.
+
+Attributed the same way as the absmax → MSE refresh below, by reverting through the env var:
+
+    MODIFF_ACT_CLIP_RATIO=1.0 python integration/tests/test_kernel_correctness.py   # golden 0.00e+00
+
+md5 `aa3d09f4…` → `ba258b14…`. The loose `re < 0.40` bound still passes at 0.340, so only the golden
+moved — but do not read that as the ratio being free on Gaussian data. It is not.
+
 ## Note: a missing golden currently passes
 
 `check_golden` creates a golden when the file is absent and returns a non-FAIL string, and these

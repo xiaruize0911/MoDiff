@@ -21,7 +21,7 @@
    "dst": "integration/calibration/int4_calibration_qdiff.pt",
    "kind": "act",
    "layers": 70,
-   "stat": "scale median 1.8572",
+   "stat": "scale median 8.3572",
    "problems": []
   },
   {
