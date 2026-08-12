@@ -1,8 +1,21 @@
 # Current state: what the shipped defaults actually do
 
-A description, not a comparison. Every arm below runs the configuration a user gets from
-`benchmark_ldm.py --mode <X>` with no flags — nothing here passes a calibration path, overrides an
-environment variable, or reports a delta against a previous state.
+Every arm below runs the configuration a user gets from `benchmark_ldm.py --mode <X>` with no flags
+— nothing here passes a calibration path or overrides an environment variable.
+
+> **W4A4 changed substantially on 2026-08-12.** Two calibration constants
+> (`DELTA_CLIP_RATIO = 8`, `ACT_CLIP_RATIO = 4.5`, both in `int4_optimized.py`, both swept, neither
+> needing a kernel change) took W4A4 PTQ from 0.8642 to **0.4695** and W4A4 MoDiff from 0.6122 to
+> **0.3090**. The full account, including the paper reproduction that made it findable and the three
+> plan items that were *deprioritised on evidence*, is
+> [`docs/paper_repro_2026-08-12/FINDINGS.md`](../paper_repro_2026-08-12/FINDINGS.md).
+>
+> **Read the CV column.** One earlier version of §2 was measured while a second CUDA process was
+> profiling, and the CV went from ≤0.23% to 38% — which is how it was caught and discarded. Any
+> latency table here without CVs under ~0.5% is contended and should not be quoted.
+>
+> **Noise floor**: a zero-change repeat moves W8A8 arms by 1.3–5.1% and W4A4 arms by 0.05–0.6%. Do
+> not read a W8A8 difference under ~5% as an effect.
 
 ## 0. The configuration under test
 
@@ -15,6 +28,8 @@ environment variable, or reports a delta against a previous state.
 | SmoothQuant | **off** | Q-Diffusion exports are bare floats, so the fold never happens |
 | int8 weights | per-output-channel absmax | `int8_optimized.py` |
 | int4 weights | per-output-channel MSE clip search | `_int4_weight_scale`, `MODIFF_INT4_WSCALE=mse` |
+| int4 activation grid | **deliberately clipped, ratio 4.5** | `ACT_CLIP_RATIO` |
+| int4 delta grid | **deliberately clipped, ratio 8** | `DELTA_CLIP_RATIO` |
 | attention | quantized, static, flash | `QUANT_ENV` — each harness sets its own copy; `MODIFF_QUANT_ATTN=1`, `MODIFF_QUANT_ATTN_STATIC=1`, `MODIFF_QATTN_FLASH=1` |
 
 This is the paper's `--modulate --quant_mode qdiff --cali_min_max` path (README:96).
@@ -30,10 +45,11 @@ Six samples per mode, DDIM 50 steps, seed 20260805, one column = one noise vecto
 
 * **W8A8 holds.** Both the PTQ and MoDiff rows are the same buildings as fp16, down to the spires
   and the sky. MoDiff's row is the closer of the two.
-* **W4A4 does not, but MoDiff clearly helps there.** The PTQ row is near-uniform pastel fog — the
-  structure is gone, not degraded. The MoDiff row recovers recognisable cathedral facades and
-  spires out of that fog, at roughly two thirds the latent error. It is still not a usable
-  configuration; it is visibly a *model* rather than a wash.
+* **W4A4 now produces buildings.** After the two clip ratios landed, the MoDiff row (relL2 0.3392)
+  has legible cathedrals — spires, facades, the blue tower in column 4, the yellow massing in
+  column 5 — and the PTQ row (0.4680) has structure emerging where it used to be uniform pastel fog.
+  Before: PTQ 0.8571 was a wash and MoDiff 0.5906 was high-frequency scribble. Still short of W8A8,
+  but no longer a different category of output.
 
 ## 2. End-to-end latency
 
@@ -41,25 +57,25 @@ Batch 128, DDIM 200 steps, 2 warm-up runs discarded, median of 3 repeats.
 
 | mode | ms / step | ms / sample | vs fp16 | CV |
 |---|---:|---:|---:|---:|
-| fp16 | 105.59 | 164.98 | 1.000x | 0.17% |
-| W8A8 PTQ | 72.98 | 114.03 | **1.447x** | 0.19% |
-| W8A8 MoDiff | 74.47 | 116.36 | **1.418x** | 0.19% |
-| W4A4 PTQ | 58.80 | 91.87 | **1.796x** | 0.23% |
-| W4A4 MoDiff | 59.98 | 93.72 | **1.760x** | 0.01% |
+| fp16 | 106.22 | 165.97 | 1.000x | 0.20% |
+| W8A8 PTQ | 73.27 | 114.49 | **1.450x** | 0.10% |
+| W8A8 MoDiff | 74.82 | 116.90 | **1.420x** | 0.15% |
+| W4A4 PTQ | 59.16 | 92.44 | **1.795x** | 0.13% |
+| W4A4 MoDiff | 60.51 | 94.54 | **1.756x** | 0.32% |
 
-Every arm has CV ≤ 0.23%, so the ordering is not noise.
+Every arm has CV ≤ 0.32%, so the ordering is not noise.
 
-**These were re-run after the `ba8b8c9` dequant fix and reproduce the pre-fix run to ≤0.41%** on
-every arm, inside twice each arm's CV. That is the expected result — these kernels have no
-data-dependent control flow, so a fix that changes values cannot change scheduling — and re-running
-is what turns "expected" into "checked".
+**Latency did not move with the quality fixes**, and it should not have: `DELTA_CLIP_RATIO` and
+`ACT_CLIP_RATIO` change numbers in a table, not kernel scheduling. Measured across three separate
+clean runs this session the arms reproduce to ≤1.2%. That is what makes the fidelity gains in §3
+free.
 
-**MoDiff is nearly free in time**: 74.47 against its own baseline's 72.98 at 8 bits (+2.0%), 59.98
-against 58.80 at 4 bits (+2.0%). That is a property of the shipped static delta path — the step size
+**MoDiff is nearly free in time**: 74.82 against its own baseline's 73.27 at 8 bits (+2.1%), 60.51
+against 59.16 at 4 bits (+2.3%). That is a property of the shipped static delta path — the step size
 comes from a table, so there is no per-call absmax reduction over the activation to pay for. The
 modulation costs an add and a cache read.
 
-**Four-bit is 1.24x faster than eight-bit** (58.80 against 72.98 on the PTQ arms). Whether that is
+**Four-bit is 1.24x faster than eight-bit** (59.16 against 73.27 on the PTQ arms). Whether that is
 worth having is §3's question, not this one's.
 
 ![e2e](plots/01_e2e_speed.png)
@@ -71,30 +87,28 @@ worth having is §3's question, not this one's.
 Latent relL2 against fp16, 3 seeds {1234, 20260805, 777}, batch 8, DDIM 50 — the protocol every
 A/B in this tree uses, so these are the numbers to quote:
 
-| mode | relL2 vs fp16 | ms/step (batch 128) |
-|---|---:|---:|
-| W8A8 PTQ | 0.1140 | 72.98 |
-| W8A8 MoDiff | **0.0607** | 74.47 |
-| W4A4 PTQ | 0.8642 | 58.80 |
-| W4A4 MoDiff | 0.6122 | 59.98 |
+| mode | relL2 vs fp16 | was, session start | |
+|---|---:|---:|---|
+| W8A8 PTQ | 0.1138 | 0.2564 | 2.25× — Q-Diffusion activation scales |
+| W8A8 MoDiff | **0.0605** | 0.0393 (dynamic) | static now matches dynamic |
+| W4A4 PTQ | **0.4695** | 0.8642 | **1.84× — `ACT_CLIP_RATIO`** |
+| W4A4 MoDiff | **0.3090** | 0.6122 | **1.98× — `DELTA_CLIP_RATIO`** |
 
-The scatter above uses the single-seed values measured alongside the sample grid (0.1630 / 0.0643 /
-0.8571 / 0.5906) so that each point grades the image it sits next to; the seed-to-seed spread is why
-the table and the plot differ in the third decimal.
+The scatter above uses the single-seed values measured alongside the sample grid (0.1634 / 0.0650 /
+0.4680 / 0.3392); the seed-to-seed spread is why they differ from the 3-seed table.
 
-Read together with §2 there are two usable operating points and one that is not:
+Read together with §2:
 
-* **W8A8 MoDiff — 0.0607 at 1.418x.** The best fidelity of any quantized arm, for 2.3% more time
-  than its own baseline.
-* **W8A8 PTQ — 0.1140 at 1.447x.** Nearly twice the error of the MoDiff arm, at essentially the
-  same speed.
-* **W4A4 — 1.80x, and neither arm is usable.** The PTQ arm is fog at 0.8642. MoDiff cuts that to
-  0.6122 and the samples show why — structure comes back — but 0.61 is not a shippable fidelity.
-  The speed is real and the output is not.
+* **W8A8 MoDiff — 0.0605.** Still the best fidelity of any quantized arm.
+* **W8A8 PTQ — 0.1138.** Nearly twice the error, at essentially the same speed.
+* **W4A4 MoDiff — 0.3090, and it now beats its own dynamic arm** (0.4327), which is the reversal
+  worth noting: at session start static cost 1.71× against dynamic at this bit width, and it now
+  wins by 0.71×. "Static Q-Diffusion is a fidelity sacrifice at W4A4" is **retracted**.
+* **W4A4 PTQ — 0.4695.** Structure rather than fog, still well short of W8A8.
 
-These W4A4 numbers postdate a quantize/dequantize fix in the int4 fused MoDiff path (`ba8b8c9`);
-anything measured before it read 1.0469 for the MoDiff arm. See
-[`static_qdiff_2026-08-12` §4a](../static_qdiff_2026-08-12/FINDINGS.md).
+**One cost of `ACT_CLIP_RATIO`, stated rather than buried**: the W4A4 *dynamic* arm regressed
+0.3577 → 0.4327. It reads the static activation grid at t=T too and gains nothing from clipping it.
+The shipped default is static, so the trade is right — it is not free for every configuration.
 
 ## 3a. Where W4A4's damage actually comes from
 
@@ -227,17 +241,17 @@ Same batch and step count as §2, per-layer CUDA-event timing summed by kind.
 
 | config | wall ms/step | attributed | conv | updown | attn (score) | proj (42 linears) |
 |---|---:|---:|---:|---:|---:|---:|
-| fp16 | 105.6 | — | — | — | — | — |
-| **W8A8 PTQ** *(shipped)* | 72.7 | 46.6 | 22.7 | 3.9 | 20.0 | — |
-| **W8A8 conv-only** *(shipped MoDiff)* | 80.1 | 67.9 | 41.0 | 6.8 | 20.1 | — |
-| W8A8 conv+proj | 102.5 | 90.3 | 40.4 | 6.7 | 34.4 | 8.8 |
-| W8A8 conv+proj +projK4 | 99.8 | 87.7 | 40.5 | 6.8 | 32.9 | 7.5 |
-| W8A8 conv+proj +projK4 +routeB | 99.3 | 87.8 | 40.5 | 6.8 | 32.3 | 8.2 |
-| W8A4 conv+proj | 102.1 | 89.9 | 40.1 | 6.7 | 34.3 | 8.8 |
-| W4A4 conv+proj | 95.5 | 84.3 | 28.7 | 5.8 | 22.7 | 27.1 |
+| fp16 | 105.8 | — | — | — | — | — |
+| **W8A8 PTQ** *(shipped)* | 73.2 | 46.6 | 22.7 | 3.9 | 20.0 | — |
+| **W8A8 conv-only** *(shipped MoDiff)* | 80.5 | 67.8 | 40.9 | 6.8 | 20.1 | — |
+| W8A8 conv+proj | 103.1 | 90.3 | 40.4 | 6.7 | 34.4 | 8.8 |
+| W8A8 conv+proj +projK4 | 100.5 | 87.7 | 40.5 | 6.8 | 32.9 | 7.5 |
+| W8A8 conv+proj +projK4 +routeB | 99.6 | 87.9 | 40.5 | 6.8 | 32.3 | 8.3 |
+| W8A4 conv+proj | 102.3 | 90.0 | 40.1 | 6.7 | 34.4 | 8.8 |
+| W4A4 conv+proj | 95.8 | 84.9 | 28.7 | 6.3 | 22.8 | 27.1 |
 
-**Cross-check.** This harness and §2's are independent, and they agree: fp16 105.6 against 105.59,
-W8A8 PTQ 72.7 against 72.98. Re-run after `ba8b8c9`, these reproduce the pre-fix profile to ≤0.57%.
+**Cross-check.** This harness and §2's are independent, and they agree: fp16 105.8 against 106.22,
+W8A8 PTQ 73.2 against 73.27.
 
 **Only the first three rows are shipped configurations.** The `conv+proj` rows have
 `MODIFF_LINEAR=1`, which the tree defaults to `0`. They are here because the block profiler's grid
@@ -272,11 +286,11 @@ Share of profiled GPU kernel time:
 
 | mode | GEMM / conv | GroupNorm+SiLU family | attention | elementwise / copy | other |
 |---|---:|---:|---:|---:|---:|
-| fp16 | 46.5% | 20.2% | 11.0% | 18.7% | 3.6% |
-| W8A8 PTQ | 51.2% | 25.6% | 12.5% | 7.9% | 2.8% |
-| W8A8 MoDiff | 51.5% | 25.2% | 12.3% | 8.3% | 2.7% |
+| fp16 | 46.6% | 20.2% | 11.0% | 18.6% | 3.6% |
+| W8A8 PTQ | 51.2% | 25.6% | 12.6% | 7.9% | 2.8% |
+| W8A8 MoDiff | 51.4% | 25.2% | 12.4% | 8.3% | 2.7% |
 | W4A4 PTQ | 39.8% | 32.3% | 14.7% | 9.8% | 3.4% |
-| W4A4 MoDiff | 42.0% | 29.9% | 14.5% | 10.2% | 3.3% |
+| W4A4 MoDiff | 42.1% | 29.8% | 14.5% | 10.2% | 3.3% |
 
 Two things about how these buckets are built, because both were wrong in a first pass:
 
@@ -303,11 +317,11 @@ captured steps (ms per denoising step):
 
 | mode | conv | attention | linear | norm / quantize | other | signatures |
 |---|---:|---:|---:|---:|---:|---:|
-| fp16 | 54.65 | 12.99 | 5.80 | 18.55 | 7.66 | 84 |
-| W8A8 PTQ | 30.52 | 10.43 | 9.37 | 28.90 | 2.02 | 126 |
-| W8A8 MoDiff | 54.69 | 10.51 | 9.73 | 37.05 | 1.88 | 190 |
-| W4A4 PTQ | 17.08 | 10.18 | 8.52 | 29.24 | 2.01 | 126 |
-| W4A4 MoDiff | 30.83 | 10.25 | 8.70 | 35.18 | 1.86 | 190 |
+| fp16 | 54.78 | 12.99 | 5.81 | 18.59 | 7.66 | 84 |
+| W8A8 PTQ | 30.73 | 10.52 | 9.60 | 29.06 | 2.05 | 126 |
+| W8A8 MoDiff | 54.78 | 10.52 | 9.39 | 36.98 | 1.85 | 190 |
+| W4A4 PTQ | 17.15 | 10.26 | 8.73 | 29.26 | 2.01 | 126 |
+| W4A4 MoDiff | 30.89 | 10.27 | 8.59 | 35.25 | 1.86 | 190 |
 
 **Do not read the MoDiff rows as per-step totals.** They carry 190 signatures against the baselines'
 126 — roughly one extra per conv — because a MoDiff layer registers *both* a first-step entry and a
@@ -315,11 +329,41 @@ modulated-step entry, and those never both run on the same step. Summing them do
 is why conv appears to double while §2 measures MoDiff at +2%. The rows are comparable *within* a
 column, not as totals.
 
-Read that way: **the conv GEMM itself is where the bit width pays.** 30.52 → 17.08 ms going W8A8 →
+Read that way: **the conv GEMM itself is where the bit width pays.** 30.73 → 17.15 ms going W8A8 →
 W4A4 on the PTQ arms, a 1.79x on the conv suite alone, which is the whole of the 1.80x e2e speedup.
 Attention is flat at ~10.2–10.5 ms across every quantized arm — it is already int8-flash in all of
 them, so 4-bit buys nothing there — and `norm / quantize` is essentially flat too. Everything the
 4-bit path gains, it gains in the GEMM.
+
+## 5a. Against the paper's own W4A4
+
+The README's `--modulate --quant_mode qdiff --cali_min_max` command was run verbatim (only `-n` and
+`-l` changed) with the two inputs this tree had been missing — `cali_data/church.pt` from the paper's
+HF dataset and `church_w4a8_ckpt.pth` from Q-Diffusion's Drive folder.
+
+![paper](../paper_repro_2026-08-12/paper_w4a4_samples.png)
+
+It produces clean churches. So the method was never in question, and the gap was entirely ours.
+[`docs/paper_repro_2026-08-12/FINDINGS.md`](../paper_repro_2026-08-12/FINDINGS.md) has the full
+account; the parts that matter for reading this report:
+
+* **Four configuration deviations**, two of them self-inflicted. The one worth internalising: the
+  `.pt` format has no slot for a zero point, so `--a_sym` was passed to the *calibration command* —
+  a limitation in the innermost layer propagated all the way out to the reference invocation, and
+  then the constrained thing was measured and called "the paper's method".
+* **Importing the paper's per-layer delta values is worse than sweeping our own constant** — 0.2452
+  against the 0.3090 the swept constant reaches. The optimum follows the trajectory, and ours is not
+  theirs (different weights, EMA, calibration set, step count).
+* **Three plan items were deprioritised on evidence rather than effort**: AdaRound weight import
+  (our RTN+MSE already beats AdaRound at 0.1296 vs 0.1506 on weight reconstruction), the activation
+  zero point (scoped to 6 CUDA kernels, but the only instrument able to price it failed its own
+  self-check twice), and the coverage alignment (the claim that 35 emb linears were unquantized was
+  inferred, not measured, and is withdrawn).
+* **Still not aligned**: this report's W4A4 is 0.3090 relL2 with visible structure; the paper's is
+  visually indistinguishable from fp16. The remaining gap is the activation zero point, AdaRound
+  weights, EMA, and the paper's calibration set — the last two available behind
+  `MODIFF_USE_EMA=1` / `CALI_PAPER=1`, both defaulted off because each moves every mode at once and
+  W8A8's noise floor is 5.1%.
 
 ## 6. Reproducing
 
