@@ -359,11 +359,13 @@ account; the parts that matter for reading this report:
   zero point (scoped to 6 CUDA kernels, but the only instrument able to price it failed its own
   self-check twice), and the coverage alignment (the claim that 35 emb linears were unquantized was
   inferred, not measured, and is withdrawn).
+* **EMA and the paper's calibration set were measured and do not help** — W4A4 PTQ +2.0%, MoDiff
+  **+72.1%** — so both flags stay opt-in. The bound on that: the aligned arm kept a clip ratio swept
+  on the old trajectory, and the optimum follows the trajectory, so this rules out flipping the flags
+  as a free win rather than ruling out EMA itself.
 * **Still not aligned**: this report's W4A4 is 0.3090 relL2 with visible structure; the paper's is
-  visually indistinguishable from fp16. The remaining gap is the activation zero point, AdaRound
-  weights, EMA, and the paper's calibration set — the last two available behind
-  `MODIFF_USE_EMA=1` / `CALI_PAPER=1`, both defaulted off because each moves every mode at once and
-  W8A8's noise floor is 5.1%.
+  visually indistinguishable from fp16. With EMA and the calibration set eliminated, the remaining
+  gap is the **activation zero point** and the **AdaRound weights**.
 
 ## 6. Reproducing
 

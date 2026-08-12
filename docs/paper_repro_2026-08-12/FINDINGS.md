@@ -155,6 +155,48 @@ relocation. That was reasoning by elimination, not measurement, and it sits insi
 numbers at once, including W8A8 whose noise floor is 5.1%, so enabling them by default would be hard
 to attribute and would invalidate every committed number in one step.
 
+## 9. EMA and the paper's calibration set: measured, and they do not help
+
+Both flags from §8 were calibrated and measured rather than left as untested switches. The aligned
+arm uses the EMA network (no `--no_ema`) *and* the paper's `cali_data/church.pt`, for both the
+activation and the delta export, with the same clip ratios as shipped.
+
+**Each arm is graded against a fp16 reference computed on its own network.** Scoring an EMA-deployed
+model against a non-EMA reference folds the 13.8% weight difference into relL2 and reports it as
+quantization error, which would make EMA look bad for a reason unrelated to quantization.
+
+| axis | shipped | EMA + paper cali | change |
+|---|---:|---:|---:|
+| W4A4 PTQ | 0.4692 | 0.4784 | +2.0% |
+| W4A4 MoDiff | 0.3094 | **0.5325** | **+72.1%** |
+
+**Aligning these two makes it worse**, far outside the 0.6% W4A4 noise floor on the MoDiff axis. Both
+flags stay opt-in.
+
+**The bound on that conclusion.** This arm changed two things — the network and the calibration set —
+while keeping `DELTA_CLIP_RATIO = 8`, which was swept on the *old* trajectory. §2 and §3 both showed
+the optimum follows the trajectory, so the +72% is plausibly the ratio being mis-sized for the new
+one rather than EMA being harmful in itself. What this rules out is *flipping the flags* as a free
+win; it does not cleanly rule out EMA. Deciding that needs the ratio re-swept on the aligned
+configuration.
+
+Either way it locates the remaining gap: **not** EMA, **not** the calibration set. What is left is the
+activation zero point (§6) and the AdaRound weights (§5).
+
+## 10. Where this landed
+
+| plan item | disposition | evidence |
+|---|---|---|
+| #1 delta clip search | **landed** | 0.6122 → 0.3090, real kernels |
+| #3 activation clip search | **landed** | 0.8642 → 0.4695, real kernels |
+| #6 EMA + paper cali set | landed as opt-in, **measured, does not help** | §9 |
+| #2 activation zero point | scoped (6 kernels, not 15), **not built** | the only instrument able to price it fails its own self-check |
+| #4 AdaRound weights | **deprioritised** | ours 0.1296 beats AdaRound 0.1506 on weight reconstruction |
+| #5 coverage | **claim withdrawn** | all 37 emb linears are shape-eligible and `emb_layers` is a child module |
+
+Not aligned, stated plainly: the paper's samples are visually indistinguishable from fp16 and ours are
+not. W4A4 MoDiff is 0.3090 with legible cathedrals, against a wash at session start.
+
 ## Reproducing
 
 ```bash
