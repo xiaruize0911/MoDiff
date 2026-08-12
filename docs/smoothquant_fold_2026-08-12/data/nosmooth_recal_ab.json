@@ -1,0 +1,92 @@
+{
+ "seeds": [
+  1234,
+  20260805,
+  777
+ ],
+ "steps": 50,
+ "batch": 8,
+ "arms": {
+  "shipped": "integration/calibration/int4_calibration_realckpt.pt",
+  "nosmooth": "integration/calibration/int4_calibration_nosmooth.pt",
+  "recal": "docs/smoothquant_fold_2026-08-12/data/int4_nosmooth_recal.pt"
+ },
+ "prior": {
+  "int4_baseline/shipped": 0.7121,
+  "int4_baseline/nosmooth": 0.4823,
+  "int4/shipped": 0.422,
+  "int4/nosmooth": 0.354
+ },
+ "results": {
+  "int4_baseline/shipped": {
+   "path": "integration/calibration/int4_calibration_realckpt.pt",
+   "relL2": [
+    0.7650149464607239,
+    0.6642568707466125,
+    0.7068077325820923
+   ],
+   "mean": 0.7120265165964762
+  },
+  "int4_baseline/nosmooth": {
+   "path": "integration/calibration/int4_calibration_nosmooth.pt",
+   "relL2": [
+    0.49391961097717285,
+    0.46346142888069153,
+    0.5087628364562988
+   ],
+   "mean": 0.4887146254380544
+  },
+  "int4_baseline/recal": {
+   "path": "docs/smoothquant_fold_2026-08-12/data/int4_nosmooth_recal.pt",
+   "relL2": [
+    0.8743720054626465,
+    0.8165259957313538,
+    0.8955768942832947
+   ],
+   "mean": 0.8621582984924316
+  },
+  "int4/shipped": {
+   "path": "integration/calibration/int4_calibration_realckpt.pt",
+   "relL2": [
+    0.458041250705719,
+    0.3970956802368164,
+    0.39772599935531616
+   ],
+   "mean": 0.4176209767659505
+  },
+  "int4/nosmooth": {
+   "path": "integration/calibration/int4_calibration_nosmooth.pt",
+   "relL2": [
+    0.4300510585308075,
+    0.37950220704078674,
+    0.38278019428253174
+   ],
+   "mean": 0.397444486618042
+  },
+  "int4/recal": {
+   "path": "docs/smoothquant_fold_2026-08-12/data/int4_nosmooth_recal.pt",
+   "relL2": [
+    0.41888800263404846,
+    0.38390663266181946,
+    0.3863039016723633
+   ],
+   "mean": 0.3963661789894104
+  }
+ },
+ "verdict": {
+  "int4_baseline": {
+   "shipped": 0.7120265165964762,
+   "nosmooth": 0.4887146254380544,
+   "recal": 0.8621582984924316,
+   "best": "nosmooth",
+   "recal_over_nosmooth": 1.7641344326858335
+  },
+  "int4": {
+   "shipped": 0.4176209767659505,
+   "nosmooth": 0.397444486618042,
+   "recal": 0.3963661789894104,
+   "best": "recal",
+   "recal_over_nosmooth": 0.9972868975040837
+  }
+ }
+}

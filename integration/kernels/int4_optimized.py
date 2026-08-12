@@ -1483,17 +1483,24 @@ class OptimizedInt4Conv2d(nn.Module):
         take this path on purpose — see benchmark_ldm.py:CALIBRATION_PREFERENCE. The two
         measurements are of different things (one layer's first step against the whole
         trajectory) and both stand; the trajectory is what production runs, so it decides.
-        A candidate mechanism — folding s (2.96-5.39 across input channels) widens each
-        output channel's weight range, and at 15 weight levels that costs more than the
-        extra activation clipping it prevents — is NOT instrumented, so it stays a
-        candidate.
+
+        WHY, now instrumented — and NOT for the reason first guessed. This docstring used to
+        offer a candidate: folding s widens each output channel's weight range, costing more
+        than the clipping it prevents. Folding does cost 1.215x weight error on 65/70 real
+        convs, but that is not the reason, because at matched scaling folding is 17% BETTER
+        (PTQ 0.7120 folded against 0.8622 unfolded, both without clipping). The float path
+        wins on CLIPPING: the smoothed-range scale is a median 5.13x too large for unsmoothed
+        input, which clips the peak of 43% of input channels and happens to land near 4-bit
+        clip-optimal. Size the scale correctly and PTQ regresses 0.4887 -> 0.8622.
+
+        And the two do not compose — fold + deliberate clipping loses to clipping alone at
+        every over-scale tested — because SmoothQuant EQUALISES the per-channel maxima, which
+        is exactly what makes clipping expensive: at the same over-scale it clips 90.5% of
+        channels against 51.9% unfolded. See docs/smoothquant_fold_2026-08-12/FINDINGS.md.
 
         This method itself is unchanged: a dict entry still restores smoothing. The default
-        moved, not the semantics. One caveat on the gate that would normally back that up:
-        test_int4_export_apply asserts the restored path beats the float path by >0.05 and
-        is currently FAILING on its own terms — apply 0.069 against legacy 0.067, on one
-        random 256-channel conv. Pre-existing (reproduced unchanged at 21f33ff), and it
-        points the same way the trajectory measurement does, not at anything landed here."""
+        moved, not the semantics — and test_int4_export_apply now gates that on bit-exact
+        state restoration rather than on an accuracy margin its fixture cannot produce."""
         can_refold = (smooth_scale is not None and self._orig_weight is not None
                       and self.in_channels % 2 == 0)
         if can_refold:

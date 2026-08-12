@@ -226,18 +226,21 @@ different questions; `--calibration` still pins one file when the comparison is 
 "degrades it ~2×" and called the float path "strictly worse". That number is real, but it is *one
 layer's MoDiff first step* (d77c516), and it does not survive generalisation to the trajectory: over
 50 steps the float path wins on both axes. The docstring now carries both measurements and says which
-one decides the default. Why they disagree is not instrumented — the candidate is that folding s
-(2.96–5.39 across input channels) widens each output channel's weight range, and at 15 weight levels
-that costs more than the activation clipping it prevents — so it is labelled a candidate, not an
-explanation.
+one decides the default.
 
-The repo's own gate for that belief is **already failing, and was before this change**.
-`test_int4_export_apply` requires the smoothing-restored path to beat the float path by >0.05 and
-reads `apply=0.069, legacy=0.067` — inverted, on one random 256-channel conv. `test_int8_export_apply`
-reads 0.004 against 0.004. Both were re-run against a stashed tree at 21f33ff and print byte-identical
-output, so they are inherited, not caused. They are left failing rather than retuned: the threshold
-encodes a claim that three independent measurements now disagree with, and picking a new number for it
-without instrumenting the mechanism would just re-assert the same belief more quietly. §9.6.
+> **Superseded.** This section originally offered a candidate for *why* — that folding s widens each
+> output channel's weight range past what 15 levels can carry. That candidate was subsequently
+> instrumented and **refuted**: folding does cost 1.215× weight error, but at matched scaling it is
+> 17% *better*, and the nosmooth win is a clipping effect the smoothed-range scale produces by
+> accident. [`docs/smoothquant_fold_2026-08-12/FINDINGS.md`](../smoothquant_fold_2026-08-12/FINDINGS.md)
+> has the decomposition, and it also corrects §5c's reading of the qdiff range.
+
+The repo's own gate for that belief was **failing before this change and is now fixed**.
+`test_int4_export_apply` required the smoothing-restored path to beat the float path by >0.05 and read
+`apply=0.069, legacy=0.067` — inverted, on one random 256-channel conv. Re-run against a stashed tree
+at 21f33ff it printed byte-identical output, so it was inherited, not caused. It was not retuned: the
+fixture turns out to be inert (its per-channel activation spread is 1.26 against the real network's
+4.83), so the clause was replaced with bit-exact state restoration. §9.6.
 
 ## 6. What changed in the tree
 
@@ -351,11 +354,15 @@ in a second and would have caught it the moment it happened; nothing else in thi
 5. **The remaining ~2.4 ms in the projections is a fusion problem** (Stage B): the int8 GEMM is
    1.24× but a standalone `quantize_act_int8` pass makes the path a 0.86× net loss. The conv path and
    the landed int8-qkv fusion already solve this elsewhere.
-6. **Three inherited test failures in `test_kernel_correctness.py`**, all reproduced unchanged against
-   a stashed tree at 21f33ff: `int4_conv` (golden rel 8.97e-02, i.e. a stale or drifted golden) and
-   both `*_export_apply` gates (§5e). The export/apply pair is not a nuisance failure — its threshold
-   asserts the *opposite* of what §5a/§5e measured, so it should be settled by instrumenting the
-   mechanism, not by moving the number. Nothing in this session touched the kernels.
+6. ~~**Three inherited test failures in `test_kernel_correctness.py`**~~ — **resolved**, see
+   [`docs/smoothquant_fold_2026-08-12/FINDINGS.md`](../smoothquant_fold_2026-08-12/FINDINGS.md).
+   `int4_conv` was a stale golden, attributable to `82af5bc`'s deliberate absmax → MSE weight-scale
+   change and proved by the `MODIFF_INT4_WSCALE=absmax` revert matching bit-exactly; refreshed. Both
+   `*_export_apply` gates asserted a 0.05 accuracy separation on a fixture that can only produce
+   ~0.002 of it, in the other direction — replaced with bit-exact state restoration plus an explicit
+   discriminator check. **That report also refutes §5e's candidate mechanism** and corrects §5c: the
+   true observed activation range, recovered independently from the shipped calibration, is 3.937,
+   so qdiff's 3.769 was not an under-estimate.
 
 ## Reproducing
 

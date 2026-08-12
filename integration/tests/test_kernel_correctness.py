@@ -490,13 +490,16 @@ class _OneConv(nn.Module):
 
 
 def _export_apply_check(kind):
-    """Round-trip export→apply of a static calibration onto a FRESH converted model and
-    compare the MoDiff first-step accuracy against live calibration. Guards that the
-    SmoothQuant state (smooth_scale + smoothed weights) survives the checkpoint: before
-    the fix, export saved only the per-tensor scale, so applying a SmoothQuant-derived
-    scale onto unsmoothed weights degraded int4 ~2x (rel ~0.40 vs ~0.20); int8 masked it.
-    Also asserts the legacy float-only path still loads (backward compat) and reproduces
-    the old degradation, so the gate provably bites."""
+    """Round-trip export→apply of a static calibration onto a FRESH converted model, gating that
+    the SmoothQuant state (smooth_scale + repacked weights + per-tensor scale) survives the
+    checkpoint bit-for-bit and that the MoDiff first-step accuracy tracks live calibration.
+    Before d77c516, export saved only the per-tensor scale, so applying a SmoothQuant-derived
+    scale onto unsmoothed weights left the two desynced.
+
+    The gate bites on STATE EQUALITY, not on an accuracy margin. The original version asserted
+    `apply_acc < legacy_acc - 0.05` to prove it could fail; that clause was removed on 2026-08-12
+    because this fixture cannot produce such a gap and the real network moves the other way. See
+    the comment at the assertion, and docs/smoothquant_fold_2026-08-12/FINDINGS.md."""
     if kind == "int4":
         from integration.kernels.int4_optimized import (
             convert_model_to_optimized_int4 as convert, set_calibrating_int4 as set_calib,
@@ -536,15 +539,52 @@ def _export_apply_check(kind):
     apply_acc = rel_err(applied(x), ref)
 
     legacy = {k: (v["static_scale"] if isinstance(v, dict) else v) for k, v in scales.items()}
-    old = fresh(); apply(old, legacy); enable(old, True)
+    old = fresh(); n_legacy = apply(old, legacy); enable(old, True)
     legacy_acc = rel_err(old(x), ref)
 
-    # apply must match live (SmoothQuant restored) and clearly beat the legacy path.
-    ok = (n == 1 and has_smooth and apply_acc <= live_acc + 0.02
-          and apply_acc < 0.40 and apply_acc < legacy_acc - 0.05)
+    # What the round trip must reproduce is STATE, not an accuracy margin. Comparing the restored
+    # smooth_scale and repacked weights against live's bit-for-bit bites harder than any tolerance:
+    # a regression to the scale-only path cannot leave these equal, whatever the fixture's numerics
+    # happen to do. It also does not depend on the fixture producing a gap -- see below, this one
+    # cannot.
+    lm, am = live.c, applied.c
+    smooth_restored = torch.equal(lm.smooth_scale, am.smooth_scale)
+    weights_restored = torch.equal(lm.weight_packed, am.weight_packed) if hasattr(lm, "weight_packed") \
+        else torch.equal(lm.weight_int8, am.weight_int8)
+    scale_restored = abs(float(lm.static_input_scale.item()) - float(am.static_input_scale.item())) < 1e-6
+
+    # THE OLD CLAUSE WAS `apply_acc < legacy_acc - 0.05`, and it is deliberately gone.
+    # It asserted that restoring SmoothQuant beats not restoring it. Two measurements say it cannot
+    # be asserted here:
+    #   1. This fixture is inert. SmoothQuant migrates PER-INPUT-CHANNEL activation outliers, and a
+    #      Gaussian input has none: measured max/median of the per-channel activation absmax is 1.26
+    #      here against 4.83 on the real checkpoint, giving s a spread of 1.12 against 2.30. A near
+    #      uniform s cancels against the scale (see _apply_smoothquant), so folding it changes the
+    #      4-bit weight error by 1.02x here against 1.22x on the real convs. The gap the clause
+    #      demanded is 0.05; the fixture can produce ~0.002, in the other direction.
+    #   2. End to end it points the other way. Over 50 DDIM steps on the real checkpoint, 3 seeds,
+    #      NOT folding is better -- W4A4 PTQ 0.7121 -> 0.4823, MoDiff 0.4220 -> 0.3540 -- which is
+    #      why integration/'s int4 defaults now ship bare floats.
+    # docs/smoothquant_fold_2026-08-12/FINDINGS.md has both, with the mechanism decomposed.
+    # The legacy path is still exercised for backward compatibility: it must LOAD and stay finite,
+    # which is the part of the original intent that survives.
+    legacy_ok = n_legacy == 1 and legacy_acc == legacy_acc and legacy_acc < float("inf")
+
+    # AND THE GATE MUST PROVABLY BITE. A state comparison that passes for every input proves
+    # nothing, so assert the discriminator directly: the legacy float-only load must NOT reproduce
+    # live's state. This is the same role the old accuracy clause played, moved onto a quantity the
+    # fixture can actually express -- the legacy path skips _fold_weights_with_smooth, so its
+    # smooth_scale stays identity no matter how inert the data is.
+    om = old.c
+    legacy_bites = not torch.equal(lm.smooth_scale, om.smooth_scale)
+
+    ok = (n == 1 and has_smooth and apply_acc <= live_acc + 0.02 and apply_acc < 0.40
+          and smooth_restored and weights_restored and scale_restored and legacy_ok and legacy_bites)
     return f"{kind}_export_apply", ok, (
         f"live={live_acc:.3f} apply={apply_acc:.3f} legacy(float-only)={legacy_acc:.3f} "
-        f"smooth_serialized={has_smooth}")
+        f"smooth_serialized={has_smooth} restored(smooth/weights/scale)="
+        f"{int(smooth_restored)}{int(weights_restored)}{int(scale_restored)} "
+        f"discriminates={int(legacy_bites)}")
 
 
 def test_int4_export_apply():
