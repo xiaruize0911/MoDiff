@@ -164,7 +164,41 @@ def load_model(config_path: str, ckpt_path: str, verbose: bool = False):
         print("Missing keys:", m)
     if verbose and u:
         print("Unexpected keys:", u)
-    
+
+    # EMA WEIGHTS, off by default -- and the default is the divergence, not the flag.
+    #
+    # scripts/sample_diffusion_ldm.py:527 swaps in the EMA weights unless --no_ema, so the reference
+    # implementation calibrates AND samples on the EMA network; the paper's own W4A4 run logs
+    # "Switched to EMA weights". This loader never did, which is why every calibration run in
+    # docs/qdiff_bridge_2026-08-12 had to pass --no_ema to match it. The two networks are genuinely
+    # different: assert_same_network.py measures 0/70 conv weights matching with EMA on, worst 13.8%
+    # relative L2.
+    #
+    # Left OFF by default on purpose. Turning it on moves every mode's numbers at once, including
+    # W8A8, whose run-to-run noise floor is 1.3-5.1% (docs/paper_repro_2026-08-12/data/
+    # ab_fix1_run{1,2}.json) -- so the change would be hard to attribute and would invalidate every
+    # committed number in one step. MODIFF_USE_EMA=1 selects the reference-aligned network, and any
+    # calibration file used with it must have been produced WITHOUT --no_ema.
+    if os.environ.get("MODIFF_USE_EMA", "0") == "1":
+        n = 0
+        try:
+            ema = {k[len("model_ema."):].replace(".", "", 0): v for k, v in sd.items()
+                   if k.startswith("model_ema.")}
+            if not ema:
+                print("  MODIFF_USE_EMA=1 but the checkpoint has no model_ema.* keys; ignoring")
+            else:
+                # model_ema keys drop the dots from the parameter path (LitEma's m_name2s_name)
+                flat = {k.replace(".", ""): k for k, _ in model.model.diffusion_model.named_parameters()}
+                tgt = dict(model.model.diffusion_model.named_parameters())
+                for ek, ev in ema.items():
+                    orig = flat.get(ek)
+                    if orig is not None and tgt[orig].data.shape == ev.shape:
+                        tgt[orig].data.copy_(ev)
+                        n += 1
+                print(f"  MODIFF_USE_EMA=1: swapped {n} EMA parameters into the UNet")
+        except Exception as e:
+            print(f"  MODIFF_USE_EMA=1 failed ({type(e).__name__}: {e}); running non-EMA")
+
     return model.cuda().eval(), conf
 
 
