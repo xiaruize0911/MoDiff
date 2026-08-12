@@ -1,0 +1,40 @@
+{
+ "seeds": [
+  1234,
+  20260805,
+  777
+ ],
+ "ptq_reference": 0.8642,
+ "results": {
+  "qdiff_constant": {
+   "mean": 1.050158143043518,
+   "relL2": [
+    1.0429357290267944,
+    1.0339829921722412,
+    1.0735557079315186
+   ],
+   "delta_mode": "static",
+   "table": "integration/calibration/int4_delta_qdiff.pt"
+  },
+  "perstep": {
+   "mean": 18.715206782023113,
+   "relL2": [
+    18.876314163208008,
+    18.196304321289062,
+    19.073001861572266
+   ],
+   "delta_mode": "static",
+   "table": "docs/state_report_2026-08-12/data/int4_delta_perstep_qdiffcfg.pt"
+  },
+  "dynamic": {
+   "mean": 0.35329283277193707,
+   "relL2": [
+    0.37893277406692505,
+    0.3456883430480957,
+    0.3352573812007904
+   ],
+   "delta_mode": "dynamic",
+   "table": null
+  }
+ }
+}

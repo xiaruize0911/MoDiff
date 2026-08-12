@@ -15,66 +15,66 @@
  "results": {
   "int8_baseline/-": {
    "label": "W8A8 PTQ",
-   "mean": 0.1138225868344307,
+   "mean": 0.11398420731226604,
    "relL2": [
-    0.09798769652843475,
-    0.15380872786045074,
-    0.08967133611440659
+    0.09845651686191559,
+    0.15359458327293396,
+    0.08990152180194855
    ],
    "calibration": "integration/calibration/int8_calibration_qdiff.pt",
    "delta_mode": "static"
   },
   "int8/static": {
    "label": "W8A8 MoDiff static",
-   "mean": 0.05202387024958929,
+   "mean": 0.06069569041331609,
    "relL2": [
-    0.04452246427536011,
-    0.06549873948097229,
-    0.046050406992435455
+    0.04281719774007797,
+    0.09209775924682617,
+    0.04717211425304413
    ],
    "calibration": "integration/calibration/int8_calibration_qdiff.pt",
    "delta_mode": "static"
   },
   "int8/dynamic": {
    "label": "W8A8 MoDiff dynamic",
-   "mean": 0.06109000121553739,
+   "mean": 0.06117290258407593,
    "relL2": [
-    0.036294128745794296,
-    0.09681753069162369,
-    0.05015834420919418
+    0.03670857474207878,
+    0.09621648490428925,
+    0.050593648105859756
    ],
    "calibration": "integration/calibration/int8_calibration_qdiff.pt",
    "delta_mode": "dynamic"
   },
   "int4_baseline/-": {
    "label": "W4A4 PTQ",
-   "mean": 0.8641931811968485,
+   "mean": 0.8642260034879049,
    "relL2": [
-    0.8893131017684937,
-    0.821601390838623,
-    0.881665050983429
+    0.8893463611602783,
+    0.8216444253921509,
+    0.8816872239112854
    ],
    "calibration": "integration/calibration/int4_calibration_qdiff.pt",
    "delta_mode": "static"
   },
   "int4/static": {
    "label": "W4A4 MoDiff static",
-   "mean": 1.0469401677449544,
+   "mean": 0.6122225324312845,
    "relL2": [
-    1.0403772592544556,
-    1.0296756029129028,
-    1.0707676410675049
+    0.6447259783744812,
+    0.5861526727676392,
+    0.6057889461517334
    ],
    "calibration": "integration/calibration/int4_calibration_qdiff.pt",
    "delta_mode": "static"
   },
   "int4/dynamic": {
    "label": "W4A4 MoDiff dynamic",
-   "mean": 0.3576972981293996,
+   "mean": 0.3576664626598358,
    "relL2": [
-    0.3827235698699951,
-    0.34741225838661194,
-    0.3429560661315918
+    0.3827245235443115,
+    0.34726253151893616,
+    0.34301233291625977
    ],
    "calibration": "integration/calibration/int4_calibration_qdiff.pt",
    "delta_mode": "dynamic"
@@ -82,14 +82,14 @@
  },
  "verdict": {
   "int8": {
-   "static": 0.05202387024958929,
-   "dynamic": 0.06109000121553739,
-   "ratio": 0.8515938650261107
+   "static": 0.06069569041331609,
+   "dynamic": 0.06117290258407593,
+   "ratio": 0.9921989614584014
   },
   "int4": {
-   "static": 1.0469401677449544,
-   "dynamic": 0.3576972981293996,
-   "ratio": 2.926888665975375
+   "static": 0.6122225324312845,
+   "dynamic": 0.3576664626598358,
+   "ratio": 1.7117135553565954
   }
  }
 }

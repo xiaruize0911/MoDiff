@@ -1,0 +1,42 @@
+{
+ "seed": 20260805,
+ "steps": 50,
+ "n": 6,
+ "modes": {
+  "fp16": {
+   "label": "fp16 reference",
+   "relL2_vs_fp16": 0.0,
+   "ms_per_step": 17.78324185987003,
+   "calibration": null,
+   "delta_mode": null
+  },
+  "int8_baseline": {
+   "label": "W8A8 PTQ  (int8_baseline)",
+   "relL2_vs_fp16": 0.16300024092197418,
+   "ms_per_step": 11.034433780005202,
+   "calibration": "integration/calibration/int8_calibration_qdiff.pt",
+   "delta_mode": null
+  },
+  "int8": {
+   "label": "W8A8 MoDiff  (int8)",
+   "relL2_vs_fp16": 0.06430020928382874,
+   "ms_per_step": 15.515142240037676,
+   "calibration": "integration/calibration/int8_calibration_qdiff.pt",
+   "delta_mode": "static"
+  },
+  "int4_baseline": {
+   "label": "W4A4 PTQ  (int4_baseline)",
+   "relL2_vs_fp16": 0.8570517897605896,
+   "ms_per_step": 10.54993446014123,
+   "calibration": "integration/calibration/int4_calibration_qdiff.pt",
+   "delta_mode": null
+  },
+  "int4": {
+   "label": "W4A4 MoDiff  (int4)",
+   "relL2_vs_fp16": 0.5905564427375793,
+   "ms_per_step": 14.579477839870378,
+   "calibration": "integration/calibration/int4_calibration_qdiff.pt",
+   "delta_mode": "static"
+  }
+ }
+}
