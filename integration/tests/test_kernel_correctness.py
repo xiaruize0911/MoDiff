@@ -480,6 +480,78 @@ def test_int4_modiff_conv():
     return "int4_modiff_conv", lifecycle_ok and acc < 0.40, detail
 
 
+def test_int4_gn_fused_delta_table():
+    """The FUSED GroupNorm MoDiff path must quantize and dequantize on the SAME grid.
+
+    forward_gn_fused_modiff quantizes silu(gn(x)-a_hat) with d_scale in the pack kernel and
+    dequantizes the int accumulation with d_alpha in the conv epilogue, so the two have to be
+    reciprocals. They were taken from different sources: d_alpha from _cached_alpha_tensor
+    (1/static_input_scale) and d_scale from _delta_scale_args_i4. That was consistent while static
+    mode meant "quantize the delta on the activation grid", and silently stopped being consistent
+    when the per-step delta table was added -- the output then carried a factor equal to the
+    delta/activation gain, 2.05x on the shipped W4A4 files.
+
+    Why the other tests missed it: it needs a delta table LOADED (nothing loaded one until the
+    static path was wired on 2026-08-12) and it lives on the GN-fused path, while a bare conv goes
+    through _forward_modulated, which always took the pair together. So this drives the fused entry
+    point directly with a table on a deliberately different grid.
+    """
+    from integration.kernels.int4_optimized import OptimizedInt4Conv2d
+    torch.manual_seed(0)
+    C, R, N = 256, 32, 8
+    conv = nn.Conv2d(C, C, 3, padding=1).to(DEV)
+    opt = _calib_conv(OptimizedInt4Conv2d(conv).to(DEV),
+                      torch.randn(16, C, R, R, device=DEV)).to(memory_format=torch.channels_last)
+    opt.enable_modiff(True)
+    # fused_resblock.wire_silu_fusion() sets this in a real model; set it directly so the gate
+    # exercises the fused entry point rather than skipping to the generic one.
+    opt.fuse_input_silu = True
+    gw = torch.ones(C, device=DEV, dtype=torch.float16)
+    gb = torch.zeros(C, device=DEV, dtype=torch.float16)
+    emp = torch.empty(0, device=DEV, dtype=torch.float16)
+    x1 = torch.randn(N, C, R, R, device=DEV, dtype=torch.float16
+                     ).contiguous(memory_format=torch.channels_last)
+    # THE MODULATED STEP MUST SEE A DIFFERENT TENSOR. Feeding x twice makes the temporal delta
+    # ~0, every scale rounds it to the same zeros, and the gate reads 0.00e+00 whether the code is
+    # right or wrong -- a test that cannot fail. (Checked: with the fix reverted, the same-x
+    # version still "passed".) x2 is far enough from x1 that the delta spans the grid.
+    x2 = (x1 + 0.7 * torch.randn_like(x1)).contiguous(memory_format=torch.channels_last)
+
+    # THE INVARIANT. Once a delta table is in force, the modulated step quantizes and dequantizes
+    # on the TABLE's grid, so its output must not depend on the activation scale at all -- that
+    # only enters through a_hat, which step 1 has already fixed. Run the same modulated step twice
+    # with the activation scale perturbed AFTER seeding, and the two must agree. If d_alpha is
+    # taken from the activation scale while d_scale comes from the table, they cannot.
+    #
+    # Comparing "table vs no table" instead would NOT work: a finer delta grid legitimately moves
+    # the output (measured 0.34), so there is no fixed reference to gate against.
+    base_act = float(opt.static_input_scale.item())
+    s_tab = base_act * 2.05          # the delta/activation gain measured on the shipped W4A4 files
+
+    def modulated(act_override):
+        opt.reset_state()
+        opt.set_static_scale(base_act)          # identical seeding step -> identical a_hat/o_hat
+        opt(x1)
+        opt.static_delta_scale.fill_(s_tab)
+        opt.static_delta_alpha.fill_(1.0 / s_tab)
+        opt.is_delta_calibrated.fill_(True)
+        opt._delta_cal = True
+        if act_override is not None:
+            opt.set_static_scale(act_override)  # perturbs ONLY the activation grid
+        if not opt.can_gn_fuse_modiff(x2):
+            return None
+        return opt.forward_gn_fused_modiff(x2, gw, gb, 32, 1e-5, emp, emp).float()
+
+    a = modulated(None)
+    if a is None:
+        return "int4_gn_fused_table", False, "fused path not eligible — gate did not run"
+    b = modulated(base_act / 2.05)
+    re = rel_err(b, a)
+    ok = re < 1e-3
+    return "int4_gn_fused_table", ok, (f"act-scale invariance rel={re:.2e} "
+                                       f"(desync tracks the 2.05x activation change)")
+
+
 class _OneConv(nn.Module):
     def __init__(self, conv):
         super().__init__()
@@ -596,6 +668,7 @@ def test_int8_export_apply():
 
 TESTS = [test_int8_conv, test_int8_conv_channels_last, test_int8_dual_store,
          test_int4_conv, test_int4_dual_store, test_int8_modiff_conv, test_int4_modiff_conv,
+         test_int4_gn_fused_delta_table,
          test_int4_export_apply, test_int8_export_apply,
          test_int8_linear, test_group_norm_silu, test_fused_gn_qkv,
          test_modiff_invariants_int8, test_code_utilisation_metric,

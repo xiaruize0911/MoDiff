@@ -748,13 +748,24 @@ class OptimizedInt4Conv2d(nn.Module):
         # the reduction itself (reusing its GN statistics) and the conv alpha comes from the
         # buffer it writes. See the int8 counterpart forward_gn_fused_modiff.
         gn_dyn = self._delta_gn_dynamic_args_i4(x.device)
-        d_alpha = (self._inv_scale_buf.view(1) if self.delta_dynamic
-                   else self._cached_alpha_tensor.view(1))
-        # In dynamic mode the scale lives in _scale_buf (written by the kernel on refresh steps,
-        # retained from the last refresh otherwise); in static mode it is the activation scale.
-        d_scale, _ = self._delta_scale_args_i4(x.device)   # table in static mode, buffer in dynamic
+        # d_scale QUANTIZES silu(gn(x)-a_hat) in the pack kernel below and d_alpha DEQUANTIZES the
+        # int accumulation in the conv epilogue, so they must be reciprocals of the SAME quantity.
+        # Take both from one source, exactly as the int8 twin does (int8_optimized.py:932).
+        #
+        # They used to be taken from two: d_alpha from _cached_alpha_tensor (1/static_input_scale)
+        # and d_scale from _delta_scale_args_i4. That was consistent while static mode meant "use
+        # the ACTIVATION scale for the delta" -- the pre-table behaviour this line's old comment
+        # described. When the per-step delta table was added, _delta_scale_args_i4 started returning
+        # static_delta_scale[i] while this site kept the activation alpha, so every fused-GN MoDiff
+        # conv quantized on the delta grid and dequantized on the activation one. The error is
+        # exactly the delta/activation gain -- measured 2.05x on the shipped W4A4 tables, and it
+        # only appears once a table is actually loaded, which nothing did until 2026-08-12.
+        d_scale, d_alpha = self._delta_scale_args_i4(x.device)
         if self.delta_dynamic:
+            # Dynamic mode: the kernel writes the scale it used into _scale_buf and its reciprocal
+            # into _inv_scale_buf. Override BOTH, never one.
             d_scale = self._scale_buf.view(1)
+            d_alpha = self._inv_scale_buf.view(1)
 
         p_step1 = profiler.start("MoDiff INT4 GN-fused Step1 (GN+SiLU+delta+pack)")
         x_packed = modiff_cutlass.group_norm_silu_delta_quantize_pack_nhwc(

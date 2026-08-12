@@ -796,6 +796,13 @@ class BenchmarkRunner:
         # (+~0.004 rel-L2 over fp16 attention); ineligible blocks fall back to fp16 SDPA. Flash is the
         # sole quantized-attention path (the materialized int-GEMM path was removed). MODIFF_QUANT_ATTN=0
         # reverts attention to fp16 SDPA.
+        # BEFORE the attention/linear conversion, because that block runs a 5-step DDIM sample to
+        # calibrate the linear activation scales. With the table not yet loaded, every conv on that
+        # sample hits the static branch uncalibrated and prints "no MoDiff delta calibration ... Run
+        # the delta calibration pass" — 70 lines telling the reader to do the thing that happens
+        # four lines later. Harmless to the run, expensive to whoever reads the log.
+        self._load_delta_table(model, mode)
+
         _force_qattn = os.environ.get("MODIFF_QUANT_ATTN", "1") != "0"
         try:
             if std_attn_bits in (4, 8) and (not quant_lin or _force_qattn):
@@ -933,7 +940,6 @@ class BenchmarkRunner:
             print(f"Class-conditional model: latent shape -> {self.shape}, "
                   f"sampling class {getattr(self, 'sample_class', 0)}")
 
-        self._load_delta_table(model, mode)
         return model, DDIMSampler(model)
 
     def _load_delta_table(self, model, mode):
