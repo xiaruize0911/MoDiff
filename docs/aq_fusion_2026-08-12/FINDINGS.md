@@ -1,9 +1,9 @@
-# Route (b): the aq_* fusion was not impossible, the gate was wrong
+# int8 qkv -> flash: the aq_* fusion was not impossible, the gate was wrong
 
 **+0.79 ms/step, landed behind `MODIFF_FUSE_QKV_I8=1`.** Three instruments agree, and the
 kernel-level prediction made before the end-to-end run matched it to 0.00 ms.
 
-The 2026-08-11 report closed with route (b) refuted: "neither int8 attention width in this model can
+The 2026-08-11 report closed with this fusion refuted: "neither int8 attention width in this model can
 take the gather path", and its `Open` item 3 simultaneously called the same fusion "the largest open
 item" and "not implemented". Both were wrong, in opposite directions. It **was** implemented and
 gated off, and it **was** runnable — on 10 of the 21 blocks.
@@ -33,17 +33,17 @@ weaker than the other, is what produced this.
 
 | candidate | ceiling | verdict | measured |
 |---|---:|---|---|
-| `aq_*` route (a): fp16 → flash | 4.60 | refuted 2026-08-11 | 18.0 ms slower (quantize-on-load, per k/v re-read) |
-| `aq_*` route (b): int8 → flash, hd=48 | 1.47 | **landed on 10/21 blocks** | **+0.79 ms/step** |
-| `aq_*` route (b): hd=24 via an 8 B loader | 3.13 | **refuted** | 2.11× the mma kernel vs a 1.44× break-even, −0.907 ms/block |
+| `aq_*` via fp16 qkv → flash | 4.60 | refuted 2026-08-11 | 18.0 ms slower (quantize-on-load, per k/v re-read) |
+| `aq_*` via int8 qkv → flash, hd=48 | 1.47 | **landed on 10/21 blocks** | **+0.79 ms/step** |
+| `aq_*` via int8 qkv → flash, hd=24 (8 B loader) | 3.13 | **refuted** | 2.11× the mma kernel vs a 1.44× break-even, −0.907 ms/block |
 | GN stats → conv epilogue, shared atomics | 4.30 | refuted 2026-08-11 | 6.5× slower, nondeterministic |
 | GN stats → conv epilogue, warp tree | 4.30 | **mechanism viable, margin is not** | 0.96× shipped and deterministic — too thin to justify the EVT node |
 
 ## Stage 0: the pre-check, because the score kernel changes too
 
-Route (b) does not merely delete the three `aq_*` passes — it swaps the score kernel, from the mma
-kernel that reads pre-transposed `qi/ki/vt` to the packed kernel that gathers per-token bytes. Route
-(a) fed that same entry point fp16 and lost 18 ms, so the gather path was measured on its own before
+The int8-qkv route does not merely delete the three `aq_*` passes — it swaps the score kernel, from the mma
+kernel that reads pre-transposed `qi/ki/vt` to the packed kernel that gathers per-token bytes. The
+fp16 variant fed that same entry point fp16 and lost 18 ms, so the gather path was measured on its own before
 any wiring (`integration/tests/bench_flash_packed_vs_unpacked.py`, batch 128, median of 20):
 
 | C | T | hd | arm U `aq_*` | arm U flash | arm U total | arm P packed | P / U_flash | net |
@@ -53,7 +53,7 @@ any wiring (`integration/tests/bench_flash_packed_vs_unpacked.py`, batch 128, me
 | 384 | 64 | 48 | 0.098 | 0.047 | 0.145 | 0.070 | 1.49× | **+0.074** |
 
 `arm P` excludes the quantize on purpose: in production that int8 comes out of
-`gemm_w8a8_awq_o_hat_out_i8`'s epilogue, which runs regardless. Charging route (b) for the work its
+`gemm_w8a8_awq_o_hat_out_i8`'s epilogue, which runs regardless. Charging this route for the work its
 whole point is to make free would measure the wrong thing.
 
 **Break-even, stated before the run:** the packed kernel had to come in under 2.0× the mma kernel's
@@ -119,7 +119,7 @@ on its own, which is why the kernel microbenchmark (which times only the quantiz
 under-predicted the ceiling while still landing the net exactly.
 
 **Do not read the trace total.** It says −2.47 ms/step, three times the measured effect, because
-buckets route (b) cannot touch moved too: `conv` −0.92 at identical call counts (35 → 35),
+buckets this fusion cannot touch moved too: `conv` −0.92 at identical call counts (35 → 35),
 `norm_quantize` −0.11, `elementwise` −0.21. The two captures are separate 8-step processes minutes
 apart, so that is drift, and it is larger than half the effect being measured. Same limit
 `docs/profile_kernels_layers_2026-08-11` states for its own tables: shares and named kernels within a
@@ -141,7 +141,7 @@ kernel-level finding that the codes are identical and only the fp16 accumulation
 
 ![quality](plots/03_quality_paired.png)
 
-A note on a comparison NOT made: route (a)'s recorded 0.01710 is an **arm-to-arm** relL2, while these
+A note on a comparison NOT made: the fp16-qkv route's recorded 0.01710 is an **arm-to-arm** relL2, while these
 are relL2-vs-fp16. They are different quantities and were kept off the same axis.
 
 ## hd=24: the 8-byte loader was built, and it is refuted
@@ -162,11 +162,11 @@ About **−4.5 ms/step** over the 5 blocks if it were wired. Two reasons, both s
 transactions go through L1 (`.cg` is 16-byte-only, so `.ca` is forced), and T=1024 re-reads k and v
 16× more often than T=64 does, so the gather is paid on every re-read while the `aq_*` quantize is
 paid once. The ratio ordering across the three shapes — 1.50× at T=64, 1.85× at T=256, 2.11× at
-T=1024 — is the same T-dependence that made route (a) lose, arriving through a different door.
+T=1024 — is the same T-dependence that made the fp16-qkv route lose, arriving through a different door.
 
 ![loader width](plots/05_loader_width.png)
 
-**Kept in the tree, default off, exactly like route (a).** The loader is correct — hd=24 matches an
+**Kept in the tree, default off, exactly like the fp16-qkv route.** The loader is correct — hd=24 matches an
 fp32 reference at 4.56e-3 against production's 4.53e-3, is deterministic over 10 launches, and does
 not read past `hd` into the padded tail (`integration/tests/test_flash_packed_load8.py`). What ships
 it off is `_qkv_i8_ok`'s `hd % 16 == 0`, which is **now a measured performance gate rather than a
@@ -314,7 +314,7 @@ now refuses that combination instead of silently replacing the dataset.
    `report_next` or be accepted one step stale, and the relL2 cost of stale has to be measured before
    any kernel is written. Note also it only pays at A8/A7 — at A4 the projections are already a
    0.976×/1.014× proposition.
-5. **Quality is unresolved, not clean.** ±2.5% per-seed swings at 3 seeds. If route (b) is ever made
+5. **Quality is unresolved, not clean.** ±2.5% per-seed swings at 3 seeds. If this fusion is ever made
    default rather than flag-gated, that needs more seeds — the 8-seed lesson from `docs/act_bits_2026-08-05`
    applies (a 3-seed mean there reversed sign at 8).
 4. **The environment had to be re-provisioned.** `omegaconf`, `einops`, `pytorch-lightning==1.4.2`,

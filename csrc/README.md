@@ -117,7 +117,7 @@ first while the pattern is still cheap to change.
 | 2 | `linear/` | **DONE** — `baseline/linear/gemm_wxax.cu` (1508 L, 16 exports), `modiff/linear/gemm_wxax.cu` (795 L, 3 exports) | the 3 `*_o_hat*` host fns moved; the 3 GEMM kernels + `GWQ_*` constants + `gwq_s2r_A/B`/`gwq_store2` **copied** as `static` (the kernels are dual-purpose — baseline launches them with `o_hat == nullptr`) |
 | 3 | `norm/` | **DONE** — `baseline/norm/{group_norm_silu,fused_gn_qkv}.cu` (1551 + 436 L, 10 exports), `modiff/norm/group_norm_silu.cu` (2033 L, 4 exports) | **zero shared kernels**: 16 kernels + `gn_launch_group_stats` reach only from the delta entry points, 6 kernels + the two `*_impl` helpers only from baseline. Only the small dtype-dispatch helpers (`gn_load`/`gn_load2`/`gn_store2`, `gns_silu`, `gn_report_delta_absmax`) are copied. SASS gate passed with **no re-baseline** |
 | 4 | `conv/` | **DONE** — `baseline/conv/` (4 files, 2325 L) + `modiff/conv/` (4 files, 1033 L) | the 8 `*_o_hat*` exports moved; **the int8 and int4 CUTLASS conv Op instantiations, `conv2d_intX_fprop`, the EVT preamble and `make_problem` are COPIED**. Cost measured: clean build **246 s → 480 s (1.95×)**, `.so` 26,480,696 → 27,116,888 B (+2.4%), `build/` 83 → 92 MB |
-| 5 | `attention/` | **DONE** — both files whole to `baseline/attention/` (2777 + 1144 L, 36 exports) | **0 of 36 host fns reference `a_hat`/`o_hat`** — attention is stateless in both datapaths, so nothing was duplicated and nothing went to `modiff/`. Each file carries a DATAPATH NOTE explaining that MoDiff's involvement is *which entry point it may call* (`_qout` unusable under MoDiff; `packed_vt` is route (b)'s), decided in Python. SASS gate passed with **no re-baseline** |
+| 5 | `attention/` | **DONE** — both files whole to `baseline/attention/` (2777 + 1144 L, 36 exports) | **0 of 36 host fns reference `a_hat`/`o_hat`** — attention is stateless in both datapaths, so nothing was duplicated and nothing went to `modiff/`. Each file carries a DATAPATH NOTE explaining that MoDiff's involvement is *which entry point it may call* (`_qout` unusable under MoDiff; `packed_vt` is what the int8-qkv fusion feeds), decided in Python. SASS gate passed with **no re-baseline** |
 | 6 | `util/` | **DONE** — `baseline/util/layout_transform.cu` (460 L, 4 exports), `modiff/util/layout_transform.cu` (324 L, 1 export) | `fp16_ncw_delta_to_int8_cl` + its 4 delta kernels moved; nothing shared but the `TILE_T` #define. SASS gate passed with **no re-baseline** — a true pure move |
 
 **`modiff_kernels_api.h` is deliberately NOT split.** It was attempted and reverted. The partition
@@ -212,10 +212,10 @@ arms inside one process.
 | MoDiff conv+proj, K=1 (the paper's datapath) | 104.01 | 1.003× |
 | MoDiff conv+proj, K=4 | 98.45 | 1.059× |
 | … + projection refresh schedule (`MODIFF_LINEAR_DELTA_REFRESH=4`) | 95.68 | 1.090× |
-| … + route (b) qkv int8→flash (`MODIFF_FUSE_QKV_I8=1`) | **95.09** | **1.097×** |
+| … + qkv int8→flash (`MODIFF_FUSE_QKV_I8=1`) | **95.09** | **1.097×** |
 
 The gains those last two arms represent, from paired A/B (the trustworthy instrument):
-**+2.81 ms** for the projection refresh and **+0.79 ms** for route (b). This run's within-process
+**+2.81 ms** for the projection refresh and **+0.79 ms** for the int8-qkv fusion. This run's within-process
 deltas confirm both at +2.77 and +0.59.
 
 **Per bucket, batch 128** (bucketed Perfetto trace, `docs/aq_fusion_2026-08-12/data/trace_buckets_qkvi8.json`,
@@ -235,7 +235,7 @@ Read shares within a column and named kernels within a capture — **not** total
 Two captures of the same arm minutes apart drift ~1 ms on buckets nothing touched.
 
 **Post-migration re-measurement (2026-08-12), the evidence that the split changed no behaviour:**
-the route (b) paired A/B reads **+0.71 ms/step** (stdev 0.073) against the pre-split **+0.79 ± 0.14**,
+the int8-qkv paired A/B reads **+0.71 ms/step** (stdev 0.073) against the pre-split **+0.79 ± 0.14**,
 and the ON arm sits at **94.60 ms/step** against the recorded **94.88** — both inside run-to-run noise,
 with all three kernel counters exact (10 / 5 / 10 ON, 0 / 15 / 0 OFF). Together with the per-kernel SASS
 gate (279/279 identical) and the export manifest (130/130), that is the whole claim: same code, same
@@ -254,7 +254,7 @@ QKᵀ+softmax+AV with scores never leaving SRAM. The two genuinely unfused items
 `gn_stats_partials_chanmajor` (4.7 ms) and the elementwise glue (6.7 ms).
 
 Fusion candidates that were **built and refuted by measurement** are recorded where they were
-measured, not deleted, so they are not re-proposed: `docs/aq_fusion_2026-08-12/FINDINGS.md` (route (a)
+measured, not deleted, so they are not re-proposed: `docs/aq_fusion_2026-08-12/FINDINGS.md` (fp16 qkv→flash
 18 ms slower; hd=24 8-byte gather 2.11× against a 1.44× break-even; GN-stats in the conv epilogue
 0.96×, viable mechanism but too thin a margin) and `docs/profile_kernels_layers_2026-08-11/FINDINGS.md`.
 

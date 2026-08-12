@@ -21,7 +21,7 @@ every table below names them explicitly rather than as a category:
 
 ```bash
 MODIFF_LINEAR_DELTA_REFRESH=4   # projection delta refresh schedule
-MODIFF_FUSE_QKV_I8=1            # route (b): qkv GEMM emits int8 straight into flash's gather path
+MODIFF_FUSE_QKV_I8=1            # qkv GEMM emits int8 straight into flash's gather path
 ```
 
 ---
@@ -62,7 +62,7 @@ paired A/B instead.
 The 21 blocks fall into exactly **four shape tiers**, and cost tracks the tier with almost no
 within-tier variation (≤ 0.04 ms). Tier totals, ms/step:
 
-| tier | blocks | idx | conv+proj | `+DELTA_REFRESH=4` | `+FUSE_QKV_I8=1` | route (b) Δ |
+| tier | blocks | idx | conv+proj | `+DELTA_REFRESH=4` | `+FUSE_QKV_I8=1` | int8-qkv Δ |
 |---|--:|---|---:|---:|---:|---:|
 | C192 T1024 hd24 | 5 | 0, 1, 18, 19, 20 | 26.57 | 24.95 | **24.99** | +0.04 |
 | C384 T256 hd48 | 5 | 2, 3, 15, 16, 17 | 11.26 | 10.45 | **10.08** | **−0.37** |
@@ -70,14 +70,14 @@ within-tier variation (≤ 0.04 ms). Tier totals, ms/step:
 | C768 T16 hd96 | 6 | 6–11 | 1.88 | 1.72 | **1.72** | +0.00 |
 | **total** | **21** | | **42.97** | **40.14** | **39.45** | **−0.68** |
 
-**Five blocks are 63% of all attention time.** They are the hd=24 tier — the same five that route (b)
+**Five blocks are 63% of all attention time.** They are the hd=24 tier — the same five the int8-qkv path
 cannot reach (the int8 gather needs `hd % 16 == 0`, and 24 bytes/token fails it), and the same five
 where the 8-byte loader was measured 2.11× slower than the mma kernel. Any further attention work is
 about these five blocks or it is about 37% of the budget.
 
-**Route (b)'s footprint is exactly its gate.** −0.37 and −0.36 on the two hd=48 tiers, and 0.00 / +0.04
-(inside noise) on the tiers its predicate excludes. This is the first per-block confirmation of the
-+0.79 ms/step e2e result; previously it was only known at whole-model and kernel scope. The two hd=48
+**The int8-qkv path's footprint is exactly its gate.** −0.37 and −0.36 on the two hd=48 tiers, and 0.00 / +0.04
+(inside noise) on the tiers its predicate excludes. This is the first per-block confirmation of that
+fusion's +0.79 ms/step e2e result; previously it was only known at whole-model and kernel scope. The two hd=48
 tiers are 10 blocks and 32% of attention, which is why a −0.73 ms tier effect is worth 0.79 e2e.
 
 The projection refresh, by contrast, moves **every** tier (−1.62 / −0.81 / −0.24 / −0.16), because
@@ -136,7 +136,7 @@ Four structural facts fall straight out of this table:
   fog, while at W8A8/W8A4 it was visually indistinguishable.
 * **The refresh schedule pays on both sides of the projection.** `proj` 8.79 → 7.50 *and* `attn`
   34.18 → 32.64, because each attention block's own qkv projection is inside the `attn` timer.
-* **Route (b) pays only inside `attn`.** 32.64 → 31.98 with `proj` flat at 7.50 → 7.48 — consistent
+* **The int8-qkv path pays only inside `attn`.** 32.64 → 31.98 with `proj` flat at 7.50 → 7.48 — consistent
   with it changing what the qkv GEMM writes and what flash reads, not the projection dispatch.
 
 **Read shares within a row, not totals.** 11–37% of the step sits outside the timed dispatchers
@@ -172,7 +172,7 @@ Reading down the columns:
   datapath on at K=1, back to 15.84 with both refresh schedules. It is still the second-largest bucket.
 * **`norm_quantize` halves when MoDiff conv turns on** (17.44 → 9.73): the delta path's fused GN kernel
   replaces the baseline's separate quantize pass. This is MoDiff *paying* for itself somewhere.
-* **`attn_quantize` 4.59 → 2.94** and **`attention` 8.70 → 9.81** is route (b)'s trade, visible directly:
+* **`attn_quantize` 4.59 → 2.94** and **`attention` 8.70 → 9.81** is the int8-qkv trade, visible directly:
   −1.65 of re-quantize against +1.11 of a gather kernel that costs more than the mma one.
 * The two **knockout arms** are diagnostics, not configurations anyone would run: disabling MoDiff conv
   while keeping the rest pushes `elementwise` to 53.59 (the delta subtraction falls back to PyTorch),
@@ -206,8 +206,8 @@ calls).**
 The elementwise bucket is the **largest unfused item in the model** — bigger than the whole
 `attn_quantize` bucket, bigger than `norm_quantize` — and no one has ever targeted it.
 `flash_attn_int8_mma_kernel_t` at 7.01 ms over just 5 calls is the hd=24 attention tier again, seen
-from the third instrument; `flash_attn_int8_packed_mma_kernel` at 2.54 over 10 calls is route (b)'s
-gather on the hd=48 tiers.
+from the third instrument; `flash_attn_int8_packed_mma_kernel` at 2.54 over 10 calls is that path's
+gather kernel on the hd=48 tiers.
 
 ---
 

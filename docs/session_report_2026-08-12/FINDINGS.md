@@ -16,7 +16,7 @@ are regenerated offline by `scripts/make_plots.py`.
 
 ![verdicts](plots/00_fusion_verdicts.png)
 
-**`route (b)` landed: +0.79 ms/step**, behind `MODIFF_FUSE_QKV_I8=1`, on 10 of the 21 attention
+**The int8-qkv fusion landed: +0.79 ms/step**, behind `MODIFF_FUSE_QKV_I8=1`, on 10 of the 21 attention
 blocks. The qkv GEMM emits int8 at a per-column scale straight into flash's gather path, so the three
 `aq_*` re-quantize kernels disappear on those blocks.
 
@@ -44,7 +44,7 @@ the qkv GEMM is worth that on its own.
 
 | candidate | verdict |
 |---|---|
-| `route (a)` fp16 → flash | **−18.0 ms/step.** Flash re-reads k/v per query block, so "quantize on load" means quantize O(T/block) times. Quantize-once-then-gather is *why* the `aq_*` kernels exist. |
+| the other candidate: fp16 qkv → flash | **−18.0 ms/step.** Flash re-reads k/v per query block, so "quantize on load" means quantize O(T/block) times. Quantize-once-then-gather is *why* the `aq_*` kernels exist. |
 | hd=24 via an 8-byte `cp.async` loader | Built (`LOAD_B ∈ {16,8}`, `.ca` because `.cg` is 16-byte only), correct, deterministic — and **2.11× the mma kernel against a 1.44× break-even**, ≈ −4.5 ms/step over its 5 blocks. |
 | GN stats → conv epilogue, shared atomics | **1.74× the pass it replaces**, and nondeterministic. |
 | GN stats → conv epilogue, warp tree | Rewritten with `__match_any_sync` + masked inclusive scan, no atomics: **deterministic on every shape** and **0.96×**. Clears all three Stage-A gates and is *still* not worth Stage C — 0.96× returns ~4% of a pass whose ceiling assumed the reduction was free, and `768×4×4` is still 1.54×. |
@@ -117,7 +117,7 @@ with no compile error.
 Re-ran all three instruments: 8 e2e arms, 6 layer configs, 3 traces. 32.5 min, sequential.
 
 - **speedups vs this run's own fp16** reproduce to within **0.005×** on five of seven arms
-- **within-process deltas** match the paired-A/B record: projection refresh **+2.77** vs +2.81, route (b)
+- **within-process deltas** match the paired-A/B record: projection refresh **+2.77** vs +2.81, int8 qkv
   **+0.59** vs +0.71/+0.79, K=1→K=4 **+5.56/+5.57** vs +5.69/+5.68
 - **layer coverage 0.635–0.880** vs the documented 0.643–0.883, identical layer counts, and both
   structural facts hold: W8A4 ≡ W8A8 datapath (conv 39.68 vs 39.96), W4A4 projections 27.01 ms = 3.1× W8A8's 8.75

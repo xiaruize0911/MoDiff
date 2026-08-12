@@ -1,4 +1,4 @@
-"""Figures for the route (b) report. Offline: reads data/*.json, writes plots/*.png, no GPU.
+"""Figures for the int8-qkv fusion report. Offline: reads data/*.json, writes plots/*.png, no GPU.
 
 Three instruments, and they are not interchangeable:
 
@@ -49,7 +49,7 @@ def load(name):
 def plot_kernel(out, fname="bench_packed_vs_unpacked.json", title=None, brk=None):
     """Per shape: what arm U spends on aq_* + mma flash, against arm P's single gather kernel.
 
-    Called twice: once on the 16-byte-only data (hd=24 rejected, the state route (b) shipped in) and
+    Called twice: once on the 16-byte-only data (hd=24 rejected, the state that shipped) and
     once on the 8-byte-loader data (hd=24 legal and losing). `brk` labels the break-even ratio per
     shape, which is what each bar has to be read against.
     """
@@ -83,7 +83,7 @@ def plot_kernel(out, fname="bench_packed_vs_unpacked.json", title=None, brk=None
     ax.set_xticks(list(x))
     ax.set_xticklabels(labels)
     ax.set_ylabel(f"ms per call, batch {d['batch']} (median of {d['iters']})")
-    ax.set_title(title or "Route (b) at the kernel level: the quantize it removes vs the gather it "
+    ax.set_title(title or "int8 qkv at the kernel level: the quantize it removes vs the gather it "
                  "pays for", loc="left")
     ax.grid(axis="y", color=GRID, linewidth=0.8)
     ax.set_axisbelow(True)
@@ -101,7 +101,7 @@ def plot_e2e(out):
     ms = {k: a["stats"]["median"] / 1e3 / d["steps"] for k, a in d["arms"].items()}
     order = ["modiff_full_k4_projk4", "modiff_full_k4_projk4_qkvi8"]
     short = {"modiff_full_k4_projk4": "conv+proj K=4\n+proj K=4",
-             "modiff_full_k4_projk4_qkvi8": "…+ route (b)"}
+             "modiff_full_k4_projk4_qkvi8": "…+ int8 qkv"}
     fp16_file = os.path.join(ROOT, "docs/profile_kernels_layers_2026-08-11/data/"
                                    "differential_timing_fp16.json")
     fp16 = None
@@ -234,7 +234,7 @@ def plot_quality(out):
     pad = (max(per) - min(per)) * 0.35 + 0.2
     axr.set_ylim(min(per + [mean - band]) - pad, max(per + [mean + band]) + pad)
 
-    fig.suptitle(f"Route (b) quality, batch {d['batch']}, DDIM {d['steps']}, {len(seeds)} paired "
+    fig.suptitle(f"int8-qkv quality, batch {d['batch']}, DDIM {d['steps']}, {len(seeds)} paired "
                  f"seeds -- control (OFF twice) was bit-identical", x=0.01, ha="left", fontsize=11.5)
     fig.tight_layout(rect=(0, 0, 1, 0.94))
     fig.savefig(out, dpi=170)
@@ -247,7 +247,7 @@ def plot_trace(out):
 
     The net (+0.79) is three terms pulling against each other, and only a trace can show them apart.
     What this figure deliberately does NOT show is the trace TOTAL: the two captures are separate
-    8-step processes minutes apart, and buckets route (b) cannot touch (conv -0.92, norm_quantize
+    8-step processes minutes apart, and buckets this fusion cannot touch (conv -0.92, norm_quantize
     -0.11) moved by more than half the effect. That is capture drift, and it is why the headline
     number comes from the paired A/B instead. Read shares and named kernels here, never totals --
     the same limit docs/profile_kernels_layers_2026-08-11 states for its own tables.
@@ -270,7 +270,7 @@ def plot_trace(out):
         assert hit, f"no kernel matching {prefix!r} in {c.get('config', '?')}"
         return sum(hit)
 
-    # The plain and out_i8 GEMMs are ONE term: route (b) moves 10 of the 42 qkv/proj GEMM calls from
+    # The plain and out_i8 GEMMs are ONE term: the fusion moves 10 of the 42 qkv/proj GEMM calls from
     # the plain variant to the int8-output one, so counting either alone is meaningless.
     gemm_a = kms(a, "gemm_w8a8_kernel_awq")
     gemm_b = kms(b, "gemm_w8a8_kernel_awq")
@@ -292,7 +292,7 @@ def plot_trace(out):
         ax.text(i, v + (0.03 if v >= 0 else -0.03), f"{v:+.2f}", ha="center",
                 va="bottom" if v >= 0 else "top", color=INK2, fontsize=9)
     ax.set_ylabel("ms/step recovered (positive = faster)")
-    ax.set_title("What route (b) trades, per kernel, batch 128", loc="left")
+    ax.set_title("What the int8-qkv fusion trades, per kernel, batch 128", loc="left")
     ax.grid(axis="y", color=GRID, linewidth=0.8)
     ax.set_axisbelow(True)
     ax.text(0.01, 0.03, "trace attributes the terms; it does not measure the total "

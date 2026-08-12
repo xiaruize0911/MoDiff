@@ -47,7 +47,7 @@ def plot_verdicts(out):
     """Every fusion candidate this session touched. TWO panels, because the numbers are not in the
     same unit and putting them on one axis would be wrong.
 
-    Left: end-to-end ms/step at batch 128 -- route (a) and route (b) are paired A/B measurements on the
+    Left: end-to-end ms/step at batch 128 -- the two qkv->flash candidates are paired A/B measurements on the
     whole model; hd=24 is a per-call microbenchmark extrapolated over its 5 blocks, so it is marked
     (est.). Right: the GN-stats candidates, which are KERNEL-level and only ever measured against the
     pass they would replace, expressed as a ratio. A ratio below 1.0 is faster.
@@ -66,9 +66,9 @@ def plot_verdicts(out):
 
     fig, (axl, axr) = plt.subplots(1, 2, figsize=(12.6, 5.0),
                                    gridspec_kw={"width_ratios": [1.5, 1]})
-    items = [("route (b)\nqkv int8 -> flash\nLANDED", ab["paired_median"], BLUE, ""),
+    items = [("int8 qkv -> flash\nLANDED", ab["paired_median"], BLUE, ""),
              ("hd=24 via 8-byte\ncp.async loader\nREFUTED", hd24_step, ROSE, " (est.)"),
-             ("route (a)\nfp16 -> flash\nREFUTED 08-11", -18.0, ROSE, "")]
+             ("fp16 qkv -> flash\nREFUTED 08-11", -18.0, ROSE, "")]
     vals = [i[1] for i in items]
     axl.bar([i[0] for i in items], vals, color=[i[2] for i in items], width=0.55)
     axl.axhline(0, color=INK2, linewidth=1.2)

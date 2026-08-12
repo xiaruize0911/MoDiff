@@ -45,7 +45,7 @@ adjacent in the ladder, so they are the least contaminated this instrument can p
 
 | within-run delta | this run | recorded |
 |---|---:|---|
-| route (b), qkv int8 → flash gather | **+0.59** | +0.79 / +0.71 (paired A/B) |
+| qkv int8 → flash gather | **+0.59** | +0.79 / +0.71 (paired A/B) |
 | projection refresh schedule K=4 | **+2.77** | **+2.81** (paired A/B) |
 | conv+proj K=1 → K=4 | +5.56 | +5.69 |
 | conv-only K=1 → K=4 | +5.57 | +5.68 |
@@ -133,7 +133,7 @@ The other two arms, compared against older captures, sit 0.1–0.8 low per bucke
 capture-age offset as the e2e table, seen per kernel. That is the cleanest available demonstration that
 the differences are references aging, not code moving.
 
-Route (b)'s trade also reproduces exactly: `attn_quantize` 4.59 → 2.94 (−1.65) against `attention`
+The int8-qkv trade also reproduces exactly: `attn_quantize` 4.59 → 2.94 (−1.65) against `attention`
 8.70 → 9.81 (+1.11).
 
 ![buckets](plots/03_kernel_buckets.png)
@@ -161,7 +161,7 @@ nowhere, which is indistinguishable from "still running".
    numbers quoted in `docs/aq_fusion_2026-08-12/FINDINGS.md` came from the *previous* captures, so they
    no longer regenerate byte-identically from the tree — they reproduce to within ±0.10 ms, which is
    why this is a note and not a correction.
-3. **Route (b) reads +0.59 here against +0.71/+0.79 from paired A/B.** All three agree on sign and order
+3. **The int8-qkv fusion reads +0.59 here against +0.71/+0.79 from paired A/B.** All three agree on sign and order
    and the difference is inside the session offset, but the paired A/B remains the number to quote: it
    alternates arms inside one process and is the only one of the three immune to what this report just
    measured.

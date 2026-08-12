@@ -83,7 +83,7 @@ def plot_e2e(out):
              "modiff_conv_k4": "MoDiff conv\nK=4", "modiff_conv_k1": "MoDiff conv\nK=1",
              "modiff_full_k1": "conv+proj K=1\n(paper)", "modiff_full_k4": "conv+proj\nK=4",
              "modiff_full_k4_projk4": "+ proj refresh\nK=4",
-             DEFAULT_ARM: "+ route (b)"}
+             DEFAULT_ARM: "+ int8 qkv\n-> flash"}
     ms = {"fp16": fp}
     ms.update({a: r["stats"]["median"] / 1e3 / q["steps"] for a, r in q["arms"].items()})
     arms = [a for a in order if a in ms]
@@ -113,7 +113,7 @@ def plot_blocks(out):
     """All 21 attention blocks in the current configuration, and what the two flags move.
 
     The right panel is the whole point: the flags act on the hd=48 tiers and nowhere else, which is
-    exactly what route (b)'s gate predicts (it needs hd % 16 == 0 and T % 64 == 0).
+    exactly what the int8-qkv gate predicts (it needs hd % 16 == 0 and T % 64 == 0).
     """
     rows = {r["config"]: r for r in (load("profile_layers.json") or [])}
     if CURRENT not in rows:
@@ -150,20 +150,20 @@ def plot_blocks(out):
         ys = [i + (j - 1) * w for i in range(len(names))]
         axr.barh(ys, tot, color=col, height=w * 0.9, label=f"{lab}  ({sum(tot):.2f} ms)")
         if j == len(W8A8_LADDER) - 1:
-            # annotate route (b) alone -- i.e. against the row above it, not against conv+proj.
+            # annotate the int8-qkv fusion alone -- against the row above it, not against conv+proj.
             # The refresh schedule moves every tier (it is a projection-side change and these timers
-            # wrap the block's projections); route (b) is the one that should be tier-selective.
+            # wrap the block's projections); the int8-qkv fusion is the tier-selective one.
             base = [sum(rows[W8A8_LADDER[-2][0]]["layers"][f"attn{i:02d}"] for i in s_)
                     for _, s_, _ in TIERS]
             for i, (t, b) in enumerate(zip(tot, base)):
                 d = t - b
-                axr.text(max(t, b) + 0.35, i, f"route(b) {d:+.2f}",
+                axr.text(max(t, b) + 0.35, i, f"int8 qkv {d:+.2f}",
                          va="center", color=ROSE if abs(d) >= 0.05 else INK3, fontsize=8.5)
     axr.set_yticks(range(len(names)))
     axr.set_yticklabels(names, fontsize=8.5)
     axr.invert_yaxis()
     axr.set_xlabel("ms/step, summed over the tier")
-    axr.set_title("Route (b) moves the 10 hd48 blocks and nothing else", loc="left")
+    axr.set_title("The int8-qkv fusion moves the 10 hd48 blocks, nothing else", loc="left")
     axr.grid(axis="x", color=GRID, linewidth=0.8)
     axr.set_axisbelow(True)
     axr.set_xlim(0, 34)
