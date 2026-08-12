@@ -1,0 +1,17 @@
+{
+ "seed": 20260805,
+ "steps": 50,
+ "n": 6,
+ "QMAX": 7.0,
+ "act_scales": "integration/calibration/int4_calibration_qdiff.pt",
+ "delta_table": "integration/calibration/int4_delta_qdiff.pt",
+ "relL2": {
+  "fp16 reference": 0.0,
+  "fake: activations 4-bit only": 0.9059880375862122,
+  "fake: weights 4-bit only": 0.27284273505210876,
+  "fake: act + weight  (W4A4 PTQ simulated)": 0.8885124921798706,
+  "fake: act + weight + MoDiff": 0.5234934091567993,
+  "real int4 kernels  (W4A4 PTQ)": 0.8548142313957214,
+  "real int4 kernels  (W4A4 MoDiff)": 0.6193780303001404
+ }
+}

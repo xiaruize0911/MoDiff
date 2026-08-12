@@ -91,6 +91,51 @@ These W4A4 numbers postdate a quantize/dequantize fix in the int4 fused MoDiff p
 anything measured before it read 1.0469 for the MoDiff arm. See
 [`static_qdiff_2026-08-12` §4a](../static_qdiff_2026-08-12/FINDINGS.md).
 
+## 3a. Where W4A4's damage actually comes from
+
+§3's W4A4 numbers are one figure over four stacked things: the 4-bit activation grid, the 4-bit
+weights, the MoDiff recursion, and the int4 CUTLASS datapath. Fake quantization separates them by
+running the ordinary fp16 model and simulating one piece at a time.
+
+![fake quant](plots/w4a4_fake_quant.png)
+
+| arm | relL2 vs fp16 |
+|---|---:|
+| fp16 | 0.0000 |
+| **fake: activations 4-bit only** (weights fp16) | **0.9060** |
+| **fake: weights 4-bit only** (activations fp16) | **0.2728** |
+| fake: act + weight — W4A4 PTQ simulated | 0.8885 |
+| fake: act + weight + MoDiff | 0.5235 |
+| real int4 kernels, W4A4 PTQ | 0.8548 |
+| real int4 kernels, W4A4 MoDiff | 0.6194 |
+
+**The activations are the whole problem.** Quantizing only the weights leaves the churches standing
+— dirtier texture, but structure, sky and spires all intact, at 0.2728. Quantizing only the
+activations is already total fog at 0.9060, indistinguishable from full W4A4's 0.8885. This is worth
+stating against expectation: the tree documents int4 weight reconstruction at 0.1254 median relative
+Frobenius, which sounds like the dominant term, and at the output it is worth 0.27 against the
+activation grid's 0.91.
+
+**The kernels are faithful.** Simulated 0.8885 against real 0.8548 (PTQ), simulated 0.5235 against
+real 0.6194 (MoDiff) — same ordering, 4–18% apart. So W4A4's loss is inherent to 4-bit arithmetic
+rather than something the int4 datapath adds. It is also an independent check on the `ba8b8c9`
+dequant fix: before it, the real MoDiff arm read 1.0469 against the simulation's 0.5235 — twice as
+bad as the arithmetic allows — and it now lands next to it.
+
+**MoDiff's gain is real, not an implementation artifact**: 0.8885 → 0.5235 in pure simulation.
+
+One difference the numbers hide: the simulated and real MoDiff rows have similar relL2 but do not
+*look* alike — simulation gives high-contrast collage, the kernels give low-contrast structure
+emerging from fog. The harness accumulates `a_hat` in fp32 where the kernels accumulate `o_hat` in
+fp16, which `act_fake_quant.py` names as its one idealisation. This is what that idealisation looks
+like.
+
+**Consequence for anyone optimising W4A4.** Better weight quantization (AdaRound, group-wise) is
+bounded by that 0.27. The 4-bit activation grid is where the loss is, and there is a known unexplored
+lever there: the qdiff scale sized to the true range (assumed absmax 3.77, no clipping) gives 0.86,
+while the shipped absmax file's accidentally-5.13x-too-large scale — which clips 43% of channel peaks
+— gives 0.71. Aggressive clipping helps at 4 bits and has never been searched for deliberately.
+
 ## 4. Per-block attribution
 
 ![blocks](plots/04_block_kinds.png)
