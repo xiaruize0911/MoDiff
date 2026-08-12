@@ -37,14 +37,28 @@ sys.path[:0] = [ROOT, os.path.join(ROOT, "integration/benchmarks/report"),
 import torch                                                                # noqa: E402
 import dynamic_delta_ab as H                                               # noqa: E402
 
-#: (label, mode, MODIFF_LINEAR, act_bits, K). fp16 has no quantized layers to attribute, so it
-#: appears in the whole-model plot only.
-CONFIGS = [("W8A8 PTQ", "int8_baseline", "0", 8, 4),
-           ("W8A8 conv-only", "int8", "0", 8, 4),
-           ("W8A8 conv+proj", "int8", "1", 8, 4),
-           ("W8A4 conv+proj", "int8", "1", 4, 4),
-           ("W4A4 conv+proj", "int4", "1", 8, 4)]
-WALL_ONLY = [("fp16", "fp16", "0", 8, 4)]
+#: (label, mode, MODIFF_LINEAR, act_bits, K, extra_env). fp16 has no quantized layers to attribute,
+#: so it appears in the whole-model plot only.
+#:
+#: extra_env carries the flags that are NOT part of the (mode, lin, act_bits, K) grid -- the projection
+#: refresh schedule and the route (b) qkv fusion. Both default off in the library, so a config that
+#: wants them must say so, and EVERY OTHER config must have them explicitly cleared: profile() runs in
+#: a loop in one process, so a leaked env var would silently attribute one config's datapath to the
+#: next. Added 2026-08-12 to give those two configurations a per-layer/per-block profile, which they
+#: had never had.
+CONFIGS = [("W8A8 PTQ", "int8_baseline", "0", 8, 4, {}),
+           ("W8A8 conv-only", "int8", "0", 8, 4, {}),
+           ("W8A8 conv+proj", "int8", "1", 8, 4, {}),
+           ("W8A8 conv+proj +projK4", "int8", "1", 8, 4,
+            {"MODIFF_LINEAR_DELTA_REFRESH": "4"}),
+           ("W8A8 conv+proj +projK4 +routeB", "int8", "1", 8, 4,
+            {"MODIFF_LINEAR_DELTA_REFRESH": "4", "MODIFF_FUSE_QKV_I8": "1"}),
+           ("W8A4 conv+proj", "int8", "1", 4, 4, {}),
+           ("W4A4 conv+proj", "int4", "1", 8, 4, {})]
+WALL_ONLY = [("fp16", "fp16", "0", 8, 4, {})]
+
+#: Cleared before every config unless that config asks for them. See the note above.
+OPTIONAL_ENV = ["MODIFF_LINEAR_DELTA_REFRESH", "MODIFF_FUSE_QKV_I8"]
 
 #: Leaf dispatch targets, per layer kind. `forward` is absent ON PURPOSE: it wraps the others, and
 #: timing both is the double count that invalidated the earlier profile.
@@ -91,7 +105,11 @@ class EventTimer:
         return {k: len(v) for k, v in self.pairs.items() if v}
 
 
-def profile(label, mode, lin, act_bits, k, steps):
+def profile(label, mode, lin, act_bits, k, steps, extra_env=None):
+    for _v in OPTIONAL_ENV:
+        os.environ.pop(_v, None)
+    for _k, _v in (extra_env or {}).items():
+        os.environ[_k] = _v
     os.environ["MODIFF_LINEAR"] = lin
     os.environ["MODIFF_ACT_BITS"] = str(act_bits)
     os.environ["MODIFF_DELTA_REFRESH"] = str(k)
@@ -308,9 +326,9 @@ def main():
 
     print(f"batch {args.batch}, DDIM {args.steps}, {torch.cuda.get_device_name(0)}\n", flush=True)
     rows = []
-    for label, mode, lin, ab, k in WALL_ONLY + CONFIGS:
-        print(f"=== {label}", flush=True)
-        r = profile(label, mode, lin, ab, k, args.steps)
+    for label, mode, lin, ab, k, extra in WALL_ONLY + CONFIGS:
+        print(f"=== {label}" + (f"   {extra}" if extra else ""), flush=True)
+        r = profile(label, mode, lin, ab, k, args.steps, extra)
         rows.append(r)
         if r.get("kinds"):
             print(f"    wall {r['wall_ms_per_step']:.1f} ms/step, instrumented "

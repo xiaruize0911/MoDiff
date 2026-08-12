@@ -1,6 +1,6 @@
 # Route (b): the aq_* fusion was not impossible, the gate was wrong
 
-**+0.79 ms/step, landed opt-in behind `MODIFF_FUSE_QKV_I8=1`.** Three instruments agree, and the
+**+0.79 ms/step, landed behind `MODIFF_FUSE_QKV_I8=1`.** Three instruments agree, and the
 kernel-level prediction made before the end-to-end run matched it to 0.00 ms.
 
 The 2026-08-11 report closed with route (b) refuted: "neither int8 attention width in this model can
@@ -315,7 +315,7 @@ now refuses that combination instead of silently replacing the dataset.
    any kernel is written. Note also it only pays at A8/A7 — at A4 the projections are already a
    0.976×/1.014× proposition.
 5. **Quality is unresolved, not clean.** ±2.5% per-seed swings at 3 seeds. If route (b) is ever made
-   default rather than opt-in, that needs more seeds — the 8-seed lesson from `docs/act_bits_2026-08-05`
+   default rather than flag-gated, that needs more seeds — the 8-seed lesson from `docs/act_bits_2026-08-05`
    applies (a 3-seed mean there reversed sign at 8).
 4. **The environment had to be re-provisioned.** `omegaconf`, `einops`, `pytorch-lightning==1.4.2`,
    `torchmetrics==0.6.0`, `tqdm`, `ninja`, `matplotlib`, all installed under a constraints file

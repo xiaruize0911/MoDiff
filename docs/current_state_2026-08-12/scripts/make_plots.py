@@ -1,14 +1,15 @@
-"""Current-state profile figures. Offline: reads docs/postsplit_benchmark_2026-08-12/data/, no GPU.
+"""Current-state profile figures. Offline: reads this report's data/ (plus the e2e runs from
+docs/postsplit_benchmark_2026-08-12/data/), no GPU.
 
 ABSOLUTE state only -- no pre/post comparison anywhere in this report. Four views, coarse to fine:
 
   00  e2e per arm            which configuration costs what
-  01  per attention block    all 21 blocks, and the four shape tiers they fall into
+  01  per attention block    all 21 blocks, four shape tiers, three W8A8 configurations
   02  per conv layer         all 70 called convs in UNet depth order
   03  per kernel             the current default's top kernels and bucket split
 
 Instrument boundaries matter and are stated on each figure: the e2e number is profiler-free wall clock,
-the per-layer/per-block numbers are CUDA events covering 0.64-0.88 of the step, and the per-kernel
+the per-layer/per-block numbers are CUDA events covering 0.63-0.89 of the step, and the per-kernel
 numbers are a bucketed 8-step Perfetto trace. They do not sum to each other.
 
 Palette copied from docs/profile_kernels_layers_2026-08-11/scripts/make_plots.py.
@@ -22,7 +23,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt                                          # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-SRC = os.path.join(ROOT, "docs/postsplit_benchmark_2026-08-12/data")
+SRC = os.path.join(ROOT, "docs/current_state_2026-08-12/data")
+E2E = os.path.join(ROOT, "docs/postsplit_benchmark_2026-08-12/data")
 PLOTS = os.path.join(ROOT, "docs/current_state_2026-08-12/plots")
 
 SURFACE, INK, INK2, INK3 = "#fcfcfb", "#0b0b0b", "#52514e", "#8a8880"
@@ -46,11 +48,22 @@ TIERS = [("C192 T1024 hd24", {0, 1, 18, 19, 20}, ROSE),
          ("C384 T64 hd48", {4, 5, 12, 13, 14}, AQUA),
          ("C768 T16 hd96", {6, 7, 8, 9, 10, 11}, INK3)]
 DEFAULT_ARM = "modiff_full_k4_projk4_qkvi8"
+#: the three W8A8 conv+proj configurations, in the order the flags stack up
+W8A8_LADDER = [("W8A8 conv+proj", "conv+proj", INK3),
+               ("W8A8 conv+proj +projK4", "+ MODIFF_LINEAR_DELTA_REFRESH=4", BLUE),
+               ("W8A8 conv+proj +projK4 +routeB", "+ MODIFF_FUSE_QKV_I8=1", ROSE)]
+#: the configuration the tree runs by default with both flags set
+CURRENT = W8A8_LADDER[-1][0]
 
 
 def load(name):
-    p = os.path.join(SRC, name)
-    return json.load(open(p)) if os.path.exists(p) else None
+    """Layer/trace data is this report's own; the e2e differential runs live in the report that
+    produced them and are read from there rather than copied."""
+    for d in (SRC, E2E):
+        p = os.path.join(d, name)
+        if os.path.exists(p):
+            return json.load(open(p))
+    return None
 
 
 def layer_row(cfg):
@@ -69,8 +82,8 @@ def plot_e2e(out):
     SHORT = {"fp16": "fp16", "int8_ptq": "W8A8 PTQ\n(no MoDiff)",
              "modiff_conv_k4": "MoDiff conv\nK=4", "modiff_conv_k1": "MoDiff conv\nK=1",
              "modiff_full_k1": "conv+proj K=1\n(paper)", "modiff_full_k4": "conv+proj\nK=4",
-             "modiff_full_k4_projk4": "+proj refresh\n(opt-in)",
-             DEFAULT_ARM: "+route (b)\n(opt-in)"}
+             "modiff_full_k4_projk4": "+ proj refresh\nK=4",
+             DEFAULT_ARM: "+ route (b)"}
     ms = {"fp16": fp}
     ms.update({a: r["stats"]["median"] / 1e3 / q["steps"] for a, r in q["arms"].items()})
     arms = [a for a in order if a in ms]
@@ -97,18 +110,21 @@ def plot_e2e(out):
 
 
 def plot_blocks(out):
-    """All 21 attention blocks, coloured by shape tier. The four tiers are the whole story."""
-    r = layer_row("W8A8 conv+proj")
-    if not r:
+    """All 21 attention blocks in the current configuration, and what the two flags move.
+
+    The right panel is the whole point: the flags act on the hd=48 tiers and nowhere else, which is
+    exactly what route (b)'s gate predicts (it needs hd % 16 == 0 and T % 64 == 0).
+    """
+    rows = {r["config"]: r for r in (load("profile_layers.json") or [])}
+    if CURRENT not in rows:
         return False
-    L = r["layers"]
+    L = rows[CURRENT]["layers"]
     idx = sorted(int(k[4:]) for k in L if k.startswith("attn"))
     vals = [L[f"attn{i:02d}"] for i in idx]
-    colors = []
-    for i in idx:
-        colors.append(next((c for _, s, c in TIERS if i in s), INK3))
-    fig, (axl, axr) = plt.subplots(1, 2, figsize=(13.0, 4.7),
-                                   gridspec_kw={"width_ratios": [1.7, 1]})
+    colors = [next((c for _, s_, c in TIERS if i in s_), INK3) for i in idx]
+
+    fig, (axl, axr) = plt.subplots(1, 2, figsize=(13.6, 4.9),
+                                   gridspec_kw={"width_ratios": [1.55, 1]})
     axl.bar(range(len(idx)), vals, color=colors, width=0.66)
     for i, v in enumerate(vals):
         if v > 1.0:
@@ -117,30 +133,43 @@ def plot_blocks(out):
     axl.set_xticklabels([str(i) for i in idx], fontsize=8)
     axl.set_xlabel("attention block, UNet order (0-7 down, 8-10 middle, 11-20 up)")
     axl.set_ylabel("ms/step")
-    axl.set_title("Per attention block -- 42.85 ms/step over 21 blocks", loc="left")
+    axl.set_title(f"Per attention block -- {sum(vals):.2f} ms/step over 21 blocks", loc="left")
     axl.grid(axis="y", color=GRID, linewidth=0.8)
     axl.set_axisbelow(True)
     handles = [plt.Rectangle((0, 0), 1, 1, color=c) for _, _, c in TIERS]
-    axl.legend(handles, [n for n, _, _ in TIERS], fontsize=8.5, title="shape tier",
-               title_fontsize=8.5)
+    axl.legend(handles, [f"{n} ({len(s_)})" for n, s_, _ in TIERS], fontsize=8.5,
+               title="shape tier", title_fontsize=8.5)
 
     names = [n for n, _, _ in TIERS]
-    tot = [sum(L[f"attn{i:02d}"] for i in s) for _, s, _ in TIERS]
-    cnt = [len(s) for _, s, _ in TIERS]
-    axr.barh(range(len(names)), tot, color=[c for _, _, c in TIERS], height=0.55)
-    for i, (t, n) in enumerate(zip(tot, cnt)):
-        axr.text(t + 0.4, i, f"{t:.2f} ms  ({n} blocks, {100 * t / sum(tot):.0f}%)",
-                 va="center", color=INK2, fontsize=9)
+    w = 0.26
+    for j, (cfg, lab, col) in enumerate(W8A8_LADDER):
+        if cfg not in rows:
+            continue
+        Lj = rows[cfg]["layers"]
+        tot = [sum(Lj[f"attn{i:02d}"] for i in s_) for _, s_, _ in TIERS]
+        ys = [i + (j - 1) * w for i in range(len(names))]
+        axr.barh(ys, tot, color=col, height=w * 0.9, label=f"{lab}  ({sum(tot):.2f} ms)")
+        if j == len(W8A8_LADDER) - 1:
+            # annotate route (b) alone -- i.e. against the row above it, not against conv+proj.
+            # The refresh schedule moves every tier (it is a projection-side change and these timers
+            # wrap the block's projections); route (b) is the one that should be tier-selective.
+            base = [sum(rows[W8A8_LADDER[-2][0]]["layers"][f"attn{i:02d}"] for i in s_)
+                    for _, s_, _ in TIERS]
+            for i, (t, b) in enumerate(zip(tot, base)):
+                d = t - b
+                axr.text(max(t, b) + 0.35, i, f"route(b) {d:+.2f}",
+                         va="center", color=ROSE if abs(d) >= 0.05 else INK3, fontsize=8.5)
     axr.set_yticks(range(len(names)))
     axr.set_yticklabels(names, fontsize=8.5)
     axr.invert_yaxis()
     axr.set_xlabel("ms/step, summed over the tier")
-    axr.set_title("5 hd24 blocks are 62% of attention", loc="left")
+    axr.set_title("Route (b) moves the 10 hd48 blocks and nothing else", loc="left")
     axr.grid(axis="x", color=GRID, linewidth=0.8)
     axr.set_axisbelow(True)
-    axr.set_xlim(0, max(tot) * 1.75)
-    fig.suptitle("W8A8 conv+proj, batch 128 -- CUDA events on live dispatch targets (coverage 0.88)",
-                 x=0.01, ha="left", fontsize=11.5)
+    axr.set_xlim(0, 34)
+    axr.legend(fontsize=8, loc="lower right")
+    fig.suptitle("Batch 128 -- CUDA events on live dispatch targets (coverage 0.87-0.88). "
+                 "Left: current configuration, both flags set.", x=0.01, ha="left", fontsize=11.5)
     fig.tight_layout(rect=(0, 0, 1, 0.93))
     fig.savefig(out, dpi=170)
     plt.close(fig)
@@ -148,14 +177,37 @@ def plot_blocks(out):
 
 
 def plot_conv_layers(out):
-    """All called conv layers in depth order, for the arms that have them."""
-    rows = load("profile_layers.json") or []
-    fig, ax = plt.subplots(figsize=(12.0, 4.7))
-    for r, c in zip([x for x in rows if x.get("layers")], (INK3, AQUA, BLUE, PLUM, ROSE)):
-        conv = {k: v for k, v in r["layers"].items() if k.startswith("conv")}
-        names = sorted(conv, key=lambda n: int(n[4:]))
-        ax.plot(range(len(names)), [conv[n] for n in names], linewidth=1.5, color=c,
-                label=f"{r['config']} ({sum(conv.values()):.1f} ms)")
+    """All called conv layers in depth order.
+
+    Five of the eight configs (every MoDiff conv arm at W8A8 and W8A4) share one conv datapath and
+    agree to <=0.055 ms on every single layer, so plotting them as eight curves is eight curves on top
+    of each other. They are drawn as one min-max band instead, which is itself the finding.
+    """
+    rows = {r["config"]: r for r in (load("profile_layers.json") or [])}
+    if not rows:
+        return False
+    SAME = ["W8A8 conv-only", "W8A8 conv+proj", "W8A8 conv+proj +projK4",
+            "W8A8 conv+proj +projK4 +routeB", "W8A4 conv+proj"]
+    SAME = [c for c in SAME if c in rows]
+
+    def series(cfg):
+        conv = {k: v for k, v in rows[cfg]["layers"].items() if k.startswith("conv")}
+        return [conv[n] for n in sorted(conv, key=lambda n: int(n[4:]))]
+
+    fig, ax = plt.subplots(figsize=(12.4, 4.9))
+    band = [series(c) for c in SAME]
+    x = range(len(band[0]))
+    lo = [min(col) for col in zip(*band)]
+    hi = [max(col) for col in zip(*band)]
+    ax.fill_between(x, lo, hi, color=BLUE, alpha=0.30, linewidth=0)
+    ax.plot(x, [sum(col) / len(col) for col in zip(*band)], color=BLUE, linewidth=1.6,
+            label=f"MoDiff conv datapath -- {len(SAME)} configs, W8A8 and W8A4 "
+                  f"({sum(band[1]):.1f} ms, max spread 0.055)")
+    for cfg, col in (("W8A8 PTQ", INK3), ("W4A4 conv+proj", PLUM)):
+        if cfg in rows:
+            v = series(cfg)
+            ax.plot(range(len(v)), v, color=col, linewidth=1.5,
+                    label=f"{cfg} ({sum(v):.1f} ms)")
     ax.set_xlabel("quantized conv layer, UNet depth order (high-res input blocks -> middle -> "
                   "high-res output blocks)")
     ax.set_ylabel("ms/step")
@@ -163,7 +215,7 @@ def plot_conv_layers(out):
                  "the low-res middle is nearly free", loc="left")
     ax.grid(axis="y", color=GRID, linewidth=0.8)
     ax.set_axisbelow(True)
-    ax.legend(fontsize=9)
+    ax.legend(fontsize=8.5)
     fig.tight_layout()
     fig.savefig(out, dpi=170)
     plt.close(fig)
@@ -171,7 +223,7 @@ def plot_conv_layers(out):
 
 
 def plot_kernels(out):
-    d = load("trace_buckets_postsplit.json")
+    d = load("trace_buckets_all.json")
     if not d or DEFAULT_ARM not in d["configs"]:
         return False
     c = d["configs"][DEFAULT_ARM]
@@ -219,8 +271,8 @@ def plot_kernels(out):
     axr.grid(axis="x", color=GRID, linewidth=0.8)
     axr.set_axisbelow(True)
     axr.set_xlim(0, max(v["ms_per_step"] for _, v in bk) * 1.95)
-    fig.suptitle("Per kernel: current default + both opt-ins (MoDiff conv+proj K=4, proj refresh, "
-                 "route b), batch 128, 8-step trace", x=0.01, ha="left", fontsize=11.5)
+    fig.suptitle("Per kernel, current configuration (MoDiff conv+proj K=4, projection refresh K=4, "
+                 "route b) -- batch 128, 8-step trace", x=0.01, ha="left", fontsize=11.5)
     fig.tight_layout(rect=(0, 0, 1, 0.93))
     fig.savefig(out, dpi=170)
     plt.close(fig)

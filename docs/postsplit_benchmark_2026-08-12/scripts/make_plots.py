@@ -45,7 +45,7 @@ plt.rcParams.update({
 
 #: Pre-split reference, ms/step, from the records this report re-measures against.
 #: docs/profile_kernels_layers_2026-08-11/data/ (fp16 .. modiff_full_k4) and
-#: docs/aq_fusion_2026-08-12/data/differential_timing_qkvi8.json (the two opt-in arms).
+#: docs/aq_fusion_2026-08-12/data/differential_timing_qkvi8.json (the projK4 and routeB arms).
 PRE = {"fp16": 106.09, "int8_ptq": 73.31, "modiff_conv_k4": 77.33, "modiff_conv_k1": 83.01,
        "modiff_full_k1": 105.42, "modiff_full_k4": 99.73,
        "modiff_full_k4_projk4": 95.64, "modiff_full_k4_projk4_qkvi8": 94.88}
@@ -54,8 +54,8 @@ ORDER = ["fp16", "int8_ptq", "modiff_conv_k4", "modiff_conv_k1", "modiff_full_k1
 SHORT = {"fp16": "fp16", "int8_ptq": "W8A8 PTQ", "modiff_conv_k4": "conv K=4",
          "modiff_conv_k1": "conv K=1", "modiff_full_k1": "conv+proj\nK=1",
          "modiff_full_k4": "conv+proj\nK=4",
-         "modiff_full_k4_projk4": "+proj K=4\n(opt-in)",
-         "modiff_full_k4_projk4_qkvi8": "+route (b)\n(opt-in)"}
+         "modiff_full_k4_projk4": "+proj refresh\nK=4",
+         "modiff_full_k4_projk4_qkvi8": "+route (b)"}
 
 
 def load(name):

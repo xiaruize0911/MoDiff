@@ -101,7 +101,7 @@ def plot_e2e(out):
     ms = {k: a["stats"]["median"] / 1e3 / d["steps"] for k, a in d["arms"].items()}
     order = ["modiff_full_k4_projk4", "modiff_full_k4_projk4_qkvi8"]
     short = {"modiff_full_k4_projk4": "conv+proj K=4\n+proj K=4",
-             "modiff_full_k4_projk4_qkvi8": "…+ route (b)\n(opt-in)"}
+             "modiff_full_k4_projk4_qkvi8": "…+ route (b)"}
     fp16_file = os.path.join(ROOT, "docs/profile_kernels_layers_2026-08-11/data/"
                                    "differential_timing_fp16.json")
     fp16 = None

@@ -1,0 +1,4220 @@
+{
+ "gpu": "NVIDIA A40",
+ "configs": {
+  "int8_ptq": {
+   "steps": 8,
+   "gpu_ms_per_step": 69.40655274999999,
+   "per_step_ms": {
+    "step/000": 68.169,
+    "step/001": 69.077,
+    "step/002": 69.709,
+    "step/003": 69.387,
+    "step/004": 69.609,
+    "step/005": 69.642,
+    "step/006": 69.695,
+    "step/007": 69.964
+   },
+   "outside_steps_ms_total": 0.0,
+   "kernels": {
+    "at::native::elementwise_kernel": {
+     "ms_per_step": 2.3885898749999988,
+     "calls_per_step": 95.125,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "at::native::reduce_kernel": {
+     "ms_per_step": 0.003604,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "[gpu_memcpy]": {
+     "ms_per_step": 0.00162,
+     "calls_per_step": 1.125,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "(anonymous namespace)::elementwise_kernel_with_index": {
+     "ms_per_step": 0.00017199999999999998,
+     "calls_per_step": 0.125,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "at::native::unrolled_elementwise_kernel": {
+     "ms_per_step": 0.9974782499999998,
+     "calls_per_step": 17.875,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "at::native::vectorized_elementwise_kernel": {
+     "ms_per_step": 0.28601849999999995,
+     "calls_per_step": 38.25,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "at::native::(anonymous namespace)::CatArrayBatchedCopy_aligned16_contig": {
+     "ms_per_step": 0.000351875,
+     "calls_per_step": 0.125,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "at::native::(anonymous namespace)::indexSelectLargeIndex": {
+     "ms_per_step": 0.003931875,
+     "calls_per_step": 1.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "cutlass::Kernel2": {
+     "ms_per_step": 0.004895875,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize32x32x64_stage6_warpsize2x2x1_tensor16x8x16_kernel": {
+     "ms_per_step": 0.159205875,
+     "calls_per_step": 21.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "sm80_xmma_fprop_implicit_gemm_indexed_wo_smem_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x64_stage1_warpsize4x1x1_g1_tensor16x8x16_aligna4_alignc4_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.09679675,
+     "calls_per_step": 1.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "group_norm_silu_quantize_nhwc_vec2_kernel": {
+     "ms_per_step": 16.423925749999995,
+     "calls_per_step": 83.0,
+     "bucket": "norm_quantize",
+     "suite_of": "norm_quantize"
+    },
+    "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2R_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2U_S2U_EEELi1ES2Q_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2U_S2K_iEEELb1EEEEEES30_EEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE": {
+     "ms_per_step": 13.715860999999999,
+     "calls_per_step": 35.0,
+     "bucket": "conv",
+     "suite_of": "conv"
+    },
+    "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS2D_IS2P_JNS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2R_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2U_S2U_EEELi1ES2Q_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2U_S2K_iEEELb1EEEEEES30_EEENS1J_14VisitorAuxLoadIS2G_S1S_S2L_EEEEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE": {
+     "ms_per_step": 10.98302275,
+     "calls_per_step": 35.0,
+     "bucket": "conv",
+     "suite_of": "conv"
+    },
+    "gemm_w8a8_kernel_awq_out_i8": {
+     "ms_per_step": 5.234849874999998,
+     "calls_per_step": 21.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "flash_attn_int8_mma_kernel_t": {
+     "ms_per_step": 8.423625124999997,
+     "calls_per_step": 15.0,
+     "bucket": "attention",
+     "suite_of": "attention"
+    },
+    "gemm_w8a8_kernel_awq(signed char const*, signed char const*, float const*, float, __half*, int, int, int, int, __half const*, __half const*, __half*, float const*)": {
+     "ms_per_step": 3.289123125,
+     "calls_per_step": 21.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "group_norm_silu_quantize_resize_nhwc_kernel": {
+     "ms_per_step": 0.8558680000000002,
+     "calls_per_step": 8.0,
+     "bucket": "norm_quantize",
+     "suite_of": "norm_quantize"
+    },
+    "at::native::(anonymous namespace)::avg_pool2d_out_cuda_frame_nhwc": {
+     "ms_per_step": 0.45461087499999997,
+     "calls_per_step": 4.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize64x128x32_stage4_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.07618825,
+     "calls_per_step": 1.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "ampere_fp16_s16816gemm_fp16_64x64_sliced1x2_ldg8_relu_f2f_stages_64x5_tn": {
+     "ms_per_step": 0.15600425,
+     "calls_per_step": 15.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "ampere_fp16_s16816gemm_fp16_256x128_ldg8_f2f_stages_32x3_tn": {
+     "ms_per_step": 0.022700125,
+     "calls_per_step": 1.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "flash_attn_int8_qi8packed_small_qout_kernel": {
+     "ms_per_step": 0.34656175000000006,
+     "calls_per_step": 6.0,
+     "bucket": "attention",
+     "suite_of": "attention"
+    },
+    "cat2_channels_last_fp16_kernel(__half const*, __half const*, __half*, long, int, int)": {
+     "ms_per_step": 1.9261193750000005,
+     "calls_per_step": 15.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "ampere_fp16_s16816gemm_fp16_128x64_ldg8_f2f_stages_32x6_tn": {
+     "ms_per_step": 0.06323612499999999,
+     "calls_per_step": 3.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "at::native::(anonymous namespace)::upsample_nearest2d_nhwc_out_frame": {
+     "ms_per_step": 1.243011125,
+     "calls_per_step": 4.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize96x128x32_stage4_warpsize2x2x1_tensor16x8x16_kernel": {
+     "ms_per_step": 0.1177365,
+     "calls_per_step": 2.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "[gpu_memset]": {
+     "ms_per_step": 0.0034000000000000002,
+     "calls_per_step": 2.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "ampere_fp16_s1688gemm_fp16_128x128_ldg8_f2f_stages_32x1_tn": {
+     "ms_per_step": 0.048312125,
+     "calls_per_step": 1.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.08243662499999999,
+     "calls_per_step": 1.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x64x32_stage4_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.5047348750000001,
+     "calls_per_step": 3.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_t1r1s1_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.5077547499999999,
+     "calls_per_step": 3.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x64x32_stage5_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.5726749999999999,
+     "calls_per_step": 2.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "at::native::(anonymous namespace)::RowwiseMomentsCUDAKernel": {
+     "ms_per_step": 0.156852625,
+     "calls_per_step": 1.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "at::native::(anonymous namespace)::ComputeFusedParamsCUDAKernel": {
+     "ms_per_step": 0.003456,
+     "calls_per_step": 1.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "nhwcAddPaddingKernel": {
+     "ms_per_step": 0.009668249999999998,
+     "calls_per_step": 2.0,
+     "bucket": "conv",
+     "suite_of": "other"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize256x32x32_stage5_warpsize4x1x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.242153625,
+     "calls_per_step": 1.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    }
+   },
+   "delta_from": null,
+   "mode": "int8_baseline",
+   "route_check": {
+    "attn_blocks": 21,
+    "attn_class": "QuantizedStandardAttentionBlock",
+    "qout_eligible": 21,
+    "attn_qkv_i8": 0,
+    "wxax": 42,
+    "wxax_modiff": 0,
+    "wxax_out_i8": 0,
+    "wxax_bias_res": 42,
+    "int8_convs": 140,
+    "conv_modiff_on": 0,
+    "conv_delta_refresh": [
+     1
+    ]
+   },
+   "buckets": {
+    "conv": {
+     "ms_per_step": 26.791291875,
+     "calls_per_step": 84.0,
+     "kernels": 10
+    },
+    "norm_quantize": {
+     "ms_per_step": 17.440102374999995,
+     "calls_per_step": 93.0,
+     "kernels": 4
+    },
+    "linear_gemm": {
+     "ms_per_step": 9.091167999999998,
+     "calls_per_step": 85.0,
+     "kernels": 8
+    },
+    "attention": {
+     "ms_per_step": 8.770186874999997,
+     "calls_per_step": 21.0,
+     "kernels": 2
+    },
+    "elementwise": {
+     "ms_per_step": 7.300283749999999,
+     "calls_per_step": 175.5,
+     "kernels": 9
+    },
+    "other": {
+     "ms_per_step": 0.013519875,
+     "calls_per_step": 5.125,
+     "kernels": 4
+    }
+   },
+   "suite_of_buckets": {
+    "conv": {
+     "ms_per_step": 24.69888375,
+     "calls_per_step": 70.0,
+     "kernels": 2
+    },
+    "norm_quantize": {
+     "ms_per_step": 17.279793749999996,
+     "calls_per_step": 91.0,
+     "kernels": 2
+    },
+    "linear": {
+     "ms_per_step": 11.173907875,
+     "calls_per_step": 97.0,
+     "kernels": 15
+    },
+    "attention": {
+     "ms_per_step": 8.770186874999997,
+     "calls_per_step": 21.0,
+     "kernels": 2
+    },
+    "other": {
+     "ms_per_step": 7.483780499999999,
+     "calls_per_step": 184.625,
+     "kernels": 16
+    }
+   },
+   "wall_ms_per_step": 73.6092919921875,
+   "trace_over_wall": 0.942904772910551
+  },
+  "modiff_full_k4_projk4": {
+   "steps": 8,
+   "gpu_ms_per_step": 92.44503587500004,
+   "per_step_ms": {
+    "step/000": 93.062,
+    "step/001": 89.643,
+    "step/002": 89.449,
+    "step/003": 97.128,
+    "step/004": 93.484,
+    "step/005": 90.075,
+    "step/006": 89.743,
+    "step/007": 96.975
+   },
+   "outside_steps_ms_total": 0.0,
+   "kernels": {
+    "at::native::unrolled_elementwise_kernel": {
+     "ms_per_step": 1.3329445000000015,
+     "calls_per_step": 125.75,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize64x128x32_stage4_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.0758325,
+     "calls_per_step": 1.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "at::native::elementwise_kernel": {
+     "ms_per_step": 4.131391999999999,
+     "calls_per_step": 140.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "gn_stats_partials_chanmajor_kernel": {
+     "ms_per_step": 4.693168374999999,
+     "calls_per_step": 83.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "gn_stats_reduce_partials_kernel(float const*, float const*, float*, float*, int, long, float, int)": {
+     "ms_per_step": 0.4935221250000003,
+     "calls_per_step": 83.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "gn_delta_absmax_flat_vec2_kernel": {
+     "ms_per_step": 2.0499716249999977,
+     "calls_per_step": 20.75,
+     "bucket": "delta_quantize",
+     "suite_of": "other"
+    },
+    "gn_apply_delta_quantize_flat_vec2_kernel": {
+     "ms_per_step": 10.724406625000007,
+     "calls_per_step": 83.0,
+     "bucket": "delta_quantize",
+     "suite_of": "norm_quantize"
+    },
+    "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS2D_IS2M_JNS2D_IS2P_JNS1J_14VisitorAuxLoadIS2G_S1S_S2L_EENS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2T_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2W_S2W_EEELi1ES2S_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2W_S2K_iEEELb1EEEEEEEEEEEES2R_EEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE": {
+     "ms_per_step": 11.604081375000002,
+     "calls_per_step": 35.0,
+     "bucket": "conv",
+     "suite_of": "conv"
+    },
+    "gemm_w8a8_kernel_awq(signed char const*, signed char const*, float const*, float, __half*, int, int, int, int, __half const*, __half const*, __half*, float const*)": {
+     "ms_per_step": 14.674178625,
+     "calls_per_step": 42.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "aq_qtok_packed_static_qk_vec2_kernel": {
+     "ms_per_step": 0.9880540000000001,
+     "calls_per_step": 10.0,
+     "bucket": "attn_quantize",
+     "suite_of": "other"
+    },
+    "aq_vquant_trans_packed_tiled_vec2_kernel": {
+     "ms_per_step": 1.81532175,
+     "calls_per_step": 15.0,
+     "bucket": "attn_quantize",
+     "suite_of": "norm_quantize"
+    },
+    "flash_attn_int8_mma_kernel_t": {
+     "ms_per_step": 8.441744625,
+     "calls_per_step": 15.0,
+     "bucket": "attention",
+     "suite_of": "attention"
+    },
+    "static_quantize_and_update_ahat_kernel_int8_half_cache_vec2": {
+     "ms_per_step": 2.6173102500000005,
+     "calls_per_step": 21.0,
+     "bucket": "delta_quantize",
+     "suite_of": "norm_quantize"
+    },
+    "at::native::vectorized_elementwise_kernel": {
+     "ms_per_step": 2.6204428749999993,
+     "calls_per_step": 69.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS1J_14VisitorAuxLoadIS2G_S1S_S2L_EENS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2T_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2W_S2W_EEELi1ES2S_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2W_S2K_iEEELb1EEEEEEEEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE": {
+     "ms_per_step": 13.790810875,
+     "calls_per_step": 35.0,
+     "bucket": "conv",
+     "suite_of": "conv"
+    },
+    "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize32x32x64_stage6_warpsize2x2x1_tensor16x8x16_kernel": {
+     "ms_per_step": 0.154801125,
+     "calls_per_step": 21.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "group_norm_silu_delta_quantize_resize_nhwc_kernel": {
+     "ms_per_step": 3.5698024999999998,
+     "calls_per_step": 10.0,
+     "bucket": "norm_quantize",
+     "suite_of": "norm_quantize"
+    },
+    "at::native::(anonymous namespace)::avg_pool2d_out_cuda_frame_nhwc": {
+     "ms_per_step": 0.4454023749999999,
+     "calls_per_step": 4.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "ampere_fp16_s16816gemm_fp16_64x64_sliced1x2_ldg8_relu_f2f_stages_64x5_tn": {
+     "ms_per_step": 0.1513487499999999,
+     "calls_per_step": 15.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "ampere_fp16_s16816gemm_fp16_256x128_ldg8_f2f_stages_32x3_tn": {
+     "ms_per_step": 0.022000125000000002,
+     "calls_per_step": 1.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "pytorch_flash::flash_fwd_kernel": {
+     "ms_per_step": 0.26187699999999997,
+     "calls_per_step": 6.0,
+     "bucket": "attention",
+     "suite_of": "other"
+    },
+    "cat2_channels_last_fp16_kernel(__half const*, __half const*, __half*, long, int, int)": {
+     "ms_per_step": 1.9205655,
+     "calls_per_step": 15.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "ampere_fp16_s16816gemm_fp16_128x64_ldg8_f2f_stages_32x6_tn": {
+     "ms_per_step": 0.061984625,
+     "calls_per_step": 3.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "at::native::(anonymous namespace)::upsample_nearest2d_nhwc_out_frame": {
+     "ms_per_step": 1.2150025,
+     "calls_per_step": 4.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize96x128x32_stage4_warpsize2x2x1_tensor16x8x16_kernel": {
+     "ms_per_step": 0.114817,
+     "calls_per_step": 2.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "[gpu_memset]": {
+     "ms_per_step": 0.003248125,
+     "calls_per_step": 2.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "ampere_fp16_s1688gemm_fp16_128x128_ldg8_f2f_stages_32x1_tn": {
+     "ms_per_step": 0.04712837500000001,
+     "calls_per_step": 1.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.08086475000000001,
+     "calls_per_step": 1.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x64x32_stage4_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.5034427499999999,
+     "calls_per_step": 3.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_t1r1s1_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.5034145000000001,
+     "calls_per_step": 3.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "aq_qtok_packed_static_qk_flat_kernel": {
+     "ms_per_step": 1.7914214999999996,
+     "calls_per_step": 5.0,
+     "bucket": "attn_quantize",
+     "suite_of": "other"
+    },
+    "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x64x32_stage5_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.5707151250000001,
+     "calls_per_step": 2.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "at::native::(anonymous namespace)::RowwiseMomentsCUDAKernel": {
+     "ms_per_step": 0.155616875,
+     "calls_per_step": 1.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "at::native::(anonymous namespace)::ComputeFusedParamsCUDAKernel": {
+     "ms_per_step": 0.003348,
+     "calls_per_step": 1.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "nhwcAddPaddingKernel": {
+     "ms_per_step": 0.009808125000000001,
+     "calls_per_step": 2.0,
+     "bucket": "conv",
+     "suite_of": "other"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize256x32x32_stage5_warpsize4x1x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.235781,
+     "calls_per_step": 1.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "at::native::reduce_kernel": {
+     "ms_per_step": 0.0036,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "[gpu_memcpy]": {
+     "ms_per_step": 0.001688,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "at::native::(anonymous namespace)::indexSelectLargeIndex": {
+     "ms_per_step": 0.003931875,
+     "calls_per_step": 1.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "cutlass::Kernel2": {
+     "ms_per_step": 0.004924250000000001,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "sm80_xmma_fprop_implicit_gemm_indexed_wo_smem_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x64_stage1_warpsize4x1x1_g1_tensor16x8x16_aligna4_alignc4_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.096032375,
+     "calls_per_step": 1.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "delta_absmax_fp16_kernel": {
+     "ms_per_step": 0.4592866250000001,
+     "calls_per_step": 5.25,
+     "bucket": "delta_quantize",
+     "suite_of": "other"
+    }
+   },
+   "delta_from": "modiff_full_k4",
+   "mode": "int8",
+   "route_check": {
+    "attn_blocks": 21,
+    "attn_class": "QuantizedStandardAttentionBlock",
+    "qout_eligible": 0,
+    "attn_qkv_i8": 0,
+    "wxax": 42,
+    "wxax_modiff": 42,
+    "wxax_out_i8": 0,
+    "wxax_bias_res": 0,
+    "int8_convs": 140,
+    "conv_modiff_on": 140,
+    "conv_delta_refresh": [
+     4
+    ]
+   },
+   "buckets": {
+    "conv": {
+     "ms_per_step": 27.470783375000003,
+     "calls_per_step": 84.0,
+     "kernels": 10
+    },
+    "delta_quantize": {
+     "ms_per_step": 15.850975125000007,
+     "calls_per_step": 130.0,
+     "kernels": 4
+    },
+    "linear_gemm": {
+     "ms_per_step": 15.226258625,
+     "calls_per_step": 85.0,
+     "kernels": 7
+    },
+    "elementwise": {
+     "ms_per_step": 11.669681625,
+     "calls_per_step": 358.75,
+     "kernels": 7
+    },
+    "norm_quantize": {
+     "ms_per_step": 8.915457875,
+     "calls_per_step": 178.0,
+     "kernels": 5
+    },
+    "attention": {
+     "ms_per_step": 8.703621625,
+     "calls_per_step": 21.0,
+     "kernels": 2
+    },
+    "attn_quantize": {
+     "ms_per_step": 4.59479725,
+     "calls_per_step": 30.0,
+     "kernels": 3
+    },
+    "other": {
+     "ms_per_step": 0.013460375,
+     "calls_per_step": 5.0,
+     "kernels": 4
+    }
+   },
+   "suite_of_buckets": {
+    "conv": {
+     "ms_per_step": 25.39489225,
+     "calls_per_step": 70.0,
+     "kernels": 2
+    },
+    "other": {
+     "ms_per_step": 22.58921624999999,
+     "calls_per_step": 580.75,
+     "kernels": 21
+    },
+    "norm_quantize": {
+     "ms_per_step": 18.726841125000007,
+     "calls_per_step": 129.0,
+     "kernels": 4
+    },
+    "linear": {
+     "ms_per_step": 17.292341625,
+     "calls_per_step": 97.0,
+     "kernels": 14
+    },
+    "attention": {
+     "ms_per_step": 8.441744625,
+     "calls_per_step": 15.0,
+     "kernels": 1
+    }
+   },
+   "wall_ms_per_step": null,
+   "trace_over_wall": null
+  },
+  "modiff_full_k4_projk4_qkvi8": {
+   "steps": 8,
+   "gpu_ms_per_step": 91.61597725000006,
+   "per_step_ms": {
+    "step/000": 92.246,
+    "step/001": 88.954,
+    "step/002": 88.987,
+    "step/003": 96.256,
+    "step/004": 92.635,
+    "step/005": 88.769,
+    "step/006": 88.9,
+    "step/007": 96.181
+   },
+   "outside_steps_ms_total": 0.0,
+   "kernels": {
+    "gn_stats_partials_chanmajor_kernel": {
+     "ms_per_step": 4.696364250000005,
+     "calls_per_step": 83.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "gn_stats_reduce_partials_kernel(float const*, float const*, float*, float*, int, long, float, int)": {
+     "ms_per_step": 0.4983596250000004,
+     "calls_per_step": 83.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "gn_apply_delta_quantize_flat_vec2_kernel": {
+     "ms_per_step": 10.72102087500001,
+     "calls_per_step": 83.0,
+     "bucket": "delta_quantize",
+     "suite_of": "norm_quantize"
+    },
+    "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS2D_IS2M_JNS2D_IS2P_JNS1J_14VisitorAuxLoadIS2G_S1S_S2L_EENS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2T_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2W_S2W_EEELi1ES2S_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2W_S2K_iEEELb1EEEEEEEEEEEES2R_EEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE": {
+     "ms_per_step": 11.587962750000008,
+     "calls_per_step": 35.0,
+     "bucket": "conv",
+     "suite_of": "conv"
+    },
+    "cat2_channels_last_fp16_kernel(__half const*, __half const*, __half*, long, int, int)": {
+     "ms_per_step": 1.9221187500000005,
+     "calls_per_step": 15.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS1J_14VisitorAuxLoadIS2G_S1S_S2L_EENS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2T_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2W_S2W_EEELi1ES2S_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2W_S2K_iEEELb1EEEEEEEEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE": {
+     "ms_per_step": 13.766667625000007,
+     "calls_per_step": 35.0,
+     "bucket": "conv",
+     "suite_of": "conv"
+    },
+    "at::native::vectorized_elementwise_kernel": {
+     "ms_per_step": 2.618311125000003,
+     "calls_per_step": 69.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "at::native::unrolled_elementwise_kernel": {
+     "ms_per_step": 1.3340647500000038,
+     "calls_per_step": 125.75,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize32x32x64_stage6_warpsize2x2x1_tensor16x8x16_kernel": {
+     "ms_per_step": 0.15435287499999997,
+     "calls_per_step": 21.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.08074825,
+     "calls_per_step": 1.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "at::native::elementwise_kernel": {
+     "ms_per_step": 4.051800249999998,
+     "calls_per_step": 120.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "gemm_w8a8_kernel_awq_out_i8": {
+     "ms_per_step": 3.9099115,
+     "calls_per_step": 10.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "flash_attn_int8_packed_mma_kernel": {
+     "ms_per_step": 2.543348374999999,
+     "calls_per_step": 10.0,
+     "bucket": "attention",
+     "suite_of": "attention"
+    },
+    "static_quantize_and_update_ahat_kernel_int8_half_cache_vec2": {
+     "ms_per_step": 2.614660874999999,
+     "calls_per_step": 21.0,
+     "bucket": "delta_quantize",
+     "suite_of": "norm_quantize"
+    },
+    "gemm_w8a8_kernel_awq(signed char const*, signed char const*, float const*, float, __half*, int, int, int, int, __half const*, __half const*, __half*, float const*)": {
+     "ms_per_step": 10.61931225,
+     "calls_per_step": 32.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x64x32_stage4_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.50088625,
+     "calls_per_step": 3.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "group_norm_silu_delta_quantize_resize_nhwc_kernel": {
+     "ms_per_step": 3.559274000000001,
+     "calls_per_step": 10.0,
+     "bucket": "norm_quantize",
+     "suite_of": "norm_quantize"
+    },
+    "at::native::(anonymous namespace)::upsample_nearest2d_nhwc_out_frame": {
+     "ms_per_step": 1.2133620000000005,
+     "calls_per_step": 4.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_t1r1s1_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.502446625,
+     "calls_per_step": 3.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "aq_qtok_packed_static_qk_flat_kernel": {
+     "ms_per_step": 1.7889686249999999,
+     "calls_per_step": 5.0,
+     "bucket": "attn_quantize",
+     "suite_of": "other"
+    },
+    "aq_vquant_trans_packed_tiled_vec2_kernel": {
+     "ms_per_step": 1.150433625,
+     "calls_per_step": 5.0,
+     "bucket": "attn_quantize",
+     "suite_of": "norm_quantize"
+    },
+    "flash_attn_int8_mma_kernel_t": {
+     "ms_per_step": 7.008203375,
+     "calls_per_step": 5.0,
+     "bucket": "attention",
+     "suite_of": "attention"
+    },
+    "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x64x32_stage5_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.570938625,
+     "calls_per_step": 2.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "at::native::(anonymous namespace)::RowwiseMomentsCUDAKernel": {
+     "ms_per_step": 0.15560849999999998,
+     "calls_per_step": 1.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "at::native::(anonymous namespace)::ComputeFusedParamsCUDAKernel": {
+     "ms_per_step": 0.0033038749999999995,
+     "calls_per_step": 1.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "[gpu_memset]": {
+     "ms_per_step": 0.0033436250000000002,
+     "calls_per_step": 2.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "nhwcAddPaddingKernel": {
+     "ms_per_step": 0.009636124999999999,
+     "calls_per_step": 2.0,
+     "bucket": "conv",
+     "suite_of": "other"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize256x32x32_stage5_warpsize4x1x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.236341125,
+     "calls_per_step": 1.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "at::native::reduce_kernel": {
+     "ms_per_step": 0.0035800000000000003,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "[gpu_memcpy]": {
+     "ms_per_step": 0.0016279999999999999,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "at::native::(anonymous namespace)::indexSelectLargeIndex": {
+     "ms_per_step": 0.003908,
+     "calls_per_step": 1.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "cutlass::Kernel2": {
+     "ms_per_step": 0.004676,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "sm80_xmma_fprop_implicit_gemm_indexed_wo_smem_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x64_stage1_warpsize4x1x1_g1_tensor16x8x16_aligna4_alignc4_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.09593612500000001,
+     "calls_per_step": 1.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "gn_delta_absmax_flat_vec2_kernel": {
+     "ms_per_step": 2.0467381250000005,
+     "calls_per_step": 20.75,
+     "bucket": "delta_quantize",
+     "suite_of": "other"
+    },
+    "at::native::(anonymous namespace)::avg_pool2d_out_cuda_frame_nhwc": {
+     "ms_per_step": 0.4449668750000001,
+     "calls_per_step": 4.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize64x128x32_stage4_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.07548037499999999,
+     "calls_per_step": 1.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "ampere_fp16_s16816gemm_fp16_64x64_sliced1x2_ldg8_relu_f2f_stages_64x5_tn": {
+     "ms_per_step": 0.1503125,
+     "calls_per_step": 15.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "ampere_fp16_s16816gemm_fp16_256x128_ldg8_f2f_stages_32x3_tn": {
+     "ms_per_step": 0.02195625,
+     "calls_per_step": 1.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "pytorch_flash::flash_fwd_kernel": {
+     "ms_per_step": 0.26199300000000003,
+     "calls_per_step": 6.0,
+     "bucket": "attention",
+     "suite_of": "other"
+    },
+    "ampere_fp16_s16816gemm_fp16_128x64_ldg8_f2f_stages_32x6_tn": {
+     "ms_per_step": 0.06163612500000001,
+     "calls_per_step": 3.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize96x128x32_stage4_warpsize2x2x1_tensor16x8x16_kernel": {
+     "ms_per_step": 0.11449275,
+     "calls_per_step": 2.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "ampere_fp16_s1688gemm_fp16_128x128_ldg8_f2f_stages_32x1_tn": {
+     "ms_per_step": 0.04710025000000001,
+     "calls_per_step": 1.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "delta_absmax_fp16_kernel": {
+     "ms_per_step": 0.45982237500000006,
+     "calls_per_step": 5.25,
+     "bucket": "delta_quantize",
+     "suite_of": "other"
+    }
+   },
+   "delta_from": "modiff_full_k4_projk4",
+   "mode": "int8",
+   "route_check": {
+    "attn_blocks": 21,
+    "attn_class": "QuantizedStandardAttentionBlock",
+    "qout_eligible": 0,
+    "attn_qkv_i8": 10,
+    "wxax": 42,
+    "wxax_modiff": 42,
+    "wxax_out_i8": 0,
+    "wxax_bias_res": 0,
+    "int8_convs": 140,
+    "conv_modiff_on": 140,
+    "conv_delta_refresh": [
+     4
+    ]
+   },
+   "buckets": {
+    "conv": {
+     "ms_per_step": 27.427043875000017,
+     "calls_per_step": 84.0,
+     "kernels": 10
+    },
+    "delta_quantize": {
+     "ms_per_step": 15.842242250000009,
+     "calls_per_step": 130.0,
+     "kernels": 4
+    },
+    "linear_gemm": {
+     "ms_per_step": 15.0790745,
+     "calls_per_step": 85.0,
+     "kernels": 8
+    },
+    "elementwise": {
+     "ms_per_step": 11.588531750000005,
+     "calls_per_step": 338.75,
+     "kernels": 7
+    },
+    "attention": {
+     "ms_per_step": 9.813544749999998,
+     "calls_per_step": 21.0,
+     "kernels": 3
+    },
+    "norm_quantize": {
+     "ms_per_step": 8.912910250000007,
+     "calls_per_step": 178.0,
+     "kernels": 5
+    },
+    "attn_quantize": {
+     "ms_per_step": 2.9394022499999997,
+     "calls_per_step": 10.0,
+     "kernels": 2
+    },
+    "other": {
+     "ms_per_step": 0.013227625,
+     "calls_per_step": 5.0,
+     "kernels": 4
+    }
+   },
+   "suite_of_buckets": {
+    "conv": {
+     "ms_per_step": 25.354630375000013,
+     "calls_per_step": 70.0,
+     "kernels": 2
+    },
+    "other": {
+     "ms_per_step": 21.52255387500001,
+     "calls_per_step": 550.75,
+     "kernels": 20
+    },
+    "norm_quantize": {
+     "ms_per_step": 18.04538937500001,
+     "calls_per_step": 119.0,
+     "kernels": 4
+    },
+    "linear": {
+     "ms_per_step": 17.141851874999997,
+     "calls_per_step": 97.0,
+     "kernels": 15
+    },
+    "attention": {
+     "ms_per_step": 9.551551749999998,
+     "calls_per_step": 15.0,
+     "kernels": 2
+    }
+   },
+   "wall_ms_per_step": null,
+   "trace_over_wall": null
+  },
+  "fp16": {
+   "steps": 8,
+   "gpu_ms_per_step": 101.45142587499997,
+   "per_step_ms": {
+    "step/000": 102.873,
+    "step/001": 101.348,
+    "step/002": 101.038,
+    "step/003": 100.992,
+    "step/004": 101.259,
+    "step/005": 101.422,
+    "step/006": 101.524,
+    "step/007": 101.156
+   },
+   "outside_steps_ms_total": 0.0,
+   "kernels": {
+    "at::native::elementwise_kernel": {
+     "ms_per_step": 8.501362249999989,
+     "calls_per_step": 173.125,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "at::native::reduce_kernel": {
+     "ms_per_step": 0.0036641250000000003,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "[gpu_memcpy]": {
+     "ms_per_step": 0.0019479999999999996,
+     "calls_per_step": 1.125,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "(anonymous namespace)::elementwise_kernel_with_index": {
+     "ms_per_step": 0.000164,
+     "calls_per_step": 0.125,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "at::native::unrolled_elementwise_kernel": {
+     "ms_per_step": 5.354875374999998,
+     "calls_per_step": 68.625,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "at::native::vectorized_elementwise_kernel": {
+     "ms_per_step": 4.928108374999999,
+     "calls_per_step": 110.25,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "at::native::(anonymous namespace)::CatArrayBatchedCopy_aligned16_contig": {
+     "ms_per_step": 0.00034,
+     "calls_per_step": 0.125,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "at::native::(anonymous namespace)::indexSelectLargeIndex": {
+     "ms_per_step": 0.004,
+     "calls_per_step": 1.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "cutlass::Kernel2": {
+     "ms_per_step": 0.666820375,
+     "calls_per_step": 7.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize32x32x64_stage6_warpsize2x2x1_tensor16x8x16_kernel": {
+     "ms_per_step": 0.1634325,
+     "calls_per_step": 21.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "sm80_xmma_fprop_implicit_gemm_indexed_wo_smem_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x16_stage1_warpsize4x1x1_g1_tensor16x8x16_aligna4_alignc8_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.09759237500000001,
+     "calls_per_step": 1.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "group_norm_silu_nhwc_kernel": {
+     "ms_per_step": 19.05184225,
+     "calls_per_step": 81.0,
+     "bucket": "norm_quantize",
+     "suite_of": "norm_quantize"
+    },
+    "cutlass__5x_cudnn::Kernel": {
+     "ms_per_step": 32.422637874999964,
+     "calls_per_step": 65.0,
+     "bucket": "conv",
+     "suite_of": "other"
+    },
+    "gn_accum_kernel(__half const*, float*, float*, int, int, int, int)": {
+     "ms_per_step": 0.865997125,
+     "calls_per_step": 10.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "gn_finalize_kernel(float const*, float const*, __half*, __half*, int, int, int, int, float, float)": {
+     "ms_per_step": 0.031204875,
+     "calls_per_step": 10.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "_ZN7cutlass6KernelINS_4conv6kernel38ImplicitGemmConvolutionFusionPerSampleINS1_11threadblock33ImplicitGemmFpropFusionMultistageINS_4gemm9GemmShapeILi128ELi256ELi32EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi32EEENS_6half_tENS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi32ELi128EEELi256ENSH_ILi4ELi8EEELi8EEENS_12AlignedArrayISC_Li8ELi16EEEEENSF_11threadblock25RegularTileAccessIteratorISB_SC_NSD_37RowMajorTensorOpMultiplicandCrosswiseILi16ELi32EEELi0ESK_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedINSA_ILi32ELi256EEESC_SE_NSG_INSH_ILi32ELi256EEELi256ESJ_Li8EEESM_Lb0EEENSP_ISX_SC_NSD_40ColumnMajorTensorOpMultiplicandCrosswiseILi16ELi32EEELi1ESZ_Li16EEELSV_1ENS4_39PredicatedScaleBiasVectorAccessIteratorINSA_ILi1ELi32EEESC_NSD_8RowMajorEEENSO_36RegularScaleBiasVectorAccessIteratorIS15_SC_S16_EELSV_0ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi32EEESC_SR_SC_S12_fS16_NS1C_17MmaTensorOpPolicyINST_3MmaINS7_ILi16ELi8ELi16EEELi32ESC_S16_SC_NSD_11ColumnMajorEfS16_NST_13OpMultiplyAddEEENSA_ILi1ELi1EEEEELi1ELb0EbEENSA_ILi0ELi0EEES1O_Li1EEENS1C_21ScaleBiasTileIteratorINSA_ILi64ELi32EEESC_S16_NSA_ILi16ELi16EEENS1C_35MmaTensorOpMultiplicandTileIteratorINSH_ILi32ELi64EEELNS6_7OperandE0ESC_NSD_29TensorOpMultiplicandCrosswiseILi16ELi32EEENSH_ILi16ELi16EEELi1ELi32ELi1EE6PolicyELi32ELi1EEELi3EbEENS_8epilogue11threadblock8EpilogueIS8_S1N_Li1ENS24_22PredicatedTileIteratorINS24_26OutputTileOptimalThreadMapINS24_15OutputTileShapeILi256ELi8ELi2ELi1ELi1EEENS28_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEESC_Lb0ENSD_9NoPermuteELb0EEENS23_4warp24FragmentIteratorTensorOpIS1E_S1H_fNS_5ArrayIfLi4ELb1EEES16_EENS2E_25TileIteratorTensorOpMixedIS1E_S1H_fLi32ELi16ELi8ELi8ELb0EEENS24_23SharedLoadIteratorMixedINS2B_18CompactedThreadMapEfLi32ELi16ELi8ELi8ELb0EEENS23_6thread17LinearCombinationISC_Li8EffLNS2O_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ESC_EENSA_ILi0ELi8EEELi2ELi1EEENS1A_30GemmIdentityThreadblockSwizzleILi1EEELNS1_8OperatorE0ENS1_17Conv2dProblemSizeEEEEEvNT_6ParamsE": {
+     "ms_per_step": 5.39480725,
+     "calls_per_step": 10.0,
+     "bucket": "conv",
+     "suite_of": "conv"
+    },
+    "pytorch_flash::flash_fwd_kernel": {
+     "ms_per_step": 11.296284375000008,
+     "calls_per_step": 21.0,
+     "bucket": "attention",
+     "suite_of": "other"
+    },
+    "ampere_fp16_s1688gemm_fp16_128x128_ldg8_relu_f2f_tn": {
+     "ms_per_step": 1.4003295000000004,
+     "calls_per_step": 10.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "at::native::(anonymous namespace)::avg_pool2d_out_cuda_frame_nhwc": {
+     "ms_per_step": 0.9171414999999999,
+     "calls_per_step": 8.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize64x128x32_stage4_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.20362875000000005,
+     "calls_per_step": 3.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize96x128x32_stage4_warpsize2x2x1_tensor16x8x16_kernel": {
+     "ms_per_step": 0.456644,
+     "calls_per_step": 8.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "ampere_fp16_s16816gemm_fp16_64x64_sliced1x2_ldg8_relu_f2f_stages_64x5_tn": {
+     "ms_per_step": 0.14764525000000006,
+     "calls_per_step": 15.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "ampere_fp16_s16816gemm_fp16_256x128_ldg8_f2f_stages_32x3_tn": {
+     "ms_per_step": 0.023191875,
+     "calls_per_step": 1.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "ampere_fp16_s16816gemm_fp16_256x128_ldg8_relu_f2f_stages_32x3_tn": {
+     "ms_per_step": 0.40934649999999995,
+     "calls_per_step": 5.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize160x128x32_stage4_warpsize2x2x1_tensor16x8x16_kernel": {
+     "ms_per_step": 0.1453695,
+     "calls_per_step": 5.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "ampere_fp16_s16816gemm_fp16_128x64_ldg8_relu_f2f_stages_64x3_tn": {
+     "ms_per_step": 0.013239999999999998,
+     "calls_per_step": 1.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "cat2_channels_last_fp16_kernel(__half const*, __half const*, __half*, long, int, int)": {
+     "ms_per_step": 1.1524346250000002,
+     "calls_per_step": 11.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "[gpu_memset]": {
+     "ms_per_step": 0.006456000000000002,
+     "calls_per_step": 4.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x64_stage3_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.33382937500000004,
+     "calls_per_step": 3.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "ampere_fp16_s16816gemm_fp16_128x64_ldg8_f2f_stages_32x6_tn": {
+     "ms_per_step": 0.06426475,
+     "calls_per_step": 3.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "at::native::(anonymous namespace)::upsample_nearest2d_nhwc_out_frame": {
+     "ms_per_step": 2.5232030000000005,
+     "calls_per_step": 8.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.623651375,
+     "calls_per_step": 3.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize256x128x32_stage3_warpsize4x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 2.8893371250000004,
+     "calls_per_step": 2.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_t1r1s1_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.364978,
+     "calls_per_step": 2.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x64x32_stage5_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.5770075,
+     "calls_per_step": 2.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "at::native::(anonymous namespace)::RowwiseMomentsCUDAKernel": {
+     "ms_per_step": 0.15903687500000002,
+     "calls_per_step": 1.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "at::native::(anonymous namespace)::ComputeFusedParamsCUDAKernel": {
+     "ms_per_step": 0.003448,
+     "calls_per_step": 1.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "nhwcAddPaddingKernel": {
+     "ms_per_step": 0.009855875000000002,
+     "calls_per_step": 2.0,
+     "bucket": "conv",
+     "suite_of": "other"
+    },
+    "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x32_stage4_warpsize4x1x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.242305375,
+     "calls_per_step": 1.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    }
+   },
+   "delta_from": null,
+   "mode": "fp16",
+   "route_check": {
+    "attn_blocks": 21,
+    "attn_class": "TokenMajorAttentionBlock",
+    "wxax": 0,
+    "wxax_modiff": 0,
+    "wxax_out_i8": 0,
+    "wxax_bias_res": 0,
+    "int8_convs": 0,
+    "conv_modiff_on": 0,
+    "conv_delta_refresh": []
+   },
+   "buckets": {
+    "conv": {
+     "ms_per_step": 43.15963087499996,
+     "calls_per_step": 94.0,
+     "kernels": 11
+    },
+    "elementwise": {
+     "ms_per_step": 23.38162912499999,
+     "calls_per_step": 380.25,
+     "kernels": 9
+    },
+    "norm_quantize": {
+     "ms_per_step": 20.111529125,
+     "calls_per_step": 103.0,
+     "kernels": 5
+    },
+    "attention": {
+     "ms_per_step": 11.296284375000008,
+     "calls_per_step": 21.0,
+     "kernels": 1
+    },
+    "linear_gemm": {
+     "ms_per_step": 2.8234638750000007,
+     "calls_per_step": 69.0,
+     "kernels": 9
+    },
+    "other": {
+     "ms_per_step": 0.6788885,
+     "calls_per_step": 13.125,
+     "kernels": 4
+    }
+   },
+   "suite_of_buckets": {
+    "other": {
+     "ms_per_step": 68.84898262499996,
+     "calls_per_step": 503.375,
+     "kernels": 20
+    },
+    "norm_quantize": {
+     "ms_per_step": 19.05184225,
+     "calls_per_step": 81.0,
+     "kernels": 1
+    },
+    "linear": {
+     "ms_per_step": 8.15579375,
+     "calls_per_step": 86.0,
+     "kernels": 17
+    },
+    "conv": {
+     "ms_per_step": 5.39480725,
+     "calls_per_step": 10.0,
+     "kernels": 1
+    }
+   },
+   "wall_ms_per_step": 105.938720703125,
+   "trace_over_wall": 0.9576425427988705
+  },
+  "modiff_conv_k4": {
+   "steps": 8,
+   "gpu_ms_per_step": 73.06402550000003,
+   "per_step_ms": {
+    "step/000": 70.785,
+    "step/001": 71.474,
+    "step/002": 70.746,
+    "step/003": 78.779,
+    "step/004": 71.379,
+    "step/005": 71.475,
+    "step/006": 71.213,
+    "step/007": 78.66
+   },
+   "outside_steps_ms_total": 0.0,
+   "kernels": {
+    "at::native::elementwise_kernel": {
+     "ms_per_step": 2.3738450000000006,
+     "calls_per_step": 95.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "at::native::reduce_kernel": {
+     "ms_per_step": 0.003636,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "[gpu_memcpy]": {
+     "ms_per_step": 0.001624125,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "at::native::(anonymous namespace)::indexSelectLargeIndex": {
+     "ms_per_step": 0.004016,
+     "calls_per_step": 1.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "at::native::unrolled_elementwise_kernel": {
+     "ms_per_step": 1.3467647500000015,
+     "calls_per_step": 125.75,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "cutlass::Kernel2": {
+     "ms_per_step": 0.004892,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "at::native::vectorized_elementwise_kernel": {
+     "ms_per_step": 0.2971574999999998,
+     "calls_per_step": 38.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize32x32x64_stage6_warpsize2x2x1_tensor16x8x16_kernel": {
+     "ms_per_step": 0.16062812499999995,
+     "calls_per_step": 21.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "sm80_xmma_fprop_implicit_gemm_indexed_wo_smem_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x16_stage1_warpsize4x1x1_g1_tensor16x8x16_aligna4_alignc8_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.09726425000000001,
+     "calls_per_step": 1.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "gn_stats_partials_chanmajor_kernel": {
+     "ms_per_step": 3.6021717500000023,
+     "calls_per_step": 62.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "gn_stats_reduce_partials_kernel(float const*, float const*, float*, float*, int, long, float, int)": {
+     "ms_per_step": 0.3657898750000009,
+     "calls_per_step": 62.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "gn_apply_delta_quantize_flat_vec2_kernel": {
+     "ms_per_step": 8.263851875000011,
+     "calls_per_step": 62.0,
+     "bucket": "delta_quantize",
+     "suite_of": "norm_quantize"
+    },
+    "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS1J_14VisitorAuxLoadIS2G_S1S_S2L_EENS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2T_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2W_S2W_EEELi1ES2S_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2W_S2K_iEEELb1EEEEEEEEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE": {
+     "ms_per_step": 14.078323500000003,
+     "calls_per_step": 35.0,
+     "bucket": "conv",
+     "suite_of": "conv"
+    },
+    "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS2D_IS2M_JNS2D_IS2P_JNS1J_14VisitorAuxLoadIS2G_S1S_S2L_EENS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2T_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2W_S2W_EEELi1ES2S_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2W_S2K_iEEELb1EEEEEEEEEEEES2R_EEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE": {
+     "ms_per_step": 11.797608375000005,
+     "calls_per_step": 35.0,
+     "bucket": "conv",
+     "suite_of": "conv"
+    },
+    "group_norm_silu_quantize_nhwc_vec2_kernel": {
+     "ms_per_step": 2.0469898750000004,
+     "calls_per_step": 21.0,
+     "bucket": "norm_quantize",
+     "suite_of": "norm_quantize"
+    },
+    "gemm_w8a8_kernel_awq_out_i8": {
+     "ms_per_step": 5.2418088749999985,
+     "calls_per_step": 21.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "flash_attn_int8_mma_kernel_t": {
+     "ms_per_step": 8.407306124999998,
+     "calls_per_step": 15.0,
+     "bucket": "attention",
+     "suite_of": "attention"
+    },
+    "gemm_w8a8_kernel_awq(signed char const*, signed char const*, float const*, float, __half*, int, int, int, int, __half const*, __half const*, __half*, float const*)": {
+     "ms_per_step": 3.305205625,
+     "calls_per_step": 21.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "group_norm_silu_delta_quantize_resize_nhwc_kernel": {
+     "ms_per_step": 3.5590077499999992,
+     "calls_per_step": 10.0,
+     "bucket": "norm_quantize",
+     "suite_of": "norm_quantize"
+    },
+    "at::native::(anonymous namespace)::avg_pool2d_out_cuda_frame_nhwc": {
+     "ms_per_step": 0.4563308749999999,
+     "calls_per_step": 4.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize64x128x32_stage4_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.199333,
+     "calls_per_step": 3.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "ampere_fp16_s16816gemm_fp16_64x64_sliced1x2_ldg8_relu_f2f_stages_64x5_tn": {
+     "ms_per_step": 0.15314612500000002,
+     "calls_per_step": 15.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "ampere_fp16_s16816gemm_fp16_256x128_ldg8_f2f_stages_32x3_tn": {
+     "ms_per_step": 0.02272025,
+     "calls_per_step": 1.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "flash_attn_int8_qi8packed_small_qout_kernel": {
+     "ms_per_step": 0.34768975,
+     "calls_per_step": 6.0,
+     "bucket": "attention",
+     "suite_of": "attention"
+    },
+    "cat2_channels_last_fp16_kernel(__half const*, __half const*, __half*, long, int, int)": {
+     "ms_per_step": 1.9282747499999993,
+     "calls_per_step": 15.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "ampere_fp16_s16816gemm_fp16_128x64_ldg8_f2f_stages_32x6_tn": {
+     "ms_per_step": 0.0637485,
+     "calls_per_step": 3.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "at::native::(anonymous namespace)::upsample_nearest2d_nhwc_out_frame": {
+     "ms_per_step": 1.241850625,
+     "calls_per_step": 4.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize96x128x32_stage4_warpsize2x2x1_tensor16x8x16_kernel": {
+     "ms_per_step": 0.163137125,
+     "calls_per_step": 3.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.613627375,
+     "calls_per_step": 3.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_t1r1s1_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.36212587500000004,
+     "calls_per_step": 2.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x64x32_stage5_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.5723431250000001,
+     "calls_per_step": 2.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "at::native::(anonymous namespace)::RowwiseMomentsCUDAKernel": {
+     "ms_per_step": 0.15631275000000003,
+     "calls_per_step": 1.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "at::native::(anonymous namespace)::ComputeFusedParamsCUDAKernel": {
+     "ms_per_step": 0.00344,
+     "calls_per_step": 1.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "[gpu_memset]": {
+     "ms_per_step": 0.00207975,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "nhwcAddPaddingKernel": {
+     "ms_per_step": 0.009824125,
+     "calls_per_step": 2.0,
+     "bucket": "conv",
+     "suite_of": "other"
+    },
+    "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x32_stage4_warpsize4x1x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.235021625,
+     "calls_per_step": 1.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "gn_delta_absmax_flat_vec2_kernel": {
+     "ms_per_step": 1.5751285000000008,
+     "calls_per_step": 15.5,
+     "bucket": "delta_quantize",
+     "suite_of": "other"
+    }
+   },
+   "delta_from": "int8_ptq",
+   "mode": "int8",
+   "route_check": {
+    "attn_blocks": 21,
+    "attn_class": "QuantizedStandardAttentionBlock",
+    "qout_eligible": 21,
+    "attn_qkv_i8": 0,
+    "wxax": 42,
+    "wxax_modiff": 0,
+    "wxax_out_i8": 0,
+    "wxax_bias_res": 42,
+    "int8_convs": 140,
+    "conv_modiff_on": 140,
+    "conv_delta_refresh": [
+     4
+    ]
+   },
+   "buckets": {
+    "conv": {
+     "ms_per_step": 27.96547125000001,
+     "calls_per_step": 84.0,
+     "kernels": 9
+    },
+    "delta_quantize": {
+     "ms_per_step": 9.838980375000013,
+     "calls_per_step": 77.5,
+     "kernels": 2
+    },
+    "norm_quantize": {
+     "ms_per_step": 9.733712000000002,
+     "calls_per_step": 157.0,
+     "kernels": 6
+    },
+    "linear_gemm": {
+     "ms_per_step": 9.110394625,
+     "calls_per_step": 85.0,
+     "kernels": 7
+    },
+    "attention": {
+     "ms_per_step": 8.754995874999999,
+     "calls_per_step": 21.0,
+     "kernels": 2
+    },
+    "elementwise": {
+     "ms_per_step": 7.648239500000001,
+     "calls_per_step": 282.75,
+     "kernels": 7
+    },
+    "other": {
+     "ms_per_step": 0.012231875,
+     "calls_per_step": 4.0,
+     "kernels": 4
+    }
+   },
+   "suite_of_buckets": {
+    "conv": {
+     "ms_per_step": 25.875931875000006,
+     "calls_per_step": 70.0,
+     "kernels": 2
+    },
+    "norm_quantize": {
+     "ms_per_step": 13.869849500000011,
+     "calls_per_step": 93.0,
+     "kernels": 3
+    },
+    "other": {
+     "ms_per_step": 13.373138375000007,
+     "calls_per_step": 430.25,
+     "kernels": 17
+    },
+    "linear": {
+     "ms_per_step": 11.190109875,
+     "calls_per_step": 97.0,
+     "kernels": 13
+    },
+    "attention": {
+     "ms_per_step": 8.754995874999999,
+     "calls_per_step": 21.0,
+     "kernels": 2
+    }
+   },
+   "wall_ms_per_step": 77.5003955078125,
+   "trace_over_wall": 0.9427568081589305
+  },
+  "modiff_conv_k1": {
+   "steps": 8,
+   "gpu_ms_per_step": 78.2977705,
+   "per_step_ms": {
+    "step/000": 77.515,
+    "step/001": 78.486,
+    "step/002": 78.598,
+    "step/003": 78.46,
+    "step/004": 78.556,
+    "step/005": 77.969,
+    "step/006": 78.482,
+    "step/007": 78.315
+   },
+   "outside_steps_ms_total": 0.0,
+   "kernels": {
+    "at::native::elementwise_kernel": {
+     "ms_per_step": 2.3885300000000034,
+     "calls_per_step": 95.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "at::native::reduce_kernel": {
+     "ms_per_step": 0.003644,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "[gpu_memcpy]": {
+     "ms_per_step": 0.0017118749999999999,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "at::native::(anonymous namespace)::indexSelectLargeIndex": {
+     "ms_per_step": 0.0040681250000000006,
+     "calls_per_step": 1.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "at::native::unrolled_elementwise_kernel": {
+     "ms_per_step": 1.343664875000002,
+     "calls_per_step": 125.75,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "cutlass::Kernel2": {
+     "ms_per_step": 0.004912125000000001,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "at::native::vectorized_elementwise_kernel": {
+     "ms_per_step": 0.2989886249999996,
+     "calls_per_step": 38.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize32x32x64_stage6_warpsize2x2x1_tensor16x8x16_kernel": {
+     "ms_per_step": 0.15840937500000007,
+     "calls_per_step": 21.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "sm80_xmma_fprop_implicit_gemm_indexed_wo_smem_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x16_stage1_warpsize4x1x1_g1_tensor16x8x16_aligna4_alignc8_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.09691650000000002,
+     "calls_per_step": 1.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "gn_stats_partials_chanmajor_kernel": {
+     "ms_per_step": 3.5914660000000014,
+     "calls_per_step": 62.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "gn_stats_reduce_partials_kernel(float const*, float const*, float*, float*, int, long, float, int)": {
+     "ms_per_step": 0.3644287500000002,
+     "calls_per_step": 62.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "gn_delta_absmax_flat_vec2_kernel": {
+     "ms_per_step": 6.283753499999992,
+     "calls_per_step": 62.0,
+     "bucket": "delta_quantize",
+     "suite_of": "other"
+    },
+    "gn_apply_delta_quantize_flat_vec2_kernel": {
+     "ms_per_step": 8.232846625000002,
+     "calls_per_step": 62.0,
+     "bucket": "delta_quantize",
+     "suite_of": "norm_quantize"
+    },
+    "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS1J_14VisitorAuxLoadIS2G_S1S_S2L_EENS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2T_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2W_S2W_EEELi1ES2S_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2W_S2K_iEEELb1EEEEEEEEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE": {
+     "ms_per_step": 14.024620000000006,
+     "calls_per_step": 35.0,
+     "bucket": "conv",
+     "suite_of": "conv"
+    },
+    "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS2D_IS2M_JNS2D_IS2P_JNS1J_14VisitorAuxLoadIS2G_S1S_S2L_EENS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2T_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2W_S2W_EEELi1ES2S_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2W_S2K_iEEELb1EEEEEEEEEEEES2R_EEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE": {
+     "ms_per_step": 11.764400499999992,
+     "calls_per_step": 35.0,
+     "bucket": "conv",
+     "suite_of": "conv"
+    },
+    "group_norm_silu_quantize_nhwc_vec2_kernel": {
+     "ms_per_step": 2.050990125,
+     "calls_per_step": 21.0,
+     "bucket": "norm_quantize",
+     "suite_of": "norm_quantize"
+    },
+    "gemm_w8a8_kernel_awq_out_i8": {
+     "ms_per_step": 5.219946749999998,
+     "calls_per_step": 21.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "flash_attn_int8_mma_kernel_t": {
+     "ms_per_step": 8.382238499999998,
+     "calls_per_step": 15.0,
+     "bucket": "attention",
+     "suite_of": "attention"
+    },
+    "gemm_w8a8_kernel_awq(signed char const*, signed char const*, float const*, float, __half*, int, int, int, int, __half const*, __half const*, __half*, float const*)": {
+     "ms_per_step": 3.2752361249999997,
+     "calls_per_step": 21.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "group_norm_silu_delta_quantize_resize_nhwc_kernel": {
+     "ms_per_step": 4.267761999999999,
+     "calls_per_step": 16.0,
+     "bucket": "norm_quantize",
+     "suite_of": "norm_quantize"
+    },
+    "at::native::(anonymous namespace)::avg_pool2d_out_cuda_frame_nhwc": {
+     "ms_per_step": 0.4543739999999999,
+     "calls_per_step": 4.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize64x128x32_stage4_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.198516875,
+     "calls_per_step": 3.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "ampere_fp16_s16816gemm_fp16_64x64_sliced1x2_ldg8_relu_f2f_stages_64x5_tn": {
+     "ms_per_step": 0.1539645,
+     "calls_per_step": 15.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "ampere_fp16_s16816gemm_fp16_256x128_ldg8_f2f_stages_32x3_tn": {
+     "ms_per_step": 0.02256025,
+     "calls_per_step": 1.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "flash_attn_int8_qi8packed_small_qout_kernel": {
+     "ms_per_step": 0.34621350000000006,
+     "calls_per_step": 6.0,
+     "bucket": "attention",
+     "suite_of": "attention"
+    },
+    "cat2_channels_last_fp16_kernel(__half const*, __half const*, __half*, long, int, int)": {
+     "ms_per_step": 1.9305171250000004,
+     "calls_per_step": 15.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "ampere_fp16_s16816gemm_fp16_128x64_ldg8_f2f_stages_32x6_tn": {
+     "ms_per_step": 0.06315225000000001,
+     "calls_per_step": 3.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "at::native::(anonymous namespace)::upsample_nearest2d_nhwc_out_frame": {
+     "ms_per_step": 1.23551375,
+     "calls_per_step": 4.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize96x128x32_stage4_warpsize2x2x1_tensor16x8x16_kernel": {
+     "ms_per_step": 0.16344899999999998,
+     "calls_per_step": 3.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.6134835000000001,
+     "calls_per_step": 3.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_t1r1s1_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.360061875,
+     "calls_per_step": 2.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x64x32_stage5_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.572475375,
+     "calls_per_step": 2.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "at::native::(anonymous namespace)::RowwiseMomentsCUDAKernel": {
+     "ms_per_step": 0.15787675,
+     "calls_per_step": 1.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "at::native::(anonymous namespace)::ComputeFusedParamsCUDAKernel": {
+     "ms_per_step": 0.003468125,
+     "calls_per_step": 1.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "[gpu_memset]": {
+     "ms_per_step": 0.00211975,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "nhwcAddPaddingKernel": {
+     "ms_per_step": 0.009668000000000001,
+     "calls_per_step": 2.0,
+     "bucket": "conv",
+     "suite_of": "other"
+    },
+    "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x32_stage4_warpsize4x1x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.25182150000000003,
+     "calls_per_step": 1.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    }
+   },
+   "delta_from": "modiff_conv_k4",
+   "mode": "int8",
+   "route_check": {
+    "attn_blocks": 21,
+    "attn_class": "QuantizedStandardAttentionBlock",
+    "qout_eligible": 21,
+    "attn_qkv_i8": 0,
+    "wxax": 42,
+    "wxax_modiff": 0,
+    "wxax_out_i8": 0,
+    "wxax_bias_res": 42,
+    "int8_convs": 140,
+    "conv_modiff_on": 140,
+    "conv_delta_refresh": [
+     1
+    ]
+   },
+   "buckets": {
+    "conv": {
+     "ms_per_step": 27.891964124999998,
+     "calls_per_step": 84.0,
+     "kernels": 9
+    },
+    "delta_quantize": {
+     "ms_per_step": 14.516600124999995,
+     "calls_per_step": 124.0,
+     "kernels": 2
+    },
+    "norm_quantize": {
+     "ms_per_step": 10.435991750000001,
+     "calls_per_step": 163.0,
+     "kernels": 6
+    },
+    "linear_gemm": {
+     "ms_per_step": 9.056718249999998,
+     "calls_per_step": 85.0,
+     "kernels": 7
+    },
+    "attention": {
+     "ms_per_step": 8.728451999999997,
+     "calls_per_step": 21.0,
+     "kernels": 2
+    },
+    "elementwise": {
+     "ms_per_step": 7.655656500000005,
+     "calls_per_step": 282.75,
+     "kernels": 7
+    },
+    "other": {
+     "ms_per_step": 0.01238775,
+     "calls_per_step": 4.0,
+     "kernels": 4
+    }
+   },
+   "suite_of_buckets": {
+    "conv": {
+     "ms_per_step": 25.7890205,
+     "calls_per_step": 70.0,
+     "kernels": 2
+    },
+    "other": {
+     "ms_per_step": 18.078705375,
+     "calls_per_step": 476.75,
+     "kernels": 17
+    },
+    "norm_quantize": {
+     "ms_per_step": 14.551598750000002,
+     "calls_per_step": 99.0,
+     "kernels": 3
+    },
+    "linear": {
+     "ms_per_step": 11.149993874999998,
+     "calls_per_step": 97.0,
+     "kernels": 13
+    },
+    "attention": {
+     "ms_per_step": 8.728451999999997,
+     "calls_per_step": 21.0,
+     "kernels": 2
+    }
+   },
+   "wall_ms_per_step": 84.165888671875,
+   "trace_over_wall": 0.9302791396315893
+  },
+  "modiff_full_k1": {
+   "steps": 8,
+   "gpu_ms_per_step": 100.56236674999998,
+   "per_step_ms": {
+    "step/000": 100.143,
+    "step/001": 100.649,
+    "step/002": 100.619,
+    "step/003": 100.622,
+    "step/004": 100.633,
+    "step/005": 100.56,
+    "step/006": 100.524,
+    "step/007": 100.748
+   },
+   "outside_steps_ms_total": 0.0,
+   "kernels": {
+    "gemm_w8a8_kernel_awq(signed char const*, signed char const*, float const*, float, __half*, int, int, int, int, __half const*, __half const*, __half*, float const*)": {
+     "ms_per_step": 14.687128999999995,
+     "calls_per_step": 42.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "at::native::vectorized_elementwise_kernel": {
+     "ms_per_step": 2.6182578749999994,
+     "calls_per_step": 69.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "gn_stats_partials_chanmajor_kernel": {
+     "ms_per_step": 4.698435000000007,
+     "calls_per_step": 83.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "gn_stats_reduce_partials_kernel(float const*, float const*, float*, float*, int, long, float, int)": {
+     "ms_per_step": 0.49552475,
+     "calls_per_step": 83.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "gn_delta_absmax_flat_vec2_kernel": {
+     "ms_per_step": 8.183990999999997,
+     "calls_per_step": 83.0,
+     "bucket": "delta_quantize",
+     "suite_of": "other"
+    },
+    "gn_apply_delta_quantize_flat_vec2_kernel": {
+     "ms_per_step": 10.712636999999999,
+     "calls_per_step": 83.0,
+     "bucket": "delta_quantize",
+     "suite_of": "norm_quantize"
+    },
+    "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS1J_14VisitorAuxLoadIS2G_S1S_S2L_EENS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2T_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2W_S2W_EEELi1ES2S_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2W_S2K_iEEELb1EEEEEEEEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE": {
+     "ms_per_step": 13.798494874999996,
+     "calls_per_step": 35.0,
+     "bucket": "conv",
+     "suite_of": "conv"
+    },
+    "at::native::unrolled_elementwise_kernel": {
+     "ms_per_step": 1.3347286250000008,
+     "calls_per_step": 125.75,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize32x32x64_stage6_warpsize2x2x1_tensor16x8x16_kernel": {
+     "ms_per_step": 0.15594149999999993,
+     "calls_per_step": 21.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "at::native::elementwise_kernel": {
+     "ms_per_step": 4.133293625,
+     "calls_per_step": 140.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS2D_IS2M_JNS2D_IS2P_JNS1J_14VisitorAuxLoadIS2G_S1S_S2L_EENS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2T_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2W_S2W_EEELi1ES2S_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2W_S2K_iEEELb1EEEEEEEEEEEES2R_EEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE": {
+     "ms_per_step": 11.612874374999992,
+     "calls_per_step": 35.0,
+     "bucket": "conv",
+     "suite_of": "conv"
+    },
+    "aq_qtok_packed_static_qk_flat_kernel": {
+     "ms_per_step": 1.7908011250000004,
+     "calls_per_step": 5.0,
+     "bucket": "attn_quantize",
+     "suite_of": "other"
+    },
+    "aq_vquant_trans_packed_tiled_vec2_kernel": {
+     "ms_per_step": 1.808820125,
+     "calls_per_step": 15.0,
+     "bucket": "attn_quantize",
+     "suite_of": "norm_quantize"
+    },
+    "flash_attn_int8_mma_kernel_t": {
+     "ms_per_step": 8.434745125000001,
+     "calls_per_step": 15.0,
+     "bucket": "attention",
+     "suite_of": "attention"
+    },
+    "delta_absmax_fp16_kernel": {
+     "ms_per_step": 1.840113374999999,
+     "calls_per_step": 21.0,
+     "bucket": "delta_quantize",
+     "suite_of": "other"
+    },
+    "static_quantize_and_update_ahat_kernel_int8_half_cache_vec2": {
+     "ms_per_step": 2.527383874999999,
+     "calls_per_step": 21.0,
+     "bucket": "delta_quantize",
+     "suite_of": "norm_quantize"
+    },
+    "group_norm_silu_delta_quantize_resize_nhwc_kernel": {
+     "ms_per_step": 4.253533249999999,
+     "calls_per_step": 16.0,
+     "bucket": "norm_quantize",
+     "suite_of": "norm_quantize"
+    },
+    "at::native::(anonymous namespace)::avg_pool2d_out_cuda_frame_nhwc": {
+     "ms_per_step": 0.4462857499999999,
+     "calls_per_step": 4.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize64x128x32_stage4_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.19536474999999995,
+     "calls_per_step": 3.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "aq_qtok_packed_static_qk_vec2_kernel": {
+     "ms_per_step": 0.9897411249999999,
+     "calls_per_step": 10.0,
+     "bucket": "attn_quantize",
+     "suite_of": "other"
+    },
+    "ampere_fp16_s16816gemm_fp16_64x64_sliced1x2_ldg8_relu_f2f_stages_64x5_tn": {
+     "ms_per_step": 0.1504776250000001,
+     "calls_per_step": 15.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "ampere_fp16_s16816gemm_fp16_256x128_ldg8_f2f_stages_32x3_tn": {
+     "ms_per_step": 0.022068249999999998,
+     "calls_per_step": 1.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "pytorch_flash::flash_fwd_kernel": {
+     "ms_per_step": 0.263349375,
+     "calls_per_step": 6.0,
+     "bucket": "attention",
+     "suite_of": "other"
+    },
+    "cat2_channels_last_fp16_kernel(__half const*, __half const*, __half*, long, int, int)": {
+     "ms_per_step": 1.923169875,
+     "calls_per_step": 15.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "ampere_fp16_s16816gemm_fp16_128x64_ldg8_f2f_stages_32x6_tn": {
+     "ms_per_step": 0.06204825,
+     "calls_per_step": 3.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "at::native::(anonymous namespace)::upsample_nearest2d_nhwc_out_frame": {
+     "ms_per_step": 1.210641875,
+     "calls_per_step": 4.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize96x128x32_stage4_warpsize2x2x1_tensor16x8x16_kernel": {
+     "ms_per_step": 0.15893224999999997,
+     "calls_per_step": 3.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.6090355,
+     "calls_per_step": 3.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_t1r1s1_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.35927375,
+     "calls_per_step": 2.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x64x32_stage5_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.5708908749999999,
+     "calls_per_step": 2.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "at::native::(anonymous namespace)::RowwiseMomentsCUDAKernel": {
+     "ms_per_step": 0.155844875,
+     "calls_per_step": 1.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "at::native::(anonymous namespace)::ComputeFusedParamsCUDAKernel": {
+     "ms_per_step": 0.0033959999999999997,
+     "calls_per_step": 1.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "[gpu_memset]": {
+     "ms_per_step": 0.001992,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "nhwcAddPaddingKernel": {
+     "ms_per_step": 0.009644,
+     "calls_per_step": 2.0,
+     "bucket": "conv",
+     "suite_of": "other"
+    },
+    "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x32_stage4_warpsize4x1x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.23240525,
+     "calls_per_step": 1.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "at::native::reduce_kernel": {
+     "ms_per_step": 0.0036,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "[gpu_memcpy]": {
+     "ms_per_step": 0.0018121249999999997,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "at::native::(anonymous namespace)::indexSelectLargeIndex": {
+     "ms_per_step": 0.003928125,
+     "calls_per_step": 1.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "cutlass::Kernel2": {
+     "ms_per_step": 0.004816,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "sm80_xmma_fprop_implicit_gemm_indexed_wo_smem_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x16_stage1_warpsize4x1x1_g1_tensor16x8x16_aligna4_alignc8_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.096944625,
+     "calls_per_step": 1.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    }
+   },
+   "delta_from": "modiff_conv_k1",
+   "mode": "int8",
+   "route_check": {
+    "attn_blocks": 21,
+    "attn_class": "QuantizedStandardAttentionBlock",
+    "qout_eligible": 0,
+    "attn_qkv_i8": 0,
+    "wxax": 42,
+    "wxax_modiff": 42,
+    "wxax_out_i8": 0,
+    "wxax_bias_res": 0,
+    "int8_convs": 140,
+    "conv_modiff_on": 140,
+    "conv_delta_refresh": [
+     1
+    ]
+   },
+   "buckets": {
+    "conv": {
+     "ms_per_step": 27.484927999999986,
+     "calls_per_step": 84.0,
+     "kernels": 9
+    },
+    "delta_quantize": {
+     "ms_per_step": 23.264125249999992,
+     "calls_per_step": 208.0,
+     "kernels": 4
+    },
+    "linear_gemm": {
+     "ms_per_step": 15.236596874999995,
+     "calls_per_step": 85.0,
+     "kernels": 6
+    },
+    "elementwise": {
+     "ms_per_step": 11.670305749999999,
+     "calls_per_step": 358.75,
+     "kernels": 7
+    },
+    "norm_quantize": {
+     "ms_per_step": 9.606733875000007,
+     "calls_per_step": 184.0,
+     "kernels": 5
+    },
+    "attention": {
+     "ms_per_step": 8.698094500000002,
+     "calls_per_step": 21.0,
+     "kernels": 2
+    },
+    "attn_quantize": {
+     "ms_per_step": 4.589362375,
+     "calls_per_step": 30.0,
+     "kernels": 3
+    },
+    "other": {
+     "ms_per_step": 0.012220124999999998,
+     "calls_per_step": 4.0,
+     "kernels": 4
+    }
+   },
+   "suite_of_buckets": {
+    "other": {
+     "ms_per_step": 30.11336650000001,
+     "calls_per_step": 657.75,
+     "kernels": 21
+    },
+    "conv": {
+     "ms_per_step": 25.411369249999986,
+     "calls_per_step": 70.0,
+     "kernels": 2
+    },
+    "norm_quantize": {
+     "ms_per_step": 19.30237425,
+     "calls_per_step": 135.0,
+     "kernels": 4
+    },
+    "linear": {
+     "ms_per_step": 17.30051162499999,
+     "calls_per_step": 97.0,
+     "kernels": 12
+    },
+    "attention": {
+     "ms_per_step": 8.434745125000001,
+     "calls_per_step": 15.0,
+     "kernels": 1
+    }
+   },
+   "wall_ms_per_step": 106.592724609375,
+   "trace_over_wall": 0.9434261777107756
+  },
+  "modiff_full_k4": {
+   "steps": 8,
+   "gpu_ms_per_step": 95.07705175000004,
+   "per_step_ms": {
+    "step/000": 93.21,
+    "step/001": 93.356,
+    "step/002": 93.414,
+    "step/003": 100.521,
+    "step/004": 93.359,
+    "step/005": 92.84,
+    "step/006": 93.253,
+    "step/007": 100.663
+   },
+   "outside_steps_ms_total": 0.0,
+   "kernels": {
+    "at::native::unrolled_elementwise_kernel": {
+     "ms_per_step": 1.3337465000000015,
+     "calls_per_step": 125.75,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "at::native::elementwise_kernel": {
+     "ms_per_step": 4.128615374999998,
+     "calls_per_step": 140.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "gn_stats_partials_chanmajor_kernel": {
+     "ms_per_step": 4.694886125000004,
+     "calls_per_step": 83.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "gn_stats_reduce_partials_kernel(float const*, float const*, float*, float*, int, long, float, int)": {
+     "ms_per_step": 0.49410475000000065,
+     "calls_per_step": 83.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "gn_delta_absmax_flat_vec2_kernel": {
+     "ms_per_step": 3.512171625,
+     "calls_per_step": 36.5,
+     "bucket": "delta_quantize",
+     "suite_of": "other"
+    },
+    "gn_apply_delta_quantize_flat_vec2_kernel": {
+     "ms_per_step": 10.721957124999994,
+     "calls_per_step": 83.0,
+     "bucket": "delta_quantize",
+     "suite_of": "norm_quantize"
+    },
+    "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS2D_IS2M_JNS2D_IS2P_JNS1J_14VisitorAuxLoadIS2G_S1S_S2L_EENS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2T_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2W_S2W_EEELi1ES2S_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2W_S2K_iEEELb1EEEEEEEEEEEES2R_EEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE": {
+     "ms_per_step": 11.578919124999995,
+     "calls_per_step": 35.0,
+     "bucket": "conv",
+     "suite_of": "conv"
+    },
+    "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS1J_14VisitorAuxLoadIS2G_S1S_S2L_EENS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2T_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2W_S2W_EEELi1ES2S_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2W_S2K_iEEELb1EEEEEEEEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE": {
+     "ms_per_step": 13.76888075,
+     "calls_per_step": 35.0,
+     "bucket": "conv",
+     "suite_of": "conv"
+    },
+    "at::native::vectorized_elementwise_kernel": {
+     "ms_per_step": 2.617464750000003,
+     "calls_per_step": 69.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize32x32x64_stage6_warpsize2x2x1_tensor16x8x16_kernel": {
+     "ms_per_step": 0.1544998750000001,
+     "calls_per_step": 21.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize64x128x32_stage4_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.19564062500000004,
+     "calls_per_step": 3.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "gemm_w8a8_kernel_awq(signed char const*, signed char const*, float const*, float, __half*, int, int, int, int, __half const*, __half const*, __half*, float const*)": {
+     "ms_per_step": 14.674589125000008,
+     "calls_per_step": 42.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "aq_qtok_packed_static_qk_vec2_kernel": {
+     "ms_per_step": 0.9896961249999999,
+     "calls_per_step": 10.0,
+     "bucket": "attn_quantize",
+     "suite_of": "other"
+    },
+    "aq_vquant_trans_packed_tiled_vec2_kernel": {
+     "ms_per_step": 1.8084484999999992,
+     "calls_per_step": 15.0,
+     "bucket": "attn_quantize",
+     "suite_of": "norm_quantize"
+    },
+    "flash_attn_int8_mma_kernel_t": {
+     "ms_per_step": 8.421639750000004,
+     "calls_per_step": 15.0,
+     "bucket": "attention",
+     "suite_of": "attention"
+    },
+    "delta_absmax_fp16_kernel": {
+     "ms_per_step": 1.8405768750000011,
+     "calls_per_step": 21.0,
+     "bucket": "delta_quantize",
+     "suite_of": "other"
+    },
+    "static_quantize_and_update_ahat_kernel_int8_half_cache_vec2": {
+     "ms_per_step": 2.5272635,
+     "calls_per_step": 21.0,
+     "bucket": "delta_quantize",
+     "suite_of": "norm_quantize"
+    },
+    "group_norm_silu_delta_quantize_resize_nhwc_kernel": {
+     "ms_per_step": 3.5377167500000013,
+     "calls_per_step": 10.0,
+     "bucket": "norm_quantize",
+     "suite_of": "norm_quantize"
+    },
+    "at::native::(anonymous namespace)::avg_pool2d_out_cuda_frame_nhwc": {
+     "ms_per_step": 0.4443502500000001,
+     "calls_per_step": 4.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "ampere_fp16_s16816gemm_fp16_64x64_sliced1x2_ldg8_relu_f2f_stages_64x5_tn": {
+     "ms_per_step": 0.1501086249999999,
+     "calls_per_step": 15.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "ampere_fp16_s16816gemm_fp16_256x128_ldg8_f2f_stages_32x3_tn": {
+     "ms_per_step": 0.021924,
+     "calls_per_step": 1.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "pytorch_flash::flash_fwd_kernel": {
+     "ms_per_step": 0.2626013750000001,
+     "calls_per_step": 6.0,
+     "bucket": "attention",
+     "suite_of": "other"
+    },
+    "cat2_channels_last_fp16_kernel(__half const*, __half const*, __half*, long, int, int)": {
+     "ms_per_step": 1.9224162500000004,
+     "calls_per_step": 15.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "ampere_fp16_s16816gemm_fp16_128x64_ldg8_f2f_stages_32x6_tn": {
+     "ms_per_step": 0.061764749999999986,
+     "calls_per_step": 3.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "at::native::(anonymous namespace)::upsample_nearest2d_nhwc_out_frame": {
+     "ms_per_step": 1.2106856249999998,
+     "calls_per_step": 4.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize96x128x32_stage4_warpsize2x2x1_tensor16x8x16_kernel": {
+     "ms_per_step": 0.15821274999999996,
+     "calls_per_step": 3.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.61025525,
+     "calls_per_step": 3.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_t1r1s1_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.35890587500000004,
+     "calls_per_step": 2.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "aq_qtok_packed_static_qk_flat_kernel": {
+     "ms_per_step": 1.790920625,
+     "calls_per_step": 5.0,
+     "bucket": "attn_quantize",
+     "suite_of": "other"
+    },
+    "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x64x32_stage5_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.5706346250000002,
+     "calls_per_step": 2.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "at::native::(anonymous namespace)::RowwiseMomentsCUDAKernel": {
+     "ms_per_step": 0.155580875,
+     "calls_per_step": 1.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "at::native::(anonymous namespace)::ComputeFusedParamsCUDAKernel": {
+     "ms_per_step": 0.0033399999999999997,
+     "calls_per_step": 1.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "[gpu_memset]": {
+     "ms_per_step": 0.002032,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "nhwcAddPaddingKernel": {
+     "ms_per_step": 0.009651999999999999,
+     "calls_per_step": 2.0,
+     "bucket": "conv",
+     "suite_of": "other"
+    },
+    "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x32_stage4_warpsize4x1x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.23182887500000002,
+     "calls_per_step": 1.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "at::native::reduce_kernel": {
+     "ms_per_step": 0.0036,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "[gpu_memcpy]": {
+     "ms_per_step": 0.0016799999999999999,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "at::native::(anonymous namespace)::indexSelectLargeIndex": {
+     "ms_per_step": 0.003936125,
+     "calls_per_step": 1.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "cutlass::Kernel2": {
+     "ms_per_step": 0.004732,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "sm80_xmma_fprop_implicit_gemm_indexed_wo_smem_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x16_stage1_warpsize4x1x1_g1_tensor16x8x16_aligna4_alignc8_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.097072625,
+     "calls_per_step": 1.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    }
+   },
+   "delta_from": "modiff_full_k1",
+   "mode": "int8",
+   "route_check": {
+    "attn_blocks": 21,
+    "attn_class": "QuantizedStandardAttentionBlock",
+    "qout_eligible": 0,
+    "attn_qkv_i8": 0,
+    "wxax": 42,
+    "wxax_modiff": 42,
+    "wxax_out_i8": 0,
+    "wxax_bias_res": 0,
+    "int8_convs": 140,
+    "conv_modiff_on": 140,
+    "conv_delta_refresh": [
+     4
+    ]
+   },
+   "buckets": {
+    "conv": {
+     "ms_per_step": 27.421789749999995,
+     "calls_per_step": 84.0,
+     "kernels": 9
+    },
+    "delta_quantize": {
+     "ms_per_step": 18.601969124999997,
+     "calls_per_step": 161.5,
+     "kernels": 4
+    },
+    "linear_gemm": {
+     "ms_per_step": 15.22109912500001,
+     "calls_per_step": 85.0,
+     "kernels": 6
+    },
+    "elementwise": {
+     "ms_per_step": 11.661214875000002,
+     "calls_per_step": 358.75,
+     "kernels": 7
+    },
+    "norm_quantize": {
+     "ms_per_step": 8.885628500000006,
+     "calls_per_step": 178.0,
+     "kernels": 5
+    },
+    "attention": {
+     "ms_per_step": 8.684241125000005,
+     "calls_per_step": 21.0,
+     "kernels": 2
+    },
+    "attn_quantize": {
+     "ms_per_step": 4.589065249999999,
+     "calls_per_step": 30.0,
+     "kernels": 3
+    },
+    "other": {
+     "ms_per_step": 0.012044,
+     "calls_per_step": 4.0,
+     "kernels": 4
+    }
+   },
+   "suite_of_buckets": {
+    "other": {
+     "ms_per_step": 25.426789250000002,
+     "calls_per_step": 611.25,
+     "kernels": 21
+    },
+    "conv": {
+     "ms_per_step": 25.347799874999993,
+     "calls_per_step": 70.0,
+     "kernels": 2
+    },
+    "norm_quantize": {
+     "ms_per_step": 18.595385874999995,
+     "calls_per_step": 129.0,
+     "kernels": 4
+    },
+    "linear": {
+     "ms_per_step": 17.285437000000012,
+     "calls_per_step": 97.0,
+     "kernels": 12
+    },
+    "attention": {
+     "ms_per_step": 8.421639750000004,
+     "calls_per_step": 15.0,
+     "kernels": 1
+    }
+   },
+   "wall_ms_per_step": 99.807890625,
+   "trace_over_wall": 0.9526005524675925
+  },
+  "base_no_conv_modiff": {
+   "steps": 8,
+   "gpu_ms_per_step": 147.96098262500007,
+   "per_step_ms": {
+    "step/000": 148.1,
+    "step/001": 147.933,
+    "step/002": 147.956,
+    "step/003": 147.919,
+    "step/004": 147.975,
+    "step/005": 147.904,
+    "step/006": 147.939,
+    "step/007": 147.961
+   },
+   "outside_steps_ms_total": 0.0,
+   "kernels": {
+    "at::native::elementwise_kernel": {
+     "ms_per_step": 21.833540249999963,
+     "calls_per_step": 282.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "aq_qtok_packed_static_qk_vec2_kernel": {
+     "ms_per_step": 0.9948121249999997,
+     "calls_per_step": 10.0,
+     "bucket": "attn_quantize",
+     "suite_of": "other"
+    },
+    "aq_vquant_trans_packed_tiled_vec2_kernel": {
+     "ms_per_step": 1.7997716249999989,
+     "calls_per_step": 15.0,
+     "bucket": "attn_quantize",
+     "suite_of": "norm_quantize"
+    },
+    "flash_attn_int8_mma_kernel_t": {
+     "ms_per_step": 8.32773075,
+     "calls_per_step": 15.0,
+     "bucket": "attention",
+     "suite_of": "attention"
+    },
+    "delta_absmax_fp16_kernel": {
+     "ms_per_step": 3.649645125,
+     "calls_per_step": 42.0,
+     "bucket": "delta_quantize",
+     "suite_of": "other"
+    },
+    "static_quantize_and_update_ahat_kernel_int8_half_cache_vec2": {
+     "ms_per_step": 5.052723250000003,
+     "calls_per_step": 42.0,
+     "bucket": "delta_quantize",
+     "suite_of": "norm_quantize"
+    },
+    "gemm_w8a8_kernel_awq(signed char const*, signed char const*, float const*, float, __half*, int, int, int, int, __half const*, __half const*, __half*, float const*)": {
+     "ms_per_step": 14.447467125000005,
+     "calls_per_step": 42.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "at::native::unrolled_elementwise_kernel": {
+     "ms_per_step": 12.807761000000019,
+     "calls_per_step": 160.75,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "at::native::(anonymous namespace)::CatArrayBatchedCopy_aligned16_contig": {
+     "ms_per_step": 3.4627350000000003,
+     "calls_per_step": 14.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "group_norm_silu_nhwc_kernel": {
+     "ms_per_step": 24.41376450000001,
+     "calls_per_step": 91.0,
+     "bucket": "norm_quantize",
+     "suite_of": "norm_quantize"
+    },
+    "at::native::vectorized_elementwise_kernel": {
+     "ms_per_step": 12.107760500000015,
+     "calls_per_step": 127.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "scale_quantize_int8_kernel(float const*, signed char*, float const*, int)": {
+     "ms_per_step": 5.910997750000006,
+     "calls_per_step": 69.0,
+     "bucket": "quantize",
+     "suite_of": "norm_quantize"
+    },
+    "_ZN7cutlass6KernelINS_4conv6kernel23ImplicitGemmConvolutionINS1_11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1N_ILi1ELi8ELi1ELi1ELi8EEELi256ELi1ELi32EEEfLb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1T_20TileIteratorTensorOpIS14_S18_iS15_EENS1J_18SharedLoadIteratorINS1Q_18CompactedThreadMapEiLi4EEENS1I_6thread17LinearCombinationIfLi1EifLNS23_9ScaleType4KindE0ELNS_15FloatRoundStyleE2EfEENSA_ILi0ELi8EEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS1_8OperatorE0ENS1_17Conv2dProblemSizeELNS1_9GroupModeE0EEEEEvNT_6ParamsE": {
+     "ms_per_step": 24.83772475,
+     "calls_per_step": 70.0,
+     "bucket": "conv",
+     "suite_of": "conv"
+    },
+    "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize32x32x64_stage6_warpsize2x2x1_tensor16x8x16_kernel": {
+     "ms_per_step": 0.14937974999999995,
+     "calls_per_step": 21.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize64x128x32_stage4_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.19526100000000002,
+     "calls_per_step": 3.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "at::native::(anonymous namespace)::upsample_nearest2d_nhwc_out_frame": {
+     "ms_per_step": 2.3736636250000003,
+     "calls_per_step": 8.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_t1r1s1_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.35828537499999996,
+     "calls_per_step": 2.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.6143393749999998,
+     "calls_per_step": 3.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "aq_qtok_packed_static_qk_flat_kernel": {
+     "ms_per_step": 1.7910963750000004,
+     "calls_per_step": 5.0,
+     "bucket": "attn_quantize",
+     "suite_of": "other"
+    },
+    "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x64x32_stage5_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.572050125,
+     "calls_per_step": 2.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "at::native::(anonymous namespace)::RowwiseMomentsCUDAKernel": {
+     "ms_per_step": 0.15204025,
+     "calls_per_step": 1.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "at::native::(anonymous namespace)::ComputeFusedParamsCUDAKernel": {
+     "ms_per_step": 0.00326,
+     "calls_per_step": 1.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "[gpu_memset]": {
+     "ms_per_step": 0.001984,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "nhwcAddPaddingKernel": {
+     "ms_per_step": 0.009256,
+     "calls_per_step": 2.0,
+     "bucket": "conv",
+     "suite_of": "other"
+    },
+    "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x32_stage4_warpsize4x1x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.2206455,
+     "calls_per_step": 1.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "at::native::reduce_kernel": {
+     "ms_per_step": 0.0034202499999999997,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "[gpu_memcpy]": {
+     "ms_per_step": 0.002068125,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "at::native::(anonymous namespace)::indexSelectLargeIndex": {
+     "ms_per_step": 0.003780125,
+     "calls_per_step": 1.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "cutlass::Kernel2": {
+     "ms_per_step": 0.0045839999999999995,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "sm80_xmma_fprop_implicit_gemm_indexed_wo_smem_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x16_stage1_warpsize4x1x1_g1_tensor16x8x16_aligna4_alignc8_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.096620125,
+     "calls_per_step": 1.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "static_quantize_int8_noahat_vec2_kernel": {
+     "ms_per_step": 0.12716475,
+     "calls_per_step": 1.0,
+     "bucket": "quantize",
+     "suite_of": "norm_quantize"
+    },
+    "at::native::(anonymous namespace)::avg_pool2d_out_cuda_frame_nhwc": {
+     "ms_per_step": 1.0031040000000004,
+     "calls_per_step": 8.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "ampere_fp16_s16816gemm_fp16_64x64_sliced1x2_ldg8_relu_f2f_stages_64x5_tn": {
+     "ms_per_step": 0.14512075000000002,
+     "calls_per_step": 15.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "ampere_fp16_s16816gemm_fp16_256x128_ldg8_f2f_stages_32x3_tn": {
+     "ms_per_step": 0.020996375,
+     "calls_per_step": 1.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "pytorch_flash::flash_fwd_kernel": {
+     "ms_per_step": 0.25238037500000005,
+     "calls_per_step": 6.0,
+     "bucket": "attention",
+     "suite_of": "other"
+    },
+    "ampere_fp16_s16816gemm_fp16_128x64_ldg8_f2f_stages_32x6_tn": {
+     "ms_per_step": 0.058476125000000004,
+     "calls_per_step": 3.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize96x128x32_stage4_warpsize2x2x1_tensor16x8x16_kernel": {
+     "ms_per_step": 0.15557250000000003,
+     "calls_per_step": 3.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    }
+   },
+   "delta_from": "modiff_full_k1",
+   "mode": "int8",
+   "route_check": {
+    "attn_blocks": 21,
+    "attn_class": "QuantizedStandardAttentionBlock",
+    "qout_eligible": 0,
+    "attn_qkv_i8": 0,
+    "wxax": 42,
+    "wxax_modiff": 42,
+    "wxax_out_i8": 0,
+    "wxax_bias_res": 0,
+    "int8_convs": 140,
+    "conv_modiff_on": 0,
+    "conv_delta_refresh": [
+     1
+    ]
+   },
+   "buckets": {
+    "elementwise": {
+     "ms_per_step": 53.5923445,
+     "calls_per_step": 600.75,
+     "kernels": 7
+    },
+    "conv": {
+     "ms_per_step": 26.90418225,
+     "calls_per_step": 84.0,
+     "kernels": 8
+    },
+    "norm_quantize": {
+     "ms_per_step": 24.56906475000001,
+     "calls_per_step": 93.0,
+     "kernels": 3
+    },
+    "linear_gemm": {
+     "ms_per_step": 14.977012625000004,
+     "calls_per_step": 85.0,
+     "kernels": 6
+    },
+    "delta_quantize": {
+     "ms_per_step": 8.702368375000002,
+     "calls_per_step": 84.0,
+     "kernels": 2
+    },
+    "attention": {
+     "ms_per_step": 8.580111125,
+     "calls_per_step": 21.0,
+     "kernels": 2
+    },
+    "quantize": {
+     "ms_per_step": 6.0381625000000065,
+     "calls_per_step": 70.0,
+     "kernels": 2
+    },
+    "attn_quantize": {
+     "ms_per_step": 4.585680124999999,
+     "calls_per_step": 30.0,
+     "kernels": 3
+    },
+    "other": {
+     "ms_per_step": 0.012056375,
+     "calls_per_step": 4.0,
+     "kernels": 4
+    }
+   },
+   "suite_of_buckets": {
+    "other": {
+     "ms_per_step": 60.45689112499999,
+     "calls_per_step": 671.75,
+     "kernels": 18
+    },
+    "norm_quantize": {
+     "ms_per_step": 37.30442187500002,
+     "calls_per_step": 218.0,
+     "kernels": 5
+    },
+    "conv": {
+     "ms_per_step": 24.83772475,
+     "calls_per_step": 70.0,
+     "kernels": 1
+    },
+    "linear": {
+     "ms_per_step": 17.034214125000005,
+     "calls_per_step": 97.0,
+     "kernels": 12
+    },
+    "attention": {
+     "ms_per_step": 8.32773075,
+     "calls_per_step": 15.0,
+     "kernels": 1
+    }
+   },
+   "wall_ms_per_step": 152.038056640625,
+   "trace_over_wall": 0.9731838586620324
+  },
+  "ptq_no_projquant": {
+   "steps": 8,
+   "gpu_ms_per_step": 75.742309625,
+   "per_step_ms": {
+    "step/000": 75.386,
+    "step/001": 75.721,
+    "step/002": 75.669,
+    "step/003": 75.727,
+    "step/004": 75.571,
+    "step/005": 75.913,
+    "step/006": 75.969,
+    "step/007": 75.982
+   },
+   "outside_steps_ms_total": 0.0,
+   "kernels": {
+    "cat2_channels_last_fp16_kernel(__half const*, __half const*, __half*, long, int, int)": {
+     "ms_per_step": 1.922631875,
+     "calls_per_step": 15.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "group_norm_silu_quantize_nhwc_vec2_kernel": {
+     "ms_per_step": 16.322038,
+     "calls_per_step": 83.0,
+     "bucket": "norm_quantize",
+     "suite_of": "norm_quantize"
+    },
+    "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2R_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2U_S2U_EEELi1ES2Q_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2U_S2K_iEEELb1EEEEEES30_EEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE": {
+     "ms_per_step": 13.644034249999999,
+     "calls_per_step": 35.0,
+     "bucket": "conv",
+     "suite_of": "conv"
+    },
+    "at::native::vectorized_elementwise_kernel": {
+     "ms_per_step": 0.36894424999999964,
+     "calls_per_step": 48.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "ampere_fp16_s16816gemm_fp16_64x64_sliced1x2_ldg8_relu_f2f_stages_64x5_tn": {
+     "ms_per_step": 0.15532975,
+     "calls_per_step": 15.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize96x128x32_stage4_warpsize2x2x1_tensor16x8x16_kernel": {
+     "ms_per_step": 0.162736875,
+     "calls_per_step": 3.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "at::native::elementwise_kernel": {
+     "ms_per_step": 4.161889125000004,
+     "calls_per_step": 140.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS2D_IS2P_JNS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2R_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2U_S2U_EEELi1ES2Q_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2U_S2K_iEEELb1EEEEEES30_EEENS1J_14VisitorAuxLoadIS2G_S1S_S2L_EEEEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE": {
+     "ms_per_step": 10.917881000000012,
+     "calls_per_step": 35.0,
+     "bucket": "conv",
+     "suite_of": "conv"
+    },
+    "gemm_w8a8_kernel_awq(signed char const*, signed char const*, float const*, float, __half*, int, int, int, int, __half const*, __half const*, __half*, float const*)": {
+     "ms_per_step": 7.3836962499999945,
+     "calls_per_step": 42.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "pytorch_flash::flash_fwd_kernel": {
+     "ms_per_step": 0.26347725000000005,
+     "calls_per_step": 6.0,
+     "bucket": "attention",
+     "suite_of": "other"
+    },
+    "quant_act_int8_kernel(__half const*, signed char*, float, long)": {
+     "ms_per_step": 1.3376938749999998,
+     "calls_per_step": 21.0,
+     "bucket": "quantize",
+     "suite_of": "norm_quantize"
+    },
+    "group_norm_silu_quantize_resize_nhwc_kernel": {
+     "ms_per_step": 0.8533678749999999,
+     "calls_per_step": 8.0,
+     "bucket": "norm_quantize",
+     "suite_of": "norm_quantize"
+    },
+    "at::native::unrolled_elementwise_kernel": {
+     "ms_per_step": 0.9971806250000003,
+     "calls_per_step": 17.75,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "at::native::(anonymous namespace)::upsample_nearest2d_nhwc_out_frame": {
+     "ms_per_step": 1.23122575,
+     "calls_per_step": 4.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "sm80_xmma_gemm_f16f16_f16f32_f32_tn_n_tilesize32x32x64_stage6_warpsize2x2x1_tensor16x8x16_kernel": {
+     "ms_per_step": 0.1590960000000001,
+     "calls_per_step": 21.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.61221475,
+     "calls_per_step": 3.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "aq_qtok_packed_static_qk_vec2_kernel": {
+     "ms_per_step": 0.9863364999999998,
+     "calls_per_step": 10.0,
+     "bucket": "attn_quantize",
+     "suite_of": "other"
+    },
+    "aq_vquant_trans_packed_tiled_vec2_kernel": {
+     "ms_per_step": 1.8064966250000007,
+     "calls_per_step": 15.0,
+     "bucket": "attn_quantize",
+     "suite_of": "norm_quantize"
+    },
+    "flash_attn_int8_mma_kernel_t": {
+     "ms_per_step": 8.481838625000005,
+     "calls_per_step": 15.0,
+     "bucket": "attention",
+     "suite_of": "attention"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize64x128x32_stage4_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.19806837500000002,
+     "calls_per_step": 3.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_t1r1s1_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.36078962499999995,
+     "calls_per_step": 2.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "aq_qtok_packed_static_qk_flat_kernel": {
+     "ms_per_step": 1.79022,
+     "calls_per_step": 5.0,
+     "bucket": "attn_quantize",
+     "suite_of": "other"
+    },
+    "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x64x32_stage5_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.5709661249999999,
+     "calls_per_step": 2.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "at::native::(anonymous namespace)::RowwiseMomentsCUDAKernel": {
+     "ms_per_step": 0.15658087499999998,
+     "calls_per_step": 1.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "at::native::(anonymous namespace)::ComputeFusedParamsCUDAKernel": {
+     "ms_per_step": 0.003444,
+     "calls_per_step": 1.0,
+     "bucket": "norm_quantize",
+     "suite_of": "other"
+    },
+    "[gpu_memset]": {
+     "ms_per_step": 0.00206,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "nhwcAddPaddingKernel": {
+     "ms_per_step": 0.009676,
+     "calls_per_step": 2.0,
+     "bucket": "conv",
+     "suite_of": "other"
+    },
+    "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x32_stage4_warpsize4x1x1_g1_tensor16x8x16_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.233453,
+     "calls_per_step": 1.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "at::native::reduce_kernel": {
+     "ms_per_step": 0.003608,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "[gpu_memcpy]": {
+     "ms_per_step": 0.0017439999999999999,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "at::native::(anonymous namespace)::indexSelectLargeIndex": {
+     "ms_per_step": 0.004,
+     "calls_per_step": 1.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "cutlass::Kernel2": {
+     "ms_per_step": 0.004884,
+     "calls_per_step": 1.0,
+     "bucket": "other",
+     "suite_of": "other"
+    },
+    "sm80_xmma_fprop_implicit_gemm_indexed_wo_smem_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x16_stage1_warpsize4x1x1_g1_tensor16x8x16_aligna4_alignc8_execute_kernel__5x_cudnn": {
+     "ms_per_step": 0.09680825,
+     "calls_per_step": 1.0,
+     "bucket": "conv",
+     "suite_of": "linear"
+    },
+    "at::native::(anonymous namespace)::avg_pool2d_out_cuda_frame_nhwc": {
+     "ms_per_step": 0.4522418749999999,
+     "calls_per_step": 4.0,
+     "bucket": "elementwise",
+     "suite_of": "other"
+    },
+    "ampere_fp16_s16816gemm_fp16_256x128_ldg8_f2f_stages_32x3_tn": {
+     "ms_per_step": 0.022611999999999997,
+     "calls_per_step": 1.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    },
+    "ampere_fp16_s16816gemm_fp16_128x64_ldg8_f2f_stages_32x6_tn": {
+     "ms_per_step": 0.06304425000000001,
+     "calls_per_step": 3.0,
+     "bucket": "linear_gemm",
+     "suite_of": "linear"
+    }
+   },
+   "delta_from": "int8_ptq",
+   "mode": "int8_baseline",
+   "route_check": {
+    "attn_blocks": 21,
+    "attn_class": "QuantizedStandardAttentionBlock",
+    "qout_eligible": 0,
+    "attn_qkv_i8": 0,
+    "wxax": 42,
+    "wxax_modiff": 0,
+    "wxax_out_i8": 0,
+    "wxax_bias_res": 42,
+    "int8_convs": 140,
+    "conv_modiff_on": 0,
+    "conv_delta_refresh": [
+     1
+    ]
+   },
+   "buckets": {
+    "conv": {
+     "ms_per_step": 26.643891375000006,
+     "calls_per_step": 84.0,
+     "kernels": 9
+    },
+    "norm_quantize": {
+     "ms_per_step": 17.335430749999997,
+     "calls_per_step": 93.0,
+     "kernels": 4
+    },
+    "elementwise": {
+     "ms_per_step": 9.138113500000003,
+     "calls_per_step": 229.75,
+     "kernels": 7
+    },
+    "attention": {
+     "ms_per_step": 8.745315875000005,
+     "calls_per_step": 21.0,
+     "kernels": 2
+    },
+    "linear_gemm": {
+     "ms_per_step": 7.946515124999994,
+     "calls_per_step": 85.0,
+     "kernels": 6
+    },
+    "attn_quantize": {
+     "ms_per_step": 4.583053125,
+     "calls_per_step": 30.0,
+     "kernels": 3
+    },
+    "quantize": {
+     "ms_per_step": 1.3376938749999998,
+     "calls_per_step": 21.0,
+     "kernels": 1
+    },
+    "other": {
+     "ms_per_step": 0.012296000000000001,
+     "calls_per_step": 4.0,
+     "kernels": 4
+    }
+   },
+   "suite_of_buckets": {
+    "conv": {
+     "ms_per_step": 24.561915250000013,
+     "calls_per_step": 70.0,
+     "kernels": 2
+    },
+    "norm_quantize": {
+     "ms_per_step": 20.319596375,
+     "calls_per_step": 127.0,
+     "kernels": 4
+    },
+    "other": {
+     "ms_per_step": 12.360144125000005,
+     "calls_per_step": 258.75,
+     "kernels": 17
+    },
+    "linear": {
+     "ms_per_step": 10.018815249999998,
+     "calls_per_step": 97.0,
+     "kernels": 12
+    },
+    "attention": {
+     "ms_per_step": 8.481838625000005,
+     "calls_per_step": 15.0,
+     "kernels": 1
+    }
+   },
+   "wall_ms_per_step": 80.273779296875,
+   "trace_over_wall": 0.9435498152501783
+  }
+ },
+ "diffs": {
+  "modiff_full_k4 -> modiff_full_k4_projk4": {
+   "trace_delta_ms_per_step": -2.6320158749999933,
+   "wall_delta_ms_per_step": null,
+   "by_bucket": {
+    "attention": 0.019380499999995138,
+    "elementwise": 0.008466749999998413,
+    "attn_quantize": 0.0057320000000009586,
+    "conv": 0.04899362500000848,
+    "delta_quantize": -2.7509939999999897,
+    "other": 0.001416375000000001,
+    "norm_quantize": 0.029829374999993163,
+    "linear_gemm": 0.005159499999990658
+   },
+   "by_kernel": [
+    {
+     "kernel": "gn_delta_absmax_flat_vec2_kernel",
+     "bucket": "delta_quantize",
+     "from_ms": 3.512171625,
+     "to_ms": 2.0499716249999977,
+     "delta_ms": -1.4622000000000024
+    },
+    {
+     "kernel": "delta_absmax_fp16_kernel",
+     "bucket": "delta_quantize",
+     "from_ms": 1.8405768750000011,
+     "to_ms": 0.4592866250000001,
+     "delta_ms": -1.381290250000001
+    },
+    {
+     "kernel": "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "bucket": "conv",
+     "from_ms": 0.61025525,
+     "to_ms": 0.08086475000000001,
+     "delta_ms": -0.5293905
+    },
+    {
+     "kernel": "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x64x32_stage4_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "bucket": "conv",
+     "from_ms": 0.0,
+     "to_ms": 0.5034427499999999,
+     "delta_ms": 0.5034427499999999
+    },
+    {
+     "kernel": "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize256x32x32_stage5_warpsize4x1x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "bucket": "conv",
+     "from_ms": 0.0,
+     "to_ms": 0.235781,
+     "delta_ms": 0.235781
+    },
+    {
+     "kernel": "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x32_stage4_warpsize4x1x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "bucket": "conv",
+     "from_ms": 0.23182887500000002,
+     "to_ms": 0.0,
+     "delta_ms": -0.23182887500000002
+    },
+    {
+     "kernel": "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_t1r1s1_execute_kernel__5x_cudnn",
+     "bucket": "conv",
+     "from_ms": 0.35890587500000004,
+     "to_ms": 0.5034145000000001,
+     "delta_ms": 0.14450862500000006
+    },
+    {
+     "kernel": "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize64x128x32_stage4_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "bucket": "conv",
+     "from_ms": 0.19564062500000004,
+     "to_ms": 0.0758325,
+     "delta_ms": -0.11980812500000004
+    },
+    {
+     "kernel": "sm80_xmma_fprop_implicit_gemm_indexed_wo_smem_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x16_stage1_warpsize4x1x1_g1_tensor16x8x16_aligna4_alignc8_execute_kernel__5x_cudnn",
+     "bucket": "conv",
+     "from_ms": 0.097072625,
+     "to_ms": 0.0,
+     "delta_ms": -0.097072625
+    },
+    {
+     "kernel": "sm80_xmma_fprop_implicit_gemm_indexed_wo_smem_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x64_stage1_warpsize4x1x1_g1_tensor16x8x16_aligna4_alignc4_execute_kernel__5x_cudnn",
+     "bucket": "conv",
+     "from_ms": 0.0,
+     "to_ms": 0.096032375,
+     "delta_ms": 0.096032375
+    },
+    {
+     "kernel": "static_quantize_and_update_ahat_kernel_int8_half_cache_vec2",
+     "bucket": "delta_quantize",
+     "from_ms": 2.5272635,
+     "to_ms": 2.6173102500000005,
+     "delta_ms": 0.0900467500000004
+    }
+   ]
+  },
+  "modiff_full_k4_projk4 -> modiff_full_k4_projk4_qkvi8": {
+   "trace_delta_ms_per_step": -0.8290586249999876,
+   "wall_delta_ms_per_step": null,
+   "by_bucket": {
+    "elementwise": -0.08114987499999593,
+    "norm_quantize": -0.002547624999992948,
+    "attn_quantize": -1.6553950000000004,
+    "conv": -0.04373949999998672,
+    "delta_quantize": -0.008732874999997975,
+    "other": -0.00023275000000000032,
+    "attention": 1.1099231249999981,
+    "linear_gemm": -0.147184124999999
+   },
+   "by_kernel": [
+    {
+     "kernel": "gemm_w8a8_kernel_awq(signed char const*, signed char const*, float const*, float, __half*, int, int, int, int, __half const*, __half const*, __half*, float const*)",
+     "bucket": "linear_gemm",
+     "from_ms": 14.674178625,
+     "to_ms": 10.61931225,
+     "delta_ms": -4.054866375
+    },
+    {
+     "kernel": "gemm_w8a8_kernel_awq_out_i8",
+     "bucket": "linear_gemm",
+     "from_ms": 0.0,
+     "to_ms": 3.9099115,
+     "delta_ms": 3.9099115
+    },
+    {
+     "kernel": "flash_attn_int8_packed_mma_kernel",
+     "bucket": "attention",
+     "from_ms": 0.0,
+     "to_ms": 2.543348374999999,
+     "delta_ms": 2.543348374999999
+    },
+    {
+     "kernel": "flash_attn_int8_mma_kernel_t",
+     "bucket": "attention",
+     "from_ms": 8.441744625,
+     "to_ms": 7.008203375,
+     "delta_ms": -1.4335412500000002
+    },
+    {
+     "kernel": "aq_qtok_packed_static_qk_vec2_kernel",
+     "bucket": "attn_quantize",
+     "from_ms": 0.9880540000000001,
+     "to_ms": 0.0,
+     "delta_ms": -0.9880540000000001
+    },
+    {
+     "kernel": "aq_vquant_trans_packed_tiled_vec2_kernel",
+     "bucket": "attn_quantize",
+     "from_ms": 1.81532175,
+     "to_ms": 1.150433625,
+     "delta_ms": -0.664888125
+    },
+    {
+     "kernel": "at::native::elementwise_kernel",
+     "bucket": "elementwise",
+     "from_ms": 4.131391999999999,
+     "to_ms": 4.051800249999998,
+     "delta_ms": -0.0795917500000014
+    }
+   ]
+  },
+  "int8_ptq -> modiff_conv_k4": {
+   "trace_delta_ms_per_step": 3.6574727500000392,
+   "wall_delta_ms_per_step": 3.891103515625005,
+   "by_bucket": {
+    "elementwise": 0.34795575000000145,
+    "norm_quantize": -7.706390374999993,
+    "conv": 1.174179375000012,
+    "delta_quantize": 9.838980375000013,
+    "other": -0.001288000000000001,
+    "attention": -0.015190999999997956,
+    "linear_gemm": 0.019226625000001718
+   },
+   "by_kernel": [
+    {
+     "kernel": "group_norm_silu_quantize_nhwc_vec2_kernel",
+     "bucket": "norm_quantize",
+     "from_ms": 16.423925749999995,
+     "to_ms": 2.0469898750000004,
+     "delta_ms": -14.376935874999994
+    },
+    {
+     "kernel": "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS1J_14VisitorAuxLoadIS2G_S1S_S2L_EENS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2T_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2W_S2W_EEELi1ES2S_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2W_S2K_iEEELb1EEEEEEEEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE",
+     "bucket": "conv",
+     "from_ms": 0.0,
+     "to_ms": 14.078323500000003,
+     "delta_ms": 14.078323500000003
+    },
+    {
+     "kernel": "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2R_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2U_S2U_EEELi1ES2Q_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2U_S2K_iEEELb1EEEEEES30_EEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE",
+     "bucket": "conv",
+     "from_ms": 13.715860999999999,
+     "to_ms": 0.0,
+     "delta_ms": -13.715860999999999
+    },
+    {
+     "kernel": "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS2D_IS2M_JNS2D_IS2P_JNS1J_14VisitorAuxLoadIS2G_S1S_S2L_EENS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2T_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2W_S2W_EEELi1ES2S_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2W_S2K_iEEELb1EEEEEEEEEEEES2R_EEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE",
+     "bucket": "conv",
+     "from_ms": 0.0,
+     "to_ms": 11.797608375000005,
+     "delta_ms": 11.797608375000005
+    },
+    {
+     "kernel": "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS2D_IS2P_JNS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2R_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2U_S2U_EEELi1ES2Q_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2U_S2K_iEEELb1EEEEEES30_EEENS1J_14VisitorAuxLoadIS2G_S1S_S2L_EEEEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE",
+     "bucket": "conv",
+     "from_ms": 10.98302275,
+     "to_ms": 0.0,
+     "delta_ms": -10.98302275
+    },
+    {
+     "kernel": "gn_apply_delta_quantize_flat_vec2_kernel",
+     "bucket": "delta_quantize",
+     "from_ms": 0.0,
+     "to_ms": 8.263851875000011,
+     "delta_ms": 8.263851875000011
+    },
+    {
+     "kernel": "gn_stats_partials_chanmajor_kernel",
+     "bucket": "norm_quantize",
+     "from_ms": 0.0,
+     "to_ms": 3.6021717500000023,
+     "delta_ms": 3.6021717500000023
+    },
+    {
+     "kernel": "group_norm_silu_delta_quantize_resize_nhwc_kernel",
+     "bucket": "norm_quantize",
+     "from_ms": 0.0,
+     "to_ms": 3.5590077499999992,
+     "delta_ms": 3.5590077499999992
+    },
+    {
+     "kernel": "gn_delta_absmax_flat_vec2_kernel",
+     "bucket": "delta_quantize",
+     "from_ms": 0.0,
+     "to_ms": 1.5751285000000008,
+     "delta_ms": 1.5751285000000008
+    },
+    {
+     "kernel": "group_norm_silu_quantize_resize_nhwc_kernel",
+     "bucket": "norm_quantize",
+     "from_ms": 0.8558680000000002,
+     "to_ms": 0.0,
+     "delta_ms": -0.8558680000000002
+    },
+    {
+     "kernel": "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "bucket": "conv",
+     "from_ms": 0.08243662499999999,
+     "to_ms": 0.613627375,
+     "delta_ms": 0.5311907499999999
+    },
+    {
+     "kernel": "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x64x32_stage4_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "bucket": "conv",
+     "from_ms": 0.5047348750000001,
+     "to_ms": 0.0,
+     "delta_ms": -0.5047348750000001
+    },
+    {
+     "kernel": "gn_stats_reduce_partials_kernel(float const*, float const*, float*, float*, int, long, float, int)",
+     "bucket": "norm_quantize",
+     "from_ms": 0.0,
+     "to_ms": 0.3657898750000009,
+     "delta_ms": 0.3657898750000009
+    },
+    {
+     "kernel": "at::native::unrolled_elementwise_kernel",
+     "bucket": "elementwise",
+     "from_ms": 0.9974782499999998,
+     "to_ms": 1.3467647500000015,
+     "delta_ms": 0.3492865000000017
+    },
+    {
+     "kernel": "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize256x32x32_stage5_warpsize4x1x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "bucket": "conv",
+     "from_ms": 0.242153625,
+     "to_ms": 0.0,
+     "delta_ms": -0.242153625
+    },
+    {
+     "kernel": "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x32_stage4_warpsize4x1x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "bucket": "conv",
+     "from_ms": 0.0,
+     "to_ms": 0.235021625,
+     "delta_ms": 0.235021625
+    },
+    {
+     "kernel": "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_t1r1s1_execute_kernel__5x_cudnn",
+     "bucket": "conv",
+     "from_ms": 0.5077547499999999,
+     "to_ms": 0.36212587500000004,
+     "delta_ms": -0.14562887499999988
+    },
+    {
+     "kernel": "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize64x128x32_stage4_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "bucket": "conv",
+     "from_ms": 0.07618825,
+     "to_ms": 0.199333,
+     "delta_ms": 0.12314475000000001
+    },
+    {
+     "kernel": "sm80_xmma_fprop_implicit_gemm_indexed_wo_smem_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x16_stage1_warpsize4x1x1_g1_tensor16x8x16_aligna4_alignc8_execute_kernel__5x_cudnn",
+     "bucket": "conv",
+     "from_ms": 0.0,
+     "to_ms": 0.09726425000000001,
+     "delta_ms": 0.09726425000000001
+    },
+    {
+     "kernel": "sm80_xmma_fprop_implicit_gemm_indexed_wo_smem_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x64_stage1_warpsize4x1x1_g1_tensor16x8x16_aligna4_alignc4_execute_kernel__5x_cudnn",
+     "bucket": "conv",
+     "from_ms": 0.09679675,
+     "to_ms": 0.0,
+     "delta_ms": -0.09679675
+    }
+   ]
+  },
+  "modiff_conv_k4 -> modiff_conv_k1": {
+   "trace_delta_ms_per_step": 5.233744999999971,
+   "wall_delta_ms_per_step": 6.665493164062497,
+   "by_bucket": {
+    "elementwise": 0.00741700000000467,
+    "norm_quantize": 0.7022797499999989,
+    "conv": -0.07350712500001322,
+    "delta_quantize": 4.677619749999982,
+    "other": 0.00015587499999999976,
+    "attention": -0.02654387500000155,
+    "linear_gemm": -0.053676375000002
+   },
+   "by_kernel": [
+    {
+     "kernel": "gn_delta_absmax_flat_vec2_kernel",
+     "bucket": "delta_quantize",
+     "from_ms": 1.5751285000000008,
+     "to_ms": 6.283753499999992,
+     "delta_ms": 4.708624999999992
+    },
+    {
+     "kernel": "group_norm_silu_delta_quantize_resize_nhwc_kernel",
+     "bucket": "norm_quantize",
+     "from_ms": 3.5590077499999992,
+     "to_ms": 4.267761999999999,
+     "delta_ms": 0.7087542500000001
+    },
+    {
+     "kernel": "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS1J_14VisitorAuxLoadIS2G_S1S_S2L_EENS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2T_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2W_S2W_EEELi1ES2S_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2W_S2K_iEEELb1EEEEEEEEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE",
+     "bucket": "conv",
+     "from_ms": 14.078323500000003,
+     "to_ms": 14.024620000000006,
+     "delta_ms": -0.05370349999999746
+    }
+   ]
+  },
+  "modiff_conv_k1 -> modiff_full_k1": {
+   "trace_delta_ms_per_step": 22.264596249999983,
+   "wall_delta_ms_per_step": 22.4268359375,
+   "by_bucket": {
+    "attention": -0.030357499999995596,
+    "elementwise": 4.0146492499999935,
+    "attn_quantize": 4.589362375,
+    "conv": -0.40703612500001185,
+    "delta_quantize": 8.747525124999997,
+    "other": -0.0001676250000000011,
+    "norm_quantize": -0.8292578749999944,
+    "linear_gemm": 6.179878624999997
+   },
+   "by_kernel": [
+    {
+     "kernel": "gemm_w8a8_kernel_awq(signed char const*, signed char const*, float const*, float, __half*, int, int, int, int, __half const*, __half const*, __half*, float const*)",
+     "bucket": "linear_gemm",
+     "from_ms": 3.2752361249999997,
+     "to_ms": 14.687128999999995,
+     "delta_ms": 11.411892874999996
+    },
+    {
+     "kernel": "gemm_w8a8_kernel_awq_out_i8",
+     "bucket": "linear_gemm",
+     "from_ms": 5.219946749999998,
+     "to_ms": 0.0,
+     "delta_ms": -5.219946749999998
+    },
+    {
+     "kernel": "static_quantize_and_update_ahat_kernel_int8_half_cache_vec2",
+     "bucket": "delta_quantize",
+     "from_ms": 0.0,
+     "to_ms": 2.527383874999999,
+     "delta_ms": 2.527383874999999
+    },
+    {
+     "kernel": "gn_apply_delta_quantize_flat_vec2_kernel",
+     "bucket": "delta_quantize",
+     "from_ms": 8.232846625000002,
+     "to_ms": 10.712636999999999,
+     "delta_ms": 2.4797903749999968
+    },
+    {
+     "kernel": "at::native::vectorized_elementwise_kernel",
+     "bucket": "elementwise",
+     "from_ms": 0.2989886249999996,
+     "to_ms": 2.6182578749999994,
+     "delta_ms": 2.3192692499999996
+    },
+    {
+     "kernel": "group_norm_silu_quantize_nhwc_vec2_kernel",
+     "bucket": "norm_quantize",
+     "from_ms": 2.050990125,
+     "to_ms": 0.0,
+     "delta_ms": -2.050990125
+    },
+    {
+     "kernel": "gn_delta_absmax_flat_vec2_kernel",
+     "bucket": "delta_quantize",
+     "from_ms": 6.283753499999992,
+     "to_ms": 8.183990999999997,
+     "delta_ms": 1.9002375000000047
+    },
+    {
+     "kernel": "delta_absmax_fp16_kernel",
+     "bucket": "delta_quantize",
+     "from_ms": 0.0,
+     "to_ms": 1.840113374999999,
+     "delta_ms": 1.840113374999999
+    },
+    {
+     "kernel": "aq_vquant_trans_packed_tiled_vec2_kernel",
+     "bucket": "attn_quantize",
+     "from_ms": 0.0,
+     "to_ms": 1.808820125,
+     "delta_ms": 1.808820125
+    },
+    {
+     "kernel": "aq_qtok_packed_static_qk_flat_kernel",
+     "bucket": "attn_quantize",
+     "from_ms": 0.0,
+     "to_ms": 1.7908011250000004,
+     "delta_ms": 1.7908011250000004
+    },
+    {
+     "kernel": "at::native::elementwise_kernel",
+     "bucket": "elementwise",
+     "from_ms": 2.3885300000000034,
+     "to_ms": 4.133293625,
+     "delta_ms": 1.744763624999997
+    },
+    {
+     "kernel": "gn_stats_partials_chanmajor_kernel",
+     "bucket": "norm_quantize",
+     "from_ms": 3.5914660000000014,
+     "to_ms": 4.698435000000007,
+     "delta_ms": 1.1069690000000056
+    },
+    {
+     "kernel": "aq_qtok_packed_static_qk_vec2_kernel",
+     "bucket": "attn_quantize",
+     "from_ms": 0.0,
+     "to_ms": 0.9897411249999999,
+     "delta_ms": 0.9897411249999999
+    },
+    {
+     "kernel": "flash_attn_int8_qi8packed_small_qout_kernel",
+     "bucket": "attention",
+     "from_ms": 0.34621350000000006,
+     "to_ms": 0.0,
+     "delta_ms": -0.34621350000000006
+    },
+    {
+     "kernel": "pytorch_flash::flash_fwd_kernel",
+     "bucket": "attention",
+     "from_ms": 0.0,
+     "to_ms": 0.263349375,
+     "delta_ms": 0.263349375
+    },
+    {
+     "kernel": "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS1J_14VisitorAuxLoadIS2G_S1S_S2L_EENS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2T_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2W_S2W_EEELi1ES2S_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2W_S2K_iEEELb1EEEEEEEEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE",
+     "bucket": "conv",
+     "from_ms": 14.024620000000006,
+     "to_ms": 13.798494874999996,
+     "delta_ms": -0.22612512500001003
+    },
+    {
+     "kernel": "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS2D_IS2M_JNS2D_IS2P_JNS1J_14VisitorAuxLoadIS2G_S1S_S2L_EENS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2T_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2W_S2W_EEELi1ES2S_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2W_S2K_iEEELb1EEEEEEEEEEEES2R_EEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE",
+     "bucket": "conv",
+     "from_ms": 11.764400499999992,
+     "to_ms": 11.612874374999992,
+     "delta_ms": -0.15152612500000018
+    },
+    {
+     "kernel": "gn_stats_reduce_partials_kernel(float const*, float const*, float*, float*, int, long, float, int)",
+     "bucket": "norm_quantize",
+     "from_ms": 0.3644287500000002,
+     "to_ms": 0.49552475,
+     "delta_ms": 0.13109599999999982
+    },
+    {
+     "kernel": "flash_attn_int8_mma_kernel_t",
+     "bucket": "attention",
+     "from_ms": 8.382238499999998,
+     "to_ms": 8.434745125000001,
+     "delta_ms": 0.05250662500000303
+    }
+   ]
+  },
+  "modiff_full_k1 -> modiff_full_k4": {
+   "trace_delta_ms_per_step": -5.485314999999943,
+   "wall_delta_ms_per_step": -6.784833984374998,
+   "by_bucket": {
+    "attention": -0.013853374999996504,
+    "elementwise": -0.009090874999996501,
+    "attn_quantize": -0.00029712500000123043,
+    "conv": -0.06313824999999085,
+    "delta_quantize": -4.662156124999996,
+    "other": -0.0001761249999999992,
+    "norm_quantize": -0.7211053750000005,
+    "linear_gemm": -0.015497749999985544
+   },
+   "by_kernel": [
+    {
+     "kernel": "gn_delta_absmax_flat_vec2_kernel",
+     "bucket": "delta_quantize",
+     "from_ms": 8.183990999999997,
+     "to_ms": 3.512171625,
+     "delta_ms": -4.6718193749999966
+    },
+    {
+     "kernel": "group_norm_silu_delta_quantize_resize_nhwc_kernel",
+     "bucket": "norm_quantize",
+     "from_ms": 4.253533249999999,
+     "to_ms": 3.5377167500000013,
+     "delta_ms": -0.7158164999999981
+    }
+   ]
+  },
+  "modiff_full_k1 -> base_no_conv_modiff": {
+   "trace_delta_ms_per_step": 47.39861587500009,
+   "wall_delta_ms_per_step": 45.445332031250004,
+   "by_bucket": {
+    "attention": -0.11798337500000144,
+    "elementwise": 41.922038750000006,
+    "attn_quantize": -0.0036822500000015523,
+    "conv": -0.5807457499999842,
+    "delta_quantize": -14.56175687499999,
+    "other": -0.00016374999999999897,
+    "quantize": 6.0381625000000065,
+    "norm_quantize": 14.962330875000003,
+    "linear_gemm": -0.25958424999999075
+   },
+   "by_kernel": [
+    {
+     "kernel": "_ZN7cutlass6KernelINS_4conv6kernel23ImplicitGemmConvolutionINS1_11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1N_ILi1ELi8ELi1ELi1ELi8EEELi256ELi1ELi32EEEfLb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1T_20TileIteratorTensorOpIS14_S18_iS15_EENS1J_18SharedLoadIteratorINS1Q_18CompactedThreadMapEiLi4EEENS1I_6thread17LinearCombinationIfLi1EifLNS23_9ScaleType4KindE0ELNS_15FloatRoundStyleE2EfEENSA_ILi0ELi8EEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS1_8OperatorE0ENS1_17Conv2dProblemSizeELNS1_9GroupModeE0EEEEEvNT_6ParamsE",
+     "bucket": "conv",
+     "from_ms": 0.0,
+     "to_ms": 24.83772475,
+     "delta_ms": 24.83772475
+    },
+    {
+     "kernel": "group_norm_silu_nhwc_kernel",
+     "bucket": "norm_quantize",
+     "from_ms": 0.0,
+     "to_ms": 24.41376450000001,
+     "delta_ms": 24.41376450000001
+    },
+    {
+     "kernel": "at::native::elementwise_kernel",
+     "bucket": "elementwise",
+     "from_ms": 4.133293625,
+     "to_ms": 21.833540249999963,
+     "delta_ms": 17.700246624999963
+    },
+    {
+     "kernel": "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS1J_14VisitorAuxLoadIS2G_S1S_S2L_EENS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2T_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2W_S2W_EEELi1ES2S_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2W_S2K_iEEELb1EEEEEEEEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE",
+     "bucket": "conv",
+     "from_ms": 13.798494874999996,
+     "to_ms": 0.0,
+     "delta_ms": -13.798494874999996
+    },
+    {
+     "kernel": "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS2D_IS2M_JNS2D_IS2P_JNS1J_14VisitorAuxLoadIS2G_S1S_S2L_EENS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2T_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2W_S2W_EEELi1ES2S_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2W_S2K_iEEELb1EEEEEEEEEEEES2R_EEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE",
+     "bucket": "conv",
+     "from_ms": 11.612874374999992,
+     "to_ms": 0.0,
+     "delta_ms": -11.612874374999992
+    },
+    {
+     "kernel": "at::native::unrolled_elementwise_kernel",
+     "bucket": "elementwise",
+     "from_ms": 1.3347286250000008,
+     "to_ms": 12.807761000000019,
+     "delta_ms": 11.473032375000018
+    },
+    {
+     "kernel": "gn_apply_delta_quantize_flat_vec2_kernel",
+     "bucket": "delta_quantize",
+     "from_ms": 10.712636999999999,
+     "to_ms": 0.0,
+     "delta_ms": -10.712636999999999
+    },
+    {
+     "kernel": "at::native::vectorized_elementwise_kernel",
+     "bucket": "elementwise",
+     "from_ms": 2.6182578749999994,
+     "to_ms": 12.107760500000015,
+     "delta_ms": 9.489502625000016
+    },
+    {
+     "kernel": "gn_delta_absmax_flat_vec2_kernel",
+     "bucket": "delta_quantize",
+     "from_ms": 8.183990999999997,
+     "to_ms": 0.0,
+     "delta_ms": -8.183990999999997
+    },
+    {
+     "kernel": "scale_quantize_int8_kernel(float const*, signed char*, float const*, int)",
+     "bucket": "quantize",
+     "from_ms": 0.0,
+     "to_ms": 5.910997750000006,
+     "delta_ms": 5.910997750000006
+    },
+    {
+     "kernel": "gn_stats_partials_chanmajor_kernel",
+     "bucket": "norm_quantize",
+     "from_ms": 4.698435000000007,
+     "to_ms": 0.0,
+     "delta_ms": -4.698435000000007
+    },
+    {
+     "kernel": "group_norm_silu_delta_quantize_resize_nhwc_kernel",
+     "bucket": "norm_quantize",
+     "from_ms": 4.253533249999999,
+     "to_ms": 0.0,
+     "delta_ms": -4.253533249999999
+    },
+    {
+     "kernel": "at::native::(anonymous namespace)::CatArrayBatchedCopy_aligned16_contig",
+     "bucket": "elementwise",
+     "from_ms": 0.0,
+     "to_ms": 3.4627350000000003,
+     "delta_ms": 3.4627350000000003
+    },
+    {
+     "kernel": "static_quantize_and_update_ahat_kernel_int8_half_cache_vec2",
+     "bucket": "delta_quantize",
+     "from_ms": 2.527383874999999,
+     "to_ms": 5.052723250000003,
+     "delta_ms": 2.525339375000004
+    },
+    {
+     "kernel": "cat2_channels_last_fp16_kernel(__half const*, __half const*, __half*, long, int, int)",
+     "bucket": "elementwise",
+     "from_ms": 1.923169875,
+     "to_ms": 0.0,
+     "delta_ms": -1.923169875
+    },
+    {
+     "kernel": "delta_absmax_fp16_kernel",
+     "bucket": "delta_quantize",
+     "from_ms": 1.840113374999999,
+     "to_ms": 3.649645125,
+     "delta_ms": 1.8095317500000012
+    },
+    {
+     "kernel": "at::native::(anonymous namespace)::upsample_nearest2d_nhwc_out_frame",
+     "bucket": "elementwise",
+     "from_ms": 1.210641875,
+     "to_ms": 2.3736636250000003,
+     "delta_ms": 1.1630217500000002
+    },
+    {
+     "kernel": "at::native::(anonymous namespace)::avg_pool2d_out_cuda_frame_nhwc",
+     "bucket": "elementwise",
+     "from_ms": 0.4462857499999999,
+     "to_ms": 1.0031040000000004,
+     "delta_ms": 0.5568182500000005
+    },
+    {
+     "kernel": "gn_stats_reduce_partials_kernel(float const*, float const*, float*, float*, int, long, float, int)",
+     "bucket": "norm_quantize",
+     "from_ms": 0.49552475,
+     "to_ms": 0.0,
+     "delta_ms": -0.49552475
+    },
+    {
+     "kernel": "gemm_w8a8_kernel_awq(signed char const*, signed char const*, float const*, float, __half*, int, int, int, int, __half const*, __half const*, __half*, float const*)",
+     "bucket": "linear_gemm",
+     "from_ms": 14.687128999999995,
+     "to_ms": 14.447467125000005,
+     "delta_ms": -0.2396618749999906
+    },
+    {
+     "kernel": "static_quantize_int8_noahat_vec2_kernel",
+     "bucket": "quantize",
+     "from_ms": 0.0,
+     "to_ms": 0.12716475,
+     "delta_ms": 0.12716475
+    },
+    {
+     "kernel": "flash_attn_int8_mma_kernel_t",
+     "bucket": "attention",
+     "from_ms": 8.434745125000001,
+     "to_ms": 8.32773075,
+     "delta_ms": -0.10701437500000033
+    }
+   ]
+  },
+  "int8_ptq -> ptq_no_projquant": {
+   "trace_delta_ms_per_step": 6.3357568750000155,
+   "wall_delta_ms_per_step": 6.664487304687512,
+   "by_bucket": {
+    "attention": -0.024870999999992094,
+    "elementwise": 1.8378297500000036,
+    "attn_quantize": 4.583053125,
+    "conv": -0.14740049999999272,
+    "other": -0.0012238749999999993,
+    "quantize": 1.3376938749999998,
+    "norm_quantize": -0.10467162499999816,
+    "linear_gemm": -1.1446528750000038
+   },
+   "by_kernel": [
+    {
+     "kernel": "gemm_w8a8_kernel_awq_out_i8",
+     "bucket": "linear_gemm",
+     "from_ms": 5.234849874999998,
+     "to_ms": 0.0,
+     "delta_ms": -5.234849874999998
+    },
+    {
+     "kernel": "gemm_w8a8_kernel_awq(signed char const*, signed char const*, float const*, float, __half*, int, int, int, int, __half const*, __half const*, __half*, float const*)",
+     "bucket": "linear_gemm",
+     "from_ms": 3.289123125,
+     "to_ms": 7.3836962499999945,
+     "delta_ms": 4.094573124999995
+    },
+    {
+     "kernel": "aq_vquant_trans_packed_tiled_vec2_kernel",
+     "bucket": "attn_quantize",
+     "from_ms": 0.0,
+     "to_ms": 1.8064966250000007,
+     "delta_ms": 1.8064966250000007
+    },
+    {
+     "kernel": "aq_qtok_packed_static_qk_flat_kernel",
+     "bucket": "attn_quantize",
+     "from_ms": 0.0,
+     "to_ms": 1.79022,
+     "delta_ms": 1.79022
+    },
+    {
+     "kernel": "at::native::elementwise_kernel",
+     "bucket": "elementwise",
+     "from_ms": 2.3885898749999988,
+     "to_ms": 4.161889125000004,
+     "delta_ms": 1.7732992500000049
+    },
+    {
+     "kernel": "quant_act_int8_kernel(__half const*, signed char*, float, long)",
+     "bucket": "quantize",
+     "from_ms": 0.0,
+     "to_ms": 1.3376938749999998,
+     "delta_ms": 1.3376938749999998
+    },
+    {
+     "kernel": "aq_qtok_packed_static_qk_vec2_kernel",
+     "bucket": "attn_quantize",
+     "from_ms": 0.0,
+     "to_ms": 0.9863364999999998,
+     "delta_ms": 0.9863364999999998
+    },
+    {
+     "kernel": "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "bucket": "conv",
+     "from_ms": 0.08243662499999999,
+     "to_ms": 0.61221475,
+     "delta_ms": 0.529778125
+    },
+    {
+     "kernel": "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x64x32_stage4_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "bucket": "conv",
+     "from_ms": 0.5047348750000001,
+     "to_ms": 0.0,
+     "delta_ms": -0.5047348750000001
+    },
+    {
+     "kernel": "flash_attn_int8_qi8packed_small_qout_kernel",
+     "bucket": "attention",
+     "from_ms": 0.34656175000000006,
+     "to_ms": 0.0,
+     "delta_ms": -0.34656175000000006
+    },
+    {
+     "kernel": "pytorch_flash::flash_fwd_kernel",
+     "bucket": "attention",
+     "from_ms": 0.0,
+     "to_ms": 0.26347725000000005,
+     "delta_ms": 0.26347725000000005
+    },
+    {
+     "kernel": "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize256x32x32_stage5_warpsize4x1x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "bucket": "conv",
+     "from_ms": 0.242153625,
+     "to_ms": 0.0,
+     "delta_ms": -0.242153625
+    },
+    {
+     "kernel": "sm80_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x32_stage4_warpsize4x1x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "bucket": "conv",
+     "from_ms": 0.0,
+     "to_ms": 0.233453,
+     "delta_ms": 0.233453
+    },
+    {
+     "kernel": "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x128x32_stage3_warpsize2x2x1_g1_tensor16x8x16_t1r1s1_execute_kernel__5x_cudnn",
+     "bucket": "conv",
+     "from_ms": 0.5077547499999999,
+     "to_ms": 0.36078962499999995,
+     "delta_ms": -0.14696512499999997
+    },
+    {
+     "kernel": "sm86_xmma_fprop_implicit_gemm_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize64x128x32_stage4_warpsize2x2x1_g1_tensor16x8x16_execute_kernel__5x_cudnn",
+     "bucket": "conv",
+     "from_ms": 0.07618825,
+     "to_ms": 0.19806837500000002,
+     "delta_ms": 0.12188012500000002
+    },
+    {
+     "kernel": "group_norm_silu_quantize_nhwc_vec2_kernel",
+     "bucket": "norm_quantize",
+     "from_ms": 16.423925749999995,
+     "to_ms": 16.322038,
+     "delta_ms": -0.10188774999999595
+    },
+    {
+     "kernel": "sm80_xmma_fprop_implicit_gemm_indexed_wo_smem_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x16_stage1_warpsize4x1x1_g1_tensor16x8x16_aligna4_alignc8_execute_kernel__5x_cudnn",
+     "bucket": "conv",
+     "from_ms": 0.0,
+     "to_ms": 0.09680825,
+     "delta_ms": 0.09680825
+    },
+    {
+     "kernel": "sm80_xmma_fprop_implicit_gemm_indexed_wo_smem_f16f16_f16f32_f32_nhwckrsc_nhwc_tilesize128x32x64_stage1_warpsize4x1x1_g1_tensor16x8x16_aligna4_alignc4_execute_kernel__5x_cudnn",
+     "bucket": "conv",
+     "from_ms": 0.09679675,
+     "to_ms": 0.0,
+     "delta_ms": -0.09679675
+    },
+    {
+     "kernel": "at::native::vectorized_elementwise_kernel",
+     "bucket": "elementwise",
+     "from_ms": 0.28601849999999995,
+     "to_ms": 0.36894424999999964,
+     "delta_ms": 0.08292574999999969
+    },
+    {
+     "kernel": "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2R_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2U_S2U_EEELi1ES2Q_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2U_S2K_iEEELb1EEEEEES30_EEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE",
+     "bucket": "conv",
+     "from_ms": 13.715860999999999,
+     "to_ms": 13.644034249999999,
+     "delta_ms": -0.0718267499999996
+    },
+    {
+     "kernel": "_ZN7cutlass6KernelIN6modiff26ImplicitGemmConvolutionEVTINS_4conv11threadblock22ImplicitGemmMultistageINS_4gemm9GemmShapeILi128ELi128ELi128EEENS4_48Conv2dFpropActivationTileAccessIteratorOptimizedINS_11MatrixShapeILi128ELi128EEEaNS_6layout10TensorNHWCENS_9transform29PitchLinearWarpRakedThreadMapINS_16PitchLinearShapeILi128ELi128EEELi256ENSG_ILi8ELi4EEELi16EEENS_12AlignedArrayIaLi16ELi16EEEEENSE_11threadblock25RegularTileAccessIteratorISB_aNSC_37RowMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi0ESJ_Li16EEELNS_4arch14CacheOperation4KindE0ENS4_44Conv2dFpropFilterTileAccessIteratorOptimizedISB_aSD_SJ_SL_Lb0EEENSO_ISB_aNSC_40ColumnMajorTensorOpMultiplicandCrosswiseILi8ELi128EEELi1ESJ_Li16EEELSU_1ENS6_11threadblock9MmaPolicyINS6_4warp11MmaTensorOpINS7_ILi64ELi64ELi64EEEaSQ_aSY_iNSC_8RowMajorENS12_17MmaTensorOpPolicyINSS_3MmaINS7_ILi16ELi8ELi32EEELi32EaS15_aNSC_11ColumnMajorEiS15_NSS_21OpMultiplyAddSaturateEEENSA_ILi1ELi1EEEEELi2ELb0EbEENSA_ILi0ELi0EEES1F_Li2EEELi3EbEENS_8epilogue11threadblock28EpilogueWithVisitorCallbacksINS1J_8EpilogueIS8_S1E_Li2ENS1J_26PredicatedTileIteratorConvINS1J_26OutputTileOptimalThreadMapINS1J_15OutputTileShapeILi128ELi8ELi2ELi1ELi1EEENS1O_ILi1ELi8ELi1ELi1ELi8EEELi256ELi8ELi16EEENS_6half_tELb0ENSC_9NoPermuteELb0ELi4EEENS1I_4warp24FragmentIteratorTensorOpIS14_S18_iNS_5ArrayIiLi4ELb1EEES15_EENS1V_25TileIteratorTensorOpMixedIS14_S18_iLi32ELi16ELi8ELi8ELb0EEENS1J_23SharedLoadIteratorMixedINS1R_18CompactedThreadMapEiLi32ELi16ELi8ELi8ELb0EEENS1I_6thread17LinearCombinationIS1S_Li8EifLNS25_9ScaleType4KindE0ELNS_15FloatRoundStyleE2ES1S_EENSA_ILi0ELi8EEELi1ELi1EEENS1J_13TreeVisitor2xINS1J_15VisitorAuxStoreINS1J_22OutputTileThreadLayoutIS8_S14_S1S_Li8ELi1EEES1S_LS29_2EN4cute5tupleIJlNS2H_1CILi1EEElEEEEEJNS2D_INS1J_14VisitorComputeINS_4plusEffLS29_2EvEEJNS2D_IS2P_JNS2D_INS2N_INS_10multipliesEffLS29_2EvEEJNS2D_IS2R_JNS1J_15VisitorAccFetchENS1J_22VisitorScalarBroadcastIfNS2I_IJNS2J_ILi0EEES2U_S2U_EEELi1ES2Q_EEEEENS1J_19VisitorRowBroadcastIS2G_fNS2I_IJS2U_S2K_iEEELb1EEEEEES30_EEENS1J_14VisitorAuxLoadIS2G_S1S_S2L_EEEEEEEELi1ELi1EEENS10_30GemmIdentityThreadblockSwizzleILi1EEELNS3_8OperatorE0ENS3_17Conv2dProblemSizeEEEEEvNT_6ParamsE",
+     "bucket": "conv",
+     "from_ms": 10.98302275,
+     "to_ms": 10.917881000000012,
+     "delta_ms": -0.06514174999998801
+    },
+    {
+     "kernel": "flash_attn_int8_mma_kernel_t",
+     "bucket": "attention",
+     "from_ms": 8.423625124999997,
+     "to_ms": 8.481838625000005,
+     "delta_ms": 0.05821350000000791
+    }
+   ]
+  }
+ }
+}

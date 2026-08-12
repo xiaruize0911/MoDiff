@@ -66,7 +66,7 @@ def plot_verdicts(out):
 
     fig, (axl, axr) = plt.subplots(1, 2, figsize=(12.6, 5.0),
                                    gridspec_kw={"width_ratios": [1.5, 1]})
-    items = [("route (b)\nqkv int8 -> flash\nLANDED (opt-in)", ab["paired_median"], BLUE, ""),
+    items = [("route (b)\nqkv int8 -> flash\nLANDED", ab["paired_median"], BLUE, ""),
              ("hd=24 via 8-byte\ncp.async loader\nREFUTED", hd24_step, ROSE, " (est.)"),
              ("route (a)\nfp16 -> flash\nREFUTED 08-11", -18.0, ROSE, "")]
     vals = [i[1] for i in items]

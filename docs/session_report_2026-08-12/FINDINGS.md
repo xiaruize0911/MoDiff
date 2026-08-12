@@ -16,7 +16,7 @@ are regenerated offline by `scripts/make_plots.py`.
 
 ![verdicts](plots/00_fusion_verdicts.png)
 
-**`route (b)` landed: +0.79 ms/step**, opt-in behind `MODIFF_FUSE_QKV_I8=1`, on 10 of the 21 attention
+**`route (b)` landed: +0.79 ms/step**, behind `MODIFF_FUSE_QKV_I8=1`, on 10 of the 21 attention
 blocks. The qkv GEMM emits int8 at a per-column scale straight into flash's gather path, so the three
 `aq_*` re-quantize kernels disappear on those blocks.
 

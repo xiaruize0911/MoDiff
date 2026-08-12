@@ -211,8 +211,8 @@ arms inside one process.
 | MoDiff conv only, K=1 | 81.66 | 1.277× |
 | MoDiff conv+proj, K=1 (the paper's datapath) | 104.01 | 1.003× |
 | MoDiff conv+proj, K=4 | 98.45 | 1.059× |
-| … + projection refresh schedule (opt-in) | 95.68 | 1.090× |
-| … + route (b) qkv int8→flash (opt-in) | **95.09** | **1.097×** |
+| … + projection refresh schedule (`MODIFF_LINEAR_DELTA_REFRESH=4`) | 95.68 | 1.090× |
+| … + route (b) qkv int8→flash (`MODIFF_FUSE_QKV_I8=1`) | **95.09** | **1.097×** |
 
 The gains those last two arms represent, from paired A/B (the trustworthy instrument):
 **+2.81 ms** for the projection refresh and **+0.79 ms** for route (b). This run's within-process

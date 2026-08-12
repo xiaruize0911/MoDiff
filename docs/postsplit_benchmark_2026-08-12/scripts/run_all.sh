@@ -8,7 +8,7 @@ cd /workspace/MoDiff
 D=/workspace/MoDiff/docs/postsplit_benchmark_2026-08-12
 S=$(date +%s)
 
-# 1. e2e, the quantized ladder + both opt-in arms. fp16 runs SEPARATELY below: it is the only arm
+# 1. e2e, the full quantized ladder. fp16 runs SEPARATELY below: it is the only arm
 #    that converts nothing, and mixing it in a shared process has bitten this harness before.
 python docs/component_attribution_2026-08-07/scripts/differential_timing.py \
   --arms int8_ptq,modiff_conv_k4,modiff_conv_k1,modiff_full_k1,modiff_full_k4,modiff_full_k4_projk4,modiff_full_k4_projk4_qkvi8 \
