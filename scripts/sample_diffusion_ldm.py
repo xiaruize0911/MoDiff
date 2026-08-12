@@ -421,6 +421,14 @@ def get_parser():
     parser.add_argument("--act_tensor", action="store_true", help="use tensor-wise activation quantization")
     parser.add_argument("--out_penalty", type=float, default=0.0, help="penalty for outliers in calibration")
     parser.add_argument("--cali_min_max", action="store_true", help="use min-max of calibration datasets to init scaling")
+    parser.add_argument("--skip_weight_recon", action="store_true",
+                        help="skip weight AdaRound (~20000 iters x 168 layers). Weights keep the "
+                             "channel-wise MSE quantizer. The saved ckpt has no weight_quantizer.alpha "
+                             "and cannot be reloaded with --resume; it is an activation-scale artifact.")
+    parser.add_argument("--no_ema", action="store_true",
+                        help="do NOT swap in EMA weights. Required when the scales will be consumed by "
+                             "integration/, whose loader does not use EMA -- otherwise the two build "
+                             "different networks (measured: 0/70 conv weights match).")
     parser.add_argument("--generate", type=str, default=None, choices=[None, "raw", "residual"], help="generate calibration data")
 
     return parser
@@ -525,9 +533,16 @@ if __name__ == "__main__":
 
     model, global_step = load_model(config, ckpt, gpu, eval_mode)
     logger.info(f"global step: {global_step}")
-    logger.info("Switched to EMA weights")
-    model.model_ema.store(model.model.parameters())
-    model.model_ema.copy_to(model.model)
+    if opt.no_ema:
+        # integration/benchmarks/benchmark_ldm.py:152 does NOT swap in EMA weights, so a calibration
+        # run that does would derive scales for a different network than the one consuming them.
+        # Measured 2026-08-12: 0/70 conv weights match, worst rel L2 0.1382. See
+        # docs/qdiff_bridge_2026-08-12/scripts/assert_same_network.py.
+        logger.info("Keeping NON-EMA weights (--no_ema): matches integration/'s loader")
+    else:
+        logger.info("Switched to EMA weights")
+        model.model_ema.store(model.model.parameters())
+        model.model_ema.copy_to(model.model)
 
     if opt.generate is not None:
         if opt.generate == 'residual':
@@ -623,7 +638,17 @@ if __name__ == "__main__":
                     else:
                         recon_model_modiff(module)
 
-            if not opt.resume_w:
+            if opt.skip_weight_recon:
+                # Weight AdaRound is ~20000 iterations x 168 layers -- day-scale on an A40, and this
+                # project targets ACTIVATION quantization (README:43). The init forward above already
+                # filled every weight_quantizer.delta via the channel-wise MSE search, so weights are
+                # quantized, just not learned-rounded. NOTE the resulting ckpt.pth has no
+                # weight_quantizer.alpha and is therefore NOT loadable via --resume / resume_cali_model,
+                # which calls convert_adaround() and expects alpha. It is an activation-scale artifact.
+                logger.info("Skipping weight reconstruction (--skip_weight_recon): "
+                            "weights keep the channel-wise MSE quantizer, no AdaRound")
+                qnn.set_quant_state(weight_quant=True, act_quant=False)
+            elif not opt.resume_w:
                 logger.info("Doing weight calibration")
                 recon_model(qnn)
                 qnn.set_quant_state(weight_quant=True, act_quant=False)
@@ -651,13 +676,30 @@ if __name__ == "__main__":
                 
 
                 kwargs = dict(
-                    cali_data=cali_data, iters=opt.cali_iters_a, act_quant=True, 
-                    opt_mode='mse', lr=opt.cali_lr, min_max=opt.cali_min_max, out_penalty=opt.out_penalty)   
+                    cali_data=cali_data, iters=opt.cali_iters_a, act_quant=True,
+                    opt_mode='mse', lr=opt.cali_lr)
                 if opt.modulate:
+                    # layer_reconstruction_modiff ALSO takes min_max/out_penalty, and -- critically --
+                    # its full-cali-set min-max delta init runs BEFORE the optimizer loop, so this
+                    # path must be called even at iters=0 or the delta scale is never set from the
+                    # temporal residual at all.
+                    kwargs.update(min_max=opt.cali_min_max, out_penalty=opt.out_penalty)
                     recon_model_modiff(qnn)
-                else:
+                elif opt.cali_iters_a > 0:
+                    # layer_reconstruction() does NOT accept min_max/out_penalty -- passing them was a
+                    # pre-existing TypeError that made this branch unrunnable (found 2026-08-12; the
+                    # non-modulate activation path had evidently never been exercised).
+                    #
+                    # It also has no min-max init: with iters=0 it would cache inputs and outputs for
+                    # all 168 layers and then run zero optimizer steps. So at iters=0 we skip it
+                    # outright. The activation scales are already set -- init_quantization_scale ran
+                    # during the priming forward above, using 'max' under --a_min_max or the 80-point
+                    # MSE search otherwise.
                     recon_model(qnn)
-                qnn.set_quant_state(weight_quant=True, act_quant=True)   
+                else:
+                    logger.info("Activation LSQ skipped (cali_iters_a=0, no --modulate): scales come "
+                                "from init_quantization_scale on the priming forward")
+                qnn.set_quant_state(weight_quant=True, act_quant=True)
 
             logger.info("Saving calibrated quantized UNet model")
             for m in qnn.model.modules():
