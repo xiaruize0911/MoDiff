@@ -1,0 +1,3946 @@
+[
+ {
+  "config": "W8A8 PTQ",
+  "mode": "int8_baseline",
+  "modiff_linear": "0",
+  "act_bits": 8,
+  "K": 4,
+  "wall_ms_per_step": 71.28637017001893,
+  "instrumented_ms_per_step": 71.55349563501659,
+  "blocks": {
+   "ot000": 0.3617836794257164,
+   "rb001": 2.5128287971019745,
+   "at002": 2.60095951795578,
+   "rb003": 2.524466716051102,
+   "at004": 2.6080204796791078,
+   "rb005": 1.2233609598875046,
+   "rb006": 1.4933273607492448,
+   "at007": 0.8714768004417419,
+   "rb008": 1.4883163207769394,
+   "at009": 0.8770894402265549,
+   "rb010": 0.7147985595464706,
+   "rb011": 0.653065759241581,
+   "at012": 0.23641856007277964,
+   "rb013": 0.6543822401762008,
+   "at014": 0.23883263997733592,
+   "rb015": 0.2094286397844553,
+   "rb016": 0.38836671993136407,
+   "at017": 0.19196863971650602,
+   "rb018": 0.45435392037034034,
+   "at019": 0.192498399913311,
+   "rb020": 0.2401766399294138,
+   "rb021": 0.20981184005737305,
+   "rb022": 0.2094115201383829,
+   "rb023": 0.20971424005925654,
+   "at024": 0.08332815989851952,
+   "rb025": 0.2111174400150776,
+   "rb026": 0.3192712004482746,
+   "rb027": 0.3196087995171547,
+   "rb028": 0.31916911974549295,
+   "rb029": 0.46627999991178515,
+   "rb030": 0.7877313598990441,
+   "at031": 0.19210895977914333,
+   "rb032": 0.7876241594552994,
+   "at033": 0.19213215984404086,
+   "rb034": 0.7041734409332275,
+   "at035": 0.1921019195765257,
+   "rb036": 1.2642376029491424,
+   "rb037": 1.0675454443693162,
+   "at038": 0.23881023973226548,
+   "rb039": 0.8875956803560257,
+   "at040": 0.23628463968634605,
+   "rb041": 0.8872211188077926,
+   "at042": 0.2359494400769472,
+   "rb043": 1.6343047940731048,
+   "rb044": 2.2403427135944365,
+   "at045": 0.865463517010212,
+   "rb046": 2.234311364889145,
+   "at047": 0.8624553582072259,
+   "rb048": 2.032427516579628,
+   "at049": 0.8634331196546554,
+   "rb050": 5.67299694776535,
+   "rb051": 4.460743200778961,
+   "at052": 2.5643372809886933,
+   "rb053": 3.4963119971752166,
+   "at054": 2.5735761594772337,
+   "rb055": 3.511785125732422,
+   "at056": 2.5836980748176575,
+   "time_embed": 0.15041888035833836,
+   "out_tail": 2.2001998364925384
+  },
+  "calls": {
+   "ot000": 200,
+   "rb001": 200,
+   "at002": 200,
+   "rb003": 200,
+   "at004": 200,
+   "rb005": 200,
+   "rb006": 200,
+   "at007": 200,
+   "rb008": 200,
+   "at009": 200,
+   "rb010": 200,
+   "rb011": 200,
+   "at012": 200,
+   "rb013": 200,
+   "at014": 200,
+   "rb015": 200,
+   "rb016": 200,
+   "at017": 200,
+   "rb018": 200,
+   "at019": 200,
+   "rb020": 200,
+   "rb021": 200,
+   "rb022": 200,
+   "rb023": 200,
+   "at024": 200,
+   "rb025": 200,
+   "rb026": 200,
+   "rb027": 200,
+   "rb028": 200,
+   "rb029": 200,
+   "rb030": 200,
+   "at031": 200,
+   "rb032": 200,
+   "at033": 200,
+   "rb034": 200,
+   "at035": 200,
+   "rb036": 200,
+   "rb037": 200,
+   "at038": 200,
+   "rb039": 200,
+   "at040": 200,
+   "rb041": 200,
+   "at042": 200,
+   "rb043": 200,
+   "rb044": 200,
+   "at045": 200,
+   "rb046": 200,
+   "at047": 200,
+   "rb048": 200,
+   "at049": 200,
+   "rb050": 200,
+   "rb051": 200,
+   "at052": 200,
+   "rb053": 200,
+   "at054": 200,
+   "rb055": 200,
+   "at056": 200,
+   "time_embed": 200,
+   "out_tail": 200
+  },
+  "meta": {
+   "ot000": {
+    "type": "conv_in",
+    "where": "in",
+    "container": 0,
+    "in_shape": [
+     128,
+     4,
+     32,
+     32
+    ]
+   },
+   "rb001": {
+    "type": "resblock",
+    "where": "in",
+    "container": 1,
+    "channels": 192,
+    "out_channels": 192,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ]
+   },
+   "at002": {
+    "type": "attention",
+    "where": "in",
+    "container": 1,
+    "channels": 192,
+    "num_heads": 8,
+    "head_dim": 24,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ],
+    "T": 1024,
+    "tier": "hd24 T1024"
+   },
+   "rb003": {
+    "type": "resblock",
+    "where": "in",
+    "container": 2,
+    "channels": 192,
+    "out_channels": 192,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ]
+   },
+   "at004": {
+    "type": "attention",
+    "where": "in",
+    "container": 2,
+    "channels": 192,
+    "num_heads": 8,
+    "head_dim": 24,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ],
+    "T": 1024,
+    "tier": "hd24 T1024"
+   },
+   "rb005": {
+    "type": "resblock",
+    "where": "in",
+    "container": 3,
+    "channels": 192,
+    "out_channels": 192,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ]
+   },
+   "rb006": {
+    "type": "resblock",
+    "where": "in",
+    "container": 4,
+    "channels": 192,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     192,
+     16,
+     16
+    ]
+   },
+   "at007": {
+    "type": "attention",
+    "where": "in",
+    "container": 4,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     16,
+     16
+    ],
+    "T": 256,
+    "tier": "hd48 T256"
+   },
+   "rb008": {
+    "type": "resblock",
+    "where": "in",
+    "container": 5,
+    "channels": 384,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     384,
+     16,
+     16
+    ]
+   },
+   "at009": {
+    "type": "attention",
+    "where": "in",
+    "container": 5,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     16,
+     16
+    ],
+    "T": 256,
+    "tier": "hd48 T256"
+   },
+   "rb010": {
+    "type": "resblock",
+    "where": "in",
+    "container": 6,
+    "channels": 384,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     384,
+     16,
+     16
+    ]
+   },
+   "rb011": {
+    "type": "resblock",
+    "where": "in",
+    "container": 7,
+    "channels": 384,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ]
+   },
+   "at012": {
+    "type": "attention",
+    "where": "in",
+    "container": 7,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ],
+    "T": 64,
+    "tier": "hd48 T64"
+   },
+   "rb013": {
+    "type": "resblock",
+    "where": "in",
+    "container": 8,
+    "channels": 384,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ]
+   },
+   "at014": {
+    "type": "attention",
+    "where": "in",
+    "container": 8,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ],
+    "T": 64,
+    "tier": "hd48 T64"
+   },
+   "rb015": {
+    "type": "resblock",
+    "where": "in",
+    "container": 9,
+    "channels": 384,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ]
+   },
+   "rb016": {
+    "type": "resblock",
+    "where": "in",
+    "container": 10,
+    "channels": 384,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     384,
+     4,
+     4
+    ]
+   },
+   "at017": {
+    "type": "attention",
+    "where": "in",
+    "container": 10,
+    "channels": 768,
+    "num_heads": 8,
+    "head_dim": 96,
+    "in_shape": [
+     128,
+     768,
+     4,
+     4
+    ],
+    "T": 16,
+    "tier": "hd96 T16"
+   },
+   "rb018": {
+    "type": "resblock",
+    "where": "in",
+    "container": 11,
+    "channels": 768,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     768,
+     4,
+     4
+    ]
+   },
+   "at019": {
+    "type": "attention",
+    "where": "in",
+    "container": 11,
+    "channels": 768,
+    "num_heads": 8,
+    "head_dim": 96,
+    "in_shape": [
+     128,
+     768,
+     4,
+     4
+    ],
+    "T": 16,
+    "tier": "hd96 T16"
+   },
+   "rb020": {
+    "type": "resblock",
+    "where": "in",
+    "container": 12,
+    "channels": 768,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     768,
+     4,
+     4
+    ]
+   },
+   "rb021": {
+    "type": "resblock",
+    "where": "in",
+    "container": 13,
+    "channels": 768,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     768,
+     2,
+     2
+    ]
+   },
+   "rb022": {
+    "type": "resblock",
+    "where": "in",
+    "container": 14,
+    "channels": 768,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     768,
+     2,
+     2
+    ]
+   },
+   "rb023": {
+    "type": "resblock",
+    "where": "mid",
+    "container": 0,
+    "channels": 768,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     768,
+     2,
+     2
+    ]
+   },
+   "at024": {
+    "type": "attention",
+    "where": "mid",
+    "container": 0,
+    "channels": 768,
+    "num_heads": 8,
+    "head_dim": 96,
+    "in_shape": [
+     128,
+     768,
+     2,
+     2
+    ],
+    "T": 4,
+    "tier": "hd96 T4"
+   },
+   "rb025": {
+    "type": "resblock",
+    "where": "mid",
+    "container": 0,
+    "channels": 768,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     768,
+     2,
+     2
+    ]
+   },
+   "rb026": {
+    "type": "resblock",
+    "where": "out",
+    "container": 0,
+    "channels": 1536,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     1536,
+     2,
+     2
+    ]
+   },
+   "rb027": {
+    "type": "resblock",
+    "where": "out",
+    "container": 1,
+    "channels": 1536,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     1536,
+     2,
+     2
+    ]
+   },
+   "rb028": {
+    "type": "resblock",
+    "where": "out",
+    "container": 2,
+    "channels": 1536,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     1536,
+     2,
+     2
+    ]
+   },
+   "rb029": {
+    "type": "resblock",
+    "where": "out",
+    "container": 2,
+    "channels": 768,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     768,
+     2,
+     2
+    ]
+   },
+   "rb030": {
+    "type": "resblock",
+    "where": "out",
+    "container": 3,
+    "channels": 1536,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     1536,
+     4,
+     4
+    ]
+   },
+   "at031": {
+    "type": "attention",
+    "where": "out",
+    "container": 3,
+    "channels": 768,
+    "num_heads": 8,
+    "head_dim": 96,
+    "in_shape": [
+     128,
+     768,
+     4,
+     4
+    ],
+    "T": 16,
+    "tier": "hd96 T16"
+   },
+   "rb032": {
+    "type": "resblock",
+    "where": "out",
+    "container": 4,
+    "channels": 1536,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     1536,
+     4,
+     4
+    ]
+   },
+   "at033": {
+    "type": "attention",
+    "where": "out",
+    "container": 4,
+    "channels": 768,
+    "num_heads": 8,
+    "head_dim": 96,
+    "in_shape": [
+     128,
+     768,
+     4,
+     4
+    ],
+    "T": 16,
+    "tier": "hd96 T16"
+   },
+   "rb034": {
+    "type": "resblock",
+    "where": "out",
+    "container": 5,
+    "channels": 1152,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     1152,
+     4,
+     4
+    ]
+   },
+   "at035": {
+    "type": "attention",
+    "where": "out",
+    "container": 5,
+    "channels": 768,
+    "num_heads": 8,
+    "head_dim": 96,
+    "in_shape": [
+     128,
+     768,
+     4,
+     4
+    ],
+    "T": 16,
+    "tier": "hd96 T16"
+   },
+   "rb036": {
+    "type": "resblock",
+    "where": "out",
+    "container": 5,
+    "channels": 768,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     768,
+     4,
+     4
+    ]
+   },
+   "rb037": {
+    "type": "resblock",
+    "where": "out",
+    "container": 6,
+    "channels": 1152,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     1152,
+     8,
+     8
+    ]
+   },
+   "at038": {
+    "type": "attention",
+    "where": "out",
+    "container": 6,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ],
+    "T": 64,
+    "tier": "hd48 T64"
+   },
+   "rb039": {
+    "type": "resblock",
+    "where": "out",
+    "container": 7,
+    "channels": 768,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     768,
+     8,
+     8
+    ]
+   },
+   "at040": {
+    "type": "attention",
+    "where": "out",
+    "container": 7,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ],
+    "T": 64,
+    "tier": "hd48 T64"
+   },
+   "rb041": {
+    "type": "resblock",
+    "where": "out",
+    "container": 8,
+    "channels": 768,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     768,
+     8,
+     8
+    ]
+   },
+   "at042": {
+    "type": "attention",
+    "where": "out",
+    "container": 8,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ],
+    "T": 64,
+    "tier": "hd48 T64"
+   },
+   "rb043": {
+    "type": "resblock",
+    "where": "out",
+    "container": 8,
+    "channels": 384,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ]
+   },
+   "rb044": {
+    "type": "resblock",
+    "where": "out",
+    "container": 9,
+    "channels": 768,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     768,
+     16,
+     16
+    ]
+   },
+   "at045": {
+    "type": "attention",
+    "where": "out",
+    "container": 9,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     16,
+     16
+    ],
+    "T": 256,
+    "tier": "hd48 T256"
+   },
+   "rb046": {
+    "type": "resblock",
+    "where": "out",
+    "container": 10,
+    "channels": 768,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     768,
+     16,
+     16
+    ]
+   },
+   "at047": {
+    "type": "attention",
+    "where": "out",
+    "container": 10,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     16,
+     16
+    ],
+    "T": 256,
+    "tier": "hd48 T256"
+   },
+   "rb048": {
+    "type": "resblock",
+    "where": "out",
+    "container": 11,
+    "channels": 576,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     576,
+     16,
+     16
+    ]
+   },
+   "at049": {
+    "type": "attention",
+    "where": "out",
+    "container": 11,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     16,
+     16
+    ],
+    "T": 256,
+    "tier": "hd48 T256"
+   },
+   "rb050": {
+    "type": "resblock",
+    "where": "out",
+    "container": 11,
+    "channels": 384,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     384,
+     16,
+     16
+    ]
+   },
+   "rb051": {
+    "type": "resblock",
+    "where": "out",
+    "container": 12,
+    "channels": 576,
+    "out_channels": 192,
+    "in_shape": [
+     128,
+     576,
+     32,
+     32
+    ]
+   },
+   "at052": {
+    "type": "attention",
+    "where": "out",
+    "container": 12,
+    "channels": 192,
+    "num_heads": 8,
+    "head_dim": 24,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ],
+    "T": 1024,
+    "tier": "hd24 T1024"
+   },
+   "rb053": {
+    "type": "resblock",
+    "where": "out",
+    "container": 13,
+    "channels": 384,
+    "out_channels": 192,
+    "in_shape": [
+     128,
+     384,
+     32,
+     32
+    ]
+   },
+   "at054": {
+    "type": "attention",
+    "where": "out",
+    "container": 13,
+    "channels": 192,
+    "num_heads": 8,
+    "head_dim": 24,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ],
+    "T": 1024,
+    "tier": "hd24 T1024"
+   },
+   "rb055": {
+    "type": "resblock",
+    "where": "out",
+    "container": 14,
+    "channels": 384,
+    "out_channels": 192,
+    "in_shape": [
+     128,
+     384,
+     32,
+     32
+    ]
+   },
+   "at056": {
+    "type": "attention",
+    "where": "out",
+    "container": 14,
+    "channels": 192,
+    "num_heads": 8,
+    "head_dim": 24,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ],
+    "T": 1024,
+    "tier": "hd24 T1024"
+   },
+   "time_embed": {
+    "type": "time_embed",
+    "where": "head",
+    "container": -1,
+    "in_shape": [
+     128,
+     192
+    ]
+   },
+   "out_tail": {
+    "type": "out_tail",
+    "where": "tail",
+    "container": -1,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ]
+   }
+  },
+  "by_type": {
+   "conv_in": {
+    "ms_per_step": 0.3617836794257164,
+    "n": 1
+   },
+   "resblock": {
+    "ms_per_step": 46.49060926079751,
+    "n": 35
+   },
+   "attention": {
+    "ms_per_step": 19.500943506732582,
+    "n": 21
+   },
+   "time_embed": {
+    "ms_per_step": 0.15041888035833836,
+    "n": 1
+   },
+   "out_tail": {
+    "ms_per_step": 2.2001998364925384,
+    "n": 1
+   }
+  },
+  "sum_over_wall": 0.9637740706946765,
+  "conv_audit": {
+   "n_quant_conv_modules": 140,
+   "n_live_on_fusedresblock": 70,
+   "n_dead_under_original": 70,
+   "n_dead_matching_a_live_shape": 70,
+   "dead_are_disjoint_from_live": true,
+   "accounted": true
+  }
+ },
+ {
+  "config": "W8A8 conv-only",
+  "mode": "int8",
+  "modiff_linear": "0",
+  "act_bits": 8,
+  "K": 4,
+  "wall_ms_per_step": 79.17122948001634,
+  "instrumented_ms_per_step": 79.78198259999772,
+  "blocks": {
+   "ot000": 0.422170080691576,
+   "rb001": 2.8588639974594114,
+   "at002": 2.624861602783203,
+   "rb003": 2.870375028848648,
+   "at004": 2.627602400779724,
+   "rb005": 1.5783883196115494,
+   "rb006": 1.5144153612852096,
+   "at007": 0.8796603199839592,
+   "rb008": 1.5919273561239242,
+   "at009": 0.883398080766201,
+   "rb010": 0.825417600274086,
+   "rb011": 0.5405817595124245,
+   "at012": 0.2395948800444603,
+   "rb013": 0.5406364797055722,
+   "at014": 0.24242639943957328,
+   "rb015": 0.26912175968289376,
+   "rb016": 0.4363760004937649,
+   "at017": 0.19412624008953572,
+   "rb018": 0.4989351986348629,
+   "at019": 0.19392048001289366,
+   "rb020": 0.2841372790932655,
+   "rb021": 0.24448735967278482,
+   "rb022": 0.24510064013302327,
+   "rb023": 0.24472735978662968,
+   "at024": 0.08260159984230996,
+   "rb025": 0.24535903982818127,
+   "rb026": 0.3570686389505863,
+   "rb027": 0.35694864064455034,
+   "rb028": 0.35645728021860124,
+   "rb029": 0.5384964814782143,
+   "rb030": 0.7718432021141052,
+   "at031": 0.19430832028388978,
+   "rb032": 0.7692587226629257,
+   "at033": 0.19419455967843532,
+   "rb034": 0.648081279695034,
+   "at035": 0.19403935976326467,
+   "rb036": 1.4497751992940904,
+   "rb037": 1.0060358440876007,
+   "at038": 0.24185679964721202,
+   "rb039": 0.8249494391679764,
+   "at040": 0.2412278401106596,
+   "rb041": 0.8244113576412201,
+   "at042": 0.23963455997407437,
+   "rb043": 2.129638557434082,
+   "rb044": 2.50427392244339,
+   "at045": 0.8761955210566521,
+   "rb046": 2.4979790449142456,
+   "at047": 0.8695099204778671,
+   "rb048": 2.21261071562767,
+   "at049": 0.8666230395436287,
+   "rb050": 8.17461757183075,
+   "rb051": 5.409270107746124,
+   "at052": 2.5854510354995726,
+   "rb053": 4.12993328332901,
+   "at054": 2.591911995410919,
+   "rb055": 4.1363708889484405,
+   "at056": 2.6018529665470123,
+   "time_embed": 0.35085471987724304,
+   "out_tail": 2.206646717786789
+  },
+  "calls": {
+   "ot000": 200,
+   "rb001": 200,
+   "at002": 200,
+   "rb003": 200,
+   "at004": 200,
+   "rb005": 200,
+   "rb006": 200,
+   "at007": 200,
+   "rb008": 200,
+   "at009": 200,
+   "rb010": 200,
+   "rb011": 200,
+   "at012": 200,
+   "rb013": 200,
+   "at014": 200,
+   "rb015": 200,
+   "rb016": 200,
+   "at017": 200,
+   "rb018": 200,
+   "at019": 200,
+   "rb020": 200,
+   "rb021": 200,
+   "rb022": 200,
+   "rb023": 200,
+   "at024": 200,
+   "rb025": 200,
+   "rb026": 200,
+   "rb027": 200,
+   "rb028": 200,
+   "rb029": 200,
+   "rb030": 200,
+   "at031": 200,
+   "rb032": 200,
+   "at033": 200,
+   "rb034": 200,
+   "at035": 200,
+   "rb036": 200,
+   "rb037": 200,
+   "at038": 200,
+   "rb039": 200,
+   "at040": 200,
+   "rb041": 200,
+   "at042": 200,
+   "rb043": 200,
+   "rb044": 200,
+   "at045": 200,
+   "rb046": 200,
+   "at047": 200,
+   "rb048": 200,
+   "at049": 200,
+   "rb050": 200,
+   "rb051": 200,
+   "at052": 200,
+   "rb053": 200,
+   "at054": 200,
+   "rb055": 200,
+   "at056": 200,
+   "time_embed": 200,
+   "out_tail": 200
+  },
+  "meta": {
+   "ot000": {
+    "type": "conv_in",
+    "where": "in",
+    "container": 0,
+    "in_shape": [
+     128,
+     4,
+     32,
+     32
+    ]
+   },
+   "rb001": {
+    "type": "resblock",
+    "where": "in",
+    "container": 1,
+    "channels": 192,
+    "out_channels": 192,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ]
+   },
+   "at002": {
+    "type": "attention",
+    "where": "in",
+    "container": 1,
+    "channels": 192,
+    "num_heads": 8,
+    "head_dim": 24,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ],
+    "T": 1024,
+    "tier": "hd24 T1024"
+   },
+   "rb003": {
+    "type": "resblock",
+    "where": "in",
+    "container": 2,
+    "channels": 192,
+    "out_channels": 192,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ]
+   },
+   "at004": {
+    "type": "attention",
+    "where": "in",
+    "container": 2,
+    "channels": 192,
+    "num_heads": 8,
+    "head_dim": 24,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ],
+    "T": 1024,
+    "tier": "hd24 T1024"
+   },
+   "rb005": {
+    "type": "resblock",
+    "where": "in",
+    "container": 3,
+    "channels": 192,
+    "out_channels": 192,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ]
+   },
+   "rb006": {
+    "type": "resblock",
+    "where": "in",
+    "container": 4,
+    "channels": 192,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     192,
+     16,
+     16
+    ]
+   },
+   "at007": {
+    "type": "attention",
+    "where": "in",
+    "container": 4,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     16,
+     16
+    ],
+    "T": 256,
+    "tier": "hd48 T256"
+   },
+   "rb008": {
+    "type": "resblock",
+    "where": "in",
+    "container": 5,
+    "channels": 384,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     384,
+     16,
+     16
+    ]
+   },
+   "at009": {
+    "type": "attention",
+    "where": "in",
+    "container": 5,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     16,
+     16
+    ],
+    "T": 256,
+    "tier": "hd48 T256"
+   },
+   "rb010": {
+    "type": "resblock",
+    "where": "in",
+    "container": 6,
+    "channels": 384,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     384,
+     16,
+     16
+    ]
+   },
+   "rb011": {
+    "type": "resblock",
+    "where": "in",
+    "container": 7,
+    "channels": 384,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ]
+   },
+   "at012": {
+    "type": "attention",
+    "where": "in",
+    "container": 7,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ],
+    "T": 64,
+    "tier": "hd48 T64"
+   },
+   "rb013": {
+    "type": "resblock",
+    "where": "in",
+    "container": 8,
+    "channels": 384,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ]
+   },
+   "at014": {
+    "type": "attention",
+    "where": "in",
+    "container": 8,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ],
+    "T": 64,
+    "tier": "hd48 T64"
+   },
+   "rb015": {
+    "type": "resblock",
+    "where": "in",
+    "container": 9,
+    "channels": 384,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ]
+   },
+   "rb016": {
+    "type": "resblock",
+    "where": "in",
+    "container": 10,
+    "channels": 384,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     384,
+     4,
+     4
+    ]
+   },
+   "at017": {
+    "type": "attention",
+    "where": "in",
+    "container": 10,
+    "channels": 768,
+    "num_heads": 8,
+    "head_dim": 96,
+    "in_shape": [
+     128,
+     768,
+     4,
+     4
+    ],
+    "T": 16,
+    "tier": "hd96 T16"
+   },
+   "rb018": {
+    "type": "resblock",
+    "where": "in",
+    "container": 11,
+    "channels": 768,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     768,
+     4,
+     4
+    ]
+   },
+   "at019": {
+    "type": "attention",
+    "where": "in",
+    "container": 11,
+    "channels": 768,
+    "num_heads": 8,
+    "head_dim": 96,
+    "in_shape": [
+     128,
+     768,
+     4,
+     4
+    ],
+    "T": 16,
+    "tier": "hd96 T16"
+   },
+   "rb020": {
+    "type": "resblock",
+    "where": "in",
+    "container": 12,
+    "channels": 768,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     768,
+     4,
+     4
+    ]
+   },
+   "rb021": {
+    "type": "resblock",
+    "where": "in",
+    "container": 13,
+    "channels": 768,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     768,
+     2,
+     2
+    ]
+   },
+   "rb022": {
+    "type": "resblock",
+    "where": "in",
+    "container": 14,
+    "channels": 768,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     768,
+     2,
+     2
+    ]
+   },
+   "rb023": {
+    "type": "resblock",
+    "where": "mid",
+    "container": 0,
+    "channels": 768,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     768,
+     2,
+     2
+    ]
+   },
+   "at024": {
+    "type": "attention",
+    "where": "mid",
+    "container": 0,
+    "channels": 768,
+    "num_heads": 8,
+    "head_dim": 96,
+    "in_shape": [
+     128,
+     768,
+     2,
+     2
+    ],
+    "T": 4,
+    "tier": "hd96 T4"
+   },
+   "rb025": {
+    "type": "resblock",
+    "where": "mid",
+    "container": 0,
+    "channels": 768,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     768,
+     2,
+     2
+    ]
+   },
+   "rb026": {
+    "type": "resblock",
+    "where": "out",
+    "container": 0,
+    "channels": 1536,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     1536,
+     2,
+     2
+    ]
+   },
+   "rb027": {
+    "type": "resblock",
+    "where": "out",
+    "container": 1,
+    "channels": 1536,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     1536,
+     2,
+     2
+    ]
+   },
+   "rb028": {
+    "type": "resblock",
+    "where": "out",
+    "container": 2,
+    "channels": 1536,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     1536,
+     2,
+     2
+    ]
+   },
+   "rb029": {
+    "type": "resblock",
+    "where": "out",
+    "container": 2,
+    "channels": 768,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     768,
+     2,
+     2
+    ]
+   },
+   "rb030": {
+    "type": "resblock",
+    "where": "out",
+    "container": 3,
+    "channels": 1536,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     1536,
+     4,
+     4
+    ]
+   },
+   "at031": {
+    "type": "attention",
+    "where": "out",
+    "container": 3,
+    "channels": 768,
+    "num_heads": 8,
+    "head_dim": 96,
+    "in_shape": [
+     128,
+     768,
+     4,
+     4
+    ],
+    "T": 16,
+    "tier": "hd96 T16"
+   },
+   "rb032": {
+    "type": "resblock",
+    "where": "out",
+    "container": 4,
+    "channels": 1536,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     1536,
+     4,
+     4
+    ]
+   },
+   "at033": {
+    "type": "attention",
+    "where": "out",
+    "container": 4,
+    "channels": 768,
+    "num_heads": 8,
+    "head_dim": 96,
+    "in_shape": [
+     128,
+     768,
+     4,
+     4
+    ],
+    "T": 16,
+    "tier": "hd96 T16"
+   },
+   "rb034": {
+    "type": "resblock",
+    "where": "out",
+    "container": 5,
+    "channels": 1152,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     1152,
+     4,
+     4
+    ]
+   },
+   "at035": {
+    "type": "attention",
+    "where": "out",
+    "container": 5,
+    "channels": 768,
+    "num_heads": 8,
+    "head_dim": 96,
+    "in_shape": [
+     128,
+     768,
+     4,
+     4
+    ],
+    "T": 16,
+    "tier": "hd96 T16"
+   },
+   "rb036": {
+    "type": "resblock",
+    "where": "out",
+    "container": 5,
+    "channels": 768,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     768,
+     4,
+     4
+    ]
+   },
+   "rb037": {
+    "type": "resblock",
+    "where": "out",
+    "container": 6,
+    "channels": 1152,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     1152,
+     8,
+     8
+    ]
+   },
+   "at038": {
+    "type": "attention",
+    "where": "out",
+    "container": 6,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ],
+    "T": 64,
+    "tier": "hd48 T64"
+   },
+   "rb039": {
+    "type": "resblock",
+    "where": "out",
+    "container": 7,
+    "channels": 768,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     768,
+     8,
+     8
+    ]
+   },
+   "at040": {
+    "type": "attention",
+    "where": "out",
+    "container": 7,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ],
+    "T": 64,
+    "tier": "hd48 T64"
+   },
+   "rb041": {
+    "type": "resblock",
+    "where": "out",
+    "container": 8,
+    "channels": 768,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     768,
+     8,
+     8
+    ]
+   },
+   "at042": {
+    "type": "attention",
+    "where": "out",
+    "container": 8,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ],
+    "T": 64,
+    "tier": "hd48 T64"
+   },
+   "rb043": {
+    "type": "resblock",
+    "where": "out",
+    "container": 8,
+    "channels": 384,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ]
+   },
+   "rb044": {
+    "type": "resblock",
+    "where": "out",
+    "container": 9,
+    "channels": 768,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     768,
+     16,
+     16
+    ]
+   },
+   "at045": {
+    "type": "attention",
+    "where": "out",
+    "container": 9,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     16,
+     16
+    ],
+    "T": 256,
+    "tier": "hd48 T256"
+   },
+   "rb046": {
+    "type": "resblock",
+    "where": "out",
+    "container": 10,
+    "channels": 768,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     768,
+     16,
+     16
+    ]
+   },
+   "at047": {
+    "type": "attention",
+    "where": "out",
+    "container": 10,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     16,
+     16
+    ],
+    "T": 256,
+    "tier": "hd48 T256"
+   },
+   "rb048": {
+    "type": "resblock",
+    "where": "out",
+    "container": 11,
+    "channels": 576,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     576,
+     16,
+     16
+    ]
+   },
+   "at049": {
+    "type": "attention",
+    "where": "out",
+    "container": 11,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     16,
+     16
+    ],
+    "T": 256,
+    "tier": "hd48 T256"
+   },
+   "rb050": {
+    "type": "resblock",
+    "where": "out",
+    "container": 11,
+    "channels": 384,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     384,
+     16,
+     16
+    ]
+   },
+   "rb051": {
+    "type": "resblock",
+    "where": "out",
+    "container": 12,
+    "channels": 576,
+    "out_channels": 192,
+    "in_shape": [
+     128,
+     576,
+     32,
+     32
+    ]
+   },
+   "at052": {
+    "type": "attention",
+    "where": "out",
+    "container": 12,
+    "channels": 192,
+    "num_heads": 8,
+    "head_dim": 24,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ],
+    "T": 1024,
+    "tier": "hd24 T1024"
+   },
+   "rb053": {
+    "type": "resblock",
+    "where": "out",
+    "container": 13,
+    "channels": 384,
+    "out_channels": 192,
+    "in_shape": [
+     128,
+     384,
+     32,
+     32
+    ]
+   },
+   "at054": {
+    "type": "attention",
+    "where": "out",
+    "container": 13,
+    "channels": 192,
+    "num_heads": 8,
+    "head_dim": 24,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ],
+    "T": 1024,
+    "tier": "hd24 T1024"
+   },
+   "rb055": {
+    "type": "resblock",
+    "where": "out",
+    "container": 14,
+    "channels": 384,
+    "out_channels": 192,
+    "in_shape": [
+     128,
+     384,
+     32,
+     32
+    ]
+   },
+   "at056": {
+    "type": "attention",
+    "where": "out",
+    "container": 14,
+    "channels": 192,
+    "num_heads": 8,
+    "head_dim": 24,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ],
+    "T": 1024,
+    "tier": "hd24 T1024"
+   },
+   "time_embed": {
+    "type": "time_embed",
+    "where": "head",
+    "container": -1,
+    "in_shape": [
+     128,
+     192
+    ]
+   },
+   "out_tail": {
+    "type": "out_tail",
+    "where": "tail",
+    "container": -1,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ]
+   }
+  },
+  "by_type": {
+   "conv_in": {
+    "ms_per_step": 0.422170080691576,
+    "n": 1
+   },
+   "resblock": {
+    "ms_per_step": 53.88687071837485,
+    "n": 35
+   },
+   "attention": {
+    "ms_per_step": 19.66499792173505,
+    "n": 21
+   },
+   "time_embed": {
+    "ms_per_step": 0.35085471987724304,
+    "n": 1
+   },
+   "out_tail": {
+    "ms_per_step": 2.206646717786789,
+    "n": 1
+   }
+  },
+  "sum_over_wall": 0.9666584775948552,
+  "conv_audit": {
+   "n_quant_conv_modules": 140,
+   "n_live_on_fusedresblock": 70,
+   "n_dead_under_original": 70,
+   "n_dead_matching_a_live_shape": 70,
+   "dead_are_disjoint_from_live": true,
+   "accounted": true
+  }
+ },
+ {
+  "config": "W8A8 conv+proj",
+  "mode": "int8",
+  "modiff_linear": "1",
+  "act_bits": 8,
+  "K": 4,
+  "wall_ms_per_step": 101.65835893498297,
+  "instrumented_ms_per_step": 103.18335629999638,
+  "blocks": {
+   "ot000": 0.4216208001971245,
+   "rb001": 2.834524644613266,
+   "at002": 5.305171861648559,
+   "rb003": 2.830765769481659,
+   "at004": 5.303611032962799,
+   "rb005": 1.5657230395078658,
+   "rb006": 1.495971200466156,
+   "at007": 2.2593344008922576,
+   "rb008": 1.5704993623495103,
+   "at009": 2.248013752698898,
+   "rb010": 0.8135374414920807,
+   "rb011": 0.532425599694252,
+   "at012": 0.6417707189917564,
+   "rb013": 0.5331382410228253,
+   "at014": 0.6404867187142372,
+   "rb015": 0.26501488000154494,
+   "rb016": 0.43078991934657096,
+   "at017": 0.32860975921154023,
+   "rb018": 0.48931088075041773,
+   "at019": 1.047458565980196,
+   "rb020": 0.2813631996512413,
+   "rb021": 0.24135312020778657,
+   "rb022": 0.2408665606379509,
+   "rb023": 0.24089039973914622,
+   "at024": 0.1753329598158598,
+   "rb025": 0.241643840149045,
+   "rb026": 0.3519320000708103,
+   "rb027": 0.3510588803887367,
+   "rb028": 0.3507844802737236,
+   "rb029": 0.529767038822174,
+   "rb030": 0.7585612803697586,
+   "at031": 0.3278192001581192,
+   "rb032": 0.7574944004416466,
+   "at033": 0.32779824137687685,
+   "rb034": 0.6366881597042083,
+   "at035": 0.3273867200314999,
+   "rb036": 1.434229918718338,
+   "rb037": 0.9916423985362053,
+   "at038": 0.6408969578146935,
+   "rb039": 0.8103993579745292,
+   "at040": 0.6395220783352852,
+   "rb041": 0.8099739176034927,
+   "at042": 0.6430343979597092,
+   "rb043": 2.1070083129405974,
+   "rb044": 2.4730550396442412,
+   "at045": 2.230695207118988,
+   "rb046": 2.462799837589264,
+   "at047": 2.2391748809814453,
+   "rb048": 2.183210394978523,
+   "at049": 2.236305764913559,
+   "rb050": 8.110486879348755,
+   "rb051": 5.350774405002594,
+   "at052": 5.277698090076447,
+   "rb053": 4.098163846731186,
+   "at054": 5.2863388657569885,
+   "rb055": 4.117899664640427,
+   "at056": 5.3017036771774295,
+   "time_embed": 0.3400865602493286,
+   "out_tail": 2.200360321998596
+  },
+  "calls": {
+   "ot000": 200,
+   "rb001": 200,
+   "at002": 200,
+   "rb003": 200,
+   "at004": 200,
+   "rb005": 200,
+   "rb006": 200,
+   "at007": 200,
+   "rb008": 200,
+   "at009": 200,
+   "rb010": 200,
+   "rb011": 200,
+   "at012": 200,
+   "rb013": 200,
+   "at014": 200,
+   "rb015": 200,
+   "rb016": 200,
+   "at017": 200,
+   "rb018": 200,
+   "at019": 200,
+   "rb020": 200,
+   "rb021": 200,
+   "rb022": 200,
+   "rb023": 200,
+   "at024": 200,
+   "rb025": 200,
+   "rb026": 200,
+   "rb027": 200,
+   "rb028": 200,
+   "rb029": 200,
+   "rb030": 200,
+   "at031": 200,
+   "rb032": 200,
+   "at033": 200,
+   "rb034": 200,
+   "at035": 200,
+   "rb036": 200,
+   "rb037": 200,
+   "at038": 200,
+   "rb039": 200,
+   "at040": 200,
+   "rb041": 200,
+   "at042": 200,
+   "rb043": 200,
+   "rb044": 200,
+   "at045": 200,
+   "rb046": 200,
+   "at047": 200,
+   "rb048": 200,
+   "at049": 200,
+   "rb050": 200,
+   "rb051": 200,
+   "at052": 200,
+   "rb053": 200,
+   "at054": 200,
+   "rb055": 200,
+   "at056": 200,
+   "time_embed": 200,
+   "out_tail": 200
+  },
+  "meta": {
+   "ot000": {
+    "type": "conv_in",
+    "where": "in",
+    "container": 0,
+    "in_shape": [
+     128,
+     4,
+     32,
+     32
+    ]
+   },
+   "rb001": {
+    "type": "resblock",
+    "where": "in",
+    "container": 1,
+    "channels": 192,
+    "out_channels": 192,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ]
+   },
+   "at002": {
+    "type": "attention",
+    "where": "in",
+    "container": 1,
+    "channels": 192,
+    "num_heads": 8,
+    "head_dim": 24,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ],
+    "T": 1024,
+    "tier": "hd24 T1024"
+   },
+   "rb003": {
+    "type": "resblock",
+    "where": "in",
+    "container": 2,
+    "channels": 192,
+    "out_channels": 192,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ]
+   },
+   "at004": {
+    "type": "attention",
+    "where": "in",
+    "container": 2,
+    "channels": 192,
+    "num_heads": 8,
+    "head_dim": 24,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ],
+    "T": 1024,
+    "tier": "hd24 T1024"
+   },
+   "rb005": {
+    "type": "resblock",
+    "where": "in",
+    "container": 3,
+    "channels": 192,
+    "out_channels": 192,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ]
+   },
+   "rb006": {
+    "type": "resblock",
+    "where": "in",
+    "container": 4,
+    "channels": 192,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     192,
+     16,
+     16
+    ]
+   },
+   "at007": {
+    "type": "attention",
+    "where": "in",
+    "container": 4,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     16,
+     16
+    ],
+    "T": 256,
+    "tier": "hd48 T256"
+   },
+   "rb008": {
+    "type": "resblock",
+    "where": "in",
+    "container": 5,
+    "channels": 384,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     384,
+     16,
+     16
+    ]
+   },
+   "at009": {
+    "type": "attention",
+    "where": "in",
+    "container": 5,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     16,
+     16
+    ],
+    "T": 256,
+    "tier": "hd48 T256"
+   },
+   "rb010": {
+    "type": "resblock",
+    "where": "in",
+    "container": 6,
+    "channels": 384,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     384,
+     16,
+     16
+    ]
+   },
+   "rb011": {
+    "type": "resblock",
+    "where": "in",
+    "container": 7,
+    "channels": 384,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ]
+   },
+   "at012": {
+    "type": "attention",
+    "where": "in",
+    "container": 7,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ],
+    "T": 64,
+    "tier": "hd48 T64"
+   },
+   "rb013": {
+    "type": "resblock",
+    "where": "in",
+    "container": 8,
+    "channels": 384,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ]
+   },
+   "at014": {
+    "type": "attention",
+    "where": "in",
+    "container": 8,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ],
+    "T": 64,
+    "tier": "hd48 T64"
+   },
+   "rb015": {
+    "type": "resblock",
+    "where": "in",
+    "container": 9,
+    "channels": 384,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ]
+   },
+   "rb016": {
+    "type": "resblock",
+    "where": "in",
+    "container": 10,
+    "channels": 384,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     384,
+     4,
+     4
+    ]
+   },
+   "at017": {
+    "type": "attention",
+    "where": "in",
+    "container": 10,
+    "channels": 768,
+    "num_heads": 8,
+    "head_dim": 96,
+    "in_shape": [
+     128,
+     768,
+     4,
+     4
+    ],
+    "T": 16,
+    "tier": "hd96 T16"
+   },
+   "rb018": {
+    "type": "resblock",
+    "where": "in",
+    "container": 11,
+    "channels": 768,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     768,
+     4,
+     4
+    ]
+   },
+   "at019": {
+    "type": "attention",
+    "where": "in",
+    "container": 11,
+    "channels": 768,
+    "num_heads": 8,
+    "head_dim": 96,
+    "in_shape": [
+     128,
+     768,
+     4,
+     4
+    ],
+    "T": 16,
+    "tier": "hd96 T16"
+   },
+   "rb020": {
+    "type": "resblock",
+    "where": "in",
+    "container": 12,
+    "channels": 768,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     768,
+     4,
+     4
+    ]
+   },
+   "rb021": {
+    "type": "resblock",
+    "where": "in",
+    "container": 13,
+    "channels": 768,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     768,
+     2,
+     2
+    ]
+   },
+   "rb022": {
+    "type": "resblock",
+    "where": "in",
+    "container": 14,
+    "channels": 768,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     768,
+     2,
+     2
+    ]
+   },
+   "rb023": {
+    "type": "resblock",
+    "where": "mid",
+    "container": 0,
+    "channels": 768,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     768,
+     2,
+     2
+    ]
+   },
+   "at024": {
+    "type": "attention",
+    "where": "mid",
+    "container": 0,
+    "channels": 768,
+    "num_heads": 8,
+    "head_dim": 96,
+    "in_shape": [
+     128,
+     768,
+     2,
+     2
+    ],
+    "T": 4,
+    "tier": "hd96 T4"
+   },
+   "rb025": {
+    "type": "resblock",
+    "where": "mid",
+    "container": 0,
+    "channels": 768,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     768,
+     2,
+     2
+    ]
+   },
+   "rb026": {
+    "type": "resblock",
+    "where": "out",
+    "container": 0,
+    "channels": 1536,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     1536,
+     2,
+     2
+    ]
+   },
+   "rb027": {
+    "type": "resblock",
+    "where": "out",
+    "container": 1,
+    "channels": 1536,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     1536,
+     2,
+     2
+    ]
+   },
+   "rb028": {
+    "type": "resblock",
+    "where": "out",
+    "container": 2,
+    "channels": 1536,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     1536,
+     2,
+     2
+    ]
+   },
+   "rb029": {
+    "type": "resblock",
+    "where": "out",
+    "container": 2,
+    "channels": 768,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     768,
+     2,
+     2
+    ]
+   },
+   "rb030": {
+    "type": "resblock",
+    "where": "out",
+    "container": 3,
+    "channels": 1536,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     1536,
+     4,
+     4
+    ]
+   },
+   "at031": {
+    "type": "attention",
+    "where": "out",
+    "container": 3,
+    "channels": 768,
+    "num_heads": 8,
+    "head_dim": 96,
+    "in_shape": [
+     128,
+     768,
+     4,
+     4
+    ],
+    "T": 16,
+    "tier": "hd96 T16"
+   },
+   "rb032": {
+    "type": "resblock",
+    "where": "out",
+    "container": 4,
+    "channels": 1536,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     1536,
+     4,
+     4
+    ]
+   },
+   "at033": {
+    "type": "attention",
+    "where": "out",
+    "container": 4,
+    "channels": 768,
+    "num_heads": 8,
+    "head_dim": 96,
+    "in_shape": [
+     128,
+     768,
+     4,
+     4
+    ],
+    "T": 16,
+    "tier": "hd96 T16"
+   },
+   "rb034": {
+    "type": "resblock",
+    "where": "out",
+    "container": 5,
+    "channels": 1152,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     1152,
+     4,
+     4
+    ]
+   },
+   "at035": {
+    "type": "attention",
+    "where": "out",
+    "container": 5,
+    "channels": 768,
+    "num_heads": 8,
+    "head_dim": 96,
+    "in_shape": [
+     128,
+     768,
+     4,
+     4
+    ],
+    "T": 16,
+    "tier": "hd96 T16"
+   },
+   "rb036": {
+    "type": "resblock",
+    "where": "out",
+    "container": 5,
+    "channels": 768,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     768,
+     4,
+     4
+    ]
+   },
+   "rb037": {
+    "type": "resblock",
+    "where": "out",
+    "container": 6,
+    "channels": 1152,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     1152,
+     8,
+     8
+    ]
+   },
+   "at038": {
+    "type": "attention",
+    "where": "out",
+    "container": 6,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ],
+    "T": 64,
+    "tier": "hd48 T64"
+   },
+   "rb039": {
+    "type": "resblock",
+    "where": "out",
+    "container": 7,
+    "channels": 768,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     768,
+     8,
+     8
+    ]
+   },
+   "at040": {
+    "type": "attention",
+    "where": "out",
+    "container": 7,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ],
+    "T": 64,
+    "tier": "hd48 T64"
+   },
+   "rb041": {
+    "type": "resblock",
+    "where": "out",
+    "container": 8,
+    "channels": 768,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     768,
+     8,
+     8
+    ]
+   },
+   "at042": {
+    "type": "attention",
+    "where": "out",
+    "container": 8,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ],
+    "T": 64,
+    "tier": "hd48 T64"
+   },
+   "rb043": {
+    "type": "resblock",
+    "where": "out",
+    "container": 8,
+    "channels": 384,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ]
+   },
+   "rb044": {
+    "type": "resblock",
+    "where": "out",
+    "container": 9,
+    "channels": 768,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     768,
+     16,
+     16
+    ]
+   },
+   "at045": {
+    "type": "attention",
+    "where": "out",
+    "container": 9,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     16,
+     16
+    ],
+    "T": 256,
+    "tier": "hd48 T256"
+   },
+   "rb046": {
+    "type": "resblock",
+    "where": "out",
+    "container": 10,
+    "channels": 768,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     768,
+     16,
+     16
+    ]
+   },
+   "at047": {
+    "type": "attention",
+    "where": "out",
+    "container": 10,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     16,
+     16
+    ],
+    "T": 256,
+    "tier": "hd48 T256"
+   },
+   "rb048": {
+    "type": "resblock",
+    "where": "out",
+    "container": 11,
+    "channels": 576,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     576,
+     16,
+     16
+    ]
+   },
+   "at049": {
+    "type": "attention",
+    "where": "out",
+    "container": 11,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     16,
+     16
+    ],
+    "T": 256,
+    "tier": "hd48 T256"
+   },
+   "rb050": {
+    "type": "resblock",
+    "where": "out",
+    "container": 11,
+    "channels": 384,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     384,
+     16,
+     16
+    ]
+   },
+   "rb051": {
+    "type": "resblock",
+    "where": "out",
+    "container": 12,
+    "channels": 576,
+    "out_channels": 192,
+    "in_shape": [
+     128,
+     576,
+     32,
+     32
+    ]
+   },
+   "at052": {
+    "type": "attention",
+    "where": "out",
+    "container": 12,
+    "channels": 192,
+    "num_heads": 8,
+    "head_dim": 24,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ],
+    "T": 1024,
+    "tier": "hd24 T1024"
+   },
+   "rb053": {
+    "type": "resblock",
+    "where": "out",
+    "container": 13,
+    "channels": 384,
+    "out_channels": 192,
+    "in_shape": [
+     128,
+     384,
+     32,
+     32
+    ]
+   },
+   "at054": {
+    "type": "attention",
+    "where": "out",
+    "container": 13,
+    "channels": 192,
+    "num_heads": 8,
+    "head_dim": 24,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ],
+    "T": 1024,
+    "tier": "hd24 T1024"
+   },
+   "rb055": {
+    "type": "resblock",
+    "where": "out",
+    "container": 14,
+    "channels": 384,
+    "out_channels": 192,
+    "in_shape": [
+     128,
+     384,
+     32,
+     32
+    ]
+   },
+   "at056": {
+    "type": "attention",
+    "where": "out",
+    "container": 14,
+    "channels": 192,
+    "num_heads": 8,
+    "head_dim": 24,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ],
+    "T": 1024,
+    "tier": "hd24 T1024"
+   },
+   "time_embed": {
+    "type": "time_embed",
+    "where": "head",
+    "container": -1,
+    "in_shape": [
+     128,
+     192
+    ]
+   },
+   "out_tail": {
+    "type": "out_tail",
+    "where": "tail",
+    "container": -1,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ]
+   }
+  },
+  "by_type": {
+   "conv_in": {
+    "ms_per_step": 0.4216208001971245,
+    "n": 1
+   },
+   "resblock": {
+    "ms_per_step": 53.29374831289052,
+    "n": 35
+   },
+   "attention": {
+    "ms_per_step": 43.428163852617146,
+    "n": 21
+   },
+   "time_embed": {
+    "ms_per_step": 0.3400865602493286,
+    "n": 1
+   },
+   "out_tail": {
+    "ms_per_step": 2.200360321998596,
+    "n": 1
+   }
+  },
+  "sum_over_wall": 0.980578290779876,
+  "conv_audit": {
+   "n_quant_conv_modules": 140,
+   "n_live_on_fusedresblock": 70,
+   "n_dead_under_original": 70,
+   "n_dead_matching_a_live_shape": 70,
+   "dead_are_disjoint_from_live": true,
+   "accounted": true
+  }
+ },
+ {
+  "config": "W8A8 conv+proj +projK4",
+  "mode": "int8",
+  "modiff_linear": "1",
+  "act_bits": 8,
+  "K": 4,
+  "wall_ms_per_step": 99.29582543001743,
+  "instrumented_ms_per_step": 99.77296364999347,
+  "blocks": {
+   "ot000": 0.4322910402715206,
+   "rb001": 2.8407308661937716,
+   "at002": 4.99992959022522,
+   "rb003": 2.8411606299877166,
+   "at004": 5.0004665613174435,
+   "rb005": 1.5614662390947343,
+   "rb006": 1.5006761628389358,
+   "at007": 2.0922663962841033,
+   "rb008": 1.5762998372316361,
+   "at009": 2.0924000048637392,
+   "rb010": 0.814547521173954,
+   "rb011": 0.5340089596807956,
+   "at012": 0.5935497590899468,
+   "rb013": 0.5350716806948185,
+   "at014": 0.6003452798724175,
+   "rb015": 0.26620351999998093,
+   "rb016": 0.42981023982167244,
+   "at017": 0.30509023994207385,
+   "rb018": 0.49003807991743087,
+   "at019": 0.30468560099601744,
+   "rb020": 0.27891423910856245,
+   "rb021": 0.24108560018241407,
+   "rb022": 0.2404560002684593,
+   "rb023": 0.24078239999711515,
+   "at024": 0.1624121605604887,
+   "rb025": 0.24096720054745674,
+   "rb026": 0.3505950412154198,
+   "rb027": 0.3508548802137375,
+   "rb028": 0.35029919967055323,
+   "rb029": 0.5289652809500694,
+   "rb030": 0.7593143996596337,
+   "at031": 0.3059051194787025,
+   "rb032": 0.759279359281063,
+   "at033": 0.30563408076763154,
+   "rb034": 0.6388545605540276,
+   "at035": 0.3048993609845638,
+   "rb036": 1.437894715666771,
+   "rb037": 0.9927064007520676,
+   "at038": 0.5937161609530449,
+   "rb039": 0.8140166407823562,
+   "at040": 0.5985239991545677,
+   "rb041": 0.8132814413309097,
+   "at042": 0.593994722366333,
+   "rb043": 2.103775678873062,
+   "rb044": 2.4780748891830444,
+   "at045": 2.0905497562885285,
+   "rb046": 2.471758885383606,
+   "at047": 2.086705598831177,
+   "rb048": 2.1921540772914887,
+   "at049": 2.0918548834323882,
+   "rb050": 8.12781394481659,
+   "rb051": 5.366662878990173,
+   "at052": 4.961874070167542,
+   "rb053": 4.107131345272064,
+   "at054": 4.972320456504821,
+   "rb055": 4.124253282546997,
+   "at056": 4.992713134288788,
+   "time_embed": 0.35768031910061837,
+   "out_tail": 2.201870880126953
+  },
+  "calls": {
+   "ot000": 200,
+   "rb001": 200,
+   "at002": 200,
+   "rb003": 200,
+   "at004": 200,
+   "rb005": 200,
+   "rb006": 200,
+   "at007": 200,
+   "rb008": 200,
+   "at009": 200,
+   "rb010": 200,
+   "rb011": 200,
+   "at012": 200,
+   "rb013": 200,
+   "at014": 200,
+   "rb015": 200,
+   "rb016": 200,
+   "at017": 200,
+   "rb018": 200,
+   "at019": 200,
+   "rb020": 200,
+   "rb021": 200,
+   "rb022": 200,
+   "rb023": 200,
+   "at024": 200,
+   "rb025": 200,
+   "rb026": 200,
+   "rb027": 200,
+   "rb028": 200,
+   "rb029": 200,
+   "rb030": 200,
+   "at031": 200,
+   "rb032": 200,
+   "at033": 200,
+   "rb034": 200,
+   "at035": 200,
+   "rb036": 200,
+   "rb037": 200,
+   "at038": 200,
+   "rb039": 200,
+   "at040": 200,
+   "rb041": 200,
+   "at042": 200,
+   "rb043": 200,
+   "rb044": 200,
+   "at045": 200,
+   "rb046": 200,
+   "at047": 200,
+   "rb048": 200,
+   "at049": 200,
+   "rb050": 200,
+   "rb051": 200,
+   "at052": 200,
+   "rb053": 200,
+   "at054": 200,
+   "rb055": 200,
+   "at056": 200,
+   "time_embed": 200,
+   "out_tail": 200
+  },
+  "meta": {
+   "ot000": {
+    "type": "conv_in",
+    "where": "in",
+    "container": 0,
+    "in_shape": [
+     128,
+     4,
+     32,
+     32
+    ]
+   },
+   "rb001": {
+    "type": "resblock",
+    "where": "in",
+    "container": 1,
+    "channels": 192,
+    "out_channels": 192,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ]
+   },
+   "at002": {
+    "type": "attention",
+    "where": "in",
+    "container": 1,
+    "channels": 192,
+    "num_heads": 8,
+    "head_dim": 24,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ],
+    "T": 1024,
+    "tier": "hd24 T1024"
+   },
+   "rb003": {
+    "type": "resblock",
+    "where": "in",
+    "container": 2,
+    "channels": 192,
+    "out_channels": 192,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ]
+   },
+   "at004": {
+    "type": "attention",
+    "where": "in",
+    "container": 2,
+    "channels": 192,
+    "num_heads": 8,
+    "head_dim": 24,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ],
+    "T": 1024,
+    "tier": "hd24 T1024"
+   },
+   "rb005": {
+    "type": "resblock",
+    "where": "in",
+    "container": 3,
+    "channels": 192,
+    "out_channels": 192,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ]
+   },
+   "rb006": {
+    "type": "resblock",
+    "where": "in",
+    "container": 4,
+    "channels": 192,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     192,
+     16,
+     16
+    ]
+   },
+   "at007": {
+    "type": "attention",
+    "where": "in",
+    "container": 4,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     16,
+     16
+    ],
+    "T": 256,
+    "tier": "hd48 T256"
+   },
+   "rb008": {
+    "type": "resblock",
+    "where": "in",
+    "container": 5,
+    "channels": 384,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     384,
+     16,
+     16
+    ]
+   },
+   "at009": {
+    "type": "attention",
+    "where": "in",
+    "container": 5,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     16,
+     16
+    ],
+    "T": 256,
+    "tier": "hd48 T256"
+   },
+   "rb010": {
+    "type": "resblock",
+    "where": "in",
+    "container": 6,
+    "channels": 384,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     384,
+     16,
+     16
+    ]
+   },
+   "rb011": {
+    "type": "resblock",
+    "where": "in",
+    "container": 7,
+    "channels": 384,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ]
+   },
+   "at012": {
+    "type": "attention",
+    "where": "in",
+    "container": 7,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ],
+    "T": 64,
+    "tier": "hd48 T64"
+   },
+   "rb013": {
+    "type": "resblock",
+    "where": "in",
+    "container": 8,
+    "channels": 384,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ]
+   },
+   "at014": {
+    "type": "attention",
+    "where": "in",
+    "container": 8,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ],
+    "T": 64,
+    "tier": "hd48 T64"
+   },
+   "rb015": {
+    "type": "resblock",
+    "where": "in",
+    "container": 9,
+    "channels": 384,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ]
+   },
+   "rb016": {
+    "type": "resblock",
+    "where": "in",
+    "container": 10,
+    "channels": 384,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     384,
+     4,
+     4
+    ]
+   },
+   "at017": {
+    "type": "attention",
+    "where": "in",
+    "container": 10,
+    "channels": 768,
+    "num_heads": 8,
+    "head_dim": 96,
+    "in_shape": [
+     128,
+     768,
+     4,
+     4
+    ],
+    "T": 16,
+    "tier": "hd96 T16"
+   },
+   "rb018": {
+    "type": "resblock",
+    "where": "in",
+    "container": 11,
+    "channels": 768,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     768,
+     4,
+     4
+    ]
+   },
+   "at019": {
+    "type": "attention",
+    "where": "in",
+    "container": 11,
+    "channels": 768,
+    "num_heads": 8,
+    "head_dim": 96,
+    "in_shape": [
+     128,
+     768,
+     4,
+     4
+    ],
+    "T": 16,
+    "tier": "hd96 T16"
+   },
+   "rb020": {
+    "type": "resblock",
+    "where": "in",
+    "container": 12,
+    "channels": 768,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     768,
+     4,
+     4
+    ]
+   },
+   "rb021": {
+    "type": "resblock",
+    "where": "in",
+    "container": 13,
+    "channels": 768,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     768,
+     2,
+     2
+    ]
+   },
+   "rb022": {
+    "type": "resblock",
+    "where": "in",
+    "container": 14,
+    "channels": 768,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     768,
+     2,
+     2
+    ]
+   },
+   "rb023": {
+    "type": "resblock",
+    "where": "mid",
+    "container": 0,
+    "channels": 768,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     768,
+     2,
+     2
+    ]
+   },
+   "at024": {
+    "type": "attention",
+    "where": "mid",
+    "container": 0,
+    "channels": 768,
+    "num_heads": 8,
+    "head_dim": 96,
+    "in_shape": [
+     128,
+     768,
+     2,
+     2
+    ],
+    "T": 4,
+    "tier": "hd96 T4"
+   },
+   "rb025": {
+    "type": "resblock",
+    "where": "mid",
+    "container": 0,
+    "channels": 768,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     768,
+     2,
+     2
+    ]
+   },
+   "rb026": {
+    "type": "resblock",
+    "where": "out",
+    "container": 0,
+    "channels": 1536,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     1536,
+     2,
+     2
+    ]
+   },
+   "rb027": {
+    "type": "resblock",
+    "where": "out",
+    "container": 1,
+    "channels": 1536,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     1536,
+     2,
+     2
+    ]
+   },
+   "rb028": {
+    "type": "resblock",
+    "where": "out",
+    "container": 2,
+    "channels": 1536,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     1536,
+     2,
+     2
+    ]
+   },
+   "rb029": {
+    "type": "resblock",
+    "where": "out",
+    "container": 2,
+    "channels": 768,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     768,
+     2,
+     2
+    ]
+   },
+   "rb030": {
+    "type": "resblock",
+    "where": "out",
+    "container": 3,
+    "channels": 1536,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     1536,
+     4,
+     4
+    ]
+   },
+   "at031": {
+    "type": "attention",
+    "where": "out",
+    "container": 3,
+    "channels": 768,
+    "num_heads": 8,
+    "head_dim": 96,
+    "in_shape": [
+     128,
+     768,
+     4,
+     4
+    ],
+    "T": 16,
+    "tier": "hd96 T16"
+   },
+   "rb032": {
+    "type": "resblock",
+    "where": "out",
+    "container": 4,
+    "channels": 1536,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     1536,
+     4,
+     4
+    ]
+   },
+   "at033": {
+    "type": "attention",
+    "where": "out",
+    "container": 4,
+    "channels": 768,
+    "num_heads": 8,
+    "head_dim": 96,
+    "in_shape": [
+     128,
+     768,
+     4,
+     4
+    ],
+    "T": 16,
+    "tier": "hd96 T16"
+   },
+   "rb034": {
+    "type": "resblock",
+    "where": "out",
+    "container": 5,
+    "channels": 1152,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     1152,
+     4,
+     4
+    ]
+   },
+   "at035": {
+    "type": "attention",
+    "where": "out",
+    "container": 5,
+    "channels": 768,
+    "num_heads": 8,
+    "head_dim": 96,
+    "in_shape": [
+     128,
+     768,
+     4,
+     4
+    ],
+    "T": 16,
+    "tier": "hd96 T16"
+   },
+   "rb036": {
+    "type": "resblock",
+    "where": "out",
+    "container": 5,
+    "channels": 768,
+    "out_channels": 768,
+    "in_shape": [
+     128,
+     768,
+     4,
+     4
+    ]
+   },
+   "rb037": {
+    "type": "resblock",
+    "where": "out",
+    "container": 6,
+    "channels": 1152,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     1152,
+     8,
+     8
+    ]
+   },
+   "at038": {
+    "type": "attention",
+    "where": "out",
+    "container": 6,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ],
+    "T": 64,
+    "tier": "hd48 T64"
+   },
+   "rb039": {
+    "type": "resblock",
+    "where": "out",
+    "container": 7,
+    "channels": 768,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     768,
+     8,
+     8
+    ]
+   },
+   "at040": {
+    "type": "attention",
+    "where": "out",
+    "container": 7,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ],
+    "T": 64,
+    "tier": "hd48 T64"
+   },
+   "rb041": {
+    "type": "resblock",
+    "where": "out",
+    "container": 8,
+    "channels": 768,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     768,
+     8,
+     8
+    ]
+   },
+   "at042": {
+    "type": "attention",
+    "where": "out",
+    "container": 8,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ],
+    "T": 64,
+    "tier": "hd48 T64"
+   },
+   "rb043": {
+    "type": "resblock",
+    "where": "out",
+    "container": 8,
+    "channels": 384,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     384,
+     8,
+     8
+    ]
+   },
+   "rb044": {
+    "type": "resblock",
+    "where": "out",
+    "container": 9,
+    "channels": 768,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     768,
+     16,
+     16
+    ]
+   },
+   "at045": {
+    "type": "attention",
+    "where": "out",
+    "container": 9,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     16,
+     16
+    ],
+    "T": 256,
+    "tier": "hd48 T256"
+   },
+   "rb046": {
+    "type": "resblock",
+    "where": "out",
+    "container": 10,
+    "channels": 768,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     768,
+     16,
+     16
+    ]
+   },
+   "at047": {
+    "type": "attention",
+    "where": "out",
+    "container": 10,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     16,
+     16
+    ],
+    "T": 256,
+    "tier": "hd48 T256"
+   },
+   "rb048": {
+    "type": "resblock",
+    "where": "out",
+    "container": 11,
+    "channels": 576,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     576,
+     16,
+     16
+    ]
+   },
+   "at049": {
+    "type": "attention",
+    "where": "out",
+    "container": 11,
+    "channels": 384,
+    "num_heads": 8,
+    "head_dim": 48,
+    "in_shape": [
+     128,
+     384,
+     16,
+     16
+    ],
+    "T": 256,
+    "tier": "hd48 T256"
+   },
+   "rb050": {
+    "type": "resblock",
+    "where": "out",
+    "container": 11,
+    "channels": 384,
+    "out_channels": 384,
+    "in_shape": [
+     128,
+     384,
+     16,
+     16
+    ]
+   },
+   "rb051": {
+    "type": "resblock",
+    "where": "out",
+    "container": 12,
+    "channels": 576,
+    "out_channels": 192,
+    "in_shape": [
+     128,
+     576,
+     32,
+     32
+    ]
+   },
+   "at052": {
+    "type": "attention",
+    "where": "out",
+    "container": 12,
+    "channels": 192,
+    "num_heads": 8,
+    "head_dim": 24,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ],
+    "T": 1024,
+    "tier": "hd24 T1024"
+   },
+   "rb053": {
+    "type": "resblock",
+    "where": "out",
+    "container": 13,
+    "channels": 384,
+    "out_channels": 192,
+    "in_shape": [
+     128,
+     384,
+     32,
+     32
+    ]
+   },
+   "at054": {
+    "type": "attention",
+    "where": "out",
+    "container": 13,
+    "channels": 192,
+    "num_heads": 8,
+    "head_dim": 24,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ],
+    "T": 1024,
+    "tier": "hd24 T1024"
+   },
+   "rb055": {
+    "type": "resblock",
+    "where": "out",
+    "container": 14,
+    "channels": 384,
+    "out_channels": 192,
+    "in_shape": [
+     128,
+     384,
+     32,
+     32
+    ]
+   },
+   "at056": {
+    "type": "attention",
+    "where": "out",
+    "container": 14,
+    "channels": 192,
+    "num_heads": 8,
+    "head_dim": 24,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ],
+    "T": 1024,
+    "tier": "hd24 T1024"
+   },
+   "time_embed": {
+    "type": "time_embed",
+    "where": "head",
+    "container": -1,
+    "in_shape": [
+     128,
+     192
+    ]
+   },
+   "out_tail": {
+    "type": "out_tail",
+    "where": "tail",
+    "container": -1,
+    "in_shape": [
+     128,
+     192,
+     32,
+     32
+    ]
+   }
+  },
+  "by_type": {
+   "conv_in": {
+    "ms_per_step": 0.4322910402715206,
+    "n": 1
+   },
+   "resblock": {
+    "ms_per_step": 53.399906079173086,
+    "n": 35
+   },
+   "attention": {
+    "ms_per_step": 40.04983693636953,
+    "n": 21
+   },
+   "time_embed": {
+    "ms_per_step": 0.35768031910061837,
+    "n": 1
+   },
+   "out_tail": {
+    "ms_per_step": 2.201870880126953,
+    "n": 1
+   }
+  },
+  "sum_over_wall": 0.9712551845697952,
+  "conv_audit": {
+   "n_quant_conv_modules": 140,
+   "n_live_on_fusedresblock": 70,
+   "n_dead_under_original": 70,
+   "n_dead_matching_a_live_shape": 70,
+   "dead_are_disjoint_from_live": true,
+   "accounted": true
+  }
+ }
+]

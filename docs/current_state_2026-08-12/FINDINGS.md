@@ -7,14 +7,19 @@ All numbers measured 2026-08-12 on an idle **NVIDIA A40**, LSUN-churches LDM, **
 Every layer/block and per-kernel number here was captured today, for **every** configuration in the
 tables. The figures regenerate offline from `data/`.
 
-**Three instruments, three different scopes. They do not sum to one another** — that is a property of
+**Four instruments, four different scopes. They do not sum to one another** — that is a property of
 the instruments, not an inconsistency:
 
 | instrument | scope | what it is authoritative for |
 |---|---|---|
 | differential | whole model, profiler-free wall clock, 200 steps × 5 repeats | **e2e ms/step** |
+| block harness | CUDA events on every UNet block, covers 0.96–0.98 of the step | **where the step goes**, §5 |
 | layer harness | CUDA events on live dispatch targets, covers 0.63–0.89 of the step | **shares** per layer/block |
 | Perfetto trace | 8 steps, bucketed offline | **which CUDA kernel**, within one capture |
+
+The block and layer harnesses are **not nested versions of each other**: a conv timed by the layer
+harness runs *inside* a ResBlock timed by the block harness, so adding a row from §3 to a row from §5
+double counts. Each is complete on its own terms and they are read separately.
 
 Two environment flags select the fastest MoDiff configuration and are **off by default in the code**;
 every table below names them explicitly rather than as a category:
@@ -59,15 +64,16 @@ paired A/B instead.
 
 ![blocks](plots/01_per_attention_block.png)
 
-The 21 blocks fall into exactly **four shape tiers**, and cost tracks the tier with almost no
-within-tier variation (≤ 0.04 ms). Tier totals, ms/step:
+The 21 blocks fall into **five shape tiers**, and cost tracks the tier with almost no within-tier
+variation (≤ 0.04 ms). Tier totals, ms/step:
 
 | tier | blocks | idx | conv+proj | `+DELTA_REFRESH=4` | `+FUSE_QKV_I8=1` | int8-qkv Δ |
 |---|--:|---|---:|---:|---:|---:|
 | C192 T1024 hd24 | 5 | 0, 1, 18, 19, 20 | 26.57 | 24.95 | **24.99** | +0.04 |
 | C384 T256 hd48 | 5 | 2, 3, 15, 16, 17 | 11.26 | 10.45 | **10.08** | **−0.37** |
 | C384 T64 hd48 | 5 | 4, 5, 12, 13, 14 | 3.25 | 3.01 | **2.65** | **−0.36** |
-| C768 T16 hd96 | 6 | 6–11 | 1.88 | 1.72 | **1.72** | +0.00 |
+| C768 T16 hd96 | 5 | 6, 7, 9, 10, 11 | 1.70 | 1.56 | **1.56** | +0.00 |
+| C768 T4 hd96 *(middle block)* | 1 | 8 | 0.19 | 0.17 | **0.17** | −0.00 |
 | **total** | **21** | | **42.97** | **40.14** | **39.45** | **−0.68** |
 
 **Five blocks are 63% of all attention time.** They are the hd=24 tier — the same five the int8-qkv path
@@ -80,12 +86,15 @@ about these five blocks or it is about 37% of the budget.
 fusion's +0.79 ms/step e2e result; previously it was only known at whole-model and kernel scope. The two hd=48
 tiers are 10 blocks and 32% of attention, which is why a −0.73 ms tier effect is worth 0.79 e2e.
 
-The projection refresh, by contrast, moves **every** tier (−1.62 / −0.81 / −0.24 / −0.16), because
-these timers wrap each block's own qkv and output projections.
+The projection refresh, by contrast, moves **every** tier (−1.62 / −0.81 / −0.24 / −0.14 / −0.02),
+because these timers wrap each block's own qkv and output projections.
 
 The 6 blocks at hd=96 never run the custom flash at all (`_resolve_flash` requires `hd ≤ 48` and
 `T % 64 == 0`), so they fall back to PyTorch SDPA — and cost 4% of attention, which is why that has
-never been worth fixing.
+never been worth fixing. Five of them run at T=16; the sixth is the **middle block at T=4** (the
+feature map is 2×2 there), which is why `attn08` reads 0.17 against its neighbours' 0.31. Earlier
+tables in this project reported all six as one T=16 tier; the block instrument in §5, which reads each
+block's actual input shape, is what separated them.
 
 ### Per projection
 
@@ -110,17 +119,37 @@ individual layer** (worst case `conv130`: 3.348 / 3.312 / 3.318 / 3.320 / 3.293)
 figure draws them as one band: W8A8 conv-only, all three W8A8 conv+proj variants and W8A4 conv+proj are
 the same conv code path, and neither the projection flags nor the activation width touch it.
 
-**70 of 140 quantized conv modules are never called during sampling.** This is unexplained and has been
-open since 2026-08-11; `fusion_audit.py` reports `n_conv_modules` and `n_conv_layers_called` separately
-because of it. Any per-layer conv work should target the 70 that actually run.
+### Why there are 140 conv modules and only 70 run — closed
+
+`fusion_audit.py` has carried "70 of 140 quantized conv modules never called" as **OPEN since
+2026-08-11**. It is not a sampling-path mystery; it is a double conversion, and `profile_blocks.py`'s
+`audit_convs()` prints the evidence on every run:
+
+```
+n_quant_conv_modules 140 | live on FusedResBlock 70 | dead under .original 70
+dead_are_disjoint_from_live True | accounted True | dead matching a live shape 70
+```
+
+`FusedResBlock` keeps `self.original` ([fused_resblock.py:730](integration/fused_ops/fused_resblock.py:730)),
+whose `in_layers[-1]` / `out_layers[-1]` **are the same `nn.Conv2d` objects** it re-exposes as
+`in_conv` / `out_conv`. The int8/int4 converter walks `original` first and `setattr`s a wrapper into
+that `Sequential` — which does not rebind `FusedResBlock.in_conv`, still pointing at the raw conv — then
+reaches `in_conv` and wraps it a **second** time. The two wrappers are distinct objects with distinct
+copies of the quantized weights; only the `FusedResBlock` one is on the live path, because
+`_forward_openai` reads `self.in_conv`.
+
+So the 70 "uncalled" modules are **shadow copies, one per live conv, each holding a full set of int8
+weights**. They cost memory and conversion time and nothing else. The layer harness's `conv{i:03d}`
+indices reflect this exactly: every called key has `i % 4 ∈ {2, 3}`, i.e. `conv{4j+2}` is ResBlock *j*'s
+live `in_conv` and `conv{4j+3}` its live `out_conv`.
 
 ### By kind — all eight configurations
 
 | config | wall | coverage | conv | attn (score path) | proj (42 linears) | updown |
 |---|---:|---:|---:|---:|---:|---:|
 | fp16 | 103.71 | — | — | — | — | — |
-| W8A8 PTQ | 72.51 | 0.629 | 22.17 | 19.59 | 0.00 | 3.84 |
-| W8A8 conv-only | 79.32 | 0.843 | 40.42 | 19.71 | 0.00 | 6.70 |
+| W8A8 PTQ | 72.51 | 0.629 | 22.17 | 19.59 † | 0.00 | 3.84 |
+| W8A8 conv-only | 79.32 | 0.843 | 40.42 | 19.71 † | 0.00 | 6.70 |
 | W8A8 conv+proj | 101.87 | 0.881 | 40.04 | 34.18 | 8.79 | 6.69 |
 | W8A8 conv+proj, `DELTA_REFRESH=4` | 101.09 | 0.859 | 39.99 | 32.64 | 7.50 | 6.72 |
 | **W8A8 conv+proj, both flags** | **98.83** | **0.873** | **40.02** | **31.98** | **7.48** | **6.75** |
@@ -139,8 +168,16 @@ Four structural facts fall straight out of this table:
 * **The int8-qkv path pays only inside `attn`.** 32.64 → 31.98 with `proj` flat at 7.50 → 7.48 — consistent
   with it changing what the qkv GEMM writes and what flash reads, not the projection dispatch.
 
+† **The `attn` column is not like-for-like on those two rows.** The harness reports attention *net of
+its projections*, by subtracting every `QuantLinearWxAx.forward`. Under PTQ and conv-only the
+projections are never converted — those models contain **0** `QuantLinearWxAx`, not 42 idle ones — so
+nothing is subtracted and 19.59 / 19.71 are the whole attention block, fp16 projections included. The
+six `conv+proj` rows are net. Read down that column only within the six, or use §5, where the block
+instrument times whole attention blocks uniformly in every configuration.
+
 **Read shares within a row, not totals.** 11–37% of the step sits outside the timed dispatchers
-(ResBlock arithmetic, `x_upd`, elementwise glue), so `wall` here is not the e2e number in §1.
+(ResBlock arithmetic, `x_upd`, elementwise glue), so `wall` here is not the e2e number in §1. §5
+closes most of that gap with a second instrument.
 
 ---
 

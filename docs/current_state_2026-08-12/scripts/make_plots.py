@@ -43,10 +43,14 @@ plt.rcParams.update({
 
 #: attention block index -> shape tier, from the churches UNet config
 #: (model_channels 192, channel_mult [1,2,2,4,4], num_heads 8, attention_resolutions [1,2,4,8]).
+#: The hd96 row is two tiers, not one: the MIDDLE block sits at a 2x2 feature map, so T=4 rather
+#: than 16, which is why attn08 reads about half its neighbours. Separated 2026-08-12 after the block
+#: instrument (profile_blocks.py) recorded each block's actual input shape.
 TIERS = [("C192 T1024 hd24", {0, 1, 18, 19, 20}, ROSE),
          ("C384 T256 hd48", {2, 3, 15, 16, 17}, ORANGE),
          ("C384 T64 hd48", {4, 5, 12, 13, 14}, AQUA),
-         ("C768 T16 hd96", {6, 7, 8, 9, 10, 11}, INK3)]
+         ("C768 T16 hd96", {6, 7, 9, 10, 11}, INK3),
+         ("C768 T4 hd96 (middle)", {8}, "#c9c7c1")]
 DEFAULT_ARM = "modiff_full_k4_projk4_qkvi8"
 #: the three W8A8 conv+proj configurations, in the order the flags stack up
 W8A8_LADDER = [("W8A8 conv+proj", "conv+proj", INK3),
@@ -131,7 +135,7 @@ def plot_blocks(out):
             axl.text(i, v * 1.01, f"{v:.2f}", ha="center", va="bottom", color=INK2, fontsize=8)
     axl.set_xticks(range(len(idx)))
     axl.set_xticklabels([str(i) for i in idx], fontsize=8)
-    axl.set_xlabel("attention block, UNet order (0-7 down, 8-10 middle, 11-20 up)")
+    axl.set_xlabel("attention block, UNet order (0-7 input blocks, 8 middle, 9-20 output blocks)")
     axl.set_ylabel("ms/step")
     axl.set_title(f"Per attention block -- {sum(vals):.2f} ms/step over 21 blocks", loc="left")
     axl.grid(axis="y", color=GRID, linewidth=0.8)
@@ -163,10 +167,10 @@ def plot_blocks(out):
     axr.set_yticklabels(names, fontsize=8.5)
     axr.invert_yaxis()
     axr.set_xlabel("ms/step, summed over the tier")
-    axr.set_title("The int8-qkv fusion moves the 10 hd48 blocks, nothing else", loc="left")
+    axr.set_title("int8 qkv moves the 10 hd48 blocks, nothing else", loc="left")
     axr.grid(axis="x", color=GRID, linewidth=0.8)
     axr.set_axisbelow(True)
-    axr.set_xlim(0, 34)
+    axr.set_xlim(0, 35)
     axr.legend(fontsize=8, loc="lower right")
     fig.suptitle("Batch 128 -- CUDA events on live dispatch targets (coverage 0.87-0.88). "
                  "Left: current configuration, both flags set.", x=0.01, ha="left", fontsize=11.5)
