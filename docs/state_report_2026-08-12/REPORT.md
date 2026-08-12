@@ -141,6 +141,84 @@ lever there: the qdiff scale sized to the true range (assumed absmax 3.77, no cl
 while the shipped absmax file's accidentally-5.13x-too-large scale — which clips 43% of channel peaks
 — gives 0.71. Aggressive clipping helps at 4 bits and has never been searched for deliberately.
 
+## 3b. The W4A4 activation quantizer is leaving 1.6 bits on the table
+
+§3a put the damage on the activation grid. This is what is wrong with it, and what fixing it buys.
+
+**The grid is symmetric; the data is not.** Every one of the 70 convs consumes `silu(gn(x))`, and
+SiLU bottoms out at −0.2785 while being unbounded above. Measured on real activations at the shipped
+W4A4 scale (`probe_int4_code_use.py`, 70 convs):
+
+| | measured |
+|---|---:|
+| mass on negative codes (−7..−1) | 3.62% median |
+| codes ever used | 9 of 15 |
+| codes carrying >0.1% of the mass | **5 of 15** |
+| \|max\| / \|min\| of the activation | **19.91×** |
+| effective bits | **log₂(5) = 2.32**, against a nominal 3.91 |
+
+Seven of fifteen codes cover a range 20× narrower than the one that matters. W4A4 is not running at
+4 bits; it is running at about 2.3.
+
+**Two fixes, measured separately** (act-only fake quant, weights fp16 so the grid is the only
+variable, 3 seeds). Both families were swept over clip ratio, because clipping and the zero point
+are separable and a single point cannot tell them apart:
+
+| clip ratio | symmetric | asymmetric |
+|---:|---:|---:|
+| 1.00 | 1.1499 | 0.6542 |
+| 0.25 | — | **0.3668** |
+| 0.20 | 0.6589 | 0.3884 |
+| 0.15 | **0.4519** | 0.4297 |
+| 0.09 | 0.7202 | 0.6281 |
+| *shipped grid* | *0.9294* | — |
+
+Clipping alone is worth **2.06×** and is pure calibration. The zero point adds **1.23×** on top and
+needs a kernel change — implementable, since `Σw(a_q − z) = Σw·a_q − z·Σw` and the second term is a
+per-output-channel constant that folds into the bias, but a kernel change nonetheless.
+
+**On the real int4 kernels, clipping reproduces** (W4A4 PTQ, 3 seeds, sweep extended downward until
+the minimum was bracketed rather than stopping at the edge of the range):
+
+| | relL2 |
+|---|---:|
+| shipped grid | 0.8908 |
+| clip ×0.15 | 0.5312 |
+| **clip ×0.12** | **0.4803** |
+| clip ×0.10 | 0.4917 |
+| clip ×0.08 | 0.6648 |
+
+**1.85×**, and the samples go from fog to recognisable buildings. Note the two intermediate ratios
+(0.25, 0.20) are *worse* than shipped and render with a strong orange cast — the saturated regime is
+not a smooth degradation, and a coarse sweep straddling it reads the wrong winner.
+
+**MoDiff barely benefits — 1.04×** — and that is mechanism, not noise: MoDiff reads the static
+activation scale only at t=T, one step in fifty. This fix is for `int4_baseline`.
+
+### The part that does not require leaving the paper
+
+README:87 recommends `--cali_min_max` because it is "data-efficient and computation-efficient,
+resulting in comparable results compared to MSE calibration". **MSE calibration is Q-Diffusion's own
+option**, and at 4 bits the "comparable" claim does not hold:
+
+| W4A4 PTQ | scale median | relL2 | vs shipped |
+|---|---:|---:|---:|
+| qdiff min-max *(shipped)* | 1.857 | 0.8934 | — |
+| **qdiff MSE clip-search** | 2.541 | **0.5727** | **1.56×** |
+| hand clip ×0.12 | 10.516 | 0.4705 | 1.90× |
+
+So most of the win is available by **dropping one flag from the calibration command** — no kernel
+change, no departure from the paper's own menu. `qdiff_bridge` §5b rejected this exact arm ("no —
+1.5203, worse"); that measurement was taken through the 18.1× unit error and is void. This is a
+second casualty of that bug: it did not only make W4A4 look worse, it disqualified a correct
+direction.
+
+**And a result worth keeping.** MSE's optimum sits at scale 2.54 while the end-to-end optimum is
+10.5 — it clips **4× less** than it should. qdiff's search minimises *layer-wise activation
+reconstruction MSE*, and at 4 bits that objective diverges from output error: reconstruction says
+keep the tail, the trajectory says sacrifice it entirely. That gap is not a bug in either, it is the
+wrong loss for the regime.
+
 ## 4. Per-block attribution
 
 ![blocks](plots/04_block_kinds.png)

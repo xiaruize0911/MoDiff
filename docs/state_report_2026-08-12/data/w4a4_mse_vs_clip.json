@@ -1,0 +1,29 @@
+{
+ "qdiff min-max (shipped)": {
+  "mean": 0.8934135834376017,
+  "relL2": [
+   0.9267401099205017,
+   0.8618051409721375,
+   0.891695499420166
+  ],
+  "file": "integration/calibration/int4_calibration_qdiff.pt"
+ },
+ "qdiff MSE clip-search": {
+  "mean": 0.5727019309997559,
+  "relL2": [
+   0.572048008441925,
+   0.5643444061279297,
+   0.5817133784294128
+  ],
+  "file": "docs/qdiff_bridge_2026-08-12/data/qdiff_w4a4_mse.pt"
+ },
+ "hand clip x0.12": {
+  "mean": 0.4704667627811432,
+  "relL2": [
+   0.4782693386077881,
+   0.4580087959766388,
+   0.4751221537590027
+  ],
+  "file": "docs/state_report_2026-08-12/data/int4_calibration_clip012.pt"
+ }
+}

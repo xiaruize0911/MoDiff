@@ -161,7 +161,7 @@ committed 0.7837 — a 9% discrepancy, not chased.
 | hypothesis | test | verdict |
 |---|---|---|
 | mismatched weight quantizer — qdiff defaulted to **asymmetric** 4-bit weights, integration uses per-output-channel symmetric MSE | added `--w_sym`, recalibrated | **no** — assumed range 3.769 → 3.586, relL2 1.1667 → 1.2200 |
-| wrong statistic — absmax instead of clip-optimal | qdiff's 80-candidate clip search | **no** — 1.5203, worse |
+| wrong statistic — absmax instead of clip-optimal | qdiff's 80-candidate clip search | ~~no — 1.5203, worse~~ **OVERTURNED**: measured through the 18.1× unit error (§9.1). Re-measured with units fixed it is worth **1.56×** (0.8934 → 0.5727), and an explicit end-to-end clip search 1.90×. See `docs/state_report_2026-08-12` §3b |
 | wrong calibration bit width — an 8-bit-optimal clip rescaled to 15 levels is not clip-optimal | calibrated directly at `--act_bit 4` | **no** |
 | wrong trajectory — `--generate` runs at `:553` and `exit()`s at `:565`, **before** `if opt.ptq:` at `:568`, so the latents are the **fp16** model's | two-pass bootstrap: generated calibration data from the quantized W4A4 model itself | **no** — assumed range 3.769 → 3.705 |
 
