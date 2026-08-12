@@ -53,6 +53,8 @@ OUT = "docs/qdiff_bridge_2026-08-12/data/act_fake_quant.json"
 #: int8_optimized.py:113 -- 1 initial quantize + 4 refinement rounds at t=T
 WARMUP_ROUNDS = 5
 QMAX = 127.0
+#: int8_optimized.py:261 -- recompute the dynamic delta scale every Kth modulated step
+DELTA_REFRESH = 4
 
 #: The bar, from docs/modiff_correctness_2026-08-03/FINDINGS.md's 2026-08-04 headline table
 #: (real ckpt, DDIM S=50, batch 8, seed 1234, latent relL2 vs fp16, measured AT STEADY STATE).
@@ -80,8 +82,10 @@ class DeltaHook:
     mode 'modiff'   : the t=T warm-up then the t<T delta recursion
     """
 
-    def __init__(self, name, s_act, s_delta=None, mode="modiff"):
+    def __init__(self, name, s_act, s_delta=None, mode="modiff", refresh=DELTA_REFRESH):
         self.name, self.s_act, self.s_delta, self.mode = name, s_act, s_delta, mode
+        self.refresh = refresh
+        self._held = None                     # the dynamic scale being reused between refreshes
         self.a_hat = None
         self.step = 0
         self.calls = 0
@@ -115,8 +119,16 @@ class DeltaHook:
             self.a_hat, self.step = a, 1
         else:
             d = x - self.a_hat
-            if self.s_delta is None:                       # today's DYNAMIC default: per-call absmax
-                s = QMAX / d.abs().max().clamp_min(1e-6)
+            if self.s_delta is None:
+                # Today's default is DYNAMIC but NOT per-step: MODIFF_DELTA_REFRESH=4 recomputes every
+                # 4th modulated step and reuses the held scale in between (int8_optimized.py:261). The
+                # tree measured K=1 losing on every bit width and costing ~8% of ms/step, because a
+                # per-step absmax sets the grid from one step's worst outlier while holding it smooths
+                # the estimate. Modelling refresh matters here: a held scale can clip when the delta
+                # grows, which is exactly what this harness is trying to measure.
+                if self._held is None or (self.step - 1) % self.refresh == 0:
+                    self._held = float(QMAX / d.abs().max().clamp_min(1e-6))
+                s = self._held
             else:
                 s = float(self.s_delta[min(self.step - 1, self.s_delta.numel() - 1)])
             self._note(d, s)

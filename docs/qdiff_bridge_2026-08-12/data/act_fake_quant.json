@@ -1,0 +1,76 @@
+{
+ "steps": 50,
+ "batch": 8,
+ "seeds": [
+  1234
+ ],
+ "warmup_rounds": 5,
+ "reference": {
+  "baseline": 0.2378,
+  "modiff_static_notable": 0.1878,
+  "modiff_static_table": 0.0422,
+  "modiff_dynamic": 0.0393
+ },
+ "summary": {
+  "baseline/shipped": {
+   "relL2_mean": 0.23703870177268982,
+   "relL2_stdev": 0.0,
+   "clip_pct": 0.2181506310685017,
+   "layers_clipping": 67,
+   "per_seed": [
+    0.23703870177268982
+   ],
+   "calls": 3500
+  },
+  "baseline/qdiff_sym": {
+   "relL2_mean": 0.09237100929021835,
+   "relL2_stdev": 0.0,
+   "clip_pct": 0.012177454263539996,
+   "layers_clipping": 56,
+   "per_seed": [
+    0.09237100929021835
+   ],
+   "calls": 3500
+  },
+  "baseline/qdiff_mse": {
+   "relL2_mean": 0.1004696786403656,
+   "relL2_stdev": 0.0,
+   "clip_pct": 0.012041617603665598,
+   "layers_clipping": 60,
+   "per_seed": [
+    0.1004696786403656
+   ],
+   "calls": 3500
+  },
+  "modiff/shipped+dynamic": {
+   "relL2_mean": 0.012054248712956905,
+   "relL2_stdev": 0.0,
+   "clip_pct": 0.00514013228220203,
+   "layers_clipping": 70,
+   "per_seed": [
+    0.012054248712956905
+   ],
+   "calls": 3500
+  },
+  "modiff/qdiff_sym+dynamic": {
+   "relL2_mean": 0.010551434010267258,
+   "relL2_stdev": 0.0,
+   "clip_pct": 0.000494544611838589,
+   "layers_clipping": 70,
+   "per_seed": [
+    0.010551434010267258
+   ],
+   "calls": 3500
+  },
+  "modiff/shipped+nativetable": {
+   "relL2_mean": 0.02142328768968582,
+   "relL2_stdev": 0.0,
+   "clip_pct": 0.0046426299717174414,
+   "layers_clipping": 63,
+   "per_seed": [
+    0.02142328768968582
+   ],
+   "calls": 3500
+  }
+ }
+}
