@@ -71,7 +71,10 @@ def latent(runner, model, sampler):
     # an a_hat/o_hat cache too, and a leftover cache does not degrade gracefully -- measured, a run
     # after an unreset run returns an ALL-NaN latent. Every protocol built on this harness discards
     # run 1 as warm-up and measures run 2, so a partial reset here corrupts exactly the run that
-    # gets recorded. Each entry is a no-op when its family is absent or not in MoDiff mode.
+    # gets recorded. Each entry is a no-op when its family is absent or not in MoDiff mode --
+    # which is why this stays comprehensive even though the default flipped BACK to 0 on
+    # 2026-08-12: any run that sets MODIFF_LINEAR=1 explicitly still needs the wxax reset,
+    # and paying for a no-op is free.
     from integration.kernels.int4_optimized import reset_modiff_state as r4
     from integration.kernels.int8_optimized import reset_modiff_state as r8
     resets = [r8, r4]
