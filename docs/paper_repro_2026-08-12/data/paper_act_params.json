@@ -1,0 +1,282 @@
+{
+ "input_blocks.1.0.in_conv": {
+  "delta": 0.0029278199654072523,
+  "zp": 8.0
+ },
+ "input_blocks.1.0.out_conv": {
+  "delta": 0.013812899589538574,
+  "zp": 5.0
+ },
+ "input_blocks.2.0.in_conv": {
+  "delta": 0.00833338126540184,
+  "zp": 8.0
+ },
+ "input_blocks.2.0.out_conv": {
+  "delta": 0.01181950606405735,
+  "zp": 6.0
+ },
+ "input_blocks.3.0.in_conv": {
+  "delta": 0.006100877188146114,
+  "zp": 5.0
+ },
+ "input_blocks.3.0.out_conv": {
+  "delta": 0.004210778046399355,
+  "zp": 7.0
+ },
+ "input_blocks.4.0.in_conv": {
+  "delta": 0.01032191887497902,
+  "zp": 8.0
+ },
+ "input_blocks.4.0.out_conv": {
+  "delta": 0.008901897817850113,
+  "zp": 6.0
+ },
+ "input_blocks.5.0.in_conv": {
+  "delta": 0.012406810186803341,
+  "zp": 8.0
+ },
+ "input_blocks.5.0.out_conv": {
+  "delta": 0.013822841458022594,
+  "zp": 7.0
+ },
+ "input_blocks.6.0.in_conv": {
+  "delta": 0.01008270587772131,
+  "zp": 6.0
+ },
+ "input_blocks.6.0.out_conv": {
+  "delta": 0.008777054026722908,
+  "zp": 7.0
+ },
+ "input_blocks.7.0.in_conv": {
+  "delta": 0.011514195241034031,
+  "zp": 6.0
+ },
+ "input_blocks.7.0.out_conv": {
+  "delta": 0.011893240734934807,
+  "zp": 8.0
+ },
+ "input_blocks.8.0.in_conv": {
+  "delta": 0.009123686701059341,
+  "zp": 8.0
+ },
+ "input_blocks.8.0.out_conv": {
+  "delta": 0.012484773062169552,
+  "zp": 9.0
+ },
+ "input_blocks.9.0.in_conv": {
+  "delta": 0.005419095512479544,
+  "zp": 8.0
+ },
+ "input_blocks.9.0.out_conv": {
+  "delta": 0.010700949467718601,
+  "zp": 7.0
+ },
+ "input_blocks.10.0.in_conv": {
+  "delta": 0.007635378744453192,
+  "zp": 7.0
+ },
+ "input_blocks.10.0.out_conv": {
+  "delta": 0.010601457208395004,
+  "zp": 8.0
+ },
+ "input_blocks.11.0.in_conv": {
+  "delta": 0.007906126789748669,
+  "zp": 9.0
+ },
+ "input_blocks.11.0.out_conv": {
+  "delta": 0.013973712921142578,
+  "zp": 9.0
+ },
+ "input_blocks.12.0.in_conv": {
+  "delta": 0.0040524243377149105,
+  "zp": 6.0
+ },
+ "input_blocks.12.0.out_conv": {
+  "delta": 0.010579610243439674,
+  "zp": 8.0
+ },
+ "input_blocks.13.0.in_conv": {
+  "delta": 0.007166125345975161,
+  "zp": 8.0
+ },
+ "input_blocks.13.0.out_conv": {
+  "delta": 0.01308170985430479,
+  "zp": 7.0
+ },
+ "input_blocks.14.0.in_conv": {
+  "delta": 0.0077316639944911,
+  "zp": 8.0
+ },
+ "input_blocks.14.0.out_conv": {
+  "delta": 0.006258456036448479,
+  "zp": 6.0
+ },
+ "middle_block.0.in_conv": {
+  "delta": 0.007728862576186657,
+  "zp": 7.0
+ },
+ "middle_block.0.out_conv": {
+  "delta": 0.005567430052906275,
+  "zp": 5.0
+ },
+ "middle_block.2.in_conv": {
+  "delta": 0.0073261260986328125,
+  "zp": 7.0
+ },
+ "middle_block.2.out_conv": {
+  "delta": 0.0016855488065630198,
+  "zp": 7.0
+ },
+ "output_blocks.0.0.in_conv": {
+  "delta": 0.007645138073712587,
+  "zp": 8.0
+ },
+ "output_blocks.0.0.out_conv": {
+  "delta": 0.01976594887673855,
+  "zp": 7.0
+ },
+ "output_blocks.1.0.in_conv": {
+  "delta": 0.009282155893743038,
+  "zp": 8.0
+ },
+ "output_blocks.1.0.out_conv": {
+  "delta": 0.03533218801021576,
+  "zp": 8.0
+ },
+ "output_blocks.2.0.in_conv": {
+  "delta": 0.00916639156639576,
+  "zp": 7.0
+ },
+ "output_blocks.2.0.out_conv": {
+  "delta": 0.03269773721694946,
+  "zp": 7.0
+ },
+ "output_blocks.2.1.in_conv": {
+  "delta": 0.009671582840383053,
+  "zp": 7.0
+ },
+ "output_blocks.2.1.out_conv": {
+  "delta": 0.01593749038875103,
+  "zp": 4.0
+ },
+ "output_blocks.3.0.in_conv": {
+  "delta": 0.00928171444684267,
+  "zp": 7.0
+ },
+ "output_blocks.3.0.out_conv": {
+  "delta": 0.04969649389386177,
+  "zp": 8.0
+ },
+ "output_blocks.4.0.in_conv": {
+  "delta": 0.011344345286488533,
+  "zp": 8.0
+ },
+ "output_blocks.4.0.out_conv": {
+  "delta": 0.03681730479001999,
+  "zp": 8.0
+ },
+ "output_blocks.5.0.in_conv": {
+  "delta": 0.009332358837127686,
+  "zp": 8.0
+ },
+ "output_blocks.5.0.out_conv": {
+  "delta": 0.03031611442565918,
+  "zp": 8.0
+ },
+ "output_blocks.5.2.in_conv": {
+  "delta": 0.009408410638570786,
+  "zp": 8.0
+ },
+ "output_blocks.5.2.out_conv": {
+  "delta": 0.034849923104047775,
+  "zp": 6.0
+ },
+ "output_blocks.6.0.in_conv": {
+  "delta": 0.012021414004266262,
+  "zp": 7.0
+ },
+ "output_blocks.6.0.out_conv": {
+  "delta": 0.03582382947206497,
+  "zp": 7.0
+ },
+ "output_blocks.7.0.in_conv": {
+  "delta": 0.011460264213383198,
+  "zp": 8.0
+ },
+ "output_blocks.7.0.out_conv": {
+  "delta": 0.028092114254832268,
+  "zp": 7.0
+ },
+ "output_blocks.8.0.in_conv": {
+  "delta": 0.014718937687575817,
+  "zp": 7.0
+ },
+ "output_blocks.8.0.out_conv": {
+  "delta": 0.05165964737534523,
+  "zp": 8.0
+ },
+ "output_blocks.8.2.in_conv": {
+  "delta": 0.01476403046399355,
+  "zp": 8.0
+ },
+ "output_blocks.8.2.out_conv": {
+  "delta": 0.05366075038909912,
+  "zp": 8.0
+ },
+ "output_blocks.9.0.in_conv": {
+  "delta": 0.022344280034303665,
+  "zp": 7.0
+ },
+ "output_blocks.9.0.out_conv": {
+  "delta": 0.05319666862487793,
+  "zp": 9.0
+ },
+ "output_blocks.10.0.in_conv": {
+  "delta": 0.03207067772746086,
+  "zp": 6.0
+ },
+ "output_blocks.10.0.out_conv": {
+  "delta": 0.04394051060080528,
+  "zp": 8.0
+ },
+ "output_blocks.11.0.in_conv": {
+  "delta": 0.022486118599772453,
+  "zp": 7.0
+ },
+ "output_blocks.11.0.out_conv": {
+  "delta": 0.045250751078128815,
+  "zp": 10.0
+ },
+ "output_blocks.11.2.in_conv": {
+  "delta": 0.02124728448688984,
+  "zp": 7.0
+ },
+ "output_blocks.11.2.out_conv": {
+  "delta": 0.11552765965461731,
+  "zp": 7.0
+ },
+ "output_blocks.12.0.in_conv": {
+  "delta": 0.03967048227787018,
+  "zp": 8.0
+ },
+ "output_blocks.12.0.out_conv": {
+  "delta": 0.03372398391366005,
+  "zp": 9.0
+ },
+ "output_blocks.13.0.in_conv": {
+  "delta": 0.025839872658252716,
+  "zp": 9.0
+ },
+ "output_blocks.13.0.out_conv": {
+  "delta": 0.022220969200134277,
+  "zp": 10.0
+ },
+ "output_blocks.14.0.in_conv": {
+  "delta": 0.020540941506624222,
+  "zp": 8.0
+ },
+ "output_blocks.14.0.out_conv": {
+  "delta": 0.015151512809097767,
+  "zp": 7.0
+ }
+}

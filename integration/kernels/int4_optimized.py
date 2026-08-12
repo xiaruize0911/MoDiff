@@ -460,6 +460,51 @@ class OptimizedInt4Conv2d(nn.Module):
     # ------------------------------------------------------------------
     Q_DELTA = 7.0
 
+    #: DELIBERATE CLIPPING ON THE DELTA GRID, and the single largest W4A4 quality lever found so far.
+    #:
+    #: Sizing the grid to the observed absmax is the obvious choice and it is wrong at 4 bits. The
+    #: MoDiff residual is heavy-tailed: covering its full range spends the 15 codes on a tail almost
+    #: nothing lands in, and the bulk gets a step size it cannot afford. Dividing the assumed range
+    #: by this ratio saturates the tail and buys resolution everywhere else.
+    #:
+    #: Swept act-only on the real checkpoint (DDIM S=50, batch 6, 3 seeds, fp16 weights so the delta
+    #: grid is the only variable -- docs/paper_repro_2026-08-12/data/delta_clip_sweep.json):
+    #:
+    #:     ratio    1     2     4     8     16    21    32
+    #:     relL2  .4945 .3362 .1773 .1147 .2193 .2542 .3117
+    #:
+    #: A clean U with its minimum at 8, worth 4.3x over the unclipped table. For reference the
+    #: paper's OWN per-layer delta values, dropped into this datapath, read 0.2452 -- so a single
+    #: swept constant beats importing them, because the optimum follows the trajectory and ours is
+    #: not theirs (different weights, EMA, calibration set and step count).
+    #:
+    #: THIS IS PROTOCOL-DEPENDENT and must not be read as universal. The residual shrinks with step
+    #: count (measured absmax 0.83 at S=50 against 0.50 at S=500), so a run at a very different S
+    #: should re-sweep. MODIFF_DELTA_CLIP_RATIO exists for that.
+    #:
+    #: int8 keeps 1.0: 255 levels do not have this problem and the sweep was never run there. Do not
+    #: copy the 8 across without measuring -- that assumption is what the int4/int8 twins keep
+    #: getting wrong.
+    DELTA_CLIP_RATIO = float(os.environ.get("MODIFF_DELTA_CLIP_RATIO", "8.0"))
+
+    #: The same lever on the ACTIVATION grid, and for the same reason. `silu(gn(x))` is one-sided
+    #: (SiLU bottoms out at -0.2785, unbounded above) with |max|/|min| measured at 19.91x, so a
+    #: symmetric grid sized to the positive tail leaves only 5 of 15 codes carrying >0.1% of the
+    #: mass -- an effective 2.32 bits of a nominal 3.91
+    #: (docs/state_report_2026-08-12/data/int4_code_use.json).
+    #:
+    #: Under-sizing the range saturates that tail and gives the bulk a usable step. Swept act-only:
+    #: assumed absmax /1 reads 1.1499, /6.7 reads 0.4519. Set from a real-kernel sweep, not the
+    #: fake-quant one -- the harness runs fp16 weights, and once the activation grid is fine the
+    #: weight error (0.2728 on its own) stops being negligible, so fake quant reads systematically
+    #: optimistic in exactly this regime. Measured: at DELTA_CLIP_RATIO 8 the harness predicted
+    #: 0.1147 and the kernels delivered 0.3099.
+    #:
+    #: A zero point would recover most of this properly rather than by saturation, and is worth a
+    #: further 1.23x on top of the best clip -- see the plan's fix #2. This constant is the part that
+    #: needs no format or kernel change.
+    ACT_CLIP_RATIO = float(os.environ.get("MODIFF_ACT_CLIP_RATIO", "1.0"))
+
     def _ensure_delta_dyn_bufs(self, device):
         """Allocate the 4 reduction buffers the dynamic delta scale needs.
 
@@ -570,7 +615,8 @@ class OptimizedInt4Conv2d(nn.Module):
                 lo, hi = max(0, i - 1), min(absmax.numel(), i + 2)
                 absmax[i] = float(a[lo:hi].max())
 
-        scale = self.Q_DELTA / (absmax * safety).clamp_min(1e-12)
+        # DELTA_CLIP_RATIO deliberately under-sizes the grid; see the constant for the sweep.
+        scale = self.Q_DELTA / (absmax * safety / self.DELTA_CLIP_RATIO).clamp_min(1e-12)
         self.static_delta_scale.copy_(scale.to(torch.float32))
         self.static_delta_alpha.copy_((1.0 / scale).to(torch.float32))
         self.is_delta_calibrated.fill_(True)
@@ -1392,6 +1438,8 @@ class OptimizedInt4Conv2d(nn.Module):
         else:
             static_scale = self._scale_sum / self._scale_count
 
+        # ACT_CLIP_RATIO deliberately under-sizes the grid; see the constant for the sweep.
+        static_scale = float(static_scale) * self.ACT_CLIP_RATIO
         self.static_input_scale.fill_(float(static_scale))
         self.is_calibrated = True
         self._cached_scale_float = float(static_scale)

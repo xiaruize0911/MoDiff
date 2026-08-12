@@ -1,0 +1,14 @@
+{
+ "seeds": [
+  1234,
+  20260805,
+  777
+ ],
+ "relL2": {
+  "fp16 reference": 0.0,
+  "2  ours: 4-bit a_T + our delta table": 0.49462661147117615,
+  "3  ours' a_T + PAPER delta/zp": 0.2529185066620509,
+  "4  PAPER a_T exact + PAPER delta/zp": 0.2528953601916631,
+  "5  PAPER a_T exact + paper magnitude, SYMMETRIC": 0.24527444442113241
+ }
+}

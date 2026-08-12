@@ -29,7 +29,7 @@
    "dst": "integration/calibration/int4_delta_qdiff.pt",
    "kind": "delta",
    "layers": 70,
-   "stat": "steps [256], scale median 3.8068",
+   "stat": "steps [256], scale median 30.4546",
    "problems": []
   }
  ]

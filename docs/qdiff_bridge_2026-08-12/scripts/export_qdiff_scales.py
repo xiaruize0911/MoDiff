@@ -260,15 +260,35 @@ def main():
 
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     if a.kind == "static":
+        # Same deliberate clipping as the delta branch below, on the activation grid. int4 only;
+        # imported from the kernel so the export and the live calibration path cannot drift.
+        if a.target == "int4":
+            from integration.kernels.int4_optimized import OptimizedInt4Conv2d
+            r = OptimizedInt4Conv2d.ACT_CLIP_RATIO
+            if r != 1.0:
+                kept = {k: v * r for k, v in kept.items()}
+                print(f"  act clip ratio {r:g} (assumed range / {r:g}); "
+                      f"MODIFF_ACT_CLIP_RATIO overrides")
         torch.save(kept, a.out)
     else:
         if a.delta_head > 0:
             if not a.act_scales:
                 raise SystemExit("--kind delta with --delta-head > 0 needs --act-scales")
             act = torch.load(a.act_scales, map_location="cpu", weights_only=False)
+        # Deliberate clipping, int4 only. qdiff sizes the delta grid to the range it observed, which
+        # is the right thing at 8 bits and the wrong thing at 4 -- the residual is heavy-tailed, so
+        # covering it fully spends 15 codes on a tail nothing lands in. The ratio and its sweep live
+        # in OptimizedInt4Conv2d.DELTA_CLIP_RATIO; imported rather than duplicated so the export and
+        # the live calibration path cannot drift apart.
+        clip = 1.0
+        if a.target == "int4":
+            from integration.kernels.int4_optimized import OptimizedInt4Conv2d
+            clip = OptimizedInt4Conv2d.DELTA_CLIP_RATIO
+            print(f"  delta clip ratio {clip:g} (assumed range / {clip:g}); "
+                  f"MODIFF_DELTA_CLIP_RATIO overrides")
         table = {}
         for k, v in kept.items():
-            t = torch.full((MAX_STEPS,), float(v), dtype=torch.float32)
+            t = torch.full((MAX_STEPS,), float(v) * clip, dtype=torch.float32)
             if a.delta_head > 0:
                 # |a_t - a_hat_{t+1}| <= 2*act_absmax, so act_scale/2 cannot clip. qdiff's a_hat_T is
                 # the UNQUANTIZED a_T, so its step-1 delta carries none of the t=T quantization error
