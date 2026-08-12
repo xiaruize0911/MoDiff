@@ -180,24 +180,31 @@ def load_model(config_path: str, ckpt_path: str, verbose: bool = False):
     # committed number in one step. MODIFF_USE_EMA=1 selects the reference-aligned network, and any
     # calibration file used with it must have been produced WITHOUT --no_ema.
     if os.environ.get("MODIFF_USE_EMA", "0") == "1":
-        n = 0
-        try:
-            ema = {k[len("model_ema."):].replace(".", "", 0): v for k, v in sd.items()
-                   if k.startswith("model_ema.")}
-            if not ema:
-                print("  MODIFF_USE_EMA=1 but the checkpoint has no model_ema.* keys; ignoring")
+        # LitEma is built over DiffusionWrapper (ddpm.py: self.model_ema = LitEma(self.model)) and
+        # m_name2s_name strips the dots, so a key is `model_ema.` + the name relative to
+        # DiffusionWrapper with dots removed:
+        #     model.diffusion_model.input_blocks.0.0.weight
+        #  -> model_ema.diffusion_modelinput_blocks00weight
+        # The first version of this block mangled names relative to diffusion_model instead of
+        # DiffusionWrapper, so it matched nothing and reported "swapped 0" -- an honest zero, but a
+        # flag that silently did nothing. Hence the assertion below rather than a count in a log line.
+        ema = {k[len("model_ema."):]: v for k, v in sd.items()
+               if k.startswith("model_ema.") and hasattr(v, "shape") and v.dim() > 0}
+        tgt = dict(model.model.named_parameters())          # DiffusionWrapper, matching LitEma
+        flat = {k.replace(".", ""): k for k in tgt}
+        n, miss = 0, 0
+        for ek, ev in ema.items():
+            orig = flat.get(ek)
+            if orig is not None and tgt[orig].data.shape == ev.shape:
+                tgt[orig].data.copy_(ev)
+                n += 1
             else:
-                # model_ema keys drop the dots from the parameter path (LitEma's m_name2s_name)
-                flat = {k.replace(".", ""): k for k, _ in model.model.diffusion_model.named_parameters()}
-                tgt = dict(model.model.diffusion_model.named_parameters())
-                for ek, ev in ema.items():
-                    orig = flat.get(ek)
-                    if orig is not None and tgt[orig].data.shape == ev.shape:
-                        tgt[orig].data.copy_(ev)
-                        n += 1
-                print(f"  MODIFF_USE_EMA=1: swapped {n} EMA parameters into the UNet")
-        except Exception as e:
-            print(f"  MODIFF_USE_EMA=1 failed ({type(e).__name__}: {e}); running non-EMA")
+                miss += 1
+        print(f"  MODIFF_USE_EMA=1: swapped {n} EMA parameters ({miss} unmatched)")
+        if n == 0:
+            raise RuntimeError(
+                "MODIFF_USE_EMA=1 matched 0 parameters. Running non-EMA silently under an EMA flag "
+                "is worse than failing: it would look like 'EMA makes no difference'.")
 
     return model.cuda().eval(), conf
 
