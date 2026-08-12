@@ -1470,10 +1470,30 @@ class OptimizedInt4Conv2d(nn.Module):
         Without restoring smooth_scale (the old apply path, i.e. plain set_static_scale),
         a SmoothQuant-derived static scale gets applied to UNsmoothed weights with no
         activation smoothing: int8 masks the mismatch (8-bit range) but int4's 4-bit
-        range degrades it ~2x (first-step rel ~0.40 vs ~0.20). If the weights can't be
-        re-folded (odd in_channels, or _orig_weight already released), we fall back to
-        that scale-only path rather than smoothing activations against unsmoothed weights,
-        which would be strictly worse."""
+        range degrades it ~2x (ONE layer's MoDiff first step, rel ~0.40 against ~0.20 for
+        live calibration; d77c516). If the weights can't be re-folded (odd in_channels, or
+        _orig_weight already released), we fall back to that scale-only path rather than
+        smoothing activations against unsmoothed weights, which would be strictly worse.
+
+        THAT ~2x DOES NOT GENERALISE TO THE TRAJECTORY, and at W4A4 it inverts. Whole
+        network, 50 DDIM steps, 3 seeds, the mismatched scale-only path is BETTER: latent
+        relL2 0.7119 -> 0.4885 (PTQ) and 0.4200 -> 0.3963 (MoDiff), with the sample grid
+        turning fog into cathedral structure (docs/qdiff_bridge_2026-08-12/FINDINGS.md
+        §5a/§5c). integration/'s int4 defaults therefore ship the scales as BARE FLOATS and
+        take this path on purpose — see benchmark_ldm.py:CALIBRATION_PREFERENCE. The two
+        measurements are of different things (one layer's first step against the whole
+        trajectory) and both stand; the trajectory is what production runs, so it decides.
+        A candidate mechanism — folding s (2.96-5.39 across input channels) widens each
+        output channel's weight range, and at 15 weight levels that costs more than the
+        extra activation clipping it prevents — is NOT instrumented, so it stays a
+        candidate.
+
+        This method itself is unchanged: a dict entry still restores smoothing. The default
+        moved, not the semantics. One caveat on the gate that would normally back that up:
+        test_int4_export_apply asserts the restored path beats the float path by >0.05 and
+        is currently FAILING on its own terms — apply 0.069 against legacy 0.067, on one
+        random 256-channel conv. Pre-existing (reproduced unchanged at 21f33ff), and it
+        points the same way the trajectory measurement does, not at anything landed here."""
         can_refold = (smooth_scale is not None and self._orig_weight is not None
                       and self.in_channels % 2 == 0)
         if can_refold:

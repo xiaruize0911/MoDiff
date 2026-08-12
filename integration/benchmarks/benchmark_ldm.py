@@ -314,6 +314,77 @@ def _reset_wxax_modiff_safe(model):
         pass
 
 
+#: Calibration files in PREFERENCE ORDER, best first. Resolved at run_mode() time when no explicit
+#: --calibration-path was given.
+#:
+#: The order is measured, not stylistic:
+#:   *_qdiff.pt     Q-Diffusion PTQ, symmetric absmax. int8: fake-quant A/B 2026-08-12 takes baseline
+#:                  relL2 0.2558 -> 0.1082 on 3/3 seeds, clipped elements 0.220% -> 0.012%
+#:                  (docs/qdiff_bridge_2026-08-12/data/act_fake_quant.json). int4: calibrated at
+#:                  --weight_bit 4 --act_bit 4, and it wins for MoDiff ONLY -- see the int4 split.
+#:   *_nosmooth.pt  int4 only. _realckpt.pt's static scales re-emitted as bare floats, which is what
+#:                  turns SmoothQuant OFF (apply_int4_static_scales refolds smooth_scale only for
+#:                  dict-valued entries). Not a recalibration: the same 70 numbers, applied
+#:                  differently.
+#:   *_realckpt.pt  live absmax calibration against the real checkpoint. What every harness has
+#:                  explicitly passed. Its int8 scale is mean(127/absmax_i), a mean of RECIPROCALS,
+#:                  which runs up to 14.5x too large on layers whose range swings across timesteps.
+#:   *.pt           derived from the 856-byte STUB checkpoint, and it was the auto-default until
+#:                  2026-08-12. docs/modiff_correctness_2026-08-03/FINDINGS.md:660-676 measures it at
+#:                  latent relL2 0.882 (int8) / 3.023 (int4) -- "worse than useless". Kept last only
+#:                  so a fresh container with no other file still runs.
+#:
+#: int4 IS SPLIT BY MODE and int8 is not, because at 4 bits the two axes disagree about which file is
+#: best (docs/qdiff_bridge_2026-08-12/data/w4a4_ab.json, latent relL2, 3 seeds):
+#:
+#:                     shipped   no-smooth   qdiff sym
+#:       W4A4 PTQ       0.7119    0.4885      1.1945
+#:       W4A4 MoDiff    0.4200    0.3963      0.3398
+#:
+#: PTQ wants SmoothQuant off on the shipped scales; MoDiff wants the qdiff scales. Handing PTQ the
+#: qdiff file is a 1.7x REGRESSION, so no single int4 default carries both wins.
+#:
+#: The cost of splitting, stated rather than hidden: a PTQ-vs-MoDiff comparison run from defaults now
+#: varies the calibration file as well as the mode, so the "MoDiff rescues W4A4" gap reads 1.44x
+#: (0.4885 -> 0.3398) instead of the single-variable 1.70x (0.7119 -> 0.4200). Pass --calibration
+#: explicitly when the comparison, not the best available quality, is the point.
+#:
+#: All of these are gitignored (.gitignore:6 *.pt) and regenerable; see
+#: docs/qdiff_bridge_2026-08-12/scripts/run_calibration.sh, make_int4_defaults.py and
+#: recalibrate_real_ckpt.py.
+CALIBRATION_PREFERENCE = {
+    'int8': ['integration/calibration/int8_calibration_qdiff.pt',
+             'integration/calibration/int8_calibration_realckpt.pt',
+             'integration/calibration/int8_calibration.pt'],
+    #: MoDiff convs: int4, int4_attn_modiff.
+    'int4': ['integration/calibration/int4_calibration_qdiff.pt',
+             'integration/calibration/int4_calibration_realckpt.pt',
+             'integration/calibration/int4_calibration.pt'],
+    #: PTQ convs: int4_baseline. Falls back to _realckpt.pt, i.e. the pre-2026-08-12 behaviour.
+    'int4_baseline': ['integration/calibration/int4_calibration_nosmooth.pt',
+                      'integration/calibration/int4_calibration_realckpt.pt',
+                      'integration/calibration/int4_calibration.pt'],
+}
+
+
+def _default_calibration_path(mode: str):
+    """First existing file in preference order, or the last entry so the error names a real path."""
+    if mode in ('int8', 'int8_baseline', 'int8_attn_modiff'):
+        cands = CALIBRATION_PREFERENCE['int8']
+    elif mode in ('int4', 'int4_attn_modiff'):
+        cands = CALIBRATION_PREFERENCE['int4']
+    elif mode == 'int4_baseline':
+        cands = CALIBRATION_PREFERENCE['int4_baseline']
+    else:
+        return None
+    for c in cands:
+        if os.path.exists(c):
+            if c is not cands[0]:
+                print(f"  calibration: {c} (preferred {cands[0]} not present)")
+            return c
+    return cands[-1]
+
+
 class BenchmarkRunner:
     """Unified benchmark runner for all precision modes."""
     
@@ -1110,49 +1181,6 @@ class BenchmarkRunner:
             generated += batch
 
         return total_time, generated, quant_memory_after_warmup
-    
-#: Calibration files in PREFERENCE ORDER, best first. Resolved at run_mode() time when no explicit
-#: --calibration-path was given.
-#:
-#: The order is measured, not stylistic:
-#:   *_qdiff.pt     Q-Diffusion PTQ, symmetric absmax over 640 samples at 10 timesteps. Fake-quant
-#:                  A/B 2026-08-12: baseline relL2 0.2558 -> 0.1082, beating the absmax file on 3/3
-#:                  seeds, with clipped elements 0.220% -> 0.012%.
-#:                  (docs/qdiff_bridge_2026-08-12/data/act_fake_quant.json)
-#:   *_realckpt.pt  live absmax calibration against the real checkpoint. What every harness has
-#:                  explicitly passed. Its scale is mean(127/absmax_i), a mean of RECIPROCALS, which
-#:                  runs up to 14.5x too large on layers whose range swings across timesteps.
-#:   *.pt           derived from the 856-byte STUB checkpoint, and it was the auto-default until
-#:                  2026-08-12. docs/modiff_correctness_2026-08-03/FINDINGS.md:660-676 measures it at
-#:                  latent relL2 0.882 (int8) / 3.023 (int4) -- "worse than useless". Kept last only
-#:                  so a fresh container with no other file still runs.
-#:
-#: All of these are gitignored (.gitignore:6 *.pt) and regenerable; see
-#: docs/qdiff_bridge_2026-08-12/scripts/run_calibration.sh and recalibrate_real_ckpt.py.
-CALIBRATION_PREFERENCE = {
-    'int8': ['integration/calibration/int8_calibration_qdiff.pt',
-             'integration/calibration/int8_calibration_realckpt.pt',
-             'integration/calibration/int8_calibration.pt'],
-    'int4': ['integration/calibration/int4_calibration_realckpt.pt',
-             'integration/calibration/int4_calibration.pt'],
-}
-
-
-def _default_calibration_path(mode: str):
-    """First existing file in preference order, or the last entry so the error names a real path."""
-    if mode in ('int8', 'int8_baseline', 'int8_attn_modiff'):
-        cands = CALIBRATION_PREFERENCE['int8']
-    elif mode in ('int4', 'int4_baseline', 'int4_attn_modiff'):
-        cands = CALIBRATION_PREFERENCE['int4']
-    else:
-        return None
-    for c in cands:
-        if os.path.exists(c):
-            if c is not cands[0]:
-                print(f"  calibration: {c} (preferred {cands[0]} not present)")
-            return c
-    return cands[-1]
-
 
     def run_mode(self, mode: str, num_samples: int = 16, calibrate: bool = True, force_recalibrate: bool = False):
         """Run benchmark for a specific mode."""

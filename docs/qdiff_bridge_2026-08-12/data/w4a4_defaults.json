@@ -1,0 +1,96 @@
+{
+ "seeds": [
+  1234,
+  20260805,
+  777
+ ],
+ "steps": 50,
+ "batch": 8,
+ "expect_w4a4_ab": {
+  "int4_baseline/default": 0.4885,
+  "int4_baseline/shipped": 0.7119,
+  "int4/default": 0.3398,
+  "int4/shipped": 0.42
+ },
+ "gates": {
+  "int4_baseline/default": {
+   "path": "integration/calibration/int4_calibration_nosmooth.pt",
+   "layers_applied": 70,
+   "convs": 140,
+   "problems": []
+  },
+  "int4_baseline/shipped": {
+   "path": "integration/calibration/int4_calibration_realckpt.pt",
+   "layers_applied": 70,
+   "convs": 140,
+   "problems": []
+  },
+  "int4/default": {
+   "path": "integration/calibration/int4_calibration_qdiff.pt",
+   "layers_applied": 70,
+   "convs": 140,
+   "problems": []
+  },
+  "int4/shipped": {
+   "path": "integration/calibration/int4_calibration_realckpt.pt",
+   "layers_applied": 70,
+   "convs": 140,
+   "problems": []
+  }
+ },
+ "results": {
+  "int4_baseline/default": {
+   "path": "integration/calibration/int4_calibration_nosmooth.pt",
+   "relL2": [
+    0.4838448464870453,
+    0.4561035931110382,
+    0.5069020986557007
+   ],
+   "mean": 0.4822835127512614
+  },
+  "int4_baseline/shipped": {
+   "path": "integration/calibration/int4_calibration_realckpt.pt",
+   "relL2": [
+    0.7645623683929443,
+    0.6642739772796631,
+    0.7073177695274353
+   ],
+   "mean": 0.7120513717333475
+  },
+  "int4/default": {
+   "path": "integration/calibration/int4_calibration_qdiff.pt",
+   "relL2": [
+    0.38126426935195923,
+    0.3434616029262543,
+    0.33722642064094543
+   ],
+   "mean": 0.35398409763971966
+  },
+  "int4/shipped": {
+   "path": "integration/calibration/int4_calibration_realckpt.pt",
+   "relL2": [
+    0.46499383449554443,
+    0.40062010288238525,
+    0.4003829061985016
+   ],
+   "mean": 0.4219989478588104
+  }
+ },
+ "verdict": {
+  "int4_baseline": {
+   "shipped": 0.7120513717333475,
+   "default": 0.4822835127512614,
+   "ratio": 0.6773156149917078,
+   "seeds_improved": 3,
+   "of": 3
+  },
+  "int4": {
+   "shipped": 0.4219989478588104,
+   "default": 0.35398409763971966,
+   "ratio": 0.838826967308348,
+   "seeds_improved": 3,
+   "of": 3
+  }
+ },
+ "pass": true
+}

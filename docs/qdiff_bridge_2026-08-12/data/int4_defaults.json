@@ -1,0 +1,27 @@
+{
+ "shipped": "integration/calibration/int4_calibration_realckpt.pt",
+ "qdiff_src": "docs/qdiff_bridge_2026-08-12/data/qdiff_w4a4_sym.pt",
+ "out": {
+  "int4_baseline": "integration/calibration/int4_calibration_nosmooth.pt",
+  "int4": "integration/calibration/int4_calibration_qdiff.pt"
+ },
+ "layers": 70,
+ "smoothed_in_shipped": 70,
+ "qdiff_over_shipped_scale": {
+  "median": 3.7753908357397794,
+  "min": 1.8110982882851117,
+  "max": 11.582543390690486
+ },
+ "measured_relL2": {
+  "PTQ": {
+   "shipped": 0.7119,
+   "nosmooth": 0.4885,
+   "qdiff_sym": 1.1945
+  },
+  "MoDiff": {
+   "shipped": 0.42,
+   "nosmooth": 0.3963,
+   "qdiff_sym": 0.3398
+  }
+ }
+}
