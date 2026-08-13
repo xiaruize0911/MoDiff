@@ -973,6 +973,20 @@ __global__ void gn_finalize_sumsq_kernel(const float* __restrict__ sum, const fl
 // Kept unreferenced on the dead-code policy's one admissible ground -- the reason it is unused is the
 // finding. Harness: the numbers above are reproducible from the kernel plus group_norm_silu_nhwc.
 //
+// SECOND ANSWER, 2026-08-13 (docs/gn_stats_in_epilogue_2026-08-11/FINDINGS.md). The warp-tree rewrite
+// below had never been re-measured after it was written. It PASSES all three gates: max rel err 5.7e-7
+// against an fp32 reference, deterministic on every shape, and 11.43 ms weighted against the shipped
+// pass's 11.94 -- 0.96x, and 1.82x better than the atomics version. The predicted failure survives
+// exactly where predicted: 768x4x4 is 1.53x WORSE, the shape with fewest slots per thread.
+//
+// AND YET DO NOT WIRE IT, for a reason the design doc did not consider: the pass it would replace is
+// NOT BANDWIDTH BOUND, so removing the read is not worth much. Measured achieved bandwidth is 106/130/
+// 121/60 GB/s across the four shapes -- 9-19% of the A40's ~700, i.e. 6.2x off the roofline (1.91 ms
+// ideal vs 11.94 actual). At most ~16% of the pass is the X read that fusion eliminates; ~84% is the
+// reduction and per-launch structure, which an epilogue version still pays. End to end the fusion is
+// worth ~0.9%, against ~3.8% for simply getting this kernel nearer its own roofline -- which needs no
+// EVT change at all. The 6.2x deficit is the finding worth acting on; this prototype is not.
+//
 // Slots are per (tile_m, tile_n), never atomics: MODIFF_GN_STATS_ALT=2 measured an atomic GN
 // reduction 1.7x slower AND nondeterministic (1.27e-1 latent drift between replays of one seed).
 template <typename TIn>
