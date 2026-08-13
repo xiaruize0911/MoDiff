@@ -249,6 +249,90 @@ __global__ void scale_quantize_pack_kernel(
     output[idx] = (i0 & 0x0F) | ((i1 & 0x0F) << 4);
 }
 
+// Add the zero-point border correction to a conv OUTPUT, touching border pixels only.
+//
+// THE CHEAP ALTERNATIVE TO PADDING WITH z. Keeping CUTLASS's zero-fill and correcting the output is
+// equivalent and much cheaper than materializing a z-valued halo (measured +8.3% on the quantize+conv
+// pair, because the enlarged activation is written and then read).
+//
+// THE ARITHMETIC. With a_q = round(a*s) + z for real taps and a_q = 0 for zero-filled taps, and the bias
+// carrying -z*sum_over_ALL_taps(w_q)*ws/s, the computed output is
+//
+//     computed = true - (z/s) * ws[k] * sum_{missing taps} w_q[k, tap]
+//
+// so adding (z/s)*ws[k]*sum_{missing} w_q[k] restores it exactly. The missing-tap SET depends only on
+// which output row and column class the pixel is in -- 3 row classes x 3 column classes for 3x3/pad-1 --
+// so the whole correction is a small [n_pat][K] table computed once at calibration time. Validated
+// against the same closed form in integration/tests/test_int4_zp_padding.py to 0.9-2.6%.
+//
+// ONLY THE BORDER IS VISITED, and it is enumerated rather than filtered: the host passes the list of
+// border positions and each one's pattern id. Gridding over the whole output and skipping the interior
+// would make this a full pass, which is the mistake the halo fill in group_norm_silu.cu already made
+// once (+32% on that kernel until it was narrowed to the four bands).
+//
+//   Op:       per-output-channel additive correction on the border ring of a conv output
+//   Inputs:   out FP16 [N,K,Ho,Wo] channels_last (NHWC physical, modified IN PLACE);
+//             corr FP32 [n_pat, K]; border_hw INT32 [n_border] flat (ho*Wo+wo); border_pat INT32 [n_border]
+//   Outputs:  out, corrected in place
+//   Computes: out[n,k,ho,wo] += corr[pat(ho,wo), k] for every border position
+//: read-modify-write in the output's own dtype: fp16 rounds once, exactly as the conv's own store does
+template <typename T> __device__ __forceinline__ T zp_add_as(T v, float d);
+template <> __device__ __forceinline__ __half zp_add_as<__half>(__half v, float d) {
+    return __float2half(__half2float(v) + d);
+}
+template <> __device__ __forceinline__ float zp_add_as<float>(float v, float d) { return v + d; }
+
+template <typename T>
+__global__ void add_zp_border_correction_kernel(
+    T* __restrict__ out, const float* __restrict__ corr,
+    const int* __restrict__ border_hw, const int* __restrict__ border_pat,
+    int N, int K, long HWo, int n_border, long total) {
+    for (long idx = (long)blockIdx.x * blockDim.x + threadIdx.x; idx < total;
+         idx += (long)blockDim.x * gridDim.x) {
+        const int k = (int)(idx % K);
+        const long rest = idx / K;
+        const int i = (int)(rest % n_border);
+        const long n = rest / n_border;
+        const long off = (n * HWo + border_hw[i]) * K + k;
+        out[off] = zp_add_as<T>(out[off], corr[(long)border_pat[i] * K + k]);
+    }
+}
+
+void add_zp_border_correction(torch::Tensor out, torch::Tensor corr,
+                              torch::Tensor border_hw, torch::Tensor border_pat) {
+    CHECK_CUDA(out);
+    TORCH_CHECK(out.dim() == 4, "add_zp_border_correction: out must be [N,K,Ho,Wo]");
+    TORCH_CHECK(out.scalar_type() == torch::kHalf || out.scalar_type() == torch::kFloat32,
+                "add_zp_border_correction: output must be fp16 or fp32");
+    TORCH_CHECK(out.is_contiguous(at::MemoryFormat::ChannelsLast),
+                "add_zp_border_correction: out must be channels_last (the correction indexes NHWC)");
+    TORCH_CHECK(corr.dim() == 2 && corr.scalar_type() == torch::kFloat32,
+                "add_zp_border_correction: corr must be fp32 [n_pat, K]");
+    TORCH_CHECK(border_hw.scalar_type() == torch::kInt32 && border_pat.scalar_type() == torch::kInt32,
+                "add_zp_border_correction: border index tensors must be int32");
+    TORCH_CHECK(border_hw.numel() == border_pat.numel(),
+                "add_zp_border_correction: border_hw and border_pat must have equal length");
+    const int N = (int)out.size(0), K = (int)out.size(1);
+    const long HWo = (long)out.size(2) * out.size(3);
+    TORCH_CHECK(corr.size(1) == K, "add_zp_border_correction: corr's second dim must be K");
+    const int n_border = (int)border_hw.numel();
+    if (n_border == 0) return;
+    const long total = (long)N * n_border * K;
+    const int block = 256;
+    const int grid = (int)std::min<long>((total + block - 1) / block, 65535L);
+    auto stream = at::cuda::getCurrentCUDAStream();
+    if (out.scalar_type() == torch::kHalf) {
+        add_zp_border_correction_kernel<__half><<<grid, block, 0, stream>>>(
+            reinterpret_cast<__half*>(out.data_ptr<at::Half>()), corr.data_ptr<float>(),
+            border_hw.data_ptr<int>(), border_pat.data_ptr<int>(), N, K, HWo, n_border, total);
+    } else {
+        add_zp_border_correction_kernel<float><<<grid, block, 0, stream>>>(
+            out.data_ptr<float>(), corr.data_ptr<float>(),
+            border_hw.data_ptr<int>(), border_pat.data_ptr<int>(), N, K, HWo, n_border, total);
+    }
+    C10_CUDA_CHECK(cudaGetLastError());
+}
+
 // Spatially pad a PACKED int4 activation with a given int4 CODE, in one pass.
 //
 // WHY A CODE AND NOT ZERO. With an asymmetric activation grid (a_q = clamp(round(a*s) + z, -7, 7)) the

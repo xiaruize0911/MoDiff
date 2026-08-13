@@ -259,8 +259,10 @@ ZP_UNSUPPORTED_HITS = set()
 
 
 def _zp_prepad_enabled():
-    """Shared with int4_optimized: pad an asymmetric grid's halo with the code z instead of 0."""
-    return os.environ.get("MODIFF_ZP_PREPAD", "0") == "1"
+    """True when the halo mode is selected. Imported from int4_optimized so the two files cannot drift
+    about which of the three padding modes is active -- they are mutually exclusive."""
+    from integration.kernels.int4_optimized import _zp_prepad_enabled as _impl
+    return _impl()
 
 
 def _zp_unsupported(conv, where, grid="activation"):

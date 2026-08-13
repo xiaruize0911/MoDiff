@@ -20,25 +20,37 @@ PTQ delivered 7.1%. The mistake was scoring 1.06× against `zp_headroom.py`'s 1.
 fix #2's cost was *"15 CUDA entry points plus a Σ(w_q) fold"*. Those kernels are built and gated now, so
 that bar no longer prices anything.
 
-## What it costs, and what it does NOT cost
+## What it costs: three implementations, measured
 
-Also corrected: this file previously said a padding fix needs *"a position-aware epilogue correction,
-since the padded tap set varies per output pixel"*. **It does not.** Padding the activation with the
-code `z` is sufficient and needs no reduction at all — every padded tap then decodes to `z` and
-dequantizes to `(z − z)/s = 0`, which is what a zero-padded convolution is supposed to contribute.
+Correct padding is implemented in production kernels, selected by `MODIFF_ZP_PAD_MODE`:
 
-`MODIFF_ZP_PREPAD=1` demonstrates it on the real datapath by padding the **packed** int4 tensor with the
-byte whose two nibbles are both `z` and running the conv with `padding=0`
-([`_prepad_packed_with_zp`](../../integration/kernels/int4_optimized.py), gated in
-[`test_int4_zp_prepad.py`](../../integration/tests/test_int4_zp_prepad.py): bit-identical at z=0,
-correct pad byte for negative z, and it reduces the padded conv's error).
+| mode | mechanism | quantize+conv cost | end-to-end PTQ | end-to-end MoDiff |
+|---|---|--:|--:|--:|
+| `none` | CUTLASS zero-fill — **the defect** | baseline | +81.7% | +204.0% |
+| **`halo`** (default) | quantize kernel emits a `z`-valued spatial halo; conv runs `padding=0` | **+8.9%** | **−7.1%** | **−0.4%** |
+| `border` | keep zero-fill, add `(z/s)·ws[k]·Σ_missing w_q[k]` to the output's border pixels | **+5.3%** | −1.6% | −0.9% |
 
-**That emulation is not the production fix**: it materializes a padded copy per conv and costs
-**+7.1% ms/step** (13.12 → 14.05 at batch 8 / 50 steps), so the trade through this route is 1:1 and
-pointless. The production fix writes the `z`-valued halo directly from the quantize kernel that already
-emits the packed tensor — a bounds change on an existing write, not a new kernel or a new reduction.
-**That is now justified work at a measured −7.1% on the PTQ axis**, where before it looked like buying
-1.06× for a position-aware epilogue.
+Both corrections are exact in principle and agree to **1.000×** on an isolated fp32 conv
+([`test_int4_zp_prepad.py`](../../integration/tests/test_int4_zp_prepad.py)). New entry points:
+`group_norm_silu_quantize_pack_nhwc_zp_pad` (halo emitted in-kernel, so no extra traversal),
+`pad_packed_int4_code` (one-pass code-padding of a packed tensor), `add_zp_border_correction`
+(border-only, fp16/fp32).
+
+**`halo` is the default because it is the mode whose end-to-end result is verified.** `border` is
+cheaper and should eventually win, but end to end it delivers only −1.6% on PTQ where `halo` gives
+−7.1%, so on the real datapath the two are *not* yet equivalent. Two candidates, neither confirmed:
+
+* **the fp16 read-modify-write.** The correction is 2–3× the output's own magnitude (|corr|/|o| has
+  median 7× for the full tap set), so `out += corr` adds two large numbers to get a small one, in fp16.
+  The isolated agreement was measured on an fp32 output and therefore never tested this.
+* **conv paths that bypass `_conv_from_int4`.** `forward_to_int4` and `forward_from_int4_dual` call the
+  CUTLASS entry points directly, so their borders would never be corrected — the same shape of omission
+  as the original census's, and exactly what left MoDiff at +200% until the t=T conv in `_int4_conv` was
+  covered too.
+
+Resolving that is the remaining work, and it is a cost optimisation: the lever itself is delivered.
+The genuinely free form is fusing the correction into the conv's EVT epilogue, which already adds a
+per-channel bias and would need the output pixel's border class — not built.
 
 ## What stands unchanged
 

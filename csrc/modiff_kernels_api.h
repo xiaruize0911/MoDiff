@@ -35,6 +35,10 @@ torch::Tensor quantize_and_pack(torch::Tensor input);
 //: value for an asymmetric activation grid is the code z; see the kernel comment in quantize.cu.
 torch::Tensor pad_packed_int4_code(torch::Tensor x_packed, int64_t pad_h, int64_t pad_w,
                                    double zero_point);
+//: The CHEAP form of fix #2's padding correction: keep CUTLASS's zero-fill and add
+//: (z/s)*ws[k]*sum_{missing taps} w_q[k] to the border pixels of the OUTPUT. Border-only, one launch.
+void add_zp_border_correction(torch::Tensor out, torch::Tensor corr,
+                              torch::Tensor border_hw, torch::Tensor border_pat);
 torch::Tensor scale_quantize_and_pack(torch::Tensor input, torch::Tensor scale);
 //: Activation-zero-point variant (plan fix #2). MoDiff's t=T entry point -- see the kernel comment
 //: in quantize.cu for why this specific one is load-bearing and was missing from the first census.

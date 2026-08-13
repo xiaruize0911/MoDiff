@@ -39,6 +39,13 @@ sys.path.insert(0, ROOT)
 #: _refold_zp_bias now raises for exactly this configuration. Set before the import that reads it.
 os.environ["MODIFF_ZP_ALLOW_PADDED"] = "1"
 
+#: THE DEFECT IS THIS FILE'S SUBJECT, so the padding treatment is pinned rather than left to the default.
+#: That default became "border" on 2026-08-13, when the correction started shipping, and it corrects the
+#: very error this file characterises: with it on, the corner error drops from the predicted 1.13 to
+#: 0.0147 and all four gates here fail -- correctly, because there is then no defect to measure. A file
+#: that measures a defect has to ask for the defect.
+os.environ["MODIFF_ZP_PAD_MODE"] = "none"
+
 import torch                                                              # noqa: E402
 import torch.nn as nn                                                     # noqa: E402
 import torch.nn.functional as F                                           # noqa: E402

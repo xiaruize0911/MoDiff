@@ -122,10 +122,47 @@ _ZP_UNSUPPORTED = set()
 #: off by default (it materializes a padded copy per conv).
 #: Does the extension have the fused code-pad kernel? Checked once at import, like the other HAS_* gates.
 HAS_PAD_PACKED_INT4_CODE = hasattr(modiff_cutlass, "pad_packed_int4_code") if HAS_CUTLASS else False
+#: the border-correction kernel: the cheap exact form of fix #2's padding correction
+HAS_ZP_BORDER_CORRECTION = (hasattr(modiff_cutlass, "add_zp_border_correction")
+                            if HAS_CUTLASS else False)
+
+
+def _zp_pad_mode():
+    """How an asymmetric grid's padding is made correct. Read at call time so an A/B can flip it.
+
+      "halo"   (default) -- pad the packed activation with the code z and run the conv with padding=0.
+                +8.9% on the quantize+conv pair, and the mode whose -7.1% PTQ result is measured.
+      "border" -- keep CUTLASS's zero-fill and correct the OUTPUT's border pixels. Cheaper (+5.3%) and
+                exact on an isolated conv, but only -1.6% end to end on PTQ; see the note below.
+      "none"   -- leave the defect in place. Only for reproducing the +82%/+204% measurement.
+    """
+    #: MODIFF_ZP_PREPAD=1 is the older spelling of "halo". Resolved HERE, so the three modes stay
+    #: MUTUALLY EXCLUSIVE by construction: the first version let the legacy flag turn on the halo while
+    #: the default mode still applied the border correction, and the two composed into a DOUBLE
+    #: correction (0.4303 -> 0.4646 on a case where either alone is right). Two ways to be correct are
+    #: not two things to do.
+    if os.environ.get("MODIFF_ZP_PREPAD", "0") == "1":
+        return "halo"
+    #: DEFAULT IS "halo", the one whose end-to-end result is verified. "border" is cheaper (+5.3% vs
+    #: +8.9% on the quantize+conv pair) and agrees with halo to 1.000x on an isolated fp32 conv, but
+    #: end to end it delivers only -1.6% on PTQ against halo's -7.1% -- so the two are NOT yet
+    #: equivalent on the real datapath and the cheaper one is not the default. Unexplained gap,
+    #: candidates recorded in docs/zp_coverage_2026-08-13/FINDINGS.md: the fp16 read-modify-write (the
+    #: correction is 2-3x the output's own magnitude, so the add is between two large numbers), and conv
+    #: paths that bypass _conv_from_int4 (forward_to_int4, forward_from_int4_dual) and are therefore
+    #: never corrected.
+    mode = os.environ.get("MODIFF_ZP_PAD_MODE", "halo")
+    if mode not in ("border", "halo", "none"):
+        raise RuntimeError(f"MODIFF_ZP_PAD_MODE must be border|halo|none, got {mode!r}")
+    return mode
+
+
+def _zp_border_enabled():
+    return _zp_pad_mode() == "border" and HAS_ZP_BORDER_CORRECTION
 
 
 def _zp_prepad_enabled():
-    return os.environ.get("MODIFF_ZP_PREPAD", "0") == "1"
+    return _zp_pad_mode() == "halo"
 
 class OptimizedInt4Conv2d(nn.Module):
     """
@@ -519,6 +556,20 @@ class OptimizedInt4Conv2d(nn.Module):
 
         if with_bias and self.bias is not None:
             out = out + self.bias
+
+        # ZERO-POINT BORDER CORRECTION on the t=T conv too. This is the MoDiff arm's only
+        # activation-grid read, and leaving it out left that arm at +200% while PTQ was already at -6%:
+        # the correction was wired into _conv_from_int4 (the PTQ fused path) and this site was missed --
+        # the same shape of omission as the original census's, fixing the path you are looking at and not
+        # the other one. `zp` is already gated on with_bias above, so a bias-free warm-up residual gets no
+        # correction, correctly.
+        if zp != 0.0 and _zp_border_enabled() and (self.padding[0] or self.padding[1]):
+            oc = (out if out.is_contiguous(memory_format=torch.channels_last)
+                  else out.contiguous(memory_format=torch.channels_last))
+            corr, bhw, bpat = self._build_zp_border_correction(oc.shape[2], oc.shape[3])
+            if bhw.numel():
+                modiff_cutlass.add_zp_border_correction(oc, corr, bhw, bpat)
+            out = oc
         return out
 
     def _ensure_dynamic_buffers(self, x: torch.Tensor):
@@ -1272,6 +1323,95 @@ class OptimizedInt4Conv2d(nn.Module):
         profiler.stop("MoDiff INT4 Static Conv2d (from codes)", p)
         return self._module_output()
 
+    def _build_zp_border_correction(self, h_out: int, w_out: int):
+        """(corr [n_pat, K] fp32, border_hw int32, border_pat int32) for this conv's output geometry.
+
+        THE CHEAP FORM OF FIX #2's PADDING CORRECTION. CUTLASS zero-fills padded taps, which an
+        asymmetric grid reads as -z/s rather than 0, so the computed output is
+
+            computed = true - (z/s) * ws[k] * sum_{missing taps} w_q[k, tap]
+
+        and adding that term back is exact. Padding the activation with the code z is the other way to
+        be correct and costs +8.3% on the quantize+conv pair, because it enlarges the activation; this
+        way touches only the border of the OUTPUT and needs no extra bytes anywhere.
+
+        THE MISSING-TAP SET IS A FUNCTION OF THE ROW AND COLUMN CLASS ONLY. Which kh are out of bounds
+        depends on the output row alone, and which kw on the output column alone, so the correction is a
+        small [n_row_class * n_col_class, K] table. Classes are derived from the conv's real geometry
+        (stride, dilation, padding, kernel) rather than assuming 3x3/pad-1, and rows/cols whose tap set
+        is empty collapse into the interior class, which is skipped entirely.
+
+        Cached on (h_out, w_out, z, s) because it depends on the calibration and the shape, both of
+        which are fixed during sampling.
+        """
+        key = (h_out, w_out, float(self._zp_float), float(self.static_input_scale.item()))
+        cached = getattr(self, "_zp_border_cache", None)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+
+        R, S = self.kernel_size
+        ph, pw = self.padding
+        sh, sw = self.stride
+        dh, dw = self.dilation
+        h_in = (h_out - 1) * sh - 2 * ph + dh * (R - 1) + 1
+        w_in = (w_out - 1) * sw - 2 * pw + dw * (S - 1) + 1
+
+        def classes(n_out, n_in, pad, stride, dil, ksz):
+            """output index -> frozenset of out-of-bounds tap indices, deduplicated into classes."""
+            per = []
+            for o in range(n_out):
+                miss = frozenset(k for k in range(ksz)
+                                 if not (0 <= o * stride - pad + k * dil < n_in))
+                per.append(miss)
+            uniq = {}
+            ids = []
+            for m in per:
+                if m not in uniq:
+                    uniq[m] = len(uniq)
+                ids.append(uniq[m])
+            inv = {v: k for k, v in uniq.items()}
+            return ids, [inv[i] for i in range(len(uniq))]
+
+        row_ids, row_sets = classes(h_out, h_in, ph, sh, dh, R)
+        col_ids, col_sets = classes(w_out, w_in, pw, sw, dw, S)
+
+        # sum of quantized weights over input channels, per (k, kh, kw)
+        w = self._orig_weight
+        K = w.shape[0]
+        ws = self.weight_scale_channel.view(-1).to(torch.float32)
+        wq = (w.reshape(K, -1).float() / ws[:, None]).round().clamp(-7, 7).reshape_as(w)
+        tap_sum = wq.sum(dim=1)                                   # [K, R, S]
+        z = float(self._zp_float)
+        s_in = float(self.static_input_scale.item())
+        gain = (z / s_in) * ws                                    # [K]
+
+        n_cc = len(col_sets)
+        corr = torch.zeros(len(row_sets) * n_cc, K, dtype=torch.float32, device=w.device)
+        for ri, rmiss in enumerate(row_sets):
+            for ci, cmiss in enumerate(col_sets):
+                taps = [(kh, kw) for kh in range(R) for kw in range(S)
+                        if kh in rmiss or kw in cmiss]
+                if not taps:
+                    continue
+                acc = torch.zeros(K, dtype=torch.float32, device=w.device)
+                for kh, kw in taps:
+                    acc += tap_sum[:, kh, kw]
+                corr[ri * n_cc + ci] = gain * acc
+
+        hw, pat = [], []
+        for ho in range(h_out):
+            for wo in range(w_out):
+                p = row_ids[ho] * n_cc + col_ids[wo]
+                if bool(corr[p].abs().max() > 0):
+                    hw.append(ho * w_out + wo)
+                    pat.append(p)
+        dev = w.device
+        out = (corr.contiguous(),
+               torch.tensor(hw, dtype=torch.int32, device=dev),
+               torch.tensor(pat, dtype=torch.int32, device=dev))
+        self._zp_border_cache = (key, out)
+        return out
+
     def _prepad_packed_with_zp(self, x_packed: torch.Tensor, h_in: int, w_in: int):
         """Spatially pad a packed int4 activation with the code `z`, returning (padded, h, w).
 
@@ -1311,8 +1451,16 @@ class OptimizedInt4Conv2d(nn.Module):
         out[:, ph:ph + H, pw:pw + W, :] = x_packed
         return out.contiguous(), h_in + 2 * ph, w_in + 2 * pw
 
+    def _conv_from_int4_uncorrected(self, x_packed, h_in, w_in, residual=None):
+        """_conv_from_int4 without the zero-point border correction. Split out so the corrected path can
+        call the conv exactly as the symmetric path does and then fix the border, rather than
+        duplicating the store dispatch."""
+        return self._conv_from_int4(x_packed, h_in, w_in, residual=residual,
+                                    _skip_zp_correction=True)
+
     def _conv_from_int4(self, x_packed: torch.Tensor, h_in: int, w_in: int,
-                        residual: Optional[torch.Tensor] = None) -> torch.Tensor:
+                        residual: Optional[torch.Tensor] = None,
+                        _skip_zp_correction: bool = False) -> torch.Tensor:
         """Run the calibrated INT4 conv (dequant/bias/store dispatch) on an
         already-quantized+packed activation ([N, H, W, C/2], the layout produced by
         scale_quantize_and_pack). Shared by _forward_standard (which quantizes first)
@@ -1336,6 +1484,33 @@ class OptimizedInt4Conv2d(nn.Module):
         # #2 is worth when its padding is RIGHT, so the negative answer rests on a measurement rather
         # than on an isolated ceiling. At z = 0 the pad byte is 0, i.e. exactly what CUTLASS inserts, so
         # this path is bit-identical to the normal one -- which is how it is gated.
+        # THE CHEAP CORRECT ROUTE, and the default one once a zero point is live: keep CUTLASS's
+        # zero-fill and add (z/s)*ws[k]*sum_{missing} w_q[k] to the border pixels of the OUTPUT. Exact
+        # (it agrees with the code-z halo to 1.000x on every shape tested) and cheaper, because it moves
+        # border-sized traffic instead of enlarging the activation: +5.3% against the halo's +8.9% on the
+        # quantize+conv pair. MODIFF_ZP_PAD_MODE=halo selects the other one.
+        if (not _skip_zp_correction and _zp_border_enabled()
+                and getattr(self, "_zp_float", 0.0) != 0.0
+                and (self.padding[0] or self.padding[1])):
+            h_out = ((h_in + 2 * self.padding[0] - self.dilation[0] * (self.kernel_size[0] - 1) - 1)
+                     // self.stride[0]) + 1
+            w_out = ((w_in + 2 * self.padding[1] - self.dilation[1] * (self.kernel_size[1] - 1) - 1)
+                     // self.stride[1]) + 1
+            out = self._conv_from_int4_uncorrected(x_packed, h_in, w_in, residual)
+            if not (out.dtype in (torch.float16, torch.float32)
+                    and out.is_contiguous(memory_format=torch.channels_last)
+                    and out.dim() == 4 and out.shape[2] == h_out and out.shape[3] == w_out):
+                # The correction indexes NHWC fp16 [N,K,Ho,Wo] in place. Any other store (int8 requant,
+                # dual-store) would need its own handling, so refuse rather than silently skip it and
+                # leave the border wrong -- that is the failure mode this whole area exists to avoid.
+                raise RuntimeError(
+                    f"{self.layer_name}: zero-point border correction needs an fp16/fp32 channels_last "
+                    f"[N,K,Ho,Wo] conv output, got dtype={out.dtype} shape={tuple(out.shape)}. Set "
+                    f"MODIFF_ZP_PAD_MODE=halo for this configuration.")
+            corr, bhw, bpat = self._build_zp_border_correction(h_out, w_out)
+            if bhw.numel():
+                modiff_cutlass.add_zp_border_correction(out, corr, bhw, bpat)
+            return out
         if (_zp_prepad_enabled() and getattr(self, "_zp_float", 0.0) != 0.0
                 and (self.padding[0] or self.padding[1])):
             xp, hp, wp = self._prepad_packed_with_zp(x_packed, h_in, w_in)

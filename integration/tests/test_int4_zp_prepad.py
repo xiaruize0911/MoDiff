@@ -69,8 +69,11 @@ def unpack_int4(y, C):
     return torch.stack([lo, hi], dim=-1).reshape(*y.shape[:-1], C)
 
 
-def run(conv, a, s, z, prepad):
-    os.environ["MODIFF_ZP_PREPAD"] = "1" if prepad else "0"
+def run(conv, a, s, z, mode):
+    """`mode` names the padding treatment explicitly: none | halo | border. The default is no longer
+    'defective', so a test that only flipped MODIFF_ZP_PREPAD would compare two CORRECT arms."""
+    os.environ.pop("MODIFF_ZP_PREPAD", None)
+    os.environ["MODIFF_ZP_PAD_MODE"] = mode
     conv.set_static_calibration(s, None, z)
     with torch.no_grad():
         return conv(a.float().contiguous(memory_format=torch.channels_last)).float()
@@ -87,8 +90,8 @@ def main():
         a = silu_like((2, cin, hw, hw), 5)
         m = OptimizedInt4Conv2d(c, layer_name="probe").cuda()
         (s_sym, _), _ = grids(a)
-        y_off = run(m, a, s_sym, 0.0, prepad=False)
-        y_on = run(m, a, s_sym, 0.0, prepad=True)
+        y_off = run(m, a, s_sym, 0.0, "none")
+        y_on = run(m, a, s_sym, 0.0, "halo")
         ok = torch.equal(y_off, y_on)
         print(f"   C={cin:4d} {hw}x{hw} pad={pad}   {'ok' if ok else 'FAIL'}")
         if not ok:
@@ -160,17 +163,20 @@ def main():
             ref = F.conv2d(a.float(), c.weight.float(), c.bias.float(), padding=1)
         (s_sym, _), (s_asym, z_asym) = grids(a)
         m = OptimizedInt4Conv2d(c, layer_name="probe").cuda()
-        e_sym = float((run(m, a, s_sym, 0.0, False) - ref).norm() / ref.norm())
-        e_zf = float((run(m, a, s_asym, z_asym, False) - ref).norm() / ref.norm())
-        e_pp = float((run(m, a, s_asym, z_asym, True) - ref).norm() / ref.norm())
-        ok = e_pp < e_zf
-        print(f"   C={cin:4d} {hw}x{hw} z={z_asym:+.0f}   sym {e_sym:.4f}   "
-              f"asym zero-filled {e_zf:.4f}   asym prepad {e_pp:.4f}   "
-              f"{'ok' if ok else 'FAIL'}  (prepad vs sym: {e_pp / e_sym:.2f}x)")
+        e_sym = float((run(m, a, s_sym, 0.0, "none") - ref).norm() / ref.norm())
+        e_zf = float((run(m, a, s_asym, z_asym, "none") - ref).norm() / ref.norm())
+        e_pp = float((run(m, a, s_asym, z_asym, "halo") - ref).norm() / ref.norm())
+        e_bc = float((run(m, a, s_asym, z_asym, "border") - ref).norm() / ref.norm())
+        #: both corrections must beat the defect, and they must AGREE -- they are two independent
+        #: derivations of the same quantity, so a disagreement means one of them is wrong.
+        ok = e_pp < e_zf and e_bc < e_zf and abs(e_bc / e_pp - 1.0) < 0.02
+        print(f"   C={cin:4d} {hw}x{hw} z={z_asym:+.0f}   sym {e_sym:.4f}   zero-fill {e_zf:.4f}   "
+              f"halo {e_pp:.4f}   border {e_bc:.4f}   {'ok' if ok else 'FAIL'}  "
+              f"(border/halo {e_bc / e_pp:.3f}x, best vs sym {min(e_pp, e_bc) / e_sym:.2f}x)")
         if not ok:
-            fails.append(f"prepad no better C={cin} {hw}")
+            fails.append(f"correction C={cin} {hw}")
 
-    os.environ["MODIFF_ZP_PREPAD"] = "0"
+    os.environ["MODIFF_ZP_PAD_MODE"] = "border"
     print()
     if fails:
         print(f"FAILED ({len(fails)}): {', '.join(fails)}")

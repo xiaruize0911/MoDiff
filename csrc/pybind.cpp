@@ -5,6 +5,9 @@
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // Standalone elementwise quantize/pack/dequant-accumulate (kernels/quantize.cu)
     m.def("quantize_and_pack", &quantize_and_pack, "Fast Quantization and Packing for INT4");
+    m.def("add_zp_border_correction", &add_zp_border_correction,
+          "add the zero-point border correction to a conv output in place, border pixels only "
+          "(the cheap form of fix #2's padding correction)");
     m.def("pad_packed_int4_code", &pad_packed_int4_code,
           "spatial constant-pad of a packed int4 activation with an int4 CODE -- the correct padding "
           "value for an asymmetric grid is z, not 0 (fix #2)");
