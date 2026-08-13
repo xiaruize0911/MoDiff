@@ -54,8 +54,13 @@ os.makedirs(REFDIR, exist_ok=True)
 
 
 def gen(mode, steps, batch, seed, activate=True, model_seed=20260803):
-    cal = ("integration/calibration/int8_calibration.pt" if "int8" in mode or mode in ("fp16", "fp32")
-           else "integration/calibration/int4_calibration.pt")
+    # CALIBRATION_PREFERENCE, not a hardcoded path -- see the note in
+    # integration/benchmarks/report/kernel_suites_bench.py. This one matters MORE than the pure
+    # timing harnesses: this script compares UNet output against goldens, so the activation scale
+    # changes what it asserts, not just how fast it runs. The two live goldens
+    # (e2e_int8{,_baseline}_s20_b4.pt) were captured against the old literal and are refreshed
+    # with this change; golden/README.md records the attribution.
+    cal = bldm._default_calibration_path(mode)
     # The checkpoint is an empty stub, so every weight comes from default-initialisation off the
     # global RNG -- and torch seeds that nondeterministically per process. Unseeded, this model is
     # a DIFFERENT random network in every run and no golden can survive; measured rel_err ~0.4 for

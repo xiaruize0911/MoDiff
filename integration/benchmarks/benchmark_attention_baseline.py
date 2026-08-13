@@ -55,6 +55,18 @@ except ImportError:
 # Standalone baseline modules for attention (no MoDiff)
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _pref_calib(bits):
+    """CALIBRATION_PREFERENCE for a bit width -- see the note in report/kernel_suites_bench.py.
+
+    Used as the FALLBACK for --int{8,4}_calib. Those flags used to default to the stub-checkpoint
+    literal; defaulting them to None instead would have been worse than the bug, because the consumer
+    below skips loading when the path is falsy, so an unset flag would silently run the model on
+    per-call DYNAMIC scales rather than on the wrong static ones. Resolve, do not blank.
+    """
+    from integration.benchmarks.benchmark_ldm import CALIBRATION_PREFERENCE, _pick
+    return _pick(CALIBRATION_PREFERENCE[f"int{bits}"], "calibration")
+
+
 class BaselineInt8Conv1d(nn.Module):
     """
     INT8 CUTLASS conv1d WITHOUT MoDiff temporal caching.
@@ -358,13 +370,16 @@ def main():
     parser.add_argument('--ckpt',   default='models/ldm/lsun_churches256/model.ckpt')
     parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--steps',      type=int, default=50)
-    parser.add_argument('--int8_calib', default='integration/calibration/int8_calibration.pt')
+    parser.add_argument('--int8_calib', default=None)
     parser.add_argument('--num_runs',   type=int, default=3)
     parser.add_argument('--output', default='integration/results/attn_baseline_benchmark.json')
     parser.add_argument('--skip_pipeline', action='store_true',
                         help='Skip full pipeline tests, only run per-layer microbenchmarks')
     args = parser.parse_args()
 
+    # Resolve the calibration through CALIBRATION_PREFERENCE when unset; the old default was the
+    # stub-checkpoint literal, and leaving it None would silently run uncalibrated.
+    args.int8_calib = args.int8_calib or _pref_calib(8)
     print(f"GPU: {torch.cuda.get_device_name()}")
     print(f"CUTLASS available: {HAS_CUTLASS}")
     print(f"batch_size={args.batch_size}, steps={args.steps}\n")

@@ -40,13 +40,18 @@ def run_skip_gnorm(mode: str, steps: int, num_samples: int, batch_size: int,
         "--steps", str(steps),
         "--num_samples", str(num_samples),
         "--batch_size", str(batch_size),
-        "--calibration", calib,
         "--output_dir", out_dir,
         "--skip_calibration",
         "--no_groupnorm",
         "--linear_backend", linear_backend,
         "--linear_int_gemm_min_m", str(linear_int_gemm_min_m),
     ]
+    # Only pass --calibration when one was asked for. Unset, benchmark_ldm resolves through
+    # CALIBRATION_PREFERENCE (run_mode falls back at benchmark_ldm.py:1325); the previous
+    # argparse default was the stub-checkpoint file. `None` in argv would also raise TypeError
+    # in subprocess.run, so the flag is conditional rather than empty.
+    if calib:
+        cmd += ["--calibration", calib]
 
     print(f"\n[SKIP_GNORM] Running {mode.upper()} ...", flush=True)
     t0   = time.perf_counter()
@@ -106,9 +111,9 @@ def main():
                         default=["fp32", "fp16", "int8_baseline",
                                  "int4_baseline", "int8", "int4"])
     parser.add_argument("--int8_calib",
-                        default="integration/calibration/int8_calibration.pt")
+                        default=None)
     parser.add_argument("--int4_calib",
-                        default="integration/calibration/int4_calibration.pt")
+                        default=None)
     parser.add_argument("--output_dir",
                         default="integration/results/skip_groupnorm_bs42_n168_s200")
     parser.add_argument("--existing_json",

@@ -35,10 +35,15 @@ def run_one(mode: str, no_attention: bool, steps: int, num_samples: int,
         "--steps", str(steps),
         "--num_samples", str(num_samples),
         "--batch_size", str(batch_size),
-        "--calibration", calib,
         "--output_dir", out_dir,
         "--skip_calibration",           # use existing calibration
     ]
+    # Only pass --calibration when one was actually asked for. Unset, benchmark_ldm resolves through
+    # CALIBRATION_PREFERENCE (run_mode falls back at benchmark_ldm.py:1325), which is what the tree
+    # ships; the previous literal default was the stub-checkpoint file. Also: `None` in this argv list
+    # would have raised TypeError in subprocess.run, so the flag has to be conditional, not empty.
+    if calib:
+        cmd += ["--calibration", calib]
     if no_attention:
         cmd.append("--no_attention")
 
@@ -81,8 +86,10 @@ def main():
     parser.add_argument("--batch_size",  type=int, default=8)
     parser.add_argument("--calib", default=None,
                         help="Legacy override: use one calibration file for all modes")
-    parser.add_argument("--int8_calib", default="integration/calibration/int8_calibration.pt")
-    parser.add_argument("--int4_calib", default="integration/calibration/int4_calibration.pt")
+    # default None -> resolved through CALIBRATION_PREFERENCE at the call site, so an unset flag
+    # cannot silently select the stub-checkpoint file (see kernel_suites_bench for the note).
+    parser.add_argument("--int8_calib", default=None)
+    parser.add_argument("--int4_calib", default=None)
     parser.add_argument("--output_dir",  default="integration/results/skip_attn_clean")
     parser.add_argument("--modes",       nargs="+",
                         default=["fp16", "int8_baseline", "int4_baseline"])

@@ -39,9 +39,10 @@ def build(mode, args):
     # "int8:int_gemm" -> base mode int8 with the fused W8A8 linear kernel.
     base, _, lb = mode.partition(":")
     lb = lb or args.linear_backend
-    cal = (args.calibration or
-           ("integration/calibration/int8_calibration.pt" if "int8" in base or base in ("fp16", "fp32")
-            else "integration/calibration/int4_calibration.pt"))
+    # CALIBRATION_PREFERENCE, not a hardcoded path -- see the note in
+    # integration/benchmarks/report/kernel_suites_bench.py. The old literal was the
+    # stub-checkpoint file, demoted to last resort on 2026-08-12.
+    cal = args.calibration or bldm._default_calibration_path(base)
     runner = bldm.BenchmarkRunner(
         config_path=args.config, ckpt_path=args.ckpt, output_dir="/tmp/ab_out",
         batch_size=args.batch_size, steps=args.steps, calibration_path=cal, linear_backend=lb)

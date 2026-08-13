@@ -79,6 +79,18 @@ from ldm.util import instantiate_from_config
 from omegaconf import OmegaConf
 
 
+def _pref_calib(bits):
+    """CALIBRATION_PREFERENCE for a bit width -- see the note in report/kernel_suites_bench.py.
+
+    Used as the FALLBACK for --int{8,4}_calib. Those flags used to default to the stub-checkpoint
+    literal; defaulting them to None instead would have been worse than the bug, because the consumer
+    below skips loading when the path is falsy, so an unset flag would silently run the model on
+    per-call DYNAMIC scales rather than on the wrong static ones. Resolve, do not blank.
+    """
+    from integration.benchmarks.benchmark_ldm import CALIBRATION_PREFERENCE, _pick
+    return _pick(CALIBRATION_PREFERENCE[f"int{bits}"], "calibration")
+
+
 def load_model(config_path, ckpt_path):
     conf = OmegaConf.load(config_path)
     pl_sd = torch.load(ckpt_path, map_location="cpu", weights_only=False)
@@ -196,8 +208,8 @@ def main():
     parser.add_argument('--ckpt', type=str, default='models/ldm/lsun_churches256/model.ckpt')
     parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--steps', type=int, default=50)
-    parser.add_argument('--int8_calib', type=str, default='integration/calibration/int8_calibration.pt')
-    parser.add_argument('--int4_calib', type=str, default='integration/calibration/int4_calibration.pt')
+    parser.add_argument('--int8_calib', type=str, default=None)
+    parser.add_argument('--int4_calib', type=str, default=None)
     parser.add_argument('--num_batches', type=int, default=4)
     parser.add_argument('--output', type=str, default='integration/results/skip_attention_ablation.json')
     args = parser.parse_args()
@@ -228,7 +240,8 @@ def main():
             continue
 
         print(f"\n{'='*55}\n{label.upper()}\n{'='*55}")
-        calib = args.int4_calib if 'int4' in base_mode else args.int8_calib
+        calib = ((args.int4_calib or _pref_calib(4)) if 'int4' in base_mode
+                 else (args.int8_calib or _pref_calib(8)))
         model, sampler = setup_mode(
             args.config, args.ckpt, base_mode, skip_attn, args.batch_size,
             calib_path=calib if 'fp' not in base_mode else None

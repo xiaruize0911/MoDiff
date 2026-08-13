@@ -39,8 +39,18 @@ torch.backends.cudnn.allow_tf32 = False
 # ── Config ────────────────────────────────────────────────────────────────────
 CONFIG     = "configs/latent-diffusion/lsun_churches-ldm-kl-8.yaml"
 CKPT       = "models/ldm/lsun_churches256/model.ckpt"
-CALIB_INT8 = "integration/calibration/int8_calibration.pt"
-CALIB_INT4 = "integration/calibration/int4_calibration.pt"
+# Resolved through CALIBRATION_PREFERENCE rather than hardcoded. The hardcoded value was
+# `int*_calibration.pt`, which benchmark_ldm's own preference comment grades at latent relL2
+# 0.882 (int8) / 3.023 (int4) -- "worse than useless" -- and demoted to LAST RESORT on
+# 2026-08-12 when the qdiff files landed. It was also derived from the 856-byte STUB
+# checkpoint, and this tree has carried the real 2.7 GB checkpoint since 2026-08-04, so the
+# "stub" premise several of these harnesses still state in prose is stale too. Fixed across
+# five harnesses on 2026-08-13 after the same defect was found in e2e_three_mode_bench;
+# for LATENCY a scale is only a multiplier (measured: <=0.33% across all arms), but the stub
+# file also carries 37 emb-Linear scales the qdiff file does not, which puts those layers on
+# a static scale here and a per-call dynamic absmax in the shipped path -- a different kernel
+# route, not a different number.
+# Resolved lazily at the call site (benchmark_ldm is imported there, not at module scope).
 BATCH      = 42
 WARMUP     = 5     # steps before profiling (not counted)
 STEPS      = 15    # steps to time
@@ -185,11 +195,9 @@ class CUDATimer:
 # ── Per-mode profiling run ─────────────────────────────────────────────────────
 def profile_mode(mode: str) -> tuple:
     """Load model for *mode*, attach profiler, run, return (wall_ms, summary)."""
-    from integration.benchmarks.benchmark_ldm import BenchmarkRunner
+    from integration.benchmarks.benchmark_ldm import BenchmarkRunner, _default_calibration_path
 
-    calib = (CALIB_INT8 if "int8" in mode
-             else CALIB_INT4 if "int4" in mode
-             else None)
+    calib = _default_calibration_path(mode)
 
     runner = BenchmarkRunner(
         CONFIG, CKPT, "/tmp/ldm_profile",

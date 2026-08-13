@@ -67,10 +67,22 @@ _MODE_FILTER = [x.strip() for x in os.environ.get("KBENCH_MODES", "").split(",")
 MODES = [m for m in _MODE_FILTER if m in _ALL_MODES] or _ALL_MODES[:3]
 #: The MoDiff modes read the same calibration artifact as their baseline; the delta scale is
 #: computed at runtime (MODIFF_DELTA_MODE=dynamic) and is not stored in this file.
-CALIB = {"int8_baseline": "integration/calibration/int8_calibration.pt",
-         "int4_baseline": "integration/calibration/int4_calibration.pt",
-         "int8": "integration/calibration/int8_calibration.pt",
-         "int4": "integration/calibration/int4_calibration.pt"}
+#: Resolved through CALIBRATION_PREFERENCE rather than hardcoded. The hardcoded value was
+#: `int*_calibration.pt`, which benchmark_ldm's own preference comment grades at latent relL2
+#: 0.882 (int8) / 3.023 (int4) -- "worse than useless" -- and demoted to LAST RESORT on
+#: 2026-08-12 when the qdiff files landed. It was also derived from the 856-byte STUB
+#: checkpoint, and this tree has carried the real 2.7 GB checkpoint since 2026-08-04, so the
+#: "stub" premise several of these harnesses still state in prose is stale too. Fixed across
+#: five harnesses on 2026-08-13 after the same defect was found in e2e_three_mode_bench;
+#: for LATENCY a scale is only a multiplier (measured: <=0.33% across all arms), but the stub
+#: file also carries 37 emb-Linear scales the qdiff file does not, which puts those layers on
+#: a static scale here and a per-call dynamic absmax in the shipped path -- a different kernel
+#: route, not a different number.
+class CALIB:
+    """Drop-in for the dict this replaced, so call sites keep reading CALIB.get(mode)."""
+    @staticmethod
+    def get(mode):
+        return B._default_calibration_path(mode)
 QUANT_ENV = {"MODIFF_QUANT_LINEAR": "1", "MODIFF_QUANT_ATTN": "1",
              "MODIFF_QUANT_ATTN_STATIC": "1", "MODIFF_QATTN_FLASH": "1",
              "MODIFF_FLASH_GATE": "on", "MODIFF_LINEAR_OUT_I8": "0"}

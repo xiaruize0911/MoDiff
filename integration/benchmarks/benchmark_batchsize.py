@@ -78,6 +78,18 @@ from ldm.models.diffusion.ddim import DDIMSampler
 from omegaconf import OmegaConf
 
 
+def _pref_calib(bits):
+    """CALIBRATION_PREFERENCE for a bit width -- see the note in report/kernel_suites_bench.py.
+
+    Used as the FALLBACK for --int{8,4}_calib. Those flags used to default to the stub-checkpoint
+    literal; defaulting them to None instead would have been worse than the bug, because the consumer
+    below skips loading when the path is falsy, so an unset flag would silently run the model on
+    per-call DYNAMIC scales rather than on the wrong static ones. Resolve, do not blank.
+    """
+    from integration.benchmarks.benchmark_ldm import CALIBRATION_PREFERENCE, _pick
+    return _pick(CALIBRATION_PREFERENCE[f"int{bits}"], "calibration")
+
+
 def setup_model_for_mode(config_path, ckpt_path, mode, batch_size, calib_path=None):
     """Load and configure model for given mode."""
     from ldm.util import instantiate_from_config
@@ -189,8 +201,8 @@ def main():
     parser.add_argument('--modes', type=str, nargs='+',
                         default=['fp32', 'fp16', 'int8', 'int4'],
                         choices=['fp32', 'fp16', 'int8', 'int8_baseline', 'int4', 'int4_baseline'])
-    parser.add_argument('--int8_calib', type=str, default='integration/calibration/int8_calibration.pt')
-    parser.add_argument('--int4_calib', type=str, default='integration/calibration/int4_calibration.pt')
+    parser.add_argument('--int8_calib', type=str, default=None)
+    parser.add_argument('--int4_calib', type=str, default=None)
     parser.add_argument('--num_batches', type=int, default=4, help='Timed repetitions per batch size')
     parser.add_argument('--output', type=str, default='integration/results/batchsize_ablation.json')
     args = parser.parse_args()
@@ -204,7 +216,8 @@ def main():
     for mode in args.modes:
         print(f"\n{'='*50}\nMode: {mode.upper()}\n{'='*50}")
         results[mode] = {}
-        calib = args.int4_calib if 'int4' in mode else args.int8_calib
+        calib = ((args.int4_calib or _pref_calib(4)) if 'int4' in mode
+                 else (args.int8_calib or _pref_calib(8)))
         max_bs = max(args.batch_sizes)
 
         model, sampler = setup_model_for_mode(

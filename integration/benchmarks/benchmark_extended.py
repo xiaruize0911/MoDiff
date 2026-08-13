@@ -131,6 +131,16 @@ def measure_gpu_memory():
     }
 
 
+#: CALIBRATION_PREFERENCE, not a hardcoded path -- see the note in
+#: integration/benchmarks/report/kernel_suites_bench.py. The literal this replaced was the
+#: stub-checkpoint file, which benchmark_ldm demoted to LAST RESORT on 2026-08-12; the modes here are
+#: named int8_cudagraph / int4_cudagraph etc, which _default_calibration_path does not recognise, so
+#: the bit width is selected explicitly rather than by passing the mode through.
+def _calib_for_bits(bits):
+    from integration.benchmarks.benchmark_ldm import CALIBRATION_PREFERENCE, _pick
+    return _pick(CALIBRATION_PREFERENCE[f"int{bits}"], "calibration") or ""
+
+
 class ExtendedBenchmarkRunner:
     """Benchmark runner for extended modes."""
 
@@ -214,7 +224,7 @@ class ExtendedBenchmarkRunner:
             convert_model_to_optimized_int8(model.model.diffusion_model)
             from integration.utils.buffer_pool import initialize_buffer_pool
             initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
-            calib_path = 'integration/calibration/int8_calibration.pt'
+            calib_path = _calib_for_bits(8)
             if os.path.exists(calib_path):
                 scales = torch.load(calib_path, weights_only=True)
                 loaded = apply_static_scales(model.model.diffusion_model, scales)
@@ -225,7 +235,7 @@ class ExtendedBenchmarkRunner:
             convert_model_to_optimized_int8(model.model.diffusion_model)
             from integration.utils.buffer_pool import initialize_buffer_pool
             initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
-            calib_path = 'integration/calibration/int8_calibration.pt'
+            calib_path = _calib_for_bits(8)
             if os.path.exists(calib_path):
                 scales = torch.load(calib_path, weights_only=True)
                 loaded = apply_static_scales(model.model.diffusion_model, scales)
@@ -235,7 +245,7 @@ class ExtendedBenchmarkRunner:
         elif mode == 'int8_separate':
             convert_model_to_separate_int8(model.model.diffusion_model)
             # Use existing INT8 calibration scales if available
-            calib_path = 'integration/calibration/int8_calibration.pt'
+            calib_path = _calib_for_bits(8)
             if os.path.exists(calib_path):
                 scales = torch.load(calib_path, weights_only=True)
                 loaded = apply_separate_int8_scales(model.model.diffusion_model, scales)
@@ -244,7 +254,7 @@ class ExtendedBenchmarkRunner:
 
         elif mode == 'int8_separate_baseline':
             convert_model_to_separate_int8(model.model.diffusion_model)
-            calib_path = 'integration/calibration/int8_calibration.pt'
+            calib_path = _calib_for_bits(8)
             if os.path.exists(calib_path):
                 scales = torch.load(calib_path, weights_only=True)
                 loaded = apply_separate_int8_scales(model.model.diffusion_model, scales)
@@ -253,7 +263,7 @@ class ExtendedBenchmarkRunner:
 
         elif mode == 'int4_separate':
             convert_model_to_separate_int4(model.model.diffusion_model)
-            calib_path = 'integration/calibration/int4_calibration.pt'
+            calib_path = _calib_for_bits(4)
             if os.path.exists(calib_path):
                 scales = torch.load(calib_path, weights_only=True)
                 loaded = apply_separate_int4_scales(model.model.diffusion_model, scales)
@@ -262,7 +272,7 @@ class ExtendedBenchmarkRunner:
 
         elif mode == 'int4_separate_baseline':
             convert_model_to_separate_int4(model.model.diffusion_model)
-            calib_path = 'integration/calibration/int4_calibration.pt'
+            calib_path = _calib_for_bits(4)
             if os.path.exists(calib_path):
                 scales = torch.load(calib_path, weights_only=True)
                 loaded = apply_separate_int4_scales(model.model.diffusion_model, scales)
@@ -279,7 +289,7 @@ class ExtendedBenchmarkRunner:
             convert_model_to_optimized_int8(model.model.diffusion_model)
             from integration.utils.buffer_pool import initialize_buffer_pool
             initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
-            calib_path = 'integration/calibration/int8_calibration.pt'
+            calib_path = _calib_for_bits(8)
             if os.path.exists(calib_path):
                 scales = torch.load(calib_path, weights_only=True)
                 loaded = apply_static_scales(model.model.diffusion_model, scales)
@@ -290,7 +300,7 @@ class ExtendedBenchmarkRunner:
             convert_model_to_optimized_int8(model.model.diffusion_model)
             from integration.utils.buffer_pool import initialize_buffer_pool
             initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
-            calib_path = 'integration/calibration/int8_calibration.pt'
+            calib_path = _calib_for_bits(8)
             if os.path.exists(calib_path):
                 scales = torch.load(calib_path, weights_only=True)
                 loaded = apply_static_scales(model.model.diffusion_model, scales)
@@ -301,7 +311,7 @@ class ExtendedBenchmarkRunner:
             convert_model_to_optimized_int4(model.model.diffusion_model)
             from integration.utils.buffer_pool import initialize_buffer_pool
             initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
-            calib_path = 'integration/calibration/int4_calibration.pt'
+            calib_path = _calib_for_bits(4)
             if os.path.exists(calib_path):
                 scales = torch.load(calib_path, weights_only=True)
                 loaded = apply_int4_static_scales(model.model.diffusion_model, scales)
@@ -312,7 +322,7 @@ class ExtendedBenchmarkRunner:
             convert_model_to_optimized_int4(model.model.diffusion_model)
             from integration.utils.buffer_pool import initialize_buffer_pool
             initialize_buffer_pool(model.model.diffusion_model, max_batch_size=self.batch_size, device='cuda')
-            calib_path = 'integration/calibration/int4_calibration.pt'
+            calib_path = _calib_for_bits(4)
             if os.path.exists(calib_path):
                 scales = torch.load(calib_path, weights_only=True)
                 loaded = apply_int4_static_scales(model.model.diffusion_model, scales)

@@ -113,8 +113,9 @@ def collect_layers(mode_key):
     os.environ["MODIFF_LINEAR_OUT_I8"] = "0"
     for k in ("MODIFF_FLASH_ATTN", "MODIFF_FLASH_PACKED", "MODIFF_SDPA_BACKEND"):
         os.environ.pop(k, None)
-    calib = ("integration/calibration/int8_calibration.pt" if "int8" in mode_key else
-             "integration/calibration/int4_calibration.pt" if "int4" in mode_key else None)
+    # See the CALIBRATION_PREFERENCE note in kernel_suites_bench: hardcoding the stub-checkpoint
+    # file made this harness measure a configuration the tree stopped shipping on 2026-08-12.
+    calib = B._default_calibration_path(mode_key)
     r = B.BenchmarkRunner("configs/latent-diffusion/lsun_churches-ldm-kl-8.yaml",
                           "models/ldm/lsun_churches256/model.ckpt", output_dir=f"{HERE}/tmp_out",
                           batch_size=BATCH, steps=2, shape=(4, 32, 32), calibration_path=calib,

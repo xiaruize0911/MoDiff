@@ -57,12 +57,17 @@ def run_one(mode: str, no_attention: bool, no_resblock: bool,
         "--steps", str(steps),
         "--num_samples", str(num_samples),
         "--batch_size", str(batch_size),
-        "--calibration", calib,
         "--output_dir", out_dir,
         "--skip_calibration",
         "--linear_backend", linear_backend,
         "--linear_int_gemm_min_m", str(linear_int_gemm_min_m),
     ]
+    # Only pass --calibration when one was asked for. Unset, benchmark_ldm resolves through
+    # CALIBRATION_PREFERENCE (run_mode falls back at benchmark_ldm.py:1325); the previous
+    # argparse default was the stub-checkpoint file. `None` in argv would also raise TypeError
+    # in subprocess.run, so the flag is conditional rather than empty.
+    if calib:
+        cmd += ["--calibration", calib]
     if no_attention:
         cmd.append("--no_attention")
     if no_resblock:
@@ -121,9 +126,9 @@ def main():
     parser.add_argument("--num_samples", type=int, default=168)
     parser.add_argument("--batch_size",  type=int, default=42)
     parser.add_argument("--int8_calib",
-                        default="integration/calibration/int8_calibration.pt")
+                        default=None)
     parser.add_argument("--int4_calib",
-                        default="integration/calibration/int4_calibration.pt")
+                        default=None)
     parser.add_argument("--output_dir",
                         default="integration/results/skip_nonlinear_clean")
     parser.add_argument("--modes", nargs="+",
