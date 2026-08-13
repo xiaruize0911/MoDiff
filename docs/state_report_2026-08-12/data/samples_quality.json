@@ -6,35 +6,35 @@
   "fp16": {
    "label": "fp16 reference",
    "relL2_vs_fp16": 0.0,
-   "ms_per_step": 25.722044220019598,
+   "ms_per_step": 18.252045620174613,
    "calibration": null,
    "delta_mode": null
   },
   "int8_baseline": {
    "label": "W8A8 PTQ  (int8_baseline)",
-   "relL2_vs_fp16": 0.16335125267505646,
-   "ms_per_step": 23.10571792011615,
+   "relL2_vs_fp16": 0.16475331783294678,
+   "ms_per_step": 13.6713301402051,
    "calibration": "integration/calibration/int8_calibration_qdiff.pt",
    "delta_mode": null
   },
   "int8": {
    "label": "W8A8 MoDiff  (int8)",
-   "relL2_vs_fp16": 0.06501892954111099,
-   "ms_per_step": 26.849793279834557,
+   "relL2_vs_fp16": 0.06149619445204735,
+   "ms_per_step": 19.525673059979454,
    "calibration": "integration/calibration/int8_calibration_qdiff.pt",
    "delta_mode": "static"
   },
   "int4_baseline": {
    "label": "W4A4 PTQ  (int4_baseline)",
-   "relL2_vs_fp16": 0.46795496344566345,
-   "ms_per_step": 18.23442344000796,
+   "relL2_vs_fp16": 0.47887834906578064,
+   "ms_per_step": 10.78371473995503,
    "calibration": "integration/calibration/int4_calibration_qdiff.pt",
    "delta_mode": null
   },
   "int4": {
    "label": "W4A4 MoDiff  (int4)",
-   "relL2_vs_fp16": 0.33918505907058716,
-   "ms_per_step": 22.27344762010034,
+   "relL2_vs_fp16": 0.3470580577850342,
+   "ms_per_step": 17.974526720063295,
    "calibration": "integration/calibration/int4_calibration_qdiff.pt",
    "delta_mode": "static"
   }
