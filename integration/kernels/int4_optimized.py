@@ -172,11 +172,29 @@ class OptimizedInt4Conv2d(nn.Module):
         else:
             self.register_buffer('weight_packed', torch.empty(0, dtype=torch.int8))
 
+        # --- Sum of quantized weights per output channel, for the activation zero point ---
+        # An asymmetric activation grid stores a_q = round(a*s) + z, so a = (a_q - z)/s and
+        #     sum_i w_q[k,i] * a[i] = (sum_i w_q[k,i]*a_q[i] - z * sum_i w_q[k,i]) * ws[k] / s.
+        # The second term is a CONSTANT PER OUTPUT CHANNEL, so it folds into the bias and the GEMM
+        # never has to know about the zero point. This buffer is that sum; it is exact (int4 codes in
+        # fp32) and is computed here, once, from the same w_quant the packing uses -- deriving it
+        # later from weight_packed would mean unpacking nibbles and could drift from what shipped.
+        self.register_buffer('weight_sum_q',
+                             w_quant.reshape(K, -1).sum(dim=1).float().view(1, K, 1, 1))
+        #: Activation zero point, per tensor. ZERO unless an asymmetric calibration sets it, and at
+        #: zero every expression below reduces exactly to the symmetric path -- which is what
+        #: test_int4_zero_point.py asserts bit-for-bit rather than approximately.
+        self.register_buffer('static_input_zp', torch.zeros(1, dtype=torch.float32))
+
         # --- Bias ---
         if conv.bias is not None:
             self.register_buffer('bias', conv.bias.data.view(1, -1, 1, 1))
         else:
             self.bias = None
+        #: The bias as it arrived, before any zero-point correction is folded in. Kept because the
+        #: correction depends on the activation scale: re-calibrating must recompute it from the
+        #: ORIGINAL bias, not from an already-corrected one, or the correction compounds.
+        self._orig_bias = None if self.bias is None else self.bias.clone()
 
         self._empty_bias = None
         self.use_cutlass = HAS_CUTLASS and self.groups == 1 and self.in_channels % 2 == 0
@@ -1583,6 +1601,36 @@ class OptimizedInt4Conv2d(nn.Module):
         else:
             self.end_calibration()
 
+    def _refold_zp_bias(self):
+        """Fold the activation zero point's per-output-channel correction into the stored bias.
+
+        bias_eff[k] = bias[k] - z * sum_i w_q[k,i] * ws[k] / s
+
+        Done ONCE here rather than in the forward path, because z and s are fixed by calibration and
+        do not change during sampling. That is what keeps the zero point out of every conv call site,
+        the EVT epilogue and the GEMM entirely -- the arithmetic is identical, it just happens at
+        calibration time. At z = 0 the correction is exactly 0.0 and `bias` is restored byte-for-byte
+        from _orig_bias, so an asymmetric file and a symmetric one cannot drift apart.
+
+        A conv with NO bias gains one when z != 0: the correction is a real per-channel offset and
+        there is nowhere else to put it. It is dropped again (back to None) if z returns to 0.
+        """
+        z = float(self.static_input_zp.item())
+        s_in = float(self.static_input_scale.item())
+        if z == 0.0 or s_in == 0.0:
+            self.bias = None if self._orig_bias is None else self._orig_bias.clone()
+            return
+        ws = self.weight_scale_channel.view(1, -1, 1, 1).to(torch.float32)
+        corr = -(z / s_in) * self.weight_sum_q.to(torch.float32) * ws
+        base = self._orig_bias
+        if base is None:
+            self.bias = corr.to(self.weight_scale_channel.dtype)
+        else:
+            self.bias = (base.to(torch.float32) + corr).to(base.dtype)
+        if getattr(self, '_evt_bias_f32', None) is not None:
+            # Invalidate the cached fp32 flattening the EVT epilogue reads, or it keeps the old bias.
+            self._evt_bias_f32 = None
+
     def set_static_scale(self, scale: float):
         self.static_input_scale.fill_(float(scale))
         self.is_calibrated = True
@@ -1594,8 +1642,11 @@ class OptimizedInt4Conv2d(nn.Module):
         self._cached_scale_tensor = torch.tensor(
             [float(scale)], device=self.static_input_scale.device, dtype=torch.float32
         )
+        # The correction scales as 1/s, so it must be refolded whenever s changes.
+        self._refold_zp_bias()
 
-    def set_static_calibration(self, scale: float, smooth_scale: Optional[torch.Tensor] = None):
+    def set_static_calibration(self, scale: float, smooth_scale: Optional[torch.Tensor] = None,
+                               zero_point: float = 0.0):
         """Restore a full static calibration from an exported checkpoint: the per-tensor
         activation `scale` AND, when the layer used SmoothQuant, the per-in-channel
         `smooth_scale`. The smooth scale is re-folded into the (freshly converted, still
@@ -1637,6 +1688,8 @@ class OptimizedInt4Conv2d(nn.Module):
             # rebuilds it from the restored smooth_scale.
             if hasattr(self, '_smooth_inv_flat'):
                 del self._smooth_inv_flat
+        # Written BEFORE set_static_scale, which is what folds the correction into the bias.
+        self.static_input_zp.fill_(float(zero_point))
         self.set_static_scale(scale)
 
 
@@ -1852,7 +1905,8 @@ def apply_int4_static_scales(model: nn.Module, scales: Dict[str, object]) -> int
             if module.layer_name in scales:
                 entry = scales[module.layer_name]
                 if isinstance(entry, dict):
-                    module.set_static_calibration(entry["static_scale"], entry.get("smooth_scale"))
+                    module.set_static_calibration(entry["static_scale"], entry.get("smooth_scale"),
+                                                  float(entry.get("zero_point", 0.0)))
                 else:
                     module.set_static_scale(float(entry))
                 loaded += 1
