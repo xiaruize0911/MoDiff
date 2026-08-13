@@ -71,7 +71,7 @@ quantizes an activation when its `a_hat` argument is empty and a delta when it i
 
 ## 2. What changed
 
-Three kernels learned `z`, each as a second arity (pybind11 does not inherit C++ defaults, so the
+Four kernels learned `z`, each as a second arity (pybind11 does not inherit C++ defaults, so the
 existing callers are untouched):
 
 | kernel | role | constraint |
@@ -79,6 +79,24 @@ existing callers are untouched):
 | `scale_quantize_and_pack_zp` | MoDiff t=T | — |
 | `group_norm_silu_quantize_resize_nhwc_zp` | PTQ updown | packed int4 only; the int8 output has no matching bias correction and the wrapper `TORCH_CHECK`s it |
 | `upsample2x_quantize_pack_noahat_fprop_zp` | PTQ Upsample | empty `a_hat` only; with a cache it quantizes a delta, and the wrapper refuses |
+| `step1_static_quantize_pack_int4_noahat_fprop_zp` | `_forward_standard`'s fp16 branch | none — no `a_hat` parameter at all, so it has only the one role |
+
+**The fourth was added to make the coverage claim unconditional.** It was initially left *guarded*
+rather than taught, on the correct grounds that the census found it unreachable on both shipped W4A4
+arms. But "unreachable in this configuration" makes the claim config-dependent: a configuration that
+did reach it got a hard error instead of a result. It is the same one-line `+ z`, both its scalar and
+vec2 instantiations are gated, and the odd-channel path (which selects the scalar kernel) is exercised
+explicitly.
+
+**Every activation-grid quantize on the int4 path now honours `z`.** The three `_zp_unsupported` calls
+that remain are not coverage holes:
+
+* `quantize_and_pack (float-scale branch)` — reachable only with a python-float `input_scale`, i.e. an
+  *uncalibrated* layer, and a layer with a zero point is calibrated by construction (the zp arrives
+  with the scale in `set_static_calibration`). Unreachable by construction, not by configuration.
+* `group_norm_silu_quantize_resize_nhwc` — now the `else` of the `_zp` routing, so it fires only on the
+  **int8** path, whose bias carries no `-z·Σw_q` correction. Honouring `z` there would *be* the defect.
+* `upsample2x_quantize_pack_noahat_fprop` — its `else` is the delta role (exempt, verified) or `z = 0`.
 
 `_zp_unsupported` gained `grid=`, so a site **declares** what it quantizes instead of being
 classified by name. `"delta"` is exempt and the declaration is **verified** — a delta site with no

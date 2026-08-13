@@ -1,11 +1,14 @@
-"""Gates for the three quantize kernels that learned the activation zero point on 2026-08-13.
+"""Gates for the four quantize kernels that learned the activation zero point on 2026-08-13.
 
 test_int4_zero_point.py gates the BIAS FOLD (host side). This file gates the KERNELS, and it is the
 gate that decides whether fix #2's coverage is real:
 
-    scale_quantize_and_pack_zp                  MoDiff's t=T entry point
-    group_norm_silu_quantize_resize_nhwc_zp     PTQ updown ResBlocks (8 layers)
-    upsample2x_quantize_pack_noahat_fprop_zp    PTQ standalone Upsample
+    scale_quantize_and_pack_zp                       MoDiff's t=T entry point
+    group_norm_silu_quantize_resize_nhwc_zp          PTQ updown ResBlocks (8 layers)
+    upsample2x_quantize_pack_noahat_fprop_zp         PTQ standalone Upsample
+    step1_static_quantize_pack_int4_noahat_fprop_zp  _forward_standard's fp16 branch -- unreachable in
+                                                     the shipped config, taught anyway so the coverage
+                                                     claim is unconditional rather than config-dependent
 
 THREE GATES PER KERNEL, and the third is the one that catches a parameter that is plumbed but unused:
 
@@ -185,6 +188,47 @@ def test_gn_resize(fails, seen):
         fails.append("gnr int8 z=0")
 
 
+def test_noahat(fails, seen):
+    print("\n4. step1_static_quantize_pack_int4_noahat_fprop_zp  (_forward_standard fp16 branch)")
+    torch.manual_seed(21)
+    dev = "cuda"
+    for C in (192, 768, 1536):
+        for dt in (torch.float16, torch.float32):
+            x = (torch.randn(2, C, 8, 8, device=dev, dtype=dt) * 2.0).contiguous(
+                memory_format=torch.channels_last)
+            s = torch.tensor([3.0], device=dev)
+            e = torch.empty(0, device=dev, dtype=torch.float32)
+            base = mc.step1_static_quantize_pack_int4_noahat_fprop(x, s, e)
+            z0 = mc.step1_static_quantize_pack_int4_noahat_fprop_zp(x, s, e, 0.0)
+            ok = torch.equal(base, z0)
+            tag = "fp16" if dt == torch.float16 else "fp32"
+            print(f"   C={C:5d} {tag} z=0 bit-identical                     {'ok' if ok else 'FAIL'}")
+            if not ok:
+                fails.append(f"noahat z=0 C={C} {tag}")
+            c0 = unpack_int4(base, C)
+            for z in (-4.0, 3.0):
+                zz = mc.step1_static_quantize_pack_int4_noahat_fprop_zp(x, s, e, z)
+                if torch.equal(base, zz):
+                    print(f"   C={C:5d} {tag} z={z:+5.1f} DIFFERS                       FAIL")
+                    fails.append(f"noahat z={z} inert C={C} {tag}")
+                    continue
+                shift_gate(c0, unpack_int4(zz, C), z,
+                           f"C={C} {tag} z={z:+5.1f} shift is exactly +z", fails, seen)
+    #: the odd-channel path takes the scalar kernel rather than the vec2 one, so both instantiations
+    #: are exercised -- the vec2 gate is num_channels % 2 == 0
+    x = (torch.randn(2, 6, 4, 4, device=dev, dtype=torch.float16)).contiguous(
+        memory_format=torch.channels_last)
+    s = torch.tensor([3.0], device=dev)
+    sm = torch.rand(3, device=dev, dtype=torch.float32) + 0.5      # odd num_channels -> scalar kernel
+    a = mc.step1_static_quantize_pack_int4_noahat_fprop(x, s, sm)
+    b = mc.step1_static_quantize_pack_int4_noahat_fprop_zp(x, s, sm, 0.0)
+    c = mc.step1_static_quantize_pack_int4_noahat_fprop_zp(x, s, sm, 2.0)
+    ok = torch.equal(a, b) and not torch.equal(a, c)
+    print(f"   scalar (odd num_channels) kernel also honours z    {'ok' if ok else 'FAIL'}")
+    if not ok:
+        fails.append("noahat scalar kernel")
+
+
 def test_upsample(fails, seen):
     print("\n3. upsample2x_quantize_pack_noahat_fprop_zp  (PTQ Upsample)")
     torch.manual_seed(7)
@@ -239,16 +283,18 @@ def test_upsample(fails, seen):
 
 def main():
     for n in ("scale_quantize_and_pack_zp", "group_norm_silu_quantize_resize_nhwc_zp",
-              "upsample2x_quantize_pack_noahat_fprop_zp"):
+              "upsample2x_quantize_pack_noahat_fprop_zp",
+              "step1_static_quantize_pack_int4_noahat_fprop_zp"):
         if not hasattr(mc, n):
             print(f"MISSING ENTRY POINT {n} -- rebuild the extension")
             return 1
     fails = []
     #: comparable-element counts per kernel, so an all-skipped kernel fails instead of reading green
-    seen = {"scale_quantize_and_pack": [], "gn_resize": [], "upsample": []}
+    seen = {"scale_quantize_and_pack": [], "gn_resize": [], "upsample": [], "noahat": []}
     test_scale_quantize_and_pack(fails, seen["scale_quantize_and_pack"])
     test_gn_resize(fails, seen["gn_resize"])
     test_upsample(fails, seen["upsample"])
+    test_noahat(fails, seen["noahat"])
     for k, v in seen.items():
         if not v or all(n == 0 for n in v):
             print(f"\nVACUOUS: {k}'s shift gate had no comparable codes in any case, so it asserted "
@@ -258,7 +304,7 @@ def main():
     if fails:
         print(f"FAILED ({len(fails)}): {', '.join(fails)}")
         return 1
-    print("ALL PASS: all three kernels are bit-identical at z=0, responsive to z!=0, shift the\n"
+    print("ALL PASS: all four kernels are bit-identical at z=0, responsive to z!=0, shift the\n"
           "unclamped codes by exactly +z, and refuse a zero point on a delta quantize.")
     return 0
 

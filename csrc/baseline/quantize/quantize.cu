@@ -965,19 +965,30 @@ template <typename T_IN>
 __global__ void static_quantize_pack_int4_noahat_kernel(
     const T_IN* __restrict__ x, int8_t* __restrict__ output_packed,
     const float* __restrict__ scale_ptr, const float* __restrict__ smooth_inv,
-    int num_channels, int num_elements) {
+    int num_channels, int num_elements,
+    // ACTIVATION ZERO POINT (plan fix #2). This kernel takes NO a_hat, so it always quantizes the
+    // activation itself on the activation grid, feeding a conv that adds the zp-corrected bias
+    // (_forward_standard -> _conv_from_int4). z therefore applies unconditionally here -- unlike
+    // upsample2x_quantize_pack_noahat_fprop, whose optional a_hat gives it two roles.
+    //
+    // TAUGHT 2026-08-13 TO MAKE THE COVERAGE CLAIM UNCONDITIONAL. The 2026-08-13 census found this
+    // entry point unreachable on both shipped W4A4 arms (every calibrated conv goes through the GN
+    // fusion or the resize kernel), so it was left GUARDED -- correct but conditional: a
+    // configuration that did reach it got a hard error instead of a result. z = 0 reproduces the old
+    // kernel exactly.
+    float zp = 0.0f) {
     float scale = *scale_ptr;
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
     for (int base = idx * 2; base < num_elements; base += stride * 2) {
         float x0 = load_as_float(x, base);
         if (smooth_inv != nullptr) x0 *= smooth_inv[base % num_channels];
-        float q0 = fmaxf(-7.0f, fminf(7.0f, roundf(x0 * scale)));
+        float q0 = fmaxf(-7.0f, fminf(7.0f, roundf(x0 * scale) + zp));
         float q1 = 0.0f;
         if (base + 1 < num_elements) {
             float x1 = load_as_float(x, base + 1);
             if (smooth_inv != nullptr) x1 *= smooth_inv[(base + 1) % num_channels];
-            q1 = fmaxf(-7.0f, fminf(7.0f, roundf(x1 * scale)));
+            q1 = fmaxf(-7.0f, fminf(7.0f, roundf(x1 * scale) + zp));
         }
         output_packed[base / 2] =
             (static_cast<int8_t>(q0) & 0x0F) | ((static_cast<int8_t>(q1) & 0x0F) << 4);
@@ -993,7 +1004,18 @@ template <typename T_IN>
 __global__ void static_quantize_pack_int4_noahat_vec2_kernel(
     const T_IN* __restrict__ x, int8_t* __restrict__ output_packed,
     const float* __restrict__ scale_ptr, const float* __restrict__ smooth_inv,
-    int num_channels, int num_elements) {
+    int num_channels, int num_elements,
+    // ACTIVATION ZERO POINT (plan fix #2). This kernel takes NO a_hat, so it always quantizes the
+    // activation itself on the activation grid, feeding a conv that adds the zp-corrected bias
+    // (_forward_standard -> _conv_from_int4). z therefore applies unconditionally here -- unlike
+    // upsample2x_quantize_pack_noahat_fprop, whose optional a_hat gives it two roles.
+    //
+    // TAUGHT 2026-08-13 TO MAKE THE COVERAGE CLAIM UNCONDITIONAL. The 2026-08-13 census found this
+    // entry point unreachable on both shipped W4A4 arms (every calibrated conv goes through the GN
+    // fusion or the resize kernel), so it was left GUARDED -- correct but conditional: a
+    // configuration that did reach it got a hard error instead of a result. z = 0 reproduces the old
+    // kernel exactly.
+    float zp = 0.0f) {
     float scale = *scale_ptr;
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
@@ -1005,14 +1027,14 @@ __global__ void static_quantize_pack_int4_noahat_vec2_kernel(
                 float2 sm = *reinterpret_cast<const float2*>(&smooth_inv[c0]);
                 xv.x *= sm.x; xv.y *= sm.y;
             }
-            float q0 = fmaxf(-7.0f, fminf(7.0f, roundf(xv.x * scale)));
-            float q1 = fmaxf(-7.0f, fminf(7.0f, roundf(xv.y * scale)));
+            float q0 = fmaxf(-7.0f, fminf(7.0f, roundf(xv.x * scale) + zp));
+            float q1 = fmaxf(-7.0f, fminf(7.0f, roundf(xv.y * scale) + zp));
             output_packed[base / 2] =
                 (static_cast<int8_t>(q0) & 0x0F) | ((static_cast<int8_t>(q1) & 0x0F) << 4);
         } else {
             float x0 = load_as_float(x, base);
             if (smooth_inv != nullptr) x0 *= smooth_inv[base % num_channels];
-            float q0 = fmaxf(-7.0f, fminf(7.0f, roundf(x0 * scale)));
+            float q0 = fmaxf(-7.0f, fminf(7.0f, roundf(x0 * scale) + zp));
             output_packed[base / 2] = static_cast<int8_t>(q0) & 0x0F;
         }
     }
@@ -1151,8 +1173,8 @@ torch::Tensor step1_static_quantize_noahat_fprop(
 
 // Cache-free static int4 quantize+pack (baseline conv): fp16/fp32 x + static scale (+optional
 // smooth), NO a_hat. Output packed int8 [N,H,W,C/2] (same layout as step1_static_quantize_pack_int4_fprop).
-torch::Tensor step1_static_quantize_pack_int4_noahat_fprop(
-    torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv) {
+static torch::Tensor step1_static_quantize_pack_int4_noahat_fprop_impl(
+    torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv, double zero_point) {
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     int num_input = x.numel();
     int num_output = num_input / 2;
@@ -1170,26 +1192,38 @@ torch::Tensor step1_static_quantize_pack_int4_noahat_fprop(
         if (use_vec2) {
             static_quantize_pack_int4_noahat_vec2_kernel<__half><<<grid_size_vec2, block_size, 0, stream>>>(
                 reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), x_packed.data_ptr<int8_t>(),
-                scale_buf.data_ptr<float>(), smooth_ptr, num_channels, num_input);
+                scale_buf.data_ptr<float>(), smooth_ptr, num_channels, num_input, (float)zero_point);
         } else {
             static_quantize_pack_int4_noahat_kernel<__half><<<grid_size, block_size, 0, stream>>>(
                 reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), x_packed.data_ptr<int8_t>(),
-                scale_buf.data_ptr<float>(), smooth_ptr, num_channels, num_input);
+                scale_buf.data_ptr<float>(), smooth_ptr, num_channels, num_input, (float)zero_point);
         }
     } else {
         if (use_vec2) {
             static_quantize_pack_int4_noahat_vec2_kernel<float><<<grid_size_vec2, block_size, 0, stream>>>(
                 x.data_ptr<float>(), x_packed.data_ptr<int8_t>(),
-                scale_buf.data_ptr<float>(), smooth_ptr, num_channels, num_input);
+                scale_buf.data_ptr<float>(), smooth_ptr, num_channels, num_input, (float)zero_point);
         } else {
             static_quantize_pack_int4_noahat_kernel<float><<<grid_size, block_size, 0, stream>>>(
                 x.data_ptr<float>(), x_packed.data_ptr<int8_t>(),
-                scale_buf.data_ptr<float>(), smooth_ptr, num_channels, num_input);
+                scale_buf.data_ptr<float>(), smooth_ptr, num_channels, num_input, (float)zero_point);
         }
     }
     int N = x.size(0), C = x.size(1), H = x.size(2), W = x.size(3);
     return x_packed.view({N, H, W, C / 2});
 }
+// Two arities, same rationale as the other _zp pairs in this tree (pybind11 does not inherit C++
+// defaults, and the existing 3-argument callers must stay untouched).
+torch::Tensor step1_static_quantize_pack_int4_noahat_fprop(
+    torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv) {
+    return step1_static_quantize_pack_int4_noahat_fprop_impl(x, scale_buf, smooth_inv, 0.0);
+}
+
+torch::Tensor step1_static_quantize_pack_int4_noahat_fprop_zp(
+    torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv, double zero_point) {
+    return step1_static_quantize_pack_int4_noahat_fprop_impl(x, scale_buf, smooth_inv, zero_point);
+}
+
 
 // ---- Upsample(nearest, 2x) + static quantize fusion (baseline conv, NO a_hat): fold the
 // Upsample.forward -> F.interpolate(scale_factor=2, mode="nearest") pass into the following

@@ -105,6 +105,10 @@ torch::Tensor step1_static_quantize_noahat_fprop(
     torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv);
 torch::Tensor step1_static_quantize_pack_int4_noahat_fprop(
     torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv);
+//: Activation-zero-point variant (plan fix #2). No a_hat, so this always quantizes the activation on
+//: the activation grid and z applies unconditionally.
+torch::Tensor step1_static_quantize_pack_int4_noahat_fprop_zp(
+    torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv, double zero_point);
 
 // Upsample(nearest,2x) + static quantize fusion (baseline conv, NO a_hat): fold Upsample.forward's
 // F.interpolate into the following conv's quantize prologue, never materializing the fp16 upsampled

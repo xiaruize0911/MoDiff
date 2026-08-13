@@ -1159,17 +1159,24 @@ class OptimizedInt4Conv2d(nn.Module):
                 # wasted. Bit-identical output (residual=x-0=x). SmoothQuant applied upstream -> empty.
                 if self._empty_smooth is None or self._empty_smooth.device != x.device:
                     self._empty_smooth = torch.empty(0, device=x.device, dtype=torch.float32)
-                # Activation grid feeding _conv_from_int4's bias, so z applies -- but this kernel has
-                # no zero-point arity. GUARDED RATHER THAN TAUGHT: the 2026-08-13 census
-                # (docs/zp_coverage_2026-08-13/data/site_census.json) recorded every quantize on both
-                # W4A4 arms of the shipped configuration and this entry point never fired, because
-                # every calibrated conv is reached either through the GN fusion or through the resize
-                # kernel. A fourth kernel for a path nothing measured is work justified by nothing;
-                # a strict guard turns "unreachable" into a claim that fails loudly if it is wrong.
-                self._zp_unsupported("step1_static_quantize_pack_int4_noahat_fprop")
-                x_packed = modiff_cutlass.step1_static_quantize_pack_int4_noahat_fprop(
-                    x, self.static_input_scale.view(1), self._empty_smooth
-                )
+                # Activation grid feeding _conv_from_int4's bias, so z applies. This kernel was left
+                # GUARDED rather than taught at first, on the grounds that the 2026-08-13 census found
+                # it unreachable on both shipped W4A4 arms (every calibrated conv goes through the GN
+                # fusion or the resize kernel). That was correct but made the coverage claim
+                # CONDITIONAL: a configuration that did reach it got a hard error instead of a result.
+                # Taught 2026-08-13 so the claim is unconditional -- it is the same one-line `+ z`, and
+                # this kernel takes no a_hat, so unlike upsample2x_* it has only the one role.
+                zp = getattr(self, "_zp_float", 0.0)
+                if zp != 0.0:
+                    if not hasattr(modiff_cutlass, "step1_static_quantize_pack_int4_noahat_fprop_zp"):
+                        raise RuntimeError(
+                            "activation zero point is set but modiff_cutlass lacks "
+                            "step1_static_quantize_pack_int4_noahat_fprop_zp -- rebuild the extension")
+                    x_packed = modiff_cutlass.step1_static_quantize_pack_int4_noahat_fprop_zp(
+                        x, self.static_input_scale.view(1), self._empty_smooth, zp)
+                else:
+                    x_packed = modiff_cutlass.step1_static_quantize_pack_int4_noahat_fprop(
+                        x, self.static_input_scale.view(1), self._empty_smooth)
             else:
                 x_for_quant = x if x.dtype == torch.float32 else x.float()
                 zp = getattr(self, "_zp_float", 0.0)
