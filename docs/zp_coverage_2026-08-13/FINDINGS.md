@@ -152,8 +152,33 @@ exact per output channel; the padding defect is a separate per-output-pixel term
 
 **Close fix #2 as answered negatively.** Keep the mechanism: it is bit-exact at `z = 0`, costs nothing
 in the shipped configuration, is gated, and now refuses the configuration that is wrong. Do not build
-the position-aware epilogue correction that a padding fix would need — its ceiling is 1.06× against a
-1.15× bar.
+the position-aware epilogue correction that a padding fix would need **on fix #2's account** — its
+ceiling is 1.06× against a 1.15× bar.
+
+### But do not close the CAPABILITY, because fix #4 now pays for it
+
+This is an interaction neither this file nor [FINDINGS_WEIGHT_ZP.md](FINDINGS_WEIGHT_ZP.md) can see
+alone. The padding fix needs a **per-output-pixel** correction, because the missing-tap sum varies with
+position. Fix #4 needs the *same shape of thing* for a different reason: adopting AdaRound's
+per-channel weight zero point requires
+
+```
+sum_i (w_q[k,i] - z_w[k]) * a[i] = sum_i w_q[k,i]*a[i] - z_w[k] * sum_i a[i]
+```
+
+and `sum_i a[i]` runs over the conv window, so it too is per-output-pixel and cannot fold into a
+per-channel bias. **Both remaining quality levers were blocked on one missing capability** — a windowed
+reduction the epilogue can consume — and this session priced both:
+
+| lever | worth | verdict on its own |
+|---|--:|---|
+| fix #2, activation zero point | 1.06× (ceiling, reconstruction) | not worth the capability |
+| fix #4, weight zero point + AdaRound | **1.58×** end-to-end, weight-only | worth the capability |
+
+So the correct reading is not "don't build it" but **"fix #2 does not justify it and fix #4 does"** — and
+if it gets built for fix #4, the padding correction for fix #2 becomes an incremental use of an existing
+kernel rather than a new one. At that point fix #2 is worth re-pricing at its 1.06× ceiling, which is
+still under the bar; the point is that the *cost* side changes, not that the answer above changes.
 
 The `MODIFF_ZP_STRICT` / `MODIFF_ZP_ALLOW_PADDED` pair is what makes this a closed question rather
 than a landmine: an asymmetric table cannot be run by accident, and can still be run on purpose.
