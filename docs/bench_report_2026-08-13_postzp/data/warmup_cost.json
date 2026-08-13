@@ -1,0 +1,68 @@
+{
+ "steps": 200,
+ "batch": 128,
+ "gpu": "NVIDIA A40",
+ "modes": {
+  "fp16": {
+   "label": "fp16",
+   "n_forwards": 200,
+   "step0_ms": 103.68611145019531,
+   "step1_ms": 100.92626953125,
+   "steady_median_ms": 101.75446319580078,
+   "excess_ms": 1.9316482543945312,
+   "total_ms": 20347.464385986328,
+   "excess_pct_of_sample": 0.009493311882756717,
+   "modiff_warmup_ms": 2.7128982543945312,
+   "modiff_warmup_pct": 0.013332856629855826
+  },
+  "int8_baseline": {
+   "label": "W8A8 PTQ",
+   "n_forwards": 200,
+   "step0_ms": 69.85568237304688,
+   "step1_ms": 70.64259338378906,
+   "steady_median_ms": 70.66604614257812,
+   "excess_ms": -0.81036376953125,
+   "total_ms": 14135.695404052734,
+   "excess_pct_of_sample": -0.005732747815851471,
+   "modiff_warmup_ms": -0.02911376953125,
+   "modiff_warmup_pct": -0.0002059592308624804
+  },
+  "int8": {
+   "label": "W8A8 MoDiff",
+   "n_forwards": 200,
+   "step0_ms": 735.5206298828125,
+   "step1_ms": 70.9854736328125,
+   "steady_median_ms": 72.61055755615234,
+   "excess_ms": 662.9100723266602,
+   "total_ms": 15179.891075134277,
+   "excess_pct_of_sample": 4.3670278597226115,
+   "modiff_warmup_ms": 663.6913223266602,
+   "modiff_warmup_pct": 4.372174471092437
+  },
+  "int4_baseline": {
+   "label": "W4A4 PTQ",
+   "n_forwards": 200,
+   "step0_ms": 56.661502838134766,
+   "step1_ms": 56.81324768066406,
+   "steady_median_ms": 57.442752838134766,
+   "excess_ms": -0.78125,
+   "total_ms": 11477.410205841064,
+   "excess_pct_of_sample": -0.006806849158379018,
+   "modiff_warmup_ms": 0.0,
+   "modiff_warmup_pct": 0.0
+  },
+  "int4": {
+   "label": "W4A4 MoDiff",
+   "n_forwards": 200,
+   "step0_ms": 673.5560913085938,
+   "step1_ms": 56.885345458984375,
+   "steady_median_ms": 58.108001708984375,
+   "excess_ms": 615.4480895996094,
+   "total_ms": 12227.121742248535,
+   "excess_pct_of_sample": 5.033466604597904,
+   "modiff_warmup_ms": 616.2293395996094,
+   "modiff_warmup_pct": 5.039856088701105
+  }
+ },
+ "first_step_floor_ms": -0.78125
+}
