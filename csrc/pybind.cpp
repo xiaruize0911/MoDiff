@@ -171,6 +171,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           pybind11::arg("scale"), pybind11::arg("smooth_inv"),
           pybind11::arg("mod_scale"), pybind11::arg("mod_shift"),
           pybind11::arg("k_pad") = 0);
+    m.def("group_norm_silu_quantize_pack_nhwc_zp", &group_norm_silu_quantize_pack_nhwc_zp,
+          "GN+SiLU+int4 quantize/pack with an activation ZERO POINT (fix #2); z=0 is exact");
+    m.def("group_norm_silu_quantize_pack_nhwc_fast_zp", &group_norm_silu_quantize_pack_nhwc_fast_zp,
+          "fast-reduce twin of group_norm_silu_quantize_pack_nhwc_zp");
     m.def("group_norm_silu_dequant_quantize_nhwc", &group_norm_silu_dequant_quantize_nhwc,
           "INT8-in GroupNorm(+SiLU): reads int8 activation + dequant scale (upstream conv's "
           "int8 output), computes GN from dequantized values, requantizes to int8 output");

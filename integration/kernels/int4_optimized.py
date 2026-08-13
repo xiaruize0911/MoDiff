@@ -109,6 +109,13 @@ def _int4_weight_scale(w_flat: torch.Tensor, Q: float = 7.0) -> torch.Tensor:
     return best_scale
 
 
+#: "layer|entry_point" pairs observed quantizing with a non-zero activation zero point that the
+#: entry point does not apply. As of 2026-08-13 only group_norm_silu_quantize_pack_nhwc honours
+#: z; the plan scoped fix #2 at ~6 entry points. Collected so the gap is visible instead of
+#: silently numeric -- symmetric codes against a zp-corrected bias is worse than either choice,
+#: and is what produced relL2 7-22 in the first end-to-end run.
+_ZP_UNSUPPORTED = set()
+
 class OptimizedInt4Conv2d(nn.Module):
     """
     CUTLASS-based INT4 Conv2d with SmoothQuant + MoDiff Error-Compensated Modulation.
@@ -752,6 +759,27 @@ class OptimizedInt4Conv2d(nn.Module):
                 and self.a_hat_cache.shape == x.shape
                 and x.dtype == torch.float16)
 
+    def _zp_unsupported(self, where):
+        """Raise/record when this conv's activation zero point is about to be ignored.
+
+        The bias already carries the matching -z*sum(w_q) correction (_refold_zp_bias), so quantizing
+        symmetrically here is not "the old behaviour" -- it is symmetric codes against a corrected
+        bias, which is worse than either. That combination is exactly what produced relL2 7-22 in the
+        first end-to-end zero-point run instead of a result.
+
+        As of 2026-08-13 only group_norm_silu_quantize_pack_nhwc honours z. The plan scoped fix #2 at
+        ~6 entry points; the rest reach this.
+        """
+        z = float(self.static_input_zp.item())
+        if z == 0.0:
+            return
+        name = self.layer_name or type(self).__name__
+        _ZP_UNSUPPORTED.add(f"{name}|{where}")
+        if os.environ.get("MODIFF_ZP_STRICT", "1") == "1":
+            raise RuntimeError(
+                f"{name}: activation zero point {z:+.0f} set, but {where} does not apply it while "
+                f"the bias carries its correction. Zero the zp for this layer, or teach {where}.")
+
     def can_gn_fuse_modiff_cat2(self, a: torch.Tensor, b: torch.Tensor) -> bool:
         """Eligibility for the decoder skip-concat fold, decided from SHAPES ONLY.
 
@@ -800,6 +828,7 @@ class OptimizedInt4Conv2d(nn.Module):
         d_scale, d_alpha = self._delta_scale_args_i4(x.device, x, fused_silu=True)
 
         p_step1 = profiler.start("MoDiff INT4 Static Step1 (fused SiLU)")
+        self._zp_unsupported("step1_static_quantize_pack_int4_fprop_silu")
         x_packed = modiff_cutlass.step1_static_quantize_pack_int4_fprop_silu(
             x,
             self.a_hat_cache,
@@ -957,6 +986,7 @@ class OptimizedInt4Conv2d(nn.Module):
         d_scale, d_alpha = self._delta_scale_args_i4(x.device, x, fused_silu=True)
 
         p_step1 = profiler.start("MoDiff INT4 Static Step1 (fused SiLU)")
+        self._zp_unsupported("step1_static_quantize_pack_int4_fprop_silu")
         x_packed = modiff_cutlass.step1_static_quantize_pack_int4_fprop_silu(
             x, self.a_hat_cache, d_scale, self._smooth_inv_flat)
         profiler.stop("MoDiff INT4 Static Step1 (fused SiLU)", p_step1)
@@ -1416,6 +1446,7 @@ class OptimizedInt4Conv2d(nn.Module):
             d_scale, d_alpha = self._delta_scale_args_i4(x.device, x, fused_silu=False)
 
             p_step1 = profiler.start("MoDiff INT4 Static Step1")
+            self._zp_unsupported("step1_static_quantize_pack_int4_fprop")
             x_packed = modiff_cutlass.step1_static_quantize_pack_int4_fprop(
                 x,
                 self.a_hat_cache,

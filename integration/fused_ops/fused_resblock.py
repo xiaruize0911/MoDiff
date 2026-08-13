@@ -86,6 +86,8 @@ try:
     HAS_NATIVE_GN_SILU = hasattr(modiff_cutlass, "group_norm_silu_nhwc")
     HAS_GN_SILU_QUANTIZE = hasattr(modiff_cutlass, "group_norm_silu_quantize_nhwc")
     HAS_GN_SILU_QUANTIZE_PACK = hasattr(modiff_cutlass, "group_norm_silu_quantize_pack_nhwc")
+    HAS_GN_SILU_QUANTIZE_PACK_ZP = hasattr(modiff_cutlass,
+                                           "group_norm_silu_quantize_pack_nhwc_zp")
     # MoDiff GN->delta-quantize fusion (default ON): fuse GroupNorm(+mod)+SiLU into
     # the delta-quantize + a_hat update, replacing the standalone GN kernel + separate
     # step1 pass and removing the intermediate fp16 `normed` round-trip. Bit-identical
@@ -137,6 +139,7 @@ except ImportError:
     HAS_NATIVE_GN_SILU = False
     HAS_GN_SILU_QUANTIZE = False
     HAS_GN_SILU_QUANTIZE_PACK = False
+    HAS_GN_SILU_QUANTIZE_PACK_ZP = False
     HAS_GN_SILU_DELTA_QUANTIZE = False
     HAS_GN_SILU_DELTA_QUANTIZE_PACK = False
     HAS_O_HAT_RESIDUAL = False
@@ -160,6 +163,7 @@ if os.environ.get("MODIFF_DISABLE_AVGPOOL_QUANTIZE_FUSION") == "1":
 if os.environ.get("MODIFF_DISABLE_GN_INT8_FUSION") == "1":
     HAS_GN_SILU_QUANTIZE = False
     HAS_GN_SILU_QUANTIZE_PACK = False
+    HAS_GN_SILU_QUANTIZE_PACK_ZP = False
 
 if os.environ.get("MODIFF_DISABLE_O_HAT_RESIDUAL_FUSION") == "1":
     HAS_O_HAT_RESIDUAL = False
@@ -230,6 +234,30 @@ def _prequant_common_ok(conv):
         and getattr(conv, 'use_cutlass', False)
         and getattr(conv, 'groups', 1) == 1
     )
+
+
+#: Layers observed taking a quantize path that does NOT apply the activation zero point, while their
+#: bias carries the -z*sum(w_q) correction. That combination is strictly wrong -- symmetric codes
+#: against a corrected bias -- and it is how the first end-to-end zero-point run produced relL2 7-22
+#: instead of a result. Recorded (and, under MODIFF_ZP_STRICT=1, raised on) so the gap is visible
+#: rather than silently numeric. The plan scoped fix #2 at ~6 quantize entry points; as of 2026-08-13
+#: exactly one of them (group_norm_silu_quantize_pack_nhwc) honours z.
+ZP_UNSUPPORTED_HITS = set()
+
+
+def _zp_unsupported(conv, where):
+    """Record/raise when a conv with a non-zero zero point is quantized by a path that ignores it."""
+    zp_t = getattr(conv, 'static_input_zp', None)
+    if zp_t is None or float(zp_t.item()) == 0.0:
+        return
+    name = getattr(conv, 'layer_name', None) or where
+    ZP_UNSUPPORTED_HITS.add(name)
+    if os.environ.get("MODIFF_ZP_STRICT", "1") == "1":
+        raise RuntimeError(
+            f"{name}: activation zero point {float(zp_t.item()):+.0f} is set, but this layer is "
+            f"quantized by {where}, which does not apply it -- while the bias already carries the "
+            f"matching -z*sum(w_q) correction. Set the zero point to 0 for this layer or teach "
+            f"{where} the zero point.")
 
 
 def _skip_concat_fallback(a, b):
@@ -410,10 +438,32 @@ def _prequant_gn_conv(x, gn, conv, mod_scale=None, mod_shift=None, residual=None
         if C % 2 != 0 or (C // ng) % 2 != 0:
             return None
         h_in, w_in = x.shape[2], x.shape[3]
-        if native_ok:
+        # ACTIVATION ZERO POINT (fix #2). Routed ONLY when a calibration actually set one, so the
+        # symmetric path keeps calling the exact entry point it always did. The _zp kernel is
+        # bit-identical at z=0, but not calling it at all is a stronger guarantee than trusting that.
+        # The matching -z*sum(w_q) term is already folded into conv.bias by _refold_zp_bias.
+        zp_t = getattr(conv, 'static_input_zp', None)
+        zp = float(zp_t.item()) if zp_t is not None else 0.0
+        if native_ok and zp != 0.0:
+            if not HAS_GN_SILU_QUANTIZE_PACK_ZP:
+                # A non-zero zp with no kernel to honour it would quantize symmetrically while the
+                # bias carries a correction for a zero point that was never applied -- worse than
+                # either choice alone. Refuse rather than silently pick one.
+                raise RuntimeError(
+                    "conv has a non-zero activation zero point but modiff_cutlass lacks "
+                    "group_norm_silu_quantize_pack_nhwc_zp -- rebuild the extension")
+            packed = modiff_cutlass.group_norm_silu_quantize_pack_nhwc_zp(
+                x, w, b, ng, eps, True, scale, smooth_inv, ms2d, sh2d, 0, zp)
+        elif native_ok:
             packed = modiff_cutlass.group_norm_silu_quantize_pack_nhwc(
                 x, w, b, ng, eps, True, scale, smooth_inv, ms2d, sh2d)
         else:
+            if zp != 0.0:
+                raise RuntimeError(
+                    "activation zero point is set but this layer fell back to the non-native "
+                    "scale_quantize_and_pack path, which has no zero point -- it would quantize "
+                    "symmetrically against a bias corrected for one")
+            _zp_unsupported(conv, "scale_quantize_and_pack")
             packed = modiff_cutlass.scale_quantize_and_pack(
                 _gn_mod_silu_fp32_cl(x, ng, w, b, eps, mod_scale, mod_shift), scale)
         return conv.forward_from_int4(packed, h_in, w_in, residual=residual)
@@ -589,6 +639,7 @@ def _prequant_gn_resize_conv_modiff(x, gn, h_upd, conv, mod_scale=None, mod_shif
     else:
         ms2d = sh2d = x.new_empty(0)
 
+    _zp_unsupported(conv, "group_norm_silu_delta_quantize_resize_nhwc")
     x_q = modiff_cutlass.group_norm_silu_delta_quantize_resize_nhwc(
         x, w, b, ng, eps, True, d_scale, smooth_inv, ms2d, sh2d, 0, direction, is_int4, ah, *dyn)
     if conv._delta_calib:
@@ -656,6 +707,7 @@ def _prequant_gn_resize_conv(x, gn, h_upd, conv, mod_scale=None, mod_shift=None)
     else:
         ms2d = sh2d = x.new_empty(0)
 
+    _zp_unsupported(conv, "group_norm_silu_quantize_resize_nhwc")
     x_q = modiff_cutlass.group_norm_silu_quantize_resize_nhwc(
         x, w, b, ng, eps, True, scale, smooth_inv, ms2d, sh2d, 0, direction, is_int4)
     Ho, Wo = (H * 2, W * 2) if direction > 0 else (H // 2, W // 2)
@@ -1192,6 +1244,7 @@ class FusedUpsample(nn.Module):
             ah = torch.empty(0, device=x.device, dtype=torch.float16)
             d_scale, d_alpha = conv.static_input_scale.view(1), None
         if is_int4:
+            _zp_unsupported(conv, "upsample2x_quantize_pack_noahat_fprop")
             x_q = modiff_cutlass.upsample2x_quantize_pack_noahat_fprop(x, d_scale, smooth_inv, ah)
             return (conv._conv_from_int4_o_hat(x_q, x.shape[2] * 2, x.shape[3] * 2, d_alpha)
                     if modiff else conv._conv_from_int4(x_q, x.shape[2] * 2, x.shape[3] * 2))

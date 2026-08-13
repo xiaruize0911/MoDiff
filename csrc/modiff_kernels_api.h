@@ -358,6 +358,17 @@ torch::Tensor group_norm_silu_quantize_pack_nhwc_fast(
     int64_t num_groups, double eps, bool apply_silu,
     torch::Tensor scale, torch::Tensor smooth_inv,
     torch::Tensor mod_scale, torch::Tensor mod_shift, int64_t k_pad = 0);
+//: Activation-zero-point variants (plan fix #2). a_q = clamp(round(a*s) + z, -7, 7); the
+//: dequantization's -z*sum(w_q) term is folded into the conv bias at calibration time, so the
+//: GEMM and the epilogue never see z. zero_point = 0.0 reproduces the symmetric kernel exactly.
+torch::Tensor group_norm_silu_quantize_pack_nhwc_zp(
+    torch::Tensor x, torch::Tensor weight, torch::Tensor bias, int64_t num_groups,
+    double eps, bool apply_silu, torch::Tensor scale, torch::Tensor smooth_inv,
+    torch::Tensor mod_scale, torch::Tensor mod_shift, int64_t k_pad, double zero_point);
+torch::Tensor group_norm_silu_quantize_pack_nhwc_fast_zp(
+    torch::Tensor x, torch::Tensor weight, torch::Tensor bias, int64_t num_groups,
+    double eps, bool apply_silu, torch::Tensor scale, torch::Tensor smooth_inv,
+    torch::Tensor mod_scale, torch::Tensor mod_shift, int64_t k_pad, double zero_point);
 
 torch::Tensor group_norm_silu_dequant_quantize_nhwc(
     torch::Tensor x_int8, double in_dequant, torch::Tensor weight, torch::Tensor bias,

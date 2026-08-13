@@ -848,7 +848,19 @@ __global__ void group_norm_silu_quantize_pack_nhwc_vec2_kernel(
     int G,
     float eps,
     bool apply_silu,
-    int Kpad                       // padded row width in CHANNELS (>= C, even); == C for no padding
+    int Kpad,                      // padded row width in CHANNELS (>= C, even); == C for no padding
+    // ACTIVATION ZERO POINT (plan fix #2). a_q = clamp(round(a*s) + z, -7, 7), so the 15 available
+    // codes can straddle an asymmetric range instead of being centred on 0. silu(gn(x)) is one-sided
+    // -- measured |max|/|min| = 19.91x, with only 5 of 15 codes carrying >0.1% of the mass, an
+    // effective 2.32 bits of a nominal 3.91 -- which is what this exists to recover.
+    //
+    // The dequantization's -z*sum(w_q) term is folded into the conv bias at CALIBRATION time
+    // (OptimizedInt4Conv2d._refold_zp_bias), so neither the GEMM nor the epilogue sees z, and this
+    // kernel needs nothing but the addition below.
+    //
+    // z == 0 REPRODUCES THE OLD KERNEL EXACTLY -- the added term is 0.0f, not a differently-rounded
+    // path -- which is what lets an asymmetric-capable build keep every committed symmetric number.
+    float zp = 0.0f
 ) {
     const int CPG = C / G;
     const long group_size = (long)CPG * HW;
@@ -965,8 +977,8 @@ __global__ void group_norm_silu_quantize_pack_nhwc_vec2_kernel(
             o0 *= smooth_inv[c_global0];
             o1 *= smooth_inv[c_global0 + 1];
         }
-        int8_t i0 = (int8_t)fmaxf(-7.0f, fminf(7.0f, roundf(o0 * scale)));
-        int8_t i1 = (int8_t)fmaxf(-7.0f, fminf(7.0f, roundf(o1 * scale)));
+        int8_t i0 = (int8_t)fmaxf(-7.0f, fminf(7.0f, roundf(o0 * scale) + zp));
+        int8_t i1 = (int8_t)fmaxf(-7.0f, fminf(7.0f, roundf(o1 * scale) + zp));
         // Row width is KpadH bytes, not C/2: with Kpad == C this is exactly the old mem_idx0/2
         // (mem_idx0 = hw*C + c_global0 and c_global0 is even), so the no-pad path is bit-identical.
         // Channels >= C are never visited by any group, so the pad bytes are left at the zero the
@@ -1242,7 +1254,8 @@ static torch::Tensor group_norm_silu_quantize_pack_nhwc_impl(
     torch::Tensor mod_scale,   // [N, C] scale-shift modulation, or empty for none
     torch::Tensor mod_shift,
     int64_t k_pad,             // padded row width in channels for the int4 GEMM; <=0 or ==C -> no pad
-    bool fast_reduce
+    bool fast_reduce,
+    double zero_point          // activation zero point; 0.0 reproduces the symmetric kernel exactly
 ) {
     CHECK_CUDA(x);
     CHECK_CONTIGUOUS(x);
@@ -1301,7 +1314,7 @@ static torch::Tensor group_norm_silu_quantize_pack_nhwc_impl(
             has_mod ? mod_scale.data_ptr<float>() : nullptr,
             has_mod ? mod_shift.data_ptr<float>() : nullptr,
             scale.data_ptr<float>(), smooth_ptr,
-            C, HW, (int)num_groups, (float)eps, apply_silu, Kpad);
+            C, HW, (int)num_groups, (float)eps, apply_silu, Kpad, (float)zero_point);
         else
           group_norm_silu_quantize_pack_nhwc_vec2_kernel<float, false><<<grid, block, shmem_bytes, stream>>>(
             x.data_ptr<float>(), reinterpret_cast<int8_t*>(yqp.data_ptr<int8_t>()),
@@ -1309,7 +1322,7 @@ static torch::Tensor group_norm_silu_quantize_pack_nhwc_impl(
             has_mod ? mod_scale.data_ptr<float>() : nullptr,
             has_mod ? mod_shift.data_ptr<float>() : nullptr,
             scale.data_ptr<float>(), smooth_ptr,
-            C, HW, (int)num_groups, (float)eps, apply_silu, Kpad
+            C, HW, (int)num_groups, (float)eps, apply_silu, Kpad, (float)zero_point
         );
     } else {
         if (fast_reduce)
@@ -1321,7 +1334,7 @@ static torch::Tensor group_norm_silu_quantize_pack_nhwc_impl(
             has_mod ? reinterpret_cast<const __half*>(mod_scale.data_ptr<at::Half>()) : nullptr,
             has_mod ? reinterpret_cast<const __half*>(mod_shift.data_ptr<at::Half>()) : nullptr,
             scale.data_ptr<float>(), smooth_ptr,
-            C, HW, (int)num_groups, (float)eps, apply_silu, Kpad);
+            C, HW, (int)num_groups, (float)eps, apply_silu, Kpad, (float)zero_point);
         else
           group_norm_silu_quantize_pack_nhwc_vec2_kernel<__half, false><<<grid, block, shmem_bytes, stream>>>(
             reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
@@ -1331,7 +1344,7 @@ static torch::Tensor group_norm_silu_quantize_pack_nhwc_impl(
             has_mod ? reinterpret_cast<const __half*>(mod_scale.data_ptr<at::Half>()) : nullptr,
             has_mod ? reinterpret_cast<const __half*>(mod_shift.data_ptr<at::Half>()) : nullptr,
             scale.data_ptr<float>(), smooth_ptr,
-            C, HW, (int)num_groups, (float)eps, apply_silu, Kpad
+            C, HW, (int)num_groups, (float)eps, apply_silu, Kpad, (float)zero_point
         );
     }
 
@@ -1419,13 +1432,26 @@ torch::Tensor group_norm_silu_quantize_resize_nhwc(
 }
 
 
+// TWO ARITIES EACH, not a default argument: pybind11 does not inherit C++ defaults, and this file
+// annotates no argument names, so the existing 11-argument callers in integration/ and ~8 archived
+// docs/*/scripts keep working untouched while the 12-argument form names the activation zero point.
+// Exactly the pattern step1_static_quantize_fprop already uses (see pybind.cpp).
 torch::Tensor group_norm_silu_quantize_pack_nhwc(
     torch::Tensor x, torch::Tensor weight, torch::Tensor bias, int64_t num_groups,
     double eps, bool apply_silu, torch::Tensor scale, torch::Tensor smooth_inv,
     torch::Tensor mod_scale, torch::Tensor mod_shift, int64_t k_pad) {
     return group_norm_silu_quantize_pack_nhwc_impl(
         x, weight, bias, num_groups, eps, apply_silu, scale, smooth_inv,
-        mod_scale, mod_shift, k_pad, false);
+        mod_scale, mod_shift, k_pad, false, 0.0);
+}
+
+torch::Tensor group_norm_silu_quantize_pack_nhwc_zp(
+    torch::Tensor x, torch::Tensor weight, torch::Tensor bias, int64_t num_groups,
+    double eps, bool apply_silu, torch::Tensor scale, torch::Tensor smooth_inv,
+    torch::Tensor mod_scale, torch::Tensor mod_shift, int64_t k_pad, double zero_point) {
+    return group_norm_silu_quantize_pack_nhwc_impl(
+        x, weight, bias, num_groups, eps, apply_silu, scale, smooth_inv,
+        mod_scale, mod_shift, k_pad, false, zero_point);
 }
 
 torch::Tensor group_norm_silu_quantize_pack_nhwc_fast(
@@ -1434,7 +1460,16 @@ torch::Tensor group_norm_silu_quantize_pack_nhwc_fast(
     torch::Tensor mod_scale, torch::Tensor mod_shift, int64_t k_pad) {
     return group_norm_silu_quantize_pack_nhwc_impl(
         x, weight, bias, num_groups, eps, apply_silu, scale, smooth_inv,
-        mod_scale, mod_shift, k_pad, true);
+        mod_scale, mod_shift, k_pad, true, 0.0);
+}
+
+torch::Tensor group_norm_silu_quantize_pack_nhwc_fast_zp(
+    torch::Tensor x, torch::Tensor weight, torch::Tensor bias, int64_t num_groups,
+    double eps, bool apply_silu, torch::Tensor scale, torch::Tensor smooth_inv,
+    torch::Tensor mod_scale, torch::Tensor mod_shift, int64_t k_pad, double zero_point) {
+    return group_norm_silu_quantize_pack_nhwc_impl(
+        x, weight, bias, num_groups, eps, apply_silu, scale, smooth_inv,
+        mod_scale, mod_shift, k_pad, true, zero_point);
 }
 
 // =========================================================================
