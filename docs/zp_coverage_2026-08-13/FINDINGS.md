@@ -158,15 +158,18 @@ the position-aware epilogue correction that a padding fix would need — its cei
 The `MODIFF_ZP_STRICT` / `MODIFF_ZP_ALLOW_PADDED` pair is what makes this a closed question rather
 than a landmine: an asymmetric table cannot be run by accident, and can still be run on purpose.
 
-## 7. Open, and NOT closed by this file
+## 7. The measurement-reliability question this raised — now answered separately
 
-**The W4A4 relL2 noise floor of 0.05–0.6% does not hold across processes.** The PTQ symmetric arm,
-same protocol and the same cached fp16 references, measured 0.5267 → 0.4901 → 0.5022 in three runs
-today — a 7% spread — after having reproduced 0.5266851782798767 to 16 significant digits earlier.
-At least one of those runs overlapped another CUDA process on the same GPU, which
-`docs/bench_report_2026-08-13/scripts/run_all.sh` already documents as able to turn CV 0.23% into 38%.
+While measuring the above, the PTQ symmetric arm read 0.5267 → 0.4901 → 0.5022 in three runs on
+identical inputs and the same cached references. That is chased to a conclusion in
+**[FINDINGS_NOISE_FLOOR.md](FINDINGS_NOISE_FLOOR.md)**, and the short version is:
 
-This does not touch anything above: +82% and +204% are two orders of magnitude past that spread, and
-the 1.06× ceiling is measured without a sampler at all. But it does mean **any past conclusion in this
-tree resting on a few percent of W4A4 relL2 needs re-checking against a floor measured with N repeats
-in N separate processes on an otherwise-idle GPU** — which is P5's subject, not this file's.
+* the recorded floors **hold** (W4A4 0.09%/0.13%, W8A8 1.97%/0.91%, one arm per process, idle GPU);
+* what actually breaks comparability is **arm order** — the W4A4 MoDiff arm reads 0.3954 measured
+  first and 0.3095 measured after `int4_baseline`, **+27.8%**, 200× the floor. That retracts
+  `arm_position_effect.py`'s `position_irrelevant` verdict and explains the 6.9% it could not.
+
+**Nothing above is affected**, and the reason is structural rather than lucky: the fix #2 arms are all
+measured in one run of one script in a fixed order, and compared against the symmetric baseline *from
+that same run* (0.5022 / 0.3090) rather than against a committed number. The margins are +82% and
++204%, and the 1.06× ceiling uses no sampler at all.

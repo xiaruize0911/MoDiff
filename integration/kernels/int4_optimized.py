@@ -1874,15 +1874,22 @@ def convert_model_to_optimized_int4(model: nn.Module, prefix: str = "", use_comp
                                      _memo: dict = None) -> nn.Module:
     """Wrap every eligible nn.Conv2d in OptimizedInt4Conv2d.
 
-    DEDUPLICATED BY OBJECT IDENTITY (`_memo`), added 2026-08-13 to fix a 1014.6 MiB leak.
+    DEDUPLICATED BY OBJECT IDENTITY (`_memo`), added 2026-08-13 to fix a 114 MiB leak.
 
     FusedResBlock aliases one conv under two attributes -- `fused.in_conv` IS
     `fused.original.in_layers[-1]` (fused_resblock.py:756), and likewise for out_conv. This walk
     recurses over named_children(), so it reached the SAME nn.Conv2d down two paths and wrapped it
     TWICE, into two independent modules each holding its own packed int4 weights. Only the one
     `forward` uses was ever called or calibrated; the other 70 sat inert with modiff_enabled=True.
-    Measured: 70 live + 70 orphans, 1014.6 MiB of duplicated weights out of 2762 MiB allocated -- 37%
-    of the model's memory, for modules that never ran.
+
+    114 MiB, NOT THE 1014.6 MiB THIS DOCSTRING USED TO CLAIM -- corrected 2026-08-13 after measuring
+    it (docs/zp_coverage_2026-08-13/scripts/orphan_wrapper_memory.py, which builds the model twice,
+    once with the memo defeated, and diffs the allocator). 1014.6 MiB is the sum of every tensor the
+    orphans REFERENCE, and 901 MiB of that aliases storage that was already there: both wrappers wrap
+    ONE nn.Conv2d, so its fp16 weight is one allocation with two references. What the orphans actually
+    allocated for themselves -- packed int4 weights and their own buffers -- is 113.6 MiB by
+    per-storage sum and 114.3 MiB by allocator delta, which agree to 0.7%. Still worth fixing; not 37%
+    of the model.
 
     The memo makes the second path reuse the first wrapper, so one object is referenced from both.
 

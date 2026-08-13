@@ -1,0 +1,14 @@
+{
+ "wrappers_deduped": 70,
+ "wrappers_naive": 140,
+ "extra_wrappers": 70,
+ "orphans_found_structurally": 70,
+ "alloc_delta_dedup_MiB": 118.361328125,
+ "alloc_delta_naive_MiB": 232.69140625,
+ "bug_cost_allocator_MiB": 114.330078125,
+ "bug_cost_per_module_sum_MiB": 1014.7130031585693,
+ "orphan_shared_storage_MiB": 901.125,
+ "orphan_unique_storage_MiB": 113.58800315856934,
+ "commit_message_estimate_MiB": 113.0,
+ "docstring_claim_MiB": 1014.6
+}
