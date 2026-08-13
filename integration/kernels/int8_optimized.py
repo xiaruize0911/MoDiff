@@ -1866,7 +1866,31 @@ class OptimizedInt8Conv2d(nn.Module):
 # ---------------------------------------------------------------------------
 
 def convert_model_to_optimized_int8(model: nn.Module, prefix: str = "", use_compile: bool = False,
-                                     skip_pointwise: bool = True) -> nn.Module:
+                                     skip_pointwise: bool = True,
+                                     _memo: dict = None) -> nn.Module:
+    """Wrap every eligible nn.Conv2d in OptimizedInt8Conv2d.
+
+    DEDUPLICATED BY OBJECT IDENTITY (`_memo`), added 2026-08-13 to fix a 1014.6 MiB leak.
+
+    FusedResBlock aliases one conv under two attributes -- `fused.in_conv` IS
+    `fused.original.in_layers[-1]` (fused_resblock.py:756), and likewise for out_conv. This walk
+    recurses over named_children(), so it reached the SAME nn.Conv2d down two paths and wrapped it
+    TWICE, into two independent modules each holding its own packed int4 weights. Only the one
+    `forward` uses was ever called or calibrated; the other 70 sat inert with modiff_enabled=True.
+    Measured: 70 live + 70 orphans, 1014.6 MiB of duplicated weights out of 2762 MiB allocated -- 37%
+    of the model's memory, for modules that never ran.
+
+    The memo makes the second path reuse the first wrapper, so one object is referenced from both.
+
+    THE NAME MATTERS AND IS NOT COSMETIC. apply_int{{4,8}}_static_scales matches on
+    `module.layer_name`, and the calibration files key on the NON-`.original.` path, which is why 70
+    of 140 wrappers loaded a scale before this fix. named_children() registers `original` before
+    `in_conv`, so the first wrapper created carries the `.original.` name -- keeping it would have
+    silently dropped calibration to 0 layers while looking like a pure memory win. The memo therefore
+    upgrades layer_name to the non-`.original.` path when it sees it.
+    """
+    if _memo is None:
+        _memo = {}
     for name, child in model.named_children():
         full_name = f"{prefix}.{name}" if prefix else name
         if isinstance(child, nn.Conv2d) and not isinstance(child, OptimizedInt8Conv2d):
@@ -1882,14 +1906,25 @@ def convert_model_to_optimized_int8(model: nn.Module, prefix: str = "", use_comp
             if is_pointwise and skip_pointwise:
                 continue
 
+            hit = _memo.get(id(child))
+            if hit is not None:
+                # Same underlying conv, reached by a second alias. Reuse the one wrapper, and prefer
+                # the name the calibration files key on (see the docstring).
+                if ".original." in (getattr(hit, "layer_name", "") or "") \
+                        and ".original." not in full_name:
+                    hit.layer_name = full_name
+                setattr(model, name, hit)
+                continue
             optimized_conv = OptimizedInt8Conv2d(child, layer_name=full_name, use_compile=use_compile)
+            _memo[id(child)] = optimized_conv
             target_device = child.weight.device
             if target_device.type != 'cpu':
                 optimized_conv = optimized_conv.to(target_device)
             setattr(model, name, optimized_conv)
         else:
             convert_model_to_optimized_int8(child, prefix=full_name, use_compile=use_compile,
-                                             skip_pointwise=skip_pointwise)
+                                             skip_pointwise=skip_pointwise,
+                                             _memo=_memo)
 
     # Convert to channels_last for PyTorch perf, then restore weight_int8.
     # Only at the top-level call: this function recurses, and re-running the
