@@ -30,27 +30,48 @@ Correct padding is implemented in production kernels, selected by `MODIFF_ZP_PAD
 | **`halo`** (default) | quantize kernel emits a `z`-valued spatial halo; conv runs `padding=0` | **+8.9%** | **−7.1%** | **−0.4%** |
 | `border` | keep zero-fill, add `(z/s)·ws[k]·Σ_missing w_q[k]` to the output's border pixels | **+5.3%** | −1.6% | −0.9% |
 
+(`border`'s deficit is diagnosed below: it corrects an already-rounded value, so it inherits an ulp the
+halo never incurs.)
+
 Both corrections are exact in principle and agree to **1.000×** on an isolated fp32 conv
 ([`test_int4_zp_prepad.py`](../../integration/tests/test_int4_zp_prepad.py)). New entry points:
 `group_norm_silu_quantize_pack_nhwc_zp_pad` (halo emitted in-kernel, so no extra traversal),
 `pad_packed_int4_code` (one-pass code-padding of a packed tensor), `add_zp_border_correction`
 (border-only, fp16/fp32).
 
-**`halo` is the default because it is the mode whose end-to-end result is verified.** `border` is
-cheaper and should eventually win, but end to end it delivers only −1.6% on PTQ where `halo` gives
-−7.1%, so on the real datapath the two are *not* yet equivalent. Two candidates, neither confirmed:
+**`halo` is the default, and the reason is now diagnosed rather than suspected**
+([`border_vs_halo_diagnosis.py`](scripts/border_vs_halo_diagnosis.py),
+[`data/border_vs_halo_diagnosis.json`](data/border_vs_halo_diagnosis.json)).
 
-* **the fp16 read-modify-write.** The correction is 2–3× the output's own magnitude (|corr|/|o| has
-  median 7× for the full tap set), so `out += corr` adds two large numbers to get a small one, in fp16.
-  The isolated agreement was measured on an fp32 output and therefore never tested this.
-* **conv paths that bypass `_conv_from_int4`.** `forward_to_int4` and `forward_from_int4_dual` call the
-  CUTLASS entry points directly, so their borders would never be corrected — the same shape of omission
-  as the original census's, and exactly what left MoDiff at +200% until the t=T conv in `_int4_conv` was
-  covered too.
+Both corrections are exact in exact arithmetic, and they agree to 1.000× on an isolated conv. Measured
+against an **exact integer reference** — the conv recomputed in float64 from the integer codes, so the
+reference contains no fp16 and no epilogue rounding — and split into border and interior pixels:
 
-Resolving that is the remaining work, and it is a cost optimisation: the lever itself is delivered.
-The genuinely free form is fusing the correction into the conv's EVT epilogue, which already adds a
-per-channel bias and would need the output pixel's border class — not built.
+| mode | relL2 all | border | interior | border excess (quadrature) |
+|---|--:|--:|--:|--:|
+| `none` (defect) | 0.2729 | 0.6679 | 0.00754 | 0.6679 |
+| `halo` | 0.00755 | 0.00762 | 0.00754 | **0.0011** |
+| `border` | 0.00770 | 0.00844 | 0.00754 | **0.0038** |
+
+The interior error is the epilogue's own rounding and is identical in all three modes, which is what makes
+the border column readable. **The halo's border is as accurate as its interior; the post-hoc correction
+adds 1.8–∞× more** (across four shapes). It corrects a value the epilogue has *already rounded* at ~2.7×
+the true magnitude — one ulp at 3.3 is 2^-8 = 0.00391, which is exactly the observed max difference — and
+that ulp is unrecoverable. Per conv the excess is invisible (0.0077 vs 0.0076 against a reference, or
+0.4303 vs 0.4303 once 4-bit noise is included, which is why the isolated gate could not see it); over 70
+layers it compounds into the end-to-end gap.
+
+Two hypotheses were refuted on the way, and both are recorded in the script so they are not re-run:
+
+* **coverage** — 70 correction calls per step against 70 padded convs, i.e. every one;
+* **the fp16 store** — real and measurable as that one ulp, but not the driver: forcing an fp32 store
+  leaves the gap intact (border 0.5101, halo 0.4778, symmetric 0.5212).
+
+**So a post-hoc correction cannot match the halo at any store dtype**, because the rounding it inherits
+happens inside the epilogue. "Make `border` equivalent" is not a tuning task — the cheap route is only
+viable **fused into the epilogue**, where the accumulator is still exact, and there it would be both
+cheaper than the halo *and* as accurate. That is the one remaining piece of work on this lever, and it is
+now a specified change rather than an open question.
 
 ## What stands unchanged
 
