@@ -1763,6 +1763,31 @@ class OptimizedInt4Conv2d(nn.Module):
         """
         z = float(self.static_input_zp.item())
         self._zp_float = z          # calibration-time sync is fine; the forward path reads the mirror
+        # ZERO-PADDED CONVS CANNOT USE THIS FOLD, and that is measured, not suspected.
+        #
+        # The fold subtracts z * sum_i w_q[k,i] -- the sum over the WHOLE kernel, one constant per
+        # output channel. A padded output pixel's implicit GEMM reads literal 0 on its missing taps,
+        # which dequantizes to (0 - z)/s = -z/s rather than 0, so that pixel needs the sum over only
+        # the taps it actually has. The residual is exactly -z * sum_{missing} w_q[k] * ws[k] / s,
+        # confirmed to 1-2.6% against the kernel in integration/tests/test_int4_zp_padding.py, and it
+        # lands on the border ring: 23% of pixels at 16x16, 44% at 8x8, 75% at 4x4. End to end it cost
+        # +70% (PTQ) and +170% (MoDiff) with coverage otherwise complete.
+        #
+        # REFUSING RATHER THAN CORRECTING, because the correction is not worth building: an asymmetric
+        # grid reduces the reconstruction error of silu(gn(x)) by only 1.06x once the symmetric grid is
+        # clipped (docs/zp_coverage_2026-08-13/data/zp_activation_error.json, 70 convs) -- under the
+        # 1.15x bar this tree set for fix #2 in zp_headroom.py, and that is a CEILING before any
+        # downstream dilution. Fix #3's clip ratio already took the slack the zero point was after.
+        #
+        # MODIFF_ZP_ALLOW_PADDED=1 re-enables it for experiments. It does not make it correct.
+        if z != 0.0 and tuple(self.padding) != (0, 0) \
+                and os.environ.get("MODIFF_ZP_ALLOW_PADDED", "0") != "1":
+            raise RuntimeError(
+                f"{self.layer_name or type(self).__name__}: activation zero point {z:+.0f} on a conv "
+                f"with padding {tuple(self.padding)}. The bias fold is per-output-channel and the "
+                f"padding error is per-output-pixel, so this configuration is wrong on the border "
+                f"ring by -z*sum(missing w_q)*ws/s -- see docs/zp_coverage_2026-08-13/FINDINGS.md. "
+                f"Set MODIFF_ZP_ALLOW_PADDED=1 only to reproduce that measurement.")
         s_in = float(self.static_input_scale.item())
         if z == 0.0 or s_in == 0.0:
             self.bias = None if self._orig_bias is None else self._orig_bias.clone()

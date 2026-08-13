@@ -35,6 +35,14 @@ import os
 import statistics
 import sys
 
+#: _refold_zp_bias refuses a non-zero zero point on a padded conv, because the fold is
+#: per-output-channel while the padding error is per-output-pixel. Every calibrated conv in this model
+#: is 3x3 padding=1, so without this override there is no asymmetric arm to measure at all -- and
+#: measuring it is this script's entire purpose. The override does not make the configuration correct;
+#: it makes the defect reproducible, which is why the numbers below are labelled as measuring a
+#: datapath that has a known padding defect rather than as measuring "the zero point".
+os.environ.setdefault("MODIFF_ZP_ALLOW_PADDED", "1")
+
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 os.chdir(ROOT)
 sys.path[:0] = [os.path.join(ROOT, "docs/attn_modiff_2026-08-13/scripts"),
@@ -95,15 +103,32 @@ def collect_ranges():
     H.latent(r, m, s)
     for h in hs:
         h.remove()
+    #: PADDING PER CONV, collected here because this is the only place the real modules are in hand.
+    #: An asymmetric grid is incompatible with zero-padding: CUTLASS's implicit GEMM inserts the byte
+    #: 0, which the grid dequantizes to -z/s rather than 0, while the folded bias subtracts a
+    #: correction for a tap that was never sampled. Measured in
+    #: docs/zp_coverage_2026-08-13/scripts/zp_padding_probe.py -- border error 1.47x interior for
+    #: asymmetric against 1.00x for symmetric, and pre-padding with real zeros (which the quantizer
+    #: encodes as code z, the correct padding value) recovers it. So "which convs have padded taps"
+    #: is the difference between measuring the zero point and measuring that defect.
+    pad = {k: tuple(getattr(convs[k], "padding", (0, 0))) for k in convs}
     del r, m, s
     torch.cuda.empty_cache()
-    return {k: (v.lo, v.hi) for k, v in rng.items()}, {}
+    return {k: (v.lo, v.hi) for k, v in rng.items()}, pad
 
 
-def build_table(ranges, clip):
+def build_table(ranges, clip, pad=None, unpadded_only=False):
     """Asymmetric (scale, zero_point) per layer. `clip` shrinks the positive tail the way
     ACT_CLIP_RATIO does for the symmetric grid -- the one-sidedness is why clipping helps at all, so
-    the asymmetric grid needs the same lever or the comparison is unfair to it."""
+    the asymmetric grid needs the same lever or the comparison is unfair to it.
+
+    `unpadded_only` KEEPS THE ZERO POINT AND DROPS IT WHERE PADDING WOULD CORRUPT IT: convs with
+    padding=(0,0) get the asymmetric grid, every other conv gets z=0 on the SAME clipped scale it
+    would have had symmetrically. That arm measures the zero point's real-model ceiling -- what it is
+    worth where it is implementable -- separately from the padding defect that dominates it elsewhere.
+    A layer with z=0 still gets its asymmetric-derived `static_scale`, so this is not simply the
+    symmetric arm relabelled; the scale differs and the comparison stays honest about that.
+    """
     out = {}
     for k, (lo, hi) in ranges.items():
         hi_c = hi / clip
@@ -111,6 +136,13 @@ def build_table(ranges, clip):
             continue
         s = (2.0 * Q) / (hi_c - lo)
         z = -round(lo * s) - Q
+        if unpadded_only:
+            p = (pad or {}).get(k, (0, 0))
+            if any(int(v) != 0 for v in p):
+                # symmetric grid on the same clipped range: s = Q / max(|hi_c|, |lo|)
+                out[k] = {"static_scale": float(Q / max(abs(hi_c), abs(lo), 1e-9)),
+                          "zero_point": 0.0}
+                continue
         out[k] = {"static_scale": float(s), "zero_point": float(z)}
     return out
 
@@ -155,7 +187,9 @@ def main():
     os.makedirs(f"{D}/data", exist_ok=True)
 
     print("collecting per-conv silu(gn(x)) ranges ...", flush=True)
-    ranges, _ = collect_ranges()
+    ranges, pad = collect_ranges()
+    npad = sum(1 for k in ranges if any(int(v) != 0 for v in pad.get(k, (0, 0))))
+    print(f"  {npad} of {len(ranges)} convs have padded taps (padding != 0)")
     asym = statistics.median(abs(hi) / max(abs(lo), 1e-9) for lo, hi in ranges.values())
     print(f"  {len(ranges)} convs, median |max|/|min| = {asym:.2f}x")
     # SANITY GATE ON THE INSTRUMENT, not on the result. silu is bounded below by -0.2785 and unbounded
@@ -189,6 +223,16 @@ def main():
                           ("int4", f"W4A4 MoDiff asym clip {clip:g}")):
             results[f"{mode}/asym{clip:g}"] = measure(mode, path, refs, lab)
 
+    # NO "UNPADDED CONVS ONLY" CEILING ARM, and the reason is the measurement two lines above:
+    # 70 of 70 calibrated convs have padding != 0. There is no subset of this model on which the zero
+    # point is implementable, so that arm would carry zero non-zero zero points -- measure()'s own gate
+    # would refuse it, correctly, and an arm that cannot be built is not evidence.
+    #
+    # The ceiling is priced WITHOUT a kernel instead, on the captured silu(gn(x)) tensors themselves:
+    # docs/zp_coverage_2026-08-13/scripts/zp_activation_error.py puts the best asymmetric
+    # reconstruction at 1.06x the best symmetric one over the 70 convs, under the 1.15x bar
+    # zp_headroom.py set for fix #2. That is an upper bound on what any padding fix could recover.
+
     print(f"\n{'axis':14}{'symmetric':>11}{'asym r=1':>11}{'asym r=4.5':>12}{'best change':>13}")
     verdict = {}
     for mode, name in (("int4_baseline", "W4A4 PTQ"), ("int4", "W4A4 MoDiff")):
@@ -196,11 +240,15 @@ def main():
         a1, a45 = results.get(f"{mode}/asym1"), results.get(f"{mode}/asym4.5")
         cands = [v for v in (a1, a45) if v is not None]
         best = min(cands) if cands else None
-        verdict[mode] = {"sym": sym, "asym_r1": a1, "asym_r4.5": a45, "best": best,
+        verdict[mode] = {"sym": sym, "asym_r1": a1, "asym_r4.5": a45,
+                         "best": best,
                          "change_pct": (best / sym - 1) * 100 if (best and sym) else None}
         print(f"{name:14}{sym:11.4f}{(a1 if a1 else float('nan')):11.4f}"
               f"{(a45 if a45 else float('nan')):12.4f}"
               f"{(best / sym - 1) * 100 if (best and sym) else float('nan'):12.1f}%")
+
+    print(f"\n{npad} of {len(ranges)} calibrated convs have padded taps, so there is no subset of "
+          f"this model\non which the zero point is implementable -- see the note above the verdict.")
 
     #: W4A4 run-to-run floor on this protocol (docs/paper_repro_2026-08-12/FINDINGS.md section 7)
     FLOOR = 0.006
@@ -210,11 +258,22 @@ def main():
     #: A wrong GRID costs tens of percent. A wrong IMPLEMENTATION diverges. Distinguishing them is the
     #: difference between a finding and a bug, and the first run of this script called +3435% a
     #: finding. Anything past 3x is treated as a defect to hunt, not a conclusion to draw.
+    #:
+    #: WHAT THAT DEFECT IS, AS OF 2026-08-13, IS NO LONGER OPEN -- and the stock message below used to
+    #: name the wrong cause. It said "most likely a quantize kernel that does not apply z", which was
+    #: right when coverage was incomplete and is wrong now: coverage is complete and gated
+    #: (docs/zp_coverage_2026-08-13/data/coverage_gate.json -- both arms run under MODIFF_ZP_STRICT=1
+    #: with the _zp entry points exercised at predicted counts). The measured cause is ZERO-PADDING.
     if (ptq is not None and ptq > 200) or (mod is not None and mod > 200):
-        print(f"THESE ARE BUG MAGNITUDES, NOT A RESULT (PTQ {ptq:+.0f}%, MoDiff {mod:+.0f}%). A merely "
-              f"suboptimal 4-bit grid costs tens of percent; relL2 in the units seen here means the "
-              f"datapath is inconsistent -- most likely a quantize kernel that does not apply z while "
-              f"the bias carries a correction for it. Do not report this as fix #2's answer.")
+        print(f"THESE ARE DEFECT MAGNITUDES, NOT A VERDICT ON ZERO POINTS (PTQ {ptq:+.0f}%, "
+              f"MoDiff {mod:+.0f}%).\nTHE DEFECT IS IDENTIFIED AND IT IS NOT MISSING COVERAGE: "
+              f"CUTLASS's implicit GEMM zero-fills\npadded taps, so a padded tap reads code 0, which "
+              f"an asymmetric grid dequantizes to -z/s rather\nthan 0, while the folded bias subtracts "
+              f"a per-output-CHANNEL correction for a sample that was\nnever taken. The residual is "
+              f"-z*sum(missing w_q)*ws/s on the border ring, confirmed to 1-2.6%\nagainst the kernel "
+              f"in integration/tests/test_int4_zp_padding.py, and the ring is 23% of pixels\nat 16x16, "
+              f"44% at 8x8 and 75% at 4x4 -- which is why the end-to-end cost is this large.\n"
+              f"{npad} of {len(ranges)} calibrated convs are padded, so no subset of this model avoids it.")
     elif ptq is not None and ptq < -FLOOR * 100:
         print(f"THE ZERO POINT HELPS PTQ: {ptq:+.1f}%. That is the axis it was predicted to help, and "
               f"the prediction is on the record above.")
@@ -222,9 +281,24 @@ def main():
         print(f"THE ZERO POINT DOES NOT HELP PTQ ({ptq:+.1f}% vs a {FLOOR*100:.1f}% floor), and the "
               f"magnitude is small enough to be a real result rather than a defect.")
     if mod is not None:
-        print(f"MoDiff: {mod:+.1f}% -- expected to be small; it reads this grid mainly at t=T.")
+        print(f"MoDiff: {mod:+.1f}% -- predicted to be small because it reads this grid mainly at t=T. "
+              f"It is not,\nand padding is why: MoDiff reads the grid once per conv per sample but the "
+              f"resulting o_hat is then\naccumulated over every remaining step, so a border error at "
+              f"t=T never washes out.")
+
+    #: AND THE CEILING, so this file cannot be read as "fix the padding and try again". Measured with no
+    #: kernel, no conv, no padding and no sampler, on the captured silu(gn(x)) tensors themselves
+    #: (docs/zp_coverage_2026-08-13/data/zp_activation_error.json, 70 convs): the best asymmetric
+    #: reconstruction beats the best symmetric one by 1.06x, winning on 61 of 70 convs. zp_headroom.py
+    #: set the bar for fix #2 at 1.15x. Fix #3's clip ratio already took the slack the zero point was
+    #: after -- which is also why the r=1 arms above are catastrophic and the r=4.5 arms are merely bad.
+    print("\nCEILING, independent of every defect above: 1.06x on the activation-reconstruction error\n"
+          "(zp_activation_error.json, 70 convs, 61 wins), against the 1.15x bar zp_headroom.py set.\n"
+          "So fixing the padding -- a position-aware epilogue correction, since the padded tap set\n"
+          "varies per output pixel and cannot fold into a per-channel bias -- would be buying at most\n"
+          "1.06x. FIX #2 IS ANSWERED NEGATIVELY, on value, not merely on this implementation.")
     json.dump({"seeds": SEEDS, "shipped_reference": SHIPPED, "median_asymmetry": asym,
-               "floor": FLOOR, "results": results, "verdict": verdict},
+               "floor": FLOOR, "padded_convs": npad, "results": results, "verdict": verdict},
               open(f"{D}/data/zp_measured.json", "w"), indent=1)
     print(f"wrote {D}/data/zp_measured.json")
     return 0

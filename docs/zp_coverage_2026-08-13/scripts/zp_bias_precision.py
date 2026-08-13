@@ -60,29 +60,53 @@ def main():
     # int4_baseline: the arm the zero point was predicted to help, and the one that got worse.
     r, m, s = H.build("int4_baseline", ZP_TABLE, "static")
 
-    # Output scale per conv, from a real forward. Hooked on the MODULE OUTPUT, because that is the
-    # quantity the injected bias error competes with -- not the input, and not a synthetic tensor.
-    scales = {}
-
-    def hook(name):
-        def f(mod, args, out):
-            o = out[0] if isinstance(out, (tuple, list)) else out
-            if torch.is_tensor(o):
-                v = float(o.detach().float().abs().mean())
-                scales[name] = max(scales.get(name, 0.0), v)
-        return f
-
-    hs = []
     convs = {}
     for name, mo in m.model.diffusion_model.named_modules():
         if isinstance(mo, OptimizedInt4Conv2d) and float(mo.static_input_zp.item()) != 0.0:
             convs[name] = mo
-            hs.append(mo.register_forward_hook(hook(name)))
     print(f"{len(convs)} convs carry a non-zero zero point", flush=True)
+
+    # Output scale per conv, from a real forward.
+    #
+    # NOT A forward_hook. On the fused path the conv is entered as conv._conv_from_int4(...) /
+    # forward_from_int4(...), a direct METHOD call, so nn.Module hooks never fire -- the first version
+    # of this script used one and every |o| came back nan. That is the identical trap recorded as
+    # mistake #3 in docs/zero_point_2026-08-13/FINDINGS.md, and the nan is why it was caught here
+    # rather than believed. Wrapping the methods observes every entry, fused or not.
+    scales = {}
+    METHODS = ("_conv_from_int4", "_conv_from_int4_o_hat", "forward_from_int4", "forward")
+    originals = {}
+
+    def wrap(mo, name, meth):
+        fn = getattr(mo, meth, None)
+        if fn is None:
+            return
+        originals[(name, meth)] = fn
+
+        def w(*a, **kw):
+            out = fn(*a, **kw)
+            o = out[0] if isinstance(out, (tuple, list)) else out
+            if torch.is_tensor(o):
+                v = float(o.detach().float().abs().mean())
+                scales[name] = max(scales.get(name, 0.0), v)
+            return out
+        setattr(mo, meth, w)
+
+    for name, mo in convs.items():
+        for meth in METHODS:
+            wrap(mo, name, meth)
     H.SEED = 1234
     H.latent(r, m, s)
-    for h in hs:
-        h.remove()
+    for (name, meth), fn in originals.items():
+        try:
+            delattr(convs[name], meth)      # drop the instance attribute, restoring the class method
+        except AttributeError:
+            setattr(convs[name], meth, fn)
+    missing = [n for n in convs if n not in scales]
+    print(f"output scale observed for {len(scales)}/{len(convs)} convs", flush=True)
+    if missing:
+        print(f"  NOT OBSERVED ({len(missing)}): {missing[:4]}{' ...' if len(missing) > 4 else ''}")
+        print("  err/|o| is left null for those rather than filled with a guess.")
 
     rows = []
     for name, mo in convs.items():
@@ -117,18 +141,25 @@ def main():
     ratios = [r_["err_over_out"] for r_ in rows if r_["err_over_out"] is not None]
     corrs = [r_["corr_absmax"] for r_ in rows]
     outs = [r_["out_absmean"] for r_ in rows if r_["out_absmean"] == r_["out_absmean"]]
-    print(f"\nmedian |corr|max            {statistics.median(corrs):.2f}")
-    print(f"median |o| (abs mean)       {statistics.median(outs):.4f}")
-    print(f"|corr| / |o|, median        {statistics.median(corrs) / statistics.median(outs):.0f}x")
-    print(f"fp16 bias error / |o|:      median {100 * statistics.median(ratios):.2f}%   "
-          f"worst {100 * max(ratios):.2f}%")
-
+    dtypes = sorted({r_["bias_dtype"] for r_ in rows})
+    print(f"\nstored bias dtype(s)        {dtypes}")
+    print(f"median |corr|max            {statistics.median(corrs):.2f}")
+    if outs:
+        print(f"median |o| (abs mean)       {statistics.median(outs):.4f}")
+        print(f"|corr| / |o|, median        "
+              f"{statistics.median(corrs) / statistics.median(outs):.0f}x")
     os.makedirs(f"{D}/data", exist_ok=True)
-    json.dump({"convs": len(convs), "rows": rows,
-               "median_err_over_out": statistics.median(ratios),
-               "worst_err_over_out": max(ratios)},
+    json.dump({"convs": len(convs), "bias_dtypes": dtypes, "rows": rows,
+               "median_err_over_out": (statistics.median(ratios) if ratios else None),
+               "worst_err_over_out": (max(ratios) if ratios else None)},
               open(f"{D}/data/zp_bias_precision.json", "w"), indent=1)
-    print(f"\nwrote {D}/data/zp_bias_precision.json")
+    print(f"wrote {D}/data/zp_bias_precision.json")
+    if not ratios:
+        print("\nNO OUTPUT SCALES OBSERVED -- err/|o| cannot be computed, so this script reaches NO "
+              "verdict. Fix the observation before reading anything into the columns above.")
+        return 1
+    print(f"stored-bias error / |o|:    median {100 * statistics.median(ratios):.3f}%   "
+          f"worst {100 * max(ratios):.3f}%")
 
     # The verdict rule, fixed before the numbers were seen. The W4A4 run-to-run floor is 0.6%, so an
     # injected per-channel error at or above that scale can move a relL2 measurably and the

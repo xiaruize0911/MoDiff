@@ -52,6 +52,22 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 os.chdir(ROOT)
 sys.path.insert(0, ROOT)
 
+#: _refold_zp_bias REFUSES a non-zero zero point on a padded conv (2026-08-13): the fold is
+#: per-output-channel while the padding error is per-output-pixel, so that configuration is wrong on
+#: the border ring. This file is exempt ON PURPOSE, and the reason is worth stating because the
+#: alternative looks tidier and is worse.
+#:
+#: The obvious fix is to move the fixture to padding=0 and drop the override. That would make this file
+#: pass while no longer gating the arithmetic where it is actually used: every one of the model's 70
+#: calibrated convs is 3x3 padding=1, so a padding=0 fixture would gate the fold on a shape the tree
+#: does not contain. The fold's ARITHMETIC is correct on padded convs -- it is exact per output
+#: CHANNEL, which is what the four gates below check; what is wrong on a padded conv is a separate,
+#: per-output-PIXEL term that lives at the border and is measured in test_int4_zp_padding.py.
+#:
+#: So: this file gates the fold, that file gates the padding defect, and the override is what keeps the
+#: two questions from collapsing into one.
+os.environ.setdefault("MODIFF_ZP_ALLOW_PADDED", "1")
+
 import torch                                                             # noqa: E402
 import torch.nn as nn                                                    # noqa: E402
 from integration.kernels.int4_optimized import OptimizedInt4Conv2d       # noqa: E402
