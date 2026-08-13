@@ -4,6 +4,28 @@
 
 `ms/sample = us/call x calls/sample / 1000`. Both factors are shown because they point at different fixes: a fat kernel wants a better tile, a frequent one wants fusion.
 
+## Reading the kernel names
+
+Every kernel here is one of three things: an **unquantized fp16 fallback**, a **quantized compute kernel**, or the same compute kernel with a **different epilogue fused onto it**. The suffixes say which:
+
+| suffix | what it means |
+|---|---|
+| `_fprop` | plain CUTLASS implicit-GEMM conv; the epilogue does dequant only, caller adds bias |
+| `_evt_*` | an Epilogue Visitor Tree hand-assembled onto the conv Mma (CUTLASS 4.6.1 has no EVT-on-conv path), so bias/residual/o_hat fold into the conv's own store and no post-conv scratch tensor is ever written |
+| `_vt` | V arrives PRE-TRANSPOSED as [N,H,hd_pad,T], straight from the qkv quantize, so the kernel skips a transpose |
+| `_static` | Q and K each use ONE frozen calibrated scale, folded into the row scale. Removes both per-token scale tensors, their cp.async staging, and one fp32 multiply per score element from the hot loop |
+| `_qout` | the epilogue writes the PROJECTION-QUANTIZED int8 output directly, fusing the next projection's input quantize. Mutually exclusive with MoDiff's fp16 o_hat state, so UNUSABLE under MoDiff -- all 21 blocks report qout_eligible == 0 |
+| `_hd24` | exact specialization for the dominant T=1024 / hd=24 route: three PV/output fragments instead of the generic HD_PAD=32 kernel's, plus vectorized 24-byte compact-Q staging |
+| `_small` | the staging variant that wins at small T (NNT = BC/8 halves) |
+| `qi8` / `qpacked` | how Q is staged into the kernel -- plain int8 rows vs packed |
+| `i4values_i8mma` | int4 V values fed through the int8 tensor-core MMA path |
+| `_bias_res` | bias + residual epilogue. Under MoDiff an EMPTY residual returns o_hat itself; a given one also returns o_hat_t + residual as a SEPARATE tensor, because the ResBlock/attention skip must not be folded into the temporal state |
+| `_o_hat` | MoDiff's temporal accumulate: o_hat[elem] += this step's contribution, in place, fp16 |
+| `_out_i8` / `_codes` | emits int8/int4 CODES rather than dequantized values, so the next consumer (flash attention) reads them directly |
+| `_layouts` | the fused qkv projection writes Q/K/V already in the attention kernel's per-head padded layouts, returning several tensors, so no separate reformat runs |
+
+Descriptions below are taken from the kernels' own header comments in `csrc/baseline/conv/conv2d_evt.cu`, `csrc/baseline/attention/flash_attn_int8.cu`, `csrc/{baseline,modiff}/linear/gemm_wxax.cu` and `csrc/modiff_kernels_api.h`.
+
 ## attention
 
 ### fp16 — 63.34 ms/sample total  (REPORT.md: 63.34 ✓)
@@ -11,6 +33,8 @@
 | kernel | ms/sample | % | calls/sample | µs/call (mean over sigs) | sigs | worst CV |
 |---|--:|--:|--:|--:|--:|--:|
 | `torch_sdpa_fp16` | **63.34** | 100.0% | 105 | 603.2 | 5 | 34.99% |
+
+- **`torch_sdpa_fp16`** — UNQUANTIZED fallback -- PyTorch SDPA in fp16. In the fp16 arm this is the whole attention suite; it materializes the [N,H,T,T] score matrix in HBM, which is what the flash kernels exist to avoid.
 
 <details><summary>signatures ≥ 4% of the suite (2 of 5)</summary>
 
@@ -31,6 +55,13 @@
 | `flash_attn_int8_qi8_kv_static_qout` | **2.96** | 5.8% | 20 | 148.2 | 2 | 1.10% |
 | `torch_sdpa_fp16` | **0.86** | 1.7% | 18 | 48.0 | 2 | 1.96% |
 | `flash_attn_int8_qi8packed_small_qout` | **0.68** | 1.3% | 12 | 57.0 | 2 | 0.30% |
+
+- **`flash_attn_int8_vt`** — fused int8 flash attention, V pre-transposed. Keeps the running softmax state in registers and never writes the T x T score matrix; QK^T via __dp4a int8x4->int32, AV accumulated in fp32 so P is never requantized. Softmax is always fp32.
+- **`flash_attn_int8_qi8_kv_static_qout_hd24`** — the hd=24 exact specialization of the above. One signature, 10 calls, and ~31% of the attention suite -- the single most expensive call in it.
+- **`flash_attn_int8_vt_static`** — the same with frozen Q/K scales -- the production steady state.
+- **`flash_attn_int8_qi8_kv_static_qout`** — int8 flash with static K/V scales, emitting the projection-quantized int8 output.
+- **`torch_sdpa_fp16`** — UNQUANTIZED fallback -- PyTorch SDPA in fp16. In the fp16 arm this is the whole attention suite; it materializes the [N,H,T,T] score matrix in HBM, which is what the flash kernels exist to avoid.
+- **`flash_attn_int8_qi8packed_small_qout`** — the small-T staging variant, packed Q.
 
 <details><summary>signatures ≥ 4% of the suite (5 of 13)</summary>
 
@@ -55,6 +86,13 @@
 | `torch_sdpa_fp16` | **0.87** | 1.7% | 18 | 48.2 | 2 | 0.84% |
 | `flash_attn_int8_qi8packed_small_qout` | **0.69** | 1.4% | 12 | 57.2 | 2 | 0.66% |
 
+- **`flash_attn_int8_vt`** — fused int8 flash attention, V pre-transposed. Keeps the running softmax state in registers and never writes the T x T score matrix; QK^T via __dp4a int8x4->int32, AV accumulated in fp32 so P is never requantized. Softmax is always fp32.
+- **`flash_attn_int8_qi8_kv_static_qout_hd24`** — the hd=24 exact specialization of the above. One signature, 10 calls, and ~31% of the attention suite -- the single most expensive call in it.
+- **`flash_attn_int8_vt_static`** — the same with frozen Q/K scales -- the production steady state.
+- **`flash_attn_int8_qi8_kv_static_qout`** — int8 flash with static K/V scales, emitting the projection-quantized int8 output.
+- **`torch_sdpa_fp16`** — UNQUANTIZED fallback -- PyTorch SDPA in fp16. In the fp16 arm this is the whole attention suite; it materializes the [N,H,T,T] score matrix in HBM, which is what the flash kernels exist to avoid.
+- **`flash_attn_int8_qi8packed_small_qout`** — the small-T staging variant, packed Q.
+
 <details><summary>signatures ≥ 4% of the suite (5 of 13)</summary>
 
 | ms/sample | calls | µs/call | shapes | kernel |
@@ -78,6 +116,13 @@
 | `torch_sdpa_fp16` | **0.87** | 1.7% | 18 | 48.3 | 2 | 1.30% |
 | `flash_attn_i4values_small_qout` | **0.70** | 1.4% | 12 | 58.0 | 2 | 0.30% |
 
+- **`flash_attn_int4_vt`** — int4 flash attention, V pre-transposed. W4A4's counterpart to flash_attn_int8_vt and, at ~42%, the largest single item in its suite.
+- **`flash_attn_i4values_i8mma_qi8_kv_static_qout_hd24`** — int4 V values through the int8 MMA path, hd=24 exact specialization, int8-code output -- W4A4's twin of the int8 hd24 kernel.
+- **`flash_attn_int4_vt_static`** — int4 flash with frozen Q/K scales.
+- **`flash_attn_int4_vt_static_qout`** — int4 flash, frozen scales, int8-code output.
+- **`torch_sdpa_fp16`** — UNQUANTIZED fallback -- PyTorch SDPA in fp16. In the fp16 arm this is the whole attention suite; it materializes the [N,H,T,T] score matrix in HBM, which is what the flash kernels exist to avoid.
+- **`flash_attn_i4values_small_qout`** — int4 values, small-T variant, int8-code output.
+
 <details><summary>signatures ≥ 4% of the suite (4 of 13)</summary>
 
 | ms/sample | calls | µs/call | shapes | kernel |
@@ -100,6 +145,13 @@
 | `torch_sdpa_fp16` | **0.86** | 1.7% | 18 | 48.0 | 2 | 0.97% |
 | `flash_attn_i4values_small_qout` | **0.70** | 1.4% | 12 | 58.0 | 2 | 11.48% |
 
+- **`flash_attn_int4_vt`** — int4 flash attention, V pre-transposed. W4A4's counterpart to flash_attn_int8_vt and, at ~42%, the largest single item in its suite.
+- **`flash_attn_i4values_i8mma_qi8_kv_static_qout_hd24`** — int4 V values through the int8 MMA path, hd=24 exact specialization, int8-code output -- W4A4's twin of the int8 hd24 kernel.
+- **`flash_attn_int4_vt_static`** — int4 flash with frozen Q/K scales.
+- **`flash_attn_int4_vt_static_qout`** — int4 flash, frozen scales, int8-code output.
+- **`torch_sdpa_fp16`** — UNQUANTIZED fallback -- PyTorch SDPA in fp16. In the fp16 arm this is the whole attention suite; it materializes the [N,H,T,T] score matrix in HBM, which is what the flash kernels exist to avoid.
+- **`flash_attn_i4values_small_qout`** — int4 values, small-T variant, int8-code output.
+
 <details><summary>signatures ≥ 4% of the suite (4 of 13)</summary>
 
 | ms/sample | calls | µs/call | shapes | kernel |
@@ -118,6 +170,8 @@
 | kernel | ms/sample | % | calls/sample | µs/call (mean over sigs) | sigs | worst CV |
 |---|--:|--:|--:|--:|--:|--:|
 | `torch_conv2d_fp16` | **265.72** | 100.0% | 445 | 597.1 | 33 | 2.84% |
+
+- **`torch_conv2d_fp16`** — UNQUANTIZED fallback -- PyTorch/cuDNN fp16 conv, for the convs this pipeline does not quantize (the stem/head convs and the 1x1 skips).
 
 <details><summary>signatures ≥ 4% of the suite (8 of 33)</summary>
 
@@ -140,6 +194,9 @@
 |---|--:|--:|--:|--:|--:|--:|
 | `conv2d_int8_evt_bias_residual_fp16` | **126.13** | 84.6% | 350 | 360.4 | 29 | 3.33% |
 | `torch_conv2d_fp16` | **22.97** | 15.4% | 95 | 241.7 | 13 | 1.24% |
+
+- **`conv2d_int8_evt_bias_residual_fp16`** — D1 fusion: out = acc*alpha*weight_scale[k] + bias[k] + residual[elem] -> fp16, in the conv's own store. This is the PTQ arm's whole conv datapath.
+- **`torch_conv2d_fp16`** — UNQUANTIZED fallback -- PyTorch/cuDNN fp16 conv, for the convs this pipeline does not quantize (the stem/head convs and the 1x1 skips).
 
 <details><summary>signatures ≥ 4% of the suite (8 of 42)</summary>
 
@@ -165,6 +222,11 @@
 | `conv2d_int8_evt_o_hat_residual` | **48.36** | 18.1% | 140 | 345.4 | 9 | 2.59% |
 | `torch_conv2d_fp16` | **30.45** | 11.4% | 95 | 320.5 | 13 | 0.78% |
 
+- **`conv2d_int8_fprop`** — int8 x int8 conv, plain output. On the MoDiff arm this is the t=T conv and the delta-step conv whose accumulate is done by a separate epilogue.
+- **`conv2d_int8_evt_o_hat`** — D2 fusion without a skip: o_hat[elem] += acc*alpha*weight_scale[k], in place in fp16. MoDiff's temporal state advance (paper Eq 9).
+- **`conv2d_int8_evt_o_hat_residual`** — D2 DUAL STORE: advances o_hat in place AND writes out = o_hat_new + residual[elem] -> fp16, one pass, two stores. Replaces an fp32 conv_out round-trip.
+- **`torch_conv2d_fp16`** — UNQUANTIZED fallback -- PyTorch/cuDNN fp16 conv, for the convs this pipeline does not quantize (the stem/head convs and the 1x1 skips).
+
 <details><summary>signatures ≥ 4% of the suite (6 of 62)</summary>
 
 | ms/sample | calls | µs/call | shapes | kernel |
@@ -184,6 +246,9 @@
 |---|--:|--:|--:|--:|--:|--:|
 | `conv2d_int4_evt_bias_residual_fp16` | **62.62** | 73.2% | 350 | 178.9 | 29 | 3.86% |
 | `torch_conv2d_fp16` | **22.98** | 26.8% | 95 | 241.8 | 13 | 1.50% |
+
+- **`conv2d_int4_evt_bias_residual_fp16`** — D1 fusion, int4. The PTQ arm's whole conv datapath.
+- **`torch_conv2d_fp16`** — UNQUANTIZED fallback -- PyTorch/cuDNN fp16 conv, for the convs this pipeline does not quantize (the stem/head convs and the 1x1 skips).
 
 <details><summary>signatures ≥ 4% of the suite (10 of 42)</summary>
 
@@ -211,6 +276,11 @@
 | `conv2d_int4_evt_o_hat` | **28.73** | 18.5% | 140 | 205.2 | 20 | 13.17% |
 | `conv2d_int4_evt_o_hat_residual` | **28.21** | 18.2% | 140 | 201.5 | 9 | 1.40% |
 
+- **`conv2d_int4_fprop`** — int4 x int4 conv, plain output; same role as the int8 twin.
+- **`torch_conv2d_fp16`** — UNQUANTIZED fallback -- PyTorch/cuDNN fp16 conv, for the convs this pipeline does not quantize (the stem/head convs and the 1x1 skips).
+- **`conv2d_int4_evt_o_hat`** — D2 fusion without a skip, int4. MoDiff's temporal state advance.
+- **`conv2d_int4_evt_o_hat_residual`** — D2 dual store, int4.
+
 <details><summary>signatures ≥ 4% of the suite (6 of 62)</summary>
 
 | ms/sample | calls | µs/call | shapes | kernel |
@@ -231,6 +301,8 @@
 | kernel | ms/sample | % | calls/sample | µs/call (mean over sigs) | sigs | worst CV |
 |---|--:|--:|--:|--:|--:|--:|
 | `torch_linear_fp16` | **28.96** | 100.0% | 345 | 83.9 | 12 | 1.91% |
+
+- **`torch_linear_fp16`** — UNQUANTIZED fallback -- PyTorch fp16 linear.
 
 <details><summary>signatures ≥ 4% of the suite (9 of 12)</summary>
 
@@ -258,6 +330,12 @@
 | `gemm_w8a8_awq_qkv_i8_layouts_compact` | **4.09** | 8.7% | 20 | 204.3 | 2 | 5.71% |
 | `gemm_w8a8_awq_out_i8_bias_nout` | **0.59** | 1.3% | 12 | 49.3 | 2 | 0.62% |
 
+- **`gemm_w8a8_awq_bias_res`** — W8A8 AWQ-layout GEMM with the bias+residual epilogue. `a_scale` is a 1-ELEMENT DEVICE TENSOR, not a double, because MoDiff's delta scale is produced on device each call and taking it by value would force a host sync per linear per step.
+- **`torch_linear_fp16`** — UNQUANTIZED fallback -- PyTorch fp16 linear.
+- **`gemm_w8a8_awq_qkv_i8_layouts`** — fused qkv projection: one GEMM writing Q, K and V already in the attention kernel's per-head padded layouts as int8.
+- **`gemm_w8a8_awq_qkv_i8_layouts_compact`** — the compact-staging variant of the above.
+- **`gemm_w8a8_awq_out_i8_bias_nout`** — W8A8 GEMM emitting int8 codes of (out + bias) at a per-column scale, so a projection can feed flash attention without a separate quantize.
+
 <details><summary>signatures ≥ 4% of the suite (8 of 19)</summary>
 
 | ms/sample | calls | µs/call | shapes | kernel |
@@ -283,6 +361,12 @@
 | `gemm_w8a8_awq_qkv_i8_layouts_compact` | **4.10** | 8.8% | 20 | 205.0 | 2 | 2.60% |
 | `gemm_w8a8_awq_out_i8_bias_nout` | **0.60** | 1.3% | 12 | 49.6 | 2 | 1.13% |
 
+- **`gemm_w8a8_awq_bias_res`** — W8A8 AWQ-layout GEMM with the bias+residual epilogue. `a_scale` is a 1-ELEMENT DEVICE TENSOR, not a double, because MoDiff's delta scale is produced on device each call and taking it by value would force a host sync per linear per step.
+- **`torch_linear_fp16`** — UNQUANTIZED fallback -- PyTorch fp16 linear.
+- **`gemm_w8a8_awq_qkv_i8_layouts`** — fused qkv projection: one GEMM writing Q, K and V already in the attention kernel's per-head padded layouts as int8.
+- **`gemm_w8a8_awq_qkv_i8_layouts_compact`** — the compact-staging variant of the above.
+- **`gemm_w8a8_awq_out_i8_bias_nout`** — W8A8 GEMM emitting int8 codes of (out + bias) at a per-column scale, so a projection can feed flash attention without a separate quantize.
+
 <details><summary>signatures ≥ 4% of the suite (8 of 19)</summary>
 
 | ms/sample | calls | µs/call | shapes | kernel |
@@ -307,6 +391,11 @@
 | `torch_linear_fp16` | **7.90** | 18.2% | 185 | 42.7 | 4 | 1.33% |
 | `gemm_w4a4_awq_qkv_codes` | **0.41** | 0.9% | 12 | 34.0 | 2 | 0.29% |
 
+- **`gemm_w4a4_awq_bias_res`** — W4A4 AWQ-layout GEMM, bias+residual epilogue. The linear suite's largest item on both W4A4 arms.
+- **`gemm_w4a4_awq_qkv_i4qk_i8v_layouts`** — fused qkv projection emitting int4 Q/K and int8 V in the attention layouts -- the asymmetry is deliberate: V's dot product accumulates in fp32, so it keeps 8 bits while Q/K drop to 4.
+- **`torch_linear_fp16`** — UNQUANTIZED fallback -- PyTorch fp16 linear.
+- **`gemm_w4a4_awq_qkv_codes`** — emits the qkv int4 codes plus their clamp limits rather than dequantized values.
+
 <details><summary>signatures ≥ 4% of the suite (8 of 19)</summary>
 
 | ms/sample | calls | µs/call | shapes | kernel |
@@ -330,6 +419,11 @@
 | `gemm_w4a4_awq_qkv_i4qk_i8v_layouts` | **9.77** | 22.4% | 30 | 325.7 | 3 | 4.77% |
 | `torch_linear_fp16` | **8.18** | 18.7% | 185 | 44.2 | 4 | 0.81% |
 | `gemm_w4a4_awq_qkv_codes` | **0.41** | 0.9% | 12 | 34.0 | 2 | 0.28% |
+
+- **`gemm_w4a4_awq_bias_res`** — W4A4 AWQ-layout GEMM, bias+residual epilogue. The linear suite's largest item on both W4A4 arms.
+- **`gemm_w4a4_awq_qkv_i4qk_i8v_layouts`** — fused qkv projection emitting int4 Q/K and int8 V in the attention layouts -- the asymmetry is deliberate: V's dot product accumulates in fp32, so it keeps 8 bits while Q/K drop to 4.
+- **`torch_linear_fp16`** — UNQUANTIZED fallback -- PyTorch fp16 linear.
+- **`gemm_w4a4_awq_qkv_codes`** — emits the qkv int4 codes plus their clamp limits rather than dequantized values.
 
 <details><summary>signatures ≥ 4% of the suite (8 of 19)</summary>
 
