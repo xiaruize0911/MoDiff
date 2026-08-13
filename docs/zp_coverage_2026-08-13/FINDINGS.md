@@ -1,29 +1,57 @@
-# Fix #2 is answered: NO. Coverage is complete, the obstacle is zero-padding, and the ceiling is 1.06×
+# Fix #2: the zero point helps PTQ by 7.1%. The +82%/+204% was a padding defect, not the lever
 
-**The activation zero point does not help W4A4 in this tree, and the reason is not this
-implementation.** Coverage — the thing
-[docs/zero_point_2026-08-13/FINDINGS.md](../zero_point_2026-08-13/FINDINGS.md) left open — is now
-complete and gated on both arms. With it complete the asymmetric grid measures **worse**, and two
-independent measurements say why and say that fixing it would not be worth it:
+**CORRECTED 2026-08-13, and the correction reverses the headline.** An earlier version of this file
+concluded "fix #2 is answered NO … the ceiling is 1.06× against a 1.15× bar". That was wrong: it
+measured a datapath whose padding was broken for an asymmetric grid and attributed the result to the
+zero point. With the padding **correct**, on the same protocol, same seeds, same pinned references:
 
-| | symmetric | asym r=1 | asym r=4.5 | best change |
-|---|--:|--:|--:|--:|
-| W4A4 PTQ | 0.5022 | 5.1985 | 0.9125 | **+81.7%** |
-| W4A4 MoDiff | 0.3090 | 5.0680 | 0.9393 | **+204.0%** |
+| arm | symmetric | asym, CUTLASS zero-fill | asym, code-z padding |
+|---|--:|--:|--:|
+| W4A4 PTQ | 0.5023 | 0.9125 (**+81.7%**) | **0.4665 (−7.1%)** |
+| W4A4 MoDiff | 0.3095 | 0.9393 (**+204.0%**) | **0.3083 (−0.4%)** |
 
-`docs/zero_point_2026-08-13/data/zp_measured.json`, 3 seeds, 50 steps, batch 8, pinned fp16
-references. MoDiff's symmetric arm reproduces the committed shipped 0.3090 exactly.
+−7.1% on the PTQ axis is **12× the measured W4A4 cross-process floor** of 0.6%, and it is exactly what
+was predicted on the record before any of this ran: *"this should help the PTQ axis and barely move
+MoDiff"*. MoDiff's −0.4% sits at the floor, which is what reading the activation grid only at t=T
+predicts.
 
-**Those are defect magnitudes, and the defect is zero-padding — not missing coverage.** CUTLASS's
-implicit GEMM zero-fills padded taps, so a padded tap reads code `0`, which an asymmetric grid
-dequantizes to `-z/s` rather than `0`, while the folded bias subtracts a per-output-**channel**
-correction for a sample that was never taken.
+**The 1.06× ceiling was accurate; using it to close the question was the error.** It predicted ~6% and
+PTQ delivered 7.1%. The mistake was scoring 1.06× against `zp_headroom.py`'s 1.15× bar — a bar set when
+fix #2's cost was *"15 CUDA entry points plus a Σ(w_q) fold"*. Those kernels are built and gated now, so
+that bar no longer prices anything.
 
-**And the ceiling says do not fix it.** On the captured `silu(gn(x))` tensors — no kernel, no conv, no
-padding, no sampler — the best asymmetric reconstruction beats the best symmetric one by **1.06×**
-(61 of 70 convs). `zp_headroom.py` set fix #2's bar at 1.15×. Fix #3's clip ratio already took the
-slack the zero point was after, which is also why the r=1 arms above are catastrophic and the r=4.5
-arms are merely bad.
+## What it costs, and what it does NOT cost
+
+Also corrected: this file previously said a padding fix needs *"a position-aware epilogue correction,
+since the padded tap set varies per output pixel"*. **It does not.** Padding the activation with the
+code `z` is sufficient and needs no reduction at all — every padded tap then decodes to `z` and
+dequantizes to `(z − z)/s = 0`, which is what a zero-padded convolution is supposed to contribute.
+
+`MODIFF_ZP_PREPAD=1` demonstrates it on the real datapath by padding the **packed** int4 tensor with the
+byte whose two nibbles are both `z` and running the conv with `padding=0`
+([`_prepad_packed_with_zp`](../../integration/kernels/int4_optimized.py), gated in
+[`test_int4_zp_prepad.py`](../../integration/tests/test_int4_zp_prepad.py): bit-identical at z=0,
+correct pad byte for negative z, and it reduces the padded conv's error).
+
+**That emulation is not the production fix**: it materializes a padded copy per conv and costs
+**+7.1% ms/step** (13.12 → 14.05 at batch 8 / 50 steps), so the trade through this route is 1:1 and
+pointless. The production fix writes the `z`-valued halo directly from the quantize kernel that already
+emits the packed tensor — a bounds change on an existing write, not a new kernel or a new reduction.
+**That is now justified work at a measured −7.1% on the PTQ axis**, where before it looked like buying
+1.06× for a position-aware epilogue.
+
+## What stands unchanged
+
+Everything about **coverage**, which was P1's actual blocker, and everything about the **mechanism**:
+
+* coverage is complete, gated and unconditional on both arms — four kernels honour `z`, and the three
+  remaining `_zp_unsupported` sites are documented non-holes (§2);
+* the padding defect's arithmetic, `−z·Σ(missing w_q)·ws/s` per output pixel, is confirmed to 0.9–2.6%
+  against the closed form (§3), and it is what made the zero-filled numbers what they were;
+* the fp16-bias hypothesis is still refuted (§4);
+* `_refold_zp_bias` still refuses `z ≠ 0` on a padded conv by default — which remains right, because the
+  shipped path still zero-fills. `MODIFF_ZP_ALLOW_PADDED=1` plus `MODIFF_ZP_PREPAD=1` is the correct
+  combination, and the refusal is what stops a silently-defective asymmetric run.
 
 ---
 
@@ -119,7 +147,7 @@ A `> 0` check passed that happily. What caught it was asserting the **ratio**:
 `_forward_first_step` quantizes one activation with `z` and `warmup_steps-1 = 4` residuals without it.
 It failed 350 : 0 and now reads 560 : 140.
 
-## 3. Why padding and the zero point cannot both hold
+## 3. Why ZERO-FILLED padding and the zero point cannot both hold
 
 For output pixel `p`, the fold assumes every tap carries the zero point:
 
@@ -127,15 +155,18 @@ For output pixel `p`, the fold assumes every tap carries the zero point:
 sum_i w_q[k,i] * a[i] = (sum_i w_q[k,i]*a_q[i] - z*sum_i w_q[k,i]) * ws[k]/s
 ```
 
-`z*sum_i w_q[k,i]` sums over **all** taps. A padded tap reads code 0, not code `z`, so a border pixel
-needs the sum over only the taps it actually has. The residual is
+`z*sum_i w_q[k,i]` sums over **all** taps, i.e. it assumes every tap carries `z`. A tap padded with the
+byte 0 does not, so a border pixel needs the sum over only the taps it actually has. The residual is
 
 ```
 -z * sum_{missing} w_q[k] * ws[k] / s
 ```
 
-**per output PIXEL**, which is why it cannot fold into a per-channel bias — the same obstruction as
-the weight zero point in fix #4.
+**per output PIXEL**, which is why it cannot be *corrected* by a per-channel bias. But it does not have
+to be corrected: the term exists only because the padded tap was encoded wrongly, and padding with the
+code `z` removes it at the source rather than compensating for it (§6). That is the difference between
+this and fix #4's `z_w · Σa`, which is per-output-pixel in the DATA and therefore genuinely needs a
+reduction.
 
 Confirmed three ways:
 
@@ -171,6 +202,7 @@ washes out.
 [`test_int4_zero_point.py`](../../integration/tests/test_int4_zero_point.py) | the host-side fold: exact against fp64→storage-dtype, idempotent, bit-identical at z=0, bias-free conv gains one and gives it back |
 [`test_int4_zero_point_kernels.py`](../../integration/tests/test_int4_zero_point_kernels.py) | per kernel: z=0 **bit-identical** (`torch.equal`), z≠0 differs, and the unclamped codes shift by **exactly +z** — checked by unpacking nibbles rather than reimplementing GroupNorm/SiLU/resize, so the gate cannot be wrong in a second place. Plus refusals: z on a delta quantize, z on the int8 resize output, 2D input |
 [`test_int4_zp_padding.py`](../../integration/tests/test_int4_zp_padding.py) | the padding defect, quantitatively, against the closed form |
+[`test_int4_zp_prepad.py`](../../integration/tests/test_int4_zp_prepad.py) | the code-`z` padding path: bit-identical to the normal path at z=0 (so a wrong pad byte, slice offset or padding/stride mismatch shows up on a case whose answer is known), the pad byte decodes to `z` in both nibbles for negative `z`, and it reduces a padded conv's error at z≠0 |
 [`verify_zp_coverage.py`](scripts/verify_zp_coverage.py) | both arms clean under strict mode, with per-kernel counts and the 4× warm-up invariant |
 
 `test_int4_zero_point.py` sets `MODIFF_ZP_ALLOW_PADDED=1` deliberately rather than moving its fixture
@@ -180,38 +212,43 @@ exact per output channel; the padding defect is a separate per-output-pixel term
 
 ## 6. Recommendation
 
-**Close fix #2 as answered negatively.** Keep the mechanism: it is bit-exact at `z = 0`, costs nothing
-in the shipped configuration, is gated, and now refuses the configuration that is wrong. Do not build
-the position-aware epilogue correction that a padding fix would need **on fix #2's account** — its
-ceiling is 1.06× against a 1.15× bar.
+**Build the z-valued halo in the quantize kernels, and re-enable the zero point on the PTQ axis.**
+The measured prize is −7.1% relL2 on W4A4 PTQ, 12× the cross-process floor. The mechanism is already
+built, gated and bit-exact at `z = 0`; what is missing is only that the padded halo carries `z` instead
+of 0.
 
-### But do not close the CAPABILITY, because fix #4 now pays for it
+The cheap route is closed and the reason is measured: the `MODIFF_ZP_PREPAD=1` emulation buys the 7.1%
+accuracy for +7.1% latency, a 1:1 trade. The kernels that produce the packed activation
+(`group_norm_silu_quantize_pack_nhwc_zp`, `group_norm_silu_quantize_resize_nhwc_zp`,
+`scale_quantize_and_pack_zp`) already write every output byte and already know `z`; writing a halo of
+`z` bytes around their output is a bounds change on an existing write, with no extra pass over the
+activation and no reduction. The conv then runs with `padding=0`.
 
-This is an interaction neither this file nor [FINDINGS_WEIGHT_ZP.md](FINDINGS_WEIGHT_ZP.md) can see
-alone. The padding fix needs a **per-output-pixel** correction, because the missing-tap sum varies with
-position. Fix #4 needs the *same shape of thing* for a different reason: adopting AdaRound's
-per-channel weight zero point requires
+**Do not enable it on the MoDiff axis.** −0.4% is at the floor, and MoDiff's delta steps must keep
+zero-fill: they quantize a difference on a symmetric delta grid where code 0 *is* delta 0, so a `z`
+halo there would be the defect rather than the fix.
+
+**Leave `_refold_zp_bias`'s refusal in place until that halo exists.** The shipped path still
+zero-fills, where an asymmetric table costs +82%/+204%; the refusal is what prevents that being run by
+accident, and `MODIFF_ZP_ALLOW_PADDED=1 MODIFF_ZP_PREPAD=1` is the deliberate combination.
+
+### And the capability fix #4 needs is a DIFFERENT one
+
+An earlier version of this section claimed fix #2 and fix #4 were blocked on one shared capability, a
+per-output-pixel correction, and that only fix #4 justified it. Half of that is now wrong: **fix #2 does
+not need it at all** — padding with `z` is a value change, not a reduction. Fix #4 still does:
 
 ```
 sum_i (w_q[k,i] - z_w[k]) * a[i] = sum_i w_q[k,i]*a[i] - z_w[k] * sum_i a[i]
 ```
 
-and `sum_i a[i]` runs over the conv window, so it too is per-output-pixel and cannot fold into a
-per-channel bias. **Both remaining quality levers were blocked on one missing capability** — a windowed
-reduction the epilogue can consume — and this session priced both:
+`Σ a[i]` runs over the conv window, so it genuinely varies per output pixel and cannot fold into a
+per-channel bias. So the two are independent tasks, and both are now justified:
 
-| lever | worth | verdict on its own |
+| lever | measured worth | what it needs |
 |---|--:|---|
-| fix #2, activation zero point | 1.06× (ceiling, reconstruction) | not worth the capability |
-| fix #4, weight zero point + AdaRound | **1.58×** end-to-end, weight-only | worth the capability |
-
-So the correct reading is not "don't build it" but **"fix #2 does not justify it and fix #4 does"** — and
-if it gets built for fix #4, the padding correction for fix #2 becomes an incremental use of an existing
-kernel rather than a new one. At that point fix #2 is worth re-pricing at its 1.06× ceiling, which is
-still under the bar; the point is that the *cost* side changes, not that the answer above changes.
-
-The `MODIFF_ZP_STRICT` / `MODIFF_ZP_ALLOW_PADDED` pair is what makes this a closed question rather
-than a landmine: an asymmetric table cannot be run by accident, and can still be run on purpose.
+| fix #2, activation zero point | **−7.1%** W4A4 PTQ relL2 | a `z`-valued halo in three existing quantize kernels |
+| fix #4, weight zero point + AdaRound | **1.58×** end-to-end, weight-only | a windowed `Σa` reduction the epilogue can consume |
 
 ## 7. The measurement-reliability question this raised — now answered separately
 

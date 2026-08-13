@@ -1,0 +1,42 @@
+{
+ "seeds": [
+  1234,
+  20260805,
+  777
+ ],
+ "shipped_reference": {
+  "int4_baseline": 0.4695,
+  "int4": 0.309
+ },
+ "median_asymmetry": 21.931638913234003,
+ "floor": 0.006,
+ "padded_convs": 70,
+ "results": {
+  "int4_baseline/sym": 0.5021824836730957,
+  "int4/sym": 0.30901004870732623,
+  "int4_baseline/asym1": 5.198478539784749,
+  "int4/asym1": 5.067978541056315,
+  "int4_baseline/asym4.5": 0.9125344157218933,
+  "int4/asym4.5": 0.9392667810122172
+ },
+ "verdict": {
+  "int4_baseline": {
+   "sym": 0.5021824836730957,
+   "asym_r1": 5.198478539784749,
+   "asym_r4.5": 0.9125344157218933,
+   "asym_unpadded": null,
+   "best": 0.9125344157218933,
+   "change_pct": 81.71370873937596,
+   "unpadded_change_pct": null
+  },
+  "int4": {
+   "sym": 0.30901004870732623,
+   "asym_r1": 5.067978541056315,
+   "asym_r4.5": 0.9392667810122172,
+   "asym_unpadded": null,
+   "best": 0.9392667810122172,
+   "change_pct": 203.959947238424,
+   "unpadded_change_pct": null
+  }
+ }
+}

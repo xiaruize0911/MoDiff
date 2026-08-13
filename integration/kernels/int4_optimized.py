@@ -116,6 +116,13 @@ def _int4_weight_scale(w_flat: torch.Tensor, Q: float = 7.0) -> torch.Tensor:
 #: and is what produced relL2 7-22 in the first end-to-end run.
 _ZP_UNSUPPORTED = set()
 
+#: EXPERIMENT ONLY (MODIFF_ZP_PREPAD=1): pad the packed activation with the code z instead of letting
+#: CUTLASS zero-fill it, so an asymmetric grid is padded CORRECTLY. Read at call time, not import time,
+#: so an in-process A/B can flip it between arms. See _conv_from_int4 for the mechanism and why it is
+#: off by default (it materializes a padded copy per conv).
+def _zp_prepad_enabled():
+    return os.environ.get("MODIFF_ZP_PREPAD", "0") == "1"
+
 class OptimizedInt4Conv2d(nn.Module):
     """
     CUTLASS-based INT4 Conv2d with SmoothQuant + MoDiff Error-Compensated Modulation.
@@ -478,13 +485,24 @@ class OptimizedInt4Conv2d(nn.Module):
             if self._empty_bias is None or self._empty_bias.device != x.device:
                 self._empty_bias = torch.empty(0, device=x.device)
 
+            # Same correct-asymmetric-padding emulation as _conv_from_int4, and it is needed HERE too
+            # for the MoDiff arm: this is the t=T conv, the only one on that arm that reads the
+            # activation grid and adds the corrected bias. Its delta steps do NOT need it -- they
+            # quantize a difference on a symmetric delta grid, where code 0 IS delta 0, so zero-filling
+            # is already correct there.
+            pad_h, pad_w = self.padding[0], self.padding[1]
+            if (_zp_prepad_enabled() and zp != 0.0 and (pad_h or pad_w)):
+                x_packed, _, _ = self._prepad_packed_with_zp(
+                    x_packed, x_packed.shape[1], x_packed.shape[2])
+                pad_h = pad_w = 0
+
             out_raw = modiff_cutlass.conv2d_int4_fprop(
                 x_packed,
                 self.weight_packed,
                 scale_tensor,
                 self._empty_bias,
                 self.stride[0], self.stride[1],
-                self.padding[0], self.padding[1],
+                pad_h, pad_w,
                 self.dilation[0], self.dilation[1]
             )
             out = out_raw * self.weight_scale_channel
@@ -1250,6 +1268,29 @@ class OptimizedInt4Conv2d(nn.Module):
         profiler.stop("MoDiff INT4 Static Conv2d (from codes)", p)
         return self._module_output()
 
+    def _prepad_packed_with_zp(self, x_packed: torch.Tensor, h_in: int, w_in: int):
+        """Spatially pad a packed int4 activation with the code `z`, returning (padded, h, w).
+
+        x_packed is [N, H, W, C/2] bytes, low nibble = even channel. Both nibbles of the pad byte are
+        z, so every padded tap decodes to code z and dequantizes to (z - z)/s = 0, which is what a
+        zero-padded convolution is supposed to contribute.
+
+        The nibble is TWO'S COMPLEMENT in 4 bits (z = -5 -> 0xB), matching how unpack_int4 and the
+        kernels read it, and the byte is then reinterpreted as signed int8 for the tensor's dtype. Built
+        with torch.full + a slice copy rather than F.pad, because F.pad's constant value goes through a
+        float conversion that would not round-trip a negative int8 pad byte reliably.
+        """
+        ph, pw = int(self.padding[0]), int(self.padding[1])
+        nib = int(self._zp_float) & 0x0F
+        byte = nib | (nib << 4)
+        if byte > 127:
+            byte -= 256
+        N, H, W, Cb = x_packed.shape
+        out = torch.full((N, H + 2 * ph, W + 2 * pw, Cb), byte,
+                         dtype=x_packed.dtype, device=x_packed.device)
+        out[:, ph:ph + H, pw:pw + W, :] = x_packed
+        return out.contiguous(), h_in + 2 * ph, w_in + 2 * pw
+
     def _conv_from_int4(self, x_packed: torch.Tensor, h_in: int, w_in: int,
                         residual: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Run the calibrated INT4 conv (dequant/bias/store dispatch) on an
@@ -1259,6 +1300,31 @@ class OptimizedInt4Conv2d(nn.Module):
         input's spatial dims (== x_packed.shape[1:3]). Optional `residual` (fp16
         channels_last, same shape as output) is fused into the store epilogue as the
         ResBlock skip-add."""
+        # CORRECT ASYMMETRIC PADDING (MODIFF_ZP_PREPAD=1), experimental. CUTLASS's implicit GEMM
+        # zero-fills padded taps, so with a zero point a padded tap reads code 0, which the grid
+        # dequantizes to -z/s instead of 0, while the folded bias subtracts a per-output-CHANNEL
+        # correction for a sample never taken. The correct padding VALUE is code z.
+        #
+        # This does it without a new kernel: pad the PACKED tensor with the byte whose two nibbles are
+        # both z, then run the conv with padding=0 over the enlarged input. Exact, because every padded
+        # tap then reads code z and dequantizes to (z - z)/s = 0 -- the same emulation
+        # docs/zp_coverage_2026-08-13/scripts/zp_padding_probe.py used to identify the defect, moved
+        # onto the real datapath.
+        #
+        # NOT THE SHIPPED PATH, and off by default: it materializes a padded copy of the activation per
+        # conv, which is the round-trip the fused kernels exist to avoid. It exists to measure what fix
+        # #2 is worth when its padding is RIGHT, so the negative answer rests on a measurement rather
+        # than on an isolated ceiling. At z = 0 the pad byte is 0, i.e. exactly what CUTLASS inserts, so
+        # this path is bit-identical to the normal one -- which is how it is gated.
+        if (_zp_prepad_enabled() and getattr(self, "_zp_float", 0.0) != 0.0
+                and (self.padding[0] or self.padding[1])):
+            xp, hp, wp = self._prepad_packed_with_zp(x_packed, h_in, w_in)
+            saved = self.padding
+            self.padding = (0, 0)
+            try:
+                return self._conv_from_int4(xp, hp, wp, residual=residual)
+            finally:
+                self.padding = saved
         self._ensure_conv_caches(x_packed.device)
         h_out = ((h_in + 2 * self.padding[0] - self.dilation[0] * (self.kernel_size[0] - 1) - 1) // self.stride[0]) + 1
         w_out = ((w_in + 2 * self.padding[1] - self.dilation[1] * (self.kernel_size[1] - 1) - 1) // self.stride[1]) + 1
