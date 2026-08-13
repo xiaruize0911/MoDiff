@@ -1,0 +1,62 @@
+{
+ "seeds": [
+  1234,
+  20260805,
+  777
+ ],
+ "steps": 50,
+ "batch": 8,
+ "shipped_reference": {
+  "int4_baseline": 0.4695,
+  "int4": 0.309
+ },
+ "noise_floor": 0.006,
+ "results": {
+  "int4          MoDiff conv only (shipped)": {
+   "mean": 0.30946095784505206,
+   "relL2": [
+    0.3266148567199707,
+    0.2883332669734955,
+    0.31343474984169006
+   ],
+   "modulated": {
+    "attn_proj_wxax": 0,
+    "emb_linear": 37,
+    "conv": 140
+   },
+   "ms_per_step_smallbatch": 14.920023420030097,
+   "calibration": "integration/calibration/int4_calibration_qdiff.pt"
+  },
+  "int4_linmodiff  + attn projections": {
+   "mean": 0.28354962666829425,
+   "relL2": [
+    0.2887200117111206,
+    0.2743125557899475,
+    0.2876163125038147
+   ],
+   "modulated": {
+    "attn_proj_wxax": 42,
+    "emb_linear": 37,
+    "conv": 140
+   },
+   "ms_per_step_smallbatch": 18.49945214004644,
+   "calibration": "integration/calibration/int4_calibration_qdiff.pt"
+  },
+  "int4_baseline   CONTROL, flag must not reach": {
+   "mean": 0.4692252775033315,
+   "relL2": [
+    0.4689832329750061,
+    0.44179341197013855,
+    0.49689918756484985
+   ],
+   "modulated": {
+    "attn_proj_wxax": 0,
+    "emb_linear": 0,
+    "conv": 0
+   },
+   "ms_per_step_smallbatch": 10.88311538672618,
+   "calibration": "integration/calibration/int4_calibration_qdiff.pt"
+  }
+ },
+ "references_trusted": true
+}

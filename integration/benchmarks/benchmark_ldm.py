@@ -917,13 +917,29 @@ class BenchmarkRunner:
                 #
                 # Why the trade is judged worth taking: 0.0612 is still inside the band a well-behaved
                 # 8-bit activation quantizer should occupy, so at W8A8 this is 18% of an already-small
-                # error for 29% throughput. The "recognisable churches vs fog" concern was always
-                # about W4A4, where BOTH arms (0.36 / 0.42) are bad and which is not a recommended
-                # configuration. The advisor independently reported (2026-08-11) having tried dropping
-                # MoDiff from the Linears before with no meaningful loss.
+                # error for 29% throughput.
                 #
-                # Set MODIFF_LINEAR=1 to restore. Revisit the default if the linear MoDiff path ever
-                # gains a GEMM o_hat-accumulate epilogue, which would remove most of the speed cost.
+                # THE W4A4 HALF OF THAT ARGUMENT EXPIRED, and was re-measured on 2026-08-13
+                # (docs/attn_modiff_2026-08-13/). It used to read "the 'recognisable churches vs fog'
+                # concern was always about W4A4, where BOTH arms (0.36 / 0.42) are bad and which is not
+                # a recommended configuration". W4A4 MoDiff is 0.3095 now and draws legible
+                # cathedrals, so "both are bad anyway" stopped being a reason. Measured as its own
+                # labelled arm (int4_linmodiff = this mode + MODIFF_LINEAR=1) rather than as a variant:
+                #     fidelity   relL2 0.3095 -> 0.2835   8.4% BETTER  (3 seeds, pinned fp16 refs)
+                #     latency    60.53 -> 90.34 ms/step   +49%, so 1.749x -> 1.172x vs fp16
+                # The default stays 0, but for a sound reason instead of an expired one: the arm is
+                # STRICTLY DOMINATED by W8A8 MoDiff, which is both faster (74.70 ms/step) and 4.7x more
+                # accurate (0.0605). There is no objective that selects int4_linmodiff over it.
+                #
+                # And the cost is not the o_hat epilogue, so waiting for one will not fix it. Profiled:
+                # the "quantize (standalone)" kernel bucket goes 0 -> 2890 ms of the window, because
+                # every quantize in the shipped path is FUSED into a GroupNorm kernel and modulating
+                # the projections un-fuses it (static_quantize_pack_and_update_ahat +1131,
+                # delta_absmax_fp16 +876); elementwise/copy +1426 for the a_hat/o_hat traffic; and the
+                # projections move onto the AWQ int4 GEMM (+2197 on that kernel). The route check sees
+                # the other half directly: qout-eligible 21/21 -> 0/21.
+                #
+                # Set MODIFF_LINEAR=1 to restore.
                 is_modiff = (os.environ.get("MODIFF_LINEAR", "0") == "1"
                              and mode in ("int8", "int4",
                                           "int8_attn_modiff", "int4_attn_modiff"))

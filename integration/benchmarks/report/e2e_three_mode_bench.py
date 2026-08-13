@@ -37,14 +37,43 @@ from ck_bench_stats import summarize, stability_verdict
 #: int8_attn_modiff extends MoDiff to the attention qkv/proj projections (the modiff_attention
 #: Conv1d route). Selectable here because its cost is the point of measuring it -- that path has no
 #: GEMM o_hat-accumulate epilogue, so it is expected to be SLOWER than "int8", not faster.
-_ALL_MODES = ["fp16", "int8_baseline", "int4_baseline", "int8", "int4", "int8_attn_modiff"]
+#:
+#: LABEL vs MODE. An arm's label is what lands in the JSON, the summary table and the report's
+#: plots; the mode is what benchmark_ldm._setup_model consumes. They are not always the same string.
+#: `int4_linmodiff` is mode "int4" plus MODIFF_LINEAR=1, which extends MoDiff from the 70 convs to
+#: the 42 attention qkv/proj Linears (the wxax route, NOT the modiff_attention Conv1d route that
+#: *_attn_modiff installs -- those are two different implementations of the same idea). It is not a
+#: mode in benchmark_ldm at all: MODIFF_LINEAR is a global flag that only takes effect on modes on
+#: its is_modiff whitelist. Measuring it under the label "int4" would have buried it inside the row
+#: it exists to be compared against.
+ARMS = {
+    "fp16":             ("fp16", {}),
+    "int8_baseline":    ("int8_baseline", {}),
+    "int4_baseline":    ("int4_baseline", {}),
+    "int8":             ("int8", {}),
+    "int4":             ("int4", {}),
+    "int8_attn_modiff": ("int8_attn_modiff", {}),
+    "int4_linmodiff":   ("int4", {"MODIFF_LINEAR": "1"}),
+}
+_ALL_MODES = list(ARMS)
 _MODE_FILTER = [x.strip() for x in os.environ.get("E2EBENCH_MODES", "").split(",") if x.strip()]
 MODES = [m for m in _MODE_FILTER if m in _ALL_MODES] or _ALL_MODES[:3]
-CALIB = {"int8_baseline": "integration/calibration/int8_calibration.pt",
-         "int4_baseline": "integration/calibration/int4_calibration.pt",
-         "int8": "integration/calibration/int8_calibration.pt",
-         "int4": "integration/calibration/int4_calibration.pt",
-         "int8_attn_modiff": "integration/calibration/int8_calibration.pt"}
+
+
+def calib_for(mode):
+    """Resolve through CALIBRATION_PREFERENCE, i.e. measure what a user actually gets.
+
+    This used to be a hardcoded dict pointing every arm at `int*_calibration.pt`. That file is the
+    STUB-checkpoint calibration -- benchmark_ldm's own preference comment grades it at latent relL2
+    0.882 (int8) / 3.023 (int4), "worse than useless", and demoted it to last resort on 2026-08-12
+    when the qdiff files landed. So this harness kept measuring a configuration the tree had stopped
+    shipping, while run_all.sh advertised the opposite ("NOTHING HERE PASSES A CALIBRATION PATH").
+    For LATENCY a scale is just a multiplier, so most of the divergence was immaterial -- except for
+    one thing that is not: the stub file carries 107 entries (70 convs + 37 emb Linears) where the
+    qdiff file carries 70. Those 37 Linears therefore ran on STATIC scales here and on a per-call
+    DYNAMIC absmax in the shipped path, which is a different kernel route, not a different number.
+    """
+    return B._default_calibration_path(mode)
 
 # MODIFF_QUANT_LINEAR=1 is load-bearing and easy to miss: it is what turns the attention block's
 # qkv/proj into _QuantLinearWxAx. Without it they stay plain nn.Linear, _qout_eligible() returns
@@ -64,13 +93,24 @@ QUANT_ENV = {
 }
 
 
-def set_env(mode):
+def set_env(label):
+    mode, extra = ARMS[label]
     quant = mode != "fp16"
     for k, v in QUANT_ENV.items():
         os.environ[k] = v if quant else ("0" if k in ("MODIFF_QUANT_LINEAR",
                                                       "MODIFF_QUANT_ATTN") else v)
     for k in ("MODIFF_FLASH_ATTN", "MODIFF_FLASH_PACKED", "MODIFF_SDPA_BACKEND"):
         os.environ.pop(k, None)
+    # Written explicitly, never just left alone. Every arm runs in ONE process, so an arm that only
+    # sets its flags on the way in inherits whatever the previous arm left behind -- and MODIFF_LINEAR
+    # is read at conversion time inside _setup_model, so the leak would silently give a later "int4"
+    # row the linear-MoDiff configuration and report it as the default. The route check below would
+    # catch it (expected_eligible flips to 0), which is why that guard reads the MODULE and not
+    # the environment.
+    os.environ["MODIFF_LINEAR"] = "0"
+    for k, v in extra.items():
+        os.environ[k] = v
+    return mode
 
 
 def kernel_table(prof, wall_us):
@@ -114,15 +154,17 @@ def main():
     out = {"gpu": torch.cuda.get_device_name(0), "batch": a.batch, "steps": a.steps,
            "repeats": a.repeats, "modes": {}}
 
-    for mode in MODES:
-        print(f"\n{'='*64}\n{mode}\n{'='*64}")
-        set_env(mode)
+    for label in MODES:
+        print(f"\n{'='*64}\n{label}\n{'='*64}")
+        mode = set_env(label)
+        if label != mode:
+            print(f"  arm {label} -> mode {mode} + {ARMS[label][1]}")
         runner = B.BenchmarkRunner(
             "configs/latent-diffusion/lsun_churches-ldm-kl-8.yaml",
             "models/ldm/lsun_churches256/model.ckpt",
             output_dir="integration/results/e2e_three_mode",
             batch_size=a.batch, steps=a.steps, shape=(4, 32, 32),
-            calibration_path=CALIB.get(mode),
+            calibration_path=calib_for(mode),
             linear_backend="int_gemm" if mode != "fp16" else "fp16",
         )
         model, sampler = runner._setup_model(mode)
@@ -196,7 +238,7 @@ def main():
                 f"{mode}: attention qkv/proj are {qkv_t}/{proj_t}, not quantized linears -- the "
                 f"fused epilogue route cannot engage (is MODIFF_QUANT_LINEAR=1 set?)")
             assert elig == expected, (
-                f"{mode}: {elig}/{len(blks)} qout-eligible but expected {expected}")
+                f"{label}: {elig}/{len(blks)} qout-eligible but expected {expected}")
 
         times = []
         for _ in range(a.repeats):
@@ -221,7 +263,7 @@ def main():
         # which the +-sigma fields do not give at these repeat counts.
         st = summarize(times)
 
-        out["modes"][mode] = {
+        out["modes"][label] = {
             "stats": st,
             "stability": stability_verdict(st),
             "wall_us_per_batch": wall_us,
@@ -243,7 +285,7 @@ def main():
               f"{wall_us/1e3/a.batch:6.3f} ms/sample   {wall_us/1e3/a.steps:6.2f} ms/step")
         print(f"        mean {mean_us/1e3:.1f}  sd {sd_us/1e3:.1f}  CV {sd_us/mean_us*100:.2f}%  "
               f"min {min(times)/1e3:.1f}  max {max(times)/1e3:.1f}  "
-              f"spread {out['modes'][mode]['wall_spread_pct']:.2f}%")
+              f"spread {out['modes'][label]['wall_spread_pct']:.2f}%")
         print(f"  top kernels:")
         for r in rows[:8]:
             print(f"    {r['kernel'][:58]:<60}{r['us']/1e3:>9.2f} ms  {r['pct']:>5.1f}%")
