@@ -2064,7 +2064,14 @@ __global__ void gn_apply_delta_quantize_pack_flat_vec2_kernel(
 }
 
 // Host wrapper: MoDiff GN(+mod)+SiLU + int4 delta-quantize+pack + a_hat update.
-torch::Tensor group_norm_silu_delta_quantize_pack_nhwc(
+// Implementation. Split out on 2026-08-13 so the decoder skip-concat fold can supply the
+// GroupNorm statistics it already computed instead of this function recomputing them --
+// which IS the saving. The only behavioural change inside this body is at the stats call
+// site above; every use of `x` is untouched, because the fold hands over the materialized
+// concatenation and `x` is that tensor.
+static torch::Tensor gn_delta_pack_impl(
+    torch::Tensor mean_in,          // empty => compute the stats here, exactly as before
+    torch::Tensor inv_std_in,
     torch::Tensor x,
     torch::Tensor weight,
     torch::Tensor bias,
@@ -2111,9 +2118,26 @@ torch::Tensor group_norm_silu_delta_quantize_pack_nhwc(
     auto yqp = torch::empty({N, H, W, C / 2},
                             torch::TensorOptions().dtype(torch::kInt8).device(x.device()));
     auto stats_opts = torch::TensorOptions().dtype(torch::kFloat32).device(x.device());
-    auto mean = torch::empty({N * (int)num_groups}, stats_opts);
-    auto inv_std = torch::empty({N * (int)num_groups}, stats_opts);
-    gn_launch_group_stats(x, N, C, HW, (int)num_groups, eps, mean, inv_std);
+    torch::Tensor mean, inv_std;
+    if (mean_in.defined() && mean_in.numel() > 0) {
+        // Supplied by cat2_gn_stats_fp16, which computed them on THIS tensor while writing it.
+        // Checked rather than trusted: stats for the wrong shape would not crash, they would
+        // silently normalise with someone else's mean.
+        TORCH_CHECK(inv_std_in.defined() && inv_std_in.numel() == mean_in.numel(),
+                    "gn_delta_pack_impl: inv_std_in must match mean_in");
+        TORCH_CHECK(mean_in.numel() == (long)N * num_groups,
+                    "gn_delta_pack_impl: precomputed stats have ", mean_in.numel(),
+                    " entries, expected N*G = ", (long)N * num_groups);
+        TORCH_CHECK(mean_in.scalar_type() == torch::kFloat32
+                    && inv_std_in.scalar_type() == torch::kFloat32,
+                    "gn_delta_pack_impl: precomputed stats must be float32");
+        mean = mean_in;
+        inv_std = inv_std_in;
+    } else {
+        mean = torch::empty({N * (int)num_groups}, stats_opts);
+        inv_std = torch::empty({N * (int)num_groups}, stats_opts);
+        gn_launch_group_stats(x, N, C, HW, (int)num_groups, eps, mean, inv_std);
+    }
 
     const float* smooth_ptr = (smooth_inv.numel() > 0) ? smooth_inv.data_ptr<float>() : nullptr;
     __half* cache_ptr = reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>());
@@ -2230,4 +2254,46 @@ torch::Tensor group_norm_silu_delta_quantize_pack_nhwc(
             (float)Q_level, (float)safety);
     }
     return yqp;
+}
+
+// Unchanged public entry: computes its own statistics, exactly as before this refactor.
+torch::Tensor group_norm_silu_delta_quantize_pack_nhwc(
+    torch::Tensor x, torch::Tensor weight, torch::Tensor bias, torch::Tensor a_hat_cache,
+    int64_t num_groups, double eps, bool apply_silu, torch::Tensor scale,
+    torch::Tensor smooth_inv, torch::Tensor mod_scale, torch::Tensor mod_shift,
+    torch::Tensor absmax_buf, torch::Tensor scale_out, torch::Tensor inv_scale_out,
+    torch::Tensor retire_count, double Q_level, bool report_next, double safety
+) {
+    return gn_delta_pack_impl(torch::Tensor(), torch::Tensor(), x, weight, bias, a_hat_cache, num_groups, eps, apply_silu, scale, smooth_inv,
+        mod_scale, mod_shift, absmax_buf, scale_out, inv_scale_out, retire_count,
+        Q_level, report_next, safety);
+}
+
+// THE FOLD, wired: takes the two halves the decoder would have concatenated, produces the
+// concatenation AND the GroupNorm statistics in one pass (cat2_gn_stats_fp16), then runs the ordinary
+// delta-quantize apply over that concatenation with those statistics handed to it. So the tensor is
+// read twice in total instead of three times.
+//
+// Returns {packed, cat}. The caller needs `cat` because the ResBlock consumes it twice more -- the
+// 1x1 skip conv and the out-conv's residual -- and that is precisely why this design does NOT require
+// splitting the skip conv into two accumulating halves. That was the risky half of the original plan,
+// and the half whose measurement was dominated by rows where one GEMM timed slower than two.
+//
+// Measured: 51% of cat2 saved, 1.65% projected end to end (bench_cat2_gn_fold.py). Gated to
+// BIT-EXACTNESS against cat2 + the contiguous stats path on all 9 real shapes (test_cat2_gn_fold.py),
+// because 1.65% cannot justify moving any number the model produces.
+std::vector<torch::Tensor> group_norm_silu_delta_quantize_pack_cat2_nhwc(
+    torch::Tensor a, torch::Tensor b, torch::Tensor weight, torch::Tensor bias,
+    torch::Tensor a_hat_cache, int64_t num_groups, double eps, bool apply_silu,
+    torch::Tensor scale, torch::Tensor smooth_inv, torch::Tensor mod_scale,
+    torch::Tensor mod_shift, torch::Tensor absmax_buf, torch::Tensor scale_out,
+    torch::Tensor inv_scale_out, torch::Tensor retire_count, double Q_level,
+    bool report_next, double safety
+) {
+    auto fold = cat2_gn_stats_fp16(a, b, num_groups, eps);
+    torch::Tensor x = fold[0];
+    auto yqp = gn_delta_pack_impl(fold[1], fold[2], x, weight, bias, a_hat_cache, num_groups, eps, apply_silu, scale, smooth_inv,
+        mod_scale, mod_shift, absmax_buf, scale_out, inv_scale_out, retire_count,
+        Q_level, report_next, safety);
+    return {yqp, x};
 }

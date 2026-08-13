@@ -137,6 +137,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "channels_last cat2 fused with the GroupNorm stats pass -> {cat, mean, inv_std}");
     m.def("gn_stats_fp16", &gn_stats_fp16,
           "the shipped channel-major GroupNorm stats pass alone -> {mean, inv_std}");
+    m.def("group_norm_silu_delta_quantize_pack_cat2_nhwc",
+          &group_norm_silu_delta_quantize_pack_cat2_nhwc,
+          "decoder skip-concat fold + delta-quantize apply -> {packed, cat}");
 
     // Native channels_last GroupNorm(+SiLU) (kernels/group_norm_silu.cu)
     m.def("group_norm_silu_nhwc", &group_norm_silu_nhwc,

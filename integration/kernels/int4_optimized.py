@@ -734,6 +734,31 @@ class OptimizedInt4Conv2d(nn.Module):
                 and self.a_hat_cache.shape == x.shape
                 and x.dtype == torch.float16)
 
+    def can_gn_fuse_modiff_cat2(self, a: torch.Tensor, b: torch.Tensor) -> bool:
+        """Eligibility for the decoder skip-concat fold, decided from SHAPES ONLY.
+
+        The obvious way to write this is to build a probe tensor of the concatenated shape and hand it
+        to can_gn_fuse_modiff. That is what the first version did, and it allocated a full
+        [N, C1+C2, H, W] fp16 tensor per block per step -- the size of the concatenation this
+        optimisation exists to avoid touching. It would have consumed the whole saving to decide
+        whether to take it. Everything the predicate needs is a shape or a flag, so nothing is
+        allocated here.
+
+        Mirrors _can_fuse_input_silu + can_gn_fuse_modiff exactly; if either changes, this must too.
+        """
+        if not (self.fuse_input_silu and self.modiff_enabled and not self.is_first_step
+                and self.is_calibrated and HAS_CUTLASS and self.use_cutlass
+                and getattr(self, 'groups', 1) == 1):
+            return False
+        if self.a_hat_cache is None or self.a_hat_cache.dtype != torch.float16:
+            return False
+        if a.dtype != torch.float16 or b.dtype != torch.float16 or not a.is_cuda:
+            return False
+        # a_hat_cache is indexed as the CONCATENATION, which is what the kernel writes and the apply
+        # pass reads, so it must match that shape and not either half's.
+        cat_shape = (a.shape[0], a.shape[1] + b.shape[1], a.shape[2], a.shape[3])
+        return tuple(self.a_hat_cache.shape) == cat_shape
+
     def _forward_modulated_static_fused_silu(self, x: torch.Tensor) -> torch.Tensor:
         """Same as _forward_modulated's calibrated CUTLASS branch, but `x` is
         the pre-activation input -- SiLU is applied inline inside
@@ -791,14 +816,29 @@ class OptimizedInt4Conv2d(nn.Module):
                 and x.is_cuda)
 
     def forward_gn_fused_modiff(self, x, gn_weight, gn_bias, num_groups, eps,
-                                mod_scale2d, mod_shift2d, residual=None):
+                                mod_scale2d, mod_shift2d, residual=None, x2=None):
         """int4 counterpart of OptimizedInt8Conv2d.forward_gn_fused_modiff:
         fused GroupNorm(+mod)+SiLU + INT4 delta-quantize+pack + o_hat conv,
         replacing the standalone GN kernel + step1_static_quantize_pack_int4_fprop_silu.
         Bit-identical to that two-kernel path. Caller must have verified
-        can_gn_fuse_modiff(x) and the even-CPG / GN-native conditions."""
+        can_gn_fuse_modiff(x) and the even-CPG / GN-native conditions.
+
+        `x2` is the DECODER SKIP-CONCAT FOLD. When given, (x, x2) are the two halves the UNet
+        would otherwise have concatenated with cat2_channels_last_fp16, and the kernel reads
+        them in place while emitting the concatenation itself -- so the tensor is read twice
+        in total instead of three times. Returns (out, cat) in that mode instead of out,
+        because the ResBlock still consumes the concatenation twice more (the 1x1 skip conv
+        and the out-conv's residual); handing it back is what makes splitting the skip conv
+        unnecessary. Measured 51% of cat2 saved, ~1.65% end to end, and gated to
+        bit-exactness against cat2 + this same path in integration/tests/test_cat2_gn_fold.py.
+        """
         self.step_count += 1
-        if not x.is_contiguous(memory_format=torch.channels_last):
+        if x2 is not None:
+            if not x.is_contiguous(memory_format=torch.channels_last):
+                x = x.contiguous(memory_format=torch.channels_last)
+            if not x2.is_contiguous(memory_format=torch.channels_last):
+                x2 = x2.contiguous(memory_format=torch.channels_last)
+        elif not x.is_contiguous(memory_format=torch.channels_last):
             x = x.contiguous(memory_format=torch.channels_last)
         if self._cached_alpha_tensor is None or self._cached_alpha_tensor.device != x.device:
             scale = float(self.static_input_scale.item())
@@ -833,12 +873,21 @@ class OptimizedInt4Conv2d(nn.Module):
             d_scale = self._scale_buf.view(1)
             d_alpha = self._inv_scale_buf.view(1)
 
-        p_step1 = profiler.start("MoDiff INT4 GN-fused Step1 (GN+SiLU+delta+pack)")
-        x_packed = modiff_cutlass.group_norm_silu_delta_quantize_pack_nhwc(
-            x, gn_weight, gn_bias, self.a_hat_cache, num_groups, eps, True,
-            d_scale, self._smooth_inv_flat,
-            mod_scale2d, mod_shift2d, *gn_dyn)
-        profiler.stop("MoDiff INT4 GN-fused Step1 (GN+SiLU+delta+pack)", p_step1)
+        cat = None
+        if x2 is not None:
+            p_step1 = profiler.start("MoDiff INT4 GN-fused Step1 cat2 (concat+GN+SiLU+delta+pack)")
+            x_packed, cat = modiff_cutlass.group_norm_silu_delta_quantize_pack_cat2_nhwc(
+                x, x2, gn_weight, gn_bias, self.a_hat_cache, num_groups, eps, True,
+                d_scale, self._smooth_inv_flat,
+                mod_scale2d, mod_shift2d, *gn_dyn)
+            profiler.stop("MoDiff INT4 GN-fused Step1 cat2 (concat+GN+SiLU+delta+pack)", p_step1)
+        else:
+            p_step1 = profiler.start("MoDiff INT4 GN-fused Step1 (GN+SiLU+delta+pack)")
+            x_packed = modiff_cutlass.group_norm_silu_delta_quantize_pack_nhwc(
+                x, gn_weight, gn_bias, self.a_hat_cache, num_groups, eps, True,
+                d_scale, self._smooth_inv_flat,
+                mod_scale2d, mod_shift2d, *gn_dyn)
+            profiler.stop("MoDiff INT4 GN-fused Step1 (GN+SiLU+delta+pack)", p_step1)
         if self._delta_calib:
             self._observe_delta_absmax()
 
@@ -856,7 +905,7 @@ class OptimizedInt4Conv2d(nn.Module):
                 self.stride[0], self.stride[1], self.padding[0], self.padding[1],
                 self.dilation[0], self.dilation[1])
             profiler.stop("MoDiff INT4 Static Conv2d (o_hat+residual)", p_conv)
-            return out
+            return (out, cat) if cat is not None else out
 
         p_conv = profiler.start("MoDiff INT4 Static Conv2d")
         (modiff_cutlass.conv2d_int4_evt_o_hat if self.o_hat_cache.dtype == torch.float16 else modiff_cutlass.conv2d_int4_fprop_o_hat)(
@@ -865,7 +914,8 @@ class OptimizedInt4Conv2d(nn.Module):
             self.stride[0], self.stride[1], self.padding[0], self.padding[1],
             self.dilation[0], self.dilation[1])
         profiler.stop("MoDiff INT4 Static Conv2d", p_conv)
-        return self._module_output()
+        out = self._module_output()
+        return (out, cat) if cat is not None else out
 
     def forward_modiff_fused_silu_residual(self, x: torch.Tensor, residual: torch.Tensor) -> torch.Tensor:
         """int4 counterpart of OptimizedInt8Conv2d.forward_modiff_fused_silu_residual:

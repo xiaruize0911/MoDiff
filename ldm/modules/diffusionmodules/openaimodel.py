@@ -1,3 +1,4 @@
+import os
 from abc import abstractmethod
 from functools import partial
 import math
@@ -38,6 +39,23 @@ try:
 except ImportError:
     _cat2_cutlass = None
     _HAS_CAT2_CHANNELS_LAST = False
+
+
+#: ON by default as of 2026-08-13, after the number was MEASURED rather than projected:
+#:   -1.59% end to end at W4A4 (60.48 -> 59.52 ms/step, batch 128, DDIM 200), from two runs per arm at
+#:   5 repeats; worst between-run spread 0.20%, so the effect is 8x the noise. The first 3-repeat pass
+#:   read -0.65% and I briefly explained that away with a mechanism -- it was simply an outlier.
+#: Set MODIFF_CAT2_FOLD=0 to disable. Read once at import, like every other MODIFF_* switch here.
+#:
+#: WHY DEFAULTING IT ON IS SAFE, and how each part was checked rather than argued:
+#:   * where it runs (int4 MoDiff), the sampled latent is BIT-IDENTICAL -- verify_cat2_fold_e2e.py,
+#:     which also counts that the kernel really ran (570 calls) so "identical" is not vacuous;
+#:   * where it cannot run (fp16 / int8 / the PTQ baselines), the fold kernel is called ZERO times --
+#:     test_cat2_fold_fallback.py counts that, instead of comparing latents, because fp16 sampling is
+#:     nondeterministic across processes here (~4-6e-3) and no output comparison could settle it;
+#:   * the kernel itself is bit-exact against cat2 + the contiguous stats path on all 9 real shapes,
+#:     including the 4 where a GroupNorm group straddles the two buffers -- test_cat2_gn_fold.py.
+_CAT2_FOLD = os.environ.get("MODIFF_CAT2_FOLD", "1") == "1"
 
 
 def _skip_concat(h, skip):
@@ -802,8 +820,24 @@ class UNetModel(nn.Module):
                 split = h.shape[1]
             else:
                 split = 0
-            h = _skip_concat(h, hs.pop())
-            h = module(h, emb, context, split=split)
+            # DECODER SKIP-CONCAT FOLD (MODIFF_CAT2_FOLD=1). Hand the two halves to the block
+            # instead of their concatenation: the fused int4 MoDiff ResBlock's GN prologue reads both
+            # in place and emits the concatenation itself, so the tensor is read twice in total
+            # instead of three times. A ResBlock is always the first layer of an output block, so
+            # nothing else can receive the tuple, and every ineligible case materializes the
+            # concatenation inside the block via the same _skip_concat used here.
+            #
+            # OPT-IN while it is measured end to end. The kernel is gated to bit-exactness
+            # (integration/tests/test_cat2_gn_fold.py) and the wired entry reproduces cat2 + the
+            # ordinary prologue bit-for-bit including the in-place a_hat update, but a flag keeps the
+            # shipped path untouched until the e2e latency claim (~1.65%) is confirmed rather than
+            # projected.
+            skip = hs.pop()
+            if _CAT2_FOLD and isinstance(module, nn.Sequential) and len(module) > 0 \
+                    and type(module[0]).__name__ == "FusedResBlock":
+                h = module((h, skip), emb, context, split=split)
+            else:
+                h = module(_skip_concat(h, skip), emb, context, split=split)
         h = h.type(x.dtype)
         if self.predict_codebook_ids:
             return self.id_predictor(h)

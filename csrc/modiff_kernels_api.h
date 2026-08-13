@@ -310,6 +310,17 @@ std::vector<torch::Tensor> cat2_gn_stats_fp16(
 //: made an inherited (and 3.8x wrong) number the basis of a claim that had to be retracted on
 //: 2026-08-13. Returns {mean, inv_std}.
 std::vector<torch::Tensor> gn_stats_fp16(torch::Tensor x, int64_t num_groups, double eps);
+//: The decoder skip-concat fold wired end to end: the two halves in, {packed, cat} out, with the
+//: concatenation and the GroupNorm statistics produced in one pass. Returns `cat` because the
+//: ResBlock still consumes it (skip conv + residual), which is why the skip conv does NOT need
+//: splitting. See csrc/modiff/norm/group_norm_silu.cu.
+std::vector<torch::Tensor> group_norm_silu_delta_quantize_pack_cat2_nhwc(
+    torch::Tensor a, torch::Tensor b, torch::Tensor weight, torch::Tensor bias,
+    torch::Tensor a_hat_cache, int64_t num_groups, double eps, bool apply_silu,
+    torch::Tensor scale, torch::Tensor smooth_inv, torch::Tensor mod_scale,
+    torch::Tensor mod_shift, torch::Tensor absmax_buf, torch::Tensor scale_out,
+    torch::Tensor inv_scale_out, torch::Tensor retire_count, double Q_level,
+    bool report_next, double safety);
 
 // ---- csrc/kernels/norm/group_norm_silu.cu ----
 torch::Tensor group_norm_silu_nhwc(

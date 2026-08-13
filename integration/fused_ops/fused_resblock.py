@@ -232,7 +232,22 @@ def _prequant_common_ok(conv):
     )
 
 
-def _prequant_gn_conv_modiff(x, gn, conv, mod_scale=None, mod_shift=None, residual=None):
+def _skip_concat_fallback(a, b):
+    """Materialize the decoder skip concatenation when the fold declines.
+
+    Reuses openaimodel._skip_concat so there is ONE definition of what this concatenation is -- it
+    already falls back from cat2_channels_last_fp16 to torch.cat on odd channel counts, fp32 and CPU.
+    Imported lazily to keep integration/ from importing ldm/ at module scope.
+    """
+    try:
+        from ldm.modules.diffusionmodules.openaimodel import _skip_concat
+        return _skip_concat(a, b)
+    except Exception:
+        return torch.cat([a, b], dim=1)
+
+
+def _prequant_gn_conv_modiff(x, gn, conv, mod_scale=None, mod_shift=None, residual=None,
+                             x2=None):
     """MoDiff (temporal-cache) counterpart of the baseline GN->intX fusion:
     fuse GroupNorm(+scale-shift mod)+SiLU into the conv's delta-quantize + a_hat
     update kernel (group_norm_silu_delta_quantize[_pack]_nhwc), then run the o_hat
@@ -244,8 +259,31 @@ def _prequant_gn_conv_modiff(x, gn, conv, mod_scale=None, mod_shift=None, residu
     """
     if conv is None or not getattr(conv, 'modiff_enabled', False):
         return None
-    if not hasattr(conv, 'can_gn_fuse_modiff') or not conv.can_gn_fuse_modiff(x):
-        return None
+    # THE DECODER SKIP-CONCAT FOLD. `x2` means x is only the first half; every eligibility check
+    # below is about the tensor the GroupNorm will actually see, which is the CONCATENATION -- so a
+    # probe of that shape is built and checked, rather than checking the half and hoping. Only the
+    # int4 fold kernel exists (cat2_gn_stats_fp16 is fp16/int4-only), and it requires C1 % 32 == 0
+    # so no warp straddles the two buffers; both are verified here so an ineligible shape falls back
+    # to the ordinary concat path instead of failing inside CUDA.
+    if x2 is not None:
+        if (not HAS_GN_SILU_DELTA_QUANTIZE_PACK or not hasattr(conv, 'forward_from_int4')
+                or x.dtype != torch.float16 or x2.dtype != torch.float16
+                or int(x.shape[1]) % 32 != 0
+                or not x.is_contiguous(memory_format=torch.channels_last)
+                or not x2.is_contiguous(memory_format=torch.channels_last)):
+            return None
+        # SHAPE-ONLY eligibility. The first version built a probe tensor of the concatenated shape
+        # and passed it to can_gn_fuse_modiff -- allocating, per block per step, exactly the tensor
+        # this optimisation exists to stop touching. It also crashed: new_empty() takes no
+        # memory_format on this torch. can_gn_fuse_modiff_cat2 decides from shapes and flags alone.
+        if not hasattr(conv, 'can_gn_fuse_modiff_cat2') or not conv.can_gn_fuse_modiff_cat2(x, x2):
+            return None
+        cat_shape = (x.shape[0], x.shape[1] + x2.shape[1], x.shape[2], x.shape[3])
+        x_eff = None            # no concatenated tensor exists yet; the kernel will emit it
+    else:
+        if not hasattr(conv, 'can_gn_fuse_modiff') or not conv.can_gn_fuse_modiff(x):
+            return None
+        x_eff = x
     is_int4 = hasattr(conv, 'forward_from_int4')
     if is_int4 and not HAS_GN_SILU_DELTA_QUANTIZE_PACK:
         return None
@@ -253,22 +291,36 @@ def _prequant_gn_conv_modiff(x, gn, conv, mod_scale=None, mod_shift=None, residu
         return None
 
     ng = gn.num_groups
-    N, C = x.size(0), x.size(1)
-    # GN-native eligibility (same conditions as _group_norm_silu's can_use_native).
-    if not (x.is_cuda and x.dtype in (torch.float32, torch.float16)
-            and x.is_contiguous(memory_format=torch.channels_last) and C % ng == 0):
-        return None
+    if x2 is not None:
+        # The halves' own layout/dtype were checked above; what remains is the CONCATENATION's
+        # divisibility, which is a property of the shape tuple and needs no tensor.
+        N, C = cat_shape[0], cat_shape[1]
+        if C % ng != 0:
+            return None
+        ref = x
+    else:
+        N, C = x_eff.size(0), x_eff.size(1)
+        # GN-native eligibility (same conditions as _group_norm_silu's can_use_native).
+        if not (x_eff.is_cuda and x_eff.dtype in (torch.float32, torch.float16)
+                and x_eff.is_contiguous(memory_format=torch.channels_last) and C % ng == 0):
+            return None
+        ref = x_eff
     if is_int4 and (C % 2 != 0 or (C // ng) % 2 != 0):
         return None
 
-    weight, bias = gn._cast_params(x.dtype)
+    weight, bias = gn._cast_params(ref.dtype)
     if mod_scale is not None:
         ms2d = mod_scale.reshape(N, C).contiguous()
         sh2d = mod_shift.reshape(N, C).contiguous()
     else:
-        ms2d = sh2d = x.new_empty(0)
+        ms2d = sh2d = ref.new_empty(0)
     if residual is not None:
         residual = residual.to(torch.float16).contiguous(memory_format=torch.channels_last)
+    if x2 is not None:
+        # Returns (out, cat): the fold emits the concatenation, which the caller still needs for the
+        # skip conv and the out-conv residual.
+        return conv.forward_gn_fused_modiff(x, weight, bias, ng, gn.eps, ms2d, sh2d, residual,
+                                            x2=x2)
     return conv.forward_gn_fused_modiff(x, weight, bias, ng, gn.eps, ms2d, sh2d, residual)
 
 
@@ -288,7 +340,7 @@ def _modiff_out_conv(conv, h, residual_arg):
     return conv(h), False
 
 
-def _prequant_gn_conv(x, gn, conv, mod_scale=None, mod_shift=None, residual=None):
+def _prequant_gn_conv(x, gn, conv, mod_scale=None, mod_shift=None, residual=None, x2=None):
     """If (GroupNorm+SiLU `gn` -> quantized conv `conv`) is eligible for the
     GN->intX K1-fusion, run GroupNorm(+optional scale-shift modulation)+SiLU
     emitting the conv's quantized input directly (int8, or packed int4) and then
@@ -306,9 +358,14 @@ def _prequant_gn_conv(x, gn, conv, mod_scale=None, mod_shift=None, residual=None
     # (+ a_hat update) kernel, replacing the standalone GN kernel + step1 two-kernel
     # pass. Bit-identical to that path; only kicks in once the layer is calibrated
     # with an fp16 a_hat cache (step >= 2). See _prequant_gn_conv_modiff.
-    modiff_fused = _prequant_gn_conv_modiff(x, gn, conv, mod_scale, mod_shift, residual)
+    modiff_fused = _prequant_gn_conv_modiff(x, gn, conv, mod_scale, mod_shift, residual, x2=x2)
     if modiff_fused is not None:
         return modiff_fused
+    # The fold is MoDiff-only. If it did not take, the caller must fall back to materializing the
+    # concatenation itself -- signalled by returning None rather than by silently running the
+    # non-folded path on `x`, which is only the first half and would be a wrong-shape conv.
+    if x2 is not None:
+        return None
 
     if not _prequant_common_ok(conv):
         return None
@@ -815,12 +872,33 @@ class FusedResBlock(TimestepBlock):
         """Forward pass with fused operations"""
         if self.resblock_type == 'openai':
             return self._forward_openai(x, emb, split)
-        else:
-            return self._forward_resnet(x, emb)
+        # The decoder skip-concat fold hands a (h, skip) TUPLE, and only _forward_openai understands
+        # it. This UNet's output_blocks are all openai-type so the resnet path never sees one today --
+        # which is exactly why it would be a silent trap for the next model family wired through
+        # FusedResBlock. Materialize and continue.
+        if isinstance(x, tuple):
+            x = _skip_concat_fallback(*x)
+        return self._forward_resnet(x, emb)
     
     def _forward_openai(self, x, emb, split=0):
         """Fused forward for openaimodel.ResBlock"""
-        # Input path: fused GroupNorm + SiLU, then Conv
+        # THE DECODER SKIP-CONCAT FOLD ARRIVES AS A TUPLE. openaimodel's decoder loop hands
+        # (h, hs.pop()) instead of their concatenation, so the fold kernel can read both halves in
+        # place and emit the concatenation itself -- one pass over the tensor instead of two.
+        #
+        # Only the non-updown int4 MoDiff in-path can consume it. Everything else -- and every shape
+        # the kernel rejects -- materializes the concatenation right here and proceeds exactly as
+        # before, so this is a fast path with a complete fallback rather than a new requirement.
+        # A ResBlock is always the FIRST layer of a decoder output block, so no other module ever
+        # sees the tuple.
+        x_halves = None
+        if isinstance(x, tuple):
+            x_halves = x
+            if self.updown:
+                x = _skip_concat_fallback(*x_halves)
+                x_halves = None
+            else:
+                x = None            # materialized below, either by the fold or by the fallback
         if self.updown:
             # GroupNorm+SiLU+quantize+resize in one kernel (see _prequant_gn_resize_conv),
             # which takes the RAW x -- the normalisation happens inside it. GroupNorm is
@@ -841,7 +919,21 @@ class FusedResBlock(TimestepBlock):
         else:
             # K1->GN fusion: GroupNorm+SiLU emits the conv's quantized input
             # directly (int8, or packed int4), so in_conv skips its own quantize.
-            fused = _prequant_gn_conv(x, self.fused_in_norm_silu, self.in_conv)
+            if x_halves is not None:
+                # Fold attempt. Returns (out, cat) on success -- `cat` is the concatenation the
+                # kernel produced, which the skip conv and the out-conv residual below still need.
+                folded = _prequant_gn_conv(x_halves[0], self.fused_in_norm_silu, self.in_conv,
+                                           x2=x_halves[1])
+                if folded is not None:
+                    h, x = folded
+                    fused = h
+                else:
+                    # Declined (wrong dtype/layout, C1 % 32, uncalibrated, non-MoDiff, int8 path).
+                    # Materialize and take the ordinary route.
+                    x = _skip_concat_fallback(*x_halves)
+                    fused = _prequant_gn_conv(x, self.fused_in_norm_silu, self.in_conv)
+            else:
+                fused = _prequant_gn_conv(x, self.fused_in_norm_silu, self.in_conv)
             if fused is not None:
                 h = fused
             else:
