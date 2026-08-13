@@ -192,6 +192,13 @@ class OptimizedInt4Conv2d(nn.Module):
         #: zero every expression below reduces exactly to the symmetric path -- which is what
         #: test_int4_zero_point.py asserts bit-for-bit rather than approximately.
         self.register_buffer('static_input_zp', torch.zeros(1, dtype=torch.float32))
+        #: HOST MIRROR of static_input_zp. The guards and the routing have to ask "is there a
+        #: zero point?" on every quantize, and reading the CUDA buffer with .item() forces a
+        #: device sync -- ~12k of them per sample at 62 convs x 200 steps. Measured cost of the
+        #: first version, which did exactly that: W4A4 MoDiff 59.52 -> 61.63 ms/step and PTQ
+        #: 59.04 -> 61.73. Updated only where the buffer is (calibration time), never in a
+        #: forward.
+        self._zp_float = 0.0
 
         # --- Bias ---
         if conv.bias is not None:
@@ -770,7 +777,7 @@ class OptimizedInt4Conv2d(nn.Module):
         As of 2026-08-13 only group_norm_silu_quantize_pack_nhwc honours z. The plan scoped fix #2 at
         ~6 entry points; the rest reach this.
         """
-        z = float(self.static_input_zp.item())
+        z = getattr(self, "_zp_float", 0.0)
         if z == 0.0:
             return
         name = self.layer_name or type(self).__name__
@@ -1647,6 +1654,7 @@ class OptimizedInt4Conv2d(nn.Module):
         there is nowhere else to put it. It is dropped again (back to None) if z returns to 0.
         """
         z = float(self.static_input_zp.item())
+        self._zp_float = z          # calibration-time sync is fine; the forward path reads the mirror
         s_in = float(self.static_input_scale.item())
         if z == 0.0 or s_in == 0.0:
             self.bias = None if self._orig_bias is None else self._orig_bias.clone()

@@ -247,14 +247,15 @@ ZP_UNSUPPORTED_HITS = set()
 
 def _zp_unsupported(conv, where):
     """Record/raise when a conv with a non-zero zero point is quantized by a path that ignores it."""
-    zp_t = getattr(conv, 'static_input_zp', None)
-    if zp_t is None or float(zp_t.item()) == 0.0:
+    # Host mirror, never .item() -- see OptimizedInt4Conv2d._zp_float. This function is called on
+    # every quantize, so a device sync here cost ~2 ms/step before it was removed.
+    if getattr(conv, "_zp_float", 0.0) == 0.0:
         return
     name = getattr(conv, 'layer_name', None) or where
     ZP_UNSUPPORTED_HITS.add(name)
     if os.environ.get("MODIFF_ZP_STRICT", "1") == "1":
         raise RuntimeError(
-            f"{name}: activation zero point {float(zp_t.item()):+.0f} is set, but this layer is "
+            f"{name}: activation zero point {getattr(conv, '_zp_float', 0.0):+.0f} is set, but this layer is "
             f"quantized by {where}, which does not apply it -- while the bias already carries the "
             f"matching -z*sum(w_q) correction. Set the zero point to 0 for this layer or teach "
             f"{where} the zero point.")
@@ -442,8 +443,7 @@ def _prequant_gn_conv(x, gn, conv, mod_scale=None, mod_shift=None, residual=None
         # symmetric path keeps calling the exact entry point it always did. The _zp kernel is
         # bit-identical at z=0, but not calling it at all is a stronger guarantee than trusting that.
         # The matching -z*sum(w_q) term is already folded into conv.bias by _refold_zp_bias.
-        zp_t = getattr(conv, 'static_input_zp', None)
-        zp = float(zp_t.item()) if zp_t is not None else 0.0
+        zp = getattr(conv, "_zp_float", 0.0)   # host mirror; see _zp_unsupported
         if native_ok and zp != 0.0:
             if not HAS_GN_SILU_QUANTIZE_PACK_ZP:
                 # A non-zero zp with no kernel to honour it would quantize symmetrically while the
