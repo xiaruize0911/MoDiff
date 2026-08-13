@@ -301,6 +301,15 @@ torch::Tensor unpack_int4_to_int8_cl(torch::Tensor packed, int64_t N, int64_t C,
                                      int64_t H, int64_t W);
 
 torch::Tensor cat2_channels_last_fp16(torch::Tensor a, torch::Tensor b);
+//: The decoder skip-concat fold: concatenation + GroupNorm stats in one pass over the data,
+//: so the pass cat2 used to cost is absorbed by a read that was happening anyway.
+//: Returns {cat, mean, inv_std}. See csrc/modiff/norm/group_norm_silu.cu.
+std::vector<torch::Tensor> cat2_gn_stats_fp16(
+    torch::Tensor a, torch::Tensor b, int64_t num_groups, double eps);
+//: The shipped GroupNorm stats pass, exposed so it can be TIMED IN ISOLATION -- its absence is what
+//: made an inherited (and 3.8x wrong) number the basis of a claim that had to be retracted on
+//: 2026-08-13. Returns {mean, inv_std}.
+std::vector<torch::Tensor> gn_stats_fp16(torch::Tensor x, int64_t num_groups, double eps);
 
 // ---- csrc/kernels/norm/group_norm_silu.cu ----
 torch::Tensor group_norm_silu_nhwc(

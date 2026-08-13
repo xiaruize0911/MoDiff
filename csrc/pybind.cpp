@@ -133,6 +133,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "exists for.");
     m.def("cat2_channels_last_fp16", &cat2_channels_last_fp16,
           "Specialized vectorized 2-tensor channels-last FP16 concat along dim=1 (replaces torch.cat for UNetModel's decoder skip-concat)");
+    m.def("cat2_gn_stats_fp16", &cat2_gn_stats_fp16,
+          "channels_last cat2 fused with the GroupNorm stats pass -> {cat, mean, inv_std}");
+    m.def("gn_stats_fp16", &gn_stats_fp16,
+          "the shipped channel-major GroupNorm stats pass alone -> {mean, inv_std}");
 
     // Native channels_last GroupNorm(+SiLU) (kernels/group_norm_silu.cu)
     m.def("group_norm_silu_nhwc", &group_norm_silu_nhwc,

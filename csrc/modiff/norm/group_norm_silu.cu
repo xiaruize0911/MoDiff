@@ -833,13 +833,46 @@ __global__ void gn_stats_partials_chanmajor_kernel(
     const TIn* __restrict__ X,
     float* __restrict__ part_sum,      // [N, G, nblocks]
     float* __restrict__ part_sumsq,
-    int C, long HW, int G, int nblocks
+    int C, long HW, int G, int nblocks,
+    // ---- OPTIONAL SPLIT INPUT (the decoder skip-concat fold) ----------------------------------
+    // When X2 != nullptr the tensor is not materialized: X holds the first C1 channels and X2 the
+    // remaining C - C1, each channels_last in its own buffer, and this kernel reads them in place
+    // instead of reading a concatenation someone else had to write first. When OutCat != nullptr it
+    // ALSO writes that concatenation as it goes, for the consumers that still need it (the apply
+    // kernel and the ResBlock's 1x1 skip conv).
+    //
+    // WHY THIS IS THE WHOLE OPTIMISATION. Today the decoder pays cat2 (read C + write C) and then
+    // this kernel reads the result (C) -- 3C of traffic. Reading the halves directly and emitting the
+    // concatenation here costs read C + write C = 2C, because the read was already being paid. cat2
+    // measures at 81% of peak on the shapes that dominate, so it is pure traffic and removing a pass
+    // over it is the entire win. Measured ceiling for the full fold (this plus splitting the skip
+    // conv) was 1.45-2.01% end to end; this half needs no change to the apply kernel or the conv.
+    //
+    // COALESCING IS PRESERVED, and not by luck: c is t + k*B, so within one k every consecutive
+    // thread reads a consecutive channel, and a warp only straddles the C1 boundary if C1 % 32 != 0.
+    // Every C1 this UNet concatenates is 192, 384 or 768 -- all multiples of 32 -- so no warp splits.
+    // The concat store is at the output's own stride C and is fully coalesced by construction.
+    //
+    // DETERMINISM AND BIT-EXACTNESS ARE UNCHANGED. Each channel's spatial sum still accumulates in
+    // ascending hw order in one thread's register, and the group combine still reads shared memory in
+    // ascending channel index. Only the ADDRESS a value is loaded from changes, never the value or
+    // the order it is added in -- so the partials are bit-identical to the concatenated path, which
+    // the gate in integration/tests/test_cat2_gn_fold.py asserts rather than assumes.
+    const TIn* __restrict__ X2 = nullptr,
+    TIn* __restrict__ OutCat = nullptr,
+    int C1 = 0
 ) {
     const int CPG = C / G;
     const int B = blockDim.x;                  // == C / K
     const int t = threadIdx.x;
     const int n = blockIdx.y;
-    const TIn* x_base = X + (long)n * HW * C;
+    const bool split = (X2 != nullptr);
+    const int c2 = C - C1;
+    // Per-buffer row strides: the halves are channels_last in their OWN widths, so their rows are
+    // C1 and c2 wide while the concatenation's row is C wide.
+    const TIn* a_base = X + (long)n * HW * (split ? C1 : C);
+    const TIn* b_base = split ? (X2 + (long)n * HW * c2) : nullptr;
+    TIn* cat_base = (OutCat != nullptr) ? (OutCat + (long)n * HW * C) : nullptr;
 
     float s[K], sq[K];
 #pragma unroll
@@ -849,7 +882,20 @@ __global__ void gn_stats_partials_chanmajor_kernel(
         const long row = hw * (long)C;
 #pragma unroll
         for (int k = 0; k < K; ++k) {
-            const float v = gn_load(x_base, row + t + k * B);
+            const int c = t + k * B;
+            // The raw element is kept so the concat store is a COPY, not a round-trip through
+            // float: __half -> float -> __half is lossless, but copying the bits cannot even raise
+            // the question, and cat2_channels_last_fp16 is a pure copy that this must match.
+            TIn raw;
+            if (!split) {
+                raw = a_base[row + c];
+            } else if (c < C1) {
+                raw = a_base[hw * (long)C1 + c];
+            } else {
+                raw = b_base[hw * (long)c2 + (c - C1)];
+            }
+            if (cat_base != nullptr) cat_base[row + c] = raw;
+            const float v = gn_load(&raw, 0);
             s[k] += v;
             sq[k] += v * v;
         }
@@ -1125,6 +1171,139 @@ std::vector<torch::Tensor> gn_stats_from_tiles(torch::Tensor x, int64_t num_grou
         pq.data_ptr<float>(), C, HW, (int)num_groups, (int)Mt, (int)Nt, tn, M);
   C10_CUDA_CHECK(cudaGetLastError());
   return {ps, pq};
+}
+
+// =========================================================================
+// cat2_gn_stats_fp16 -- the decoder skip-concat fold, standalone.
+//
+// Reads the two halves in place, emits their channel concatenation, and returns the GroupNorm
+// (mean, inv_std) computed over it -- all in ONE pass over the data. It replaces
+// `cat2_channels_last_fp16` followed by the stats pass inside a GN prologue: 3C of traffic becomes
+// 2C, because the read the stats pass was going to do anyway is the read that feeds the copy.
+//
+// Deliberately standalone rather than wired into group_norm_silu_delta_quantize_pack_nhwc yet: this
+// is the half with no arithmetic risk, it is separately gateable (test_cat2_gn_fold.py asserts the
+// partials are BIT-IDENTICAL to the concatenated path and the emitted concat matches
+// cat2_channels_last_fp16 exactly), and landing it before the wiring keeps a rebuild that touches the
+// model's hottest prologue out of the same change as the kernel itself.
+//
+// Only the channel-major variant is offered. The group-major tree and the two atomic variants are
+// kept in this file as recorded negative results (see gn_stats_partials_chanmajor_kernel's header);
+// none of them is what runs, so none of them needs a split-input form.
+std::vector<torch::Tensor> cat2_gn_stats_fp16(
+    torch::Tensor a, torch::Tensor b, int64_t num_groups, double eps
+) {
+    TORCH_CHECK(a.is_cuda() && b.is_cuda(), "cat2_gn_stats_fp16: expected CUDA tensors");
+    TORCH_CHECK(a.scalar_type() == torch::kHalf && b.scalar_type() == torch::kHalf,
+                "cat2_gn_stats_fp16: expected FP16 tensors");
+    TORCH_CHECK(a.dim() == 4 && b.dim() == 4, "cat2_gn_stats_fp16: expected 4D [N,C,H,W]");
+    TORCH_CHECK(a.size(0) == b.size(0) && a.size(2) == b.size(2) && a.size(3) == b.size(3),
+                "cat2_gn_stats_fp16: N,H,W must match");
+    TORCH_CHECK(a.is_contiguous(at::MemoryFormat::ChannelsLast)
+                && b.is_contiguous(at::MemoryFormat::ChannelsLast),
+                "cat2_gn_stats_fp16: both inputs must be channels_last contiguous");
+    const int N = (int)a.size(0), C1 = (int)a.size(1), C2 = (int)b.size(1);
+    const int C = C1 + C2, H = (int)a.size(2), W = (int)a.size(3);
+    const long HW = (long)H * W;
+    TORCH_CHECK(C % num_groups == 0, "cat2_gn_stats_fp16: C must be divisible by num_groups");
+    // The kernel's coalescing argument rests on no warp straddling the C1 boundary. Checked rather
+    // than assumed -- every width this UNet concatenates satisfies it, and a future one that does not
+    // should fail loudly here instead of silently reading at half efficiency.
+    TORCH_CHECK(C1 % 32 == 0, "cat2_gn_stats_fp16: C1 must be a multiple of 32 (got ", C1,
+                ") -- otherwise a warp straddles the two buffers and the loads stop coalescing");
+
+    const int K = (C + 1023) / 1024;
+    const int BLK = (K > 0) ? C / K : 0;
+    TORCH_CHECK(K >= 1 && K <= 4 && (C % K) == 0 && BLK <= 1024 && BLK >= num_groups,
+                "cat2_gn_stats_fp16: unsupported C=", C, " for the channel-major stats kernel");
+
+    auto cat = torch::empty({N, C, H, W},
+                            a.options().memory_format(at::MemoryFormat::ChannelsLast));
+    auto sopt = torch::TensorOptions().dtype(torch::kFloat32).device(a.device());
+    const int nblocks = (int)std::min<long>(HW, 32);
+    const int NG = N * (int)num_groups;
+    const long group_size = (long)(C / num_groups) * HW;
+    auto part_sum = torch::empty({(long)NG * nblocks}, sopt);
+    auto part_sumsq = torch::empty({(long)NG * nblocks}, sopt);
+    auto mean = torch::empty({NG}, sopt);
+    auto inv_std = torch::empty({NG}, sopt);
+
+    const size_t shmem = (size_t)2 * C * sizeof(float);
+    dim3 grid((unsigned)nblocks, (unsigned)N);
+    cudaStream_t st = at::cuda::getCurrentCUDAStream();
+#define GN_CAT2(KK)                                                                                    gn_stats_partials_chanmajor_kernel<__half, KK><<<grid, BLK, shmem, st>>>(                              reinterpret_cast<const __half*>(a.data_ptr<at::Half>()),                                           part_sum.data_ptr<float>(), part_sumsq.data_ptr<float>(),                                          C, HW, (int)num_groups, nblocks,                                                                   reinterpret_cast<const __half*>(b.data_ptr<at::Half>()),                                           reinterpret_cast<__half*>(cat.data_ptr<at::Half>()), C1)
+    switch (K) {
+        case 1: GN_CAT2(1); break;
+        case 2: GN_CAT2(2); break;
+        case 3: GN_CAT2(3); break;
+        default: GN_CAT2(4); break;
+    }
+#undef GN_CAT2
+    C10_CUDA_CHECK(cudaGetLastError());
+    const int fb = 128, fg = (NG + fb - 1) / fb;
+    gn_stats_reduce_partials_kernel<<<fg, fb, 0, st>>>(
+        part_sum.data_ptr<float>(), part_sumsq.data_ptr<float>(),
+        mean.data_ptr<float>(), inv_std.data_ptr<float>(),
+        nblocks, group_size, (float)eps, NG);
+    C10_CUDA_CHECK(cudaGetLastError());
+    return {cat, mean, inv_std};
+}
+
+// Single-input twin of cat2_gn_stats_fp16: the SHIPPED stats pass, exposed on its own.
+//
+// This entry point exists because its ABSENCE caused the worst measurement error of 2026-08-13. With
+// no way to time gn_stats_partials_chanmajor_kernel directly, its cost was inherited from an earlier
+// report -- 11.94 ms weighted, which turned out to be 3.8x too large and to be the FULL GN op rather
+// than the stats pass. A roofline claim was published from it and had to be retracted. A hot kernel
+// with no way to measure it in isolation is a kernel whose cost will eventually be guessed.
+//
+// It is also what makes test_cat2_gn_fold.py's stats comparison mean anything: the split path has to
+// agree with the CONTIGUOUS path through this entry. Comparing it against itself re-split (the first
+// draft of that gate) tests determinism and calls it equivalence.
+std::vector<torch::Tensor> gn_stats_fp16(torch::Tensor x, int64_t num_groups, double eps) {
+    TORCH_CHECK(x.is_cuda() && x.scalar_type() == torch::kHalf,
+                "gn_stats_fp16: expected a CUDA FP16 tensor");
+    TORCH_CHECK(x.dim() == 4, "gn_stats_fp16: expected 4D [N,C,H,W]");
+    TORCH_CHECK(x.is_contiguous(at::MemoryFormat::ChannelsLast),
+                "gn_stats_fp16: expected channels_last contiguous");
+    const int N = (int)x.size(0), C = (int)x.size(1);
+    const long HW = (long)x.size(2) * x.size(3);
+    TORCH_CHECK(C % num_groups == 0, "gn_stats_fp16: C must be divisible by num_groups");
+    const int K = (C + 1023) / 1024;
+    const int BLK = (K > 0) ? C / K : 0;
+    TORCH_CHECK(K >= 1 && K <= 4 && (C % K) == 0 && BLK <= 1024 && BLK >= num_groups,
+                "gn_stats_fp16: unsupported C=", C);
+    auto sopt = torch::TensorOptions().dtype(torch::kFloat32).device(x.device());
+    const int nblocks = (int)std::min<long>(HW, 32);
+    const int NG = N * (int)num_groups;
+    const long group_size = (long)(C / num_groups) * HW;
+    auto part_sum = torch::empty({(long)NG * nblocks}, sopt);
+    auto part_sumsq = torch::empty({(long)NG * nblocks}, sopt);
+    auto mean = torch::empty({NG}, sopt);
+    auto inv_std = torch::empty({NG}, sopt);
+    const size_t shmem = (size_t)2 * C * sizeof(float);
+    dim3 grid((unsigned)nblocks, (unsigned)N);
+    cudaStream_t st = at::cuda::getCurrentCUDAStream();
+#define GN_ONE(KK)                                                                                 \
+    gn_stats_partials_chanmajor_kernel<__half, KK><<<grid, BLK, shmem, st>>>(                      \
+        reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),                                   \
+        part_sum.data_ptr<float>(), part_sumsq.data_ptr<float>(),                                  \
+        C, HW, (int)num_groups, nblocks)
+    switch (K) {
+        case 1: GN_ONE(1); break;
+        case 2: GN_ONE(2); break;
+        case 3: GN_ONE(3); break;
+        default: GN_ONE(4); break;
+    }
+#undef GN_ONE
+    C10_CUDA_CHECK(cudaGetLastError());
+    const int fb = 128, fg = (NG + fb - 1) / fb;
+    gn_stats_reduce_partials_kernel<<<fg, fb, 0, st>>>(
+        part_sum.data_ptr<float>(), part_sumsq.data_ptr<float>(),
+        mean.data_ptr<float>(), inv_std.data_ptr<float>(),
+        nblocks, group_size, (float)eps, NG);
+    C10_CUDA_CHECK(cudaGetLastError());
+    return {mean, inv_std};
 }
 
 static void gn_launch_group_stats(
