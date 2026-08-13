@@ -126,8 +126,6 @@ try:
     #: point must then REFUSE rather than quantize symmetrically against a corrected bias.
     HAS_GN_SILU_QUANTIZE_RESIZE_ZP = hasattr(
         modiff_cutlass, "group_norm_silu_quantize_resize_nhwc_zp")
-    #: the halo arity: emits the z-valued spatial border so the conv can run with padding=0
-    HAS_GN_PACK_ZP_PAD = hasattr(modiff_cutlass, "group_norm_silu_quantize_pack_nhwc_zp_pad")
     HAS_UPSAMPLE_QUANTIZE_PACK_ZP = hasattr(
         modiff_cutlass, "upsample2x_quantize_pack_noahat_fprop_zp")
     HAS_UPSAMPLE_QUANTIZE = hasattr(modiff_cutlass, "upsample2x_quantize_noahat_fprop")
@@ -150,7 +148,6 @@ except ImportError:
     HAS_GN_SILU_QUANTIZE_PACK = False
     HAS_GN_SILU_QUANTIZE_PACK_ZP = False
     HAS_GN_SILU_QUANTIZE_RESIZE_ZP = False
-    HAS_GN_PACK_ZP_PAD = False
     HAS_UPSAMPLE_QUANTIZE_PACK_ZP = False
     HAS_GN_SILU_DELTA_QUANTIZE = False
     HAS_GN_SILU_DELTA_QUANTIZE_PACK = False
@@ -256,13 +253,6 @@ def _prequant_common_ok(conv):
 #: rather than silently numeric. The plan scoped fix #2 at ~6 quantize entry points; as of 2026-08-13
 #: exactly one of them (group_norm_silu_quantize_pack_nhwc) honours z.
 ZP_UNSUPPORTED_HITS = set()
-
-
-def _zp_prepad_enabled():
-    """True when the halo mode is selected. Imported from int4_optimized so the two files cannot drift
-    about which of the three padding modes is active -- they are mutually exclusive."""
-    from integration.kernels.int4_optimized import _zp_prepad_enabled as _impl
-    return _impl()
 
 
 def _zp_unsupported(conv, where, grid="activation"):
@@ -485,24 +475,6 @@ def _prequant_gn_conv(x, gn, conv, mod_scale=None, mod_shift=None, residual=None
                 raise RuntimeError(
                     "conv has a non-zero activation zero point but modiff_cutlass lacks "
                     "group_norm_silu_quantize_pack_nhwc_zp -- rebuild the extension")
-            # CORRECT PADDING, IN THE QUANTIZE KERNEL (fix #2). CUTLASS zero-fills padded taps, which
-            # an asymmetric grid reads as -z/s rather than 0; the correct padding value is the code z.
-            # The halo arity emits it directly, so the conv runs with padding=0 and there is no extra
-            # pass -- a separate pad kernel costs +8 to +13% ms/step, which gives back the 7.1% relL2
-            # the zero point buys. Bit-identical to pad-then-copy of the non-halo output.
-            ph, pw = int(conv.padding[0]), int(conv.padding[1])
-            if _zp_prepad_enabled() and HAS_GN_PACK_ZP_PAD and (ph or pw):
-                packed = modiff_cutlass.group_norm_silu_quantize_pack_nhwc_zp_pad(
-                    x, w, b, ng, eps, True, scale, smooth_inv, ms2d, sh2d, 0, zp, ph, pw)
-                # padding is now baked into the activation; zeroing it here also stops
-                # _conv_from_int4 from padding a second time (see its prepad branch).
-                saved_pad = conv.padding
-                conv.padding = (0, 0)
-                try:
-                    return conv.forward_from_int4(packed, h_in + 2 * ph, w_in + 2 * pw,
-                                                  residual=residual)
-                finally:
-                    conv.padding = saved_pad
             packed = modiff_cutlass.group_norm_silu_quantize_pack_nhwc_zp(
                 x, w, b, ng, eps, True, scale, smooth_inv, ms2d, sh2d, 0, zp)
         elif native_ok:

@@ -20,58 +20,72 @@ PTQ delivered 7.1%. The mistake was scoring 1.06× against `zp_headroom.py`'s 1.
 fix #2's cost was *"15 CUDA entry points plus a Σ(w_q) fold"*. Those kernels are built and gated now, so
 that bar no longer prices anything.
 
-## What it costs: three implementations, measured
+## What ships: nothing. The padding correction was built, measured, and REVERTED
 
-Correct padding is implemented in production kernels, selected by `MODIFF_ZP_PAD_MODE`:
+Correct padding was implemented two ways, measured, and then **removed from the tree** (2026-08-13).
+The tree zero-fills padded taps again, which is defective for an asymmetric grid — and that is safe only
+because `_refold_zp_bias` still **refuses** a non-zero `z` on a padded conv, so the defective
+configuration cannot be reached by accident.
 
-| mode | mechanism | quantize+conv cost | end-to-end PTQ | end-to-end MoDiff |
-|---|---|--:|--:|--:|
-| `none` | CUTLASS zero-fill — **the defect** | baseline | +81.7% | +204.0% |
-| **`halo`** (default) | quantize kernel emits a `z`-valued spatial halo; conv runs `padding=0` | **+8.9%** | **−7.1%** | **−0.4%** |
-| `border` | keep zero-fill, add `(z/s)·ws[k]·Σ_missing w_q[k]` to the output's border pixels | **+5.3%** | −1.6% | −0.9% |
+| route | mechanism | quantize+conv cost | end-to-end PTQ |
+|---|---|--:|--:|
+| zero-fill (**what ships**) | CUTLASS default | baseline | +81.7% (defective) |
+| code-`z` halo | quantize kernel emits a `z`-valued spatial halo; conv runs `padding=0` | +8.9% | **−7.1%** |
+| output border correction | keep zero-fill, add `(z/s)·ws[k]·Σ_missing w_q[k]` to border pixels | +5.3% | −1.6% |
 
-(`border`'s deficit is diagnosed below: it corrects an already-rounded value, so it inherits an ulp the
-halo never incurs.)
+**Both were reverted because neither is worth its cost, for different reasons.** The halo delivers the
+full −7.1% but enlarges the activation (34² vs 32² at the top, 6² vs 4² at the bottom), so both the
+write and the conv's read grow: +8.9% to buy 7.1%. The border correction is cheaper but only delivers
+−1.6%, and the reason is not tunable — see below.
 
-Both corrections are exact in principle and agree to **1.000×** on an isolated fp32 conv
-([`test_int4_zp_prepad.py`](../../integration/tests/test_int4_zp_prepad.py)). New entry points:
-`group_norm_silu_quantize_pack_nhwc_zp_pad` (halo emitted in-kernel, so no extra traversal),
-`pad_packed_int4_code` (one-pass code-padding of a packed tensor), `add_zp_border_correction`
-(border-only, fp16/fp32).
+### Why the cheap route can't be fixed post-hoc
 
-**`halo` is the default, and the reason is now diagnosed rather than suspected**
-([`border_vs_halo_diagnosis.py`](scripts/border_vs_halo_diagnosis.py),
-[`data/border_vs_halo_diagnosis.json`](data/border_vs_halo_diagnosis.json)).
-
-Both corrections are exact in exact arithmetic, and they agree to 1.000× on an isolated conv. Measured
-against an **exact integer reference** — the conv recomputed in float64 from the integer codes, so the
-reference contains no fp16 and no epilogue rounding — and split into border and interior pixels:
+Against an **exact integer reference** (the conv recomputed in float64 from the integer codes, so no fp16
+and no epilogue rounding), split by pixel class:
 
 | mode | relL2 all | border | interior | border excess (quadrature) |
 |---|--:|--:|--:|--:|
-| `none` (defect) | 0.2729 | 0.6679 | 0.00754 | 0.6679 |
-| `halo` | 0.00755 | 0.00762 | 0.00754 | **0.0011** |
-| `border` | 0.00770 | 0.00844 | 0.00754 | **0.0038** |
+| zero-fill | 0.2729 | 0.6679 | 0.00754 | 0.6679 |
+| halo | 0.00755 | 0.00762 | 0.00754 | **0.0011** |
+| border correction | 0.00770 | 0.00844 | 0.00754 | **0.0038** |
 
-The interior error is the epilogue's own rounding and is identical in all three modes, which is what makes
-the border column readable. **The halo's border is as accurate as its interior; the post-hoc correction
-adds 1.8–∞× more** (across four shapes). It corrects a value the epilogue has *already rounded* at ~2.7×
-the true magnitude — one ulp at 3.3 is 2^-8 = 0.00391, which is exactly the observed max difference — and
-that ulp is unrecoverable. Per conv the excess is invisible (0.0077 vs 0.0076 against a reference, or
-0.4303 vs 0.4303 once 4-bit noise is included, which is why the isolated gate could not see it); over 70
-layers it compounds into the end-to-end gap.
+The interior error is the epilogue's own rounding, identical in all three, which is what makes the border
+column readable. The halo's border is as accurate as its interior. The post-hoc correction adds 1.8–∞×
+more, because **it corrects a value the epilogue has already rounded at ~2.7× the true magnitude** — one
+ulp at 3.3 is `2^-8 = 0.00391`, exactly the observed max difference between the two modes, and
+unrecoverable. Over 70 layers that compounds into the −7.1% vs −1.6% gap.
 
-Two hypotheses were refuted on the way, and both are recorded in the script so they are not re-run:
+Two hypotheses were refuted getting there: **coverage** (70 correction calls per step against 70 padded
+convs, i.e. all of them) and **the fp16 store** (real, and it *is* that ulp, but forcing an fp32 store
+leaves the gap intact — the rounding happens inside the epilogue, so the store dtype cannot remove it).
 
-* **coverage** — 70 correction calls per step against 70 padded convs, i.e. every one;
-* **the fp16 store** — real and measurable as that one ulp, but not the driver: forcing an fp32 store
-  leaves the gap intact (border 0.5101, halo 0.4778, symmetric 0.5212).
+## The one route worth building: fuse it into the EVT epilogue
 
-**So a post-hoc correction cannot match the halo at any store dtype**, because the rounding it inherits
-happens inside the epilogue. "Make `border` equivalent" is not a tuning task — the cheap route is only
-viable **fused into the epilogue**, where the accumulator is still exact, and there it would be both
-cheaper than the halo *and* as accurate. That is the one remaining piece of work on this lever, and it is
-now a specified change rather than an open question.
+Checked against the existing tree, and it is more tractable than it looked. `conv2d_evt.cu` already has:
+
+```
+EVTD1 = AuxSt( Add( Add( Mul(Mul(Accum,Alpha), RowVec), RowVec ), AuxLd ) )
+        //     acc*alpha*weight_scale  +  bias  +  residual  -> store
+```
+
+`AuxLd` is a **per-element** visitor load — exactly what `residual` uses — and it adds **inside the
+epilogue, before the fp16 store**, which is precisely the rounding the post-hoc route could not avoid.
+
+Three facts that make this cheap, all measured rather than assumed:
+
+1. **The correction is constant.** It depends only on `z`, `s`, `ws`, `w_q` and the conv geometry — none
+   of which change during sampling — so it is precomputed once per conv, not per step.
+2. **35 of the 70 convs have that slot free** (no residual; the other 35 are ResBlock out-convs that use
+   it). For those 35 there is **no new CUDA at all**: pass the precomputed correction as `residual`.
+   The remaining 35 need one new tree variant, a second `Add`+`AuxLd` — a template addition to an
+   existing tree, not a new kernel.
+3. **It fits in 8.8 MiB.** The correction is identical for every batch element, and `AuxLd`'s stride
+   triple is `{ldK, _1, MK}` whose third component is the batch stride as a runtime `int64_t`, so
+   passing **0** broadcasts one `[1,K,Ho,Wo]` slice across the batch. Materialising it per batch element
+   would be 1.10 GiB at b128, so this is the load-bearing detail to verify first.
+
+At that point the correction is both cheaper than the halo *and* as accurate as it, which is the only
+configuration in which fix #2's −7.1% is worth taking. Until then the lever is measured, not shipped.
 
 ## What stands unchanged
 
@@ -82,9 +96,9 @@ Everything about **coverage**, which was P1's actual blocker, and everything abo
 * the padding defect's arithmetic, `−z·Σ(missing w_q)·ws/s` per output pixel, is confirmed to 0.9–2.6%
   against the closed form (§3), and it is what made the zero-filled numbers what they were;
 * the fp16-bias hypothesis is still refuted (§4);
-* `_refold_zp_bias` still refuses `z ≠ 0` on a padded conv by default — which remains right, because the
-  shipped path still zero-fills. `MODIFF_ZP_ALLOW_PADDED=1` plus `MODIFF_ZP_PREPAD=1` is the correct
-  combination, and the refusal is what stops a silently-defective asymmetric run.
+* `_refold_zp_bias` still refuses `z ≠ 0` on a padded conv — and with the correction reverted this is the
+  ONLY thing standing between a user and a silently +82% run. `MODIFF_ZP_ALLOW_PADDED=1` is now purely an
+  experiment override; there is no longer any configuration in which a padded asymmetric conv is correct.
 
 ---
 

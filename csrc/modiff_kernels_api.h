@@ -31,14 +31,6 @@
 
 // ---- csrc/kernels/quantize/quantize.cu ----
 torch::Tensor quantize_and_pack(torch::Tensor input);
-//: Spatial constant-pad of a packed int4 activation with an int4 CODE (not zero). The correct padding
-//: value for an asymmetric activation grid is the code z; see the kernel comment in quantize.cu.
-torch::Tensor pad_packed_int4_code(torch::Tensor x_packed, int64_t pad_h, int64_t pad_w,
-                                   double zero_point);
-//: The CHEAP form of fix #2's padding correction: keep CUTLASS's zero-fill and add
-//: (z/s)*ws[k]*sum_{missing taps} w_q[k] to the border pixels of the OUTPUT. Border-only, one launch.
-void add_zp_border_correction(torch::Tensor out, torch::Tensor corr,
-                              torch::Tensor border_hw, torch::Tensor border_pat);
 torch::Tensor scale_quantize_and_pack(torch::Tensor input, torch::Tensor scale);
 //: Activation-zero-point variant (plan fix #2). MoDiff's t=T entry point -- see the kernel comment
 //: in quantize.cu for why this specific one is load-bearing and was missing from the first census.
@@ -394,12 +386,6 @@ torch::Tensor group_norm_silu_quantize_pack_nhwc_zp(
     torch::Tensor x, torch::Tensor weight, torch::Tensor bias, int64_t num_groups,
     double eps, bool apply_silu, torch::Tensor scale, torch::Tensor smooth_inv,
     torch::Tensor mod_scale, torch::Tensor mod_shift, int64_t k_pad, double zero_point);
-//: HALO variant (fix #2): output is [N, H+2*pad_h, W+2*pad_w, Kpad/2] with the border set to code z.
-torch::Tensor group_norm_silu_quantize_pack_nhwc_zp_pad(
-    torch::Tensor x, torch::Tensor weight, torch::Tensor bias, int64_t num_groups,
-    double eps, bool apply_silu, torch::Tensor scale, torch::Tensor smooth_inv,
-    torch::Tensor mod_scale, torch::Tensor mod_shift, int64_t k_pad, double zero_point,
-    int64_t pad_h, int64_t pad_w);
 torch::Tensor group_norm_silu_quantize_pack_nhwc_fast_zp(
     torch::Tensor x, torch::Tensor weight, torch::Tensor bias, int64_t num_groups,
     double eps, bool apply_silu, torch::Tensor scale, torch::Tensor smooth_inv,

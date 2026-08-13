@@ -286,32 +286,15 @@ def main():
               f"resulting o_hat is then\naccumulated over every remaining step, so a border error at "
               f"t=T never washes out.")
 
-    #: AND WHETHER THE PADDING WAS CORRECT, because that is what the sign of the numbers above depends
-    #: on. MODIFF_ZP_PREPAD=1 pads the packed activation with the code z instead of letting CUTLASS
-    #: zero-fill it (integration/kernels/int4_optimized.py::_prepad_packed_with_zp, gated in
-    #: integration/tests/test_int4_zp_prepad.py). Measured on this protocol:
-    #:
-    #:     zero-filled padding   PTQ +81.7%   MoDiff +204.0%     <- the padding defect, not the lever
-    #:     code-z padding        PTQ  -7.1%   MoDiff   -0.4%     <- the lever
-    #:
-    #: The 1.06x activation-reconstruction ceiling (zp_activation_error.json) predicted ~6% and PTQ
-    #: delivered 7.1%, so the ceiling was accurate; what was wrong was reading it against a 1.15x bar
-    #: that zp_headroom.py set when the cost was "15 CUDA entry points". Those kernels are built now.
-    prepad = os.environ.get("MODIFF_ZP_PREPAD", "0") == "1"
-    print(f"\nPADDING USED FOR THE ASYMMETRIC ARMS: "
-          f"{'code z (correct)' if prepad else 'CUTLASS zero-fill (defective for an asymmetric grid)'}")
-    if not prepad:
-        print("So the numbers above measure the PADDING DEFECT, not the zero point. Re-run with\n"
-              "MODIFF_ZP_PREPAD=1 for the lever itself; on this protocol that gives PTQ -7.1%.")
-    else:
-        print("So the numbers above measure the ZERO POINT. On the PTQ axis it helps by 7.1%, which is\n"
-              "12x the W4A4 cross-process floor; on MoDiff it is 0.4%, i.e. nothing, which is what\n"
-              "reading the activation grid only at t=T predicts.\n"
-              "THE REMAINING COST IS THE PADDING MECHANISM, NOT THE ZERO POINT. This flag's emulation\n"
-              "materializes a padded copy per conv and costs +7.1% ms/step (13.12 -> 14.05 at b8/50),\n"
-              "so via that route the trade is 1:1 and pointless. A production fix writes the z-valued\n"
-              "halo from the quantize kernel that already produces the packed tensor -- a bounds change,\n"
-              "not a new reduction.")
+    #: AND WHAT THE PADDING IS, because it is what the sign of the numbers above depends on. The tree
+    #: zero-fills padded taps, which an asymmetric grid reads as -z/s rather than 0, so these arms
+    #: measure the ZERO POINT PLUS THAT DEFECT. Correct padding was implemented and measured on
+    #: 2026-08-13 (PTQ -7.1% with a code-z halo) and then REMOVED: every route to it that does not
+    #: touch the conv epilogue costs 5-9% of the quantize+conv pair, i.e. it gives back what it buys.
+    #: docs/zp_coverage_2026-08-13/FINDINGS.md has the numbers and the specified epilogue change.
+    print("\nPADDING: CUTLASS zero-fill, which is DEFECTIVE for an asymmetric grid. The numbers above\n"
+          "therefore measure the zero point plus that defect, not the zero point. See\n"
+          "docs/zp_coverage_2026-08-13/FINDINGS.md -- with the padding correct, PTQ measured -7.1%.")
     json.dump({"seeds": SEEDS, "shipped_reference": SHIPPED, "median_asymmetry": asym,
                "floor": FLOOR, "padded_convs": npad, "results": results, "verdict": verdict},
               open(f"{D}/data/zp_measured.json", "w"), indent=1)

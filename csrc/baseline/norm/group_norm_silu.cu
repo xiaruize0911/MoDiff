@@ -849,22 +849,6 @@ __global__ void group_norm_silu_quantize_pack_nhwc_vec2_kernel(
     float eps,
     bool apply_silu,
     int Kpad,                      // padded row width in CHANNELS (>= C, even); == C for no padding
-    // SPATIAL HALO (fix #2's padding correction). Win is the input width, needed to decompose the flat
-    // spatial index into (h, w); pad_h/pad_w enlarge the OUTPUT so the following conv can run with
-    // padding=0 over an activation whose halo already carries the code z.
-    //
-    // WHY IN THIS KERNEL. The correct padding value for an asymmetric grid is the code z, not 0
-    // (CUTLASS zero-fills, which this grid reads as -z/s). Doing it as a separate pad pass costs a copy
-    // and an allocation per conv -- measured +8 to +13% ms/step, which gives back the 7.1% relL2 the
-    // zero point buys. This kernel already writes every output byte, so writing them at an OFFSET into a
-    // padded buffer costs nothing: no extra traversal, no second allocation. The halo itself is filled
-    // by a separate tiny launch over the border only.
-    //
-    // pad_h == pad_w == 0 reduces the store index to exactly hw * KpadH, i.e. the historical byte
-    // order, so the symmetric path is bit-identical.
-    int Win,
-    int pad_h,
-    int pad_w,
     // ACTIVATION ZERO POINT (plan fix #2). a_q = clamp(round(a*s) + z, -7, 7), so the 15 available
     // codes can straddle an asymmetric range instead of being centred on 0. silu(gn(x)) is one-sided
     // -- measured |max|/|min| = 19.91x, with only 5 of 15 codes carrying >0.1% of the mass, an
@@ -886,11 +870,8 @@ __global__ void group_norm_silu_quantize_pack_nhwc_vec2_kernel(
     const int g = blockIdx.x % G;
     const int c_start = g * CPG;
 
-    const int Hin = (int)(HW / Win);
-    const int Wo = Win + 2 * pad_w, Ho = Hin + 2 * pad_h;
-
     const TIn* x_base = X + (long)n * HW * C;
-    int8_t* yqp_base = Yqp + (long)n * ((long)Ho * Wo * KpadH);
+    int8_t* yqp_base = Yqp + (long)n * (HW * (long)KpadH);
 
     extern __shared__ float sdata[];
     float* s_sum = sdata;
@@ -1002,12 +983,7 @@ __global__ void group_norm_silu_quantize_pack_nhwc_vec2_kernel(
         // (mem_idx0 = hw*C + c_global0 and c_global0 is even), so the no-pad path is bit-identical.
         // Channels >= C are never visited by any group, so the pad bytes are left at the zero the
         // host pre-filled them with.
-        // With a spatial halo the position shifts by (pad_h, pad_w) and the row stride becomes Wo; at
-        // pad_h == pad_w == 0 this is identically hw * KpadH again.
-        const long hw_out = (pad_h | pad_w)
-            ? ((long)((int)(hw / Win) + pad_h) * Wo + ((int)(hw % Win) + pad_w))
-            : hw;
-        yqp_base[hw_out * (long)KpadH + (c_global0 >> 1)] = (int8_t)((i0 & 0x0F) | ((i1 & 0x0F) << 4));
+        yqp_base[hw * (long)KpadH + (c_global0 >> 1)] = (int8_t)((i0 & 0x0F) | ((i1 & 0x0F) << 4));
     }
     // Only group zero clears the padded tail. This replaces a full-output torch::zeros
     // initialization with writes to the bytes that actually require zeroing.
@@ -1016,10 +992,7 @@ __global__ void group_norm_silu_quantize_pack_nhwc_vec2_kernel(
         for (long idx = threadIdx.x; idx < HW * (long)tail_bytes; idx += blockDim.x) {
             const long hw = idx / tail_bytes;
             const int pb = idx % tail_bytes;
-            const long hw_out = (pad_h | pad_w)
-                ? ((long)((int)(hw / Win) + pad_h) * Wo + ((int)(hw % Win) + pad_w))
-                : hw;
-            yqp_base[hw_out * (long)KpadH + C / 2 + pb] = 0;
+            yqp_base[hw * (long)KpadH + C / 2 + pb] = 0;
         }
     }
 }
@@ -1028,45 +1001,6 @@ __global__ void group_norm_silu_quantize_pack_nhwc_vec2_kernel(
 // the GN kernel above when a halo is requested: the GN kernel writes the interior at an offset, this
 // writes the border, and neither traverses the other's bytes. The border is O((H+W)*pad) positions
 // against the interior's O(H*W), so this is a rounding error next to the GN pass itself.
-__global__ void fill_packed_halo_kernel(int8_t* __restrict__ Y, int Ho, int Wo, int KpadH,
-                                        int pad_h, int pad_w, int8_t pad_byte, long num_halo) {
-    // ENUMERATES ONLY THE BORDER. The first version gridded over every output position and `continue`d
-    // on the interior, which made this a full extra pass over the output -- measured +32% on the
-    // quantize kernel, i.e. it reintroduced exactly the cost the in-kernel halo exists to avoid. The
-    // halo is four bands: top and bottom (pad_h x Wo each) and left and right (Hin x pad_w each), so a
-    // linear index over 2*(pad_h*Wo + Hin*pad_w) positions covers it with no idle thread.
-    const int Hin = Ho - 2 * pad_h;
-    const long band_tb = (long)pad_h * Wo;          // positions in the top (and in the bottom) band
-    const long band_lr = (long)Hin * pad_w;         // positions in the left (and in the right) band
-    const long per_img = 2 * (band_tb + band_lr);
-    for (long idx = (long)blockIdx.x * blockDim.x + threadIdx.x; idx < num_halo;
-         idx += (long)blockDim.x * gridDim.x) {
-        const int c = (int)(idx % KpadH);
-        long pos = idx / KpadH;
-        const long n = pos / per_img;
-        pos -= n * per_img;
-        int ho, wo;
-        if (pos < band_tb) {                        // top
-            ho = (int)(pos / Wo);
-            wo = (int)(pos % Wo);
-        } else if (pos < 2 * band_tb) {             // bottom
-            const long q = pos - band_tb;
-            ho = Ho - pad_h + (int)(q / Wo);
-            wo = (int)(q % Wo);
-        } else if (pos < 2 * band_tb + band_lr) {   // left
-            const long q = pos - 2 * band_tb;
-            ho = pad_h + (int)(q / pad_w);
-            wo = (int)(q % pad_w);
-        } else {                                    // right
-            const long q = pos - 2 * band_tb - band_lr;
-            ho = pad_h + (int)(q / pad_w);
-            wo = Wo - pad_w + (int)(q % pad_w);
-        }
-        Y[((n * Ho + ho) * (long)Wo + wo) * KpadH + c] = pad_byte;
-    }
-}
-
-
 // Fused GroupNorm+SiLU+quantize+2x resize, one launch, for the updown ResBlock path.
 // Pass 1 (the stats reduction) is copied verbatim from the non-resizing sibling; only pass 2
 // differs. UP=true does nearest 2x upsample, which is an exact index-select, so a value is
@@ -1339,9 +1273,7 @@ static torch::Tensor group_norm_silu_quantize_pack_nhwc_impl(
     torch::Tensor mod_shift,
     int64_t k_pad,             // padded row width in channels for the int4 GEMM; <=0 or ==C -> no pad
     bool fast_reduce,
-    double zero_point,         // activation zero point; 0.0 reproduces the symmetric kernel exactly
-    int64_t pad_h,             // spatial halo, so the following conv can run with padding=0
-    int64_t pad_w
+    double zero_point          // activation zero point; 0.0 reproduces the symmetric kernel exactly
 ) {
     CHECK_CUDA(x);
     CHECK_CONTIGUOUS(x);
@@ -1375,32 +1307,7 @@ static torch::Tensor group_norm_silu_quantize_pack_nhwc_impl(
     const int Kpad = (k_pad > (int64_t)C) ? (int)k_pad : C;
     TORCH_CHECK(Kpad % 2 == 0, "group_norm_silu_quantize_pack_nhwc: k_pad must be even");
     auto opts = torch::TensorOptions().dtype(torch::kInt8).device(x.device());
-    // SPATIAL HALO for an asymmetric grid (fix #2). The output is enlarged and its border carries the
-    // code z, so the conv runs with padding=0 and every padded tap dequantizes to (z - z)/s = 0 instead
-    // of CUTLASS's zero-fill reading as -z/s. Costs no extra traversal: the GN kernel writes the
-    // interior at an offset and a separate launch writes only the border.
-    TORCH_CHECK(pad_h >= 0 && pad_w >= 0, "group_norm_silu_quantize_pack_nhwc: negative padding");
-    const int ph = (int)pad_h, pw = (int)pad_w;
-    const int Ho = H + 2 * ph, Wo = W + 2 * pw;
-    auto yqp = torch::empty({N, Ho, Wo, Kpad / 2}, opts);
-    if (ph || pw) {
-        const int zc = (int)llround(zero_point);
-        TORCH_CHECK(zc >= -7 && zc <= 7,
-                    "group_norm_silu_quantize_pack_nhwc: halo requested with a zero point outside "
-                    "the signed int4 range");
-        const int nib = zc & 0x0F;
-        int pb = nib | (nib << 4);
-        if (pb > 127) pb -= 256;
-        const long band_tb = (long)ph * Wo, band_lr = (long)H * pw;
-        const long num_halo = (long)N * 2 * (band_tb + band_lr) * (Kpad / 2);
-        if (num_halo > 0) {
-            const int hb = 256;
-            const int hg = (int)std::min<long>((num_halo + hb - 1) / hb, 65535L);
-            fill_packed_halo_kernel<<<hg, hb, 0, at::cuda::getCurrentCUDAStream()>>>(
-                reinterpret_cast<int8_t*>(yqp.data_ptr<int8_t>()), Ho, Wo, Kpad / 2, ph, pw,
-                (int8_t)pb, num_halo);
-        }
-    }
+    auto yqp = torch::empty({N, H, W, Kpad / 2}, opts);
 
     int block_size = 32;
     while (block_size < group_size && block_size < 1024) block_size <<= 1;
@@ -1425,7 +1332,7 @@ static torch::Tensor group_norm_silu_quantize_pack_nhwc_impl(
             has_mod ? mod_scale.data_ptr<float>() : nullptr,
             has_mod ? mod_shift.data_ptr<float>() : nullptr,
             scale.data_ptr<float>(), smooth_ptr,
-            C, HW, (int)num_groups, (float)eps, apply_silu, Kpad, W, ph, pw, (float)zero_point);
+            C, HW, (int)num_groups, (float)eps, apply_silu, Kpad, (float)zero_point);
         else
           group_norm_silu_quantize_pack_nhwc_vec2_kernel<float, false><<<grid, block, shmem_bytes, stream>>>(
             x.data_ptr<float>(), reinterpret_cast<int8_t*>(yqp.data_ptr<int8_t>()),
@@ -1433,7 +1340,7 @@ static torch::Tensor group_norm_silu_quantize_pack_nhwc_impl(
             has_mod ? mod_scale.data_ptr<float>() : nullptr,
             has_mod ? mod_shift.data_ptr<float>() : nullptr,
             scale.data_ptr<float>(), smooth_ptr,
-            C, HW, (int)num_groups, (float)eps, apply_silu, Kpad, W, ph, pw, (float)zero_point
+            C, HW, (int)num_groups, (float)eps, apply_silu, Kpad, (float)zero_point
         );
     } else {
         if (fast_reduce)
@@ -1445,7 +1352,7 @@ static torch::Tensor group_norm_silu_quantize_pack_nhwc_impl(
             has_mod ? reinterpret_cast<const __half*>(mod_scale.data_ptr<at::Half>()) : nullptr,
             has_mod ? reinterpret_cast<const __half*>(mod_shift.data_ptr<at::Half>()) : nullptr,
             scale.data_ptr<float>(), smooth_ptr,
-            C, HW, (int)num_groups, (float)eps, apply_silu, Kpad, W, ph, pw, (float)zero_point);
+            C, HW, (int)num_groups, (float)eps, apply_silu, Kpad, (float)zero_point);
         else
           group_norm_silu_quantize_pack_nhwc_vec2_kernel<__half, false><<<grid, block, shmem_bytes, stream>>>(
             reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
@@ -1455,7 +1362,7 @@ static torch::Tensor group_norm_silu_quantize_pack_nhwc_impl(
             has_mod ? reinterpret_cast<const __half*>(mod_scale.data_ptr<at::Half>()) : nullptr,
             has_mod ? reinterpret_cast<const __half*>(mod_shift.data_ptr<at::Half>()) : nullptr,
             scale.data_ptr<float>(), smooth_ptr,
-            C, HW, (int)num_groups, (float)eps, apply_silu, Kpad, W, ph, pw, (float)zero_point
+            C, HW, (int)num_groups, (float)eps, apply_silu, Kpad, (float)zero_point
         );
     }
 
@@ -1586,7 +1493,7 @@ torch::Tensor group_norm_silu_quantize_pack_nhwc(
     torch::Tensor mod_scale, torch::Tensor mod_shift, int64_t k_pad) {
     return group_norm_silu_quantize_pack_nhwc_impl(
         x, weight, bias, num_groups, eps, apply_silu, scale, smooth_inv,
-        mod_scale, mod_shift, k_pad, false, 0.0, 0, 0);
+        mod_scale, mod_shift, k_pad, false, 0.0);
 }
 
 torch::Tensor group_norm_silu_quantize_pack_nhwc_zp(
@@ -1595,7 +1502,7 @@ torch::Tensor group_norm_silu_quantize_pack_nhwc_zp(
     torch::Tensor mod_scale, torch::Tensor mod_shift, int64_t k_pad, double zero_point) {
     return group_norm_silu_quantize_pack_nhwc_impl(
         x, weight, bias, num_groups, eps, apply_silu, scale, smooth_inv,
-        mod_scale, mod_shift, k_pad, false, zero_point, 0, 0);
+        mod_scale, mod_shift, k_pad, false, zero_point);
 }
 
 torch::Tensor group_norm_silu_quantize_pack_nhwc_fast(
@@ -1604,20 +1511,7 @@ torch::Tensor group_norm_silu_quantize_pack_nhwc_fast(
     torch::Tensor mod_scale, torch::Tensor mod_shift, int64_t k_pad) {
     return group_norm_silu_quantize_pack_nhwc_impl(
         x, weight, bias, num_groups, eps, apply_silu, scale, smooth_inv,
-        mod_scale, mod_shift, k_pad, true, 0.0, 0, 0);
-}
-
-//: HALO variant (fix #2's padding correction): emits [N, H+2*pad_h, W+2*pad_w, Kpad/2] with the border
-//: set to the code z, so the following conv runs with padding=0. See the kernel comment for why this
-//: belongs in the quantize kernel rather than in a separate pad pass.
-torch::Tensor group_norm_silu_quantize_pack_nhwc_zp_pad(
-    torch::Tensor x, torch::Tensor weight, torch::Tensor bias, int64_t num_groups,
-    double eps, bool apply_silu, torch::Tensor scale, torch::Tensor smooth_inv,
-    torch::Tensor mod_scale, torch::Tensor mod_shift, int64_t k_pad, double zero_point,
-    int64_t pad_h, int64_t pad_w) {
-    return group_norm_silu_quantize_pack_nhwc_impl(
-        x, weight, bias, num_groups, eps, apply_silu, scale, smooth_inv,
-        mod_scale, mod_shift, k_pad, false, zero_point, pad_h, pad_w);
+        mod_scale, mod_shift, k_pad, true, 0.0);
 }
 
 torch::Tensor group_norm_silu_quantize_pack_nhwc_fast_zp(
@@ -1626,7 +1520,7 @@ torch::Tensor group_norm_silu_quantize_pack_nhwc_fast_zp(
     torch::Tensor mod_scale, torch::Tensor mod_shift, int64_t k_pad, double zero_point) {
     return group_norm_silu_quantize_pack_nhwc_impl(
         x, weight, bias, num_groups, eps, apply_silu, scale, smooth_inv,
-        mod_scale, mod_shift, k_pad, true, zero_point, 0, 0);
+        mod_scale, mod_shift, k_pad, true, zero_point);
 }
 
 // =========================================================================
