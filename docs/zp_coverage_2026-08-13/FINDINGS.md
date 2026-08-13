@@ -36,6 +36,18 @@ described as *"the t=T activation grid"*, and prescribed teaching those kernels 
 Measured per call at the kernel boundary ([`data/site_census.json`](data/site_census.json)) — is
 `a_hat` subtracted, is the scale the activation scale, does the consumer conv add a bias:
 
+> **Which artifact shows what.** A fresh census run now reports **0** guard hits on both arms, because
+> the delta sites declare `grid="delta"` and the activation sites route to a `_zp` kernel — that zero
+> *is* the post-fix confirmation. So the historical counts are reproduced deliberately rather than
+> implied: `CENSUS_COUNT_DELTA_AS_GAPS=1` restores the old name-based classification and writes
+> [`data/site_census_name_based.json`](data/site_census_name_based.json), which shows the MoDiff arm's
+> **62 via `step1_static_quantize_pack_int4_fprop` + 8 via `group_norm_silu_delta_quantize_resize_nhwc`
+> = 70**. The PTQ arm's historical 8 do not come back there, because those sites now call a `_zp`
+> kernel and never reach the guard at all; they are visible in
+> [`data/coverage_gate.json`](data/coverage_gate.json) as 96 `group_norm_silu_quantize_resize_nhwc_zp`
+> calls instead. [`data/site_census_after_coverage.json`](data/site_census_after_coverage.json) is the
+> post-fix run kept alongside for the comparison.
+
 | site | a_hat | grid | consumer | consumer bias | verdict |
 |---|---|---|---|---|---|
 | `step1_static_quantize_pack_int4_fprop` | **yes** | delta | `conv2d_int4_evt_o_hat` | **no** | delta → z inapplicable |

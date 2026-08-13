@@ -94,11 +94,31 @@ def gpu_busy_pids():
 
 
 def one(mode, steps, batch, child_path):
+    """The per-seed values AND a cross-check that they are the ones measure() actually returned.
+
+    The child recovers the per-seed list by REGEX from measure()'s stdout, because measure() returns
+    only the mean. A regex that grabbed the wrong bracketed group would silently corrupt every spread
+    below -- and a floor that can be wrong without saying so is precisely the failure this whole file
+    is about. measure() also returns the mean independently, so the two must agree; if they do not,
+    the parse is wrong and the run stops rather than reporting a number.
+    """
     p = subprocess.run([sys.executable, child_path, mode], capture_output=True, text=True,
                        cwd=ROOT, timeout=3600)
     for line in reversed(p.stdout.split("\n")):
         if line.startswith("RESULT_JSON "):
-            return json.loads(line[len("RESULT_JSON "):])["rels"]
+            d = json.loads(line[len("RESULT_JSON "):])
+            rels, mean = d["rels"], d.get("mean")
+            if not rels:
+                raise RuntimeError(f"{mode}: child parsed no per-seed values out of measure()'s output")
+            #: TOLERANCE IS THE PRINT ROUNDING, not a fudge. measure() prints the per-seed list as
+            #: [round(x, 4) ...], so each parsed value is within 5e-5 of the truth and their mean within
+            #: 5e-5 of measure()'s returned mean. A tighter bound (1e-6, what this first used) fails on
+            #: the rounding and says nothing about whether the right numbers were parsed.
+            if mean is not None and abs(statistics.mean(rels) - mean) > 1e-4:
+                raise RuntimeError(
+                    f"{mode}: parsed per-seed {rels} averages to {statistics.mean(rels):.6f} but "
+                    f"measure() returned {mean:.6f} -- the stdout parse picked up the wrong numbers")
+            return {"rels": rels, "mean": mean}
     sys.stderr.write(p.stdout[-3000:] + "\n" + p.stderr[-3000:] + "\n")
     raise RuntimeError(f"{mode}: child produced no result")
 
@@ -132,23 +152,29 @@ def main():
                 print(f"  ABORTING at {mode} repeat {i + 1}: another GPU process appeared ({busy}).")
                 out["aborted_at"] = f"{mode}/{i + 1}"
                 break
-            rels = one(mode, a.steps, a.batch, child_path)
-            runs.append(rels)
-            print(f"  {mode:16s} repeat {i + 1}  {[round(x, 4) for x in rels]}  "
-                  f"mean {statistics.mean(rels):.4f}", flush=True)
+            got = one(mode, a.steps, a.batch, child_path)
+            runs.append(got)
+            print(f"  {mode:16s} repeat {i + 1}  {[round(x, 4) for x in got['rels']]}  "
+                  f"mean {got['mean']:.6f}", flush=True)
         if not runs:
             continue
-        means = [statistics.mean(r) for r in runs]
+        #: MEANS COME FROM measure()'s RETURN VALUE (full precision); the per-seed lists are recovered
+        #: from its printed output and are therefore rounded to 4 decimals. So mean_spread_pct is the
+        #: number to quote, and per_seed_spread_pct carries a rounding floor of roughly
+        #: 1e-4 / value ~= 0.025% -- reported, because several of the spreads below are close to it.
+        means = [r["mean"] for r in runs]
+        rels_runs = [r["rels"] for r in runs]
         per_seed_spread = []
         for j in range(len(SEEDS)):
-            vals = [r[j] for r in runs]
+            vals = [r[j] for r in rels_runs]
             per_seed_spread.append((max(vals) - min(vals)) / statistics.mean(vals) * 100)
         mean_spread = (max(means) - min(means)) / statistics.mean(means) * 100
         out["arms"][mode] = {
-            "runs": runs, "means": means,
+            "runs": rels_runs, "means": means,
             "mean_spread_pct": mean_spread,
             "per_seed_spread_pct": per_seed_spread,
-            "bit_identical": all(r == runs[0] for r in runs),
+            "per_seed_rounding_floor_pct": 1e-4 / max(statistics.mean(means), 1e-12) * 100,
+            "bit_identical": all(m == means[0] for m in means),
         }
         print(f"  {mode:16s} -> mean spread {mean_spread:.2f}%  "
               f"per-seed {[round(x, 2) for x in per_seed_spread]}  "

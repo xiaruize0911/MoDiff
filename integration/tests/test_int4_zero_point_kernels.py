@@ -27,8 +27,9 @@ THREE GATES PER KERNEL, and the third is the one that catches a parameter that i
      the 2x2 average or the nearest upsample -- which is the point. A reference reimplementation
      would be a second thing that can be wrong; this identity is a property of the kernel pair.
      Elements at the clamp are EXCLUDED rather than predicted, because round(a*s) is unrecoverable
-     from a saturated code. The count of comparable elements is printed, so "0 of 0 matched" cannot
-     pass as a green gate.
+     from a saturated code. The comparable count is printed AND ENFORCED: if a kernel's shift gate
+     found nothing comparable in any case it asserted nothing, and main() fails the run rather than
+     letting "0 of 0 matched" read as green.
 
 PLUS TWO REFUSAL GATES. The zero point belongs to the activation grid. Two of these kernels can also
 be asked to quantize a DELTA (x - a_hat), where z is undefined -- it cancels in a difference -- and
@@ -71,7 +72,12 @@ def unpack_int4(y, C):
 
 
 def shift_gate(c0, cz, z, label, fails, seen):
-    """Gate 3: on the codes the shift cannot saturate, c_zp == c0 + z exactly."""
+    """Gate 3: on the codes the shift cannot saturate, c_zp == c0 + z exactly.
+
+    A SKIP IS RECORDED, NOT SWALLOWED. `seen` collects the comparable-element count of every call so
+    main() can fail the run if a whole kernel's worth of comparisons was skipped. The docstring at the
+    top of this file claims "0 of 0 matched cannot pass as a green gate"; printing the count is not
+    that claim, enforcing it is, and the first version of this file only printed."""
     want = c0 + int(z)
     comparable = (c0.abs() < 7) & (want.abs() <= 7)
     n = int(comparable.sum())
@@ -89,10 +95,9 @@ def shift_gate(c0, cz, z, label, fails, seen):
         fails.append(label)
 
 
-def test_scale_quantize_and_pack(fails):
+def test_scale_quantize_and_pack(fails, seen):
     print("1. scale_quantize_and_pack_zp  (MoDiff t=T)")
     torch.manual_seed(20260813)
-    seen = []
     for C in (192, 768, 1536):
         x = (torch.randn(2, C, 8, 8, device="cuda") * 2.0).contiguous(
             memory_format=torch.channels_last)
@@ -126,10 +131,9 @@ def test_scale_quantize_and_pack(fails):
         print("   2D input REFUSES (channels_last only)             ok")
 
 
-def test_gn_resize(fails):
+def test_gn_resize(fails, seen):
     print("\n2. group_norm_silu_quantize_resize_nhwc_zp  (PTQ updown)")
     torch.manual_seed(4)
-    seen = []
     dev = "cuda"
     for (C, H, W, d) in UPDOWN:
         x = torch.randn(2, C, H, W, device=dev, dtype=torch.float16).contiguous(
@@ -181,11 +185,10 @@ def test_gn_resize(fails):
         fails.append("gnr int8 z=0")
 
 
-def test_upsample(fails):
+def test_upsample(fails, seen):
     print("\n3. upsample2x_quantize_pack_noahat_fprop_zp  (PTQ Upsample)")
     torch.manual_seed(7)
     dev = "cuda"
-    seen = []
     for C, H, W in ((192, 16, 16), (768, 4, 4), (1536, 2, 2)):
         x = torch.randn(2, C, H, W, device=dev, dtype=torch.float16).contiguous(
             memory_format=torch.channels_last)
@@ -241,9 +244,16 @@ def main():
             print(f"MISSING ENTRY POINT {n} -- rebuild the extension")
             return 1
     fails = []
-    test_scale_quantize_and_pack(fails)
-    test_gn_resize(fails)
-    test_upsample(fails)
+    #: comparable-element counts per kernel, so an all-skipped kernel fails instead of reading green
+    seen = {"scale_quantize_and_pack": [], "gn_resize": [], "upsample": []}
+    test_scale_quantize_and_pack(fails, seen["scale_quantize_and_pack"])
+    test_gn_resize(fails, seen["gn_resize"])
+    test_upsample(fails, seen["upsample"])
+    for k, v in seen.items():
+        if not v or all(n == 0 for n in v):
+            print(f"\nVACUOUS: {k}'s shift gate had no comparable codes in any case, so it asserted "
+                  f"nothing. Treating that as a failure rather than a pass.")
+            fails.append(f"{k}: shift gate vacuous")
     print()
     if fails:
         print(f"FAILED ({len(fails)}): {', '.join(fails)}")

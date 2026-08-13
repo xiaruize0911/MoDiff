@@ -40,6 +40,12 @@ sys.path[:0] = [os.path.join(ROOT, "docs/attn_modiff_2026-08-13/scripts"),
 #: Collect the census rather than raise on the first ignored zero point -- that is what this env var
 #: is for (docs/zero_point_2026-08-13/FINDINGS.md, "The guard, and why it is strict by default").
 os.environ["MODIFF_ZP_STRICT"] = "0"
+#: _refold_zp_bias refuses a non-zero zero point on a PADDED conv (2026-08-13): the fold is
+#: per-output-channel while the padding error is per-output-pixel. Every calibrated conv in this model is
+#: 3x3 padding=1, so this script -- whose whole subject is the asymmetric grid -- cannot build anything
+#: without the override. It does not make the configuration correct; it makes the defect reproducible,
+#: which is what a script that MEASURES the defect needs. See docs/zp_coverage_2026-08-13/FINDINGS.md.
+os.environ.setdefault("MODIFF_ZP_ALLOW_PADDED", "1")
 os.environ["MODIFF_LINEAR"] = "0"
 
 import torch                                                               # noqa: E402
@@ -48,6 +54,17 @@ import dynamic_delta_ab as H                                               # noq
 
 D = "docs/zp_coverage_2026-08-13"
 ZP_TABLE = "docs/zero_point_2026-08-13/data/int4_calibration_zp_clip4.5.pt"
+
+#: REPRODUCES THE OLD, NAME-BASED CENSUS. With coverage complete and delta sites declaring grid="delta",
+#: a run of this script now reports ZERO guard hits -- which is the correct post-fix state and is itself
+#: the confirmation that nothing is contaminated. But it means the historical counts that motivated all
+#: of this (70 pairs on the MoDiff arm, 62 of them via step1_static_quantize_pack_int4_fprop, 8 on PTQ)
+#: are no longer reproducible from a fresh run, and a finding whose evidence cannot be regenerated is a
+#: finding on trust. With CENSUS_COUNT_DELTA_AS_GAPS=1 the guard wrapper counts delta sites as gaps
+#: exactly as the name-based classification did, so those numbers come back -- alongside the
+#: classification that shows they were false positives.
+COUNT_DELTA_AS_GAPS = os.environ.get("CENSUS_COUNT_DELTA_AS_GAPS", "0") == "1"
+OUT = f"{D}/data/site_census{'_name_based' if COUNT_DELTA_AS_GAPS else ''}.json"
 
 #: entry point -> (index of the scale tensor, index of the a_hat tensor or None)
 #: Signatures read off the call sites, not guessed:
@@ -222,7 +239,7 @@ def install_patches():
     def m_guard(self, where, grid="activation"):
         _ctx["conv"], _ctx["where"] = self, where
         z = float(getattr(self, "_zp_float", 0.0))
-        if z != 0.0 and grid != "delta":
+        if z != 0.0 and (COUNT_DELTA_AS_GAPS or grid != "delta"):
             guard_hits.setdefault(f"{self.layer_name}|{where}", 0)
             guard_hits[f"{self.layer_name}|{where}"] += 1
         return orig_m(self, where, grid)
@@ -233,7 +250,7 @@ def install_patches():
     def f_guard(conv, where, grid="activation"):
         _ctx["conv"], _ctx["where"] = conv, where
         z = float(getattr(conv, "_zp_float", 0.0))
-        if z != 0.0 and grid != "delta":
+        if z != 0.0 and (COUNT_DELTA_AS_GAPS or grid != "delta"):
             k = f"{getattr(conv, 'layer_name', None)}|{where}"
             guard_hits.setdefault(k, 0)
             guard_hits[k] += 1
@@ -294,9 +311,11 @@ def main():
     print()
 
     os.makedirs(f"{D}/data", exist_ok=True)
-    with open(f"{D}/data/site_census.json", "w") as f:
+    with open(OUT, "w") as f:
         json.dump(out, f, indent=2)
-    print(f"wrote {D}/data/site_census.json")
+    print(f"wrote {OUT}"
+          + ("   (delta sites counted as gaps: reproduces the OLD name-based census)"
+             if COUNT_DELTA_AS_GAPS else "   (0 guard hits here means coverage is complete)"))
 
     # The verdict this script exists to reach, stated as a rule rather than a judgement.
     print("\n=== CLASSIFICATION ===")

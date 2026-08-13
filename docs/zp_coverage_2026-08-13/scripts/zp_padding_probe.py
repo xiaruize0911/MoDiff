@@ -50,6 +50,12 @@ os.chdir(ROOT)
 sys.path.insert(0, ROOT)
 
 import torch                                                              # noqa: E402
+#: _refold_zp_bias refuses a non-zero zero point on a PADDED conv (2026-08-13): the fold is
+#: per-output-channel while the padding error is per-output-pixel. Every calibrated conv in this model is
+#: 3x3 padding=1, so this script -- whose whole subject is the asymmetric grid -- cannot build anything
+#: without the override. It does not make the configuration correct; it makes the defect reproducible,
+#: which is what a script that MEASURES the defect needs. See docs/zp_coverage_2026-08-13/FINDINGS.md.
+os.environ.setdefault("MODIFF_ZP_ALLOW_PADDED", "1")
 import torch.nn as nn                                                     # noqa: E402
 import torch.nn.functional as F                                           # noqa: E402
 from integration.kernels.int4_optimized import OptimizedInt4Conv2d        # noqa: E402

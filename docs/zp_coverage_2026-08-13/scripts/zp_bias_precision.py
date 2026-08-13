@@ -42,6 +42,12 @@ sys.path[:0] = [os.path.join(ROOT, "docs/qdiff_bridge_2026-08-12/scripts"),
                 os.path.join(ROOT, "integration/benchmarks/report"),
                 os.path.join(ROOT, "docs/modiff_correctness_2026-08-03/scripts")]
 os.environ["MODIFF_ZP_STRICT"] = "0"
+#: _refold_zp_bias refuses a non-zero zero point on a PADDED conv (2026-08-13): the fold is
+#: per-output-channel while the padding error is per-output-pixel. Every calibrated conv in this model is
+#: 3x3 padding=1, so this script -- whose whole subject is the asymmetric grid -- cannot build anything
+#: without the override. It does not make the configuration correct; it makes the defect reproducible,
+#: which is what a script that MEASURES the defect needs. See docs/zp_coverage_2026-08-13/FINDINGS.md.
+os.environ.setdefault("MODIFF_ZP_ALLOW_PADDED", "1")
 os.environ["MODIFF_LINEAR"] = "0"
 
 import torch                                                              # noqa: E402

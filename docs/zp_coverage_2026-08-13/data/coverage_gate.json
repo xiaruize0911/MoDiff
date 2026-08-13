@@ -14,6 +14,7 @@
   "results": {
     "int4_baseline": {
       "convs_with_zp": 70,
+      "warmup_steps": 5,
       "raised": null,
       "counts": {
         "group_norm_silu_quantize_pack_nhwc_zp": 744,
@@ -22,6 +23,7 @@
     },
     "int4": {
       "convs_with_zp": 70,
+      "warmup_steps": 5,
       "raised": null,
       "counts": {
         "scale_quantize_and_pack_zp": 140,

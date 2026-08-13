@@ -42,6 +42,14 @@ sys.path[:0] = [os.path.join(ROOT, "docs/attn_modiff_2026-08-13/scripts"),
 
 #: STRICT. This is the gate: a site that ignores a live zero point must stop the run, not log.
 os.environ["MODIFF_ZP_STRICT"] = "1"
+#: AND allow the padded configuration, because this file asks a DIFFERENT question from whether that
+#: configuration is deployable. _refold_zp_bias refuses a non-zero z on a padded conv (correctly -- the
+#: fold is per-output-channel and the padding error is per-output-pixel), and every calibrated conv in
+#: this model is 3x3 padding=1, so without the override there is no asymmetric model to check coverage
+#: ON and this gate reports "0 zp kernels called" for both arms -- which is what it did once the refusal
+#: landed. Coverage (does every quantize honour z?) and deployability (is an asymmetric grid correct
+#: here?) are independent; this file answers the first and FINDINGS.md answers the second.
+os.environ.setdefault("MODIFF_ZP_ALLOW_PADDED", "1")
 os.environ["MODIFF_LINEAR"] = "0"
 
 import torch                                                              # noqa: E402
@@ -73,13 +81,17 @@ EXPECT = {
 
 #: STRUCTURAL INVARIANT, and the sharpest assertion in this file. On the MoDiff arm _forward_first_step
 #: quantizes the activation ONCE with the zero point (with_bias=True) and then quantizes
-#: warmup_steps-1 = 4 RESIDUALS without it (with_bias=False, bias-free conv, dynamic per-round scale).
-#: So the symmetric call count must be exactly 4x the asymmetric one.
+#: warmup_steps-1 RESIDUALS without it (with_bias=False, bias-free conv, dynamic per-round scale).
+#: So the symmetric call count must be exactly (warmup_steps-1)x the asymmetric one.
 #:
-#: This is here because the first version of the routing failed it 350 : 0 -- it applied z to all five,
-#: shifting every warm-up residual against a conv that adds no bias to compensate. "> 0" passed that
-#: bug happily; the ratio is what caught it.
-WARMUP_RATIO = {"int4": ("scale_quantize_and_pack", "scale_quantize_and_pack_zp", 4)}
+#: THE RATIO IS READ OFF THE MODEL, not hardcoded. It was written as a literal 4, which silently
+#: encoded warmup_steps == 5: had anyone changed warmup_steps, this gate would have failed and blamed
+#: the zero-point routing for it. A gate that can accuse the wrong thing is worse than no gate.
+#:
+#: This exists because the first version of the routing failed it 350 : 70 -- it applied z to all five
+#: quantizes, shifting every warm-up residual against a conv that adds no bias to compensate. "> 0"
+#: passed that bug happily; the ratio is what caught it.
+WARMUP_RATIO = {"int4": ("scale_quantize_and_pack", "scale_quantize_and_pack_zp")}
 
 counts = collections.Counter()
 
@@ -105,11 +117,20 @@ def run(mode):
              if isinstance(mo, OptimizedInt4Conv2d) and float(mo.static_input_zp.item()) != 0.0)
     if nz == 0:
         raise RuntimeError("GATE FAILED: the asymmetric table reached 0 convs")
-    print(f"  {nz} convs carry a non-zero zero point", flush=True)
+    #: Read the warm-up count from the modules themselves so the ratio assertion below cannot encode a
+    #: stale assumption. Disagreement between convs would make "the" ratio meaningless, so it is an
+    #: error rather than a max() or a majority vote.
+    ws = {int(mo.warmup_steps) for mo in m.model.diffusion_model.modules()
+          if isinstance(mo, OptimizedInt4Conv2d)}
+    if len(ws) != 1:
+        raise RuntimeError(f"convs disagree on warmup_steps ({sorted(ws)}); the warm-up ratio "
+                           f"assertion has no single correct value")
+    warm = next(iter(ws))
+    print(f"  {nz} convs carry a non-zero zero point, warmup_steps={warm}", flush=True)
     H.latent(r, m, s)
     del r, m, s
     torch.cuda.empty_cache()
-    return nz
+    return nz, warm
 
 
 def main():
@@ -120,10 +141,10 @@ def main():
         counts.clear()
         print(f"=== {mode}, asymmetric table, MODIFF_ZP_STRICT=1 ===", flush=True)
         try:
-            nz = run(mode)
+            nz, warm = run(mode)
             raised = None
         except Exception as e:
-            nz, raised = None, f"{type(e).__name__}: {e}"
+            nz, warm, raised = None, None, f"{type(e).__name__}: {e}"
             print(f"  RAISED: {raised}")
             traceback.print_exc(limit=3)
             failures.append(f"{mode}: strict run raised")
@@ -135,15 +156,17 @@ def main():
             print(f"    {k:44s} {rule:5s} got {got:6d}  {'ok' if ok else 'FAIL'}")
             if not ok:
                 failures.append(f"{mode}: {k} {rule} but got {got}")
-        if mode in WARMUP_RATIO:
-            sym_k, zp_k, ratio = WARMUP_RATIO[mode]
+        if mode in WARMUP_RATIO and warm:
+            sym_k, zp_k = WARMUP_RATIO[mode]
+            ratio = warm - 1
             sym, zp = counts[sym_k], counts[zp_k]
             ok = zp > 0 and sym == ratio * zp
             print(f"    warm-up invariant: {sym_k} == {ratio}x {zp_k}")
             print(f"      {sym} vs {ratio} x {zp} = {ratio * zp}   {'ok' if ok else 'FAIL'}")
             if not ok:
                 failures.append(f"{mode}: warm-up ratio {sym} != {ratio}*{zp}")
-        out[mode] = {"convs_with_zp": nz, "raised": raised, "counts": dict(counts)}
+        out[mode] = {"convs_with_zp": nz, "warmup_steps": warm, "raised": raised,
+                     "counts": dict(counts)}
         print()
 
     os.makedirs(f"{D}/data", exist_ok=True)
