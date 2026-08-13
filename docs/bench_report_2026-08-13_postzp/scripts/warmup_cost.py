@@ -24,6 +24,22 @@ all, so their step 0 should sit at the steady-state median. Whatever excess they
 first-step-of-anything overhead (allocator, cache warmth) and has to be subtracted from the MoDiff arms'
 excess before calling it warm-up.
 
+WHO ACTUALLY PAYS IT -- and the answer is NOT "every sample", which is why REPORT.md's ms/step and the
+number below are both right and are not the same number. _forward_first_step runs only when
+`a_hat_cache is None or its shape != x.shape`, so it is paid per COLD sample, and whether a sample is
+cold depends on the caller. Measured by counting the calls:
+
+    e2e_three_mode_bench's pattern (sampler.sample() repeatedly, NO reset)   70, 0, 0
+    the quality harnesses' pattern (dynamic_delta_ab.latent, WHICH RESETS)   70, 70, 70
+
+So REPORT.md's 58.50 / 73.19 ms/step CONTAIN NO WARM-UP: the bench pays it once inside its discarded
+warm-up samples and its timed repeats reuse the state. Every harness that resets -- which is all the
+quality ones, because a leftover cache does not degrade gracefully (dynamic_delta_ab's own comment
+records an ALL-NaN latent after an unreset run) -- pays it on every sample.
+
+Read the numbers below as the cost of a COLD sample, which is what correct per-sample usage costs, and
+read REPORT.md's ms/step as steady state with the warm-up excluded.
+
 Run: python docs/bench_report_2026-08-13_postzp/scripts/warmup_cost.py    # ~6 min, needs an idle GPU
 """
 import json
@@ -122,8 +138,11 @@ def main():
     os.makedirs(f"{D}/data", exist_ok=True)
     json.dump(out, open(f"{D}/data/warmup_cost.json", "w"), indent=1)
     print(f"\nwrote {D}/data/warmup_cost.json")
-    print(f"\nNOTE: the share scales as 1/steps -- it is a per-SAMPLE cost. At {STEPS} steps the numbers "
-          f"above\napply; at 50 steps multiply the percentages by {STEPS / 50:.0f}.")
+    print(f"\nNOTE 1: the share scales as 1/steps -- it is a per-COLD-SAMPLE cost. At {STEPS} steps the "
+          f"numbers above\napply; at 50 steps multiply the percentages by {STEPS / 50:.0f}.")
+    print("NOTE 2: REPORT.md's ms/step does NOT include this. e2e_three_mode_bench never resets MoDiff\n"
+          "state, so only its discarded warm-up samples pay the warm-up (measured call counts: 70, 0, 0)\n"
+          "while harnesses that reset pay it every sample (70, 70, 70).")
     return 0
 
 

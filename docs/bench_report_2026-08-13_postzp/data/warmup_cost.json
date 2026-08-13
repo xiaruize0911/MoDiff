@@ -64,5 +64,18 @@
    "modiff_warmup_pct": 5.039856088701105
   }
  },
- "first_step_floor_ms": -0.78125
+ "first_step_floor_ms": -0.78125,
+ "who_pays": {
+  "measured_first_step_calls_no_reset": [
+   70,
+   0,
+   0
+  ],
+  "measured_first_step_calls_with_reset": [
+   70,
+   70,
+   70
+  ],
+  "note": "_forward_first_step runs only when a_hat_cache is None or its shape changed. e2e_three_mode_bench never resets MoDiff state, so REPORT.md's ms/step excludes the warm-up; harnesses that reset (all the quality ones) pay it per sample."
+ }
 }
