@@ -15,6 +15,14 @@ So `docs/paper_repro_2026-08-12/FINDINGS.md` section 7 stands: anything under ~5
 resolvable, W4A4 is safe to a few tenths of a percent. The 7% wobble that prompted this
 (0.5267 → 0.4901 → 0.5022 on one arm in one afternoon) was **not** the floor.
 
+**With one qualification, added after more samples: the W4A4 MoDiff arm measured FIRST in a process is
+bimodal.** Across six such measurements it read 0.3954, 0.3954, 0.3959, 0.3959, 0.3960 — and once
+**0.3560**, a 10% excursion. Measured *second* it reads 0.3090 / 0.3095, i.e. the committed value, every
+time. So the 0.13% above is the *modal* spread and under-samples the tail; the reliable protocol is not
+"one arm per process" but **"measure after a warm-up arm"**, which is what the committed harnesses
+happen to do. A discrete excursion rather than a drift is what a kernel- or algorithm-selection flip
+looks like, which is the same suspect as the order effect below.
+
 ## What actually breaks comparability
 
 **The W4A4 MoDiff arm depends on which arm ran before it, by 28%** —
@@ -80,13 +88,29 @@ the next step and is not claimed here.
    licenses the comparison: 28% is 200× the floor.
 3. **A harness that cannot reproduce a committed number should suspect arm order before drift.**
 
-## Still open, and now sharper
+## Both arms are order-sensitive, and that accounts for every committed number
 
-`int4_baseline` reads **0.5022–0.5026** today in three independent harnesses (0.09% spread), against a
-committed **0.4695**. That is +7%, systematic, and far outside both the floor and the arm-order effect
-(this arm is insensitive to order). So something in the tree changed the W4A4 PTQ arm since 0.4695 was
-committed on 2026-08-12, and it wants bisecting.
+`int4_baseline` reads 0.5022–0.5026 measured first, against a committed 0.4695 — which looked like a
++7% regression in the tree. It is not. It is the same effect, smaller:
 
-Nothing in [FINDINGS.md](FINDINGS.md) depends on it: fix #2's conclusion compares against the symmetric
-baseline **measured in the same run** (0.5022), not against the committed number, and its margins are
+| arm | measured FIRST | measured SECOND | committed |
+|---|--:|--:|--:|
+| W4A4 PTQ (`int4_baseline`) | 0.5022–0.5023 | **0.4620 / 0.4692** (after `int4`) | 0.4695 |
+| W4A4 MoDiff (`int4`) | 0.3954–0.3960 | **0.3090 / 0.3095** (after `int4_baseline`) | 0.3090 |
+
+**Both committed values are second-arm values, and the MoDiff one reproduces exactly** (0.3090) —
+0.4692 also matches `arm_position_effect.json`'s own position-2 reading of 0.46919. The PTQ second-arm
+value is the looser of the two (0.4620 and 0.4692 in two runs, straddling the committed 0.4695), which
+is consistent with the same bimodality noted above rather than with a second effect. So:
+
+* **There is no drift and nothing to bisect.** Every committed W4A4 number in this tree is reproducible
+  today, provided the arm order matches the harness that produced it.
+* **The effect is not MoDiff-only, it is just much larger there**: 7.1% on PTQ, 27.8% on MoDiff. The
+  asymmetry is consistent with MoDiff integrating a first-step perturbation into `o_hat` across all 50
+  steps while PTQ re-derives each step independently.
+* **The direction is consistent**: the second arm is always the *better* number, which is what a
+  settling explanation predicts (whatever the first arm leaves warm, the second benefits from).
+
+Nothing in [FINDINGS.md](FINDINGS.md) depends on any of this: fix #2's conclusion compares against the
+symmetric baseline **measured in the same run**, not against a committed number, and its margins are
 +82%/+204%.
