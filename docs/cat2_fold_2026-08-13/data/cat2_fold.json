@@ -1,0 +1,265 @@
+{
+ "gpu": "NVIDIA A40",
+ "batch": 128,
+ "groups": 32,
+ "skip_types": {
+  "Conv2d": 30,
+  "Identity": 8
+ },
+ "rows": [
+  {
+   "C1": 768,
+   "C2": 768,
+   "C": 1536,
+   "H": 2,
+   "W": 2,
+   "count": 21,
+   "cpg": 48,
+   "straddles": false,
+   "cat2_us": 17.904000356793404,
+   "cat2_gbs": 175.69972840211665,
+   "split": [
+    {
+     "Cout": 768,
+     "gemm_one_us": 33.15199911594391,
+     "gemm_two_acc_us": 38.176000118255615,
+     "split_cost_us": 5.0240010023117065,
+     "net_us": 12.879999354481697,
+     "weight": 21.0,
+     "suspect": false
+    }
+   ]
+  },
+  {
+   "C1": 768,
+   "C2": 768,
+   "C": 1536,
+   "H": 4,
+   "W": 4,
+   "count": 14,
+   "cpg": 48,
+   "straddles": false,
+   "cat2_us": 30.46399913728237,
+   "cat2_gbs": 413.0420285037631,
+   "split": [
+    {
+     "Cout": 768,
+     "gemm_one_us": 77.56800204515457,
+     "gemm_two_acc_us": 89.37600255012512,
+     "split_cost_us": 11.80800050497055,
+     "net_us": 18.65599863231182,
+     "weight": 14.0,
+     "suspect": false
+    }
+   ]
+  },
+  {
+   "C1": 384,
+   "C2": 384,
+   "C": 768,
+   "H": 8,
+   "W": 8,
+   "count": 14,
+   "cpg": 24,
+   "straddles": false,
+   "cat2_us": 51.343999803066254,
+   "cat2_gbs": 490.1414789756427,
+   "split": [
+    {
+     "Cout": 384,
+     "gemm_one_us": 75.52000135183334,
+     "gemm_two_acc_us": 98.03200140595436,
+     "split_cost_us": 22.512000054121017,
+     "net_us": 28.831999748945236,
+     "weight": 14.0,
+     "suspect": false
+    }
+   ]
+  },
+  {
+   "C1": 384,
+   "C2": 384,
+   "C": 768,
+   "H": 16,
+   "W": 16,
+   "count": 14,
+   "cpg": 24,
+   "straddles": false,
+   "cat2_us": 183.53600054979324,
+   "cat2_gbs": 548.4662175183995,
+   "split": [
+    {
+     "Cout": 384,
+     "gemm_one_us": 217.79199689626694,
+     "gemm_two_acc_us": 298.8799959421158,
+     "split_cost_us": 81.08799904584885,
+     "net_us": 102.4480015039444,
+     "weight": 14.0,
+     "suspect": false
+    }
+   ]
+  },
+  {
+   "C1": 192,
+   "C2": 192,
+   "C": 384,
+   "H": 32,
+   "W": 32,
+   "count": 14,
+   "cpg": 12,
+   "straddles": false,
+   "cat2_us": 357.807993888855,
+   "cat2_gbs": 562.6665570320868,
+   "split": [
+    {
+     "Cout": 192,
+     "gemm_one_us": 325.1679986715317,
+     "gemm_two_acc_us": 493.3920055627823,
+     "split_cost_us": 168.2240068912506,
+     "net_us": 189.58398699760437,
+     "weight": 14.0,
+     "suspect": false
+    }
+   ]
+  },
+  {
+   "C1": 768,
+   "C2": 384,
+   "C": 1152,
+   "H": 4,
+   "W": 4,
+   "count": 7,
+   "cpg": 36,
+   "straddles": true,
+   "cat2_us": 25.37599951028824,
+   "cat2_gbs": 371.8940803168705,
+   "split": [
+    {
+     "Cout": 768,
+     "gemm_one_us": 68.38399916887283,
+     "gemm_two_acc_us": 80.60800284147263,
+     "split_cost_us": 12.224003672599792,
+     "net_us": 13.151995837688446,
+     "weight": 3.5,
+     "suspect": false
+    },
+    {
+     "Cout": 384,
+     "gemm_one_us": 46.1760014295578,
+     "gemm_two_acc_us": 52.41600051522255,
+     "split_cost_us": 6.239999085664749,
+     "net_us": 19.13600042462349,
+     "weight": 3.5,
+     "suspect": false
+    }
+   ]
+  },
+  {
+   "C1": 768,
+   "C2": 384,
+   "C": 1152,
+   "H": 8,
+   "W": 8,
+   "count": 7,
+   "cpg": 36,
+   "straddles": true,
+   "cat2_us": 74.01599735021591,
+   "cat2_gbs": 510.00780035952437,
+   "split": [
+    {
+     "Cout": 768,
+     "gemm_one_us": 203.13600450754166,
+     "gemm_two_acc_us": 195.63200324773788,
+     "split_cost_us": -7.504001259803772,
+     "net_us": 81.51999861001968,
+     "weight": 3.5,
+     "suspect": true
+    },
+    {
+     "Cout": 384,
+     "gemm_one_us": 108.06400328874588,
+     "gemm_two_acc_us": 126.70399993658066,
+     "split_cost_us": 18.639996647834778,
+     "net_us": 55.376000702381134,
+     "weight": 3.5,
+     "suspect": false
+    }
+   ]
+  },
+  {
+   "C1": 384,
+   "C2": 192,
+   "C": 576,
+   "H": 16,
+   "W": 16,
+   "count": 7,
+   "cpg": 18,
+   "straddles": true,
+   "cat2_us": 139.8399993777275,
+   "cat2_gbs": 539.8846705946466,
+   "split": [
+    {
+     "Cout": 384,
+     "gemm_one_us": 181.69599771499634,
+     "gemm_two_acc_us": 270.4640030860901,
+     "split_cost_us": 88.76800537109375,
+     "net_us": 51.07199400663376,
+     "weight": 3.5,
+     "suspect": false
+    },
+    {
+     "Cout": 192,
+     "gemm_one_us": 132.4639990925789,
+     "gemm_two_acc_us": 179.18399721384048,
+     "split_cost_us": 46.7199981212616,
+     "net_us": 93.12000125646591,
+     "weight": 3.5,
+     "suspect": false
+    }
+   ]
+  },
+  {
+   "C1": 384,
+   "C2": 192,
+   "C": 576,
+   "H": 32,
+   "W": 32,
+   "count": 7,
+   "cpg": 18,
+   "straddles": true,
+   "cat2_us": 533.0080091953278,
+   "cat2_gbs": 566.5766419831261,
+   "split": [
+    {
+     "Cout": 384,
+     "gemm_one_us": 653.8719832897186,
+     "gemm_two_acc_us": 1003.6320090293884,
+     "split_cost_us": 349.7600257396698,
+     "net_us": 183.24798345565796,
+     "weight": 3.5,
+     "suspect": false
+    },
+    {
+     "Cout": 192,
+     "gemm_one_us": 711.3600075244904,
+     "gemm_two_acc_us": 606.3039898872375,
+     "split_cost_us": -105.05601763725281,
+     "net_us": 638.0640268325806,
+     "weight": 3.5,
+     "suspect": true
+    }
+   ]
+  }
+ ],
+ "weighted_cat2_ms": 14.505791952833533,
+ "weighted_net_ms": 8.995167806744576,
+ "net_fraction_of_cat2": 0.620108701130756,
+ "net_fraction_clean": 0.4464853583144313,
+ "suspect_share_of_saving": 0.27998856087606244,
+ "e2e": {
+  "cat2_ms": 392.0,
+  "window_ms": 12106.0,
+  "ceiling_pct": 3.2380637700313892,
+  "realistic_pct": 2.0079515186127237
+ }
+}
