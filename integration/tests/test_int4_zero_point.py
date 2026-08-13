@@ -5,9 +5,11 @@ An asymmetric activation grid stores a_q = round(a*s) + z, so a = (a_q - z)/s an
     sum_i w_q[k,i] * a[i] = (sum_i w_q[k,i]*a_q[i] - z * sum_i w_q[k,i]) * ws[k] / s
 
 The second term is constant per output channel, so it folds into the bias and neither the GEMM nor the
-EVT epilogue ever sees the zero point. This file gates that fold on its own -- the quantize kernels do
-not yet emit `+ z`, so nothing here depends on a rebuild, and if the fold is wrong it is wrong here
-rather than three CUDA kernels later.
+EVT epilogue ever sees the zero point. This file gates that fold ON ITS OWN: nothing here depends on a
+rebuild, so if the fold is wrong it is wrong here rather than three CUDA kernels later.
+
+THE KERNELS ARE GATED SEPARATELY, in test_int4_zero_point_kernels.py -- which is the file to read for
+which quantize entry points emit `+ z` and why the delta ones deliberately do not.
 
 FOUR GATES:
 
@@ -142,8 +144,8 @@ def main():
         print(f"FAILED: {', '.join(fails)}")
         return 1
     print("ALL PASS: the zero point's bias fold is exact, idempotent, and provably inert at z=0.\n"
-          "NOTE: this gates the MECHANISM only. The quantize kernels do not emit `+ z` yet, so no\n"
-          "accuracy claim follows from this file.")
+          "NOTE: this gates the HOST-SIDE FOLD only. The kernels are gated in\n"
+          "test_int4_zero_point_kernels.py, and no accuracy claim follows from either file.")
     return 0
 
 

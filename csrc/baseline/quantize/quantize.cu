@@ -217,7 +217,23 @@ __global__ void scale_quantize_pack_kernel(
     const float* __restrict__ input,
     int8_t* __restrict__ output,
     const float* __restrict__ scale_ptr,
-    int num_elements // Number of OUTPUT packed bytes
+    int num_elements, // Number of OUTPUT packed bytes
+    // ACTIVATION ZERO POINT (plan fix #2), same contract as
+    // group_norm_silu_quantize_pack_nhwc_vec2_kernel: a_q = clamp(round(a*s) + z, -7, 7), and the
+    // dequantization's -z*sum(w_q) term is folded into the conv bias at calibration time
+    // (OptimizedInt4Conv2d._refold_zp_bias), so no GEMM or epilogue sees z.
+    //
+    // THIS SITE IS WHY THE FIRST END-TO-END ZERO-POINT RUN DIVERGED (relL2 7.3057 on the MoDiff
+    // arm). It is MoDiff's t=T entry point -- _forward_first_step -> _int4_conv -> here -- and it
+    // is the ONE quantize per layer per sample whose conv actually adds the corrected bias. It was
+    // not merely unimplemented: it was UNGUARDED, so the census in
+    // docs/zero_point_2026-08-13/FINDINGS.md never listed it, and the 62 delta-path sites it did
+    // list are z-free by construction. o_hat is then accumulated over every remaining step, so a
+    // t=T offset of z*sum(w_q)*ws/s per output channel never washes out.
+    // Measured and re-classified in docs/zp_coverage_2026-08-13/data/site_census.json.
+    //
+    // z == 0 reproduces the old kernel EXACTLY (+0.0f before the same round/clamp).
+    float zp = 0.0f
 ) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= num_elements) return;
@@ -227,8 +243,8 @@ __global__ void scale_quantize_pack_kernel(
     float v0 = vals.x * scale;
     float v1 = vals.y * scale;
 
-    int8_t i0 = (int8_t)fmaxf(-7.0f, fminf(7.0f, roundf(v0)));
-    int8_t i1 = (int8_t)fmaxf(-7.0f, fminf(7.0f, roundf(v1)));
+    int8_t i0 = (int8_t)fmaxf(-7.0f, fminf(7.0f, roundf(v0) + zp));
+    int8_t i1 = (int8_t)fmaxf(-7.0f, fminf(7.0f, roundf(v1) + zp));
 
     output[idx] = (i0 & 0x0F) | ((i1 & 0x0F) << 4);
 }
@@ -282,7 +298,8 @@ torch::Tensor quantize_and_pack(torch::Tensor input) {
 //             separate x*scale kernel launch and its global-memory round-trip)
 //   Constraints: channels_last-contiguous (CHECK_CONTIGUOUS); numel even
 //   vs fp16:  n/a (quantization / layout / MoDiff-caching support op — no fp16 equivalent; these are the overhead ops that fusion tries to hide)
-torch::Tensor scale_quantize_and_pack(torch::Tensor input, torch::Tensor scale) {
+static torch::Tensor scale_quantize_and_pack_impl(torch::Tensor input, torch::Tensor scale,
+                                                  double zero_point) {
     CHECK_CONTIGUOUS(input);
 
     int num_input = input.numel();
@@ -298,15 +315,31 @@ torch::Tensor scale_quantize_and_pack(torch::Tensor input, torch::Tensor scale) 
         input.data_ptr<float>(),
         output.data_ptr<int8_t>(),
         scale.data_ptr<float>(),
-        num_output
+        num_output,
+        (float)zero_point
     );
 
+    // NO 2D BRANCH, unlike step1_static_quantize_pack_int4_fprop: CHECK_CONTIGUOUS above requires
+    // channels_last, which a 2D tensor can never satisfy, so a [M, K] reshape here would be dead
+    // code. The linear path reaches the step1_* kernel instead.
     int N = input.size(0);
     int C = input.size(1);
     int H = input.size(2);
     int W = input.size(3);
 
     return output.view({N, H, W, C / 2});
+}
+
+// TWO ARITIES, not a C++ default argument -- pybind11 does not inherit defaults, and this keeps
+// every existing 2-argument caller (integration/ plus ~8 archived docs/*/scripts) untouched. Same
+// pattern as group_norm_silu_quantize_pack_nhwc{,_zp}.
+torch::Tensor scale_quantize_and_pack(torch::Tensor input, torch::Tensor scale) {
+    return scale_quantize_and_pack_impl(input, scale, 0.0);
+}
+
+torch::Tensor scale_quantize_and_pack_zp(torch::Tensor input, torch::Tensor scale,
+                                         double zero_point) {
+    return scale_quantize_and_pack_impl(input, scale, zero_point);
 }
 
 // Fused: input * scale -> round -> clamp(-127,127) -> int8 (vectorized float4).
@@ -1206,7 +1239,18 @@ __global__ void upsample2x_quantize_pack_noahat_kernel(
     const T_IN* __restrict__ x, int8_t* __restrict__ output_packed,
     const float* __restrict__ scale_ptr, const float* __restrict__ smooth_inv,
     int C, int H, int W, int num_channels, long num_elements_out,
-    __half* __restrict__ a_hat_cache) {   // nullptr => baseline, bit-identical (see int8 sibling)
+    __half* __restrict__ a_hat_cache,     // nullptr => baseline, bit-identical (see int8 sibling)
+    // ACTIVATION ZERO POINT (plan fix #2), AND THIS KERNEL HAS TWO ROLES:
+    //   a_hat_cache == nullptr  -> quantizes the ACTIVATION on the activation grid, feeding a conv
+    //                              that adds the zp-corrected bias.  z applies.
+    //   a_hat_cache != nullptr  -> quantizes the temporal DELTA (x - a_hat) and updates a_hat with
+    //                              q/s.  z does NOT apply: the delta is a difference of activations,
+    //                              so z cancels, and adding it here would corrupt the a_hat update
+    //                              (which would then need (q - z)/s) while the o_hat conv adds no
+    //                              bias at all.
+    // The host wrapper TORCH_CHECKs the second case, so this parameter is only ever non-zero in the
+    // first. z == 0 reproduces the old kernel exactly in both.
+    float zp = 0.0f) {
     float scale = *scale_ptr;
     const float inv_scale = 1.0f / scale;
     const int Wo = W * 2, Ho = H * 2;
@@ -1224,14 +1268,14 @@ __global__ void upsample2x_quantize_pack_noahat_kernel(
         float x0 = load_as_float(x, (int)(pix_in * C + c0));
         if (smooth_inv != nullptr) x0 *= smooth_inv[c0 % num_channels];
         const float c_0 = (a_hat_cache != nullptr) ? __half2float(a_hat_cache[base]) : 0.0f;
-        float q0 = fmaxf(-7.0f, fminf(7.0f, roundf((x0 - c_0) * scale)));
+        float q0 = fmaxf(-7.0f, fminf(7.0f, roundf((x0 - c_0) * scale) + zp));
         if (a_hat_cache != nullptr) a_hat_cache[base] = __float2half_rn(c_0 + q0 * inv_scale);
         float q1 = 0.0f;
         if (base + 1 < num_elements_out) {
             float x1 = load_as_float(x, (int)(pix_in * C + c0 + 1));
             if (smooth_inv != nullptr) x1 *= smooth_inv[(c0 + 1) % num_channels];
             const float c_1 = (a_hat_cache != nullptr) ? __half2float(a_hat_cache[base + 1]) : 0.0f;
-            q1 = fmaxf(-7.0f, fminf(7.0f, roundf((x1 - c_1) * scale)));
+            q1 = fmaxf(-7.0f, fminf(7.0f, roundf((x1 - c_1) * scale) + zp));
             if (a_hat_cache != nullptr)
                 a_hat_cache[base + 1] = __float2half_rn(c_1 + q1 * inv_scale);
         }
@@ -1283,10 +1327,16 @@ torch::Tensor upsample2x_quantize_noahat_fprop(
 // int4-packed counterpart of upsample2x_quantize_noahat_fprop. Output packed int8 [N,2H,2W,C/2]
 // (same layout convention as step1_static_quantize_pack_int4_noahat_fprop). Requires C%2==0
 // (channel-pair packing), matching every other int4 quantize kernel in this file.
-torch::Tensor upsample2x_quantize_pack_noahat_fprop(
+static torch::Tensor upsample2x_quantize_pack_noahat_fprop_impl(
     torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv,
-    torch::Tensor a_hat_cache) {
+    torch::Tensor a_hat_cache, double zero_point) {
     TORCH_CHECK(x.dim() == 4, "upsample2x_quantize_pack_noahat_fprop: x must be [N,C,H,W]");
+    // See the kernel's zp comment: with an a_hat cache this kernel quantizes a DELTA, where the
+    // zero point is undefined and would also break the a_hat update. Refuse rather than pick.
+    TORCH_CHECK(a_hat_cache.numel() == 0 || zero_point == 0.0,
+                "upsample2x_quantize_pack_noahat_fprop: a non-zero activation zero point was passed "
+                "together with an a_hat cache, i.e. to a DELTA quantize. The zero point belongs to "
+                "the activation grid only -- pass 0.0 on the MoDiff path");
     int N = x.size(0), C = x.size(1), H = x.size(2), W = x.size(3);
     TORCH_CHECK(C % 2 == 0, "upsample2x_quantize_pack_noahat_fprop: C must be even for int4 packing");
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
@@ -1309,13 +1359,29 @@ torch::Tensor upsample2x_quantize_pack_noahat_fprop(
     if (x.scalar_type() == torch::kHalf) {
         upsample2x_quantize_pack_noahat_kernel<__half><<<grid_size, block_size, 0, stream>>>(
             reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), x_packed.data_ptr<int8_t>(),
-            scale_buf.data_ptr<float>(), smooth_ptr, C, H, W, num_channels, num_elements_out, cache_ptr);
+            scale_buf.data_ptr<float>(), smooth_ptr, C, H, W, num_channels, num_elements_out, cache_ptr,
+            (float)zero_point);
     } else {
         upsample2x_quantize_pack_noahat_kernel<float><<<grid_size, block_size, 0, stream>>>(
             x.data_ptr<float>(), x_packed.data_ptr<int8_t>(),
-            scale_buf.data_ptr<float>(), smooth_ptr, C, H, W, num_channels, num_elements_out, cache_ptr);
+            scale_buf.data_ptr<float>(), smooth_ptr, C, H, W, num_channels, num_elements_out, cache_ptr,
+            (float)zero_point);
     }
     return x_packed.view({N, H * 2, W * 2, C / 2});
+}
+
+// Two arities, same rationale as the other _zp pairs in this tree.
+torch::Tensor upsample2x_quantize_pack_noahat_fprop(
+    torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv,
+    torch::Tensor a_hat_cache) {
+    return upsample2x_quantize_pack_noahat_fprop_impl(x, scale_buf, smooth_inv, a_hat_cache, 0.0);
+}
+
+torch::Tensor upsample2x_quantize_pack_noahat_fprop_zp(
+    torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv,
+    torch::Tensor a_hat_cache, double zero_point) {
+    return upsample2x_quantize_pack_noahat_fprop_impl(x, scale_buf, smooth_inv, a_hat_cache,
+                                                      zero_point);
 }
 
 // Op: fused Downsample(avg_pool,2x2,stride2) + cache-free static int8 quantize (baseline conv, no

@@ -6,6 +6,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // Standalone elementwise quantize/pack/dequant-accumulate (kernels/quantize.cu)
     m.def("quantize_and_pack", &quantize_and_pack, "Fast Quantization and Packing for INT4");
     m.def("scale_quantize_and_pack", &scale_quantize_and_pack, "Fused Scale + Quantize + Pack for INT4");
+    m.def("scale_quantize_and_pack_zp", &scale_quantize_and_pack_zp,
+          "activation-zero-point variant (fix #2): MoDiff's t=T entry point, the one quantize per "
+          "layer per sample whose conv adds the zp-corrected bias; z=0 is bit-exact");
     m.def("scale_quantize_int8", &scale_quantize_int8, "Fused Scale + Quantize for INT8");
     m.def("dequant_bias_i8", &dequant_bias_i8, "fused dequant + per-col bias for int8-output GEMM: in_i8*out_scale+bias -> fp16");
     m.def("quantize_attn_out_int4_pack", &quantize_attn_out_int4_pack, "int4 variant of quantize_attn_out_int8: transpose + int4 quantize + pack -> int8 [b*T,k_pad/2] (real ch 0..C-1 packed, C..k_pad-1 zero-filled; k_pad<=0 -> C)");
@@ -62,6 +65,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("step1_static_quantize_pack_int4_noahat_fprop", &step1_static_quantize_pack_int4_noahat_fprop, "cache-free static int4 quantize+pack (baseline conv, no a_hat)");
     m.def("upsample2x_quantize_noahat_fprop", &upsample2x_quantize_noahat_fprop, "fused Upsample(nearest,2x) + static int8 quantize (baseline conv, no a_hat)");
     m.def("upsample2x_quantize_pack_noahat_fprop", &upsample2x_quantize_pack_noahat_fprop, "fused Upsample(nearest,2x) + static int4 quantize+pack (baseline conv, no a_hat)");
+    m.def("upsample2x_quantize_pack_noahat_fprop_zp", &upsample2x_quantize_pack_noahat_fprop_zp,
+          "activation-zero-point variant (fix #2); legal only with an EMPTY a_hat cache -- with a "
+          "cache this kernel quantizes a delta, where z is undefined");
     m.def("avgpool2x_quantize_noahat_fprop", &avgpool2x_quantize_noahat_fprop, "fused Downsample(avg_pool,2x2) + static int8 quantize (baseline conv, no a_hat)");
     m.def("avgpool2x_quantize_pack_noahat_fprop", &avgpool2x_quantize_pack_noahat_fprop, "fused Downsample(avg_pool,2x2) + static int4 quantize+pack (baseline conv, no a_hat)");
     m.def("step1_static_quantize_pack_int4_fprop_silu", &step1_static_quantize_pack_int4_fprop_silu,
@@ -164,6 +170,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           pybind11::arg("k_pad") = 0);
     m.def("group_norm_silu_quantize_resize_nhwc", &group_norm_silu_quantize_resize_nhwc,
           "Fused GroupNorm+SiLU+quantize+2x resize; resize=+1 up, -1 down; pack=int4 nibbles");
+    m.def("group_norm_silu_quantize_resize_nhwc_zp", &group_norm_silu_quantize_resize_nhwc_zp,
+          "activation-zero-point variant (fix #2), packed int4 only; z=0 is bit-exact");
     m.def("group_norm_silu_quantize_pack_nhwc_fast", &group_norm_silu_quantize_pack_nhwc_fast,
           "Attention-only INT4 GroupNorm+pack with pair-vectorized warp reduction.",
           pybind11::arg("x"), pybind11::arg("weight"), pybind11::arg("bias"),

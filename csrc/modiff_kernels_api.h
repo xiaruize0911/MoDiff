@@ -32,6 +32,10 @@
 // ---- csrc/kernels/quantize/quantize.cu ----
 torch::Tensor quantize_and_pack(torch::Tensor input);
 torch::Tensor scale_quantize_and_pack(torch::Tensor input, torch::Tensor scale);
+//: Activation-zero-point variant (plan fix #2). MoDiff's t=T entry point -- see the kernel comment
+//: in quantize.cu for why this specific one is load-bearing and was missing from the first census.
+torch::Tensor scale_quantize_and_pack_zp(torch::Tensor input, torch::Tensor scale,
+                                         double zero_point);
 torch::Tensor scale_quantize_int8(torch::Tensor input, torch::Tensor scale);
 torch::Tensor quantize_attn_out_int8(torch::Tensor a, double a_scale);
 torch::Tensor quantize_attn_out_int4_pack(torch::Tensor a, double a_scale, int64_t k_pad);
@@ -115,6 +119,11 @@ torch::Tensor upsample2x_quantize_noahat_fprop(
 torch::Tensor upsample2x_quantize_pack_noahat_fprop(
     torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv,
     torch::Tensor a_hat_cache);
+//: Activation-zero-point variant (plan fix #2). Only legal with an EMPTY a_hat_cache: with a cache
+//: this kernel quantizes a delta, where z is undefined and would also corrupt the cache update.
+torch::Tensor upsample2x_quantize_pack_noahat_fprop_zp(
+    torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv,
+    torch::Tensor a_hat_cache, double zero_point);
 
 // Downsample(avg_pool,2x2,stride2) + static quantize fusion (baseline conv, NO a_hat): fold
 // Downsample.forward's nn.AvgPool2d into the following conv's quantize prologue, never
@@ -353,6 +362,14 @@ torch::Tensor group_norm_silu_quantize_resize_nhwc(
     torch::Tensor scale, torch::Tensor smooth_inv,
     torch::Tensor mod_scale, torch::Tensor mod_shift,
     int64_t k_pad, int64_t resize, bool pack);
+//: Activation-zero-point variant (plan fix #2). PACKED INT4 ONLY -- the int8 output has no matching
+//: bias correction, and the wrapper TORCH_CHECKs that.
+torch::Tensor group_norm_silu_quantize_resize_nhwc_zp(
+    torch::Tensor x, torch::Tensor weight, torch::Tensor bias,
+    int64_t num_groups, double eps, bool apply_silu,
+    torch::Tensor scale, torch::Tensor smooth_inv,
+    torch::Tensor mod_scale, torch::Tensor mod_shift,
+    int64_t k_pad, int64_t resize, bool pack, double zero_point);
 torch::Tensor group_norm_silu_quantize_pack_nhwc_fast(
     torch::Tensor x, torch::Tensor weight, torch::Tensor bias,
     int64_t num_groups, double eps, bool apply_silu,

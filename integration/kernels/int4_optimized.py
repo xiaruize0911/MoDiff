@@ -385,11 +385,29 @@ class OptimizedInt4Conv2d(nn.Module):
         abs_max = x.abs().amax()
         return 7.0 / torch.clamp(abs_max, min=1e-6)
 
-    def _dequantize_activation(self, x: torch.Tensor, input_scale) -> torch.Tensor:
+    def _dequantize_activation(self, x: torch.Tensor, input_scale,
+                               activation_grid: bool = True) -> torch.Tensor:
         """Simulate quantize-then-dequantize: a_hat = Q(x) in FP32.
         input_scale can be float or 1-element tensor.
+
+        WITH AN ACTIVATION ZERO POINT the round trip is a_q = clamp(round(a*s) + z, -7, 7) and
+        a = (a_q - z)/s, so both the clamp and the un-shift have to be here. Dropping the -z would
+        leave a_hat offset by z/s at t=T, and MoDiff carries a_hat forward through every remaining
+        step -- the error would not decay, it would seed the whole trajectory.
+
+        `activation_grid=False` MEANS x IS A RESIDUAL, not an activation, and z does not apply: it
+        cancels in a difference, the warm-up loop's conv adds no bias to compensate for it, and the
+        per-round scale is not the calibrated activation scale. This mirrors _int4_conv's with_bias
+        gate exactly -- the two must agree, because a_hat accumulates r_dq while o_hat accumulates the
+        conv of the SAME codes. If one applies z and the other does not, the caches diverge.
+
+        At z = 0 both branches are the original expression term for term, which is what
+        test_int4_zero_point.py's bit-identity gate rests on.
         """
-        return (x * input_scale).round().clamp(-7, 7) / input_scale
+        z = getattr(self, "_zp_float", 0.0) if activation_grid else 0.0
+        if z == 0.0:
+            return (x * input_scale).round().clamp(-7, 7) / input_scale
+        return (((x * input_scale).round() + z).clamp(-7, 7) - z) / input_scale
 
     def _int4_conv(self, x: torch.Tensor, input_scale, with_bias: bool = True) -> torch.Tensor:
         """INT4 x INT4 convolution via CUTLASS tensor core kernel.
@@ -407,13 +425,55 @@ class OptimizedInt4Conv2d(nn.Module):
                 x_scaled = x * input_scale
                 if not x_scaled.is_contiguous(memory_format=torch.channels_last):
                     x_scaled = x_scaled.contiguous(memory_format=torch.channels_last)
+                # quantize_and_pack takes PRE-SCALED values and has no zero-point arity, so this
+                # branch cannot honour z. It is only reached with a python-float input_scale, which
+                # means an uncalibrated layer -- a layer with a zero point is calibrated by
+                # construction (the zp arrives with the scale in set_static_calibration).
+                # Guarded only when the bias is added. A bias-free call here is the warm-up loop
+                # quantizing a RESIDUAL on a dynamic scale, which needs no zero point, so there is
+                # nothing to guard -- and it cannot use grid="delta" either, because that exemption
+                # verifies an a_hat CACHE and the warm-up residual is taken against a local a_hat
+                # that has not been stored yet.
+                if with_bias:
+                    self._zp_unsupported("quantize_and_pack (float-scale branch)")
                 x_packed = modiff_cutlass.quantize_and_pack(x_scaled)
             else:
                 # Tensor path: use fused scale+quantize+pack kernel (no CPU sync)
                 scale_tensor = (1.0 / input_scale).view(1)
                 if not x.is_contiguous(memory_format=torch.channels_last):
                     x = x.contiguous(memory_format=torch.channels_last)
-                x_packed = modiff_cutlass.scale_quantize_and_pack(x, input_scale)
+                # ACTIVATION ZERO POINT (fix #2), AND THIS IS THE SITE THAT MATTERED. This is
+                # MoDiff's t=T entry point (_forward_modulated -> _forward_first_step -> here): the
+                # one quantize per layer per sample whose conv adds the zp-corrected bias, seeding
+                # the o_hat that every later step accumulates into. It had no guard until
+                # 2026-08-13, which is why the census in docs/zero_point_2026-08-13/FINDINGS.md
+                # listed 62 harmless delta sites and not this one, and why the MoDiff arm measured
+                # relL2 7.3057 -- a divergence, not a grid.
+                #
+                # GATED ON with_bias, WHICH IS THE WHOLE DISCRIMINATION. z exists to pair with the
+                # -z*sum(w_q) term _refold_zp_bias folded into the bias, so it applies exactly where
+                # that bias is added. The two callers separate cleanly on that test:
+                #
+                #   _forward_first_step  with_bias=True   x is the ACTIVATION, on the calibrated
+                #                                         grid, and the bias is added -> z applies
+                #   its warm-up loop     with_bias=False  x is a RESIDUAL (x - a_hat) on a dynamic
+                #                                         per-round scale, conv is bias-free -> z
+                #                                         must NOT be applied
+                #
+                # Measured, not assumed: without this gate the MoDiff arm made 350 zp-quantize calls
+                # per run (70 convs x 5) instead of 70 -- every warm-up residual was being shifted by
+                # z against a conv that adds no bias to compensate, i.e. the same class of defect
+                # (codes and bias disagreeing about z) that this whole fix exists to remove, just
+                # pointing the other way.
+                zp = getattr(self, "_zp_float", 0.0) if with_bias else 0.0
+                if zp != 0.0:
+                    if not hasattr(modiff_cutlass, "scale_quantize_and_pack_zp"):
+                        raise RuntimeError(
+                            "activation zero point is set but modiff_cutlass lacks "
+                            "scale_quantize_and_pack_zp -- rebuild the extension")
+                    x_packed = modiff_cutlass.scale_quantize_and_pack_zp(x, input_scale, zp)
+                else:
+                    x_packed = modiff_cutlass.scale_quantize_and_pack(x, input_scale)
 
             if self._empty_bias is None or self._empty_bias.device != x.device:
                 self._empty_bias = torch.empty(0, device=x.device)
@@ -766,19 +826,45 @@ class OptimizedInt4Conv2d(nn.Module):
                 and self.a_hat_cache.shape == x.shape
                 and x.dtype == torch.float16)
 
-    def _zp_unsupported(self, where):
+    def _zp_unsupported(self, where, grid="activation"):
         """Raise/record when this conv's activation zero point is about to be ignored.
 
-        The bias already carries the matching -z*sum(w_q) correction (_refold_zp_bias), so quantizing
-        symmetrically here is not "the old behaviour" -- it is symmetric codes against a corrected
-        bias, which is worse than either. That combination is exactly what produced relL2 7-22 in the
-        first end-to-end zero-point run instead of a result.
+        `grid` NAMES WHAT THE CALLING SITE QUANTIZES, and it is the whole point of this signature:
 
-        As of 2026-08-13 only group_norm_silu_quantize_pack_nhwc honours z. The plan scoped fix #2 at
-        ~6 entry points; the rest reach this.
+          "activation" -- the site quantizes the activation itself on the activation grid, and its
+                          conv adds the bias that _refold_zp_bias corrected. z MUST be applied here.
+                          Ignoring it is not "the old behaviour": it is symmetric codes against a
+                          corrected bias, which is worse than either choice alone.
+
+          "delta"      -- the site quantizes a temporal DELTA (x - a_hat) and feeds a BIAS-FREE
+                          o_hat accumulate. z is inapplicable by construction: it cancels in a
+                          difference of activations, and adding it would additionally corrupt the
+                          a_hat update, which dequantizes as q/s. Nothing is wrong at such a site.
+
+        THIS PARAMETER REPLACED A CENSUS THAT CLASSIFIED BY ENTRY POINT NAME AND WAS WRONG BOTH WAYS.
+        docs/zero_point_2026-08-13/FINDINGS.md counted 70 contaminated pairs on the MoDiff arm; 62 of
+        them were step1_static_quantize_pack_int4_fprop, i.e. delta sites, and were false positives,
+        while the one site that actually mattered -- _int4_conv's t=T scale_quantize_and_pack -- had no
+        guard at all and so never appeared in the census. Measured, per call, at the kernel boundary:
+        docs/zp_coverage_2026-08-13/data/site_census.json.
+
+        COST: in the shipped symmetric configuration this is one attribute read and one float compare,
+        exactly as before -- the `grid` branch sits AFTER the z == 0 exit. That ordering is deliberate:
+        the previous version of these guards cost 3.5% of throughput by reading a CUDA scalar here
+        (fixed in 2a2b1c3), and a guard on a hot path has to be free.
         """
         z = getattr(self, "_zp_float", 0.0)
         if z == 0.0:
+            return
+        if grid == "delta":
+            # Only reachable in an asymmetric configuration, so this verification is free in the
+            # shipped one. It checks the DECLARATION rather than trusting it: a delta site without an
+            # a_hat cache is not quantizing a delta, and then the exemption below would be a hole.
+            if self.a_hat_cache is None:
+                raise RuntimeError(
+                    f"{self.layer_name}: {where} declared grid='delta' but this conv has no a_hat "
+                    f"cache, so it is not quantizing a delta -- the zero-point exemption does not "
+                    f"apply and the codes would be symmetric against a corrected bias.")
             return
         name = self.layer_name or type(self).__name__
         _ZP_UNSUPPORTED.add(f"{name}|{where}")
@@ -835,7 +921,7 @@ class OptimizedInt4Conv2d(nn.Module):
         d_scale, d_alpha = self._delta_scale_args_i4(x.device, x, fused_silu=True)
 
         p_step1 = profiler.start("MoDiff INT4 Static Step1 (fused SiLU)")
-        self._zp_unsupported("step1_static_quantize_pack_int4_fprop_silu")
+        self._zp_unsupported("step1_static_quantize_pack_int4_fprop_silu", grid="delta")
         x_packed = modiff_cutlass.step1_static_quantize_pack_int4_fprop_silu(
             x,
             self.a_hat_cache,
@@ -993,7 +1079,7 @@ class OptimizedInt4Conv2d(nn.Module):
         d_scale, d_alpha = self._delta_scale_args_i4(x.device, x, fused_silu=True)
 
         p_step1 = profiler.start("MoDiff INT4 Static Step1 (fused SiLU)")
-        self._zp_unsupported("step1_static_quantize_pack_int4_fprop_silu")
+        self._zp_unsupported("step1_static_quantize_pack_int4_fprop_silu", grid="delta")
         x_packed = modiff_cutlass.step1_static_quantize_pack_int4_fprop_silu(
             x, self.a_hat_cache, d_scale, self._smooth_inv_flat)
         profiler.stop("MoDiff INT4 Static Step1 (fused SiLU)", p_step1)
@@ -1073,12 +1159,25 @@ class OptimizedInt4Conv2d(nn.Module):
                 # wasted. Bit-identical output (residual=x-0=x). SmoothQuant applied upstream -> empty.
                 if self._empty_smooth is None or self._empty_smooth.device != x.device:
                     self._empty_smooth = torch.empty(0, device=x.device, dtype=torch.float32)
+                # Activation grid feeding _conv_from_int4's bias, so z applies -- but this kernel has
+                # no zero-point arity. GUARDED RATHER THAN TAUGHT: the 2026-08-13 census
+                # (docs/zp_coverage_2026-08-13/data/site_census.json) recorded every quantize on both
+                # W4A4 arms of the shipped configuration and this entry point never fired, because
+                # every calibrated conv is reached either through the GN fusion or through the resize
+                # kernel. A fourth kernel for a path nothing measured is work justified by nothing;
+                # a strict guard turns "unreachable" into a claim that fails loudly if it is wrong.
+                self._zp_unsupported("step1_static_quantize_pack_int4_noahat_fprop")
                 x_packed = modiff_cutlass.step1_static_quantize_pack_int4_noahat_fprop(
                     x, self.static_input_scale.view(1), self._empty_smooth
                 )
             else:
                 x_for_quant = x if x.dtype == torch.float32 else x.float()
-                x_packed = modiff_cutlass.scale_quantize_and_pack(x_for_quant, self._cached_scale_tensor)
+                zp = getattr(self, "_zp_float", 0.0)
+                x_packed = (
+                    modiff_cutlass.scale_quantize_and_pack_zp(
+                        x_for_quant, self._cached_scale_tensor, zp) if zp != 0.0
+                    else modiff_cutlass.scale_quantize_and_pack(
+                        x_for_quant, self._cached_scale_tensor))
             return self._conv_from_int4(x_packed, x.shape[2], x.shape[3])
         # Fallback: during calibration we need the host-visible scale path so the
         # module can accumulate static activation statistics (the .item() sync in
@@ -1316,6 +1415,12 @@ class OptimizedInt4Conv2d(nn.Module):
             xf = xf.contiguous(memory_format=torch.channels_last)
         # Use static_input_scale directly (not _cached_scale_tensor, which can be stale
         # if the caches were populated before set_static_scale) -- mirrors int8.
+        # Activation grid, and the conv that consumes these codes adds the corrected bias, so z
+        # applies here exactly as it does in _int4_conv's tensor branch.
+        zp = getattr(self, "_zp_float", 0.0)
+        if zp != 0.0:
+            return modiff_cutlass.scale_quantize_and_pack_zp(
+                xf, self.static_input_scale.view(1), zp)
         return modiff_cutlass.scale_quantize_and_pack(xf, self.static_input_scale.view(1))
 
     def _ensure_packed_out_buf(self, N, h_out, w_out, device):
@@ -1406,7 +1511,10 @@ class OptimizedInt4Conv2d(nn.Module):
             r_scale = (self._compute_scale_tensor(residual) if self.is_calibrated
                        else self._compute_activation_scale(residual, is_residual=True))
             conv_r  = self._int4_conv(residual, r_scale, with_bias=False)
-            r_dq    = self._dequantize_activation(residual, r_scale)
+            # activation_grid=False pairs with with_bias=False above: this is a residual on a dynamic
+            # scale, so no zero point on either side. The two calls quantize the SAME codes -- a_hat
+            # accumulates r_dq while o_hat accumulates their conv -- so they must agree about z.
+            r_dq    = self._dequantize_activation(residual, r_scale, activation_grid=False)
             a_hat   = a_hat + r_dq
             o_hat   = o_hat + conv_r
 
@@ -1453,7 +1561,7 @@ class OptimizedInt4Conv2d(nn.Module):
             d_scale, d_alpha = self._delta_scale_args_i4(x.device, x, fused_silu=False)
 
             p_step1 = profiler.start("MoDiff INT4 Static Step1")
-            self._zp_unsupported("step1_static_quantize_pack_int4_fprop")
+            self._zp_unsupported("step1_static_quantize_pack_int4_fprop", grid="delta")
             x_packed = modiff_cutlass.step1_static_quantize_pack_int4_fprop(
                 x,
                 self.a_hat_cache,

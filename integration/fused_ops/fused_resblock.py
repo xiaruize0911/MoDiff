@@ -121,6 +121,13 @@ try:
         modiff_cutlass, "group_norm_silu_delta_quantize_resize_nhwc")
     HAS_GN_SILU_QUANTIZE_RESIZE = hasattr(
         modiff_cutlass, "group_norm_silu_quantize_resize_nhwc")
+    #: Activation-zero-point twins (fix #2), added 2026-08-13. Separate flags rather than assuming a
+    #: rebuild: an older .so with the symmetric entry points must keep working, and a non-zero zero
+    #: point must then REFUSE rather than quantize symmetrically against a corrected bias.
+    HAS_GN_SILU_QUANTIZE_RESIZE_ZP = hasattr(
+        modiff_cutlass, "group_norm_silu_quantize_resize_nhwc_zp")
+    HAS_UPSAMPLE_QUANTIZE_PACK_ZP = hasattr(
+        modiff_cutlass, "upsample2x_quantize_pack_noahat_fprop_zp")
     HAS_UPSAMPLE_QUANTIZE = hasattr(modiff_cutlass, "upsample2x_quantize_noahat_fprop")
     HAS_UPSAMPLE_QUANTIZE_PACK = hasattr(modiff_cutlass, "upsample2x_quantize_pack_noahat_fprop")
     # Downsample(avg_pool,2x2)+quantize fusion (default ON): the down-direction sibling of
@@ -140,6 +147,8 @@ except ImportError:
     HAS_GN_SILU_QUANTIZE = False
     HAS_GN_SILU_QUANTIZE_PACK = False
     HAS_GN_SILU_QUANTIZE_PACK_ZP = False
+    HAS_GN_SILU_QUANTIZE_RESIZE_ZP = False
+    HAS_UPSAMPLE_QUANTIZE_PACK_ZP = False
     HAS_GN_SILU_DELTA_QUANTIZE = False
     HAS_GN_SILU_DELTA_QUANTIZE_PACK = False
     HAS_O_HAT_RESIDUAL = False
@@ -151,6 +160,7 @@ except ImportError:
 if os.environ.get("MODIFF_DISABLE_UPSAMPLE_QUANTIZE_FUSION") == "1":
     HAS_UPSAMPLE_QUANTIZE = False
     HAS_UPSAMPLE_QUANTIZE_PACK = False
+    HAS_UPSAMPLE_QUANTIZE_PACK_ZP = False
 
 if os.environ.get("MODIFF_DISABLE_AVGPOOL_QUANTIZE_FUSION") == "1":
     HAS_AVGPOOL_QUANTIZE = False
@@ -245,11 +255,24 @@ def _prequant_common_ok(conv):
 ZP_UNSUPPORTED_HITS = set()
 
 
-def _zp_unsupported(conv, where):
-    """Record/raise when a conv with a non-zero zero point is quantized by a path that ignores it."""
+def _zp_unsupported(conv, where, grid="activation"):
+    """Record/raise when a conv with a non-zero zero point is quantized by a path that ignores it.
+
+    `grid` names what the SITE quantizes -- see OptimizedInt4Conv2d._zp_unsupported for the full
+    contract. "delta" sites (x - a_hat, feeding a bias-free o_hat accumulate) are z-free by
+    construction and exempt; classifying them as gaps is what made the first census count 70 where
+    the measured number is 8 (docs/zp_coverage_2026-08-13/data/site_census.json).
+    """
     # Host mirror, never .item() -- see OptimizedInt4Conv2d._zp_float. This function is called on
     # every quantize, so a device sync here cost ~2 ms/step before it was removed.
     if getattr(conv, "_zp_float", 0.0) == 0.0:
+        return
+    if grid == "delta":
+        # Verify the declaration rather than trust it; only reachable in an asymmetric config.
+        if getattr(conv, "a_hat_cache", None) is None:
+            raise RuntimeError(
+                f"{getattr(conv, 'layer_name', None)}: {where} declared grid='delta' but the conv "
+                f"has no a_hat cache, so it is not quantizing a delta")
         return
     name = getattr(conv, 'layer_name', None) or where
     ZP_UNSUPPORTED_HITS.add(name)
@@ -458,14 +481,18 @@ def _prequant_gn_conv(x, gn, conv, mod_scale=None, mod_shift=None, residual=None
             packed = modiff_cutlass.group_norm_silu_quantize_pack_nhwc(
                 x, w, b, ng, eps, True, scale, smooth_inv, ms2d, sh2d)
         else:
+            # The non-native fallback now honours z too (scale_quantize_and_pack_zp, 2026-08-13), so
+            # a zero point no longer forces a layer down the native path to stay correct.
+            gn = _gn_mod_silu_fp32_cl(x, ng, w, b, eps, mod_scale, mod_shift)
             if zp != 0.0:
-                raise RuntimeError(
-                    "activation zero point is set but this layer fell back to the non-native "
-                    "scale_quantize_and_pack path, which has no zero point -- it would quantize "
-                    "symmetrically against a bias corrected for one")
-            _zp_unsupported(conv, "scale_quantize_and_pack")
-            packed = modiff_cutlass.scale_quantize_and_pack(
-                _gn_mod_silu_fp32_cl(x, ng, w, b, eps, mod_scale, mod_shift), scale)
+                if not hasattr(modiff_cutlass, "scale_quantize_and_pack_zp"):
+                    raise RuntimeError(
+                        "activation zero point is set but this layer fell back to the non-native "
+                        "scale_quantize_and_pack path and modiff_cutlass has no _zp variant -- it "
+                        "would quantize symmetrically against a bias corrected for one; rebuild")
+                packed = modiff_cutlass.scale_quantize_and_pack_zp(gn, scale, zp)
+            else:
+                packed = modiff_cutlass.scale_quantize_and_pack(gn, scale)
         return conv.forward_from_int4(packed, h_in, w_in, residual=residual)
     else:
         if native_ok:
@@ -639,7 +666,7 @@ def _prequant_gn_resize_conv_modiff(x, gn, h_upd, conv, mod_scale=None, mod_shif
     else:
         ms2d = sh2d = x.new_empty(0)
 
-    _zp_unsupported(conv, "group_norm_silu_delta_quantize_resize_nhwc")
+    _zp_unsupported(conv, "group_norm_silu_delta_quantize_resize_nhwc", grid="delta")
     x_q = modiff_cutlass.group_norm_silu_delta_quantize_resize_nhwc(
         x, w, b, ng, eps, True, d_scale, smooth_inv, ms2d, sh2d, 0, direction, is_int4, ah, *dyn)
     if conv._delta_calib:
@@ -707,9 +734,24 @@ def _prequant_gn_resize_conv(x, gn, h_upd, conv, mod_scale=None, mod_shift=None)
     else:
         ms2d = sh2d = x.new_empty(0)
 
-    _zp_unsupported(conv, "group_norm_silu_quantize_resize_nhwc")
-    x_q = modiff_cutlass.group_norm_silu_quantize_resize_nhwc(
-        x, w, b, ng, eps, True, scale, smooth_inv, ms2d, sh2d, 0, direction, is_int4)
+    # ACTIVATION ZERO POINT (fix #2). PTQ updown ResBlocks: the activation grid feeding a conv that
+    # adds the corrected bias -- 8 of the 8 real gaps the 2026-08-13 census found on the PTQ arm
+    # (docs/zp_coverage_2026-08-13/data/site_census.json). Routed only when a calibration actually
+    # set a zero point, so the symmetric path keeps calling the exact entry point it always did.
+    zp = getattr(conv, "_zp_float", 0.0)
+    if zp != 0.0 and is_int4:
+        if not HAS_GN_SILU_QUANTIZE_RESIZE_ZP:
+            raise RuntimeError(
+                "conv has a non-zero activation zero point but modiff_cutlass lacks "
+                "group_norm_silu_quantize_resize_nhwc_zp -- rebuild the extension")
+        x_q = modiff_cutlass.group_norm_silu_quantize_resize_nhwc_zp(
+            x, w, b, ng, eps, True, scale, smooth_inv, ms2d, sh2d, 0, direction, True, zp)
+    else:
+        # int8 has no bias correction for an int4 zero point; the guard names that rather than
+        # letting the kernel's own TORCH_CHECK surface as an opaque failure deep in a sample.
+        _zp_unsupported(conv, "group_norm_silu_quantize_resize_nhwc")
+        x_q = modiff_cutlass.group_norm_silu_quantize_resize_nhwc(
+            x, w, b, ng, eps, True, scale, smooth_inv, ms2d, sh2d, 0, direction, is_int4)
     Ho, Wo = (H * 2, W * 2) if direction > 0 else (H // 2, W // 2)
     return conv._conv_from_int4(x_q, Ho, Wo) if is_int4 else conv._conv_from_int8(x_q)
 
@@ -1244,8 +1286,25 @@ class FusedUpsample(nn.Module):
             ah = torch.empty(0, device=x.device, dtype=torch.float16)
             d_scale, d_alpha = conv.static_input_scale.view(1), None
         if is_int4:
-            _zp_unsupported(conv, "upsample2x_quantize_pack_noahat_fprop")
-            x_q = modiff_cutlass.upsample2x_quantize_pack_noahat_fprop(x, d_scale, smooth_inv, ah)
+            # ONE KERNEL, TWO ROLES, and the zero point belongs to only one of them:
+            #   modiff=False -> `ah` is empty, this quantizes the ACTIVATION on the activation grid,
+            #                   and _conv_from_int4 adds the zp-corrected bias.  z applies.
+            #   modiff=True  -> `ah` is the a_hat cache, this quantizes the DELTA and advances the
+            #                   cache, and _conv_from_int4_o_hat adds no bias at all.  z does not
+            #                   apply, and passing it would corrupt the cache update.
+            # The kernel TORCH_CHECKs the second case, so this branch cannot get it wrong silently.
+            zp = getattr(conv, "_zp_float", 0.0)
+            if zp != 0.0 and not modiff:
+                if not HAS_UPSAMPLE_QUANTIZE_PACK_ZP:
+                    raise RuntimeError(
+                        "conv has a non-zero activation zero point but modiff_cutlass lacks "
+                        "upsample2x_quantize_pack_noahat_fprop_zp -- rebuild the extension")
+                x_q = modiff_cutlass.upsample2x_quantize_pack_noahat_fprop_zp(
+                    x, d_scale, smooth_inv, ah, zp)
+            else:
+                _zp_unsupported(conv, "upsample2x_quantize_pack_noahat_fprop",
+                                grid="delta" if modiff else "activation")
+                x_q = modiff_cutlass.upsample2x_quantize_pack_noahat_fprop(x, d_scale, smooth_inv, ah)
             return (conv._conv_from_int4_o_hat(x_q, x.shape[2] * 2, x.shape[3] * 2, d_alpha)
                     if modiff else conv._conv_from_int4(x_q, x.shape[2] * 2, x.shape[3] * 2))
         x_q = modiff_cutlass.upsample2x_quantize_noahat_fprop(x, d_scale, smooth_inv, ah)

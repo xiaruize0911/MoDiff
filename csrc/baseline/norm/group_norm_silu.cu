@@ -1024,7 +1024,21 @@ __global__ void group_norm_silu_quantize_resize_nhwc_kernel(
     float eps,
     bool apply_silu,
     int Kpad,                      // padded row width in CHANNELS (>= C, even); == C for no padding
-    int W                          // INPUT width, needed to map hw -> (h, w) for the resize
+    int W,                         // INPUT width, needed to map hw -> (h, w) for the resize
+    // ACTIVATION ZERO POINT (plan fix #2), identical contract to
+    // group_norm_silu_quantize_pack_nhwc_vec2_kernel: a_q = clamp(round(a*s) + z, -7, 7), with the
+    // -z*sum(w_q) term folded into the conv bias at calibration time.
+    //
+    // PACK=false (int8) NEVER receives a non-zero z -- the host wrapper TORCH_CHECKs it. The int4
+    // zero point comes from an int4 calibration file and the int8 path's bias carries no matching
+    // correction, so letting it through would create the exact mismatch this feature guards against.
+    //
+    // In the DOWN direction z is added AFTER the 2x2 average, which is the only correct place: the
+    // average is taken on fp32 post-SiLU values and z shifts the CODE, not the activation. Adding it
+    // to each of the four contributions would scale it by 4.
+    //
+    // z == 0 reproduces the old kernel exactly in both directions.
+    float zp = 0.0f
 ) {
     const int CPG = C / G;
     const long group_size = (long)CPG * HW;
@@ -1153,8 +1167,8 @@ __global__ void group_norm_silu_quantize_resize_nhwc_kernel(
             float o0, o1;
             compute_pair(hw, c_global0, o0, o1);
             const float lim = PACK ? 7.0f : 127.0f;
-            const int8_t i0 = (int8_t)fmaxf(-lim, fminf(lim, roundf(o0 * scale)));
-            const int8_t i1 = (int8_t)fmaxf(-lim, fminf(lim, roundf(o1 * scale)));
+            const int8_t i0 = (int8_t)fmaxf(-lim, fminf(lim, roundf(o0 * scale) + zp));
+            const int8_t i1 = (int8_t)fmaxf(-lim, fminf(lim, roundf(o1 * scale) + zp));
             const int8_t packed = (int8_t)((i0 & 0x0F) | ((i1 & 0x0F) << 4));
             const int16_t pair16 = (int16_t)(((uint8_t)i0) | (((uint16_t)(uint8_t)i1) << 8));
             const int h = (int)(hw / Wi), w = (int)(hw % Wi);
@@ -1191,8 +1205,8 @@ __global__ void group_norm_silu_quantize_resize_nhwc_kernel(
             a0 *= 0.25f;                                   // average BEFORE quantizing
             a1 *= 0.25f;
             const float lim = PACK ? 7.0f : 127.0f;
-            const int8_t i0 = (int8_t)fmaxf(-lim, fminf(lim, roundf(a0 * scale)));
-            const int8_t i1 = (int8_t)fmaxf(-lim, fminf(lim, roundf(a1 * scale)));
+            const int8_t i0 = (int8_t)fmaxf(-lim, fminf(lim, roundf(a0 * scale) + zp));
+            const int8_t i1 = (int8_t)fmaxf(-lim, fminf(lim, roundf(a1 * scale) + zp));
             if constexpr (PACK)
                 yqp_base[hwo * row_bytes + (c_global0 >> 1)] =
                     (int8_t)((i0 & 0x0F) | ((i1 & 0x0F) << 4));
@@ -1356,15 +1370,21 @@ static torch::Tensor group_norm_silu_quantize_pack_nhwc_impl(
 // upsample and -1 for a 2x2 average pool; the output is [N, H*2, W*2, Kpad/2] or
 // [N, H/2, W/2, Kpad/2]. Deliberately a separate entry point from the non-resizing sibling: it
 // is a prototype for the updown ResBlock path and is not wired into the pipeline.
-torch::Tensor group_norm_silu_quantize_resize_nhwc(
+static torch::Tensor group_norm_silu_quantize_resize_nhwc_impl(
     torch::Tensor x, torch::Tensor weight, torch::Tensor bias,
     int64_t num_groups, double eps, bool apply_silu,
     torch::Tensor scale, torch::Tensor smooth_inv,
     torch::Tensor mod_scale, torch::Tensor mod_shift,
-    int64_t k_pad, int64_t resize, bool pack
+    int64_t k_pad, int64_t resize, bool pack, double zero_point
 ) {
     CHECK_CUDA(x);
     CHECK_CONTIGUOUS(x);
+    // The int4 zero point is meaningless on the int8 output: that path's bias carries no matching
+    // -z*sum(w_q) correction, so honouring z there would BE the mismatch this feature exists to
+    // avoid. Refuse instead of silently applying or silently dropping it.
+    TORCH_CHECK(pack || zero_point == 0.0,
+                "gn_quantize_resize: a non-zero activation zero point is only defined for the "
+                "packed int4 output (pack=true); the int8 path has no bias correction for it");
     TORCH_CHECK(x.dim() == 4, "gn_quantize_resize expects [N, C, H, W]");
     TORCH_CHECK(x.scalar_type() == torch::kFloat16 || x.scalar_type() == torch::kFloat32,
                 "gn_quantize_resize: only fp16/fp32 supported");
@@ -1414,7 +1434,7 @@ torch::Tensor group_norm_silu_quantize_resize_nhwc(
             has_mod ? reinterpret_cast<const T*>(mod_scale.data_ptr<ATT>()) : nullptr,      \
             has_mod ? reinterpret_cast<const T*>(mod_shift.data_ptr<ATT>()) : nullptr,      \
             scale.data_ptr<float>(), smooth_ptr, C, HW, (int)num_groups, (float)eps,        \
-            apply_silu, Kpad, W)
+            apply_silu, Kpad, W, (float)zero_point)
 #define MODIFF_GNQR_DISPATCH(T, ATT)                                                        \
     do {                                                                                    \
         if (up &&  pack) MODIFF_GNQR_LAUNCH(T, ATT, true,  true);                           \
@@ -1429,6 +1449,33 @@ torch::Tensor group_norm_silu_quantize_resize_nhwc(
 #undef MODIFF_GNQR_LAUNCH
     C10_CUDA_CHECK(cudaGetLastError());
     return yq;
+}
+
+// Two arities, same reason as group_norm_silu_quantize_pack_nhwc{,_zp}: pybind11 does not inherit
+// C++ defaults, and the 13-argument callers (integration/fused_ops/fused_resblock.py and the
+// archived prototypes in docs/*/scripts) must keep working byte-for-byte.
+torch::Tensor group_norm_silu_quantize_resize_nhwc(
+    torch::Tensor x, torch::Tensor weight, torch::Tensor bias,
+    int64_t num_groups, double eps, bool apply_silu,
+    torch::Tensor scale, torch::Tensor smooth_inv,
+    torch::Tensor mod_scale, torch::Tensor mod_shift,
+    int64_t k_pad, int64_t resize, bool pack
+) {
+    return group_norm_silu_quantize_resize_nhwc_impl(
+        x, weight, bias, num_groups, eps, apply_silu, scale, smooth_inv,
+        mod_scale, mod_shift, k_pad, resize, pack, 0.0);
+}
+
+torch::Tensor group_norm_silu_quantize_resize_nhwc_zp(
+    torch::Tensor x, torch::Tensor weight, torch::Tensor bias,
+    int64_t num_groups, double eps, bool apply_silu,
+    torch::Tensor scale, torch::Tensor smooth_inv,
+    torch::Tensor mod_scale, torch::Tensor mod_shift,
+    int64_t k_pad, int64_t resize, bool pack, double zero_point
+) {
+    return group_norm_silu_quantize_resize_nhwc_impl(
+        x, weight, bias, num_groups, eps, apply_silu, scale, smooth_inv,
+        mod_scale, mod_shift, k_pad, resize, pack, zero_point);
 }
 
 
