@@ -1,5 +1,20 @@
 """How much is a zero point still worth, now that both clip ratios have landed?
 
+RETIRED AS A DECISION INSTRUMENT, 2026-08-13. Fix #2 has since been decided by real kernels, so this
+harness could finally be scored against a KNOWN answer, and it failed a third time: it puts the
+symmetric optimum at 6.7 where the kernels put it at 4.5, and it reports the zero point worth 1.28x --
+on the far side of its own 1.15x bar from the truth (1.06x on activation reconstruction, and NEGATIVE
+end to end: +82% PTQ, +204% MoDiff). Its "WORTH IT: implement fix #2" branch would have authorised 15
+CUDA entry points of work for a lever that measures negative.
+
+THE SELF-CHECK BELOW IS WHY THAT NEVER HAPPENED, and it is why this file is kept rather than deleted:
+it is the evidence that an instrument can be precise, reproducible and wrong, and that a refusal
+mechanism earns its keep. Do not use its numbers. See docs/zp_coverage_2026-08-13/FINDINGS_HARNESS.md
+for the replacement (zp_activation_error.py, which got the magnitude right and whose scope is
+magnitude questions, NOT ratio selection).
+
+Original docstring follows.
+
 Fix #2 in the plan is the expensive one: a zero point on the activation grid touches the .pt format,
 the module state, up to 15 CUDA quantize entry points, and needs a Sigma(w_q) fold in the epilogue.
 It was justified by a 1.76x measured BEFORE fixes #1 and #3, on a grid that was not yet clipped. Both
