@@ -118,6 +118,38 @@ def main():
                   f"interior uniques {interior.unique().tolist()}")
             fails.append(f"pad byte z={z}")
 
+    # ---- 2b. the CUDA pad kernel is bit-identical to the eager reference ------------------------
+    print("\n2b. pad_packed_int4_code (CUDA, one pass) == the eager torch.full+copy reference")
+    import modiff_cutlass as mc
+    if not hasattr(mc, "pad_packed_int4_code"):
+        print("   MISSING pad_packed_int4_code -- rebuild the extension                FAIL")
+        fails.append("pad kernel missing")
+    else:
+        torch.manual_seed(9)
+        m2 = OptimizedInt4Conv2d(nn.Conv2d(64, 64, 3, padding=1, bias=True).cuda().half(),
+                                 layer_name="probe").cuda()
+        for z in (-7.0, -5.0, -1.0, 0.0, 3.0, 7.0):
+            for (H, W, Cb) in ((4, 4, 32), (16, 16, 96), (2, 3, 8)):
+                m2._zp_float = z
+                xp = torch.randint(-128, 127, (2, H, W, Cb), dtype=torch.int8, device="cuda")
+                a_ref, h1, w1 = m2._prepad_packed_with_zp_eager(xp, H, W)
+                a_cuda = mc.pad_packed_int4_code(xp, 1, 1, z)
+                ok = torch.equal(a_ref, a_cuda)
+                if not ok:
+                    print(f"   z={z:+5.1f} {H}x{W}x{Cb}   FAIL "
+                          f"({int((a_ref != a_cuda).sum())} bytes differ)")
+                    fails.append(f"pad kernel z={z} {H}x{W}")
+        if not any("pad kernel" in f for f in fails):
+            print("   all z in {-7,-5,-1,0,3,7} x 3 shapes, bit-identical            ok")
+        #: and it must refuse a code that is not a signed int4 value
+        try:
+            mc.pad_packed_int4_code(torch.zeros(1, 2, 2, 4, dtype=torch.int8, device="cuda"),
+                                    1, 1, 9.0)
+            print("   |z| > 7 REFUSES                                              FAIL (returned)")
+            fails.append("pad kernel range check")
+        except RuntimeError:
+            print("   |z| > 7 REFUSES                                              ok")
+
     # ---- 3. it actually fixes the defect -------------------------------------------------------
     print("\n3. on a padded conv with a real asymmetric grid, prepad beats zero-fill")
     for (cin, hw, seed) in ((64, 16, 11), (64, 4, 12), (128, 8, 13)):

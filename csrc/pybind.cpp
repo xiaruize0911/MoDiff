@@ -5,6 +5,9 @@
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // Standalone elementwise quantize/pack/dequant-accumulate (kernels/quantize.cu)
     m.def("quantize_and_pack", &quantize_and_pack, "Fast Quantization and Packing for INT4");
+    m.def("pad_packed_int4_code", &pad_packed_int4_code,
+          "spatial constant-pad of a packed int4 activation with an int4 CODE -- the correct padding "
+          "value for an asymmetric grid is z, not 0 (fix #2)");
     m.def("scale_quantize_and_pack", &scale_quantize_and_pack, "Fused Scale + Quantize + Pack for INT4");
     m.def("scale_quantize_and_pack_zp", &scale_quantize_and_pack_zp,
           "activation-zero-point variant (fix #2): MoDiff's t=T entry point, the one quantize per "
@@ -183,6 +186,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           pybind11::arg("k_pad") = 0);
     m.def("group_norm_silu_quantize_pack_nhwc_zp", &group_norm_silu_quantize_pack_nhwc_zp,
           "GN+SiLU+int4 quantize/pack with an activation ZERO POINT (fix #2); z=0 is exact");
+    m.def("group_norm_silu_quantize_pack_nhwc_zp_pad", &group_norm_silu_quantize_pack_nhwc_zp_pad,
+          "GN+SiLU+int4 quantize/pack emitting a z-valued spatial HALO, so the conv runs padding=0 "
+          "(fix #2's padding correction, no extra pass)");
     m.def("group_norm_silu_quantize_pack_nhwc_fast_zp", &group_norm_silu_quantize_pack_nhwc_fast_zp,
           "fast-reduce twin of group_norm_silu_quantize_pack_nhwc_zp");
     m.def("group_norm_silu_dequant_quantize_nhwc", &group_norm_silu_dequant_quantize_nhwc,

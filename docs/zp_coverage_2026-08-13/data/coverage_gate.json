@@ -1,13 +1,13 @@
 {
   "expectations": {
     "int4_baseline": {
-      "group_norm_silu_quantize_pack_nhwc_zp": "> 0",
+      "group_norm_silu_quantize_pack_nhwc_zp|group_norm_silu_quantize_pack_nhwc_zp_pad": "> 0",
       "group_norm_silu_quantize_resize_nhwc_zp": "> 0",
       "scale_quantize_and_pack_zp": "== 0"
     },
     "int4": {
       "scale_quantize_and_pack_zp": "> 0",
-      "group_norm_silu_quantize_pack_nhwc_zp": "== 0",
+      "group_norm_silu_quantize_pack_nhwc_zp|group_norm_silu_quantize_pack_nhwc_zp_pad": "== 0",
       "group_norm_silu_quantize_resize_nhwc_zp": "== 0"
     }
   },
@@ -17,7 +17,7 @@
       "warmup_steps": 5,
       "raised": null,
       "counts": {
-        "group_norm_silu_quantize_pack_nhwc_zp": 744,
+        "group_norm_silu_quantize_pack_nhwc_zp_pad": 744,
         "group_norm_silu_quantize_resize_nhwc_zp": 96
       }
     },

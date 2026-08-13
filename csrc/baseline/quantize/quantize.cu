@@ -249,6 +249,83 @@ __global__ void scale_quantize_pack_kernel(
     output[idx] = (i0 & 0x0F) | ((i1 & 0x0F) << 4);
 }
 
+// Spatially pad a PACKED int4 activation with a given int4 CODE, in one pass.
+//
+// WHY A CODE AND NOT ZERO. With an asymmetric activation grid (a_q = clamp(round(a*s) + z, -7, 7)) the
+// value 0 is encoded by the code z, not by the code 0. CUTLASS's implicit GEMM zero-FILLS padded taps,
+// so a padded tap reads code 0 and dequantizes to -z/s -- a fabricated activation on the whole border
+// ring, which measured +81.7% relL2 on W4A4 PTQ. Padding with code z instead makes every padded tap
+// dequantize to (z - z)/s = 0, and PTQ then measures -7.1% against the symmetric grid.
+// See docs/zp_coverage_2026-08-13/FINDINGS.md.
+//
+// The conv is then run with padding=0 over this enlarged input, so the correction is a padding VALUE
+// change rather than the per-output-pixel epilogue correction it first appeared to need.
+//
+// ONE PASS, WHICH IS THE POINT. The Python emulation this replaces did torch::full over the padded
+// tensor and then a slice-copy of the interior -- three traversals plus a second allocation per conv,
+// measured at +7.1% ms/step, i.e. it gave back exactly the accuracy it bought. Here each output byte is
+// written once, by one thread, either from the input or as the pad code. The packed tensor is C/2 bytes
+// per pixel against the fp16 activation's 2C, so this pass is ~1/4 of the traffic the quantize kernel
+// that produced it already moved.
+//
+//   Op:       spatial constant-pad of a packed int4 NHWC activation
+//   Inputs:   x_packed INT8 [N,H,W,Cb] (Cb = padded_channels/2); pad_h, pad_w; zero_point (the code)
+//   Outputs:  INT8 [N, H+2*pad_h, W+2*pad_w, Cb]
+//   Computes: out[n,ho,wo,c] = in-bounds ? x_packed[n,ho-pad_h,wo-pad_w,c] : byte(z|z<<4)
+//   Constraints: |z| <= 7 (a signed int4 code); pad >= 0
+__global__ void pad_packed_int4_code_kernel(
+    const int8_t* __restrict__ x, int8_t* __restrict__ out,
+    int H, int W, int Cb, int pad_h, int pad_w, int8_t pad_byte, long num_out) {
+    const int Ho = H + 2 * pad_h, Wo = W + 2 * pad_w;
+    const long row = (long)Wo * Cb;              // bytes per output row
+    const long plane = (long)Ho * row;           // bytes per output image
+    for (long idx = (long)blockIdx.x * blockDim.x + threadIdx.x; idx < num_out;
+         idx += (long)blockDim.x * gridDim.x) {
+        const int c = (int)(idx % Cb);
+        const long rest = idx / Cb;
+        const int wo = (int)(rest % Wo);
+        const long rest2 = rest / Wo;
+        const int ho = (int)(rest2 % Ho);
+        const long n = rest2 / Ho;
+        const int hi = ho - pad_h, wi = wo - pad_w;
+        int8_t v = pad_byte;
+        if (hi >= 0 && hi < H && wi >= 0 && wi < W) {
+            v = x[(((long)n * H + hi) * W + wi) * Cb + c];
+        }
+        out[n * plane + (long)ho * row + (long)wo * Cb + c] = v;
+    }
+}
+
+torch::Tensor pad_packed_int4_code(torch::Tensor x_packed, int64_t pad_h, int64_t pad_w,
+                                   double zero_point) {
+    CHECK_CUDA(x_packed);
+    TORCH_CHECK(x_packed.dim() == 4, "pad_packed_int4_code: expected [N,H,W,C/2]");
+    TORCH_CHECK(x_packed.scalar_type() == torch::kInt8, "pad_packed_int4_code: expected int8 bytes");
+    TORCH_CHECK(pad_h >= 0 && pad_w >= 0, "pad_packed_int4_code: negative padding");
+    const int z = (int)llround(zero_point);
+    TORCH_CHECK(z >= -7 && z <= 7,
+                "pad_packed_int4_code: zero point must be a signed int4 code in [-7, 7]");
+    auto xc = x_packed.is_contiguous() ? x_packed : x_packed.contiguous();
+    const int N = (int)xc.size(0), H = (int)xc.size(1), W = (int)xc.size(2), Cb = (int)xc.size(3);
+    // Two's complement in 4 bits, duplicated into both nibbles, then reinterpreted as signed int8 --
+    // the same encoding unpack_int4 and every quantize kernel in this file read.
+    const int nib = z & 0x0F;
+    int byte = nib | (nib << 4);
+    if (byte > 127) byte -= 256;
+    auto out = torch::empty({N, H + 2 * pad_h, W + 2 * pad_w, Cb},
+                            torch::TensorOptions().dtype(torch::kInt8).device(xc.device()));
+    const long num_out = out.numel();
+    if (num_out == 0) return out;
+    const int block = 256;
+    const int grid = (int)std::min<long>((num_out + block - 1) / block, 65535L);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    pad_packed_int4_code_kernel<<<grid, block, 0, stream>>>(
+        xc.data_ptr<int8_t>(), out.data_ptr<int8_t>(), H, W, Cb, (int)pad_h, (int)pad_w,
+        (int8_t)byte, num_out);
+    C10_CUDA_CHECK(cudaGetLastError());
+    return out;
+}
+
 // input: FP32, channels_last-contiguous NCHW logical / NHWC physical.
 // output: INT8 [N, H, W, C/2] with 2 packed int4 values per byte.
 //   Op:       Quantize (activation int4) + pack

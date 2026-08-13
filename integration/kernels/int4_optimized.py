@@ -120,6 +120,10 @@ _ZP_UNSUPPORTED = set()
 #: CUTLASS zero-fill it, so an asymmetric grid is padded CORRECTLY. Read at call time, not import time,
 #: so an in-process A/B can flip it between arms. See _conv_from_int4 for the mechanism and why it is
 #: off by default (it materializes a padded copy per conv).
+#: Does the extension have the fused code-pad kernel? Checked once at import, like the other HAS_* gates.
+HAS_PAD_PACKED_INT4_CODE = hasattr(modiff_cutlass, "pad_packed_int4_code") if HAS_CUTLASS else False
+
+
 def _zp_prepad_enabled():
     return os.environ.get("MODIFF_ZP_PREPAD", "0") == "1"
 
@@ -1280,6 +1284,22 @@ class OptimizedInt4Conv2d(nn.Module):
         with torch.full + a slice copy rather than F.pad, because F.pad's constant value goes through a
         float conversion that would not round-trip a negative int8 pad byte reliably.
         """
+        ph, pw = int(self.padding[0]), int(self.padding[1])
+        if HAS_PAD_PACKED_INT4_CODE:
+            # ONE PASS, one allocation. The eager version below is three traversals plus a second
+            # allocation per conv and measured +7.1% ms/step -- it gave back exactly the accuracy the
+            # zero point buys. Gated bit-for-bit against that version in test_int4_zp_prepad.py, which
+            # is why the eager path is kept rather than deleted.
+            out = modiff_cutlass.pad_packed_int4_code(x_packed, ph, pw, self._zp_float)
+            return out, h_in + 2 * ph, w_in + 2 * pw
+        return self._prepad_packed_with_zp_eager(x_packed, h_in, w_in)
+
+    def _prepad_packed_with_zp_eager(self, x_packed: torch.Tensor, h_in: int, w_in: int):
+        """Pure-PyTorch reference for _prepad_packed_with_zp. Kept as the thing the CUDA kernel is
+        gated against, and as the fallback when the extension predates it.
+
+        torch.full + a slice copy rather than F.pad, because F.pad's constant value goes through a float
+        conversion that would not round-trip a negative int8 pad byte reliably."""
         ph, pw = int(self.padding[0]), int(self.padding[1])
         nib = int(self._zp_float) & 0x0F
         byte = nib | (nib << 4)

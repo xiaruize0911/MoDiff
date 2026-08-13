@@ -61,6 +61,10 @@ ZP_TABLE = "docs/zero_point_2026-08-13/data/int4_calibration_zp_clip4.5.pt"
 
 ZP_KERNELS = ["scale_quantize_and_pack_zp",
               "group_norm_silu_quantize_pack_nhwc_zp",
+              #: the halo arity, which is where the PTQ convs go when MODIFF_ZP_PREPAD=1 asks for the
+              #: correct (code-z) padding. Both honour z; which one runs is a padding decision, not a
+              #: coverage one -- so the expectation below counts them together.
+              "group_norm_silu_quantize_pack_nhwc_zp_pad",
               "group_norm_silu_quantize_pack_nhwc_fast_zp",
               "group_norm_silu_quantize_resize_nhwc_zp",
               "upsample2x_quantize_pack_noahat_fprop_zp"]
@@ -71,11 +75,11 @@ SYM_KERNELS = ["scale_quantize_and_pack",
                "upsample2x_quantize_pack_noahat_fprop"]
 
 EXPECT = {
-    "int4_baseline": {"group_norm_silu_quantize_pack_nhwc_zp": "> 0",
+    "int4_baseline": {"group_norm_silu_quantize_pack_nhwc_zp|group_norm_silu_quantize_pack_nhwc_zp_pad": "> 0",
                       "group_norm_silu_quantize_resize_nhwc_zp": "> 0",
                       "scale_quantize_and_pack_zp": "== 0"},
     "int4": {"scale_quantize_and_pack_zp": "> 0",
-             "group_norm_silu_quantize_pack_nhwc_zp": "== 0",
+             "group_norm_silu_quantize_pack_nhwc_zp|group_norm_silu_quantize_pack_nhwc_zp_pad": "== 0",
              "group_norm_silu_quantize_resize_nhwc_zp": "== 0"},
 }
 
@@ -151,9 +155,12 @@ def main():
         seen = {k: counts[k] for k in ZP_KERNELS + SYM_KERNELS if counts[k]}
         print(f"  kernel calls: {seen}")
         for k, rule in EXPECT[mode].items():
-            got = counts[k]
+            #: "a|b" means either entry point satisfies the expectation -- used where two arities of one
+            #: kernel differ only in whether they emit the z-valued halo.
+            got = sum(counts[part] for part in k.split("|"))
             ok = (got > 0) if rule == "> 0" else (got == 0)
-            print(f"    {k:44s} {rule:5s} got {got:6d}  {'ok' if ok else 'FAIL'}")
+            print(f"    {k.replace('group_norm_silu_quantize_pack_nhwc_zp|group_norm_silu_quantize_pack_nhwc_zp_pad', 'gn_pack_zp{,_pad}'):44s} "
+                  f"{rule:5s} got {got:6d}  {'ok' if ok else 'FAIL'}")
             if not ok:
                 failures.append(f"{mode}: {k} {rule} but got {got}")
         if mode in WARMUP_RATIO and warm:
