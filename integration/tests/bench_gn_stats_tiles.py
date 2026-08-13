@@ -14,9 +14,21 @@ THREE GATES, in the order docs/gn_stats_in_epilogue_2026-08-11 sets them, becaus
      `gn_stats_partials_chanmajor_kernel` has no pybind entry; the reference is stricter anyway.
   2. Determinism -- 10 launches, `torch.equal` on both outputs. This is the gate the last attempt
      failed, and the one the rewrite is FOR.
-  3. Speed -- must beat the pass it replaces. The shipped per-shape numbers are quoted from that
-     report (it measured them; they are not re-measurable here without a pybind entry), and the
-     weighted total is computed the SAME way for both columns so the ratio is apples to apples.
+  3. Speed -- must beat the pass it replaces. THE `shipped_us` COLUMN BELOW IS WRONG, and the verdict
+     this script prints from it is therefore wrong. Left in place with this warning rather than edited,
+     because the numbers it produced are quoted in two committed documents.
+
+     The column was inherited from the 2026-08-11 report on the grounds that
+     `gn_stats_partials_chanmajor_kernel` has no pybind entry and so could not be timed here. It can be
+     timed INDIRECTLY: drive `group_norm_silu_delta_quantize_pack_nhwc` (the real two-pass MoDiff
+     entry) and isolate the launches by CUPTI self-time, which is what
+     integration/tests/bench_gn_stats_roofline.py --profile now does. Measured that way the stats pass
+     is 3.14 ms weighted, not 11.94 -- the inherited column is 3.8x too large and appears to be the
+     FULL GN op (10.94 ms measured), not the stats pass.
+
+     So the honest scoreboard is: tree 11.43 ms vs stats 3.14 ms = 3.64x SLOWER, i.e. this prototype
+     FAILS the speed gate. Gates 1 and 2 still pass and are still worth having. See
+     docs/gn_stats_in_epilogue_2026-08-11/FINDINGS.md.
 
 Run: python integration/tests/bench_gn_stats_tiles.py [--batch 128]
 """

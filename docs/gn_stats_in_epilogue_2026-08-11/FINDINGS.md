@@ -1,83 +1,102 @@
-# GN stats in the conv epilogue: the rewrite passes all three gates — and targets the wrong cost
+# GN stats in the conv epilogue: the prototype fails the speed gate by 3.6×, and the shipped kernel has no headroom
 
-Two results, and the second one matters more than the first.
+**This file retracts and replaces an earlier version of itself committed the same day
+(`a67d833`).** That version claimed the shipped stats pass runs at 15–19% of the A40's bandwidth and
+is 6.2× off its roofline, so ~3.8% of end-to-end was available by tuning it. **Both claims were
+wrong**, and they were wrong because they were built on an inherited number instead of a measured one.
+The correction is below, and the mistake is described at the end because it is the more useful part.
 
-## 1. The warp-tree rewrite passes. All three gates.
+## 1. The shipped stats pass is already near memory-bound optimal
 
-The 2026-08-11 prototype failed on two of three: 6.5× too slow and non-deterministic on every shape,
-both from 23–56 shared-memory slots with 256 threads contending on `atomicAdd`. The kernel was
-rewritten on 2026-08-12 to a segmented warp reduction (`__match_any_sync` groups the lanes sharing a
-slot, a masked butterfly sums them, one leader per group writes to its warp's private slots, warps
-combined in a fixed `w = 0..WARPS-1` order — no atomics anywhere). **That rewrite was never
-re-measured.** Measured 2026-08-13, A40, batch 128
-([`data/tree_prototype_2026-08-13.json`](data/tree_prototype_2026-08-13.json)):
+Measured 2026-08-13 with `integration/tests/bench_gn_stats_roofline.py --profile`, driving the real
+two-pass MoDiff entry point (`group_norm_silu_delta_quantize_pack_nhwc`) and isolating each kernel by
+CUPTI self-time. The stats pass reads X exactly once and writes a tiny `[N,G,nblocks]` buffer, so one
+read is its whole traffic and the percentage is honest rather than an upper bound:
 
-| C | H×W | n | tree µs | shipped µs | atomics µs | tree/shipped | max rel err | det |
-|---|---|--:|--:|--:|--:|--:|--:|---|
-| 192 | 32×32 | 14 | 423.9 | 476.2 | 542.7 | **0.89×** | 5.6e-07 | ok |
-| 384 | 32×32 | 4 | 768.9 | 771.5 | 1439.0 | 1.00× | 4.0e-07 | ok |
-| 768 | 16×16 | 4 | 404.4 | 416.6 | 1277.3 | 0.97× | 5.7e-07 | ok |
-| 768 | 4×4 | 10 | 80.2 | 52.5 | 237.0 | 1.53× | 3.0e-07 | ok |
+| C | H×W | n | stats µs | combine µs | apply µs | stats GB/s | % of 696 GB/s |
+|---|---|--:|--:|--:|--:|--:|--:|
+| 192 | 32×32 | 14 | 113.3 | 8.2 | 285.2 | 444 | **64%** |
+| 384 | 32×32 | 4 | 206.8 | 8.3 | 568.3 | 487 | **70%** |
+| 768 | 16×16 | 4 | 126.8 | 8.1 | 284.1 | 397 | **57%** |
+| 768 | 4×4 | 10 | 21.9 | 3.2 | 18.9 | 144 | 21% |
 
-Count-weighted: **tree 11.43 ms, shipped 11.94 ms — 0.96×**, and 1.82× better than the atomics
-version. Determinism holds on every shape, which is the gate the rewrite was for. The predicted
-failure mode survives only where it was predicted to: 768×4×4 is 1.53× worse, the shape with the
-fewest slots and therefore the most contention per slot.
+**57–70% of peak on every shape that carries weight.** For a kernel doing a strided reduction that is
+close to what the hardware allows; the only poor shape is 768×4×4, a 3 MiB tensor where the launch
+dominates. Count-weighted the stats pass is **3.14 ms** and the full GN op **10.94 ms**, so stats is
+**29%** of it.
 
-So the engineering worked. **But 0.96× is a warning, not a green light** — a reduction that merely
-ties the entire pass it is supposed to be folded into for free is not cheap.
+So there is **no meaningful headroom in this kernel**. Its comment block claims it is coalesced,
+atomic-free and deterministic, and the bandwidth number now confirms the claim rather than merely
+restating it.
 
-## 2. The pass is not bandwidth bound, so fusing it away saves ~16%, not 100%
+## 2. Therefore the prototype fails the speed gate — by 3.6×, not 0.96×
 
-The whole premise of putting stats in the epilogue is to avoid reading X a second time. That is only
-worth something if the read is the cost. It is not:
+`bench_gn_stats_tiles.py` grades `gn_stats_from_tiles` against a "shipped µs" column **inherited from
+the 2026-08-11 report**, because the stats kernel has no pybind entry of its own. That column reads
+**11.94 ms** weighted. The real stats pass is **3.14 ms** — the inherited column is **3.8× too
+large**, and it is not the stats pass at all (it is close to this measurement's *full* GN op, 10.94 ms,
+which suggests it was the whole fused operation).
 
-| shape | X | shipped µs | achieved | % of A40 700 GB/s |
-|---|--:|--:|--:|--:|
-| C192 32×32 | 48 MiB | 476.2 | 106 GB/s | **15%** |
-| C384 32×32 | 96 MiB | 771.5 | 130 GB/s | **19%** |
-| C768 16×16 | 48 MiB | 416.6 | 121 GB/s | **17%** |
-| C768 4×4 | 3 MiB | 52.5 | 60 GB/s | **9%** |
+Correcting the baseline:
 
-At the roofline the weighted pass would cost **1.91 ms**; it costs **11.94 ms** — **6.2× off**. So at
-most ~16% of it is the read itself, and **~84% is the reduction and per-launch structure**.
+| | weighted |
+|---|--:|
+| shipped stats pass, measured | **3.14 ms** |
+| `gn_stats_from_tiles` warp-tree prototype | 11.43 ms → **3.64× SLOWER** |
+| the 2026-08-11 atomics prototype | 20.83 ms → 6.63× slower |
 
-That reframes the whole direction:
+**The prototype does not pass its speed gate. It loses by 3.6×.** What survives from the earlier
+re-measurement is only the other two gates, which are real and were the point of the rewrite:
+correctness (max rel err 5.7e-07 against an fp32 reference) and **determinism on every shape**, which
+the atomics version failed outright. The rewrite fixed what it set out to fix. It just does not make
+the idea viable.
 
-* **Fusing the stats into the conv epilogue removes only the read.** Ceiling ≈ 16% of the pass. In the
-  full W4A4 run the stats pass is 689 ms of a 12106 ms window (5.7%), so the fusion is worth about
-  **0.9% of end-to-end** — for an EVT epilogue change, a new auxiliary output, and a reduction that
-  already loses 1.53× on one of the four shapes.
-* **A fused stats+apply GroupNorm** (one CTA per (n, group), keep X in shared memory) has the same
-  ceiling for the same reason, though it is feasible on smem grounds: CPG×HW×2 B is 12 KB at C=192,
-  24 KB at C=384, and 96 KB at the decoder's concatenated C=1536 — the last one right at the A40's
-  100 KB opt-in limit.
-* **The actual prize is that the existing kernel is 6.2× off its own roofline.** Getting the stats pass
-  to even half of roofline would take 11.94 → ~4 ms, i.e. 689 → ~230 ms of window, about **3.8% of
-  end-to-end** — W4A4 from 1.749× to roughly 1.82×. Four times the fusion's ceiling, and it needs no
-  EVT work, no new auxiliary output, and no epilogue contract.
+And the direction is dead for a structural reason, not a tuning one: the pass being replaced already
+moves its bytes at 57–70% of peak, so there is nothing for a cleverer reduction to recover. Folding the
+stats into the conv epilogue would remove a read that costs 3.14 ms weighted (**about 6.7% of the W4A4
+window**, since stats+combine is 810 of 12106 ms) — but only if the epilogue's own reduction were free,
+and the standalone measurement says that reduction alone costs 11.43 ms.
 
-**Recommendation: do not wire the epilogue prototype. Profile why `gn_stats_partials_chanmajor` runs at
-15–19% of roofline first.** The kernel is already coalesced, atomic-free and deterministic — the
-comment block documents all of that carefully — so the deficit is somewhere else (block shape is
-C/K threads, i.e. only 6 warps at C=192; the partials round-trip through global memory; and 11 000
-launches at these small shapes). That is a measurement to make, not a design to argue about.
+## 3. Why GroupNorm is only 1.19× faster than fp16, and why that is not a bug
 
-## What this does not say
+The GN family is 29.8% of the W4A4 run at 1.19× vs fp16, which looks like the largest remaining
+Amdahl term and was described that way earlier in the session. It is not an inefficiency. GroupNorm's
+input is **fp16 in every mode** — quantization shrinks the GEMM operands, not the normalisation's
+traffic — so a memory-bound pass over X costs the same at W4A4 as at fp16 by construction. Running at
+57–70% of peak *is* the answer. **There is no double-digit win here, and there is no small one either.**
 
-The per-shape "shipped µs" column is quoted from the 2026-08-11 report rather than re-measured here —
-`gn_stats_partials_chanmajor_kernel` has no pybind entry, so the harness cannot time it directly. The
-roofline arithmetic above therefore inherits that column. It is unlikely to be wrong by the 6× that
-would change the conclusion, but the honest statement is that the ratio is apples-to-apples (both
-columns weighted the same way) while the absolute shipped numbers are inherited.
+## 4. The mistake, which is the transferable part
 
-Whether the tree kernel's own 11.43 ms would shrink inside a real epilogue is also not measured: there
-its fragment is already in registers, so it would skip the load but still pay the reduction. That is
-the ~84% term, which is exactly why the fusion's ceiling is low.
+The earlier version of this file computed a roofline from a number it did not measure. Three separate
+guards should have caught it and each was skipped:
+
+* **The inherited column was flagged as inherited and then used anyway.** That version's own "What this
+  does not say" section states that the shipped µs column is quoted rather than re-measured, and calls
+  it "unlikely to be wrong by the 6× that would change the conclusion". It was wrong by 3.8×, which
+  was enough. Naming a caveat is not the same as respecting it.
+* **An arithmetic cross-check was available and free.** The full GN op measured 12.52 ms against an
+  inherited stats-only 11.94 ms, which would leave apply+combine at 0.58 ms while moving *more* bytes
+  than stats. That is impossible on its face, and it was visible in the first table printed.
+* **The first driver measured the wrong kernel entirely and reported a passing verdict.** It drove
+  `group_norm_silu_nhwc`, a single fused kernel that never launches the stats kernel, so stats came out
+  at 0.0 µs — and the comparison then divided 11.94 by zero and printed **"CONSISTENT"**. An instrument
+  that reports agreement when it has no data is worse than no instrument. It now refuses.
+
+The pattern across all three: a plausible chain of reasoning was allowed to stand in for a
+measurement, and every check that would have broken the chain was itself reasoned about rather than
+run.
 
 ## Reproducing
 
 ```bash
-python integration/tests/bench_gn_stats_tiles.py --batch 128 \
-  --json docs/gn_stats_in_epilogue_2026-08-11/data/tree_prototype_2026-08-13.json
+# the correction: isolates stats / combine / apply on the real two-pass path
+python integration/tests/bench_gn_stats_roofline.py --batch 128 --profile
+
+# the prototype's three gates (its "shipped us" column is the wrong baseline -- see above)
+python integration/tests/bench_gn_stats_tiles.py --batch 128
 ```
+
+Nsight Compute would have isolated the kernel directly, which is what this should have used from the
+start; `ncu` is installed but returns `ERR_NVGPUCTRPERM` on this host (the driver restricts performance
+counters to admin), so the isolation is done with CUPTI activity tracing through `torch.profiler`
+instead, which needs no special permission.

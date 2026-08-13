@@ -974,18 +974,25 @@ __global__ void gn_finalize_sumsq_kernel(const float* __restrict__ sum, const fl
 // finding. Harness: the numbers above are reproducible from the kernel plus group_norm_silu_nhwc.
 //
 // SECOND ANSWER, 2026-08-13 (docs/gn_stats_in_epilogue_2026-08-11/FINDINGS.md). The warp-tree rewrite
-// below had never been re-measured after it was written. It PASSES all three gates: max rel err 5.7e-7
-// against an fp32 reference, deterministic on every shape, and 11.43 ms weighted against the shipped
-// pass's 11.94 -- 0.96x, and 1.82x better than the atomics version. The predicted failure survives
-// exactly where predicted: 768x4x4 is 1.53x WORSE, the shape with fewest slots per thread.
+// below had never been re-measured after it was written. Two of its three gates pass, and they are the
+// two the rewrite was FOR: max rel err 5.7e-07 against an fp32 reference, and DETERMINISTIC on every
+// shape, where the atomics version was non-deterministic on all of them.
 //
-// AND YET DO NOT WIRE IT, for a reason the design doc did not consider: the pass it would replace is
-// NOT BANDWIDTH BOUND, so removing the read is not worth much. Measured achieved bandwidth is 106/130/
-// 121/60 GB/s across the four shapes -- 9-19% of the A40's ~700, i.e. 6.2x off the roofline (1.91 ms
-// ideal vs 11.94 actual). At most ~16% of the pass is the X read that fusion eliminates; ~84% is the
-// reduction and per-launch structure, which an epilogue version still pays. End to end the fusion is
-// worth ~0.9%, against ~3.8% for simply getting this kernel nearer its own roofline -- which needs no
-// EVT change at all. The 6.2x deficit is the finding worth acting on; this prototype is not.
+// IT FAILS THE SPEED GATE BY 3.6x. bench_gn_stats_tiles.py grades against a "shipped us" column
+// inherited from the 2026-08-11 report -- 11.94 ms weighted -- because this kernel has no pybind entry.
+// That column is 3.8x TOO LARGE: measured directly through group_norm_silu_delta_quantize_pack_nhwc
+// with CUPTI self-time, the stats pass is 3.14 ms weighted (it is the FULL GN op that costs ~11 ms).
+// So the prototype's 11.43 ms loses to 3.14 ms, and the earlier claim in this comment that it was
+// 0.96x was an artifact of the wrong baseline. Retracted.
+//
+// AND THERE IS NO HEADROOM HERE TO CHASE. This kernel achieves 444/487/397 GB/s on the three shapes
+// that carry weight -- 64%/70%/57% of the A40's 696 -- reading X exactly once. Only 768x4x4 is poor
+// (144 GB/s, 21%), a 3 MiB tensor where the launch dominates. The earlier "9-19% of peak, 6.2x off
+// roofline, ~3.8% of end-to-end available" was computed from the inherited column and is withdrawn.
+//
+// Which also explains why the GN family is only 1.19x faster than fp16 at W4A4 and why that is not a
+// defect: GroupNorm's input is fp16 in EVERY mode, so quantization never shrinks this pass's traffic.
+// A memory-bound pass over X at 57-70% of peak is the answer, not a symptom.
 //
 // Slots are per (tile_m, tile_n), never atomics: MODIFF_GN_STATS_ALT=2 measured an atomic GN
 // reduction 1.7x slower AND nondeterministic (1.27e-1 latent drift between replays of one seed).
