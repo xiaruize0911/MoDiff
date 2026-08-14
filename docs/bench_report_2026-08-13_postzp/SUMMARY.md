@@ -200,6 +200,12 @@ python docs/bench_report_2026-08-13_postzp/scripts/warmup_cost.py
 python docs/bench_report_2026-08-13_postzp/scripts/sample_grid.py
 ```
 
+[SUMMARY.pdf](SUMMARY.pdf) is this file rendered for circulation, figures inline:
+
+```bash
+python docs/bench_report_2026-08-13_postzp/scripts/md_to_pdf.py
+```
+
 The first three want an idle GPU (~6–10 min each). `sample_grid.py` is CPU-only and reads the existing
 `/workspace/fid` images; it asserts the columns are present in all five folders and that the fp16 control
 comes out at exactly 0, which is what makes the pairing claim checkable rather than assumed.
