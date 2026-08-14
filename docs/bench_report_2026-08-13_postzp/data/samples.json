@@ -1,0 +1,20 @@
+{
+ "fid_dir": "/workspace/fid",
+ "columns": [
+  "000000.png",
+  "000001.png",
+  "000002.png",
+  "000003.png",
+  "000004.png",
+  "000005.png"
+ ],
+ "metric_n": 500,
+ "mean_abs_delta_vs_fp16_255": {
+  "fp16": 0.0,
+  "int8_baseline": 15.054427917480469,
+  "int8_modiff": 1.945025624593099,
+  "int4_baseline": 40.737785227457685,
+  "int4_modiff": 29.940508392333985
+ },
+ "provenance": "2026-08-05 FID run: DDIM 50, batch 128, dynamic delta, MODIFF_LINEAR=0, real-checkpoint calibration"
+}
