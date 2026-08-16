@@ -21,6 +21,13 @@ import sys
 
 import numpy as np
 import torch
+#: pytorch_fid was missing here on 2026-08-16 and it failed the LAST step of a 25-minute pipeline, so
+#: the check runs before this script's own imports. It inserts ROOT itself because this script's
+#: sys.path setup happens further down -- the preflight has to precede that to be worth having.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.abspath(_os.path.join(_os.path.dirname(__file__), "..", "..", "..")))
+from integration.utils.preflight import preflight, FID
+preflight(*FID, what="compute_fid.py")
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--root", default="/workspace/fid")

@@ -34,6 +34,9 @@ sys.path[:0] = [ROOT, os.path.join(ROOT, "src/taming-transformers"),
                 os.path.join(ROOT, "docs/modiff_correctness_2026-08-03/scripts")]
 
 import torch                                                              # noqa: E402
+from integration.utils.preflight import preflight, MODEL                  # noqa: E402
+#: 10k x 50 DDIM steps is ~15 min per mode; a missing import found at minute 14 costs the whole run.
+preflight(*MODEL, what="generate_fid_samples.py")
 from PIL import Image                                                     # noqa: E402
 
 ap = argparse.ArgumentParser()

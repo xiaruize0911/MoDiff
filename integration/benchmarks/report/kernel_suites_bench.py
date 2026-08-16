@@ -51,6 +51,8 @@ sys.path.insert(0, os.path.join(_ROOT, "src/taming-transformers"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import torch
+from integration.utils.preflight import preflight, MODEL
+preflight(*MODEL, what="kernel_suites_bench.py")
 import torch.nn.functional as F
 from torch.profiler import profile, ProfilerActivity, DeviceType
 

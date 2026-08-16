@@ -18,6 +18,12 @@ import io
 import os
 import sys
 
+#: lmdb was missing on 2026-08-16 and this script is the prerequisite for an ~8 h B4 run, so the
+#: check goes BEFORE the import that would otherwise be the error message.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.abspath(_os.path.join(_os.path.dirname(__file__), "..", "..", "..")))
+from integration.utils.preflight import preflight, LMDB
+preflight(*LMDB, what="export_lsun_reference.py")
 import lmdb
 from PIL import Image
 
