@@ -1,0 +1,11 @@
+{
+  "n_real": 10000,
+  "dims": 2048,
+  "modes": {
+    "int4_modiff": {
+      "label": "W4A4 + MoDiff",
+      "n": 10000,
+      "fid_vs_real": 180.59320217833582
+    }
+  }
+}

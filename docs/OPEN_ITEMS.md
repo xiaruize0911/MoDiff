@@ -126,8 +126,33 @@ rounded". Learning it once did not transfer.
    fp16 reads 7.803 where LDM's published churches figure is ~4, and the paper's A8 baseline (4.24) is
    *better than our fp16*, which is the tell. That division is the same class of unit error as A16.
    → [FINDINGS_W8A4_FID](gn_fast_reduce_2026-08-16/FINDINGS_W8A4_FID.md)
-3. **FID for W4A4 + MoDiff with the new weight scale** — −7.5% relL2 at a point where the relL2→FID curve
-   is very steep; the effect on FID is unknown and could be either sign.
+3. ~~**FID for W4A4 + MoDiff with the new weight scale**~~ **MEASURED 2026-08-16 — the sign is the
+   opposite one. relL2 and FID disagree.** The MSE weight scale (`_int4_weight_scale`, default since
+   2026-08-05, adopted on a paired −7.5% latent relL2 with 4/4 seeds improving) is **5.70% WORSE on FID**:
+
+   | arm (10k, DDIM 50, same seeds, same real reference) | FID |
+   |---|--:|
+   | `MODIFF_INT4_WSCALE=absmax` — paired arm, same tree | **170.854** |
+   | MSE — the current default | 180.593 |
+   | 08-05's recorded absmax number, 11 days and one tree ago | 200.139 |
+
+   **And the naive comparison gets the sign wrong.** 180.593 against the committed 200.139 reads −9.77%
+   and looks like a win; the paired arm on the same tree reads **+5.70%** and is a loss. The entire −9.8%
+   belongs to eleven days of other changes (zero point, cat2 fold, the delta-clip constants) — absmax
+   itself moved 200.139 → 170.854. This is why the paired arm was run instead of quoting the committed
+   number.
+
+   **Second time this session that a proxy metric pointed the wrong way**, and the parallel is exact:
+   C7's warm-up count was raised 3 → 5 on the per-round *activation reconstruction* while the *latent*
+   says 1 round is 26.5% better; the MSE scale was adopted on *latent relL2* while *FID* says absmax is
+   better. A11 is the same shape from the other direction — fix #4 was deprioritised on ‖W−Q(W)‖, the one
+   metric AdaRound is willing to lose. **Three items, one failure mode: a decision made on the cheapest
+   available metric rather than the one that defines the goal.**
+
+   **Actionable:** `MODIFF_INT4_WSCALE` should be re-evaluated as a default, and `docs/fid_2026-08-05`'s
+   adoption rationale annotated. Caveat: single 10k FID per arm, so the pairing removes seed noise but
+   there are no error bars on FID itself; 9.7 points on a 170 baseline is the same order as the relL2
+   effect it contradicts.
 4. **FID at 50k**, for publication-grade absolute numbers. ~1.5 h/mode, and 68–78% of that is not the
    UNet. [FID_50K_ESTIMATE](bench_report_2026-08-13_postzp/FID_50K_ESTIMATE.md)
 5. **A weight-side method for W4A4.** No candidate has landed. This is what gates W4A4 being usable at
