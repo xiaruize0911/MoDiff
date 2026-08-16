@@ -32,6 +32,20 @@ os.chdir(ROOT)
 
 D = "docs/bench_report_2026-08-13_postzp"
 SUITES = ("attention", "conv", "linear")
+
+
+def suite_rows(d, mode, suite):
+    """One suite's records in one arm, with `fused_gn_qkv` routed to `linear`. Same rule as
+    make_plots.suite_rows -- duplicated rather than imported because this script must run standalone.
+    Captures before 2026-08-16 have those records under "other"; see docs/OPEN_ITEMS.md A1."""
+    out = []
+    for s, recs in (d["modes"].get(mode) or {}).items():
+        if not isinstance(recs, list):
+            continue
+        for r in recs:
+            if ("linear" if "gn_qkv" in (r.get("entry") or "").lower() else s) == suite:
+                out.append(r)
+    return out
 MODES = [("fp16", "fp16"), ("int8_baseline", "W8A8 PTQ"), ("int8", "W8A8 MoDiff"),
          ("int4_baseline", "W4A4 PTQ"), ("int4", "W4A4 MoDiff")]
 
@@ -69,6 +83,14 @@ DESC = {
     "torch_conv2d_fp16": "UNQUANTIZED fallback -- PyTorch/cuDNN fp16 conv, for the convs this pipeline "
                          "does not quantize (the stem/head convs and the 1x1 skips).",
     "torch_linear_fp16": "UNQUANTIZED fallback -- PyTorch fp16 linear.",
+    "fused_gn_qkv": "UNQUANTIZED, fp16 ONLY -- the qkv projection with the GroupNorm folded into its "
+                    "mainloop as a per-sample scale/bias, so the normalized activation is never written "
+                    "to HBM. Taken by the fp16 arm only, and only where T % 128 == 0 and c % 8 == 0, "
+                    "which is exactly the T=1024 and T=256 blocks; the smaller ones fall to plain "
+                    "GroupNorm + `torch_linear_fp16`. 52% of fp16's linear suite. It has NO counterpart "
+                    "in the quantized arms, which split the same work into a `norm_quantize` "
+                    "group_norm_silu_quantize_nhwc plus an AWQ GEMM here -- so the linear and "
+                    "norm_quantize suite totals do not compare across arms. docs/OPEN_ITEMS.md A1.",
     "torch_sdpa_fp16": "UNQUANTIZED fallback -- PyTorch SDPA in fp16. In the fp16 arm this is the whole "
                        "attention suite; it materializes the [N,H,T,T] score matrix in HBM, which is "
                        "what the flash kernels exist to avoid.",
@@ -183,7 +205,7 @@ def main():
         o.append(f"## {suite}")
         o.append("")
         for key, label in MODES:
-            recs = d["modes"].get(key, {}).get(suite) or []
+            recs = suite_rows(d, key, suite)
             if not recs:
                 continue
             by_entry = collections.defaultdict(lambda: [0.0, 0, 0.0, []])

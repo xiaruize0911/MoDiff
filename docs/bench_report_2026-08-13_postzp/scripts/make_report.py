@@ -34,6 +34,7 @@ _state_plots = _load("modiff_state_plots", "docs/state_report_2026-08-12/scripts
 bucket_kernel, BUCKETS = _state_plots.bucket_kernel, _state_plots.BUCKETS
 _bench_plots = _load("modiff_bench_plots", "docs/bench_report_2026-08-13_postzp/scripts/make_plots.py")
 suite_totals = _bench_plots.suite_totals
+suite_rows = _bench_plots.suite_rows
 
 D = "docs/bench_report_2026-08-13_postzp"
 MODES = [("fp16", "fp16"), ("int8_baseline", "W8A8 PTQ"), ("int8", "W8A8 MoDiff"),
@@ -163,7 +164,7 @@ def sec_suite(o, ks, suite, title):
     for m, lab in MODES:
         if lab not in tot:
             continue
-        n = len(((ks.get("modes") or {}).get(m) or {}).get(suite) or [])
+        n = len(suite_rows(ks, m, suite))
         o.append(f"| {lab} | **{f(tot[lab],3)}** | {n} |")
     o.append("")
     o.append(f"![{suite}](plots/0{3 + [s for s, _ in SUITES].index(suite)}_{suite}.png)\n")
@@ -179,7 +180,7 @@ def sec_suite(o, ks, suite, title):
     # per-signature detail
     o.append("### Per-signature detail\n")
     for m, lab in MODES:
-        rows = ((ks.get("modes") or {}).get(m) or {}).get(suite) or []
+        rows = suite_rows(ks, m, suite)
         if not rows:
             continue
         rows = sorted(rows, key=lambda r: -(float((r.get("stats") or {}).get("median") or 0)

@@ -69,19 +69,29 @@ not more bits off the GEMM.
 Real call arguments captured at the C++ entry point during a live sample, then replayed in isolation
 (8 rounds × 60 iters, median of round medians). `ms/sample` = median µs/call × calls/sample.
 
-| suite | fp16 | W8A8 PTQ | W4A4 PTQ | int8 × | int4 × | comparable? |
+| suite | fp16 | W8A8 PTQ | W4A4 PTQ | int8 × | int4 × | a speedup? |
 |---|--:|--:|--:|--:|--:|---|
-| attention | 63.34 | 51.08 | 50.01 | **1.24×** | **1.27×** | yes |
-| conv | 265.72 | 149.09 | 85.59 | 1.78× | 3.10× | **no** — fp16 counts the qkv/proj 1×1 convs here |
-| linear | 28.96 | 47.15 | 43.45 | 0.61× | 0.67× | **no** — the quantized arms count those projections here |
-| **conv + linear** | **294.68** | **196.24** | **129.04** | **1.50×** | **2.28×** | yes — the reclassification cancels |
-| all three | 358.02 | 247.32 | 179.05 | 1.45× | 2.00× | yes |
+| attention | 63.34 | 51.08 | 50.01 | **1.24×** | **1.27×** | **yes** |
+| conv | 265.72 | 149.09 | 85.59 | **1.78×** | **3.10×** | **yes** — 33/33 records matched three ways |
+| linear | 60.92 | 47.15 | 43.45 | 1.29× | 1.40× | **no** — see below |
+| norm_quantize | 92.23 | 143.35 | 144.44 | 0.64× | 0.64× | **no** |
+| other | 6.10 | 10.11 | 10.11 | 0.60× | 0.60× | **no** |
 
-**The conv and linear rows must be read as a pair.** In fp16 the attention projections are 1×1 convs; the
-quantized arms convert them to AWQ-layout linears. That moves work between the two rows, which is the
-entire reason fp16's linear total looks small and int8's looks like a 0.61× regression. Summed, 2.28× at
-W4A4 — and that agrees with the independent full-run profile's 2.03× on the GEMM/conv bucket in §2
-(the bucket also carries unquantized convs, so it is expected to be the lower of the two).
+**Only the first two rows are speedups, and there is no grouping of the rest that fixes it.** Corrected
+2026-08-16 — the earlier version of this table said fp16 counts the attention projections as 1×1 convs
+and that `conv + linear` therefore cancels the reclassification. Both halves were wrong. Conv closes
+*exactly* three ways (fp16's suite total equals its matched total to the cent, in every arm), so nothing
+moves between conv and linear at all; the 1×1 convs in §3a are ResBlock skip connections, present in all
+three arms at 1.00×. What actually happens is that fp16 runs the T=1024 and T=256 qkv through one fused
+`fused_gn_qkv` kernel — **31.96 ms/sample** — which the capture's name-matching classifier dropped into
+`other`. Its GroupNorm half has no home: the quantized arms pay that in `norm_quantize`, so no
+regrouping can put it in one place. And the sum is worse than either, because the quantized arms' fused
+epilogues *delete* tensors, so the elementwise kernels fp16 pays for them do not exist as records to be
+credited — the full-run profile in §2 sees that as 2.78 s saved and a replay suite cannot see it at all.
+
+**So read §2 and §3a, not suite ratios.** Details and the arithmetic in
+[KERNEL_SPEEDUP.md](KERNEL_SPEEDUP.md) §1; the standing consequences in [OPEN_ITEMS.md](../OPEN_ITEMS.md)
+A1/A2.
 
 ![conv](plots/04_conv.png) ![attention](plots/03_attention.png)
 
@@ -101,27 +111,45 @@ in all three arms, which is what shows the layout normalization matched real lay
 coincidentally-shaped ones. Best single layer: `K=768 C=768 3×3 @ 8×8`, **4.74×** at int4.
 
 **Why 3.83× per kernel becomes 1.78× end to end.** The chain is explicit: 3.83× on the 20 quantized conv
-layers → 2.28× on conv+linear (13 unquantized convs and the fp16 fallbacks dilute it) → 2.03× on the
-profiled matmul bucket → 1.78× on the wall clock, because that bucket is only 45.6% of fp16's run. No
-step in that chain is a loss of efficiency; it is Amdahl's law applied four times.
+layers → 3.10× on the whole conv suite (13 unquantized convs dilute it) → 2.03× on the profiled matmul
+bucket (which also carries the projection GEMMs and the fp16 fallbacks) → 1.78× on the wall clock,
+because that bucket is only 45.6% of fp16's run. No step in that chain is a loss of efficiency; it is
+Amdahl's law applied four times.
 
-### 3b. Attention, matched by (N, H, T)
+### 3b. Attention, matched by T
 
-| N | H | T | head_dim fp16→int8/int4 | calls | fp16 µs | int8 µs | int4 µs | int8 | int4 |
-|--:|--:|--:|---|--:|--:|--:|--:|--:|--:|
-| 128 | 8 | 1024 | 24→32/32 | 25 | 2036.9 | 1716.4 | 1750.1 | **1.19×** | **1.16×** |
-| 128 | 8 | 256 | 48→64/32 | 25 | 348.7 | 256.1 | 210.4 | **1.36×** | **1.66×** |
-| 128 | 8 | 64 | 48→64/32 | 25 | 90.7 | 44.6 | 41.1 | **2.03×** | **2.21×** |
-| 128 | 8 | 16 | 96→96/96 | 25 | 47.8 | 47.8 | 48.4 | 1.00× | 0.99× |
-| 128 | 8 | 4 | 96→96/96 | 5 | 47.8 | 48.9 | 48.2 | 0.98× | 0.99× |
+Corrected 2026-08-16. The previous version keyed on Q, and the `_qout` kernels take **token-major** Q, so
+they landed in phantom buckets and were dropped — the T=1024 row was comparing fp16's 25 calls against
+int8's 15, silently omitting `..._qout_hd24`, the most expensive kernel in the suite. Keyed on K, every
+record is now assigned and the rows sum to the suite totals exactly. µs/call is call-weighted.
 
-Attention is the weakest block in the pipeline and the reason is in the `head_dim` column: the flash
-kernels take a **padded** head dim, so at the dominant T=1024 route they move 32 values per row where
-fp16 moves 24 — a third more bytes — and net only 1.19×. That single signature is 15.4 ms/sample, ~31% of
-the whole attention suite, and it already has a hand-written `_hd24` specialization; the padding is
-structural to the MMA fragment layout, not a missing optimization. The two smallest routes (T≤16, hd=96)
-fall back to `torch_sdpa_fp16` in every arm — correctly, since 5–25 calls on a 4×96 tensor cannot pay for
-a quantize.
+| T | hd_pad fp16→int8/int4 | calls f/8/4 | fp16 ms | int8 ms | int4 ms | µs/call | int8 | int4 | noise |
+|--:|---|---|--:|--:|--:|---|--:|--:|---|
+| 1024 | 24→32/64 | 25/25/25 | 50.92 | 42.05 | 42.16 | 2036.9→1682.0→1686.4 | **1.21×** | **1.21×** | — |
+| 256 | 48→64/64 | 25/25/25 | 8.72 | 6.41 | 5.25 | 348.7→256.3→210.1 | **1.36×** | **1.66×** | **int4 NOISY** |
+| 64 | 48→64/64 | 25/25/25 | 2.27 | 1.08 | 1.03 | 90.7→43.1→41.3 | **2.10×** | **2.20×** | — |
+| 16 | 96→96/96 | 25/25/25 | 1.19 | 1.36 | 1.38 | 47.8→54.6→55.4 | **0.88×** | **0.86×** | — |
+| 4 | 96→96/96 | 5/5/5 | 0.24 | 0.18 | 0.18 | 47.8→36.9→36.5 | 1.30× | 1.31× | **fp16 NOISY** |
+| **total** | | | **63.34** | **51.08** | **50.01** | | **1.24×** | **1.27×** | |
+
+Attention is the weakest block in the pipeline, and two separate things make it so.
+
+**int8: padding.** The flash kernels take a padded head dim, so at the dominant T=1024 route they move 32
+values per row where fp16 moves 24 — a third more bytes — and net 1.21×. That route is 50.9 of the
+suite's 63.3 fp16 ms, so it sets the suite number. It already has a hand-written `_hd24` specialization
+and an 8-byte loader that was built and refuted; the padding is structural to the MMA fragment layout, not
+a missing optimization.
+
+**int4: there is no int4 attention datapath.** Every operand in the int4 arm is `torch.int8`, the hd24
+route's profiled kernel is literally `flash_attn_int8_mma_kernel_t`, and V stays int8 in both quantized
+arms (`gemm_w4a4_awq_qkv_i4qk_i8v_layouts` — i4 for Q/K, i8 for V). So the only thing int4 can win is Q/K
+bytes, and at T=1024 it wins none: hd=24 pads to 64 int4 = the same 32 B/row as int8's pad-to-32. It only
+shows up at hd=48, where int8 pads to 64 B and int4 to 32 B — the 1.66× at T=256, whose two contributing
+records are both flagged NOISY.
+
+**T=16 is a sign error, not a fallback.** Only 15 of its 25 calls fall back to `torch_sdpa_fp16`; the
+other 10 run `flash_attn_int8_qi8packed_small_qout` at ~65 µs against sdpa's ~48. Sending all 25 to sdpa
+recovers ~0.17 ms/sample.
 
 Per-kernel descriptions for all 28 entry points, including what each `_vt` / `_static` / `_qout` /
 `_evt_*` suffix changes, are in [KERNEL_BREAKDOWN.md](KERNEL_BREAKDOWN.md).

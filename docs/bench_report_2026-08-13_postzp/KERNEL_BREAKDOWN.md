@@ -296,27 +296,27 @@ Descriptions below are taken from the kernels' own header comments in `csrc/base
 
 ## linear
 
-### fp16 — 28.96 ms/sample total  (REPORT.md: 28.96 ✓)
+### fp16 — 60.92 ms/sample total  (REPORT.md: 60.92 ✓)
 
 | kernel | ms/sample | % | calls/sample | µs/call (mean over sigs) | sigs | worst CV |
 |---|--:|--:|--:|--:|--:|--:|
-| `torch_linear_fp16` | **28.96** | 100.0% | 345 | 83.9 | 12 | 1.91% |
+| `fused_gn_qkv` | **31.96** | 52.5% | 50 | 639.2 | 2 | 1.05% |
+| `torch_linear_fp16` | **28.96** | 47.5% | 345 | 83.9 | 12 | 1.91% |
 
+- **`fused_gn_qkv`** — UNQUANTIZED, fp16 ONLY -- the qkv projection with the GroupNorm folded into its mainloop as a per-sample scale/bias, so the normalized activation is never written to HBM. Taken by the fp16 arm only, and only where T % 128 == 0 and c % 8 == 0, which is exactly the T=1024 and T=256 blocks; the smaller ones fall to plain GroupNorm + `torch_linear_fp16`. 52% of fp16's linear suite. It has NO counterpart in the quantized arms, which split the same work into a `norm_quantize` group_norm_silu_quantize_nhwc plus an AWQ GEMM here -- so the linear and norm_quantize suite totals do not compare across arms. docs/OPEN_ITEMS.md A1.
 - **`torch_linear_fp16`** — UNQUANTIZED fallback -- PyTorch fp16 linear.
 
-<details><summary>signatures ≥ 4% of the suite (9 of 12)</summary>
+<details><summary>signatures ≥ 4% of the suite (7 of 14)</summary>
 
 | ms/sample | calls | µs/call | shapes | kernel |
 |--:|--:|--:|---|---|
+| 18.71 | 25 | 748.2 | `[128,192,32,32] x [576,1,1,192]` | `fused_gn_qkv` |
+| 13.26 | 25 | 530.2 | `[128,384,16,16] x [1152,1,1,384]` | `fused_gn_qkv` |
 | 5.02 | 25 | 200.9 | `[128,1024,192] x [192,192]` | `torch_linear_fp16` |
 | 4.65 | 75 | 62.0 | `[128,768] x [768,768]` | `torch_linear_fp16` |
 | 4.37 | 75 | 58.3 | `[128,768] x [1536,768]` | `torch_linear_fp16` |
 | 3.39 | 25 | 135.5 | `[128,256,384] x [384,384]` | `torch_linear_fp16` |
 | 2.68 | 25 | 107.1 | `[128,16,768] x [2304,768]` | `torch_linear_fp16` |
-| 2.35 | 25 | 93.9 | `[128,64,384] x [1152,384]` | `torch_linear_fp16` |
-| 1.90 | 25 | 75.8 | `[128,64,384] x [384,384]` | `torch_linear_fp16` |
-| 1.87 | 30 | 62.4 | `[128,768] x [384,768]` | `torch_linear_fp16` |
-| 1.86 | 25 | 74.6 | `[128,16,768] x [768,768]` | `torch_linear_fp16` |
 
 </details>
 

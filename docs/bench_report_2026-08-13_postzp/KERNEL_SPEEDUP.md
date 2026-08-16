@@ -4,15 +4,24 @@
 
 ## 1. Suite totals (ms/sample)
 
-| suite | fp16 | int8 | int4 | int8 speedup | int4 speedup | comparable? |
-|---|--:|--:|--:|--:|--:|---|
-| attention | 63.34 | 51.08 | 50.01 | 1.24× | 1.27× | yes |
-| conv | 265.72 | 149.09 | 85.59 | 1.78× | 3.10× | **no** — fp16 counts the qkv/proj 1×1 convs here |
-| linear | 28.96 | 47.15 | 43.45 | 0.61× | 0.67× | **no** — the quantized arms count those projections here |
-| **conv + linear** | **294.68** | **196.24** | **129.04** | **1.50×** | **2.28×** | yes — the reclassification is internal to the pair |
-| all three | 358.02 | 247.32 | 179.05 | 1.45× | 2.00× | yes |
+Totals as captured, with `fused_gn_qkv` routed to `linear` (see below). **The `speedup` columns are printed so they can be dismissed** — not one of them is a speedup. Read §2 and REPORT.md §1a instead; the paragraphs after the table say why.
 
-**Read `conv + linear`, not the two rows separately.** In fp16 the attention projections are 1×1 convs; the quantized arms convert them to linears. That moves work from one row to the other, which is why fp16's linear total looks small and int8's looks like a regression. Summed, the reclassification cancels.
+| suite | fp16 | int8 | int4 | fp16/int8 | fp16/int4 | is this a speedup? |
+|---|--:|--:|--:|--:|--:|---|
+| attention | 63.34 | 51.08 | 50.01 | 1.24× | 1.27× | **yes** — same work, same suite, all three arms |
+| conv | 265.72 | 149.09 | 85.59 | 1.78× | 3.10× | **yes** — 33/33 records matched three ways, nothing moves in or out |
+| linear | 60.92 | 47.15 | 43.45 | 1.29× | 1.40× | **no** — holds fp16's fused GroupNorm, whose quantized counterpart is in `norm_quantize` |
+| norm_quantize | 92.23 | 143.35 | 144.44 | 0.64× | 0.64× | **no** — the mirror of `linear`; also absorbs quantize launches that replace work the fp16 arm pays as separate elementwise kernels |
+| other | 6.10 | 10.11 | 10.11 | 0.60× | 0.60× | **no** — `cat2` capture coverage differs between arms (see below) |
+| **all five** | **488.31** | **400.78** | **333.61** | **1.22×** | **1.46×** | **no** — see the third paragraph |
+
+**Where fp16's qkv projections live.** fp16 runs the T=1024 and T=256 qkv through `fused_gn_qkv` — one kernel doing GroupNorm and the projection — worth **31.96 ms/sample**. The gate is `T % 128 == 0 and c % 8 == 0`, which is why the T=64/16/4 qkv is an ordinary `torch_linear_fp16` in this same suite. The quantized arms have no fused counterpart at all — they split the same work into a `group_norm_silu_quantize_nhwc` in `norm_quantize` plus an AWQ GEMM here. Until 2026-08-16 the capture's `suite_of()` matched name keywords and `fused_gn_qkv` contains none of them, so these two records sat in `other` — and this table published `linear` at 0.61×, `other` at 3.77× and a `conv + linear` row claiming the two cancel. They do not: the move is `other` → `linear`, and it never touched conv at all.
+
+**Conv closes exactly, which is what kills the old story.** All 33 conv records match three ways — fp16's suite total equals its matched total to the cent, in every arm (asserted on every run of this script). Nothing moves between conv and linear in either direction. The 1×1 convs in §2 are ResBlock skip connections, present in all three arms at 1.00×, and fp16's attention out-proj is already a Linear.
+
+**`other` is now all `cat2_channels_last_fp16`, and it does not compare either — for an unrelated reason.** The capture is asymmetric: fp16 is missing two signatures both quantized arms have (`[128,384,32,32]+[128,192,32,32]` at 2.64 ms and `[128,768,8,8]+[128,384,8,8]` at 0.34 ms), and it recorded 5 calls where int8 recorded 10 on `[128,384,16,16]²`. A concat is arm-independent by construction, so that is a coverage gap in the capture, not a real difference. It needs a GPU re-capture to close — docs/OPEN_ITEMS.md A15.
+
+**No regrouping of these five suites is clean, including the sum.** fp16's `fused_gn_qkv` does the GroupNorm too, and that GroupNorm cannot be in `linear` and in `norm_quantize` at once. Worse for the sum: the quantized arms' fused epilogues *delete* tensors, so the elementwise kernels fp16 pays for them do not exist as records to be credited — the full-run profile in REPORT.md §1a sees that as 2.78 s saved, and a replay suite cannot see it at all. That is why the all-five row reads 1.22× against the wall clock's 1.45×.
 
 ## 2. Per conv layer — the strict comparison
 
@@ -70,24 +79,41 @@ Matched on the weight normalized to `(K, C, R, S)`, so the same layer is compare
 
 ## 3. Per attention block
 
-Matched on `(N, H, T)`. head_dim differs by padding — the flash kernels take `hd_pad`, so they move more bytes per row than fp16's `hd`; that is part of the cost, not an error.
+Matched on `T`, read from **K** (`[N,H,T,hd_pad]`), with the single-tensor packed-Q records assigned by their own `T`. N=128 and H=8 in every record, so they carry no information. Every record in the suite is assigned to exactly one row and the rows sum to the suite totals exactly — checked on every run. `ms/sample` is what the row costs; `µs/call` is **call-weighted** across the kernels in the row, because a row mixes dynamic and static variants at 10 and 5 calls.
 
-| N | H | T | hd fp16→int8/int4 | calls | fp16 µs | int8 µs | int4 µs | int8 | int4 |
-|--:|--:|--:|---|--:|--:|--:|--:|--:|--:|
-| 128 | 8 | 1024 | 24→32/32 | 25 | 2036.9 | 1716.4 | 1750.1 | **1.19×** | **1.16×** |
-| 128 | 8 | 256 | 48→64/32 | 25 | 348.7 | 256.1 | 210.4 | **1.36×** | **1.66×** |
-| 128 | 8 | 64 | 48→64/32 | 25 | 90.7 | 44.6 | 41.1 | **2.03×** | **2.21×** |
-| 128 | 8 | 4 | 96→96/96 | 5 | 47.8 | 48.9 | 48.2 | **0.98×** | **0.99×** |
-| 128 | 8 | 16 | 96→96/96 | 25 | 47.8 | 47.8 | 48.4 | **1.00×** | **0.99×** |
+| T | hd_pad fp16→int8/int4 | calls f/8/4 | fp16 ms | int8 ms | int4 ms | µs/call fp16→int8→int4 | int8 | int4 | noise |
+|--:|---|---|--:|--:|--:|---|--:|--:|---|
+| 1024 | 24→32/64 | 25/25/25 | 50.92 | 42.05 | 42.16 | 2036.9→1682.0→1686.4 | **1.21×** | **1.21×** | — |
+| 256 | 48→64/64 | 25/25/25 | 8.72 | 6.41 | 5.25 | 348.7→256.3→210.1 | **1.36×** | **1.66×** | **int4 NOISY** |
+| 64 | 48→64/64 | 25/25/25 | 2.27 | 1.08 | 1.03 | 90.7→43.1→41.3 | **2.10×** | **2.20×** | — |
+| 16 | 96→96/96 | 25/25/25 | 1.19 | 1.36 | 1.38 | 47.8→54.6→55.4 | **0.88×** | **0.86×** | — |
+| 4 | 96→96/96 | 5/5/5 | 0.24 | 0.18 | 0.18 | 47.8→36.9→36.5 | **1.30×** | **1.31×** | **fp16 NOISY** |
+| **total** | | | **63.34** | **51.08** | **50.01** | | **1.24×** | **1.27×** | |
 
-5 of 8 blocks matched in all three arms.
+All 5 blocks matched in all three arms, all records assigned.
+
+**int4 does not have an int4 attention datapath, and that is the whole story of the int4 column.** Three things in the data, none of which is about bit width:
+
+1. Every operand in the int4 arm's attention is `torch.int8`.
+2. The dominant T=1024 route runs `flash_attn_i4values_i8mma_qi8_kv_static_qout_hd24`, whose profiled CUDA kernel is literally `flash_attn_int8_mma_kernel_t` — the int8 MMA.
+3. V stays int8 in both quantized arms. The qkv GEMM that feeds it says so in its name: `gemm_w4a4_awq_qkv_i4qk_i8v_layouts` — int4 for Q and K, int8 for V.
+
+So the only thing int4 can win in attention is Q/K bytes, and whether it wins any depends entirely on how `hd` pads:
+
+| | true hd | int8 pads to | int8 B/row | int4 pads to | int4 B/row | so |
+|---|--:|--:|--:|--:|--:|---|
+| T=1024 | 24 | 32 values | **32** | 64 values, 2/byte | **32** | identical traffic → 1.21× vs 1.21×, no int4 gain at the route that owns 80% of the suite |
+| T=256, T=64 | 48 | 64 values | **64** | 64 values, 2/byte | **32** | int4 halves Q/K traffic → 1.66× vs 1.36× |
+
+That is also the honest form of the padding argument for **int8**: at T=1024 it moves 32 values per row where fp16 moves 24, a third more bytes, and nets 1.21×. The padding is structural to the MMA fragment layout, not a missing optimization, and the hand-written `_hd24` specialization plus a refuted 8-byte loader are what has already been tried.
+
+**T=16 is a regression, not a clean fallback.** Only 15 of its 25 calls fall back to `torch_sdpa_fp16`; the other 10 run `flash_attn_int8_qi8packed_small_qout` at ~65 µs against sdpa's ~48, which is what puts the row at 0.88×/0.86×. A gate that sent all 25 to sdpa would recover ~0.17 ms/sample — small, but it is a sign error, not a tradeoff.
 
 ## 4. Linear — why there is no per-layer table
 
-Two reasons, both structural:
+**One reason, and it is not the one this section used to give.** The quantized arms pad K differently for the AWQ layout: the same projection is `[131072, 192]` with `K=192` in int8 and `[131072, 128]` with `K=256` in int4, so no printed shape means the same thing in both, and there is no fp16 shape that means it either.
 
-1. **fp16 has no counterpart for the projections.** They are 1×1 convs there, so the only linears the fp16 arm runs are the 37 embedding linears — a different set of layers.
-2. **The quantized arms pad K differently for the AWQ layout.** The same projection is `[131072, 192]` with `K=192` in int8 and `[131072, 128]` with `K=256` in int4, so no printed shape means the same thing in both.
+The retracted reason was *"fp16 has no counterpart for the projections — they are 1×1 convs there."* fp16 has counterparts for all of them. The out-projections at every `T`, and the qkv at T=64/16/4, are `torch_linear_fp16` records in this same suite; only the T=1024 and T=256 qkv are elsewhere, and they are `fused_gn_qkv`, not convs. §1 has the accounting.
 
 The int8→int4 comparison is still available per layer, keyed by `(M, n_out)` which both arms report:
 

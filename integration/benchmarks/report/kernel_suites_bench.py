@@ -89,10 +89,29 @@ QUANT_ENV = {"MODIFF_QUANT_LINEAR": "1", "MODIFF_QUANT_ATTN": "1",
 
 
 def suite_of(entry):
-    """Map a kernel entry point to one of the report's suites."""
+    """Map a kernel entry point to one of the report's suites.
+
+    ORDER MATTERS, and `fused_gn_qkv` is why. It is fp16's qkv PROJECTION with the GroupNorm folded into
+    its mainloop, and its name contains none of "gemm", "linear", "conv2d" or "group_norm" -- so it used
+    to fall through every test to "other". That put fp16's two largest projections (T=1024 and T=256,
+    31.96 ms/sample together) in a different suite from the quantized arms' counterparts, which are
+    ordinary GEMMs in `linear`. Three suite ratios were accounting artifacts of that one fallthrough:
+    linear read 0.61x, `other` read 3.77x, `norm_quantize` read 0.64x. Classified as `linear` here
+    because that is where the work it replaces lands in every other arm.
+
+    It is still not a CLEAN comparison, and no classification can make it one: this kernel also does the
+    GroupNorm, whose quantized counterpart is a separate `group_norm_silu_quantize_nhwc` record over in
+    `norm_quantize`. Suite totals are therefore not a speedup denominator -- see
+    docs/OPEN_ITEMS.md A1/A2. The per-layer matched tables are.
+
+    Captures written before 2026-08-16 have these records under "other"; the report scripts detect them
+    by entry name wherever they sit, so old JSON regenerates correctly.
+    """
     e = entry.lower()
     if "flash_attn" in e or "sdpa" in e:
         return "attention"
+    if "gn_qkv" in e:                        # before the conv/gemm tests: matches none of them
+        return "linear"
     if "conv2d" in e:
         return "conv"
     if "gemm" in e or "linear" in e:

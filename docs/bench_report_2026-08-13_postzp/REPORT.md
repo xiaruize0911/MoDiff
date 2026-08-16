@@ -414,7 +414,7 @@ Real call arguments captured at the C++ entry point during a live sample, then r
 
 | mode | ms/sample | signatures |
 |---|--:|--:|
-| fp16 | **28.961** | 12 |
+| fp16 | **60.922** | 14 |
 | W8A8 PTQ | **47.147** | 19 |
 | W8A8 MoDiff | **46.464** | 19 |
 | W4A4 PTQ | **43.450** | 19 |
@@ -426,6 +426,7 @@ Real call arguments captured at the C++ entry point during a live sample, then r
 
 | mode | ms/sample | entry point |
 |---|--:|---|
+| fp16 | 31.961 | `fused_gn_qkv` |
 | fp16 | 28.961 | `torch_linear_fp16` |
 | W8A8 PTQ | 29.192 | `gemm_w8a8_awq_bias_res` |
 | W8A8 PTQ | 7.625 | `torch_linear_fp16` |
@@ -452,12 +453,12 @@ Real call arguments captured at the C++ entry point during a live sample, then r
 
 | ms/sample | median µs | CV | calls | entry | shapes |
 |--:|--:|--:|--:|---|---|
+| 18.706 | 748.2 | 0.35% | 25 | `fused_gn_qkv` | `[[128, 192, 32, 32], [576, 1, 1, 192], [576]]` |
+| 13.256 | 530.2 | 1.05% | 25 | `fused_gn_qkv` | `[[128, 384, 16, 16], [1152, 1, 1, 384], [1152]]` |
 | 5.023 | 200.9 | 0.15% | 25 | `torch_linear_fp16` | `[[128, 1024, 192], [192, 192], [192]]` |
 | 4.646 | 62.0 | 0.49% | 75 | `torch_linear_fp16` | `[[128, 768], [768, 768], [768]]` |
 | 4.370 | 58.3 | 1.37% | 75 | `torch_linear_fp16` | `[[128, 768], [1536, 768], [1536]]` |
 | 3.387 | 135.5 | 0.93% | 25 | `torch_linear_fp16` | `[[128, 256, 384], [384, 384], [384]]` |
-| 2.678 | 107.1 | 0.60% | 25 | `torch_linear_fp16` | `[[128, 16, 768], [2304, 768], [2304]]` |
-| 2.348 | 93.9 | 1.91% | 25 | `torch_linear_fp16` | `[[128, 64, 384], [1152, 384], [1152]]` |
 
 **W8A8 PTQ**
 

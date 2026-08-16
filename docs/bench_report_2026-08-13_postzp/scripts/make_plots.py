@@ -105,6 +105,28 @@ def fig2_blocks(rows):
     print("wrote 02_blocks.png")
 
 
+def suite_rows(ks, mode, suite):
+    """One suite's records in one arm, with `fused_gn_qkv` routed to `linear` wherever it was captured.
+
+    THE ONE PLACE THIS DECISION IS MADE, so REPORT.md, the plots, KERNEL_BREAKDOWN.md and
+    KERNEL_SPEEDUP.md cannot disagree about what is in a suite. fused_gn_qkv is fp16's qkv projection
+    with the GroupNorm fused in; the capture's suite_of() matched name keywords and this name contains
+    none of them, so captures before 2026-08-16 have it under "other" -- which put fp16's two largest
+    projections (31.96 ms/sample) in a different suite from the quantized arms' plain GEMM counterparts
+    and made three suite ratios meaningless. Detected by name here, so old and new JSON both come out
+    right. Background: docs/OPEN_ITEMS.md A1/A2.
+    """
+    d = (ks.get("modes") or {}).get(mode) or {}
+    out = []
+    for s, rows in d.items():
+        if not isinstance(rows, list):
+            continue
+        for r in rows:
+            if ("linear" if "gn_qkv" in (r.get("entry") or "").lower() else s) == suite:
+                out.append(r)
+    return out
+
+
 def suite_totals(ks, suite):
     """Per-mode us PER SAMPLE for one suite, plus its entry points ranked.
 
@@ -115,8 +137,7 @@ def suite_totals(ks, suite):
     """
     out, tops = {}, {}
     for m, lab in MODES:
-        d = (ks.get("modes") or {}).get(m) or {}
-        rows = d.get(suite) or []
+        rows = suite_rows(ks, m, suite)
         tot, per = 0.0, {}
         for r in rows:
             st = r.get("stats") or {}
