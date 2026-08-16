@@ -197,14 +197,16 @@ def main():
     o.append("## 1. Suite totals (ms/sample)")
     o.append("")
     cs = d.get("capture_steps") or 1
+    fp16_all = sum(ms_per_sample(r) for su in ("attention", "conv", "linear", "norm_quantize", "other")
+                   for r in suite_recs(d, "fp16", su))
     o.append(f"> **The unit is not the e2e table's unit.** `calls_per_sample` counts calls over the "
              f"capture window, which is **{cs} steps** of the whole batch (`capture_steps={cs}`), so "
              f"`ms/sample` here is ~{cs}x a ms/step for batch 128. REPORT.md section 1's `ms/sample` is "
-             f"per **image** (batch time / 128). fp16 is 488.31 in this table and 160.9 in that one and "
-             f"both are right. Every ratio below is within one unit and so unaffected, but the two "
-             f"columns must not be combined -- 63.34/160.9 would read attention as 39% of the run when "
-             f"the profile says 12.3%. The `ms/step` column is the one to compare with REPORT.md "
-             f"section 1 and section 1a.")
+             f"per **image** (batch time / 128). fp16's five suites sum to {fp16_all:.2f} here against "
+             f"that table's ~161 per image, and both are right. Every ratio below is within one unit and "
+             f"so unaffected, but the two columns must not be combined -- dividing an attention total by "
+             f"a per-image number reads attention as ~39% of the run where the profile says 12.3%. The "
+             f"`ms/step` column is the one to compare with REPORT.md section 1 and section 1a.")
     o.append("")
     o.append("Totals as captured, with `fused_gn_qkv` routed to `linear` (see below). **The `speedup` "
              "columns are printed so they can be dismissed** — not one of them is a speedup. Read §2 and "
@@ -219,7 +221,7 @@ def main():
         "linear": "**no** — holds fp16's fused GroupNorm, whose quantized counterpart is in `norm_quantize`",
         "norm_quantize": "**no** — the mirror of `linear`; also absorbs quantize launches that replace "
                          "work the fp16 arm pays as separate elementwise kernels",
-        "other": "**no** — `cat2` capture coverage differs between arms (see below)",
+        "other": "**no** — fp16's `th.cat` fallback was outside the capture's wrapper list (see below)",
     }
     for suite in ("attention", "conv", "linear", "norm_quantize", "other"):
         v = {lab: sum(ms_per_sample(r) for r in suite_recs(d, key, suite)) for key, lab in ARMS}
@@ -253,13 +255,15 @@ def main():
              "direction. The 1×1 convs in §2 are ResBlock skip connections, present in all three arms "
              "at 1.00×, and fp16's attention out-proj is already a Linear.")
     o.append("")
-    o.append("**`other` is now all `cat2_channels_last_fp16`, and it does not compare either — for an "
-             "unrelated reason.** The capture is asymmetric: fp16 is missing two signatures both "
-             "quantized arms have (`[128,384,32,32]+[128,192,32,32]` at 2.64 ms and "
-             "`[128,768,8,8]+[128,384,8,8]` at 0.34 ms), and it recorded 5 calls where int8 recorded 10 "
-             "on `[128,384,16,16]²`. A concat is arm-independent by construction, so that is a coverage "
-             "gap in the capture, not a real difference. It needs a GPU re-capture to close — "
-             "docs/OPEN_ITEMS.md A15.")
+    o.append("**`other` reads fp16 as CHEAPER at concatenation, and that was an instrument artifact.** "
+             "`openaimodel._skip_concat` takes `cat2_channels_last_fp16` only when both halves are fp16 "
+             "**and** channels_last, and falls back to `th.cat` otherwise. About 3 skip-concats/step "
+             "take that fallback in the fp16 arm; the quantized arms put more layers in channels_last "
+             "fp16, so more of theirs qualify for the wrapped kernel. The capture wrapped `mc.*` plus "
+             "three `F.*` functions and **not `torch.cat`**, so it recorded theirs and not fp16's. Two "
+             "independent captures reproduced the gap to the call, which is what ruled out flakiness "
+             "and pointed at the wrapper list. `torch.cat` is wrapped as of 2026-08-16; THIS capture "
+             "predates that, so the row is still short and is not a comparison. docs/OPEN_ITEMS.md A15.")
     o.append("")
     o.append("**No regrouping of these five suites is clean, including the sum.** fp16's "
              "`fused_gn_qkv` does the GroupNorm too, and that GroupNorm cannot be in `linear` and in "
