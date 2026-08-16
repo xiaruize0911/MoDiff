@@ -262,9 +262,30 @@ the set each one needs *before* the first GPU second is spent. Install under the
    the real path. If 1.58× survives, wire it; if it does not, this item closes negative and C6 loses its
    main motivation with it.
 
-   Eighth item this session filed as missing that was already present. Order: **verify 1.58× on the real
-   kernels** → re-quantise → relL2 screen → paired FID verdict → only then weigh C6 for the zero point's
-   remaining 4–5%.
+   **The verification is fully specified — the rounding formula is confirmed from source, not inferred.**
+   `qdiff/adaptive_rounding.py:49-61`, with `soft_targets=False` (the inference path):
+
+   ```python
+   x_floor = torch.floor(W / delta)
+   x_int   = x_floor + (alpha >= 0).float()        # the learned rounding, hardened
+   x_quant = torch.clamp(x_int + zero_point, 0, n_levels - 1)   # W4 -> n_levels = 16
+   W_q     = (x_quant - zero_point) * delta
+   ```
+
+   The checkpoint carries `weight_quantizer.{alpha, delta, zero_point}` per layer alongside the fp
+   `weight`, so `W_q` is **exactly reconstructible with no fake-quant of any kind**. That is what makes the
+   verification independent of the retired harness.
+
+   Concrete steps, in order:
+   1. Reconstruct `W_q` per conv from the checkpoint with the formula above.
+   2. Re-quantise `W_q` onto the existing **symmetric** `_int4_weight_scale` (this is where the zero point
+      is dropped, and the recorded cost of dropping it is 4–5%).
+   3. Load both that and the current RTN+MSE weights into the real `OptimizedInt4Conv2d` and measure
+      end-to-end latent relL2 against fp16 — **this is the number that either confirms or kills 1.58×**.
+   4. Only if it survives: paired FID verdict (per the metric rule above), then weigh C6 for the zero
+      point's remaining 4–5%.
+
+   Eighth item this session filed as missing that was already present.
 6. **Quality of the qkv-i8 fusion (route b).** **MEASURED 2026-08-16 for the first time — the item was
    misfiled as "needs more seeds" when the truth was "never measured".**
    `quality_route_b_paired.py` reported BIT-IDENTICAL at 3 and 8 seeds and it was **vacuous**: route (b)
