@@ -67,8 +67,31 @@ published story they move.
    kernel indexes it per column throughout (`s00 = a_scale * w_scale[gc0] * inv_out_scale[gc0]`,
    `gemm_wxax.cu:328`). It is also not the blocker it was filed as: this item was carried from
    2026-08-11's "zero call sites", and the 2026-08-12 `aq_fusion` session wired it — see C2.
-9. **Per-layer profile coverage gap, 12–36%.** Closing it needs the ResBlock's own `forward` timed as a
-   residual bucket.
+9. ~~**Per-layer profile coverage gap, 12–36%.**~~ **RESOLVED 2026-08-16 — it is two different things,
+   and the 36% end is a MISLABELLING, not a hole.** Measured on the post-C1 profile
+   (`bench_report_2026-08-16_gnfast/data/profile_layers.json`):
+
+   | config | wall | kinds sum | gap |
+   |---|--:|--:|--:|
+   | fp16 | 103.58 | 0.00 | **100%** |
+   | W8A8 PTQ | 65.31 | 46.63 | 28.6% |
+   | W8A8 conv-only | 79.20 | 66.99 | 15.4% |
+   | the five `conv+proj` configs | — | — | **10.8–12.4%** |
+
+   * **fp16's 100% is scope, not a gap.** The instrument wraps quantized/MoDiff-wrapped modules; the fp16
+     arm has none (`n_convs = n_attn = n_proj = 0`), so there is nothing to attribute and nothing missing.
+   * **The PTQ arms' 28.6% is a mislabelling.** `n_proj = 42` in every arm, yet `proj (42 linears)` reads
+     **0.00** in the PTQ and conv-only configs — because `_flash_proj_qout` issues the projection as
+     `_mc.gemm_w8a8_awq_bias_res(xq, proj.qweight, …)` and never calls `QuantLinearWxAx.forward`, which is
+     what the profiler wraps. The time is not lost: `kinds` computes
+     `attn = max(attn_gross − proj_total, 0)`, so with `proj_total = 0` nothing is subtracted and the
+     projections stay **inside** `attn (score path)`. That bucket's 20.00 ms/step against B10's 18.12 for
+     the whole attention block (score + proj) confirms it. So the label is wrong, not the total.
+   * **The real unattributed remainder is 10.8–12.4%**, uniform across every config the instrument covers,
+     and *that* is what the filed fix (time the ResBlock's own `forward` as a residual bucket) addresses.
+
+   Same shape as A1 and A5: the measurement was right and its name was wrong. The one-line fix is to count
+   the projection where it is issued (the `mc.gemm_*` entry point) rather than where it is declared.
 10. ~~**The PTQ attn/proj split** — needs `_flash_proj_qout` instrumented.~~ **ANSWERED 2026-08-16 with
     no instrumentation at all.** `_flash_proj_qout` already issues its two halves as separate kernel
     launches with distinct names (the flash `_qout` kernel and `gemm_wXaX_awq_bias_res`), and the suite
