@@ -33,9 +33,23 @@ published story they move.
 
 ## B. Unsolved
 
-1. **W4A4: per-step vs constant delta.** Settled *flat* at W8A8 — 255 levels absorb a 6.5× step-to-step
-   swing and the paper's single scalar is not a compromise. At W4A4 the same measurement was standing on
-   a bug and was never redone. [static_qdiff_2026-08-12 §4](static_qdiff_2026-08-12/FINDINGS.md)
+1. ~~**W4A4: per-step vs constant delta.**~~ **RESOLVED 2026-08-16 — flat at W4A4 too, so the
+   hypothesis is refuted at both bit widths.** The arm was confounded, not unmeasurable: the native
+   per-step table had been fitted with SmoothQuant **on** (via `dynamic_delta_ab`'s CALIB) and was being
+   applied on top of the qdiff file, which has smoothing **off** — so the delta distribution it was fitted
+   to was not the one it saw, and it read 2.93× worse than the constant. Rebuilt in the matching
+   configuration (`AB_CALIB4=…int4_calibration_qdiff.pt python …/int4_delta_table.py`) and re-run:
+
+   | axis | qdiff constant | native per-step | dynamic | PTQ |
+   |---|--:|--:|--:|--:|
+   | W8A8 | 0.0495 | 0.0533 | 0.0611 | 0.1138 |
+   | **W4A4** | **0.3122** | **0.3237** | 0.3577 | 0.8642 |
+
+   A genuinely per-step table is **3.7% worse** than the paper's single scalar at W4A4, and both beat
+   dynamic. The hypothesis — that at 4 bits the constancy is the cost, because 15 levels cannot carry a
+   3–6× step-to-step swing — is dead at both widths. **Consequence: there is no point exporting a
+   per-step qdiff delta table**, which had been a candidate work item. Staticness, not constancy, is what
+   costs, and there is no better static table to reach for.
 2. **FID for W8A4 + MoDiff** — the one row directly comparable to the paper's table. ~30 min.
 3. **FID for W4A4 + MoDiff with the new weight scale** — −7.5% relL2 at a point where the relL2→FID curve
    is very steep; the effect on FID is unknown and could be either sign.
