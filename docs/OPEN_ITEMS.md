@@ -149,10 +149,31 @@ rounded". Learning it once did not transfer.
    metric AdaRound is willing to lose. **Three items, one failure mode: a decision made on the cheapest
    available metric rather than the one that defines the goal.**
 
-   **Actionable:** `MODIFF_INT4_WSCALE` should be re-evaluated as a default, and `docs/fid_2026-08-05`'s
-   adoption rationale annotated. Caveat: single 10k FID per arm, so the pairing removes seed noise but
-   there are no error bars on FID itself; 9.7 points on a 170 baseline is the same order as the relL2
-   effect it contradicts.
+   **RESOLVED by a paired bootstrap** ([fid_bootstrap.py](gn_fast_reduce_2026-08-16/scripts/fid_bootstrap.py),
+   40 replicates, one index set applied to both arms because they share a seed sequence):
+
+   | | FID | bootstrap ± |
+   |---|--:|--:|
+   | absmax | 171.739 | ± 0.458 |
+   | MSE | 181.523 | ± 0.486 |
+   | **difference** | **+9.783** | **± 0.283**, 95% CI **[+9.218, +10.250]** |
+
+   0 is outside the interval. The difference's bootstrap mean (+9.783) matches the point estimate
+   (+9.746), which is the number that matters — both arms' absolute values sit slightly high because
+   resampling with replacement biases a covariance estimate, but that bias is common to the pair and
+   cancels in the difference.
+
+   **What this still does not cover:** the bootstrap captures sampling variance of the generated set only.
+   The pairing removes noise-draw variance *from the difference* by construction, but a different seed
+   *sequence* has not been tried. So the claim is "on this seed sequence, MSE is worse by 9.78 ± 0.28",
+   not "MSE is worse in expectation over seeds".
+
+   **Actionable, and left as a decision rather than taken:** `MODIFF_INT4_WSCALE` should be re-evaluated
+   as a default and `docs/fid_2026-08-05`'s adoption rationale annotated. I did not flip it, for two
+   reasons: flipping it makes latent relL2 **worse** by 7.5% (also paired, also resolved), so this needs
+   an explicit ruling on which metric is authoritative — that is exactly the choice this item exists to
+   expose; and W4A4 is unusable at either setting (FID ~171–181 against fp16's 7.8), so the value of the
+   finding is what it implies for metric selection elsewhere, not for this arm's shipping default.
 4. **FID at 50k**, for publication-grade absolute numbers. ~1.5 h/mode, and 68–78% of that is not the
    UNet. [FID_50K_ESTIMATE](bench_report_2026-08-13_postzp/FID_50K_ESTIMATE.md)
 5. **A weight-side method for W4A4.** No candidate has landed. This is what gates W4A4 being usable at
