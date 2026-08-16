@@ -321,10 +321,17 @@ the set each one needs *before* the first GPU second is spent. Install under the
       reads as "partial confirmation" and is correspondingly more dangerous. **The two artifacts disagree
       with each other (−8.87% vs −17.57%), which is itself the tell that both are noise.**
 
-      Diagnosis so far: `load_model` *is* called 3 times with `models/ldm/lsun_churches256/model.ckpt` as a
-      positional arg, so the patch should match. It does not, and the next step is to confirm whether
-      `patched` is entered at all (a print inside it) rather than to guess a third injection point —
-      guessing is what produced two artifacts.
+      **Diagnosis complete: the injection MECHANISM is correct and the bug is in the script.** A minimal
+      test — patch `torch.load`, load `models/ldm/lsun_churches256/model.ckpt` directly, count matches —
+      gives **`patched` entered once, 89/89 keys matched, 89 substituted**. So `torch.load` interception
+      works, the key construction (`model.diffusion_model.<rel>.weight`) is right, and the bijection holds
+      at this point in the pipeline. `load_model` is also confirmed called 3 times with that path as a
+      positional arg.
+      What remains is therefore a specific defect in `b5_adaround_e2e.py`'s control flow — the patch is
+      installed in `arm()` but the count comes back 0, while the same code in isolation returns 89. Likely
+      candidates, in order: the `tally` dict identity across the closure, `H.build`'s import/caching of
+      `benchmark_ldm`, or `install()` being shadowed by the `finally` restore. **This is now a ten-line
+      debugging task with a known-good reference implementation, not an open question about AdaRound.**
 
       **Recorded warning for whoever continues: this measurement produces plausible numbers when it is
       broken.** Both artifacts were paired, multi-seed, tight-SEM and consistent with the prior. Neither was
