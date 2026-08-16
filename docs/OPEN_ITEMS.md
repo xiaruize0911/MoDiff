@@ -100,19 +100,42 @@ equality carried no information, because the policy was never in effect. Only th
 could distinguish "irrelevant" from "inert", and it says inert. Had I skipped it I would have gone on to
 measure C10's speed, found nothing, and had no idea why.
 
-### 4. And it gives A0's 221 a much better mechanism
+### 4. Scored against fp64 truth: the reference is exact, the fused return is not — and that still is
+### not a kernel bug
 
-The fused path uses a **chanmajor** decomposition (`BLK = C/K`, one block spanning channels) while the
-reference `group_norm_silu_nhwc` is **group-major** (one block per `(sample, group)`). Those are
-different fp32 reduction trees by construction, so their mean/inv_std differ and the codes follow. The
-comment asserting *"block_size formula MUST match `group_norm_silu_nhwc` … bit-identical to the
-two-kernel reference"* sits next to the **group-major fallback**, i.e. next to the path that is no longer
-taken — it was made obsolete when chanmajor landed, and nobody noticed because the gate that would have
-caught it was unrunnable.
+The right way to judge two candidate implementations is to score each against a reference, not against
+each other (the lesson `quality_gn_fast_paired.py` already recorded). Building the ground truth in fp64 —
+group-major GN statistics, the fp16 rounding of `normed` before SiLU that the kernel's own comment
+specifies, then `round((silu − a_hat)·scale)` clamped at ±127:
 
-**Still unexplained, and flagged rather than glossed:** if mean/inv_std differ, `a_hat += q/scale` should
-differ too, yet a_hat is bit-identical (both paths move it by exactly +0.19140625). That is not consistent
-with the codes differing by up to 221 and is the next thread to pull.
+| case | layer | reference vs fp64 | fused return vs fp64 |
+|---|---|--:|--:|
+| 0 | C192/**32×32** | 1.0 | **12** |
+| 5 | C192/16×16 | 1.0 | 110 |
+| 10 | C384/8×8 | 1.0 | 127 |
+| 20 | C768/**2×2** | **0.0** | **128** |
+| 30 | C1536/2×2 | 1.0 | 128 |
+| 39 | C1152/4×4 | 1.0 | 128 |
+
+**The reference path is exact** — ≤1, i.e. fp16 rounding — which also validates the fp64 reconstruction
+(a coincidental bit-level match is not plausible). **The fused return diverges, monotonically worse as
+the spatial size shrinks**, and sorting the values first barely helps (126 vs 128), so it is not a
+permutation.
+
+**But this cannot be read as "the fused kernel is wrong", and the constraint that forbids it is
+end-to-end quality.** W8A8 MoDiff's FID is **7.802 against fp16's 7.803** — parity — on this same fused
+path. A kernel returning codes that are 96% wrong at 2×2 could not produce that. Combined with a_hat
+being bit-identical (so both paths compute the *same* quantized values internally), the only consistent
+reading is that **the fused kernel returns a different encoding of the same information**, which its real
+downstream consumer interprets correctly and which the gate — comparing it element-wise against the
+reference's encoding — does not.
+
+So the gate's code column is invalid for a specific, now-identified reason, and the "spatial size" trend
+is the clue to what the encoding is: whatever differs scales with `HW`, not with `C`.
+
+**What made this findable** was refusing to let two suspect implementations grade each other. The gate had
+compared fused against reference for its whole life; scoring both against fp64 separated "one is wrong"
+from "they encode differently" in a single measurement.
 
 ### 5. Where this leaves C10
 
