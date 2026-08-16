@@ -93,6 +93,30 @@ rounded". Learning it once did not transfer.
 
 ---
 
+## A17. Dependency pre-flight: six failures, always mid-run
+
+**[new 2026-08-16]** This container has lost its Python environment at least once since 2026-08-13, and
+every rediscovery this session happened *inside* a job rather than before it:
+
+| # | missing | discovered when |
+|---|---|---|
+| 1 | `matplotlib` | regenerating report plots |
+| 2 | `markdown`, `weasyprint` + the `libpango` system libs | rendering SUMMARY.pdf |
+| 3 | `omegaconf`, `einops`, `pytorch-lightning`, `torchmetrics`, `tqdm` | first model build of a paired A/B |
+| 4 | `pytorch-fid` | the **last step** of a 25-minute B2 pipeline |
+| 5 | `ninja` | silently — distutils then rebuilt **nothing** on a header-only change, so a `.so` without the change would have been validated had the log not been read |
+| 6 | `lmdb` | starting B4's 50k reference export |
+
+`aq_fusion_2026-08-12`'s provisioning note has now been stale three times. **#5 is the dangerous one**: it
+did not fail, it silently produced a stale artifact, and only reading the build log caught it.
+
+**The fix is cheap and has been paid for six times over:** an import/`ldconfig` pre-flight at the entry
+points that own multi-stage work (`run_all.sh`, `generate_fid_samples.py`, the A/B harnesses), asserting
+the set each one needs *before* the first GPU second is spent. Install under the existing
+`torch==2.4.1` constraint file so nothing swaps torch out from under the built extension.
+
+---
+
 ## B. Unsolved
 
 1. ~~**W4A4: per-step vs constant delta.**~~ **RESOLVED 2026-08-16 — flat at W4A4 too, so the
