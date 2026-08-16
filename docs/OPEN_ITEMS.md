@@ -31,6 +31,63 @@ published story they move.
 
 ---
 
+## A0. NEW AND AHEAD OF EVERYTHING BELOW: the MoDiff GN gate neither passes nor discriminates
+
+Found 2026-08-16 while starting C10, and it outranks C10 because C10 cannot be validated until it closes.
+
+`docs/benchmark_5mode_2026-07-20/scripts/gn_modiff_verify_realinput.py` is the **zero-tolerance** gate
+MoDiff's fused GN→delta-quantize path is verified against: on real sampled inputs it runs both the fused
+kernel and the two-kernel reference (`group_norm_silu_nhwc` + `step1_static_quantize_fprop_silu`) and
+requires the int codes to be **bit-identical**. `csrc/modiff/norm/group_norm_silu.cu` cites it twice as
+the reason a previous reduction change was reverted — at `max_code_diff = 1`.
+
+Five runs per arm:
+
+| arm | max_code_diff | mean |
+|---|---|--:|
+| tree as shipped (`MODIFF_GN_STATS_FAST=0`) | 35, 38, 34, 27, 36 | **34.0** |
+| C10's fast policy (`=1`) | 81, 42, 30, 23, 35 | 42.2 |
+
+**1. The gate fails on the unchanged tree**, at 27–38 against a threshold of zero. So this path has no
+working correctness guarantee at present.
+
+**2. The gate is non-deterministic, so it cannot discriminate.** It takes a **max** over the first 40
+fused calls of a **live sample**, and fp16 sampling here varies ~4–6e-3 between processes (documented in
+`cat2_fold_2026-08-13`, which is why *that* gate counts kernel calls instead of comparing latents). Each
+run therefore instruments different data, and a max over varying inputs jumps around: the same
+configuration produced 81 and 23. **A zero-tolerance gate whose own statistic ranges 23–81 on a fixed
+configuration is not measuring what it claims.**
+
+> **A correction, recorded rather than replaced.** My first reading was n=1 per arm — 35 against 81 — and
+> I wrote it up as "the change makes it worse". At five runs the ranges overlap and the fast arm's mean
+> *excluding its outlier* is 32.5, below the generic arm's 34.0. The change is **indistinguishable** from
+> no change on this instrument. The same lesson as `act_bits_2026-08-05` and the C7 sweep in this session:
+> a difference measured once is not a difference.
+
+**Why nobody knew: the gate has been unrunnable, in two independent ways.** Its wrapper did not accept
+the `x2=` the cat2 fold added on 2026-08-13 (`TypeError` on the first instrumented call), and it passed
+**11 arguments to a kernel that had grown to 18** when the delta-quantize family gained its dynamic-scale
+contract. So "it failed the gate" and "nobody could run the gate" had become the same observable. Both
+are repaired — the 8 trailing args now come from the conv's own `_delta_gn_dynamic_args_any` rather than a
+hardcoded tuple, so the next contract change cannot re-stale it the same way.
+
+**What this blocks.** C10 ships **default OFF** — a judgement, not a measurement, since the gate is
+evidence against neither policy: this path's only correctness guard is itself broken, and changing the
+path while that is true is not justified. C10's mechanism and its shared-policy header stay in place for
+whoever closes this.
+
+**Order of work for whoever picks it up:**
+1. **Make the gate deterministic** — instrument saved inputs rather than a live sample, or seed and pin
+   the 40 calls. Nothing downstream is trustworthy until its statistic is reproducible. This is also
+   what would let it discriminate C10.
+2. Then confirm whether 27–38 reproduces on a clean pre-2026-08-16 checkout, to separate "a regression
+   landed" from "the gate was always apples-to-oranges".
+3. If it is the gate: the suspect is the reference path's `step1_static_quantize_fprop_silu`, which takes
+   no `Q_level` and no `a4` flag while the fused kernel takes both — so the two may legitimately saturate
+   at different code limits.
+
+---
+
 ## B. Unsolved
 
 1. ~~**W4A4: per-step vs constant delta.**~~ **RESOLVED 2026-08-16 — flat at W4A4 too, so the

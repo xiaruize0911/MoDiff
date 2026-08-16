@@ -23,9 +23,19 @@ model, sampler = r._setup_model(mode); cond = r._cond_kwargs(model, BATCH)
 
 stats = {"calls": 0, "max_code": 0, "max_ahat": 0.0}
 orig = FR._prequant_gn_conv_modiff
-def wrap(x, gn, conv, mod_scale=None, mod_shift=None, residual=None):
+def wrap(x, gn, conv, mod_scale=None, mod_shift=None, residual=None, x2=None, **kw):
+    # x2 (the decoder skip-concat's second half) and **kw added 2026-08-16. _prequant_gn_conv_modiff
+    # gained x2= with the cat2 fold on 2026-08-13 and this wrapper's signature did not follow, so this
+    # gate has raised TypeError -- i.e. has been UNRUNNABLE -- ever since. It is the gate that a
+    # previous reduction change was reverted for failing, so "it failed the gate" and "nobody could run
+    # the gate" had become the same observable. **kw so the next added argument degrades to a pass-through
+    # instead of breaking the gate again.
+    #
+    # A cat2-folded call passes x2 and takes a different fused kernel, so it is NOT comparable to the
+    # two-kernel reference built below; those calls are forwarded uninstrumented rather than counted.
     # Only instrument the real fused calls (post first-step, eligible).
-    if (stats["calls"] < 40 and conv is not None and getattr(conv, 'modiff_enabled', False)
+    if (x2 is None and stats["calls"] < 40 and conv is not None
+            and getattr(conv, 'modiff_enabled', False)
             and hasattr(conv, 'can_gn_fuse_modiff') and conv.can_gn_fuse_modiff(x)
             and x.is_contiguous(memory_format=torch.channels_last)):
         ng = gn.num_groups; eps = gn.eps
@@ -38,28 +48,33 @@ def wrap(x, gn, conv, mod_scale=None, mod_shift=None, residual=None):
         scale = conv.static_input_scale.view(1)
         smooth = conv._smooth_inv_flat if hasattr(conv, '_smooth_inv_flat') else x.new_empty(0, dtype=torch.float32)
         a_ref = conv.a_hat_cache.clone()
+        # The 8 trailing dynamic-scale arguments, added to these kernels after this gate was written
+        # (the gate passed 11 args to an 18/19-arg kernel and raised TypeError). Taken from the conv's
+        # OWN accessor rather than hardcoded, so the next change to that contract cannot silently
+        # re-stale the gate -- which is how it came to be unrunnable in two independent ways at once.
+        dyn = FR._delta_gn_dynamic_args_any(conv, x.device, is_int4)
         with torch.inference_mode():
             normed = M.group_norm_silu_nhwc(x, w, b, ng, eps, False, ms, sh)
             if is_int4:
                 q_ref = M.step1_static_quantize_pack_int4_fprop_silu(normed, a_ref, scale, smooth)
-                q_fus = M.group_norm_silu_delta_quantize_pack_nhwc(x, w, b, conv.a_hat_cache.clone(), ng, eps, True, scale, smooth, ms, sh)
+                q_fus = M.group_norm_silu_delta_quantize_pack_nhwc(x, w, b, conv.a_hat_cache.clone(), ng, eps, True, scale, smooth, ms, sh, *dyn[:-1])
             else:
                 q_ref = M.step1_static_quantize_fprop_silu(normed, a_ref, scale, smooth)
-                q_fus = M.group_norm_silu_delta_quantize_nhwc(x, w, b, conv.a_hat_cache.clone(), ng, eps, True, scale, smooth, ms, sh)
+                q_fus = M.group_norm_silu_delta_quantize_nhwc(x, w, b, conv.a_hat_cache.clone(), ng, eps, True, scale, smooth, ms, sh, *dyn)
             torch.cuda.synchronize()
             cd = (q_ref.int() - q_fus.int()).abs().max().item()
             # a_ref now holds the reference's updated a_hat; recompute fused a_hat on a fresh clone
             a_fus = conv.a_hat_cache.clone()
             if is_int4:
-                M.group_norm_silu_delta_quantize_pack_nhwc(x, w, b, a_fus, ng, eps, True, scale, smooth, ms, sh)
+                M.group_norm_silu_delta_quantize_pack_nhwc(x, w, b, a_fus, ng, eps, True, scale, smooth, ms, sh, *dyn[:-1])
             else:
-                M.group_norm_silu_delta_quantize_nhwc(x, w, b, a_fus, ng, eps, True, scale, smooth, ms, sh)
+                M.group_norm_silu_delta_quantize_nhwc(x, w, b, a_fus, ng, eps, True, scale, smooth, ms, sh, *dyn)
             torch.cuda.synchronize()
             ad = (a_ref.float() - a_fus.float()).abs().max().item()
         stats["calls"] += 1
         stats["max_code"] = max(stats["max_code"], cd)
         stats["max_ahat"] = max(stats["max_ahat"], ad)
-    return orig(x, gn, conv, mod_scale, mod_shift, residual)
+    return orig(x, gn, conv, mod_scale, mod_shift, residual, x2=x2, **kw)
 FR._prequant_gn_conv_modiff = wrap
 
 torch.manual_seed(1234)

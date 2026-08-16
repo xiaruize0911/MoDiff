@@ -32,6 +32,7 @@
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAException.h>
 #include <cuda_runtime.h>
+#include "gn_block_size.h"
 #include <cuda_fp16.h>
 #include <cstdlib>
 
@@ -207,8 +208,10 @@ torch::Tensor group_norm_silu_nhwc(
 
     auto y = torch::empty_like(x);
 
-    int block_size = 32;
-    while (block_size < group_size && block_size < 1024) block_size <<= 1;
+    // ONE policy, shared with the launcher that must produce identical mean/inv_std -- see
+    // csrc/gn_block_size.h. The formula used to be duplicated here and there, which is how two things
+    // that must agree bit-for-bit stop agreeing.
+    int block_size = modiff_gn_stats_block_size(group_size);
     dim3 grid((unsigned int)(N * num_groups));
     dim3 block((unsigned int)block_size);
     size_t shmem_bytes = 2 * (size_t)block_size * sizeof(float);
