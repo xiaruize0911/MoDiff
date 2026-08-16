@@ -276,10 +276,32 @@ the set each one needs *before* the first GPU second is spent. Install under the
    `weight`, so `W_q` is **exactly reconstructible with no fake-quant of any kind**. That is what makes the
    verification independent of the retired harness.
 
-   Concrete steps, in order:
-   1. Reconstruct `W_q` per conv from the checkpoint with the formula above.
-   2. Re-quantise `W_q` onto the existing **symmetric** `_int4_weight_scale` (this is where the zero point
-      is dropped, and the recorded cost of dropping it is 4–5%).
+   **Steps 1–2 DONE 2026-08-16.** 89 convs, median ‖Q(W)−W‖/‖W‖:
+
+   | | median |
+   |---|--:|
+   | AdaRound native (asymmetric, needs C6) | 0.1410 |
+   | ours, RTN + MSE symmetric | **0.1256** *(the function's own docstring records 0.1254)* |
+   | **AdaRound re-quantised onto our symmetric grid** | **0.1506** |
+
+   **Method double-validated**: the reconstruction gives exactly 16 discrete values per output channel
+   (impossible by chance if the formula were wrong), and our baseline reproduces the docstring to 0.2%.
+   An earlier attempt read +35.7% for dropping the zero point — that used an **absmax** grid, which the
+   same docstring records at 0.1825 against my measured 0.1821, so the discrepancy was the grid, not the
+   method.
+
+   **The premise for "does not need C6" holds:** dropping the zero point costs **+6.8%** (0.1410 → 0.1506),
+   close to `paper_repro`'s recorded +5.0%.
+
+   **And a trap worth naming, because it is the same one A11 fell into.** The re-quantised weights are
+   **20% worse than our own baseline on ‖W−Q(W)‖** (0.1506 vs 0.1256). That is *not* evidence against
+   AdaRound — ‖W−Q(W)‖ is the one metric AdaRound is willing to lose, which is exactly why A11 was
+   wrongly deprioritised. Killing it here on this number would repeat that error verbatim. The verdict
+   must come from step 3.
+
+   Remaining steps:
+   1. ~~Reconstruct `W_q` per conv from the checkpoint with the formula above.~~ done
+   2. ~~Re-quantise `W_q` onto the existing **symmetric** `_int4_weight_scale`.~~ done — costs +6.8%.
    3. Load both that and the current RTN+MSE weights into the real `OptimizedInt4Conv2d` and measure
       end-to-end latent relL2 against fp16 — **this is the number that either confirms or kills 1.58×**.
    4. Only if it survives: paired FID verdict (per the metric rule above), then weigh C6 for the zero
