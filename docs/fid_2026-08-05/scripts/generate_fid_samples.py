@@ -55,6 +55,11 @@ ap.add_argument("--linear", type=int, default=0, choices=(0, 1),
                      "fp16 always get 0 -- temporal state in a PTQ arm would stop it being one.")
 ap.add_argument("--decode-chunk", type=int, default=32,
                 help="images per decode_first_stage call; bounds the VAE activation peak")
+ap.add_argument("--adaround", type=int, default=0, choices=(0, 1),
+                help="substitute AdaRound's rounding for the conv weights before int4 conversion, and "
+                     "write to <folder>_adaround. B5's relL2 screen puts this 1.208x ahead at W4A4 "
+                     "(-17.15%% +- 1.77%%); this is the arm that turns that screen into an FID verdict. "
+                     "Only meaningful for int4* modes -- W8 weights do not use the AdaRound checkpoint.")
 a = ap.parse_args()
 
 #: The 2026-08-05 run used the absmax files, and every FID number committed from it is keyed to
@@ -130,6 +135,55 @@ def build(mode, delta_mode, act_bits=8, linear=None):
     return runner, model, sampler
 
 
+#: B5's AdaRound arm. Kept here rather than imported from integration/tests/b5_adaround_e2e.py because
+#: that module builds a model at import time; the 30 lines are cheap next to the coupling.
+ADAROUND_CKPT = "/workspace/quant_models/church_w4a8_ckpt.pth"
+N_ADAROUND_CONVS = 89          # the verified bijection -- see docs/OPEN_ITEMS.md B5
+
+
+def adaround_weights():
+    """{relative-name -> W_q}, reconstructing qdiff/adaptive_rounding.py:49-61 at soft_targets=False."""
+    import re
+    ck = torch.load(ADAROUND_CKPT, map_location="cpu", weights_only=False)
+    out = {}
+    for b in sorted({m.group(1) for k in ck if (m := re.match(r"(.+)\.weight_quantizer\.alpha$", k))}):
+        W = ck[b + ".weight"]
+        if W.dim() != 4:
+            continue
+        W, al = W.float(), ck[b + ".weight_quantizer.alpha"].float()
+        d, z = ck[b + ".weight_quantizer.delta"].float(), ck[b + ".weight_quantizer.zero_point"].float()
+        x_q = torch.clamp(torch.floor(W / d) + (al >= 0).float() + z, 0, 15)     # W4 -> 16 levels
+        out[b[len("model."):]] = (x_q - z) * d
+    return out
+
+
+def install_adaround(weights, tally):
+    """Substitute into the fp16 state_dict as it is loaded, so the int4 conversion re-quantises it
+    onto our symmetric MSE grid (which is what drops AdaRound's zero point -- no separate code path).
+
+    tally ACCUMULATES. The VAE's first-stage checkpoint is also named model.ckpt, and assigning here
+    let its 0 overwrite the UNet's 89 -- reporting a vacuous run for one that had worked.
+    """
+    orig = torch.load
+
+    def patched(path, *ar, **kw):
+        sd = orig(path, *ar, **kw)
+        if isinstance(path, str) and path.endswith("model.ckpt"):
+            d = sd.get("state_dict", sd) if isinstance(sd, dict) else sd
+            n = 0
+            for rel, Wq in weights.items():
+                k = "model.diffusion_model." + rel + ".weight"
+                t = d.get(k)
+                if t is not None and tuple(t.shape) == tuple(Wq.shape):
+                    d[k] = Wq.to(t.dtype)
+                    n += 1
+            tally["n"] += n
+        return sd
+
+    torch.load = patched
+    return orig
+
+
 def reset(model):
     from integration.kernels.int4_optimized import reset_modiff_state as r4
     from integration.kernels.int8_optimized import reset_modiff_state as r8
@@ -168,8 +222,13 @@ def main():
     ALL = ("fp16,int8_baseline,int8_l0,int8_l1,w8a4_baseline,w8a4_l0,w8a4_l1,"
            "int4_baseline,int4_l0,int4_l1")
     modes = ALL if a.modes.strip() == "all" else a.modes
+    ada_w = adaround_weights() if a.adaround else None
+    if ada_w is not None:
+        print(f"AdaRound arm: reconstructed {len(ada_w)} conv weights from {ADAROUND_CKPT}", flush=True)
     for mode in [m.strip() for m in modes.split(",") if m.strip()]:
         folder, dm, ab, lin = SPEC[mode]
+        if a.adaround:
+            folder += "_adaround"
         d = os.path.join(a.out, folder)
         os.makedirs(d, exist_ok=True)
         have = len([f for f in os.listdir(d) if f.endswith(".png")])
@@ -179,7 +238,22 @@ def main():
         print(f"=== {mode} -> {d}  (delta={dm}, A{ab}, LINEAR={lin if lin is not None else a.linear}, "
               f"{a.n} images, {a.steps} steps)",
               flush=True)
-        runner, model, sampler = build(mode, dm, ab, lin)
+        if ada_w is None:
+            runner, model, sampler = build(mode, dm, ab, lin)
+        else:
+            # Asserted, not printed. A vacuous AdaRound arm would produce 10k images identical to the
+            # baseline's and an FID difference of ~0, which reads as "AdaRound does not matter" -- the
+            # exact false negative a 15-minute run must not be allowed to report.
+            tally = {"n": 0}
+            orig = install_adaround(ada_w, tally)
+            try:
+                runner, model, sampler = build(mode, dm, ab, lin)
+            finally:
+                torch.load = orig
+            assert tally["n"] == N_ADAROUND_CONVS, \
+                f"AdaRound substituted {tally['n']} convs, expected {N_ADAROUND_CONVS} -- refusing to " \
+                f"generate {a.n} images for an arm that is not the arm under test"
+            print(f"  non-vacuity OK: {tally['n']} convs substituted", flush=True)
 
         reset(model)
         sample_batch(runner, model, sampler, min(a.batch, 16), a.seed0 - 1)   # warm-up, discarded

@@ -331,8 +331,41 @@ the set each one needs *before* the first GPU second is spent. Install under the
       instead**, and the fix is `+=` rather than `=`. The lesson is narrower than "counters are good": a
       counter is itself an instrument and needs the same scepticism as the thing it guards.
 
-   4. Only if it survives: paired FID verdict (per the metric rule above), then weigh C6 for the zero
-      point's remaining 4–5%.
+   4. **DONE 2026-08-16 — the FID verdict agrees with the screen and is LARGER than it.**
+
+      | arm | FID vs LSUN-churches 10k |
+      |---|--:|
+      | ours (RTN + MSE scale) | 181.514 |
+      | **AdaRound → our symmetric grid** | **140.187** |
+      | difference | **−41.327 (−22.77%)** |
+      | 40× paired bootstrap, n=10000 | −41.317 ± 0.283, 95% CI **[−41.769, −40.800]** |
+
+      **RESOLVED** — 0 is nowhere near the interval. Both arms regenerated from the current tree (37 min,
+      serial), 10000 images each, arm B's non-vacuity assertion passing *before* the first image
+      (89 convs). `eigh` agrees with pytorch_fid to 1.28e-12. Our 181.5 matches B3's independently
+      measured MSE arm at 180.593 to ~1 FID, which is an unplanned cross-check of both runs.
+
+      **B5 IS RESOLVED: implement.** AdaRound's rounding, re-quantised onto our symmetric MSE grid,
+      takes W4A4 from FID 181.5 to 140.2. It does not need C6 — the zero point is dropped, costing the
+      +6.8% on ‖W−Q(W)‖ that got A11 deprioritised, and it still wins by 22.77% on the metric that decides.
+
+      **What this says about the retired instrument.** The fake-quant harness claimed 1.58× on latent
+      relL2 where the truth on real kernels is 1.208× — it overstated the quantity it measured by 31%.
+      But the quantity it measured was the wrong one: on FID the prize is −22.77%, *larger* than the
+      screen suggested. So P4 was right to retire it and I was right not to trust its number, but the
+      reason the number was wrong is not the reason I expected. It was not overselling a small effect;
+      it was mis-measuring a large one.
+
+      **A9 closes with this.** A9's diagnosis was that W4A4's dominant error lives in the weights, which
+      MoDiff (activation-only) cannot reach. Changing nothing but the weight rounding moves FID 22.77%.
+      That is the diagnosis confirmed, and it is also the answer to "why does W4A4 lag" — not the
+      activation path, and not MoDiff.
+
+      **The caveat that bounds this.** Measured at `MODIFF_LINEAR=0` (conv-only MoDiff), because that is
+      the legacy `int4` key's default. The tree's default since 2026-08-06 is `LINEAR=1`. Weight rounding
+      is orthogonal to whether the 42 attention projections carry a_hat/o_hat, so the direction should
+      hold; the magnitude at L1 is untested and I am not quoting −41.3 for it.
+
 
    Eighth item this session filed as missing that was already present.
 6. **Quality of the qkv-i8 fusion (route b).** **MEASURED 2026-08-16 for the first time — the item was
