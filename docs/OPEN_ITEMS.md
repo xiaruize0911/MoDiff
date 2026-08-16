@@ -315,9 +315,21 @@ the set each one needs *before* the first GPU second is spent. Install under the
       checkpoint's. The run nonetheless printed a clean-looking **−8.87% ± 1.58%** improvement
       (ours/AdaRound = 1.099×). **Without the counter I would have reported that as "1.58× does not fully
       survive, but the direction holds" — and it is an artifact of 2 substituted layers.**
-      Substituting earlier is the fix: mutate the fp16 `state_dict` *before* `_setup_model` builds anything,
-      where the mapping is the verified bijection (`model.diffusion_model.X`), rather than after the module
-      tree has been rewritten. Match on names there, not on the post-conversion tree.
+      **A second attempt moved the injection to `torch.load` (the state_dict, where the verified bijection
+      applies) and the counter caught it again — `n = 0` this time.** It printed an even more persuasive
+      **−17.57% ± 1.44%, ratio 1.214×**: closer to the claimed 1.58× than the first artifact's 1.099×, so it
+      reads as "partial confirmation" and is correspondingly more dangerous. **The two artifacts disagree
+      with each other (−8.87% vs −17.57%), which is itself the tell that both are noise.**
+
+      Diagnosis so far: `load_model` *is* called 3 times with `models/ldm/lsun_churches256/model.ckpt` as a
+      positional arg, so the patch should match. It does not, and the next step is to confirm whether
+      `patched` is entered at all (a print inside it) rather than to guess a third injection point —
+      guessing is what produced two artifacts.
+
+      **Recorded warning for whoever continues: this measurement produces plausible numbers when it is
+      broken.** Both artifacts were paired, multi-seed, tight-SEM and consistent with the prior. Neither was
+      caught by inspection; both were caught by the substitution counter. Do not remove that counter, and do
+      not trust a run whose count is not exactly 0 / 89.
    4. Only if it survives: paired FID verdict (per the metric rule above), then weigh C6 for the zero
       point's remaining 4–5%.
 

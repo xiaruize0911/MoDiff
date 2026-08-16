@@ -77,25 +77,32 @@ def adaround_weights():
 
 
 def install(weights, tally):
-    """Patch the conversion entry point to substitute fp weights immediately before it runs."""
-    orig = B.convert_model_to_optimized_int4
+    """Substitute into the fp16 state_dict as it is LOADED -- the most upstream point there is.
 
-    def patched(unet, *a, **kw):
-        named = dict(unet.named_modules())
-        n = 0
-        for name, Wq in weights.items():
-            m = named.get(name)
-            if m is None or not hasattr(m, "weight") or m.weight is None:
-                continue
-            if tuple(m.weight.shape) != tuple(Wq.shape):
-                continue
-            with torch.no_grad():
-                m.weight.copy_(Wq.to(m.weight.device, m.weight.dtype))
-            n += 1
-        tally["n"] = n
-        return orig(unet, *a, **kw)
+    A first version patched convert_model_to_optimized_int4 and matched by module name. It substituted
+    2 of 89 convs, because the UNet reaching that call has already been restructured (FusedResBlock and
+    the rest) so named_modules() paths no longer match the checkpoint's -- and it still printed a
+    plausible -8.87% improvement, which the counter below is what caught. The verified bijection
+    (`model.diffusion_model.X`, 89/89, 0 shape mismatches) applies to the STATE DICT, so that is where it
+    has to be applied.
+    """
+    orig = torch.load
 
-    B.convert_model_to_optimized_int4 = patched
+    def patched(path, *a, **kw):
+        sd = orig(path, *a, **kw)
+        if isinstance(path, str) and path.endswith("model.ckpt"):
+            d = sd.get("state_dict", sd) if isinstance(sd, dict) else sd
+            n = 0
+            for rel, Wq in weights.items():
+                k = "model.diffusion_model." + rel + ".weight"
+                t = d.get(k)
+                if t is not None and tuple(t.shape) == tuple(Wq.shape):
+                    d[k] = Wq.to(t.dtype)
+                    n += 1
+            tally["n"] = n
+        return sd
+
+    torch.load = patched
     return orig
 
 
@@ -114,7 +121,7 @@ def arm(use_adaround, seeds, refs, weights):
         torch.cuda.empty_cache()
     finally:
         if orig is not None:
-            B.convert_model_to_optimized_int4 = orig
+            torch.load = orig
     return rel, tally["n"]
 
 
