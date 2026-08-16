@@ -308,10 +308,16 @@ the set each one needs *before* the first GPU second is spent. Install under the
       89 conv layers on each side, `model.X` → `model.diffusion_model.X` hits **89/89**, and **0 shape
       mismatches**. So the substitution is a rename, not a matching problem — which is where this kind of
       cross-checkpoint work usually goes wrong silently.
-      Remaining mechanics: `BenchmarkRunner._setup_model(mode)` loads and converts in one call, so the
-      substitution needs a hook between the fp16 `state_dict` load and `convert_model_to_optimized_int4`.
-      Replacing the fp weight *before* conversion is what makes the conversion itself do the
-      re-quantisation onto our MSE grid — i.e. step 2 comes free rather than needing to be reimplemented.
+      **Attempted 2026-08-16 ([b5_adaround_e2e.py](../integration/tests/b5_adaround_e2e.py)) and the
+      non-vacuity counter caught a false result.** Patching `convert_model_to_optimized_int4` and
+      substituting by module name matched **only 2 of 89 convs** — because the UNet handed to that call has
+      already been restructured (FusedResBlock and friends), so `named_modules()` paths no longer match the
+      checkpoint's. The run nonetheless printed a clean-looking **−8.87% ± 1.58%** improvement
+      (ours/AdaRound = 1.099×). **Without the counter I would have reported that as "1.58× does not fully
+      survive, but the direction holds" — and it is an artifact of 2 substituted layers.**
+      Substituting earlier is the fix: mutate the fp16 `state_dict` *before* `_setup_model` builds anything,
+      where the mapping is the verified bijection (`model.diffusion_model.X`), rather than after the module
+      tree has been rewritten. Match on names there, not on the post-conversion tree.
    4. Only if it survives: paired FID verdict (per the metric rule above), then weigh C6 for the zero
       point's remaining 4–5%.
 
