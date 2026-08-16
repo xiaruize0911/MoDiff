@@ -69,8 +69,28 @@ published story they move.
    2026-08-11's "zero call sites", and the 2026-08-12 `aq_fusion` session wired it — see C2.
 9. **Per-layer profile coverage gap, 12–36%.** Closing it needs the ResBlock's own `forward` timed as a
    residual bucket.
-10. **The PTQ attn/proj split** — needs `_flash_proj_qout` instrumented to separate the projection GEMM
-    from the score path.
+10. ~~**The PTQ attn/proj split** — needs `_flash_proj_qout` instrumented.~~ **ANSWERED 2026-08-16 with
+    no instrumentation at all.** `_flash_proj_qout` already issues its two halves as separate kernel
+    launches with distinct names (the flash `_qout` kernel and `gemm_wXaX_awq_bias_res`), and the suite
+    capture already timed both. What was missing was arithmetic: deciding which `linear` records are
+    attention projections. ms/step at batch 128
+    ([attn_proj_split.py](bench_report_2026-08-16_gnfast/scripts/attn_proj_split.py)):
+
+    | arm | score | proj | block | split |
+    |---|--:|--:|--:|---|
+    | fp16 | 12.67 | 9.96 | 22.63 | 56% / 44% |
+    | W8A8 PTQ | 10.22 | 7.90 | 18.12 | 56% / 44% |
+    | W4A4 PTQ | 10.00 | 7.11 | 17.11 | 58% / 42% |
+
+    vs fp16: score 1.24×/1.27×, projections 1.26×/1.40×, whole block 1.25×/1.32×. **The split barely
+    moves with precision and the two halves gain almost equally** — the attention block is not a fast
+    score path dragged down by slow projections or the reverse. It is uniformly ~1.25×, so C3 and C4
+    between them address only the score half of a 56/44 problem.
+
+    Two classifier traps produced a wrong table first, both understating fp16 and so overstating the
+    speedup: fp16 passes the activation 3-D as `[b,T,c]` where the quantized arms flatten to `[b*T,c]`,
+    and fp16's two largest projections are `fused_gn_qkv`, filed under `other` (A1). Third time in one
+    session that suite membership, not the measurement, was the error.
 11. ~~**Whether to build the per-output-pixel windowed reduction epilogue.**~~ **NOT A QUESTION —
     merged into C6.** As filed this item contained its own answer: the measurements already say build it
     for fix #4 (1.58× end-to-end, weight-only) and not for fix #2 (1.06× against a 1.15× bar). There is
@@ -87,7 +107,7 @@ published story they move.
 | ~~**C2**~~ | ~~the `aq_*` trio~~ | ~~4.60 ms~~ | **STALE WHEN FILED — this landed 2026-08-12.** Route (b) is wired (`quantized_std_attention.py:1050`) behind `MODIFF_FUSE_QKV_I8`, worth **+0.79 ms/step** on the 10 hd=48 blocks. The 4.60 ms was never all available: 1.47 ms was the hd=48 share (taken) and 3.13 ms the hd=24/T=1024 share, **refuted** (A14). Remaining: the flag is opt-in, which is B6, not a kernel problem | closed → B6 |
 | **C3** | attention T=1024 / hd=24 | 15.6 ms/sample, ~31% of the attention suite, at 1.21× | Needs a gather that beats the mma kernel at T=1024. The padding is structural to the MMA fragment layout, not a missing optimization, and the 8-byte loader is refuted (A14) | new kernel, no design |
 | **C4** | int4 attention | zero gain today | V is int8 and the MMA is the int8 path in every arm (A3). Nothing to win until there is a real int4 datapath | design |
-| **C5** | GN-stats epilogue, Stage C | — | Needs a reduction that wins on `768×4×4` (still 1.54×) rather than only in the weighted average — a real epilogue pays this on top of its existing work, not instead of a separate launch | measurement |
+| **C5** | GN-stats epilogue, Stage C | — | **The bar moved against it on 2026-08-16 and it is now decisively negative.** Stage C folds the GN stats into the conv epilogue to remove a separate launch, and was measured at **0.96×** — "mechanism viable, margin is not". That ratio was against the GN kernel as shipped. C1 then made that kernel **1.91–2.03× faster**, including **2.23× on the `768×4×4` shape this item names as its gate**. The launch the epilogue would remove is now worth about half what it was, so the same mechanism scores ~0.5×. Nothing needs measuring to reject it | **closed** as refuted — reopen only if the epilogue's own reduction can beat `fast_reduce`, not the generic path |
 | **C6** | weight zero point (fix #4) | **1.58×** end-to-end, weight-only | per-output-pixel windowed reduction epilogue | B11 |
 | **C7** | MoDiff warm-up | +663 ms (W8A8) / +615 ms (W4A4) per **cold sample** = 4–5% at 200 steps, **17–20% at 50** | `_forward_first_step` runs 5 convs where a steady step runs 1. Every quality harness pays it 70× because a stale `a_hat` cache produces NaN latents and it must reset | design |
 | ~~**C8**~~ | ~~70 orphaned int4 wrappers~~ | ~~114 MiB~~ | **STALE WHEN FILED — already reclaimed.** The object-identity dedup landed 2026-08-13 (`int4_optimized.py:1885`, "DEDUPLICATED BY OBJECT IDENTITY (`_memo`), added 2026-08-13 to fix a 114 MiB leak"). The 114 MiB is what the fix *saved*, measured after the fact, not a debt outstanding | closed |
