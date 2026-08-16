@@ -226,8 +226,31 @@ the set each one needs *before* the first GPU second is spent. Install under the
    directory needs a completeness check, not just a file count), and the equal-N comparison was salvaged
    with **hard links**, which cost no quota. FID artifacts now on disk: ~23 GB across `/workspace/fid*`.
 
-5. **A weight-side method for W4A4.** No candidate has landed. This is what gates W4A4 being usable at
-   all — the kernels are already there (3.83× median per conv). Follows from A9.
+5. **A weight-side method for W4A4** — **there is a candidate, its inputs are on disk, and it does not
+   need C6.** Filed as "no candidate has landed"; the pieces are all present:
+
+   * **`/workspace/quant_models/church_w4a8_ckpt.pth` (2.36 GB) is on disk**, as is
+     `/workspace/cali_data/church.pt`. `paper_repro_2026-08-12` recorded both as *"turned out to be
+     obtainable"* and downloaded them — after the run that used `--skip_weight_recon` (RTN) *because the
+     checkpoint was not on disk*. Nothing since has used them.
+   * **The 1.58× is AdaRound *plus* a weight zero point**, and the zero point is what needs C6 — the table
+     in `FINDINGS_WEIGHT_ZP` is headed "AdaRound + weight zero point", and `paper_repro` §5 says importing
+     those weights *"needs a per-output-channel weight zero point"*.
+   * **But the same document measured the symmetric fallback**: "AdaRound re-quantised on **our** grid"
+     scores 0.1581 / 0.3235 against qdiff's native 0.1506 / 0.3110 — **a 4–5% loss** to drop the zero
+     point entirely. Against a 1.58× end-to-end prize, that trade looks strongly favourable, and it needs
+     **no CUDA work at all**: load the checkpoint, re-quantise onto the existing symmetric
+     `_int4_weight_scale`, measure.
+
+   **The metric rule to measure it against, now settled by evidence rather than preference:** B4 showed the
+   FID *difference* between two arms is −0.001 across three protocols (10k/10k, 14730/50k, and the 50k
+   anchor) — so relative FID is a stable judge. B3 showed latent relL2 can point the **opposite way** to
+   FID (MSE weight scale: −7.5% relL2, **+5.7% FID**). A11 is itself an instance (deprioritised on
+   ‖W−Q(W)‖). **So: FID differences decide; relL2 screens.** Screening on relL2 is still worth doing first
+   because it is minutes rather than ~25 min/arm — but it cannot be the verdict.
+
+   Eighth item this session filed as missing that was already present. Order: re-quantise → relL2 screen →
+   paired FID verdict → only then consider C6 for the zero point's remaining 4–5%.
 6. **Quality of the qkv-i8 fusion (route b).** **MEASURED 2026-08-16 for the first time — the item was
    misfiled as "needs more seeds" when the truth was "never measured".**
    `quality_route_b_paired.py` reported BIT-IDENTICAL at 3 and 8 seeds and it was **vacuous**: route (b)
