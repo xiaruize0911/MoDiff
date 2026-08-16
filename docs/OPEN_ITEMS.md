@@ -249,8 +249,22 @@ the set each one needs *before* the first GPU second is spent. Install under the
    ‖W−Q(W)‖). **So: FID differences decide; relL2 screens.** Screening on relL2 is still worth doing first
    because it is minutes rather than ~25 min/arm — but it cannot be the verdict.
 
-   Eighth item this session filed as missing that was already present. Order: re-quantise → relL2 screen →
-   paired FID verdict → only then consider C6 for the zero point's remaining 4–5%.
+   **A risk that changes the first step, found 2026-08-16.** The 1.58× comes from
+   `zp_coverage_2026-08-13/scripts/weight_zp_end_to_end.py`, whose own first line says it measures
+   *"with no kernel at all"* — and it does `import act_fake_quant as A`, i.e. it is built on the harness
+   **P4 RETIRED**. P4's record: it *"failed a third self-check"* and *"would have said 'implement' where
+   the truth is negative"*. The script argues its case is different (a weight fake-quant is static where an
+   activation one is not, which is a reasonable argument) but that argument has not been independently
+   checked, and P4's failure mode is exactly the direction this item points.
+
+   So **the first step is not wiring, it is verifying 1.58× without that harness** — which is now possible
+   precisely because the checkpoint is on disk. Load it, re-quantise onto the symmetric grid, and measure
+   the real path. If 1.58× survives, wire it; if it does not, this item closes negative and C6 loses its
+   main motivation with it.
+
+   Eighth item this session filed as missing that was already present. Order: **verify 1.58× on the real
+   kernels** → re-quantise → relL2 screen → paired FID verdict → only then weigh C6 for the zero point's
+   remaining 4–5%.
 6. **Quality of the qkv-i8 fusion (route b).** **MEASURED 2026-08-16 for the first time — the item was
    misfiled as "needs more seeds" when the truth was "never measured".**
    `quality_route_b_paired.py` reported BIT-IDENTICAL at 3 and 8 seeds and it was **vacuous**: route (b)
