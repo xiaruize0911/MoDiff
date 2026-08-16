@@ -34,32 +34,34 @@
 // What the gate requires is that the two sites agree with EACH OTHER, and they do, because they read
 // this function.
 //
-// DEFAULT OFF (2026-08-16), and the reason is that the gate which would validate it cannot currently
-// validate anything. docs/benchmark_5mode_2026-07-20/scripts/gn_modiff_verify_realinput.py is the
-// ZERO-TOLERANCE differential the fused path is verified against. Five runs per arm:
+// DEFAULT OFF (2026-08-16) -- AND THE PREMISE IS REFUTED, so it should stay off.
 //
-//     MODIFF_GN_STATS_FAST=0 (generic, as shipped)   max_code_diff  35, 38, 34, 27, 36   mean 34.0
-//     MODIFF_GN_STATS_FAST=1 (this fast policy)      max_code_diff  81, 42, 30, 23, 35   mean 42.2
+// This policy only affects gn_launch_group_stats' GROUP-MAJOR fallback. The MoDiff path does not take it:
+// gn_launch_group_stats defaults to a CHANMAJOR decomposition (BLK = C/K) and returns before reaching the
+// group-major code. So on the MoDiff arms this flag is inert -- confirmed by a cross-arm output comparison
+// (integration/tests/gn_cross_arm_check.py): byte-identical, 0/40 cases differ.
 //
-// TWO CONCLUSIONS, and the second corrects a first reading of this data taken from n=1 per arm:
+// Forcing the group-major path (MODIFF_GN_STATS_ALT=0) to measure what the policy WOULD buy, summed over
+// this model's real GN shapes:
 //
-//   1. The gate FAILS on the unchanged tree, at 27-38 against a threshold of zero. The reduction change
-//      that was reverted for failing it was reverted at max_code_diff=1. So this path has no working
-//      correctness guarantee right now -- and nobody knew, because the gate had been UNRUNNABLE: its
-//      wrapper missed the x2= the cat2 fold added on 2026-08-13, and it passed 11 arguments to a kernel
-//      that had grown to 18. Both repaired.
-//   2. THIS POLICY IS INDISTINGUISHABLE FROM THE GENERIC ONE ON THAT INSTRUMENT. The first measurement
-//      read 35 vs 81 and looked decisive; at five runs per arm the ranges overlap (27-38 vs 23-81, the 81
-//      an outlier) because the gate is NON-DETERMINISTIC across processes -- it takes a max over the
-//      first 40 fused calls of a LIVE sample, and fp16 sampling here varies ~4-6e-3 between processes, so
-//      the 40 calls see different data every run. A max statistic over varying inputs is exactly what
-//      jumps around.
+//                          batch 8      batch 128 (production)
+//   chanmajor (default)     223.6 us      1050.4 us   <- fastest where it matters
+//   group-major + fast      179.7 us      1060.0 us
+//   group-major + generic   204.2 us      1662.2 us
 //
-// So the gate is evidence AGAINST NEITHER policy, and evidence that it cannot gate. Default stays OFF as
-// a judgement rather than a measurement: this path's only correctness guard is itself broken, and
-// changing the path while that is true is not justified. The prize -- a predicted +7.80/+8.16 ms/step on
-// the MoDiff arms, by analogy with the PTQ family's verified 1.91x/2.03x -- stays UNBANKED until
-// docs/OPEN_ITEMS.md A0 closes. Set MODIFF_GN_STATS_FAST=1 to measure it.
+// THE RANKING INVERTS WITH BATCH, and batch is a first-order variable here: chanmajor's block size is C/K,
+// independent of batch, while group-major's GRID is N*num_groups -- 256 blocks at batch 8 on 84 SMs
+// (occupancy-starved) against 4096 at batch 128. A 1.24x win at batch 8 becomes a 1% loss at 128, and
+// end-to-end agrees: the MoDiff arm measured 73.9 vs 73.2 ms/step, i.e. 0.7 ms/step SLOWER, 3 runs of 3.
+//
+// So chanmajor is already the right decomposition at production batch, and C1's 1.91x does NOT generalise
+// here: C1 sped up the PTQ family, which IS group-major, where fast_reduce genuinely wins at batch 128.
+// The analogy that produced C10's predicted +7.80/+8.16 ms/step compared the wrong two things.
+//
+// Kept because it makes the shared-policy invariant structural (two launchers that must agree bit-for-bit
+// now read one function instead of duplicating a formula), and because the group-major fallback still
+// exists and is still selectable. All three decompositions score max|d| = 1.0 against an fp64
+// reconstruction, i.e. fp16 rounding -- see docs/OPEN_ITEMS.md A0.
 //
 // Read ONCE per process (static local in an inline function -- one instance across translation units):
 // if the two sites could ever observe different values of the flag they would silently diverge, and the
