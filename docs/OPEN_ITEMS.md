@@ -89,10 +89,17 @@ published story they move.
    `report_next` argument itself (a kernel-name counter is blind to this flag): OFF False×27440 / True×0,
    ON True×7280 / False×20160 — so even with only ~26% of calls on the stale path the damage is 5.2×.
 
-   So the 6.7 ms ceiling cannot be bought this way. `MODIFF_DELTA_SAFETY` is the one remaining variable
-   (a stale scale that the delta outgrows clips, and safety is the headroom against exactly that); a sweep
-   is running. Unless a larger margin recovers most of the 460%, Part 3 needs a different way to get a
-   fresh scale into the epilogue, not a cheaper way to tolerate a stale one.
+   **The safety margin does not rescue it, and why it does not is the diagnosis.** Sweeping
+   `MODIFF_DELTA_SAFETY`: 1.15 → +460.9%, 1.5 → +708.4%, 2.5 → +544.0%, all resolved, non-monotone. So
+   the failure is **not clipping** — clipping is the one thing safety exists to prevent, and more headroom
+   does not help. The mechanism is the opposite: the MoDiff residual **shrinks** as *t* decreases, so a
+   scale measured one step earlier is systematically **too coarse** for the delta it is applied to, and a
+   safety multiplier makes it coarser still. Headroom is the wrong medicine for a grid that is already too
+   wide.
+
+   **So the 6.7 ms ceiling cannot be bought this way, and B7's design brief changes:** Part 3 needs a
+   different way to get a *fresh* scale into the epilogue, not a cheaper way to tolerate a stale one.
+   Closed negative.
 8. ~~**The dual-output GEMM's signature.**~~ **ANSWERED 2026-08-16, and the question was already moot.**
    `gemm_w8a8_awq_o_hat_out_i8` takes `inv_out_scale` as a separate `float*` — per column — and the
    scalar `TORCH_CHECK` is on `a_scale`, the delta's activation scale, which is necessarily scalar. The
