@@ -50,7 +50,20 @@ published story they move.
    3–6× step-to-step swing — is dead at both widths. **Consequence: there is no point exporting a
    per-step qdiff delta table**, which had been a candidate work item. Staticness, not constancy, is what
    costs, and there is no better static table to reach for.
-2. **FID for W8A4 + MoDiff** — the one row directly comparable to the paper's table. ~30 min.
+2. ~~**FID for W8A4 + MoDiff**~~ **MEASURED 2026-08-16 — mechanism reproduces, headline claim does not.**
+   10k samples, DDIM 50, the committed protocol: **W8A4 PTQ 311.47 → W8A4 MoDiff 35.30**, an 8.8×
+   improvement recovering 90.9% of the distance to fp16 (7.803). The unmodulated end matches the paper's
+   355.85 in order and verdict.
+
+   But the paper's A4 claim is not "MoDiff helps" — it is that **dropping a bit becomes free**: its 3.97
+   beats its own A8 baseline of 4.24, a ratio of 0.94. The same *internal* comparison on our tree gives
+   **35.30 / 16.37 = 2.16** — dropping the activation bit costs 2.16× where the paper reports it saving
+   6%. Both ratios are within-protocol, so the 10k-vs-50k bias largely cancels and cannot explain it.
+
+   **35.30 must not be divided by 3.97.** Ours is 10k, the paper's is 50k and 10k is biased upward — our
+   fp16 reads 7.803 where LDM's published churches figure is ~4, and the paper's A8 baseline (4.24) is
+   *better than our fp16*, which is the tell. That division is the same class of unit error as A16.
+   → [FINDINGS_W8A4_FID](gn_fast_reduce_2026-08-16/FINDINGS_W8A4_FID.md)
 3. **FID for W4A4 + MoDiff with the new weight scale** — −7.5% relL2 at a point where the relL2→FID curve
    is very steep; the effect on FID is unknown and could be either sign.
 4. **FID at 50k**, for publication-grade absolute numbers. ~1.5 h/mode, and 68–78% of that is not the

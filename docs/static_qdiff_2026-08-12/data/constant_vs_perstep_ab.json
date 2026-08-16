@@ -20,41 +20,41 @@
  },
  "results": {
   "int4/qdiff_constant": {
-   "mean": 1.0433436632156372,
+   "mean": 0.31222090125083923,
    "relL2": [
-    1.0325003862380981,
-    1.0291424989700317,
-    1.0683881044387817
+    0.32481175661087036,
+    0.3040304183959961,
+    0.30782052874565125
    ],
    "table": "integration/calibration/int4_delta_qdiff.pt",
    "layers": 70
   },
   "int4/native_per-step": {
-   "mean": 14.378923734029135,
+   "mean": 0.32371829946835834,
    "relL2": [
-    14.483016014099121,
-    14.004829406738281,
-    14.64892578125
+    0.3357119560241699,
+    0.3093191087245941,
+    0.32612383365631104
    ],
    "table": "integration/calibration/int4_delta_calibration.pt",
    "layers": 70
   },
   "int8/qdiff_constant": {
-   "mean": 0.05263246471683184,
+   "mean": 0.04945813864469528,
    "relL2": [
-    0.03789752349257469,
-    0.07084736227989197,
-    0.04915250837802887
+    0.03744318336248398,
+    0.06380351632833481,
+    0.04712771624326706
    ],
    "table": "integration/calibration/int8_delta_qdiff.pt",
    "layers": 70
   },
   "int8/native_per-step": {
-   "mean": 0.053430293376247086,
+   "mean": 0.053281730661789574,
    "relL2": [
-    0.044897742569446564,
-    0.08702971041202545,
-    0.02836342714726925
+    0.04273659363389015,
+    0.088319793343544,
+    0.02878880500793457
    ],
    "table": "integration/calibration/int8_delta_calibration.pt",
    "layers": 70
@@ -62,20 +62,20 @@
  },
  "verdict": {
   "int8": {
-   "qdiff_constant": 0.05263246471683184,
-   "native_per_step": 0.053430293376247086,
+   "qdiff_constant": 0.04945813864469528,
+   "native_per_step": 0.053281730661789574,
    "dynamic": 0.0611,
    "ptq": 0.1138,
-   "perstep_over_constant": 1.015158489417276,
-   "perstep_over_dynamic": 0.8744728866816217
+   "perstep_over_constant": 1.0773096627142154,
+   "perstep_over_dynamic": 0.8720414183598948
   },
   "int4": {
-   "qdiff_constant": 1.0433436632156372,
-   "native_per_step": 14.378923734029135,
+   "qdiff_constant": 0.31222090125083923,
+   "native_per_step": 0.32371829946835834,
    "dynamic": 0.3577,
    "ptq": 0.8642,
-   "perstep_over_constant": 13.78157958971311,
-   "perstep_over_dynamic": 40.19827714293859
+   "perstep_over_constant": 1.0368245629022832,
+   "perstep_over_dynamic": 0.9049994393859612
   }
  }
 }
