@@ -16,8 +16,32 @@ Inception feature distributions, so any asymmetry between the two sides is measu
 | FP16 (reference model) | 7.803 | 0.000 | — |
 | W8A8 baseline (MoDiff off) | 16.366 | 6.394 | — |
 | **W8A8 + MoDiff** | **7.802** | **0.175** | **97.3%** |
+| W8A4 baseline (MoDiff off) | 311.453 | 312.530 | — |
+| **W8A4 + MoDiff** — *the paper's configuration* | **35.303** | **18.647** | **94.0%** |
 | W4A4 baseline (MoDiff off) | 277.963 | 277.981 | — |
 | W4A4 + MoDiff | 200.139 | 191.092 | 31.3% |
+
+The W8A4 rows were **added 2026-08-16** — the images had been on disk since 04:36 that morning and the
+FID was never computed, so the paper's own configuration had no row in the table measuring it. Same
+protocol, same 10k reference, same script; `eigh` agrees with pytorch_fid to 1.71e-12.
+
+**Read the last two columns together, because they say different things.** MoDiff removes **94.0%** of
+A4 quantization error — the largest figure in this table, and the paper's method working in the paper's
+configuration. But 35.303 does **not** beat the W8A8 baseline's 16.366, and the strong form of the
+paper's claim (4-bit activations plus MoDiff beating 8-bit PTQ) therefore does not hold on FID, where
+latent relL2 said it did by 1.65×. That reversal is the third of this session and is written up above.
+
+Two further rows, from the CURRENT tree rather than this document's, so they are listed apart rather
+than mixed into the table above:
+
+| mode (current tree, 2026-08-16) | FID vs real | FID vs fp16 |
+|---|---:|---:|
+| W4A4 + MoDiff, MSE weight scale (shipped default) | 181.514 | 171.276 |
+| **W4A4 + MoDiff + AdaRound rounding** | **140.187** | **125.138** |
+
+No "error removed" column for these two: it needs a W4A4 baseline generated from the same tree, and the
+one on disk is this document's (absmax weight scale, 2026-08-05). Quoting 277.981 against them would be
+mixing trees, which is the same mistake that made the B5 arms worth regenerating.
 
 **W8A8 + MoDiff is indistinguishable from the fp16 model** (7.802 vs 7.803) while running 1.36× faster
 end to end. Quantization costs +8.56 FID and MoDiff returns essentially all of it.
