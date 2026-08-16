@@ -308,35 +308,29 @@ the set each one needs *before* the first GPU second is spent. Install under the
       89 conv layers on each side, `model.X` → `model.diffusion_model.X` hits **89/89**, and **0 shape
       mismatches**. So the substitution is a rename, not a matching problem — which is where this kind of
       cross-checkpoint work usually goes wrong silently.
-      **Attempted 2026-08-16 ([b5_adaround_e2e.py](../integration/tests/b5_adaround_e2e.py)) and the
-      non-vacuity counter caught a false result.** Patching `convert_model_to_optimized_int4` and
-      substituting by module name matched **only 2 of 89 convs** — because the UNet handed to that call has
-      already been restructured (FusedResBlock and friends), so `named_modules()` paths no longer match the
-      checkpoint's. The run nonetheless printed a clean-looking **−8.87% ± 1.58%** improvement
-      (ours/AdaRound = 1.099×). **Without the counter I would have reported that as "1.58× does not fully
-      survive, but the direction holds" — and it is an artifact of 2 substituted layers.**
-      **A second attempt moved the injection to `torch.load` (the state_dict, where the verified bijection
-      applies) and the counter caught it again — `n = 0` this time.** It printed an even more persuasive
-      **−17.57% ± 1.44%, ratio 1.214×**: closer to the claimed 1.58× than the first artifact's 1.099×, so it
-      reads as "partial confirmation" and is correspondingly more dangerous. **The two artifacts disagree
-      with each other (−8.87% vs −17.57%), which is itself the tell that both are noise.**
+      **DONE 2026-08-16 — AdaRound wins on the real kernels, but by 1.208×, not 1.58×.**
 
-      **Diagnosis complete: the injection MECHANISM is correct and the bug is in the script.** A minimal
-      test — patch `torch.load`, load `models/ldm/lsun_churches256/model.ckpt` directly, count matches —
-      gives **`patched` entered once, 89/89 keys matched, 89 substituted**. So `torch.load` interception
-      works, the key construction (`model.diffusion_model.<rel>.weight`) is right, and the bijection holds
-      at this point in the pipeline. `load_model` is also confirmed called 3 times with that path as a
-      positional arg.
-      What remains is therefore a specific defect in `b5_adaround_e2e.py`'s control flow — the patch is
-      installed in `arm()` but the count comes back 0, while the same code in isolation returns 89. Likely
-      candidates, in order: the `tally` dict identity across the closure, `H.build`'s import/caching of
-      `benchmark_ldm`, or `install()` being shadowed by the `finally` restore. **This is now a ten-line
-      debugging task with a known-good reference implementation, not an open question about AdaRound.**
+      | arm | mean relL2 vs fp16 (4 seeds) |
+      |---|--:|
+      | ours (RTN + MSE scale) | 0.4699 |
+      | **AdaRound → our symmetric grid** | **0.3889** |
+      | paired per-seed diff | **−17.15% ± 1.77% (SEM)** — resolved |
+      | ratio ours/AdaRound | **1.208×** |
 
-      **Recorded warning for whoever continues: this measurement produces plausible numbers when it is
-      broken.** Both artifacts were paired, multi-seed, tight-SEM and consistent with the prior. Neither was
-      caught by inspection; both were caught by the substitution counter. Do not remove that counter, and do
-      not trust a run whose count is not exactly 0 / 89.
+      Non-vacuity **PASS**: 89 convs substituted in the AdaRound arm, 0 in the baseline. **So the candidate
+      is real, it does not need C6** (this is measured *after* dropping the zero point onto our symmetric
+      grid), and the retired fake-quant harness **overstated the prize by 31%** — 1.58× against a true
+      1.208×. P4's warning about that instrument was directionally right without being right about the sign.
+
+      **A correction I have to make about my own instrument.** Two earlier runs were written up as
+      artifacts caught by the counter. Only the first was: it substituted 2/89 by matching post-conversion
+      module names. **The second was a real result that my counter wrongly rejected** — the VAE's
+      first-stage checkpoint is *also* named `model.ckpt`, so `tally["n"] = n` let its 0 overwrite the
+      UNet's 89, reporting 0/89 for a run that had substituted all 89. Its −17.57% / 1.214× reproduces as
+      −17.15% / 1.208× here. **The counter written to catch false positives produced a false negative
+      instead**, and the fix is `+=` rather than `=`. The lesson is narrower than "counters are good": a
+      counter is itself an instrument and needs the same scepticism as the thing it guards.
+
    4. Only if it survives: paired FID verdict (per the metric rule above), then weigh C6 for the zero
       point's remaining 4–5%.
 

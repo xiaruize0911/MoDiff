@@ -99,7 +99,11 @@ def install(weights, tally):
                 if t is not None and tuple(t.shape) == tuple(Wq.shape):
                     d[k] = Wq.to(t.dtype)
                     n += 1
-            tally["n"] = n
+            # ACCUMULATE, never assign. The VAE's first-stage checkpoint is ALSO called model.ckpt
+            # (models/first_stage_models/kl-f8/model.ckpt), so `= n` let its 0 overwrite the UNet's 89 --
+            # and the resulting "0/89" made me discard a REAL result as an artifact. The counter written to
+            # catch false positives produced a false negative instead.
+            tally["n"] += n
         return sd
 
     torch.load = patched
