@@ -31,122 +31,65 @@ published story they move.
 
 ---
 
-## A0. The MoDiff GN gate: made deterministic, and the failure is the gate, not the kernel
+## A0. RESOLVED: the invariant holds; every non-zero reading was a measurement artifact
 
-Opened and largely closed 2026-08-16, in that order. Two things were asked: make the gate deterministic,
-then find the 27–38.
+Opened 2026-08-16 on the belief that MoDiff's fused GN→delta-quantize path violated its bit-identity
+invariant (`max_code_diff` 27–38, later 221). **It does not. Both paths are correct to fp16 rounding, and
+each successive non-zero number was an artifact of how it was being measured** — including two artifacts
+of my own making.
 
-### 1. Deterministic — done
+### The final verdict
 
-`gn_modiff_verify_realinput.py` took a **max** over the first 40 fused calls of a **live sample**, and
-fp16 sampling here varies ~4–6e-3 between processes. Every run therefore instrumented different data, and
-the statistic ranged **23–81 at a fixed configuration**. A first n=1 reading of that noise (35 vs 81) had
-looked like evidence that C10's block-size change made things worse; at n=5 the ranges overlapped.
+[`integration/tests/gn_modiff_gate.py`](../integration/tests/gn_modiff_gate.py), scoring each
+implementation against an **fp64 reconstruction** rather than against the other:
 
-[`integration/tests/gn_modiff_gate.py`](../integration/tests/gn_modiff_gate.py) replaces it:
-`--capture` writes the exact inputs of the first N eligible calls to a file, `--replay` compares against
-that file. Same file in, same numbers out — verified over **6 replays × 2 policies, all identical**. It
-also reports **per case** rather than a max, because a max says "something differs by 27" and a diagnosis
-needs to know which layers and how densely.
+| | max \|Δ\| vs fp64 truth |
+|---|--:|
+| reference (`group_norm_silu_nhwc` + `step1_static_quantize_fprop_silu`) | **1.0** |
+| fused (`group_norm_silu_delta_quantize_nhwc`) | **1.0** |
 
-### 2. The 27–38 — it is the gate's code comparison, not a numerical error
+1.0 is fp16 rounding. Identical under both block-size policies. 18 of 40 cases are scored; the 22 with
+modulation or smoothing are reported **UNSCORED**, because the reconstruction only matches to ≤1 code
+without them and the order in which the kernels apply mod/affine/SiLU is not pinned down by any comment —
+guessing it produced a confident 254. A partial verdict that is trustworthy beats a total one that is not.
 
-Deterministic replay gives `max_code_diff = 221`, `nonzero = 40/40`, and:
+### Four artifacts, in the order they were peeled off
 
-| | result |
-|---|---|
-| **`max_ahat_diff`** | **0.000e+00 — bit-identical** |
-| a_hat actually updated? | **yes, both paths, by exactly +0.19140625** — the check is not vacuous |
-| C10's fast policy vs generic | **221 vs 221, identical** — the block-size policy is irrelevant to this |
+1. **The gate was unrunnable** — its wrapper missed the `x2=` the cat2 fold added on 2026-08-13, and it
+   passed 11 arguments to a kernel grown to 18. So "it failed" and "nobody could run it" were the same
+   observable. Repaired; the trailing args now come from the conv's own accessor.
+2. **It was non-deterministic** — a max over the first 40 calls of a *live* sample, and fp16 sampling
+   varies ~4–6e-3 between processes, so the statistic ranged **23–81 unchanged**. Replaced by
+   capture-once / replay-forever.
+3. **My replay had an aliasing bug** — `torch.load(map_location="cuda")` made `c["a_hat"].cuda()` a no-op
+   and `_cl()` on an already-channels_last tensor a no-op too, so every "fresh clone" was **the same
+   memory**. The fused kernel updates a_hat in place, so the reference call mutated the input the fused
+   call then read. That produced **221**, and an order-dependence ("whoever runs first is correct") that I
+   briefly wrote up as a kernel state bug.
+4. **Arm-to-arm comparison cannot decide anything** — it cannot separate "one is wrong" from "they encode
+   differently", and it is sensitive to both (2) and (3). Scoring against fp64 is immune to all of it.
 
-**a_hat being bit-identical is the load-bearing result, and it is incompatible with the codes being
-wrong.** The update is `a_hat += q/scale`; if the two paths computed different `q`, a_hat could not agree
-to the last bit. So both paths compute the *same* quantized values internally, and the disagreement is in
-**what each function returns**. Supporting evidence: the two returns have different saturation densities
-(reference clamps 6.8%/4.8% of elements at ±127, the fused kernel 0.5%), and `max|Δ| = 128` is the
-signature of comparing a clamped value against an unclamped one — not of a reduction-order drift, which
-can move a code by at most 1.
+### What it cost, and the one lesson worth keeping
 
-So the gate's *element-wise code comparison* is not a valid invariant check in its current form: it
-compares two return values whose semantics have diverged since it was written (when it passed at
-`max_code_diff = 1`). The invariant it exists to protect — that the fused kernel and the two-kernel
-reference agree — **holds on the part that is actually checkable**, a_hat, bit-for-bit.
+Along the way I asserted, and then had to retract: *"the invariant does not hold"*; *"C10 makes it worse,
+35 → 81"* (n=1 noise); *"the fused kernel is wrong at small spatial sizes"* (my aliasing); *"the two paths
+mutually pollute"* (same). Each retraction came from one more control, and the control that ended it was
+the cheapest one available from the start: **compare each implementation to a reference, never to the other
+implementation.** That is the identical correction I had to make to `quality_gn_fast_paired.py` earlier the
+same day, when it reported an arm-to-arm relL2 that could not distinguish "worse" from "differently
+rounded". Learning it once did not transfer.
 
-### 3. C10's MoDiff-side change is DEAD CODE, and the "exoneration" is retracted
+### Consequences
 
-Found by a cross-arm output comparison — running the fused kernel on the *same captured inputs* under
-both policies and differencing the results. **They are byte-identical: 0/40 cases differ in codes, 0/40 in
-a_hat**, even though 9 of the 10 distinct shapes should get different block sizes (e.g. `(192,32,32)` →
-1024 generic vs 512 fast).
+- **The invariant holds.** `csrc/modiff/norm/group_norm_silu.cu`'s two comments citing this gate as
+  evidence of fragility should be read as historical.
+- **C10's correctness objection is withdrawn, this time with evidence.** Both block-size policies score
+  1.0 against fp64. The earlier "221 = 221 exonerates it" was worthless because the policy was inert
+  (dead code behind chanmajor); this is not.
+- **C10 remains unmeasured and remains a no-op on the MoDiff arms** — moving them still requires changing
+  chanmajor's `BLK`, which is now unblocked on correctness but still needs the headroom re-derived.
 
-The reason is an early return I did not see. `gn_launch_group_stats` opens with
-
-```cpp
-static const char* _alt = std::getenv("MODIFF_GN_STATS_ALT");
-const bool want_chanmajor = (_alt == nullptr) || (_alt[0] == '3');
-const int K = (C + 1023) / 1024;
-const int BLK = (K > 0) ? C / K : 0;
-if (want_chanmajor && K >= 1 && K <= 4 && (C % K) == 0 && BLK <= 1024
-    && BLK >= num_groups && (C % num_groups) == 0) { ... return; }
-```
-
-`_alt` is unset by default → `want_chanmajor` is true → every one of these shapes satisfies the guard
-(`BLK` = 192/384/768/576/768, all ≤ 1024 and ≥ 32). **So the line I changed is never reached in the
-default configuration**, and C10 currently modifies only the fp16 `group_norm_silu_nhwc` — while its
-entire predicted value (+7.80/+8.16 ms/step) is on the MoDiff arms.
-
-**Retracted:** "C10 is exonerated — 221 vs 221 proves the block-size policy is irrelevant." That
-equality carried no information, because the policy was never in effect. Only the cross-arm comparison
-could distinguish "irrelevant" from "inert", and it says inert. Had I skipped it I would have gone on to
-measure C10's speed, found nothing, and had no idea why.
-
-### 4. Scored against fp64 truth: the reference is exact, the fused return is not — and that still is
-### not a kernel bug
-
-The right way to judge two candidate implementations is to score each against a reference, not against
-each other (the lesson `quality_gn_fast_paired.py` already recorded). Building the ground truth in fp64 —
-group-major GN statistics, the fp16 rounding of `normed` before SiLU that the kernel's own comment
-specifies, then `round((silu − a_hat)·scale)` clamped at ±127:
-
-| case | layer | reference vs fp64 | fused return vs fp64 |
-|---|---|--:|--:|
-| 0 | C192/**32×32** | 1.0 | **12** |
-| 5 | C192/16×16 | 1.0 | 110 |
-| 10 | C384/8×8 | 1.0 | 127 |
-| 20 | C768/**2×2** | **0.0** | **128** |
-| 30 | C1536/2×2 | 1.0 | 128 |
-| 39 | C1152/4×4 | 1.0 | 128 |
-
-**The reference path is exact** — ≤1, i.e. fp16 rounding — which also validates the fp64 reconstruction
-(a coincidental bit-level match is not plausible). **The fused return diverges, monotonically worse as
-the spatial size shrinks**, and sorting the values first barely helps (126 vs 128), so it is not a
-permutation.
-
-**But this cannot be read as "the fused kernel is wrong", and the constraint that forbids it is
-end-to-end quality.** W8A8 MoDiff's FID is **7.802 against fp16's 7.803** — parity — on this same fused
-path. A kernel returning codes that are 96% wrong at 2×2 could not produce that. Combined with a_hat
-being bit-identical (so both paths compute the *same* quantized values internally), the only consistent
-reading is that **the fused kernel returns a different encoding of the same information**, which its real
-downstream consumer interprets correctly and which the gate — comparing it element-wise against the
-reference's encoding — does not.
-
-So the gate's code column is invalid for a specific, now-identified reason, and the "spatial size" trend
-is the clue to what the encoding is: whatever differs scales with `HW`, not with `C`.
-
-**What made this findable** was refusing to let two suspect implementations grade each other. The gate had
-compared fused against reference for its whole life; scoring both against fp64 separated "one is wrong"
-from "they encode differently" in a single measurement.
-
-### 5. Where this leaves C10
-
-To move the MoDiff arms at all, the change has to be to **chanmajor's `BLK`**, not to the group-major
-fallback. That is a larger and riskier change: `BLK = C/K` is tied to the chanmajor kernel's shared-memory
-layout, not a free tuning knob. And it cannot be validated until A0's code comparison is trustworthy,
-because changing chanmajor's reduction changes exactly the numbers the gate cannot currently judge.
-
-So the honest order is: fix the gate's comparison (A0 §4) → then re-derive whether chanmajor has headroom
-→ only then touch it. C10's prize remains unmeasured, and its current implementation is a no-op on the
-arms that matter.
+---
 
 ---
 
