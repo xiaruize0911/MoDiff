@@ -64,10 +64,37 @@ tensor cores, which require both operands at 4 bits, which is why W8A4 is not a 
 | W8A3 + MoDiff | 7 | 0.383 |
 | W4A4 + MoDiff — our shipped int4 | 15 | 0.444 |
 
-Same activation precision, 3.5× different outcome: the gap is entirely the weights. And W8A4+MoDiff
-(0.127) beats the W8A8 **baseline** (0.238) — the paper's claim in substance, that MoDiff lets you
-drop to 4-bit activations and still beat 8-bit PTQ. So `277.96 → 200.14` is not a failure to
-reproduce the paper; it is a strictly harder configuration the paper never claimed.
+Same activation precision, 3.5× different outcome: the gap is entirely the weights. So
+`277.96 → 200.14` is not a failure to reproduce the paper; it is a strictly harder configuration the
+paper never claimed.
+
+> **THE FID ROW FOR THE PAPER'S CONFIGURATION, MEASURED 2026-08-16 — and it reverses the sentence that
+> used to end this paragraph.** This section previously concluded that W8A4+MoDiff "beats the W8A8
+> **baseline**  — the paper's claim in substance". That was a relL2 comparison (0.1553 vs 0.256). The
+> images had been on disk since 04:36 that morning, 10000 per arm, generated after the warm-up fix; the
+> FID was never computed. It is:
+>
+> | mode | FID vs real |
+> |---|--:|
+> | fp16 | 7.803 |
+> | W8A8 + MoDiff | 7.802 |
+> | **W8A8 PTQ (the baseline in question)** | **16.365** |
+> | W8A4 PTQ | 311.453 |
+> | **W8A4 + MoDiff — the paper's configuration** | **35.303** |
+>
+> **MoDiff works, and works enormously, in the paper's own configuration**: −276.151 FID, −88.67%,
+> 40× paired bootstrap 95% CI [−276.975, −275.028]. A4 PTQ is unusable at 311.5 and MoDiff makes it 35.3.
+>
+> **But it does not beat the W8A8 baseline on FID: 35.303 against 16.365, a 2.16× deficit**, where relL2
+> gave it a 1.65× advantage. THIRD sign reversal between relL2 and FID this session (B3, C7, this), and
+> the most consequential: the first two had relL2 overrating a *change*, this has it overrating the
+> *method*. Per the rule those two established, the FID row is the verdict, so the strong form of the
+> paper's claim — 4-bit activations plus MoDiff beating 8-bit PTQ — **does not hold here**. The weak form
+> does: MoDiff removes 88.67% of A4 quantization error.
+>
+> Anchors recomputed with the same script and the same reference to make the comparison sound: fp16
+> 7.803 and W8A8 PTQ 16.365, reproducing this document's 7.803 / 16.366 to 0.001. `eigh` agrees with
+> pytorch_fid to 4.86e-12.
 
 > **NOTE, 2026-08-06 (docs/act_bits_2026-08-05).** The rows above were produced by abusing
 > `MODIFF_DELTA_CLIP`, which moves only the delta quantizer and leaves the static grid that quantizes
