@@ -225,6 +225,23 @@ def capture(mode, batch, steps, max_sig_per_entry):
     for name, label in (("conv2d", "torch_conv2d_fp16"), ("linear", "torch_linear_fp16"),
                         ("scaled_dot_product_attention", "torch_sdpa_fp16")):
         wrap(F, name, getattr(F, name), label)
+    # torch.cat, added 2026-08-16, because its ABSENCE was a measurement error, not a saving.
+    #
+    # openaimodel._skip_concat takes cat2_channels_last_fp16 only when BOTH halves are fp16 AND
+    # channels_last, and falls back to th.cat otherwise. In the fp16 arm ~3 skip-concats per step take
+    # that fallback; in the quantized arms more layers emit channels_last fp16, so more of them qualify
+    # for the wrapped `mc` kernel. Wrapping only mc.* therefore recorded the quantized arms' concats and
+    # not fp16's, and the `other` suite read fp16 6.10 against int8's 10.11 -- as if quantization had
+    # made concatenation 1.66x MORE expensive. It had not; fp16's were invisible.
+    #
+    # Reproduced identically in two independent captures (2026-08-13 and 2026-08-16), which is what
+    # ruled out a transient capture gap: 4 signatures with differing call counts, same 4 both times,
+    # two of them absent from fp16 altogether. See docs/OPEN_ITEMS.md A15.
+    #
+    # This records every torch.cat in the sampler, not just skip-concats. That is the right default for
+    # an instrument whose job is to account for time: max_sig_per_entry already bounds how many
+    # signatures any one entry point can contribute.
+    wrap(torch, "cat", torch.cat, "torch_cat")
 
     r = B.BenchmarkRunner("configs/latent-diffusion/lsun_churches-ldm-kl-8.yaml",
                           "models/ldm/lsun_churches256/model.ckpt",
