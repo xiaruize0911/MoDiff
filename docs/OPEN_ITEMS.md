@@ -304,6 +304,14 @@ the set each one needs *before* the first GPU second is spent. Install under the
    2. ~~Re-quantise `W_q` onto the existing **symmetric** `_int4_weight_scale`.~~ done — costs +6.8%.
    3. Load both that and the current RTN+MSE weights into the real `OptimizedInt4Conv2d` and measure
       end-to-end latent relL2 against fp16 — **this is the number that either confirms or kills 1.58×**.
+      **Its main unknown is now removed (2026-08-16): the layer-name mapping is a clean bijection.**
+      89 conv layers on each side, `model.X` → `model.diffusion_model.X` hits **89/89**, and **0 shape
+      mismatches**. So the substitution is a rename, not a matching problem — which is where this kind of
+      cross-checkpoint work usually goes wrong silently.
+      Remaining mechanics: `BenchmarkRunner._setup_model(mode)` loads and converts in one call, so the
+      substitution needs a hook between the fp16 `state_dict` load and `convert_model_to_optimized_int4`.
+      Replacing the fp weight *before* conversion is what makes the conversion itself do the
+      re-quantisation onto our MSE grid — i.e. step 2 comes free rather than needing to be reimplemented.
    4. Only if it survives: paired FID verdict (per the metric rule above), then weigh C6 for the zero
       point's remaining 4–5%.
 
