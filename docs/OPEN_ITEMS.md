@@ -198,8 +198,31 @@ the set each one needs *before* the first GPU second is spent. Install under the
    an explicit ruling on which metric is authoritative — that is exactly the choice this item exists to
    expose; and W4A4 is unusable at either setting (FID ~171–181 against fp16's 7.8), so the value of the
    finding is what it implies for metric selection elsewhere, not for this arm's shipping default.
-4. **FID at 50k**, for publication-grade absolute numbers. ~1.5 h/mode, and 68–78% of that is not the
-   UNet. [FID_50K_ESTIMATE](bench_report_2026-08-13_postzp/FID_50K_ESTIMATE.md)
+4. **FID at 50k** — **fp16 done 2026-08-16, and it produced the project's first external anchor.**
+   50k real reference built (5.0 GB, one-off) and fp16 generated at 50k:
+
+   | | FID |
+   |---|--:|
+   | ours, 10k | 7.803 |
+   | **ours, 50k** | **5.804** |
+   | LDM's published LSUN-churches | ~4.02 |
+
+   **Two separate findings.** The 10k upward bias is **1.344×** — so every 10k number in this repo reads
+   ~34% high, and the *relative* conclusions (B2's 2.16-vs-0.94, B3's +5.70% ± 0.28) survive if that
+   factor is common across modes. **But 50k is still 1.44× the published figure**, which is not a sample-
+   count effect and points at a difference already on the record: `paper_repro_2026-08-12` lists **EMA
+   weights** as one of four deviations ("integration's loader never swaps EMA") — an unfixed gap that
+   degrades FID in exactly this direction. DDIM 50 steps versus whatever the published number used is the
+   other candidate.
+
+   **"The bias is a common factor" is currently an inference from one mode.** `int8_modiff` is generating
+   at 50k to test it, chosen because **W8A8+MoDiff reaching fp16 parity (7.802 vs 7.803) is this
+   project's headline claim** and it has only ever been checked at the biased N. If 50k also shows parity
+   against fp16's 5.804, the claim holds at the standard protocol; if it does not, the parity was a 10k
+   artifact.
+
+   Remaining after that: 3 modes × ~1.5 h if the factor turns out **not** to be common. If it is, they are
+   unnecessary and ~4.5 h of machine time is saved — which is why the two-mode probe came first.
 5. **A weight-side method for W4A4.** No candidate has landed. This is what gates W4A4 being usable at
    all — the kernels are already there (3.83× median per conv). Follows from A9.
 6. **Quality of the qkv-i8 fusion (route b).** **MEASURED 2026-08-16 for the first time — the item was
