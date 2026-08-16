@@ -32,7 +32,8 @@ published story they move.
 | **A6** **[2026-08-16]** | int4 attention's one real win, T=256 at 1.66× | Both contributing records carry `stability: NOISY` | **fixed** (flagged in the table) |
 | **A15** **[2026-08-16]** | `other` compared arm-to-arm | fp16 is missing two `cat2_channels_last_fp16` signatures the quantized arms both have (2.64 + 0.34 ms) and captured 5 calls where int8 captured 10 on `[128,384,16,16]²`. So `other` is not a clean comparison even after A1 | **open** — capture-coverage asymmetry, needs a GPU re-capture |
 | **A7** | MoDiff's temporal machinery costs 2.8% (W8A8) / 1.1% (W4A4) | Arm **order** alone moves W4A4 MoDiff by 28% and PTQ by 7–9%, and both committed values are second-arm values ([FINDINGS_NOISE_FLOOR](zp_coverage_2026-08-13/FINDINGS_NOISE_FLOOR.md)) | **open** — not resolvable on this axis; read 1–3% as "roughly free", not as a figure |
-| **A8** | the GroupNorm+SiLU family should track precision | 1.15× at W8A8 and **1.13× at W4A4** — slightly *slower* with fewer bits, while growing to 32.2% of the run | **open**, unexplained |
+| **A8** **[2026-08-16]** | the GroupNorm+SiLU family is 32.2% of the W4A4 run at 1.13×, and C1 said "no design has landed" | **Not a traffic bound and the design was already in the tree.** The family runs at 10–65% of the A40's 696 GB/s, and `..._fast` — the same entry point with `fast_reduce=true` — is 1.12–5.65× faster on the *identical* shapes. The attention paths had called it since it was written; `fused_resblock.py` named the plain entry point directly, and that is where 62 of the 83 GN calls/step are. **Fixed: +6.65 ms/step at W8A8, +7.24 at W4A4**, measured paired against predictions of 6.91/7.56 | **fixed** → [gn_fast_reduce_2026-08-16](gn_fast_reduce_2026-08-16/FINDINGS.md) |
+| **A16** **[2026-08-16]** | `ms/sample` in the suite tables, next to an e2e table using the same label | Two different units. The suites' `calls_per_sample` counts calls over the **5-step capture window** (`capture_steps=5`), so their `ms/sample` is ≈5× ms/step for the whole batch; the e2e table's `ms/sample` is per **image** (batch time ÷ 128). fp16 reads 488.31 in one and 160.9 in the other. Every *ratio* is unaffected — they are within-unit — but any attempt to combine the two, e.g. "attention is 63/161 = 39% of the run" (it is 12.3%), is wrong | **open** — relabel to ms/step, which makes the suites and the profile buckets directly checkable |
 | **A9** | MoDiff is the quality answer | True at W8A8 (97.3% of the quantization error removed, FID 7.802 vs fp16's 7.803). At W4A4 it removes **31.3%** and FID is 200.1 vs PTQ's 278.0 — the dominant error is in the **weights**, which an activation method cannot reach ([fid_2026-08-05](fid_2026-08-05/FINDINGS.md)) | **diagnosed**, not fixed → B5 |
 | **A10** | fix #2 (activation zero point) is a quality lever | Reversed twice, closed **negative**: 1.06× ceiling against a 1.15× bar. The obstacle is per-output-**pixel** zero padding, unfoldable into a per-channel bias ([zp_coverage](zp_coverage_2026-08-13/FINDINGS.md)) | **closed** |
 | **A11** | fix #4 (weight zero point / AdaRound) was deprioritised | Deprioritised on ‖W−Q(W)‖, the one metric AdaRound is willing to lose. On conv output error it wins 1.35×; end to end, weight-only, **1.58×** ([FINDINGS_WEIGHT_ZP](zp_coverage_2026-08-13/FINDINGS_WEIGHT_ZP.md)) | **open** — reprioritise, → C6 |
@@ -61,9 +62,12 @@ published story they move.
    delta scale must either come from a previous step's `report_next` or be accepted one step stale, and
    the relL2 cost of stale is unmeasured. Ceiling 6.7 ms, and it only pays at A8/A7 — at A4 the
    projections are already a 0.976×/1.014× proposition.
-8. **The dual-output GEMM's signature.** Whether `gemm_w8a8_awq_o_hat_out_i8` accepts a per-column out
-   scale or only the scalar `a_scale` its `TORCH_CHECK`s mention. This decides whether C2 is wiring or a
-   kernel change, and it is the next thing to read.
+8. ~~**The dual-output GEMM's signature.**~~ **ANSWERED 2026-08-16, and the question was already moot.**
+   `gemm_w8a8_awq_o_hat_out_i8` takes `inv_out_scale` as a separate `float*` — per column — and the
+   scalar `TORCH_CHECK` is on `a_scale`, the delta's activation scale, which is necessarily scalar. The
+   kernel indexes it per column throughout (`s00 = a_scale * w_scale[gc0] * inv_out_scale[gc0]`,
+   `gemm_wxax.cu:328`). It is also not the blocker it was filed as: this item was carried from
+   2026-08-11's "zero call sites", and the 2026-08-12 `aq_fusion` session wired it — see C2.
 9. **Per-layer profile coverage gap, 12–36%.** Closing it needs the ResBlock's own `forward` timed as a
    residual bucket.
 10. **The PTQ attn/proj split** — needs `_flash_proj_qout` instrumented to separate the projection GEMM
@@ -78,8 +82,8 @@ published story they move.
 
 | # | target | size | lever | blocked on |
 |---|---|--:|---|---|
-| **C1** | GroupNorm+SiLU family | **32.2% of W4A4 at 1.13×** | The next real lever, and the ceiling has moved to it: at W4A4 the matmuls are 39.9%, so even a *free* conv only takes 57.85 → 34.8 ms/step | no design has landed |
-| **C2** | the `aq_*` trio | **~4.60 ms** + part of the elementwise bucket | `gemm_w8a8_awq_o_hat_out_i8` → reshape (free — the qkv weight is already stored `(nh,3,hd)`) → `flash_attn_int8_packed_vt`; the three scales express as one 3C-long per-column vector | B8 only. **No CUTLASS work.** Largest actionable item |
+| ~~**C1**~~ | ~~GroupNorm+SiLU family~~ | ~~32.2% at 1.13×~~ | **DONE 2026-08-16.** Not a roofline bound and the design was in the tree: `..._fast` (`fast_reduce=true`) was reachable from attention but not from `fused_resblock.py`, which owns 62 of 83 GN calls/step. **+6.65 ms/step W8A8, +7.24 W4A4** | closed → [gn_fast_reduce_2026-08-16](gn_fast_reduce_2026-08-16/FINDINGS.md) |
+| ~~**C2**~~ | ~~the `aq_*` trio~~ | ~~4.60 ms~~ | **STALE WHEN FILED — this landed 2026-08-12.** Route (b) is wired (`quantized_std_attention.py:1050`) behind `MODIFF_FUSE_QKV_I8`, worth **+0.79 ms/step** on the 10 hd=48 blocks. The 4.60 ms was never all available: 1.47 ms was the hd=48 share (taken) and 3.13 ms the hd=24/T=1024 share, **refuted** (A14). Remaining: the flag is opt-in, which is B6, not a kernel problem | closed → B6 |
 | **C3** | attention T=1024 / hd=24 | 15.6 ms/sample, ~31% of the attention suite, at 1.21× | Needs a gather that beats the mma kernel at T=1024. The padding is structural to the MMA fragment layout, not a missing optimization, and the 8-byte loader is refuted (A14) | new kernel, no design |
 | **C4** | int4 attention | zero gain today | V is int8 and the MMA is the int8 path in every arm (A3). Nothing to win until there is a real int4 datapath | design |
 | **C5** | GN-stats epilogue, Stage C | — | Needs a reduction that wins on `768×4×4` (still 1.54×) rather than only in the weighted average — a real epilogue pays this on top of its existing work, not instead of a separate launch | measurement |

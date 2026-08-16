@@ -196,12 +196,22 @@ def main():
     # ---- 1. suite totals -----------------------------------------------------------------------
     o.append("## 1. Suite totals (ms/sample)")
     o.append("")
+    cs = d.get("capture_steps") or 1
+    o.append(f"> **The unit is not the e2e table's unit.** `calls_per_sample` counts calls over the "
+             f"capture window, which is **{cs} steps** of the whole batch (`capture_steps={cs}`), so "
+             f"`ms/sample` here is ~{cs}x a ms/step for batch 128. REPORT.md section 1's `ms/sample` is "
+             f"per **image** (batch time / 128). fp16 is 488.31 in this table and 160.9 in that one and "
+             f"both are right. Every ratio below is within one unit and so unaffected, but the two "
+             f"columns must not be combined -- 63.34/160.9 would read attention as 39% of the run when "
+             f"the profile says 12.3%. The `ms/step` column is the one to compare with REPORT.md "
+             f"section 1 and section 1a.")
+    o.append("")
     o.append("Totals as captured, with `fused_gn_qkv` routed to `linear` (see below). **The `speedup` "
              "columns are printed so they can be dismissed** — not one of them is a speedup. Read §2 and "
              "REPORT.md §1a instead; the paragraphs after the table say why.")
     o.append("")
-    o.append("| suite | fp16 | int8 | int4 | fp16/int8 | fp16/int4 | is this a speedup? |")
-    o.append("|---|--:|--:|--:|--:|--:|---|")
+    o.append("| suite | fp16 | int8 | int4 | fp16 ms/step | fp16/int8 | fp16/int4 | is this a speedup? |")
+    o.append("|---|--:|--:|--:|--:|--:|--:|---|")
     tot = {}
     NOTE = {
         "attention": "**yes** — same work, same suite, all three arms",
@@ -215,10 +225,12 @@ def main():
         v = {lab: sum(ms_per_sample(r) for r in suite_recs(d, key, suite)) for key, lab in ARMS}
         tot[suite] = v
         o.append(f"| {suite} | {v['fp16']:.2f} | {v['int8']:.2f} | {v['int4']:.2f} | "
+                 f"{v['fp16'] / cs:.2f} | "
                  f"{v['fp16'] / v['int8']:.2f}× | {v['fp16'] / v['int4']:.2f}× | {NOTE[suite]} |")
     allsum = {lab: sum(tot[s][lab] for s in tot) for _, lab in ARMS}
     o.append(f"| **all five** | **{allsum['fp16']:.2f}** | **{allsum['int8']:.2f}** | "
-             f"**{allsum['int4']:.2f}** | **{allsum['fp16'] / allsum['int8']:.2f}×** | "
+             f"**{allsum['int4']:.2f}** | **{allsum['fp16'] / cs:.2f}** | "
+             f"**{allsum['fp16'] / allsum['int8']:.2f}×** | "
              f"**{allsum['fp16'] / allsum['int4']:.2f}×** | **no** — see the third paragraph |")
     o.append("")
     gn = {lab: sum(ms_per_sample(r) for r in suite_recs(d, key, "linear") if is_gn_qkv(r))

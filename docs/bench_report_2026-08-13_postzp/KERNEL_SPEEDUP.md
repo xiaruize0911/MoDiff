@@ -4,16 +4,18 @@
 
 ## 1. Suite totals (ms/sample)
 
+> **The unit is not the e2e table's unit.** `calls_per_sample` counts calls over the capture window, which is **5 steps** of the whole batch (`capture_steps=5`), so `ms/sample` here is ~5x a ms/step for batch 128. REPORT.md section 1's `ms/sample` is per **image** (batch time / 128). fp16 is 488.31 in this table and 160.9 in that one and both are right. Every ratio below is within one unit and so unaffected, but the two columns must not be combined -- 63.34/160.9 would read attention as 39% of the run when the profile says 12.3%. The `ms/step` column is the one to compare with REPORT.md section 1 and section 1a.
+
 Totals as captured, with `fused_gn_qkv` routed to `linear` (see below). **The `speedup` columns are printed so they can be dismissed** — not one of them is a speedup. Read §2 and REPORT.md §1a instead; the paragraphs after the table say why.
 
-| suite | fp16 | int8 | int4 | fp16/int8 | fp16/int4 | is this a speedup? |
-|---|--:|--:|--:|--:|--:|---|
-| attention | 63.34 | 51.08 | 50.01 | 1.24× | 1.27× | **yes** — same work, same suite, all three arms |
-| conv | 265.72 | 149.09 | 85.59 | 1.78× | 3.10× | **yes** — 33/33 records matched three ways, nothing moves in or out |
-| linear | 60.92 | 47.15 | 43.45 | 1.29× | 1.40× | **no** — holds fp16's fused GroupNorm, whose quantized counterpart is in `norm_quantize` |
-| norm_quantize | 92.23 | 143.35 | 144.44 | 0.64× | 0.64× | **no** — the mirror of `linear`; also absorbs quantize launches that replace work the fp16 arm pays as separate elementwise kernels |
-| other | 6.10 | 10.11 | 10.11 | 0.60× | 0.60× | **no** — `cat2` capture coverage differs between arms (see below) |
-| **all five** | **488.31** | **400.78** | **333.61** | **1.22×** | **1.46×** | **no** — see the third paragraph |
+| suite | fp16 | int8 | int4 | fp16 ms/step | fp16/int8 | fp16/int4 | is this a speedup? |
+|---|--:|--:|--:|--:|--:|--:|---|
+| attention | 63.34 | 51.08 | 50.01 | 12.67 | 1.24× | 1.27× | **yes** — same work, same suite, all three arms |
+| conv | 265.72 | 149.09 | 85.59 | 53.14 | 1.78× | 3.10× | **yes** — 33/33 records matched three ways, nothing moves in or out |
+| linear | 60.92 | 47.15 | 43.45 | 12.18 | 1.29× | 1.40× | **no** — holds fp16's fused GroupNorm, whose quantized counterpart is in `norm_quantize` |
+| norm_quantize | 92.23 | 143.35 | 144.44 | 18.45 | 0.64× | 0.64× | **no** — the mirror of `linear`; also absorbs quantize launches that replace work the fp16 arm pays as separate elementwise kernels |
+| other | 6.10 | 10.11 | 10.11 | 1.22 | 0.60× | 0.60× | **no** — `cat2` capture coverage differs between arms (see below) |
+| **all five** | **488.31** | **400.78** | **333.61** | **97.66** | **1.22×** | **1.46×** | **no** — see the third paragraph |
 
 **Where fp16's qkv projections live.** fp16 runs the T=1024 and T=256 qkv through `fused_gn_qkv` — one kernel doing GroupNorm and the projection — worth **31.96 ms/sample**. The gate is `T % 128 == 0 and c % 8 == 0`, which is why the T=64/16/4 qkv is an ordinary `torch_linear_fp16` in this same suite. The quantized arms have no fused counterpart at all — they split the same work into a `group_norm_silu_quantize_nhwc` in `norm_quantize` plus an AWQ GEMM here. Until 2026-08-16 the capture's `suite_of()` matched name keywords and `fused_gn_qkv` contains none of them, so these two records sat in `other` — and this table published `linear` at 0.61×, `other` at 3.77× and a `conv + linear` row claiming the two cancel. They do not: the move is `other` → `linear`, and it never touched conv at all.
 

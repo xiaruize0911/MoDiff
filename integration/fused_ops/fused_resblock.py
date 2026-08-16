@@ -88,6 +88,28 @@ try:
     HAS_GN_SILU_QUANTIZE_PACK = hasattr(modiff_cutlass, "group_norm_silu_quantize_pack_nhwc")
     HAS_GN_SILU_QUANTIZE_PACK_ZP = hasattr(modiff_cutlass,
                                            "group_norm_silu_quantize_pack_nhwc_zp")
+    # GN FAST-REDUCE (default ON, 2026-08-16). `..._fast` is the SAME entry point with
+    # fast_reduce=true: 128-512 threads and a pair-major pass 1 instead of the generic heuristic's
+    # up-to-1024. Identical signature, identical math, different reduction ORDER.
+    #
+    # The attention paths have taken it since it was written; this file did not, and this file owns the
+    # bulk of the GN time -- so the family sat at 10-65% of the A40's 696 GB/s while the fix was in the
+    # tree. Measured over the captured ResBlock shapes at their real call counts
+    # (docs/gn_fast_reduce_2026-08-16): int8 14.51 -> 7.60 ms/step (1.91x), int4 14.93 -> 7.37 (2.03x).
+    #
+    # Numerics: a different fp32 reduction order moves the mean/inv_std in the last bits, so a value
+    # sitting exactly on a code boundary can land either side. Measured at <=1 code on <=1.6e-5% of
+    # elements across all 16 shapes, both precisions, with production modulation. Not bit-identical,
+    # and the flag exists so that is falsifiable rather than asserted.
+    # Read at CALL time, not import time, so an in-process A/B can flip it between arms -- the same
+    # reason _updown_fuse_refresh() below is a function and not a constant.
+    def _gnq(name):
+        """The fast entry point when it exists and is enabled, else the one this file always used."""
+        if os.environ.get("MODIFF_GN_FAST", "1") == "1":
+            f = getattr(modiff_cutlass, name + "_fast", None)
+            if f is not None:
+                return f
+        return getattr(modiff_cutlass, name)
     # MoDiff GN->delta-quantize fusion (default ON): fuse GroupNorm(+mod)+SiLU into
     # the delta-quantize + a_hat update, replacing the standalone GN kernel + separate
     # step1 pass and removing the intermediate fp16 `normed` round-trip. Bit-identical
@@ -142,6 +164,9 @@ try:
     HAS_AVGPOOL_QUANTIZE_PACK = hasattr(modiff_cutlass, "avgpool2x_quantize_pack_noahat_fprop")
 except ImportError:
     modiff_cutlass = None
+
+    def _gnq(name):                     # every native path is gated on native_ok/HAS_*, so unreachable
+        raise RuntimeError("modiff_cutlass is not importable")
     HAS_GN_SILU_DELTA_QUANTIZE_RESIZE = False
     HAS_NATIVE_GN_SILU = False
     HAS_GN_SILU_QUANTIZE = False
@@ -475,10 +500,10 @@ def _prequant_gn_conv(x, gn, conv, mod_scale=None, mod_shift=None, residual=None
                 raise RuntimeError(
                     "conv has a non-zero activation zero point but modiff_cutlass lacks "
                     "group_norm_silu_quantize_pack_nhwc_zp -- rebuild the extension")
-            packed = modiff_cutlass.group_norm_silu_quantize_pack_nhwc_zp(
+            packed = _gnq("group_norm_silu_quantize_pack_nhwc_zp")(
                 x, w, b, ng, eps, True, scale, smooth_inv, ms2d, sh2d, 0, zp)
         elif native_ok:
-            packed = modiff_cutlass.group_norm_silu_quantize_pack_nhwc(
+            packed = _gnq("group_norm_silu_quantize_pack_nhwc")(
                 x, w, b, ng, eps, True, scale, smooth_inv, ms2d, sh2d)
         else:
             # The non-native fallback now honours z too (scale_quantize_and_pack_zp, 2026-08-13), so
@@ -496,7 +521,7 @@ def _prequant_gn_conv(x, gn, conv, mod_scale=None, mod_shift=None, residual=None
         return conv.forward_from_int4(packed, h_in, w_in, residual=residual)
     else:
         if native_ok:
-            q = modiff_cutlass.group_norm_silu_quantize_nhwc(
+            q = _gnq("group_norm_silu_quantize_nhwc")(
                 x, w, b, ng, eps, True, scale, smooth_inv, ms2d, sh2d)
         else:
             q = modiff_cutlass.scale_quantize_int8(

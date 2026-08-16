@@ -1,0 +1,38 @@
+{
+ "mode": "int8_baseline",
+ "batch": 128,
+ "steps": 100,
+ "gpu": "NVIDIA A40",
+ "on_ms": [
+  64.9501806640625,
+  64.6690869140625,
+  64.8298876953125
+ ],
+ "off_ms": [
+  71.655849609375,
+  71.2937841796875,
+  71.47513671875
+ ],
+ "on_median": 64.8298876953125,
+ "off_median": 71.47513671875,
+ "paired_deltas": [
+  6.705668945312496,
+  6.624697265625002,
+  6.645249023437501
+ ],
+ "delta_median": 6.645249023437501,
+ "prediction": 6.907,
+ "counts_pass": true,
+ "counts": {
+  "on": {
+   "group_norm_silu_quantize_nhwc": 0.0,
+   "group_norm_silu_quantize_nhwc_fast": 83.0
+  },
+  "off": {
+   "group_norm_silu_quantize_nhwc": 62.0,
+   "group_norm_silu_quantize_nhwc_fast": 21.0
+  },
+  "expected_plain_off": 62.0,
+  "expected_fast_any": 21.0
+ }
+}
