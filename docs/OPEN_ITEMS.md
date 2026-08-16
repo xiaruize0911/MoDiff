@@ -71,10 +71,28 @@ published story they move.
    **Still open, but only as a decision:** flipping the default on an unresolved measurement would
    contradict the bar this project set for itself in `aq_fusion_2026-08-12`. Resolving it needs ~30
    seeds (stdev 3.5%, so 2×SEM < 1.5% wants n ≈ 22+). Left flag-gated pending that.
-7. **Part 3, the a_hat-aware flash qout epilogue: the first gate is a numerics decision, not code.** The
-   delta scale must either come from a previous step's `report_next` or be accepted one step stale, and
-   the relL2 cost of stale is unmeasured. Ceiling 6.7 ms, and it only pays at A8/A7 — at A4 the
-   projections are already a 0.976×/1.014× proposition.
+7. ~~**Part 3, the a_hat-aware flash qout epilogue: the first gate is a numerics decision.**~~
+   **ANSWERED 2026-08-16, and the answer is NO.** The gate was never unmeasurable — `MODIFF_DELTA_REPORT`
+   (default 0) already selects exactly the scheme in question: report-on quantizes with the pair currently
+   in force while publishing the next, so a step uses a scale measured one step earlier; report-off spends
+   a separate reduction pass for a fresh one. That pass is what the epilogue needs to remove, so B7's two
+   framings ("from a previous step's `report_next`" and "accepted one step stale") are the same branch.
+
+   Measured, W8A8, 8 seeds, relL2 vs a per-seed fp16 reference:
+
+   | arm | mean relL2 | paired |
+   |---|--:|---|
+   | OFF — fresh scale, extra pass | 0.0346 | — |
+   | **ON — one step stale, safety 1.15** | **0.1788** | **+460.9% ± 88.9% (SEM), RESOLVED** |
+
+   **5.2× the latent error.** Not marginal, and resolved on 8 seeds. Non-vacuity passed by tallying the
+   `report_next` argument itself (a kernel-name counter is blind to this flag): OFF False×27440 / True×0,
+   ON True×7280 / False×20160 — so even with only ~26% of calls on the stale path the damage is 5.2×.
+
+   So the 6.7 ms ceiling cannot be bought this way. `MODIFF_DELTA_SAFETY` is the one remaining variable
+   (a stale scale that the delta outgrows clips, and safety is the headroom against exactly that); a sweep
+   is running. Unless a larger margin recovers most of the 460%, Part 3 needs a different way to get a
+   fresh scale into the epilogue, not a cheaper way to tolerate a stale one.
 8. ~~**The dual-output GEMM's signature.**~~ **ANSWERED 2026-08-16, and the question was already moot.**
    `gemm_w8a8_awq_o_hat_out_i8` takes `inv_out_scale` as a separate `float*` — per column — and the
    scalar `TORCH_CHECK` is on `a_scale`, the delta's activation scale, which is necessarily scalar. The
