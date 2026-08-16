@@ -72,23 +72,58 @@ compares two return values whose semantics have diverged since it was written (w
 `max_code_diff = 1`). The invariant it exists to protect — that the fused kernel and the two-kernel
 reference agree — **holds on the part that is actually checkable**, a_hat, bit-for-bit.
 
-### 3. What this settles
+### 3. C10's MoDiff-side change is DEAD CODE, and the "exoneration" is retracted
 
-- **C10 is exonerated.** Its policy change is bit-identical to generic on this gate (221 = 221), and
-  a_hat is bit-identical under both. My earlier "35 → 81, this change is not neutral" was noise at n=1
-  and is retracted. The remaining reason C10 ships default OFF is that nothing has yet *measured* its
-  prize end to end — not a correctness concern.
-- **`csrc/modiff/norm/group_norm_silu.cu`'s two comments are stale**: they cite this gate as the reason a
-  reduction change was reverted, which reads as "the invariant is fragile" when the current situation is
-  "the gate's code comparison stopped being meaningful".
+Found by a cross-arm output comparison — running the fused kernel on the *same captured inputs* under
+both policies and differencing the results. **They are byte-identical: 0/40 cases differ in codes, 0/40 in
+a_hat**, even though 9 of the 10 distinct shapes should get different block sizes (e.g. `(192,32,32)` →
+1024 generic vs 512 fast).
 
-### 4. What is left, and it is small
+The reason is an early return I did not see. `gn_launch_group_stats` opens with
 
-Establish which return value is correct and fix the comparison (or drop it and keep a_hat as the gate).
-The suspect is the fifth argument to `step1_static_quantize_fprop_silu`, hardcoded `false` in the pybind
-lambda, against the fused kernel's `a4`/`Q_level` pair — i.e. the two may saturate at different code
-limits by construction. Until then the gate should be read as: **a_hat bit-identical = pass; code column
-= not a verdict.**
+```cpp
+static const char* _alt = std::getenv("MODIFF_GN_STATS_ALT");
+const bool want_chanmajor = (_alt == nullptr) || (_alt[0] == '3');
+const int K = (C + 1023) / 1024;
+const int BLK = (K > 0) ? C / K : 0;
+if (want_chanmajor && K >= 1 && K <= 4 && (C % K) == 0 && BLK <= 1024
+    && BLK >= num_groups && (C % num_groups) == 0) { ... return; }
+```
+
+`_alt` is unset by default → `want_chanmajor` is true → every one of these shapes satisfies the guard
+(`BLK` = 192/384/768/576/768, all ≤ 1024 and ≥ 32). **So the line I changed is never reached in the
+default configuration**, and C10 currently modifies only the fp16 `group_norm_silu_nhwc` — while its
+entire predicted value (+7.80/+8.16 ms/step) is on the MoDiff arms.
+
+**Retracted:** "C10 is exonerated — 221 vs 221 proves the block-size policy is irrelevant." That
+equality carried no information, because the policy was never in effect. Only the cross-arm comparison
+could distinguish "irrelevant" from "inert", and it says inert. Had I skipped it I would have gone on to
+measure C10's speed, found nothing, and had no idea why.
+
+### 4. And it gives A0's 221 a much better mechanism
+
+The fused path uses a **chanmajor** decomposition (`BLK = C/K`, one block spanning channels) while the
+reference `group_norm_silu_nhwc` is **group-major** (one block per `(sample, group)`). Those are
+different fp32 reduction trees by construction, so their mean/inv_std differ and the codes follow. The
+comment asserting *"block_size formula MUST match `group_norm_silu_nhwc` … bit-identical to the
+two-kernel reference"* sits next to the **group-major fallback**, i.e. next to the path that is no longer
+taken — it was made obsolete when chanmajor landed, and nobody noticed because the gate that would have
+caught it was unrunnable.
+
+**Still unexplained, and flagged rather than glossed:** if mean/inv_std differ, `a_hat += q/scale` should
+differ too, yet a_hat is bit-identical (both paths move it by exactly +0.19140625). That is not consistent
+with the codes differing by up to 221 and is the next thread to pull.
+
+### 5. Where this leaves C10
+
+To move the MoDiff arms at all, the change has to be to **chanmajor's `BLK`**, not to the group-major
+fallback. That is a larger and riskier change: `BLK = C/K` is tied to the chanmajor kernel's shared-memory
+layout, not a free tuning knob. And it cannot be validated until A0's code comparison is trustworthy,
+because changing chanmajor's reduction changes exactly the numbers the gate cannot currently judge.
+
+So the honest order is: fix the gate's comparison (A0 §4) → then re-derive whether chanmajor has headroom
+→ only then touch it. C10's prize remains unmeasured, and its current implementation is a no-op on the
+arms that matter.
 
 ---
 
