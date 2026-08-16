@@ -37,16 +37,35 @@ os.chdir(ROOT)
 sys.path.insert(0, ROOT)
 
 from pytorch_fid.fid_score import calculate_frechet_distance          # noqa: E402
+from scipy import linalg                                              # noqa: E402
 from pytorch_fid.inception import InceptionV3                         # noqa: E402
 from PIL import Image                                                 # noqa: E402
 
 D = "docs/gn_fast_reduce_2026-08-16"
 
 
-def features(path, model, batch=64):
-    """Inception pool3 features for every PNG in `path`, in sorted order so the pairing survives."""
+def features(path, model, batch=64, cache_dir=None):
+    """Inception pool3 features for every PNG in `path`, in sorted order so the pairing survives.
+
+    CACHED TO DISK, because extraction -- not the Frechet distance -- turned out to be the second
+    bottleneck and the one that survives re-runs. Decoding is PIL single-threaded here at ~46 img/s
+    against pytorch_fid's ~256 (it uses a multi-worker DataLoader), so 3 x 10k sets cost ~10 min every
+    time. The features of a fixed image set never change, so paying that once per set is the fix;
+    speeding up the decode would help the first run only.
+    Cache key is the directory path plus file count -- enough to catch "the folder was regenerated with a
+    different N", not enough to catch "regenerated with the same N", so it is keyed off mtime too.
+    """
     files = sorted(pathlib.Path(path).glob("*.png"))
     assert files, f"no PNGs in {path}"
+    ck = None
+    if cache_dir:
+        import hashlib
+        newest = max(f.stat().st_mtime for f in files)
+        key = hashlib.md5(f"{os.path.abspath(path)}|{len(files)}|{newest:.0f}".encode()).hexdigest()[:16]
+        ck = os.path.join(cache_dir, f"feat_{key}.npy")
+        if os.path.exists(ck):
+            print(f"  {path}: cached ({len(files)} imgs)")
+            return np.load(ck)
     out = np.empty((len(files), 2048), dtype=np.float64)
     for i in range(0, len(files), batch):
         chunk = files[i:i + batch]
@@ -57,13 +76,48 @@ def features(path, model, batch=64):
         out[i:i + len(chunk)] = f.cpu().numpy().astype(np.float64)
         if (i // batch) % 40 == 0:
             print(f"  {path}: {i + len(chunk)}/{len(files)}", flush=True)
+    if ck:
+        os.makedirs(cache_dir, exist_ok=True)
+        np.save(ck, out)
     return out
 
 
-def fid_from(feat_gen, mu_r, sigma_r):
-    mu = feat_gen.mean(axis=0)
-    sigma = np.cov(feat_gen, rowvar=False)
-    return calculate_frechet_distance(mu, sigma, mu_r, sigma_r)
+class FidAgainstFixedReference:
+    """FID against a FIXED reference, with the reference's matrix square root factored out ONCE.
+
+    WHY NOT pytorch_fid's calculate_frechet_distance: it evaluates tr(sqrtm(S_g @ S_r)) with
+    scipy.linalg.sqrtm on the 2048x2048 product -- MEASURED at 124 s per call. A 40-replicate paired
+    bootstrap is 80 calls, so ~50 minutes of CPU for a statistic whose replicate spread turned out to be
+    0.35 FID. I ran it that way once; this exists so nobody does it twice.
+
+    S_g and S_r are covariances, hence symmetric positive semidefinite. S_g @ S_r is similar to
+    S_r^(1/2) @ S_g @ S_r^(1/2), which IS symmetric, so they share eigenvalues and
+
+        tr(sqrtm(S_g @ S_r)) = sum_i sqrt(lambda_i(S_r^(1/2) S_g S_r^(1/2)))
+
+    can be had from `eigh` -- 1-2 orders of magnitude cheaper than a general `sqrtm` -- with S_r^(1/2)
+    computed a single time because the reference set is held fixed by design (compute_fid.py's header).
+    Eigenvalues are clamped at 0 before the sqrt: they are non-negative in exact arithmetic and land at
+    ~-1e-10 in practice.
+
+    Verified against calculate_frechet_distance on the real data this file was written for; the check is
+    in the __main__ path so it runs every time rather than being a claim in a comment.
+    """
+
+    def __init__(self, mu_r, sigma_r):
+        self.mu_r = mu_r
+        self.sigma_r = sigma_r
+        w, v = linalg.eigh(sigma_r)
+        self.sqrt_r = (v * np.sqrt(np.clip(w, 0.0, None))) @ v.T
+
+    def __call__(self, feat_gen):
+        mu = feat_gen.mean(axis=0)
+        sigma = np.cov(feat_gen, rowvar=False)
+        m = self.sqrt_r @ sigma @ self.sqrt_r
+        lam = linalg.eigh(m, eigvals_only=True)
+        tr_covmean = np.sqrt(np.clip(lam, 0.0, None)).sum()
+        d = mu - self.mu_r
+        return float(d @ d + np.trace(sigma) + np.trace(self.sigma_r) - 2.0 * tr_covmean)
 
 
 def main():
@@ -75,18 +129,24 @@ def main():
     ap.add_argument("--label-b", default="B")
     ap.add_argument("--reps", type=int, default=40)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--cache", default="/tmp/claude-0/-workspace/52444f32-4dcb-4c6e-a32f-ebb7833c049f/scratchpad/fid_feat_cache")
     args = ap.parse_args()
 
     model = InceptionV3([3]).cuda().eval()
     print("extracting features (once per set) ...")
-    fr = features(args.real, model)
-    fa = features(args.a, model)
-    fb = features(args.b, model)
+    fr = features(args.real, model, cache_dir=args.cache)
+    fa = features(args.a, model, cache_dir=args.cache)
+    fb = features(args.b, model, cache_dir=args.cache)
     assert len(fa) == len(fb), f"arms must be paired: {len(fa)} vs {len(fb)}"
     mu_r, sigma_r = fr.mean(axis=0), np.cov(fr, rowvar=False)
+    fid = FidAgainstFixedReference(mu_r, sigma_r)
 
-    point_a = fid_from(fa, mu_r, sigma_r)
-    point_b = fid_from(fb, mu_r, sigma_r)
+    # Self-check on every run: the fast path must agree with pytorch_fid's own function. Cheap here (two
+    # sqrtm calls) and it is what lets the 80 bootstrap calls skip it.
+    ref_a = calculate_frechet_distance(fa.mean(axis=0), np.cov(fa, rowvar=False), mu_r, sigma_r)
+    point_a, point_b = fid(fa), fid(fb)
+    assert abs(point_a - ref_a) < 1e-3, f"eigh path {point_a} vs scipy sqrtm {ref_a}"
+    print(f"self-check: eigh path agrees with pytorch_fid to {abs(point_a - ref_a):.2e} FID")
     print(f"\npoint estimates: {args.label_a} {point_a:.3f}   {args.label_b} {point_b:.3f}   "
           f"diff {point_b - point_a:+.3f} ({100 * (point_b - point_a) / point_a:+.2f}%)")
 
@@ -95,10 +155,9 @@ def main():
     da, db, dd = [], [], []
     for r in range(args.reps):
         idx = rng.integers(0, n, size=n)          # ONE index set, applied to both arms
-        va = fid_from(fa[idx], mu_r, sigma_r)
-        vb = fid_from(fb[idx], mu_r, sigma_r)
+        va, vb = fid(fa[idx]), fid(fb[idx])
         da.append(va); db.append(vb); dd.append(vb - va)
-        if r % 10 == 0:
+        if True:   # every replicate: a 4-point progress trace in a long loop is unreadable
             print(f"  replicate {r + 1}/{args.reps}: diff {vb - va:+.3f}", flush=True)
 
     da, db, dd = np.array(da), np.array(db), np.array(dd)
