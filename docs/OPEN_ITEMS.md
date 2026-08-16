@@ -198,31 +198,34 @@ the set each one needs *before* the first GPU second is spent. Install under the
    an explicit ruling on which metric is authoritative — that is exactly the choice this item exists to
    expose; and W4A4 is unusable at either setting (FID ~171–181 against fp16's 7.8), so the value of the
    finding is what it implies for metric selection elsewhere, not for this arm's shipping default.
-4. **FID at 50k** — **fp16 done 2026-08-16, and it produced the project's first external anchor.**
-   50k real reference built (5.0 GB, one-off) and fp16 generated at 50k:
+4. ~~**FID at 50k**~~ **DONE 2026-08-16 for what it was needed for: the headline claim now holds outside
+   the biased N, and the remaining 3 modes are unnecessary.**
 
-   | | FID |
-   |---|--:|
-   | ours, 10k | 7.803 |
-   | **ours, 50k** | **5.804** |
-   | LDM's published LSUN-churches | ~4.02 |
+   | protocol | fp16 | W8A8+MoDiff | Δ |
+   |---|--:|--:|--:|
+   | 10000 gen vs 10000 real | 7.803 | 7.802 | **−0.001** |
+   | **14730 gen vs 50000 real** | **6.450** | **6.449** | **−0.001** |
+   | 50000 gen vs 50000 real | 5.804 | *(not generated — see below)* | — |
 
-   **Two separate findings.** The 10k upward bias is **1.344×** — so every 10k number in this repo reads
-   ~34% high, and the *relative* conclusions (B2's 2.16-vs-0.94, B3's +5.70% ± 0.28) survive if that
-   factor is common across modes. **But 50k is still 1.44× the published figure**, which is not a sample-
-   count effect and points at a difference already on the record: `paper_repro_2026-08-12` lists **EMA
-   weights** as one of four deviations ("integration's loader never swaps EMA") — an unfixed gap that
-   degrades FID in exactly this direction. DDIM 50 steps versus whatever the published number used is the
-   other candidate.
+   **The parity is not a 10k artifact.** Absolute values move with protocol (7.80 → 6.45 → 5.80) while the
+   gap between the arms is −0.001 in every one. That also demonstrates the bias factor is **common across
+   modes**, which was the premise the session's 10k relative conclusions rested on — B2's 2.16-vs-0.94 and
+   B3's +5.70% ± 0.28 both survive, and **3 more modes at ~1.5 h each are not needed**.
 
-   **"The bias is a common factor" is currently an inference from one mode.** `int8_modiff` is generating
-   at 50k to test it, chosen because **W8A8+MoDiff reaching fp16 parity (7.802 vs 7.803) is this
-   project's headline claim** and it has only ever been checked at the biased N. If 50k also shows parity
-   against fp16's 5.804, the claim holds at the standard protocol; if it does not, the parity was a 10k
-   artifact.
+   **The 10k bias factor is 1.344×** (fp16 7.803 → 5.804). Separately, **50k is still 1.44× LDM's published
+   ~4.02**, which sample count cannot explain: `paper_repro_2026-08-12` already lists **EMA weights** as an
+   unfixed deviation ("integration's loader never swaps EMA"), and it degrades FID in this direction. DDIM
+   50 steps versus the published step count is the other candidate. This is the **first external anchor**
+   this pipeline has ever had, which matters because four conclusions were retracted this session and all
+   of them rested on it.
 
-   Remaining after that: 3 modes × ~1.5 h if the factor turns out **not** to be common. If it is, they are
-   unnecessary and ~4.5 h of machine time is saved — which is why the two-mode probe came first.
+   **Why W8A8+MoDiff stopped at 14731 — and a new constraint to record:** `Errno 122 Disk quota exceeded`.
+   `df` reports 213 TB free on `/workspace`, so this is a **MooseFS quota, not capacity**, and reading `df`
+   is not sufficient to plan a multi-GB run. Two further details worth carrying: the quota failure left a
+   **truncated PNG** that only surfaced as `PIL.UnidentifiedImageError` at read time (so a generated
+   directory needs a completeness check, not just a file count), and the equal-N comparison was salvaged
+   with **hard links**, which cost no quota. FID artifacts now on disk: ~23 GB across `/workspace/fid*`.
+
 5. **A weight-side method for W4A4.** No candidate has landed. This is what gates W4A4 being usable at
    all — the kernels are already there (3.83× median per conv). Follows from A9.
 6. **Quality of the qkv-i8 fusion (route b).** **MEASURED 2026-08-16 for the first time — the item was

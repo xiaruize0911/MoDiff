@@ -1,0 +1,16 @@
+{
+  "n_real": 50000,
+  "dims": 2048,
+  "modes": {
+    "fp16_sub": {
+      "label": "fp16_sub",
+      "n": 14730,
+      "fid_vs_real": 6.449995808515524
+    },
+    "int8_modiff": {
+      "label": "W8A8 + MoDiff",
+      "n": 14730,
+      "fid_vs_real": 6.448951007477206
+    }
+  }
+}
