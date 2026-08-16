@@ -117,9 +117,13 @@ Attention by route, call-weighted, every record assigned (KERNEL_SPEEDUP §3):
 Unchanged and still true: **there is no int4 attention datapath** — every operand is `torch.int8`, the
 dominant hd24 route's profiled kernel is `flash_attn_int8_mma_kernel_t`, and V stays int8 in both arms, so
 int4 can only win Q/K bytes and at T=1024 it wins none (hd 24 pads to 64 int4 = the same 32 B/row as
-int8's pad-to-32). And **T=16 is a sign error**: 15 of its 25 calls fall back to `torch_sdpa_fp16` at
-49.4 µs while the other 10 take `qi8packed_small_qout` at **65.8 µs** — 33% slower than the fallback it
-was chosen over. Routing all 25 to sdpa recovers ~0.16 ms/step.
+int8's pad-to-32). And **T=16's sub-1.00× is deliberate, not a bug** — 15 of its 25 calls fall back to
+`torch_sdpa_fp16` at 49.4 µs while the other 10 take `qi8packed_small_qout` at 65.8 µs, and
+`quantized_std_attention.py:484` documents that trade with its own measurements: the dp4a kernel costs
+~T², PyTorch's flash is launch-bound and flat, and taking the loss buys one uniform dataflow *and*
+removes a separate `quant_attn_out_int4_pack` pass on those blocks. So the ~0.16 ms/step is not free to
+reclaim. T=4 is the other way round and wins 2.5× (20.0 µs against 49.2), which is why one gate covers
+both.
 
 ## 5. Quality
 

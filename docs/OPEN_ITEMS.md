@@ -144,7 +144,7 @@ row names the file that holds the evidence.
 | **A1** **[2026-08-16]** | linear reads 0.61×/0.67× because "in fp16 the attention projections are 1×1 convs" counted in the conv suite, and `conv + linear` cancels it | **fixed** |
 | **A2** **[2026-08-16]** | `other` 3.77×, `norm_quantize` 0.64× | **fixed** |
 | **A3** **[2026-08-16]** | attention T=1024 nets 1.19× (int8) / 1.16× (int4) because "the flash kernels take a padded head dim" | **fixed** |
-| **A4** **[2026-08-16]** | T≤16 "falls back to `torch_sdpa_fp16` in every arm — correctly" at 1.00×/0.99× | **fixed** |
+| **A4** **[2026-08-16]** | T≤16 "falls back to `torch_sdpa_fp16` in every arm — correctly" at 1.00×/0.99× | **fixed, then partly retracted.** The published 1.00× was wrong (it is 0.87×: only 15 of 25 calls fall back at 49.4 µs, the other 10 take `qi8packed_small_qout` at 65.8 µs) — that stands. But I then called it "a sign error, not a tradeoff", and that was wrong: `quantized_std_attention.py:484` documents the loss with its own measurements and names what it buys — one uniform dataflow and no separate `quant_attn_out_int4_pack` pass on those blocks. So the ~0.16 ms/step is not free to reclaim. Corrected in both reports |
 | **A5** **[2026-08-16]** | "5 of 8 blocks matched in all three arms" | **fixed** |
 | **A6** **[2026-08-16]** | int4 attention's one real win, T=256 at 1.66× | **fixed** (flagged in the table) |
 | **A8** **[2026-08-16]** | the GroupNorm+SiLU family is 32.2% of the W4A4 run at 1.13×, and C1 said "no design has landed" | **fixed** → [gn_fast_reduce_2026-08-16](gn_fast_reduce_2026-08-16/FINDINGS.md) |
