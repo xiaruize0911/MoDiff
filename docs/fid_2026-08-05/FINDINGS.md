@@ -17,13 +17,28 @@ Inception feature distributions, so any asymmetry between the two sides is measu
 | W8A8 baseline (MoDiff off) | 16.366 | 6.394 | — |
 | **W8A8 + MoDiff** | **7.802** | **0.175** | **97.3%** |
 | W8A4 baseline (MoDiff off) | 311.453 | 312.530 | — |
-| **W8A4 + MoDiff** — *the paper's configuration* | **35.303** | **18.647** | **94.0%** |
+| **W8A4 + MoDiff (L0, conv-only)** — *the paper's configuration* | **35.303** | **18.647** | **94.0%** |
+| W8A4 + MoDiff (L1, conv+projection) | 35.869 | 19.097 | 93.9% |
 | W4A4 baseline (MoDiff off) | 277.963 | 277.981 | — |
 | W4A4 + MoDiff | 200.139 | 191.092 | 31.3% |
 
 The W8A4 rows were **added 2026-08-16** — the images had been on disk since 04:36 that morning and the
 FID was never computed, so the paper's own configuration had no row in the table measuring it. Same
 protocol, same 10k reference, same script; `eigh` agrees with pytorch_fid to 1.71e-12.
+
+**L1 does not close the gap to W8A8, and it is slightly worse than L0.** Measured 2026-08-16 because
+L1 was the obvious candidate: MoDiff on the 42 attention projections as well as the convs, which
+docs/benchmark_5mode notes "recovers structure L0 loses entirely" at W4A4. At W8A4 the paired bootstrap
+gives **+0.588 ± 0.102 FID, 95% CI [+0.397, +0.786] — RESOLVED in the wrong direction**. Catching W8A8
+PTQ needs 19 FID; L1 moves 0.59 the other way.
+
+That is consistent rather than surprising, and it points back at A9. L1's large win is at W4A4, where the
+*weights* are 4 bits too; at W8A8 the two are visually indistinguishable. W8A4 keeps int8 weights, so the
+projections it touches already have small error and there is no structure for it to recover. L1 helps when
+weight error is large — the same conclusion as A9 and B5, reached from a third direction.
+
+No same-tree W8A8 baseline was generated for this: at a 19 FID gap the anchor's ~0.9% uncertainty cannot
+change the verdict. That check was reserved for L1 landing *near* 16.365, and it did not.
 
 **Read the last two columns together, because they say different things.** MoDiff removes **94.0%** of
 A4 quantization error — the largest figure in this table, and the paper's method working in the paper's
