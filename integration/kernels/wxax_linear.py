@@ -33,6 +33,30 @@ except Exception:
     _HAS = False
     _HAS_BIAS_RES = False
 
+#: Table length for the static per-step delta scale. Imported rather than redefined so the two paths
+#: cannot drift; the conv twin's table is indexed by the same step counter.
+from integration.kernels.int4_optimized import MODIFF_MAX_STEPS            # noqa: E402
+
+#: The projections' delta grid. SWEPT 2026-08-17 with FID on the L1 + static arm, 10k images each:
+#:
+#:     ratio        1.0      2.0      8.0     no table (per-call absmax)
+#:     FID       52.584   54.555  222.515       54.300
+#:
+#: 1.0 is the answer, and 8.0 -- the CONV path's value, which this constant was seeded from -- is a 4x
+#: regression. The two distributions are not the same object. The conv sweep chose 8 because the conv
+#: delta is HEAVY-TAILED, so covering its range spends codes on a tail nothing lands in; under-sizing
+#: recovers them. `OptimizedInt4Conv2d.DELTA_CLIP_RATIO`'s own docstring records the opposite case in its
+#: test fixture -- |max|/|min| = 1.26 got WORSE with the ratio, 0.221 -> 0.340 -- and the projections'
+#: delta behaves like that one. Under-sizing its grid 8x just clips.
+#:
+#: At 1.0 the table BEATS the per-call reduction it replaces (52.584 vs 54.300, -1.72 FID) while removing
+#: it from the hot path (-8.81 ms/step, docs/w4a4_quality_2026-08-17 section 6.4). Both axes, one change.
+#:
+#: This is why the conv constant's docstring says "Do not copy the 8 across without measuring -- that
+#: assumption is what the int4/int8 twins keep getting wrong". Seeding from it cost a 4x regression and a
+#: ~30-minute window in which the table auto-loaded; see benchmark_ldm's load site.
+LINEAR_DELTA_CLIP_RATIO = float(os.environ.get("MODIFF_LINEAR_DELTA_CLIP_RATIO", "1.0"))
+
 
 def _pack4(q):  # q int8 [...,K] in [-7,7] -> [...,K/2] int8 (2 int4/byte, low nibble = even)
     q = q.to(torch.int32)
@@ -93,6 +117,31 @@ class QuantLinearWxAx(nn.Module):
         #: than the a4 measurement used.
         self.delta_refresh = max(1, int(os.environ.get("MODIFF_LINEAR_DELTA_REFRESH", "1")))
         self._step = 0
+        # ---- STATIC per-step delta table (2026-08-17) ------------------------------------------------
+        #: The conv path has one of these; the projections never did, so every modulated call here runs
+        #: `delta_absmax_fp16` -- a global reduction over the delta. THREE things follow from that, and
+        #: this table addresses all three:
+        #:
+        #:   1. COST. It is a separate pass per layer per step (+876 ms of the profiled window at batch
+        #:      128, docs/OPEN_ITEMS.md on MODIFF_LINEAR).
+        #:   2. IT BLOCKS FUSION, which is the important one. A global absmax cannot be fused with the
+        #:      kernel that consumes it -- the whole tensor must be reduced before the first element can
+        #:      be quantized. That is precisely why the conv path CAN fuse GroupNorm+SiLU+delta-quantize
+        #:      into one kernel (`group_norm_silu_delta_quantize_pack_nhwc`) and this path cannot: the
+        #:      conv path reads a static table. So the un-fused quantize that costs L1 +2890 ms is a
+        #:      CONSEQUENCE of the missing table, not an independent problem.
+        #:   3. NONDETERMINISM. docs/OPEN_ITEMS.md A18: L1 is run-to-run nondeterministic at 4.5-6.2/255
+        #:      while every L0 arm is bit-exact. `delta_absmax_fp16`'s `_retire` argument is the
+        #:      signature of a last-block-retires grid reduction, which is order-dependent. Prime
+        #:      suspect, and a static table removes the call entirely.
+        self.register_buffer('static_delta_scale', torch.zeros(MODIFF_MAX_STEPS, dtype=torch.float32))
+        self.register_buffer('static_delta_alpha', torch.zeros(MODIFF_MAX_STEPS, dtype=torch.float32))
+        self.register_buffer('is_delta_calibrated', torch.tensor(False))
+        #: Host mirror -- the hot path must never read the device buffer (one GPU->CPU sync per
+        #: modulated layer per step; the conv twin measured ~5 ms/step for exactly this mistake).
+        self._delta_cal = False
+        self._delta_calib = False
+        self._delta_absmax_obs = None
         # Scratch for the fused MoDiff path (lazily sized on first modulated call).
         self._absmax = self._scale = self._inv_scale = self._retire = None
         self._empty_f32 = None
@@ -124,6 +173,81 @@ class QuantLinearWxAx(nn.Module):
         """
         k = self.delta_refresh
         return k <= 1 or ((self._step - 1) % k) == 0
+
+    # ---- static per-step delta table -----------------------------------------------------------------
+    def _load_delta_scale_for_step(self) -> None:
+        """Point `_scale`/`_inv_scale` at the table entry for this step. No reduction, no sync.
+
+        Writes into the SAME scratch buffers the dynamic path fills, so every consumer downstream
+        (`step1_static_quantize*`, the o_hat GEMM's alpha) is unchanged -- that is what makes this a
+        drop-in and what will let the fused kernel read the scale from one place.
+        """
+        i = min(max(self._step - 1, 0), MODIFF_MAX_STEPS - 1)
+        self._scale.copy_(self.static_delta_scale[i:i + 1])
+        self._inv_scale.copy_(self.static_delta_alpha[i:i + 1])
+
+    def _observe_delta_absmax(self) -> None:
+        """Record this step's delta absmax, recovered from what the dynamic reduction just wrote.
+
+        `delta_absmax_fp16` writes `inv_scale = absmax / Q`, so `absmax = inv_scale * Q`. Reading it
+        back is how the conv twin observes too (int4_optimized._observe_delta_absmax) -- the point is to
+        observe the EXACT quantity the production path would have used, not a second estimate of it.
+        """
+        i = min(max(self._step - 1, 0), MODIFF_MAX_STEPS - 1)
+        if self._delta_absmax_obs is None or self._delta_absmax_obs.device != self._inv_scale.device:
+            self._delta_absmax_obs = torch.zeros(MODIFF_MAX_STEPS, dtype=torch.float32,
+                                                 device=self._inv_scale.device)
+        am = self._inv_scale.view(()) * float(self.Q)
+        self._delta_absmax_obs[i] = torch.maximum(self._delta_absmax_obs[i], am)
+
+    def begin_delta_calibration(self) -> None:
+        """Observe every step, so a per-step table is not undersampled by a refresh schedule."""
+        self._delta_calib = True
+        self._delta_cal = False
+        self.is_delta_calibrated.fill_(False)
+        self._delta_calib_was_refresh = self.delta_refresh
+        self.delta_refresh = 1
+        self._delta_absmax_obs = None
+
+    def end_delta_calibration(self, safety: float = 1.02, smooth: bool = True) -> bool:
+        """Turn the observed per-step absmax into the scale table. Returns True if set.
+
+        Identical arithmetic to OptimizedInt4Conv2d.end_delta_calibration -- forward-fill the tail,
+        back-fill the head, 3-wide running max, then `scale = Q / (absmax * safety / ratio)`. Copied in
+        shape rather than in spirit so a future change to one path is visibly a divergence from the
+        other; the ONE deliberate difference is LINEAR_DELTA_CLIP_RATIO, which is not the conv constant.
+        """
+        self._delta_calib = False
+        self.delta_refresh = getattr(self, "_delta_calib_was_refresh", self.delta_refresh)
+        if self._delta_absmax_obs is None:
+            return False
+        absmax = self._delta_absmax_obs.detach().to("cpu", torch.float64)
+        seen = absmax > 0
+        if not bool(seen.any()):
+            return False
+        last = 0.0
+        for i in range(absmax.numel()):
+            if seen[i]:
+                last = float(absmax[i])
+            elif last > 0.0:
+                absmax[i] = last
+        first = next((float(absmax[i]) for i in range(absmax.numel()) if absmax[i] > 0), 0.0)
+        if first <= 0.0:
+            return False
+        absmax[absmax <= 0] = first
+        if smooth:
+            a = absmax.clone()
+            for i in range(absmax.numel()):
+                lo, hi = max(0, i - 1), min(absmax.numel(), i + 2)
+                absmax[i] = float(a[lo:hi].max())
+        # self.Q is 127/7 -- the same ceiling the conv twin calls Q_DELTA. One source of truth.
+        scale = float(self.Q) / (absmax * safety / LINEAR_DELTA_CLIP_RATIO).clamp_min(1e-12)
+        self.static_delta_scale.copy_(scale.to(torch.float32))
+        self.static_delta_alpha.copy_((1.0 / scale).to(torch.float32))
+        self.is_delta_calibrated.fill_(True)
+        self._delta_cal = True
+        self._delta_absmax_obs = None
+        return True
 
     def reset_modiff(self):
         self.a_hat = None
@@ -236,9 +360,17 @@ class QuantLinearWxAx(nn.Module):
             # by hand. `step_count`-equivalent is `_step`, incremented here rather than in forward(),
             # so the non-modulated seeding call does not advance the schedule.
             self._step += 1
-            if self._delta_should_refresh():
+            # STATIC TABLE takes precedence over the per-call reduction. `_delta_cal` is the HOST
+            # mirror; reading is_delta_calibrated here would cost a GPU->CPU sync per layer per step.
+            # During calibration (`_delta_calib`) the reduction still runs -- it is what is being
+            # observed -- so the two branches are exclusive by construction, not by ordering luck.
+            if self._delta_cal and not self._delta_calib:
+                self._load_delta_scale_for_step()
+            elif self._delta_should_refresh():
                 _mc.delta_absmax_fp16(xq_in, self.a_hat, self._absmax, self._scale, self._inv_scale,
                                       self._retire, float(self.Q), self._empty_f32, False)
+                if self._delta_calib:
+                    self._observe_delta_absmax()
             if self.bits == 8:
                 codes = _mc.step1_static_quantize_fprop(xq_in, self.a_hat, self._scale,
                                                         self._empty_f32)
@@ -342,8 +474,99 @@ def convert_linears_to_wxax(module, bits, modiff=False, verbose=False, _prefix="
     return n
 
 
+def begin_wxax_delta_calibration(model) -> int:
+    """Arm per-step delta observation on every modulated wxax Linear. Returns how many."""
+    n = 0
+    for m in model.modules():
+        if isinstance(m, QuantLinearWxAx) and m.modiff:
+            m.begin_delta_calibration()
+            n += 1
+    return n
+
+
+def end_wxax_delta_calibration(model, safety: float = 1.02, smooth: bool = True) -> int:
+    """Turn observations into tables. Returns how many layers got one."""
+    return sum(int(m.end_delta_calibration(safety, smooth))
+               for m in model.modules()
+               if isinstance(m, QuantLinearWxAx) and m.modiff)
+
+
+def export_wxax_delta_scales(model) -> dict:
+    """{dotted module path -> per-step scale tensor}, for the calibrated modulated Linears.
+
+    Keyed on `named_modules()` rather than on a name stored at construction: the converter builds a
+    prefix for logging but does not keep it, and a stored name is one more thing that can go stale
+    against the module tree. A SEPARATE artifact from the conv delta table -- same reason
+    export_int4_delta_scales is separate from export_int4_static_scales: different quantity, different
+    validity.
+    """
+    out = {}
+    for name, m in model.named_modules():
+        if isinstance(m, QuantLinearWxAx) and m.modiff and bool(m.is_delta_calibrated):
+            out[name] = m.static_delta_scale.detach().to("cpu", torch.float32).clone()
+    if out:
+        # THE RATIO GOES IN THE ARTIFACT. It is baked into the values, so a file exported at one ratio
+        # and loaded under a different default is silently wrong -- which happened: exporting at 8.0 and
+        # then changing the default to 1.0 (the swept value) left `apply`'s `r / LINEAR_DELTA_CLIP_RATIO`
+        # dividing by the wrong number, so asking for 1.0 would have re-applied the 8.0 values and read
+        # as FID 222 instead of 52.6. Recording it makes that a refusal instead of a wrong number.
+        out["__clip_ratio__"] = torch.tensor(float(LINEAR_DELTA_CLIP_RATIO), dtype=torch.float64)
+    return out
+
+
+def apply_wxax_delta_scales(model, table: dict) -> int:
+    """Load a table from export_wxax_delta_scales. Returns how many layers were filled.
+
+    MODIFF_LINEAR_DELTA_TABLE_RATIO re-sizes the loaded grid by `r / LINEAR_DELTA_CLIP_RATIO`, the same
+    knob the conv path got on 2026-08-17 and for the same reason: the ratio is baked in at export, so
+    without this a re-sweep means a re-export. Default 0 = off, so an existing table loads unchanged.
+    """
+    if not table:
+        return 0
+    # The ratio the values were BAKED AT, from the artifact. Files written before this was recorded are
+    # assumed to be 8.0 -- the seeded default in force when the only such file was produced -- rather
+    # than assumed to match today's constant, which is the assumption that would be wrong.
+    if "__clip_ratio__" in table:
+        baked = float(table["__clip_ratio__"])
+    else:
+        # LOUD, because a dict without the key is indistinguishable from the one legacy file that
+        # genuinely was baked at 8.0 -- including a hand-sliced SUBSET of a newer table, which would
+        # then be rescaled 8x for no reason. Silence here is how a wrong number looks right.
+        baked = 8.0
+        print("  WARNING: linear delta table carries no __clip_ratio__; assuming it was baked at 8.0 "
+              "(the pre-2026-08-17 default). If this is a slice of a newer table, carry the key.",
+              flush=True)
+    r = float(os.environ.get("MODIFF_LINEAR_DELTA_TABLE_RATIO", "0") or 0)
+    want = r if r > 0 else LINEAR_DELTA_CLIP_RATIO
+    mul = want / baked
+    if mul != 1.0:
+        print(f"  linear delta table baked at ratio {baked}, want {want}: rescaling by {mul:.4f}",
+              flush=True)
+    loaded = 0
+    for name, m in model.named_modules():
+        if not (isinstance(m, QuantLinearWxAx) and m.modiff) or name not in table:
+            continue
+        if name == "__clip_ratio__":       # metadata, not a layer
+            continue
+        t = table[name].to(m.static_delta_scale.device, torch.float32) * mul
+        k = min(t.numel(), m.static_delta_scale.numel())
+        m.static_delta_scale[:k].copy_(t[:k])
+        if k < m.static_delta_scale.numel():
+            m.static_delta_scale[k:].fill_(float(t[k - 1]))
+        m.static_delta_alpha.copy_(1.0 / m.static_delta_scale.clamp_min(1e-12))
+        m.is_delta_calibrated.fill_(True)
+        m._delta_cal = True
+        loaded += 1
+    return loaded
+
+
 def reset_wxax_modiff(model):
-    """Clear the MoDiff temporal caches (call between DDIM samples)."""
+    """Clear the MoDiff temporal caches (call between DDIM samples).
+
+    Deliberately does NOT clear the delta table: it is calibration, not state. Clearing it here would
+    silently drop every layer back to the per-call reduction on sample 2 -- the exact class of bug the
+    conv path's `_step` reset comment warns about.
+    """
     for m in model.modules():
         if isinstance(m, QuantLinearWxAx):
             m.reset_modiff()

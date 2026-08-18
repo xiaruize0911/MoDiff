@@ -42,6 +42,7 @@ setup(
                 'csrc/modiff/conv/conv2d_int8.cu',
                 'csrc/modiff/conv/conv2d_int4.cu',
                 'csrc/modiff/conv/conv2d_evt.cu',
+                'csrc/modiff/conv/zpw_window_sum.cu',
                 # norm: GroupNorm(+SiLU)(+quantize) and fused GroupNorm->qkv
                 # family 3 of the csrc split (2026-08-12)
                 'csrc/baseline/norm/group_norm_silu.cu',

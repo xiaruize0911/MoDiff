@@ -1,0 +1,14 @@
+{
+ "dir": "/workspace/fid_warmup5",
+ "n_paired": 16,
+ "mean_abs_delta_vs_fp16_255": {
+  "int4_modiff_l0": 27.091138521830242,
+  "int4_modiff_l0_adaround": 24.10837523142497,
+  "int4_modiff_l0_attnfp16": 28.19072977701823,
+  "int4_modiff_l0_adaround_attnfp16": 26.070366859436035,
+  "int4_modiff_l1": 23.47451400756836,
+  "int4_modiff_l1_adaround": 23.22195593516032
+ },
+ "w8a8_modiff_reference_255": 2.803,
+ "config": "DDIM 50, batch 16, dynamic delta, MODIFF_WARMUP_STEPS=5, seed0=20260805"
+}

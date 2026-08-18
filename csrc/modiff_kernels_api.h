@@ -223,6 +223,12 @@ torch::Tensor conv2d_int4_evt_bias_residual_fp16(
     torch::Tensor input, torch::Tensor weight_packed, torch::Tensor inv_scale, torch::Tensor weight_scales,
     torch::Tensor bias, torch::Tensor residual, torch::Tensor output,
     int sh, int sw, int ph, int pw, int dh, int dw);
+//: fix #4 step 1: S[p] = sum over the conv window of the int4 activation codes, over all input
+//: channels. One scalar per output pixel, shared by every output channel -- the reduction the weight
+//: zero point needs. See csrc/modiff/conv/zpw_window_sum.cu for why it is padding-clean.
+torch::Tensor int4_window_sum(
+    torch::Tensor x_packed, int64_t R, int64_t S,
+    int64_t stride_h, int64_t stride_w, int64_t pad_h, int64_t pad_w, int64_t dil_h, int64_t dil_w);
 torch::Tensor conv2d_int8_evt_o_hat_residual(
     torch::Tensor input, torch::Tensor weight, torch::Tensor inv_scale, torch::Tensor weight_scales,
     torch::Tensor o_hat, torch::Tensor residual, torch::Tensor output,

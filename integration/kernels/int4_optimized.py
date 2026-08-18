@@ -168,6 +168,15 @@ class OptimizedInt4Conv2d(nn.Module):
         # weight_scale into the CUTLASS GEMM -> fp16 out, no fp32 temp). Kept in sync
         # with weight_scale_channel wherever the latter is (re)computed.
         self.register_buffer('weight_scale_channel_half', ch_scale.half().contiguous())
+        #: fix #4 (weight zero point), DORMANT until a table is loaded. Zeros means the correction below
+        #: is identically 0 and the strict guard never fires, so the shipped path is bit-unchanged.
+        #:
+        #: What it holds is NOT the AdaRound zero point itself but the leftover of the identity
+        #:     x_q - z_w[k] = (x_q - 8) + (8 - z_w[k])
+        #: i.e. `8 - z_w[k]`, because `x_q - 8` is what gets packed into signed int4 storage. See
+        #: integration/tests/test_zpw_additive.py, which measures the whole route at 1.65e-4 against a
+        #: float64 reference while the uncorrected kernel sits at 6.0-6.8e-1.
+        self.register_buffer('weight_zp', torch.zeros(K, dtype=torch.float32))
 
         w_quant = (w_flat / ch_scale.unsqueeze(1)).round().clamp(-7, 7).to(torch.int8)
         w_quant = w_quant.reshape_as(w_data)
@@ -322,6 +331,87 @@ class OptimizedInt4Conv2d(nn.Module):
 
     def _cache_dtype(self) -> torch.dtype:
         return torch.float16 if self.is_calibrated else torch.float32
+
+    # ---------------- fix #4: the weight zero point, applied additively -----------------------------
+    @property
+    def _has_weight_zp(self) -> bool:
+        zp = getattr(self, "weight_zp", None)
+        return zp is not None and bool(torch.any(zp != 0))
+
+    def _zpw_correction(self, x_packed: torch.Tensor, alpha: torch.Tensor) -> torch.Tensor:
+        """`zp[k] * ws[k] * alpha * S[p]`, to be ADDED to the conv output.
+
+        `S[p] = sum over the conv window of the int4 activation codes`, from int4_window_sum -- one fp32
+        scalar per output pixel, shared by every output channel, which is why this is a rank-1 outer
+        product and not a per-element tensor. Padding needs no correction: a padded tap's code is 0 and
+        the activation grid is symmetric, so that code means exactly 0.0.
+        """
+        S = modiff_cutlass.int4_window_sum(
+            x_packed, self.kernel_size[0], self.kernel_size[1],
+            self.stride[0], self.stride[1], self.padding[0], self.padding[1],
+            self.dilation[0], self.dilation[1])                              # [N, Ho, Wo] fp32
+        per_ch = (self.weight_zp.view(-1) * self.weight_scale_channel.view(-1)).view(1, -1, 1, 1)
+        return per_ch * alpha.reshape(1, 1, 1, 1).to(per_ch.dtype) * S.unsqueeze(1)
+
+    def _zpw_add_to_ohat(self, x_packed: torch.Tensor, alpha: torch.Tensor) -> None:
+        """Apply the weight-zero-point correction to `o_hat_cache` IN PLACE. No-op while dormant.
+
+        Only valid at sites whose conv entry accumulates into `o_hat_cache` and whose return value IS
+        that cache (`_module_output()`), which is every `conv2d_int4_{evt,fprop}_o_hat` call. Correcting
+        the cache therefore corrects the return too. Gated across four accumulated steps against a
+        float64 reference by integration/tests/test_zpw_ohat.py.
+        """
+        if not self._has_weight_zp:
+            return
+        self.o_hat_cache.add_(self._zpw_correction(x_packed, alpha).to(self.o_hat_cache.dtype))
+
+    def _zpw_add_to_ohat_and_out(self, x_packed: torch.Tensor, alpha: torch.Tensor,
+                                 out: torch.Tensor) -> None:
+        """For the DUAL-STORE entries: correct `o_hat_cache` and the separate `out` it produced.
+
+        `conv2d_int4_evt_o_hat_residual` writes both in one pass -- `o_hat += conv` and
+        `out = o_hat_new + residual`. So `out` was formed from the UNCORRECTED accumulator, and fixing
+        only the cache leaves the value this step returns short by exactly the correction while making
+        the next step's accumulator right. That asymmetry would look like a small, plausible quality
+        regression rather than a bug, which is why the two are done together here rather than by calling
+        _zpw_add_to_ohat and hoping the caller remembers. The correction is computed ONCE and added to
+        both, so the two cannot disagree.
+        """
+        if not self._has_weight_zp:
+            return
+        c = self._zpw_correction(x_packed, alpha)
+        self.o_hat_cache.add_(c.to(self.o_hat_cache.dtype))
+        out.add_(c.to(out.dtype))
+
+    def _zpw_add_to_out(self, x_packed: torch.Tensor, alpha: torch.Tensor,
+                        out: torch.Tensor) -> torch.Tensor:
+        """For the direct-output entries: return `out` corrected. No cache involved.
+
+        Returns rather than mutates because several of these sites hand back a kernel's return value
+        directly, and `.add_()` on a tensor the kernel owns is not obviously safe at every one.
+        """
+        if not self._has_weight_zp:
+            return out
+        return out + self._zpw_correction(x_packed, alpha).to(out.dtype)
+
+    def _zpw_assert_covered(self, site: str) -> None:
+        """Refuse to run an uncovered path with a non-zero zero point, rather than run it wrongly.
+
+        This is fix #2's `MODIFF_ZP_STRICT` lesson applied before the mistake instead of after it: a
+        PARTIAL build there quantized symmetrically against zp-corrected biases, produced relL2 7.3-22,
+        and a script reported "fix #2 is answered NEGATIVELY" from the artifact
+        (docs/zp_coverage_2026-08-13/FINDINGS.md). A wrong number that looks like a result is more
+        expensive than a crash. Set MODIFF_WEIGHT_ZP_STRICT=0 only to collect a coverage census.
+        """
+        if not self._has_weight_zp:
+            return
+        if os.environ.get("MODIFF_WEIGHT_ZP_STRICT", "1") != "1":
+            return
+        raise RuntimeError(
+            f"weight_zp is non-zero on {self.layer_name} but the conv path '{site}' does not apply the "
+            f"correction, so this layer would run symmetric codes against a zero-point weight scale. "
+            f"Wire _zpw_correction at that site, or unset the table. "
+            f"MODIFF_WEIGHT_ZP_STRICT=0 to collect a census instead of raising.")
 
     def effective_code_utilisation(self, x: torch.Tensor, fused_silu: bool = False) -> float:
         """max |value| this layer's static quantizer will see, in CODE units. Q (=7) is full scale.
@@ -488,6 +578,9 @@ class OptimizedInt4Conv2d(nn.Module):
                 self.dilation[0], self.dilation[1]
             )
             out = out_raw * self.weight_scale_channel
+            # fix #4 AFTER the weight_scale multiply: _zpw_correction is in the units of the FINAL
+            # scaled output (zp[k]*ws[k]*alpha*S[p]), not of the raw accumulator.
+            out = self._zpw_add_to_out(x_packed, scale_tensor, out)
         else:
             raise RuntimeError(
                 f"CUTLASS INT4 kernel unavailable for layer {self.layer_name} "
@@ -540,6 +633,7 @@ class OptimizedInt4Conv2d(nn.Module):
             self.dilation[0], self.dilation[1]
         )
         out = out_raw * self.weight_scale_channel
+        out = self._zpw_add_to_out(x_packed, self._dyn_inv_scale_buf.view(1), out)   # fix #4
         if with_bias and self.bias is not None:
             out = out + self.bias
         return out
@@ -944,6 +1038,7 @@ class OptimizedInt4Conv2d(nn.Module):
             self.padding[0], self.padding[1],
             self.dilation[0], self.dilation[1]
         )
+        self._zpw_add_to_ohat(x_packed, d_alpha)      # fix #4, in place on the cache
         profiler.stop("MoDiff INT4 Static Conv2d", p_conv)
         return self._module_output()
 
@@ -1045,6 +1140,7 @@ class OptimizedInt4Conv2d(nn.Module):
                 self.weight_scale_channel.view(-1), self.o_hat_cache, residual, out,
                 self.stride[0], self.stride[1], self.padding[0], self.padding[1],
                 self.dilation[0], self.dilation[1])
+            self._zpw_add_to_ohat_and_out(x_packed, d_alpha, out)   # fix #4, cache AND out
             profiler.stop("MoDiff INT4 Static Conv2d (o_hat+residual)", p_conv)
             return (out, cat) if cat is not None else out
 
@@ -1054,6 +1150,7 @@ class OptimizedInt4Conv2d(nn.Module):
             self.weight_scale_channel.view(-1), self.o_hat_cache,
             self.stride[0], self.stride[1], self.padding[0], self.padding[1],
             self.dilation[0], self.dilation[1])
+        self._zpw_add_to_ohat(x_packed, d_alpha)      # fix #4, in place on the cache
         profiler.stop("MoDiff INT4 Static Conv2d", p_conv)
         out = self._module_output()
         return (out, cat) if cat is not None else out
@@ -1097,6 +1194,7 @@ class OptimizedInt4Conv2d(nn.Module):
             self.weight_scale_channel.view(-1), self.o_hat_cache, residual, out,
             self.stride[0], self.stride[1], self.padding[0], self.padding[1],
             self.dilation[0], self.dilation[1])
+        self._zpw_add_to_ohat_and_out(x_packed, d_alpha, out)   # fix #4, cache AND out
         profiler.stop("MoDiff INT4 Static Conv2d (o_hat+residual)", p_conv)
         return out
 
@@ -1248,6 +1346,12 @@ class OptimizedInt4Conv2d(nn.Module):
             self.o_hat_cache,
             self.stride[0], self.stride[1], self.padding[0], self.padding[1],
             self.dilation[0], self.dilation[1])
+        if self._has_weight_zp:
+            # These entries accumulate INTO o_hat_cache in place and _module_output() returns that same
+            # tensor, so correcting the cache corrects the return value too -- one add, not two. Doing
+            # it the other way round (correcting the return and not the cache) would leave the MoDiff
+            # recursion reading an uncorrected o_hat at every later step, and would fail silently.
+            self.o_hat_cache.add_(self._zpw_correction(x_packed, alpha).to(self.o_hat_cache.dtype))
         profiler.stop("MoDiff INT4 Static Conv2d (from codes)", p)
         return self._module_output()
 
@@ -1290,7 +1394,7 @@ class OptimizedInt4Conv2d(nn.Module):
                 res_arg = (residual if residual is not None
                            else torch.empty(0, device=x_packed.device, dtype=torch.float16))
                 try:
-                    return modiff_cutlass.conv2d_int4_evt_bias_residual_fp16(
+                    _r = modiff_cutlass.conv2d_int4_evt_bias_residual_fp16(
                         x_packed, self.weight_packed, self._cached_alpha_tensor,
                         self.weight_scale_channel.view(-1), bias_arg, res_arg,
                         self._standard_output_buf,
@@ -1298,6 +1402,10 @@ class OptimizedInt4Conv2d(nn.Module):
                         self.dilation[0], self.dilation[1])
                 except RuntimeError:
                     self._evt_d1_ok = False  # fixed EVT tile can't implement this shape; use deep-fuse below
+                else:
+                    # fix #4 outside the try: a raise from the correction is NOT "this shape cannot do
+                    # EVT", and catching it there would silently drop to the slow path forever.
+                    return self._zpw_add_to_out(x_packed, self._cached_alpha_tensor, _r)
 
             # Deep-fuse: fold the per-channel weight_scale into the CUTLASS int4
             # epilogue (writes fully-scaled fp16, NO fp32 temp), then a from_half
@@ -1313,6 +1421,7 @@ class OptimizedInt4Conv2d(nn.Module):
                                 if self.bias is not None else self._empty_bias)
                     res_arg = (residual if residual is not None
                                else torch.empty(0, device=x_packed.device, dtype=torch.float16))
+                    self._zpw_assert_covered("conv_from_int4:deepfuse_bias_residual")   # fix #4: NEVER had a guard -- found by auditing every conv2d_int4_* call site, not by the guard mechanism itself
                     return modiff_cutlass.conv2d_int4_fprop_deepfuse_bias_residual_fp16(
                         x_packed, self.weight_packed, self._cached_alpha_tensor,
                         self.weight_scale_channel_half.view(-1), bias_arg, res_arg,
@@ -1348,6 +1457,7 @@ class OptimizedInt4Conv2d(nn.Module):
                 self.stride[0], self.stride[1], self.padding[0], self.padding[1],
                 self.dilation[0], self.dilation[1])
             out = out_raw * self.weight_scale_channel
+            out = self._zpw_add_to_out(x_packed, self._cached_alpha_tensor, out)   # fix #4
         if self.bias is not None and not bias_fused:
             bias = self.bias.to(out.dtype) if out.dtype != self.bias.dtype else self.bias
             out = out + bias
@@ -1391,12 +1501,14 @@ class OptimizedInt4Conv2d(nn.Module):
         for c in range(ncfg):
             try:
                 for _ in range(3):
+                    self._zpw_assert_covered("conv_from_int4:dequant_tuned_a")   # fix #4: NEVER had a guard -- found by auditing every conv2d_int4_* call site, not by the guard mechanism itself
                     modiff_cutlass.conv2d_int4_dequant_fp16_tuned(
                         x_packed, self.weight_packed, self._cached_alpha_tensor, wsh, buf, c, *strides)
                 torch.cuda.synchronize()
                 s = torch.cuda.Event(enable_timing=True); e = torch.cuda.Event(enable_timing=True)
                 s.record()
                 for _ in range(10):
+                    self._zpw_assert_covered("conv_from_int4:dequant_tuned_b")   # fix #4: NEVER had a guard -- found by auditing every conv2d_int4_* call site, not by the guard mechanism itself
                     modiff_cutlass.conv2d_int4_dequant_fp16_tuned(
                         x_packed, self.weight_packed, self._cached_alpha_tensor, wsh, buf, c, *strides)
                 e.record(); torch.cuda.synchronize()
@@ -1452,6 +1564,7 @@ class OptimizedInt4Conv2d(nn.Module):
         out = self._ensure_packed_out_buf(x_packed.shape[0], h_out, w_out, x_packed.device)
         bias_arg = (self.bias.view(-1).contiguous() if self.bias is not None else self._empty_bias)
         cid = self._ensure_tuned_config(x_packed)
+        self._zpw_assert_covered("forward_relu_requant_int4")   # fix #4: NEVER had a guard -- found by auditing every conv2d_int4_* call site, not by the guard mechanism itself
         modiff_cutlass.conv2d_int4_fprop_relu_requant_int4(
             x_packed, self.weight_packed, self._cached_alpha_tensor,
             self.weight_scale_channel_half.view(-1), bias_arg, requant_scale.view(1),
@@ -1488,6 +1601,7 @@ class OptimizedInt4Conv2d(nn.Module):
         out_packed = self._ensure_packed_out_buf(N, h_out, w_out, x_packed.device)
         bias_arg = (self.bias.view(-1).contiguous() if self.bias is not None else self._empty_bias)
         cid = self._ensure_tuned_config(x_packed)
+        self._zpw_assert_covered("fprop_bias_residual_dual")   # fix #4: NEVER had a guard -- found by auditing every conv2d_int4_* call site, not by the guard mechanism itself
         modiff_cutlass.conv2d_int4_fprop_bias_residual_dual(
             x_packed, self.weight_packed, self._cached_alpha_tensor,
             self.weight_scale_channel_half.view(-1), bias_arg, residual.half(),
@@ -1591,6 +1705,7 @@ class OptimizedInt4Conv2d(nn.Module):
                 self.padding[0], self.padding[1],
                 self.dilation[0], self.dilation[1]
             )
+            self._zpw_add_to_ohat(x_packed, d_alpha)      # fix #4, in place on the cache
             profiler.stop("MoDiff INT4 Static Conv2d", p_conv)
             return self._module_output()
 
@@ -1630,6 +1745,7 @@ class OptimizedInt4Conv2d(nn.Module):
             self.padding[0], self.padding[1],
             self.dilation[0], self.dilation[1]
         )
+        self._zpw_add_to_ohat(x_packed, self._inv_scale_buf.view(1))   # fix #4, in place
         profiler.stop("MoDiff INT4 Fused Conv2d", p_conv)
         return self._module_output()
 
@@ -2035,14 +2151,35 @@ def export_int4_delta_scales(model: nn.Module) -> Dict[str, object]:
 
 
 def apply_int4_delta_scales(model: nn.Module, table: Dict[str, object]) -> int:
-    """Load a table from export_int4_delta_scales. Returns how many layers were filled."""
+    """Load a table from export_int4_delta_scales. Returns how many layers were filled.
+
+    MODIFF_DELTA_TABLE_RATIO re-sizes the loaded grid, and exists because DELTA_CLIP_RATIO does NOT
+    reach this path. That constant is applied where a scale is DERIVED from an observed absmax
+    (`scale = Q / (absmax * safety / DELTA_CLIP_RATIO)`); a table loaded from a `.pt` is copied in
+    verbatim, with the ratio already baked in by `export_qdiff_scales.py`, which imports the same
+    constant. So the only way to re-sweep it on a static arm was to re-export the table.
+
+    Since scale is inversely proportional to the grid width, multiplying the loaded scales by
+    `r / DELTA_CLIP_RATIO` is arithmetically identical to having exported at ratio `r` -- which turns a
+    re-export into an env-var sweep. That matters because the constant's own docstring says it is
+    PROTOCOL-DEPENDENT and the 8 was swept on the L0 + dynamic arm; the L1 + static arm that now
+    measures FID 55.49 has never had it swept.
+
+    Default 0 = off, so every existing table loads bit-identically.
+    """
     if not table:
         return 0
+    _r = float(os.environ.get("MODIFF_DELTA_TABLE_RATIO", "0") or 0)
+    _mul = (_r / OptimizedInt4Conv2d.DELTA_CLIP_RATIO) if _r > 0 else 1.0
+    if _mul != 1.0:
+        print(f"  MODIFF_DELTA_TABLE_RATIO={_r}: scaling the loaded delta table by {_mul:.4f} "
+              f"(equivalent to exporting at ratio {_r} instead of "
+              f"{OptimizedInt4Conv2d.DELTA_CLIP_RATIO})", flush=True)
     loaded = 0
     for m in model.modules():
         if not isinstance(m, OptimizedInt4Conv2d) or m.layer_name not in table:
             continue
-        t = table[m.layer_name].to(m.static_delta_scale.device, torch.float32)
+        t = table[m.layer_name].to(m.static_delta_scale.device, torch.float32) * _mul
         n = min(t.numel(), m.static_delta_scale.numel())
         m.static_delta_scale[:n].copy_(t[:n])
         if n < m.static_delta_scale.numel():          # forward-fill a shorter saved table

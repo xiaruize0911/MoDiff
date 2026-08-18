@@ -65,6 +65,12 @@ from integration.utils.quant_memory import format_quant_memory_report, report_qu
 from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 
+#: Seed for the W{8,4}A{8,4} linear activation-scale calibration sample inside _setup_model. Fixed so
+#: two runs of the same configuration freeze the same 42 static scales; see the call site for what it
+#: cost while unseeded. MODIFF_WXAX_CALIB_SEED overrides it, which is how the sensitivity of those
+#: scales can be measured deliberately instead of leaking into every cross-process comparison.
+_WXAX_CALIB_SEED = int(os.environ.get("MODIFF_WXAX_CALIB_SEED", "20260805"))
+
 # INT8 imports
 try:
     from integration.kernels.int8_optimized import (
@@ -949,12 +955,86 @@ class BenchmarkRunner:
                     set_wxax_calibrating(model, True)
                     cb = min(self.batch_size, 4)
                     cond = self._cond_kwargs(model, cb)
-                    with torch.inference_mode(), torch.amp.autocast('cuda', enabled=(mode != 'fp32'), dtype=torch.float16):
-                        DDIMSampler(model).sample(S=5, batch_size=cb, shape=self.shape,
-                                                  eta=0.0, verbose=False, **cond)
+                    # SEEDED because this sample decides 42 STATIC activation scales that every later
+                    # step uses, and it runs inside _setup_model -- before any caller gets to seed
+                    # anything -- so it was drawing from whatever ambient RNG state the process was in.
+                    # Two runs of the same configuration therefore froze different scales.
+                    #
+                    # HONEST SCOPE, because this was added on a hypothesis that MEASUREMENT REFUTED. It
+                    # was introduced to explain a 4.11/255 run-to-run spread on the W4A4 L1+static arm.
+                    # It does not: after the fix the same pair still measured 4.37/255, and the cause was
+                    # then isolated to `modiff=True` on the 42 projections (MODIFF_LINEAR=1) -- L1 is
+                    # nondeterministic at 4.5-6.2/255 in a SINGLE process with the state reset between
+                    # draws, while every L0 arm is bit-exact at 0.0000. See
+                    # docs/w4a4_quality_2026-08-17/data/noise_floor{,_isolate}.json.
+                    #
+                    # Kept anyway, on its own merits: an ambient-seeded calibration is one real source of
+                    # cross-process variation removed, and MODIFF_WXAX_CALIB_SEED now makes the
+                    # sensitivity of those 42 scales measurable on purpose. It is NOT the fix for L1.
+                    #
+                    # The state is saved and restored so this does not shift the caller's own stream:
+                    # generate_fid_samples seeds per batch AFTER the build, and consuming a different
+                    # amount of randomness here would change which noise its first batch draws.
+                    _rng_cpu = torch.get_rng_state()
+                    _rng_cuda = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+                    torch.manual_seed(_WXAX_CALIB_SEED)
+                    if torch.cuda.is_available():
+                        torch.cuda.manual_seed_all(_WXAX_CALIB_SEED)
+                    try:
+                        with torch.inference_mode(), torch.amp.autocast('cuda', enabled=(mode != 'fp32'), dtype=torch.float16):
+                            DDIMSampler(model).sample(S=5, batch_size=cb, shape=self.shape,
+                                                      eta=0.0, verbose=False, **cond)
+                    finally:
+                        torch.set_rng_state(_rng_cpu)
+                        if _rng_cuda is not None:
+                            torch.cuda.set_rng_state_all(_rng_cuda)
                     n_cal = finalize_wxax_ascale(model)
                     reset_wxax_modiff(model)   # clear caches populated during calibration
                     print(f"✓ Calibrated {n_cal} W{lb}A{lb} linear activation scales (static)")
+                # STATIC per-step delta table for the 42 projections. HERE, not in _load_delta_table:
+                # that runs BEFORE this block (it has to -- the activation calibration above samples the
+                # model), so the wxax Linears do not exist yet when it fires. Loading a table against a
+                # module tree that has not been converted is the shape of bug that gave
+                # apply_int*_delta_scales zero call sites for weeks.
+                #
+                # Only for MoDiff-on-Linear (is_modiff): a table on a non-modulated Linear is dead
+                # weight that reads like a live setting. And only under MODIFF_DELTA_MODE=static, for
+                # the same reason _load_delta_table gates on it -- the dynamic path derives its step
+                # size per call and ignores the table entirely.
+                # OPT-IN ONLY, and this is a MEASURED default rather than caution. Auto-loading it
+                # regressed W4A4 L1+static from FID 54.300 to **222.515** (10k, 2026-08-17) -- a 4x
+                # regression -- because LINEAR_DELTA_CLIP_RATIO is seeded from the CONV sweep, which
+                # chose 8 for a heavy-tailed conv-delta distribution. The projections' delta is not that
+                # distribution, and under-sizing its grid 8x clips catastrophically. The conv constant's
+                # own docstring records the same failure the other way round: the test fixture with
+                # |max|/|min| = 1.26 got WORSE with the ratio (0.221 -> 0.340).
+                #
+                # So the file existing must not be enough to load it -- for ~30 minutes it was, and any
+                # L1+static run in that window would have measured 222 and read it as "L1 is bad".
+                # MODIFF_LINEAR_DELTA_TABLE must be set explicitly, and the ratio swept
+                # (MODIFF_LINEAR_DELTA_TABLE_RATIO rescales a loaded table, so no re-export) before this
+                # becomes a default again.
+                lin_path = os.environ.get("MODIFF_LINEAR_DELTA_TABLE")
+                if is_modiff and lin_path and \
+                        os.environ.get("MODIFF_DELTA_MODE", "static").lower() == "static":
+                    if os.path.exists(lin_path):
+                        from integration.kernels.wxax_linear import apply_wxax_delta_scales
+                        tbl = torch.load(lin_path, map_location="cpu", weights_only=True)
+                        n_lin_delta = apply_wxax_delta_scales(model.model.diffusion_model, tbl)
+                        # A table that matches nothing is this path's characteristic failure: the run
+                        # still samples, on the per-call reduction, and looks like "the table did not
+                        # help". Refuse instead.
+                        if n_lin_delta == 0:
+                            raise RuntimeError(
+                                f"{lin_path} matched 0 modulated Linears. The run would silently fall "
+                                f"back to delta_absmax_fp16 and read as 'the static table does not "
+                                f"help'. Regenerate it against this module tree, or unset "
+                                f"MODIFF_LINEAR_DELTA_TABLE.")
+                        print(f"✓ Loaded static per-step delta table for {n_lin_delta} Linears "
+                              f"from {lin_path}")
+                    else:
+                        print(f"  (no linear delta table at {lin_path}; the 42 projections keep the "
+                              f"per-call delta_absmax_fp16 reduction, which also blocks GN fusion)")
         except Exception as e:
             print(f"  (attention/linear conversion skipped: {e})")
 

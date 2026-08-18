@@ -243,6 +243,14 @@ def main():
                 ref_ada = F.conv2d(x, w_ada, b, st[0], st[1], st[2], st[3])
                 nrm_ada = float(ref_ada.norm()) + 1e-12
                 row["adaround"] = float((out(wq) - ref_ada).norm()) / nrm_ada
+                # ADDED 2026-08-17. `adaround` above is AdaRound WITH its per-channel zero point, which
+                # needs fix #4's windowed reduction. What SHIPS today is AdaRound re-quantized onto our
+                # symmetric grid: generate_fid_samples.install_adaround() substitutes the dequantized
+                # W_q into the state dict and the int4 conversion re-rounds it, dropping z_w. Scoring
+                # that against the SAME ref_ada isolates the zero point -- the only thing fix #4 adds
+                # over the arm already measured at FID 181.5 -> 140.2 -- from AdaRound's rounding, which
+                # is already available with no kernel work. The ratio of these two IS fix #4's prize.
+                row["adaround_on_our_grid"] = float((out(q_ours(wq)) - ref_ada).norm()) / nrm_ada
                 row["w_recon_adaround"] = float((wq - w_ada).norm() / (w_ada.norm() + 1e-12))
                 row["fp32_weight_delta"] = float((w_ada - w).norm() / (w.norm() + 1e-12))
                 row["zp_min"] = float(e["zero_point"].min())
@@ -262,7 +270,7 @@ def main():
 
     print(f"\n{'weight set':14}{'median out err':>16}{'worst':>10}{'n':>5}")
     summary = {}
-    for key in ("rtn_sym", "ours", "adaround"):
+    for key in ("rtn_sym", "ours", "adaround", "adaround_on_our_grid"):
         mm, wo, n = med(key)
         summary[key] = {"median": mm, "worst": wo, "n": n}
         print(f"{key:14}{mm:16.4f}{wo:10.4f}{n:5d}")
@@ -304,6 +312,19 @@ def main():
         wins = sum(1 for r_ in rows if "adaround" in r_ and r_["ours"] < r_["adaround"])
         print(f"\nours wins on OUTPUT error for {wins}/{matched} convs; medians "
               f"{o:.4f} (ours) vs {a:.4f} (adaround), ratio {a / o:.2f}x")
+
+        # ADDED 2026-08-17: fix #4's prize, isolated. Both arms start from AdaRound's W_q and are scored
+        # against AdaRound's own fp32 weight, so the ONLY difference is whether z_w survives.
+        g = summary.get("adaround_on_our_grid", {}).get("median")
+        if g:
+            zp_wins = sum(1 for r_ in rows
+                          if "adaround" in r_ and r_["adaround"] < r_["adaround_on_our_grid"])
+            print(f"\nFIX #4 ISOLATED -- AdaRound with z_w vs the same weights on our symmetric grid\n"
+                  f"  with z_w (needs fix #4)   median {a:.4f}\n"
+                  f"  on our grid (SHIPS TODAY) median {g:.4f}\n"
+                  f"  ratio {g / a:.2f}x, and the zero point wins on {zp_wins}/{matched} convs.\n"
+                  f"This is what a windowed reduction for z_w*Sigma(a) buys ON TOP OF the AdaRound arm\n"
+                  f"already measured end to end -- not on top of the shipped RTN+MSE weights.")
         if o <= a:
             print("\nFIX #4 IS CLOSED ON EVIDENCE. AdaRound loses on OUTPUT error too -- the metric it\n"
                   "optimises and the one the earlier deprioritisation could not measure. Adopting it\n"

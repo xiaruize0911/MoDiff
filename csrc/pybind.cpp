@@ -117,6 +117,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "EVT INT8 conv: acc*alpha*weight_scale[k] + bias[k] + residual[elem] -> fp16 (single kernel, no scratch)");
     m.def("conv2d_int4_evt_bias_residual_fp16", &conv2d_int4_evt_bias_residual_fp16,
           "EVT INT4 conv: acc*alpha*weight_scale[k] + bias[k] + residual[elem] -> fp16 (single kernel, no scratch)");
+    m.def("int4_window_sum", &int4_window_sum,
+          "fix #4 step 1: S[p] = sum over the conv window of the int4 activation codes, over all "
+          "input channels -- one fp32 scalar per output pixel, shared by every output channel. "
+          "Padding-clean because a padded tap's code is 0 and the activation grid is symmetric.");
     m.def("conv2d_int8_evt_o_hat_residual", &conv2d_int8_evt_o_hat_residual,
           "EVT INT8 conv: o_hat[elem] += acc*alpha*weight_scale[k] (in place) ; out = o_hat_new + residual -> fp16 (dual store, no fp32 round-trip)");
     m.def("conv2d_int4_evt_o_hat_residual", &conv2d_int4_evt_o_hat_residual,

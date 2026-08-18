@@ -33,3 +33,9 @@ docs/**/trace/
 # reproducible from its scripts/make_plots.py, but a report whose figures only exist on the machine
 # that made them is not a report.
 !docs/**/plots/*.png
+
+# Weight-reconstruction output trees. The ckpt.pth is already excluded by *.pth, but the run also drops
+# a sampling_config.yaml and numpy/*.npz beside it, and those would land in a REPORT directory as build
+# artifacts of a 92-minute job. The reconstruction is reproducible from scripts/recon_ours.sh.
+docs/**/recon_ours/
+docs/**/qdiff_runs/

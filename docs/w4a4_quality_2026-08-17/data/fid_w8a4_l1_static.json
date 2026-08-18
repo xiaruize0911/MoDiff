@@ -1,0 +1,11 @@
+{
+  "n_real": 10000,
+  "dims": 2048,
+  "modes": {
+    "w8a4_modiff_l1_static": {
+      "label": "w8a4_modiff_l1_static",
+      "n": 10000,
+      "fid_vs_real": 7.83514356961868
+    }
+  }
+}

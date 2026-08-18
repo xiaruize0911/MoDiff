@@ -1,0 +1,50 @@
+{
+ "W4A4 MoDiff  L1 + static": {
+  "n_draws": 3,
+  "batch": 8,
+  "pairwise_mean_abs_delta_255": [
+   4.204657872517903,
+   5.832558314005534,
+   4.6202952067057295
+  ],
+  "pairwise_max_pixel_diff": [
+   174,
+   195,
+   213
+  ],
+  "floor_mean_255": 4.885837131076389,
+  "floor_max_255": 5.832558314005534
+ },
+ "W4A4 MoDiff  L0 + dynamic": {
+  "n_draws": 3,
+  "batch": 8,
+  "pairwise_mean_abs_delta_255": [
+   0.0,
+   0.0,
+   0.0
+  ],
+  "pairwise_max_pixel_diff": [
+   0,
+   0,
+   0
+  ],
+  "floor_mean_255": 0.0,
+  "floor_max_255": 0.0
+ },
+ "W8A8 MoDiff  L0 + dynamic": {
+  "n_draws": 3,
+  "batch": 8,
+  "pairwise_mean_abs_delta_255": [
+   0.0,
+   0.0,
+   0.0
+  ],
+  "pairwise_max_pixel_diff": [
+   0,
+   0,
+   0
+  ],
+  "floor_mean_255": 0.0,
+  "floor_max_255": 0.0
+ }
+}

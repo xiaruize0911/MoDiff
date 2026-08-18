@@ -125,6 +125,30 @@ def build(mode, delta_mode, act_bits=8, linear=None):
     # was retired in the same pass and now RAISES on anything but 1.0, so it is no longer set here.
     os.environ["MODIFF_ACT_BITS"] = str(act_bits)
     os.environ.pop("MODIFF_DELTA_CLIP", None)
+    # ATTN_FP16=1 leaves the attention SCORE path (QK^T / softmax / AV) in fp16 SDPA while keeping the
+    # 42 projections quantized -- which is what the reference implementation does. qdiff's
+    # QuantAttnBlock (the class LSUN-churches' unconditional AttnBlock maps to) builds its q/k/v
+    # quantizers at `sm_abit` (8) rather than `act_bit` under the comment "we do not reduce the bit in
+    # attention in this work", and its forward() never calls them at all -- `q = self.q(h_)` goes
+    # straight into `th.bmm(q, k)`. So the paper's "W4A4" has a full-precision score path where ours
+    # runs int4 Q/K on the MMA kernels; this flag makes that one axis comparable.
+    #
+    # Set AFTER set_env, which writes MODIFF_QUANT_ATTN=1 unconditionally for every quantized mode --
+    # exporting it from the shell has no effect. Default off, like MODIFF_USE_EMA and CALI_PAPER: it
+    # moves every quantized mode at once, so enabling it by default would invalidate the committed
+    # numbers in one step.
+    if os.environ.get("ATTN_FP16") == "1" and base != "fp16":
+        os.environ["MODIFF_QUANT_ATTN"] = "0"
+    # DELTA_STATIC=1 runs the MoDiff arms on the STATIC per-step delta table -- the shipped default the
+    # speed report times -- instead of the dynamic per-call absmax this FID protocol has always used.
+    # OPEN_ITEMS B1 measured the qdiff constant at relL2 0.3122 against dynamic's 0.3577 at W4A4, so the
+    # committed FID numbers were taken on the weaker of the two.
+    #
+    # Set AFTER the MODIFF_LINEAR line above, which uses `delta_mode == "dynamic"` as its "is this a
+    # MoDiff arm" test: overwriting delta_mode before it would read as a PTQ baseline and silently turn
+    # L1 back into L0.
+    if os.environ.get("DELTA_STATIC") == "1" and delta_mode == "dynamic":
+        os.environ["MODIFF_DELTA_MODE"] = "static"
     calib = None if base == "fp16" else CALIB["int4" if "int4" in base else "int8"]
     runner = B.BenchmarkRunner(
         config_path="configs/latent-diffusion/lsun_churches-ldm-kl-8.yaml",
@@ -137,7 +161,11 @@ def build(mode, delta_mode, act_bits=8, linear=None):
 
 #: B5's AdaRound arm. Kept here rather than imported from integration/tests/b5_adaround_e2e.py because
 #: that module builds a model at import time; the 30 lines are cheap next to the coupling.
-ADAROUND_CKPT = "/workspace/quant_models/church_w4a8_ckpt.pth"
+#: ADAROUND_CKPT lets a reconstruction done on OUR network replace the paper's. A25: the paper's is the
+#: EMA network's and installing its asymmetric grid reads FID 309.689 against a 52.584 baseline, with
+#: latent relL2 2.55 -- past the 1.0 that zeroing the weights gives, so a different function rather than
+#: a degraded one. Same override name as install_adaround_zp.py so one variable moves both arms.
+ADAROUND_CKPT = os.environ.get("ADAROUND_CKPT", "/workspace/quant_models/church_w4a8_ckpt.pth")
 N_ADAROUND_CONVS = 89          # the verified bijection -- see docs/OPEN_ITEMS.md B5
 
 
@@ -229,6 +257,12 @@ def main():
         folder, dm, ab, lin = SPEC[mode]
         if a.adaround:
             folder += "_adaround"
+        if os.environ.get("ATTN_FP16") == "1":
+            folder += "_attnfp16"          # never overwrite a committed folder with a different config
+        if os.environ.get("DELTA_STATIC") == "1":
+            folder += "_static"
+        if os.environ.get("ADAROUND_ZP") == "1":
+            folder += "_adazp"
         d = os.path.join(a.out, folder)
         os.makedirs(d, exist_ok=True)
         have = len([f for f in os.listdir(d) if f.endswith(".png")])
@@ -240,6 +274,18 @@ def main():
               flush=True)
         if ada_w is None:
             runner, model, sampler = build(mode, dm, ab, lin)
+            # ADAROUND_ZP=1 -- fix #4's actual payload, and NOT --adaround. That flag substitutes
+            # AdaRound's DEQUANTIZED weights and lets our symmetric quantizer re-round them, which drops
+            # the per-channel zero point (the degraded arm measured at FID 140.2). This installs the
+            # asymmetric grid itself -- codes, per-channel delta, and weight_zp = 8 - z_w -- so the
+            # epilogue correction has something to correct. Must run AFTER build(): it walks
+            # named_modules() of the CONVERTED model, and the ResBlock fusion adds an `.original.` level
+            # the checkpoint does not have.
+            if os.environ.get("ADAROUND_ZP") == "1" and "int4" in BASE_MODE.get(mode, mode):
+                sys.path.insert(0, os.path.join(ROOT, "docs/w4a4_quality_2026-08-17/scripts"))
+                import install_adaround_zp as _azp
+                _n_zp = _azp.install(model.model.diffusion_model, _azp.adaround_asymmetric())
+                assert _n_zp >= 70, f"fix #4 installed only {_n_zp} convs; refusing to generate"
         else:
             # Asserted, not printed. A vacuous AdaRound arm would produce 10k images identical to the
             # baseline's and an FID difference of ~0, which reads as "AdaRound does not matter" -- the

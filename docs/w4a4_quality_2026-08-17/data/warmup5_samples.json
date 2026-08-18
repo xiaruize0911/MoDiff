@@ -1,0 +1,19 @@
+{
+ "fid_dir": "/workspace/fid_warmup5",
+ "n_paired": 16,
+ "columns": [
+  "000000.png",
+  "000001.png",
+  "000002.png",
+  "000003.png",
+  "000004.png",
+  "000005.png"
+ ],
+ "mean_abs_delta_vs_fp16_255": {
+  "fp16": 0.0,
+  "int8_modiff_l0": 2.8025150299072266,
+  "int4_modiff_l0": 27.091138521830242
+ },
+ "w8a8_vs_w4a4_255": 26.99811585744222,
+ "config": "DDIM 50, batch 16, dynamic delta, MODIFF_LINEAR=0 (conv-only MoDiff), MODIFF_WARMUP_STEPS=5, real-checkpoint calibration, seed0=20260805"
+}

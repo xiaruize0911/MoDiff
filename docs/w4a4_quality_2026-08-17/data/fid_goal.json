@@ -1,0 +1,16 @@
+{
+  "n_real": 10000,
+  "dims": 2048,
+  "modes": {
+    "int4_modiff_l0": {
+      "label": "int4_modiff_l0",
+      "n": 10000,
+      "fid_vs_real": 193.31636948721632
+    },
+    "int4_modiff_l1_static": {
+      "label": "int4_modiff_l1_static",
+      "n": 10000,
+      "fid_vs_real": 55.49032701303511
+    }
+  }
+}

@@ -1,0 +1,30 @@
+{
+ "dirs": {
+  "50": "/workspace/fid_warmup5",
+  "200": "/workspace/fid_warmup5_s200",
+  "500": "/workspace/fid_warmup5_s500"
+ },
+ "n_paired": 16,
+ "columns": [
+  "000000.png",
+  "000001.png",
+  "000002.png",
+  "000003.png",
+  "000004.png",
+  "000005.png"
+ ],
+ "mean_abs_delta_vs_fp16_same_steps_255": {
+  "50_int8_modiff_l0": 2.8025150299072266,
+  "50_int4_modiff_l0": 27.091138521830242,
+  "200_int8_modiff_l0": 2.6406466166178384,
+  "200_int4_modiff_l0": 30.4792054494222,
+  "500_int8_modiff_l0": 2.4853645960489907,
+  "500_int4_modiff_l0": 30.66009585062663
+ },
+ "fp16_schedule_delta_255": {
+  "50_vs_200": 6.136810938517253,
+  "200_vs_500": 1.4678020477294922,
+  "50_vs_500": 7.094964981079102
+ },
+ "config": "batch 16, dynamic delta, MODIFF_LINEAR=0, MODIFF_WARMUP_STEPS=5, real-checkpoint calibration, seed0=20260805"
+}

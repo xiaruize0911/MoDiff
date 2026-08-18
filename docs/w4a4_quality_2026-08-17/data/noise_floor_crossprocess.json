@@ -1,0 +1,24 @@
+{
+ "intra_process": {
+  "w4a4_l0_dynamic": 0.0,
+  "w4a4_l0_static": 0.0,
+  "w8a8_l0_dynamic": 0.0,
+  "w4a4_l1_dynamic": 6.2275,
+  "w4a4_l1_static": [
+   4.8858,
+   4.5032
+  ]
+ },
+ "cross_process": {
+  "w4a4_l0_cudnn_benchmark_true": 8.7305,
+  "w4a4_l0_cudnn_benchmark_false": 6.3155,
+  "w4a4_l1_static": 4.3677
+ },
+ "fid_10k_same_arm": {
+  "run1": 55.49032701303511,
+  "run2": 55.074,
+  "spread": 0.416
+ },
+ "units": "mean |delta| in 0-255 over paired images; FID vs real at n=10000",
+ "note": "cross-process is the floor that applies to every arm comparison in FINDINGS section 1, because each arm is a separate generate_fid_samples invocation. cudnn.benchmark accounts for ~28% of it; the remainder is unidentified."
+}
