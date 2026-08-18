@@ -554,3 +554,68 @@ Both are set **after** `ks.set_env()` (which writes `MODIFF_QUANT_ATTN=1` uncond
 `MODIFF_LINEAR` line (which uses `delta_mode == "dynamic"` as its "is this a MoDiff arm" test, so
 overwriting the delta mode earlier would silently turn L1 back into L0). The generation scripts assert
 both: `modiff=True` must appear for L1, and `QUANTIZED standard attention` must not for `ATTN_FP16`.
+
+
+---
+
+## 9. HANDOFF — state at 2026-08-18 03:40, and the one measurement still owed
+
+### The decisive experiment is set up but not run
+
+W4A4 is **52.584** and the activation ceiling is **7.835** (W8A4, §6.3), so **44.7 FID is the weights**.
+Fix #4's machinery is complete and gated (§5.3, six gates below) and its failure end to end is an INPUT
+problem, not an arithmetic one (§A25): the paper's AdaRound checkpoint is the **EMA** network's.
+
+**What is owed: an AdaRound reconstruction on OUR network, then one 10k FID.**
+
+```bash
+bash docs/w4a4_quality_2026-08-17/scripts/recon_ours.sh          # ~92 min at cali_iters 1000
+ADAROUND_CKPT=docs/w4a4_quality_2026-08-17/recon_ours/*/samples/ckpt.pth \
+  bash /path/to/fid_fix4.sh                                      # ~25 min, compare against 52.584
+```
+
+The reconstruction was started and **stopped at 51 of ~168 layers**. It only writes `ckpt.pth` at the
+end, so that partial run left nothing usable — a rerun starts from zero. The log confirmed the one flag
+that matters was in force: `Keeping NON-EMA weights (--no_ema): matches integration/'s loader`.
+
+`ADAROUND_CKPT` overrides the checkpoint path in both `install_adaround_zp.py` and
+`generate_fid_samples.py`, so one variable moves the fix #4 arm and B5's degraded arm together.
+
+### Predicted outcome, recorded before the run so it cannot be adjusted afterwards
+
+Fix #4 is 1.20× on conv output error **when scored on its own network**. AdaRound's rounding alone is
+1.13× on the same metric and was worth −23% FID (181.5 → 140.2) in the configuration where it helped. If
+1.20× transfers at a similar rate, 52.584 lands near **40** — better, and still far from 7.835. The
+honest expectation is that this closes part of the 44.7 and not the whole of it.
+
+### Six gates, all green
+
+| gate | what it pins |
+|---|---|
+`test_zpw_window_sum` | `S[p]` exact on 8 real shapes, max\|Δ\| = 0.0, sign-extension control fires |
+`test_zpw_ohat` | o_hat accumulate, 4 steps, 4.67e-04 vs float64 asymmetric |
+`test_zpw_direct_out` | direct-output sites, 4.95e-08 |
+`test_zpw_dual_store` | dual-store sites, 4.28e-04 on BOTH cache and return |
+`test_zpw_additive` | the additive route at 1.65e-4 — fp16 epilogue precision |
+`test_wxax_delta_table` | the projections' delta table: reduction gone, round-trip exact, ratio travels |
+
+Site coverage: **14 int4 conv entry points, 10 corrected, 4 refuse.** The audit is
+`scripts/`-reproducible, and it is what found the 5 sites that never had a guard — the guard mechanism
+does not find its own gaps.
+
+### Also unresolved, and both are instrument problems worth more than any single kernel
+
+* **A19**: the 16-image pixel screen has an 8.7/255 cross-process floor, of which `cudnn.benchmark=True`
+  explains 28% and **6.3 is unidentified**. Until that is closed, every cheap screen in this project can
+  only spot order-of-magnitude breakage, and each verdict costs a 25-minute FID run.
+* **A18**: `MODIFF_LINEAR=1` is nondeterministic within one process at 4.5–6.2/255 where every L0 arm is
+  bit-exact. Two candidates ruled out. It sits in the arm this report recommends.
+
+### Push state
+
+`main` is fast-forwarded to `8bd442f` and clean; **68 commits are pending push** (21 of them predate this
+session — local `main` was already ahead of `origin/main`). An ed25519 key was generated at
+`~/.ssh/id_ed25519` and github.com's host keys were installed after checking both fingerprints against
+GitHub's published values. The push is blocked on one manual step: the public key
+(`SHA256:hf16kxzqVHpBvekU8rGZfx5a/EGbMEQmPzvYhx5PZzE`) is not yet authorised on the account or as a
+write-enabled deploy key.
