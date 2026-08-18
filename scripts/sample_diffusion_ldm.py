@@ -629,6 +629,43 @@ if __name__ == "__main__":
                         iters=opt.cali_iters, weight=0.01, asym=True, b_range=(20, 2),
                         warmup=0.2, act_quant=False, opt_mode='mse')
 
+            # ---- INCREMENTAL CHECKPOINTING (added 2026-08-18) -------------------------------------
+            # Weight reconstruction is ~168 layers and only wrote ckpt.pth at the very end, so an
+            # interrupted run left NOTHING. Measured: a run stopped at layer 51 of 168 threw away 40
+            # minutes of GPU and had to restart from zero. Anything this long needs to be resumable.
+            #
+            # RECON_SAVE_EVERY=N dumps the state dict every N layers to ckpt.partial.pth, and
+            # RECON_RESUME=<path> loads one back and SKIPS the layers it already covers. The skip is
+            # keyed on the AdaRound alpha actually being present for that module, not on a counter --
+            # a counter would silently mis-skip if the traversal order ever changed, and the traversal
+            # is a recursive named_children() walk that block conversion can reorder.
+            _save_every = int(os.environ.get("RECON_SAVE_EVERY", "10"))
+            _done = {"n": 0}
+            _resume = os.environ.get("RECON_RESUME")
+            _resume_sd = None
+            if _resume and os.path.exists(_resume):
+                _resume_sd = torch.load(_resume, map_location="cpu", weights_only=False)
+                logger.info(f"RECON_RESUME: {_resume} has {len(_resume_sd)} entries; layers whose "
+                            f"weight_quantizer.alpha it already carries will be skipped")
+
+            def _partial_path():
+                return os.path.join(logdir, "ckpt.partial.pth")
+
+            def _maybe_save(tag):
+                _done["n"] += 1
+                if _save_every > 0 and _done["n"] % _save_every == 0:
+                    torch.save(qnn.state_dict(), _partial_path())
+                    logger.info(f"  checkpointed after {_done['n']} layers ({tag}) -> {_partial_path()}")
+
+            def _already_done(qnn_, module):
+                """True if the resume checkpoint carries this module's learned alpha."""
+                if _resume_sd is None:
+                    return False
+                for nm, mm in qnn_.named_modules():
+                    if mm is module:
+                        return (nm + ".weight_quantizer.alpha") in _resume_sd
+                return False
+
             def recon_model(model):
                 """
                 Block reconstruction. For the first and last layers, we can only apply layer reconstruction.
@@ -639,9 +676,13 @@ if __name__ == "__main__":
                         if module.ignore_reconstruction is True:
                             logger.info('Ignore reconstruction of layer {}'.format(name))
                             continue
+                        elif _already_done(qnn, module):
+                            logger.info('RESUME: skipping already-reconstructed layer {}'.format(name))
+                            continue
                         else:
                             logger.info('Reconstruction for layer {}'.format(name))
                             layer_reconstruction(qnn, module, **kwargs)
+                            _maybe_save(name)
                     else:
                         recon_model(module)
 
@@ -652,9 +693,13 @@ if __name__ == "__main__":
                         if module.ignore_reconstruction is True:
                             logger.info('Ignore reconstruction of layer {}'.format(name))
                             continue
+                        elif _already_done(qnn, module):
+                            logger.info('RESUME: skipping already-reconstructed layer {}'.format(name))
+                            continue
                         else:
                             logger.info('Reconstruction for layer {}'.format(name))
                             layer_reconstruction_modiff(qnn, module, **kwargs)
+                            _maybe_save(name)
                     else:
                         recon_model_modiff(module)
 
@@ -732,7 +777,11 @@ if __name__ == "__main__":
                             m.zero_point = nn.Parameter(torch.tensor(float(m.zero_point)))
                         else:
                             m.zero_point = nn.Parameter(m.zero_point)
-            torch.save(qnn.state_dict(), os.path.join(logdir, "ckpt.pth"))         
+            torch.save(qnn.state_dict(), os.path.join(logdir, "ckpt.pth"))
+            # The partial is now redundant and would be mistaken for a finished artifact.
+            if os.path.exists(_partial_path()):
+                os.remove(_partial_path())
+                logger.info("removed ckpt.partial.pth -- ckpt.pth is complete")         
 
         model.model.diffusion_model = qnn
 

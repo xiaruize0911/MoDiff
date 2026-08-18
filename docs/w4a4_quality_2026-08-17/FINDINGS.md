@@ -574,8 +574,15 @@ ADAROUND_CKPT=docs/w4a4_quality_2026-08-17/recon_ours/*/samples/ckpt.pth \
   bash /path/to/fid_fix4.sh                                      # ~25 min, compare against 52.584
 ```
 
-The reconstruction was started and **stopped at 51 of ~168 layers**. It only writes `ckpt.pth` at the
-end, so that partial run left nothing usable — a rerun starts from zero. The log confirmed the one flag
+The reconstruction was started and **stopped at 51 of ~168 layers**. It only wrote `ckpt.pth` at the very
+end, so 40 minutes of GPU produced nothing.
+
+**That is now fixed, and it is the one thing worth doing before the rerun.** `sample_diffusion_ldm.py`
+checkpoints every `RECON_SAVE_EVERY` layers (default 10) to `ckpt.partial.pth`, and `RECON_RESUME=<path>`
+loads one back and skips the layers it already covers. The skip is keyed on that module's learned
+`weight_quantizer.alpha` being present in the checkpoint, **not on a counter** — a counter would silently
+mis-skip if the recursive `named_children()` walk were ever reordered, and block conversion does reorder
+it. The partial is deleted once `ckpt.pth` is written, so it cannot be mistaken for a finished artifact. The log confirmed the one flag
 that matters was in force: `Keeping NON-EMA weights (--no_ema): matches integration/'s loader`.
 
 `ADAROUND_CKPT` overrides the checkpoint path in both `install_adaround_zp.py` and

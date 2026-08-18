@@ -16,6 +16,16 @@
 # 20000 x 168 layers is hours. That makes this a partial reconstruction and it must be labelled as one --
 # but a partial AdaRound on the right network beats a full one on the wrong network, which is the
 # hypothesis under test.
+# RESUMABLE as of 2026-08-18. The first attempt at this ran 51 of ~168 layers and was stopped, and the
+# script only wrote ckpt.pth at the very end -- so 40 minutes of GPU produced nothing. RECON_SAVE_EVERY
+# dumps ckpt.partial.pth every N layers; RECON_RESUME loads one back and skips the layers whose learned
+# alpha it already carries (keyed on the alpha being present, not on a counter -- a counter mis-skips if
+# the recursive named_children() walk is ever reordered).
+#
+# To resume an interrupted run:
+#   RECON_RESUME=docs/w4a4_quality_2026-08-17/recon_ours/*/samples/ckpt.partial.pth \
+#     bash docs/w4a4_quality_2026-08-17/scripts/recon_ours.sh
+export RECON_SAVE_EVERY="${RECON_SAVE_EVERY:-10}"
 set -x
 set -o pipefail
 cd /workspace/MoDiff || exit 1
@@ -23,7 +33,7 @@ export PYTHONPATH=/workspace/MoDiff:/workspace/MoDiff/src/taming-transformers
 L=/tmp/claude-0/-workspace/7883ed3f-72e3-48df-8607-0ee5db4457c1/scratchpad
 D=/workspace/MoDiff/docs/w4a4_quality_2026-08-17
 OUT=$D/recon_ours
-rm -rf "$OUT"
+if [ -z "$RECON_RESUME" ]; then rm -rf "$OUT"; fi
 S=$(date +%s)
 python scripts/sample_diffusion_ldm.py \
   -r models/ldm/lsun_churches256/model.ckpt --seed 1234 --no_ema -e 0.0 \
