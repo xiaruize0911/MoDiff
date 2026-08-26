@@ -179,7 +179,11 @@ def bench_shape(N, C, H, W):
 
     del full, ha, hb
     torch.cuda.empty_cache()
-    return {k: statistics.median(v) for k, v in res.items()}, {k: statistics.stdev(v) for k, v in res.items()}
+    # Keep the RAW per-trial timings. Round-3 audit: storing only (median, sd) made it impossible to
+    # compute the standard error of the estimator, so every sigma quoted in the report was a
+    # trial-to-trial DISPERSION masquerading as an uncertainty (~1.8x too conservative).
+    return ({k: statistics.median(v) for k, v in res.items()},
+            {k: statistics.stdev(v) for k, v in res.items()}, res)
 
 
 print(f"CONTROLLED pipelining test: {N_STAGES} (GN->conv) stages/chain, {REPS} reps/trial, "
@@ -191,7 +195,7 @@ print("-" * len(hdr))
 
 out = {}
 for (N, C, H, W, freq) in SHAPES:
-    r, sd = bench_shape(N, C, H, W)
+    r, sd, raw = bench_shape(N, C, H, W)
     bf, bp, mf, mp = r["base_full"], r["base_pipe"], r["modiff_full"], r["modiff_pipe"]
     ovh_today = 100 * (mf - bf) / bf
     ovh_piped = 100 * (mp - bp) / bp
@@ -203,7 +207,7 @@ for (N, C, H, W, freq) in SHAPES:
         v = "general win, not a_hat"
     else:
         v = "WORSE piped"
-    out[f"{C}_{H}x{W}"] = dict(freq=freq, med=r, sd=sd,
+    out[f"{C}_{H}x{W}"] = dict(freq=freq, med=r, sd=sd, raw=raw,
                                ovh_today=ovh_today, ovh_piped=ovh_piped,
                                base_gain=base_gain, mod_gain=mod_gain)
     print(f"{f'{C},{H}x{W}':14}{freq:3d} | {bf:10.3f}{bp:10.3f}{mf:10.3f}{mp:10.3f} | "

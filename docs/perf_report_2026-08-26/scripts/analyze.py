@@ -17,6 +17,7 @@ import csv
 import json
 import math
 import os
+from statistics import mean as st_mean, stdev as st_stdev
 
 import matplotlib
 matplotlib.use("Agg")
@@ -318,7 +319,8 @@ ax1.set_xticklabels([f"{s}\n{int(b)} blk\n{w:.2f} wave" for s, b, w in
                      zip(srt["shape"], srt.blocks, srt.waves)], fontsize=7.5, linespacing=1.5)
 ax1.set_ylabel("%")
 ax1.set_ylim(0, 84)
-ax1.set_title("gain correlates with wasted SMs (baseline arm)", fontsize=11, loc="left")
+ax1.set_title("baseline arm: gain rises with wasted SMs on 4/5 (768,2x2 is the exception)",
+              fontsize=10.5, loc="left")
 ax1.legend(frameon=False, fontsize=8.5, loc="upper right")
 despine(ax1)
 ax1.annotate("split penalty (89.5% this arm)\neats this one's gain",
@@ -458,18 +460,25 @@ for k in PIPE_ORDER:
 audit["absolute_overhead"] = abs_rows
 audit["absolute_overhead_weighted_change_pct"] = 100 * (tb - ta) / ta
 
-# (D) effect / sigma per cell -- "sd <= 1.7%" was the sd of a timing, not of the effect.
+# (D) effect / sigma per cell. ROUND-3 AUDIT: revisions 1-3 used the trial-to-trial standard
+#     DEVIATION as the uncertainty of a median, which is a dispersion, not a standard error -- it made
+#     every sigma ~1.8x too small and produced spurious "unresolved" marks. Now computed from the raw
+#     per-trial timings as mean +- SE(mean), with the effect's SE by quadrature.
+def _mse(v):
+    return st_mean(v), st_stdev(v) / math.sqrt(len(v))
+
 eff = {}
 for k in PIPE_ORDER:
-    m, s = pipe[k]["med"], pipe[k]["sd"]
+    raw = pipe[k]["raw"]
     for arm in ("base", "modiff"):
-        d = m[f"{arm}_full"] - m[f"{arm}_pipe"]
-        # sd of a difference of two independent medians, conservatively via quadrature
-        sd_d = math.sqrt(s[f"{arm}_full"] ** 2 + s[f"{arm}_pipe"] ** 2)
-        eff[f"{NICE[k]}|{arm}"] = dict(effect_ms=d, sd_ms=sd_d,
-                                       effect_over_sigma=(abs(d) / sd_d if sd_d else float("inf")),
-                                       resolved=bool(sd_d and abs(d) / sd_d >= 3))
+        fm, fe = _mse(raw[f"{arm}_full"])
+        pm, pe = _mse(raw[f"{arm}_pipe"])
+        d = fm - pm
+        se = math.sqrt(fe ** 2 + pe ** 2)
+        eff[f"{NICE[k]}|{arm}"] = dict(effect_ms=d, se_ms=se, t=abs(d) / se,
+                                       resolved=bool(abs(d) / se >= 3))
 audit["effect_over_sigma"] = eff
+audit["n_cells_resolved"] = f"{sum(v['resolved'] for v in eff.values())}/{len(eff)}"
 
 # (E) Spearman honestly: all 5 points, the n=4 subset, and the post-hoc-selection p-value.
 #     Enumerating all 120 rank permutations: what fraction admit SOME single-point deletion that
@@ -559,17 +568,52 @@ a2["gn_share_of_stage"]["freq_weighted"] = dict(
     baseline_pct=float(100 * (g5.gn_base * g5.freq).sum() / (g5.base_total_ms * g5.freq).sum()),
     modiff_pct=float(100 * (g5.gn_modiff * g5.freq).sum() / (g5.modiff_total_ms * g5.freq).sum()))
 
-# (B) The verdict's aggregate, WITH an uncertainty (revision 2 asserted it without one).
+# (B) The verdict's aggregate, with a real standard error (see (D) above on why the old one was wrong).
 ta = tb = va = vb = 0.0
 for k in PIPE_ORDER:
-    m, s, f = pipe[k]["med"], pipe[k]["sd"], pipe[k]["freq"]
-    ta += (m["modiff_full"] - m["base_full"]) * f
-    tb += (m["modiff_pipe"] - m["base_pipe"]) * f
-    va += f * f * (s["modiff_full"] ** 2 + s["base_full"] ** 2)
-    vb += f * f * (s["modiff_pipe"] ** 2 + s["base_pipe"] ** 2)
+    f = pipe[k]["freq"]
+    r = pipe[k]["raw"]
+    am, ae = _mse(r["modiff_full"]); bm, be = _mse(r["base_full"])
+    cm, ce = _mse(r["modiff_pipe"]); dm, de = _mse(r["base_pipe"])
+    ta += f * (am - bm); tb += f * (cm - dm)
+    va += f * f * (ae ** 2 + be ** 2); vb += f * f * (ce ** 2 + de ** 2)
 a2["aggregate_abs_overhead_rise"] = dict(
-    today_ms=ta, piped_ms=tb, rise_ms=tb - ta, sd_ms=math.sqrt(va + vb),
-    sigma=abs(tb - ta) / math.sqrt(va + vb), pct=100 * (tb - ta) / ta)
+    today_ms=ta, piped_ms=tb, rise_ms=tb - ta, se_ms=math.sqrt(va + vb),
+    t=abs(tb - ta) / math.sqrt(va + vb), pct=100 * (tb - ta) / ta)
+
+# (B2) ROUND-3: the correct cap on how much GN-hiding could move the verdict. The verdict metric is
+#      a DIFFERENCE between arms, so the cap is the MoDiff-SPECIFIC GN increment (= a_hat), not the
+#      MoDiff GN's whole share -- which includes GN work the baseline pays too. Revision 3 used 34.7%
+#      (the whole share) and claimed it "exceeds MoDiff's entire overhead on any shape"; it does not.
+gg = ab[(ab.precision == "W8A8") & (ab["shape"].isin(
+    ["768->768,2x2", "384->384,8x8", "192->192,32x32", "384->384,16x16", "768->768,4x4"]))].copy()
+a2["gn_hiding_cap"] = dict(
+    per_shape={r["shape"]: dict(cap_pp=100 * r.a_hat_ms / r.base_total_ms,
+                                own_overhead_pct=100 * (r.modiff_total_ms - r.base_total_ms) / r.base_total_ms)
+               for _, r in gg.iterrows()},
+    cap_pp_freq_wtd=float(100 * (gg.a_hat_ms * gg.freq).sum() / (gg.base_total_ms * gg.freq).sum()),
+    overhead_pct_freq_wtd=float(100 * ((gg.modiff_total_ms - gg.base_total_ms) * gg.freq).sum()
+                                / (gg.base_total_ms * gg.freq).sum()))
+a2["gn_hiding_cap"]["pct_of_overhead_removable"] = (
+    100 * a2["gn_hiding_cap"]["cap_pp_freq_wtd"] / a2["gn_hiding_cap"]["overhead_pct_freq_wtd"])
+
+# (B3) ROUND-3: in-phase fraction, MoDiff arm, these five shapes. Revision 3 published "~70-92%",
+#      which is 100 - the BASELINE GN share over the 20-shape set -- the wrong arm AND the wrong set.
+_gs = a2["gn_share_of_stage"]
+_v = [v["modiff_pct"] for k2, v in _gs.items() if k2 != "freq_weighted"]
+a2["in_phase_pct"] = dict(low=100 - max(_v), high=100 - min(_v),
+                          freq_wtd=100 - _gs["freq_weighted"]["modiff_pct"])
+
+# (B4) ROUND-3: is 768,4x4's arm asymmetry real? Revision 3 called it 2.56 sigma and hedged. With a
+#      proper SE it is resolved, so the MoDiff-specific share of that shape's gain IS established.
+_r = pipe["768_4x4"]["raw"]
+_b = [f - q for f, q in zip(_r["base_full"], _r["base_pipe"])]
+_m = [f - q for f, q in zip(_r["modiff_full"], _r["modiff_pipe"])]
+_d = st_mean(_m) - st_mean(_b)
+_se = math.sqrt((st_stdev(_m) / math.sqrt(len(_m))) ** 2 + (st_stdev(_b) / math.sqrt(len(_b))) ** 2)
+a2["arm_asymmetry_768_4x4"] = dict(modiff_saves_ms=st_mean(_m), base_saves_ms=st_mean(_b),
+                                   diff_ms=_d, se_ms=_se, t=abs(_d) / _se,
+                                   modiff_specific_pct_of_gain=100 * _d / st_mean(_m))
 
 # (C) Which arm saves more, in ABSOLUTE ms rather than percent. The ratio metric says 4/5; absolute
 #     ms -- the column the report itself calls the honest one -- says 3/5.
@@ -619,7 +663,8 @@ h = q8[q8.H == 32]
 a2["low_ratio_shapes"] = dict(
     n_32x32=len(h), ratios=sorted(h.r.round(3).tolist()),
     are_the_n_lowest=bool(set(h.r.nsmallest(4)) == set(q8.r.nsmallest(4))),
-    share_of_base_gn_time=float(100 * (h.gn_base * h.freq).sum() / (q8.gn_base * q8.freq).sum()))
+    share_of_base_gn_time=float(100 * (h.gn_base * h.freq).sum() / (q8.gn_base * q8.freq).sum()),
+    share_of_modiff_gn_time=float(100 * (h.gn_modiff * h.freq).sum() / (q8.gn_modiff * q8.freq).sum()))
 
 # (H) Negative-control spread, labelled correctly (revision 2 said "+-2.6 ms", which is the largest
 #     single magnitude, not the spread).
@@ -653,6 +698,14 @@ for prec, key in (("W8A8", "int8"), ("W4A4", "int4")):
     a2.setdefault("share_of_step_freq_weighted", {})[prec] = dict(
         a_hat_pct=wsum[prec]["a_hat_pct_freq"] * blk / step,
         o_hat_pct=wsum[prec]["o_hat_pct_freq"] * blk / step)
+
+# (L) per-shape absolute cross-harness spread, not just the aggregate (round-3 minor 18)
+a2["cross_harness_absolute_per_shape"] = {
+    NICE[k]: 100 * ((pipe[k]["med"]["modiff_full"] / 6)
+                    - float(gg[gg["shape"] == sh].modiff_total_ms.iloc[0]))
+             / float(gg[gg["shape"] == sh].modiff_total_ms.iloc[0])
+    for k, sh in zip(PIPE_ORDER, ["768->768,2x2", "384->384,8x8", "192->192,32x32",
+                                  "384->384,16x16", "768->768,4x4"])}
 
 derived["audit_round2"] = a2
 with open(f"{HERE}/data/derived.json", "w") as f:
