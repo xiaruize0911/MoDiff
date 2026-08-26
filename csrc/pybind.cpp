@@ -212,6 +212,21 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "Same, with a trailing a4 flag naming the datapath's activation bit-width. Q_level sets the "
           "NEXT step's scale, a4 sets where THIS step's codes saturate (7 vs 127) -- a reused scale is "
           "exactly where the two differ (docs/delta_clip_2026-08-06/FINDINGS.md)");
+    // 11-argument form first (a4 defaulted), matching the two overloads registered above.
+    m.def("group_norm_silu_delta_quantize_nhwc_fused",
+          [](torch::Tensor x, torch::Tensor weight, torch::Tensor bias, torch::Tensor a_hat_cache,
+             int64_t num_groups, double eps, bool apply_silu, torch::Tensor scale,
+             torch::Tensor smooth_inv, torch::Tensor mod_scale, torch::Tensor mod_shift) {
+              return group_norm_silu_delta_quantize_nhwc_fused(
+                  x, weight, bias, a_hat_cache, num_groups, eps, apply_silu, scale, smooth_inv,
+                  mod_scale, mod_shift, false);
+          },
+          "SINGLE-KERNEL group-major twin of the static path: stats reduction + apply in one kernel, "
+          "mean/inv_std kept in shared memory (the structure the baseline GN kernel already uses). "
+          "Saves one launch + the mean/inv_std global round-trip. Static scale only; needs even CPG");
+    m.def("group_norm_silu_delta_quantize_nhwc_fused",
+          &group_norm_silu_delta_quantize_nhwc_fused,
+          "Same, with a trailing a4 flag naming the datapath's activation bit-width");
     // 14-argument form first, so existing callers and tests are untouched; see the step1_* note above.
     m.def("group_norm_silu_delta_quantize_resize_nhwc",
           [](torch::Tensor x, torch::Tensor weight, torch::Tensor bias, int64_t num_groups,

@@ -28,6 +28,14 @@ except ImportError:
     HAS_CUTLASS = False
     print("Warning: modiff_cutlass extension not found.")
 
+#: EXPERIMENTAL, default OFF. Routes forward_gn_fused_modiff's step1 through the group-major
+#: single-kernel GN+delta-quantize+a_hat (group_norm_silu_delta_quantize_nhwc_fused) instead of the
+#: shipped channel-major two-kernel path, so it can be measured on real activations in the real
+#: dispatch chain. See that kernel's header comment in csrc/modiff/norm/group_norm_silu.cu: isolated
+#: synthetic-tensor measurement already found it a regression at this UNet's CPG (0.44x-0.98x); this
+#: flag exists to confirm or correct that finding end-to-end rather than trust the microbenchmark.
+_GN_GROUPMAJOR = os.environ.get("MODIFF_GN_GROUPMAJOR", "0") == "1"
+
 # Length of the MoDiff per-step delta-scale table. Indexed by the modulated-step ordinal, so it
 # must cover the largest DDIM step count anyone runs (the benchmarks use 200). Runs longer than
 # this clamp to the last entry, which is safe: the delta range is flat in the tail.
@@ -941,10 +949,21 @@ class OptimizedInt8Conv2d(nn.Module):
             d_alpha = cur_i.view(1)
 
         p_step1 = profiler.start("MoDiff INT8 GN-fused Step1 (GN+SiLU+delta)")
-        x_int8 = modiff_cutlass.group_norm_silu_delta_quantize_nhwc(
-            x, gn_weight, gn_bias, self.a_hat_cache, num_groups, eps, True,
-            d_scale, self._smooth_inv_flat,
-            mod_scale2d, mod_shift2d, *gn_dyn)
+        # EXPERIMENTAL A/B, default off: the baseline-style group-major single kernel (one block
+        # per group, a_hat added on -- see csrc/modiff/norm/group_norm_silu.cu's
+        # group_norm_silu_delta_quantize_nhwc_fused, kept there as measured-regression dead code)
+        # wired into the real dispatch path so it can be timed on real activations, not just
+        # synthetic tensors. Static delta mode + even CPG only, same constraints the kernel
+        # TORCH_CHECKs; falls through to the shipped channel-major path otherwise.
+        if (_GN_GROUPMAJOR and not self.delta_dynamic and (self.a_hat_cache.shape[1] // num_groups) % 2 == 0):
+            x_int8 = modiff_cutlass.group_norm_silu_delta_quantize_nhwc_fused(
+                x, gn_weight, gn_bias, self.a_hat_cache, num_groups, eps, True,
+                d_scale, self._smooth_inv_flat, mod_scale2d, mod_shift2d, False)
+        else:
+            x_int8 = modiff_cutlass.group_norm_silu_delta_quantize_nhwc(
+                x, gn_weight, gn_bias, self.a_hat_cache, num_groups, eps, True,
+                d_scale, self._smooth_inv_flat,
+                mod_scale2d, mod_shift2d, *gn_dyn)
         profiler.stop("MoDiff INT8 GN-fused Step1 (GN+SiLU+delta)", p_step1)
         if self._delta_calib:
             self._observe_delta_codes(x_int8)

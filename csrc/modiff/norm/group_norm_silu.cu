@@ -1996,6 +1996,283 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc(
     return yq;
 }
 
+// ---------------------------------------------------------------------------------------------
+// SINGLE-KERNEL (group-major) MoDiff delta-quantize: the structural counterpart of the BASELINE's
+// group_norm_silu_quantize_nhwc_vec2_kernel, which does its statistics reduction and its apply pass
+// in ONE kernel with mean/inv_std never leaving shared memory.
+//
+// A FAILED EXPERIMENT, KEPT AS EXECUTABLE EVIDENCE (see the dead-code policy in
+// csrc/modiff_kernels_api.h: unreferenced code stays only when the reason it is unused is itself a
+// finding worth not rediscovering). THE MERGE IS A REGRESSION -- do not wire it into the ResBlock
+// path without re-reading this comment.
+//
+// The premise. The two-kernel MoDiff path above (gn_launch_group_stats writing mean/inv_std to
+// GLOBAL memory, then gn_apply_delta_quantize_flat_* reading them back) looked like it was paying
+// two things the baseline's one-kernel GN does not: a second launch, and a global round-trip for the
+// statistics. The split had also never itself been A/B'd -- gn_stats_ab.py compared four *stats
+// algorithms* with the split held fixed, and 2026-08-16's fast_reduce swap explicitly "does not
+// touch" this path.
+//
+// THE ARITHMETIC THAT SHOULD HAVE BEEN DONE FIRST. Both paths move the SAME 9 bytes/element (x read
+// twice + a_hat read + a_hat write + int8 out); mean/inv_std is only N*G floats (16 KB against
+// 226 MB), so the "round-trip" was never real traffic. The entire available saving was ONE kernel
+// launch -- ~5 us against a 150-430 us kernel, i.e. 1-3% -- plus whatever L2 reuse of x a single
+// block might get between its two passes.
+//
+// WHAT IT COST INSTEAD, and the mechanism, from a CONTROLLED sweep (b128, A40, production
+// modulation, independent-layers chained). Every confound is pinned: N=128, G=32 and C*H*W=196608
+// throughout, so total elements, total nominal bytes (9 B/elem) and grid size (N*G = 4096 blocks)
+// are IDENTICAL on every row. Only C and HW trade off, which varies CPG and hence the contiguous
+// run length -- the one thing under test:
+//
+//   CPG  run bytes   two-kernel        this kernel       merged/two
+//     6      12 B    0.4305 ms (76%)   0.9993 ms (33%)     2.321x
+//    12      24 B    0.4328 ms (75%)   0.7675 ms (42%)     1.773x
+//    24      48 B    0.4545 ms (72%)   0.6107 ms (53%)     1.344x
+//    48      96 B    0.4727 ms (69%)   0.4921 ms (66%)     1.041x
+//    96     192 B    0.8127 ms (40%)   0.3982 ms (82%)     0.490x   <- merged wins 2x here
+//
+// Monotone in the run length, and nothing else moved: the mechanism IS the access pattern.
+// One-block-per-group forces GROUP-MAJOR access, and in NHWC a group is CPG contiguous channels
+// inside one pixel (CPG*2 bytes) and then a jump of C*2. `cpair` varies fastest here, so a 32-thread
+// warp spans ceil(64/CPG) pixels -- ~11 of them at CPG=6, each contributing 12 useful bytes out of a
+// 32-byte sector. 12/32 = 37.5% predicted utilisation against 33% measured. The flat apply kernel it
+// replaces has no runs at all: consecutive threads take consecutive addresses, so a warp covers 128
+// contiguous bytes = 4 full sectors.
+//
+// The strided a_hat WRITE is the expensive half: a partial-sector store is a read-modify-write in
+// L2, so 12 useful bytes cost a fetch plus a store. That is why the baseline's group-major single
+// kernel tolerates the identical pattern at 60-74% -- it carries 5 B/elem, x re-reads that hit L2,
+// and a 1 B/elem int8 store, but NO strided fp16 state write. Adding a_hat's read+write under
+// group-major access is what collapses.
+//
+// SO THE DESIGN IS NOT WRONG, IT IS MISMATCHED. Past CPG~48 it wins, and at CPG=96 it reaches 82% of
+// peak -- the best efficiency of any kernel in this family -- while the two-kernel path degrades
+// there (its channel-major stats kernel wants 2*C*sizeof(float) = 24 KB of shared memory at C=3072).
+// A net with wide channels or few groups should re-measure. THIS UNet runs G=32 throughout and its
+// hot shapes are CPG=6 and 12 (7 calls/step each), which is the worst case for this kernel.
+//
+// VERDICT: the existing two-kernel split is correct FOR THIS NET, and now measured rather than
+// inherited. What was never true is the premise -- both paths move the same 9 B/elem, so there was
+// only ever ~1-3% (one launch) to win, against a 2.3x coalescing penalty to lose.
+//
+// WHAT IS AND IS NOT PRESERVED. The delta-quantize arithmetic is copied verbatim from
+// gn_apply_delta_quantize_flat_vec2_kernel, including the `__half2float(__float2half(n))` rounding
+// of `normed` before SiLU that keeps this path matching the original standalone-GN + step1 pair. The
+// REDUCTION ORDER changes (channel-major partials -> pair-major warp-shuffle within one block),
+// exactly as the baseline's fast_reduce swap changed it -- so mean/inv_std move in the last fp32
+// bits and a value sitting on a code boundary can land either side. Same class and same magnitude
+// as docs/gn_fast_reduce_2026-08-16 measured for the baseline (<=1 code on ~1e-5% of elements);
+// measured for this kernel in the same doc. NOT bit-identical, and the caller keeps the two-kernel
+// path available so that is falsifiable rather than asserted.
+//
+// SCOPE: static delta scale only. The dynamic/report modes publish a scale via a separate absmax
+// pass (or gn_report_delta_absmax's cross-block retirement election), neither of which composes with
+// a one-block-per-group launch; those callers keep the two-kernel path.
+template <typename TIn>
+__global__ void gn_delta_quantize_fused_groupmajor_vec2_kernel(
+    const TIn* __restrict__ X,
+    __half* __restrict__ a_hat_cache,     // [N,H,W,C] fp16 channels_last, in place
+    int8_t* __restrict__ Yq,              // [N,H,W,C] int8 quantized delta
+    const TIn* __restrict__ gamma,
+    const TIn* __restrict__ beta,
+    const TIn* __restrict__ mod_scale,    // [N,C] or nullptr
+    const TIn* __restrict__ mod_shift,
+    const float* __restrict__ scale_ptr,  // scalar quant multiplier = Q_b/absmax
+    const float* __restrict__ smooth_inv, // [C] or nullptr
+    int C, long HW, int G, float eps, bool apply_silu,
+    // Activation bit-width of THIS datapath, not a magnitude -- same contract as the flat kernel.
+    bool a4
+) {
+    const int CPG = C / G;
+    const long group_size = (long)CPG * HW;
+    const int HALF_CPG = CPG / 2;
+    const long pairs = group_size / 2;
+
+    const int n = blockIdx.x / G;
+    const int g = blockIdx.x % G;
+    const int c_start = g * CPG;
+
+    // Per-sample bases: n*HW*C is even (C is a multiple of the group count and of 2 here), so every
+    // gn_load2/gn_store2 below stays naturally aligned -- the same argument gn_load2's comment makes.
+    const TIn* x_base = X + (long)n * HW * C;
+    int8_t* yq_base = Yq + (long)n * HW * C;
+    __half* cache_base = a_hat_cache + (long)n * HW * C;
+
+    extern __shared__ float sdata[];
+    float* s_sum = sdata;
+    float* s_sumsq = sdata + blockDim.x;
+
+    // ---- Pass 1: pair-major reduction, identical partition to the baseline's fast_reduce path ----
+    float local_sum = 0.0f, local_sumsq = 0.0f;
+    for (long pidx = threadIdx.x; pidx < pairs; pidx += blockDim.x) {
+        const int cpair = pidx % HALF_CPG;
+        const long hw = pidx / HALF_CPG;
+        const long mem_idx0 = hw * C + c_start + 2 * cpair;
+        const float2 v = gn_load2(x_base, mem_idx0);
+        local_sum += v.x + v.y;
+        local_sumsq += v.x * v.x + v.y * v.y;
+    }
+
+    __shared__ float mean_s, inv_std_s;
+    {
+        const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
+#pragma unroll
+        for (int off = 16; off > 0; off >>= 1) {
+            local_sum += __shfl_down_sync(0xffffffff, local_sum, off);
+            local_sumsq += __shfl_down_sync(0xffffffff, local_sumsq, off);
+        }
+        if (lane == 0) {
+            s_sum[warp] = local_sum;
+            s_sumsq[warp] = local_sumsq;
+        }
+        __syncthreads();
+        if (warp == 0) {
+            const int nwarp = (blockDim.x + 31) >> 5;
+            float block_sum = lane < nwarp ? s_sum[lane] : 0.0f;
+            float block_sumsq = lane < nwarp ? s_sumsq[lane] : 0.0f;
+#pragma unroll
+            for (int off = 16; off > 0; off >>= 1) {
+                block_sum += __shfl_down_sync(0xffffffff, block_sum, off);
+                block_sumsq += __shfl_down_sync(0xffffffff, block_sumsq, off);
+            }
+            if (lane == 0) {
+                float mean = block_sum / (float)group_size;
+                float var = block_sumsq / (float)group_size - mean * mean;
+                var = fmaxf(var, 0.0f);
+                mean_s = mean;
+                inv_std_s = rsqrtf(var + eps);
+            }
+        }
+    }
+    __syncthreads();
+    const float mean = mean_s;
+    const float inv_std = inv_std_s;
+    const float scale = *scale_ptr;
+    const float inv_scale = 1.0f / scale;
+    const float a4_lim = a4 ? 7.0f : 127.0f;
+
+    // ---- Pass 2: apply + delta-quantize + in-place a_hat update (math copied from the flat kernel)
+    for (long pidx = threadIdx.x; pidx < pairs; pidx += blockDim.x) {
+        const int cpair = pidx % HALF_CPG;
+        const long hw = pidx / HALF_CPG;
+        const int c_global0 = c_start + 2 * cpair;
+        const long mem_idx0 = hw * (long)C + c_global0;
+
+        float2 v = gn_load2(x_base, mem_idx0);
+        float2 w = gn_load2(gamma, c_global0);
+        float2 b = gn_load2(beta, c_global0);
+        float n0 = (v.x - mean) * inv_std * w.x + b.x;
+        float n1 = (v.y - mean) * inv_std * w.y + b.y;
+        if (mod_scale != nullptr) {
+            const long midx0 = (long)n * C + c_global0;
+            float2 ms = gn_load2(mod_scale, midx0);
+            float2 sh = gn_load2(mod_shift, midx0);
+            n0 = n0 * (1.0f + ms.x) + sh.x;
+            n1 = n1 * (1.0f + ms.y) + sh.y;
+        }
+        // Same fp16 round-trip of `normed` the flat kernel performs, so SiLU sees the value the
+        // original standalone-GN path would have materialized.
+        const float n0h = __half2float(__float2half(n0));
+        const float n1h = __half2float(__float2half(n1));
+        float o0 = apply_silu ? gns_silu(n0h) : n0h;
+        float o1 = apply_silu ? gns_silu(n1h) : n1h;
+        if (smooth_inv != nullptr) { o0 *= smooth_inv[c_global0]; o1 *= smooth_inv[c_global0 + 1]; }
+        float2 cache = gn_load2(cache_base, mem_idx0);
+        const float d0 = o0 - cache.x, d1 = o1 - cache.y;
+        const float q0 = fmaxf(-a4_lim, fminf(a4_lim, roundf(d0 * scale)));
+        const float q1 = fmaxf(-a4_lim, fminf(a4_lim, roundf(d1 * scale)));
+        gn_store2(cache_base, mem_idx0,
+                  make_float2(cache.x + q0 * inv_scale, cache.y + q1 * inv_scale));
+        const int8_t i0 = (int8_t)q0, i1 = (int8_t)q1;
+        reinterpret_cast<int16_t*>(yq_base)[mem_idx0 >> 1] =
+            (int16_t)(((unsigned char)i0) | (((unsigned char)i1) << 8));
+    }
+}
+
+// Host wrapper for the single-kernel (group-major) MoDiff delta-quantize above. Same signature and
+// same return contract as group_norm_silu_delta_quantize_nhwc's static path, minus the six
+// dynamic-scale arguments it cannot serve (see the kernel's SCOPE note). Eligibility is checked
+// here and reported by THROWING rather than by silently falling back, so a caller that thinks it is
+// on the fused path always is -- the Python side probes eligibility itself.
+torch::Tensor group_norm_silu_delta_quantize_nhwc_fused(
+    torch::Tensor x,
+    torch::Tensor weight,
+    torch::Tensor bias,
+    torch::Tensor a_hat_cache,
+    int64_t num_groups,
+    double eps,
+    bool apply_silu,
+    torch::Tensor scale,
+    torch::Tensor smooth_inv,
+    torch::Tensor mod_scale,
+    torch::Tensor mod_shift,
+    bool a4
+) {
+    CHECK_CUDA(x);
+    CHECK_CONTIGUOUS(x);
+    TORCH_CHECK(x.dim() == 4, "group_norm_silu_delta_quantize_nhwc_fused expects a 4D [N,C,H,W] tensor");
+    TORCH_CHECK(x.scalar_type() == weight.scalar_type() && x.scalar_type() == bias.scalar_type(),
+                "group_norm_silu_delta_quantize_nhwc_fused: weight/bias dtype must match input dtype");
+    TORCH_CHECK(x.scalar_type() == torch::kFloat32 || x.scalar_type() == torch::kFloat16,
+                "group_norm_silu_delta_quantize_nhwc_fused: only float32 and float16 are supported");
+    TORCH_CHECK(a_hat_cache.scalar_type() == torch::kFloat16,
+                "group_norm_silu_delta_quantize_nhwc_fused: a_hat_cache must be fp16");
+    TORCH_CHECK(a_hat_cache.sizes() == x.sizes(),
+                "group_norm_silu_delta_quantize_nhwc_fused: a_hat_cache must match x shape");
+    const bool has_mod = mod_scale.numel() > 0;
+    TORCH_CHECK(!has_mod || (mod_scale.scalar_type() == x.scalar_type() &&
+                             mod_shift.scalar_type() == x.scalar_type()),
+                "group_norm_silu_delta_quantize_nhwc_fused: mod dtype must match input dtype");
+
+    const int N = x.size(0), C = x.size(1), H = x.size(2), W = x.size(3);
+    TORCH_CHECK(C % num_groups == 0,
+                "group_norm_silu_delta_quantize_nhwc_fused: C must be divisible by num_groups");
+    const long HW = (long)H * W;
+    const int CPG = C / (int)num_groups;
+    // vec2 (and hence this kernel) needs a channel pair to stay inside one group, so both channels
+    // share one mean/inv_std. The two-kernel path has a scalar fallback for odd CPG; this one does
+    // not, and says so instead of quietly computing the wrong normalization.
+    TORCH_CHECK(CPG % 2 == 0,
+                "group_norm_silu_delta_quantize_nhwc_fused: channels-per-group must be even");
+    const long group_size = (long)CPG * HW;
+
+    auto yq = torch::empty_like(x, x.options().dtype(torch::kInt8));
+
+    // Same block-size heuristic the baseline's fast_reduce path uses (~six pairs/thread on A40).
+    int block_size = 128;
+    while ((long)block_size * 12 < group_size && block_size < 512) block_size <<= 1;
+
+    dim3 grid((unsigned int)(N * (int)num_groups));
+    dim3 block((unsigned int)block_size);
+    const size_t shmem_bytes = 2 * (size_t)block_size * sizeof(float);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    const float* smooth_ptr = (smooth_inv.numel() > 0) ? smooth_inv.data_ptr<float>() : nullptr;
+    __half* cache_ptr = reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>());
+
+    if (x.scalar_type() == torch::kFloat32) {
+        gn_delta_quantize_fused_groupmajor_vec2_kernel<float><<<grid, block, shmem_bytes, stream>>>(
+            x.data_ptr<float>(), cache_ptr, reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
+            weight.data_ptr<float>(), bias.data_ptr<float>(),
+            has_mod ? mod_scale.data_ptr<float>() : nullptr,
+            has_mod ? mod_shift.data_ptr<float>() : nullptr,
+            scale.data_ptr<float>(), smooth_ptr,
+            C, HW, (int)num_groups, (float)eps, apply_silu, a4);
+    } else {
+        gn_delta_quantize_fused_groupmajor_vec2_kernel<__half><<<grid, block, shmem_bytes, stream>>>(
+            reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), cache_ptr,
+            reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
+            reinterpret_cast<const __half*>(weight.data_ptr<at::Half>()),
+            reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
+            has_mod ? reinterpret_cast<const __half*>(mod_scale.data_ptr<at::Half>()) : nullptr,
+            has_mod ? reinterpret_cast<const __half*>(mod_shift.data_ptr<at::Half>()) : nullptr,
+            scale.data_ptr<float>(), smooth_ptr,
+            C, HW, (int)num_groups, (float)eps, apply_silu, a4);
+    }
+    C10_CUDA_CHECK(cudaGetLastError());
+    return yq;
+}
+
 // Kernel 2 (int4), half2/float2-vectorized: flat, coalesced MoDiff delta-quantize that
 // packs adjacent channel pairs (even -> low nibble, odd -> high) into one byte, matching
 // group_norm_silu_quantize_pack_nhwc's layout and

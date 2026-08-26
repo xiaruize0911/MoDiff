@@ -412,6 +412,17 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc(
     torch::Tensor absmax_buf, torch::Tensor scale_out, torch::Tensor inv_scale_out,
     torch::Tensor retire_count, double Q_level, bool report_next, double safety,
     bool a4 = false);
+// SINGLE-KERNEL (group-major) twin of the above's static path. **A FAILED EXPERIMENT, kept as
+// executable evidence under the dead-code policy at the top of this file** -- it is 0.44x-0.98x the
+// two-kernel path (slower everywhere, worst at the CPG the UNet uses most), because one-block-
+// per-group forces group-major NHWC access and de-coalesces a_hat's read/write, while the only
+// saving available was ~1-3% of one kernel launch. Full measurement + mechanism in the kernel's
+// header comment in csrc/modiff/norm/group_norm_silu.cu. Unreferenced on purpose; do not wire in.
+torch::Tensor group_norm_silu_delta_quantize_nhwc_fused(
+    torch::Tensor x, torch::Tensor weight, torch::Tensor bias, torch::Tensor a_hat_cache,
+    int64_t num_groups, double eps, bool apply_silu,
+    torch::Tensor scale, torch::Tensor smooth_inv,
+    torch::Tensor mod_scale, torch::Tensor mod_shift, bool a4 = false);
 // MoDiff twin of group_norm_silu_quantize_resize_nhwc: fuses GN(+mod)(+SiLU)+2x resize+delta
 // quantize+in-place a_hat for the eight updown ResBlocks, which get no fusion otherwise.
 // The trailing eight arguments are the same dynamic-scale contract as the non-resize sibling
