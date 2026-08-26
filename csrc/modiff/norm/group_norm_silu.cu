@@ -387,16 +387,20 @@ __global__ void group_norm_silu_delta_quantize_resize_nhwc_kernel(
                 for (int dx = 0; dx < 2; ++dx) {
                     const long hw_out = (long)(2 * h + dy) * Wo + (2 * w + dx);
                     const long ci = (long)n * HW_OUT * C + hw_out * (long)C + c_global0;
-                    const float c0 = __half2float(a_hat_cache[ci]);
-                    const float c1 = __half2float(a_hat_cache[ci + 1]);
+                    // vec2: ci is even (c_start = g*CPG with CPG even, plus 2*cpair), so this
+                    // is one naturally-aligned 4-byte load instead of two 2-byte ones. Same values.
+                    const float2 cpv = gn_load2(a_hat_cache, ci);
+                    const float c0 = cpv.x, c1 = cpv.y;
                     const float d0 = o0 - c0, d1 = o1 - c1;
                     // Reduced BEFORE the clamp, so the report is the true delta range.
                     local_delta_max = fmaxf(local_delta_max, fmaxf(fabsf(d0), fabsf(d1)));
                     if (reduce_only) continue;
                     const float q0 = fmaxf(-lim, fminf(lim, roundf(d0 * scale)));
                     const float q1 = fmaxf(-lim, fminf(lim, roundf(d1 * scale)));
-                    a_hat_cache[ci]     = __float2half_rn(c0 + q0 * inv_scale);
-                    a_hat_cache[ci + 1] = __float2half_rn(c1 + q1 * inv_scale);
+                    // one 4-byte store. __float22half2_rn rounds each component to nearest
+                    // even, exactly as the two __float2half_rn calls it replaces.
+                    gn_store2(a_hat_cache, ci,
+                              make_float2(c0 + q0 * inv_scale, c1 + q1 * inv_scale));
                     const int8_t i0 = (int8_t)q0, i1 = (int8_t)q1;
                     if constexpr (PACK)
                         yqp_base[hw_out * row_bytes + (c_global0 >> 1)] =
@@ -429,16 +433,15 @@ __global__ void group_norm_silu_delta_quantize_resize_nhwc_kernel(
             a1 *= 0.25f;
             const float lim = (PACK || a4) ? 7.0f : 127.0f;
             const long ci = (long)n * HW_OUT * C + hwo * (long)C + c_global0;
-            const float c0 = __half2float(a_hat_cache[ci]);
-            const float c1 = __half2float(a_hat_cache[ci + 1]);
+            const float2 cpv = gn_load2(a_hat_cache, ci);   // vec2, see the UP path above
+            const float c0 = cpv.x, c1 = cpv.y;
             const float d0 = a0 - c0, d1 = a1 - c1;
             // Reduced BEFORE the clamp, so the report is the true delta range.
             local_delta_max = fmaxf(local_delta_max, fmaxf(fabsf(d0), fabsf(d1)));
             if (reduce_only) continue;
             const float q0 = fmaxf(-lim, fminf(lim, roundf(d0 * scale)));
             const float q1 = fmaxf(-lim, fminf(lim, roundf(d1 * scale)));
-            a_hat_cache[ci]     = __float2half_rn(c0 + q0 * inv_scale);
-            a_hat_cache[ci + 1] = __float2half_rn(c1 + q1 * inv_scale);
+            gn_store2(a_hat_cache, ci, make_float2(c0 + q0 * inv_scale, c1 + q1 * inv_scale));
             const int8_t i0 = (int8_t)q0, i1 = (int8_t)q1;
             if constexpr (PACK)
                 yqp_base[hwo * row_bytes + (c_global0 >> 1)] =
@@ -543,6 +546,14 @@ torch::Tensor group_norm_silu_delta_quantize_resize_nhwc(
     // path already uses -- so this fusion changes no state layout.
     TORCH_CHECK(a_hat_cache.numel() == (long)N * C * Ho * Wo,
                 "gn_delta_quantize_resize: a_hat_cache must have N*C*Ho*Wo elements (post-resize)");
+    // The a_hat read/write in both the UP and DOWN paths is a vec2 at `ci`, which is even only if
+    // the group's first channel is: ci = n*HW_OUT*C + hw_out*C + c_start + 2*cpair, and C is a
+    // multiple of the alignment already required elsewhere. An odd CPG would make c_start odd on
+    // odd groups and misalign the __half2. Assert it rather than comment it -- a misaligned
+    // reinterpret_cast is undefined behaviour that can appear to work.
+    TORCH_CHECK((C / num_groups) % 2 == 0,
+                "gn_delta_quantize_resize: channels-per-group must be even for the vec2 a_hat "
+                "access (C=", C, ", groups=", num_groups, ")");
     __half* cache_ptr = reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>());
 
     // Dynamic scale, exactly as group_norm_silu_delta_quantize_nhwc defines it:
@@ -926,6 +937,93 @@ __global__ void gn_stats_partials_chanmajor_kernel(
         part_sumsq[o] = gsq;
     }
 }
+
+// ============================================================================================
+// gn_stats_partials_chanmajor_vec2_kernel -- the same statistics, BIT-IDENTICAL, at 1.21x.
+//
+// WHAT IT CHANGES, and nothing else. The kernel above is LATENCY-bound, not bandwidth-bound: it
+// reached only 50-72% of peak on this UNet's shapes (49.8% in-model, measured 2026-08-26 by nsys
+// against the apply kernel's 84.5% on the same tensors). Two causes, one fix each:
+//
+//   1. one 2-byte load per thread per hw iteration. A warp's 32 lanes therefore request 64 B --
+//      half a sector -- and the loop is a serial accumulate, so exactly one load per thread is in
+//      flight. FIX: a thread owns two ADJACENT channels and loads them as one __half2 (4 B, so a
+//      warp requests a full 128 B).
+//   2. the hw loop is not unrolled, so nothing hides the load latency. FIX: process four hw values
+//      per iteration with the four loads issued before the first dependent add.
+//
+// WHY IT IS BIT-IDENTICAL, which is the whole point -- the delta quantizer's a_hat invariant and
+// every committed FID number depend on these partials not moving:
+//   (i)   each channel still has its OWN fp32 accumulator (2t and 2t+1 are separate registers);
+//   (ii)  that accumulator still walks hw in ASCENDING order -- unrolling reorders no adds, it only
+//         issues the loads earlier;
+//   (iii) shared memory is still indexed by channel and the group combine still sums CPG channels
+//         in ascending channel index;
+//   (iv)  the fp16 -> fp32 conversion is the same __half2float, applied per element.
+// Only the ADDRESS a value is loaded from and the INSTRUCTION that loads it change, never a value
+// and never the order it is added in. integration/tests/test_gn_stats_vec2.py asserts equality of
+// both partial arrays against the kernel above on all 18 real shapes rather than assuming it.
+//
+// MEASURED, freq-weighted over all 18 real shapes at batch 128 (A40):
+//   3.305 -> 2.603 ms/step, 1.27x, and 16-72% -> 22-84% of peak bandwidth per shape.
+// Wins or ties on 16 of 18; the two ties are C=1536, whose scalar path already uses K=2.
+//
+// It also removes the need for K > 1 on this UNet: the block is C/2 threads, so C <= 2048 fits
+// under the 1024-thread cap where the scalar kernel needs the K split from C = 1152 upwards.
+//
+// NOT used for the decoder skip-concat fold (the X2/OutCat path above): that kernel also WRITES a
+// concatenation, and folding a vectorized store into it is a separate change with its own gate.
+// Requires C even, C/2 <= 1024, C/2 >= G, C % G == 0 -- gn_launch_group_stats checks all four.
+template <typename TIn>
+__global__ void gn_stats_partials_chanmajor_vec2_kernel(
+    const TIn* __restrict__ X,
+    float* __restrict__ part_sum,      // [N, G, nblocks]
+    float* __restrict__ part_sumsq,
+    int C, long HW, int G, int nblocks
+) {
+    const int CPG = C / G;
+    const int t = threadIdx.x;
+    const int n = blockIdx.y;
+    const long C2 = C / 2;
+    // Both halves of the pair live in the same group whenever CPG is even; when CPG is odd the
+    // pair can straddle a group boundary, which is FINE -- the two accumulators are written to
+    // their own channel slots in shared memory and the group combine reads by channel index.
+    const __half2* a_base = reinterpret_cast<const __half2*>(X + (long)n * HW * C);
+    float sa = 0.0f, sqa = 0.0f, sb = 0.0f, sqb = 0.0f;
+    long hw = blockIdx.x;
+    for (; hw + 3L * nblocks < HW; hw += 4L * nblocks) {
+        const __half2 r0 = a_base[(hw) * C2 + t];
+        const __half2 r1 = a_base[(hw + nblocks) * C2 + t];
+        const __half2 r2 = a_base[(hw + 2L * nblocks) * C2 + t];
+        const __half2 r3 = a_base[(hw + 3L * nblocks) * C2 + t];
+        const float2 f0 = __half22float2(r0), f1 = __half22float2(r1);
+        const float2 f2 = __half22float2(r2), f3 = __half22float2(r3);
+        sa += f0.x; sqa += f0.x * f0.x; sb += f0.y; sqb += f0.y * f0.y;
+        sa += f1.x; sqa += f1.x * f1.x; sb += f1.y; sqb += f1.y * f1.y;
+        sa += f2.x; sqa += f2.x * f2.x; sb += f2.y; sqb += f2.y * f2.y;
+        sa += f3.x; sqa += f3.x * f3.x; sb += f3.y; sqb += f3.y * f3.y;
+    }
+    for (; hw < HW; hw += nblocks) {
+        const float2 v = __half22float2(a_base[hw * C2 + t]);
+        sa += v.x; sqa += v.x * v.x;
+        sb += v.y; sqb += v.y * v.y;
+    }
+    extern __shared__ float sdata[];
+    float* ss = sdata;                         // [C]
+    float* sq_s = sdata + C;                   // [C]
+    ss[2 * t] = sa;     sq_s[2 * t] = sqa;
+    ss[2 * t + 1] = sb; sq_s[2 * t + 1] = sqb;
+    __syncthreads();
+    if (t < G) {
+        float gs = 0.0f, gsq = 0.0f;
+        const int c0 = t * CPG;
+        for (int k = 0; k < CPG; ++k) { gs += ss[c0 + k]; gsq += sq_s[c0 + k]; }
+        const long o = ((long)n * G + t) * nblocks + blockIdx.x;
+        part_sum[o] = gs;
+        part_sumsq[o] = gsq;
+    }
+}
+
 
 // Cross-block combine, also in fixed index order. One thread per (sample, group).
 __global__ void gn_stats_reduce_partials_kernel(
@@ -1354,11 +1452,30 @@ static void gn_launch_group_stats(
                     C, HW, num_groups, nblocks);                                                   \
             }                                                                                      \
         } while (0)
+        // VEC2 FAST PATH, default ON, BIT-IDENTICAL to the scalar switch below (see the kernel's
+        // header for the invariants and the gate). Set MODIFF_GN_STATS_VEC2=0 to force the scalar
+        // path -- captured once per process, like _alt above, so an A/B must fork per variant.
+        static const char* _vec2env = std::getenv("MODIFF_GN_STATS_VEC2");
+        const bool want_vec2 = (_vec2env == nullptr) || (_vec2env[0] != '0');
+        const int BLK2 = C / 2;
+        if (want_vec2 && (C % 2) == 0 && BLK2 <= 1024 && BLK2 >= num_groups) {
+            if (x.scalar_type() == torch::kFloat32) {
+                gn_stats_partials_chanmajor_vec2_kernel<float><<<grid, BLK2, shmem, st>>>(
+                    x.data_ptr<float>(), part_sum.data_ptr<float>(),
+                    part_sumsq.data_ptr<float>(), C, HW, num_groups, nblocks);
+            } else {
+                gn_stats_partials_chanmajor_vec2_kernel<__half><<<grid, BLK2, shmem, st>>>(
+                    reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
+                    part_sum.data_ptr<float>(), part_sumsq.data_ptr<float>(),
+                    C, HW, num_groups, nblocks);
+            }
+        } else {
         switch (K) {
             case 1: GN_CHANMAJOR(1); break;
             case 2: GN_CHANMAJOR(2); break;
             case 3: GN_CHANMAJOR(3); break;
             default: GN_CHANMAJOR(4); break;
+        }
         }
 #undef GN_CHANMAJOR
         const int fb = 128, fg = (NG + fb - 1) / fb;
