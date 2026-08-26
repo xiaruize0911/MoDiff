@@ -237,7 +237,8 @@ for i, (a, b) in enumerate(zip(pdf.ovh_today, pdf.ovh_piped)):
 ax2.set_xticks(x)
 ax2.set_xticklabels(pdf["shape"], rotation=25, ha="right", fontsize=8.5)
 ax2.set_ylabel("MoDiff overhead vs its own baseline (%)")
-ax2.set_title("overhead ratio rises on 4/5; 768,2x2 shrinks 0.35pp (noise)", fontsize=11, loc="left")
+_shr = pdf.loc[pdf["shape"] == "768, 2x2", "ovh_today"].iloc[0] - pdf.loc[pdf["shape"] == "768, 2x2", "ovh_piped"].iloc[0]
+ax2.set_title(f"overhead ratio rises on 4/5; 768,2x2 shrinks {_shr:.2f}pp", fontsize=11, loc="left")
 ax2.legend(frameon=False, fontsize=9, loc="upper left")
 despine(ax2)
 
@@ -309,7 +310,7 @@ derived["wave_spearman_all"] = float(wdf["sm_waste"].corr(wdf["base_gain"], meth
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.4))
 srt = wdf.sort_values("sm_waste", ascending=False).reset_index(drop=True)
 x = np.arange(len(srt))
-ax1.bar(x - bw / 2, srt.sm_waste, bw, color=C_GREY, label="SM waste (idle share of last wave)", zorder=3)
+ax1.bar(x - bw / 2, srt.sm_waste, bw, color=C_GREY, label="SM waste (idle SM-slots across all waves)", zorder=3)
 ax1.bar(x + bw / 2, srt.base_gain, bw, color=C_BASE, label="baseline gain from pipelining", zorder=3)
 for i, (a, b) in enumerate(zip(srt.sm_waste, srt.base_gain)):
     ax1.text(i - bw / 2, a + 1.2, f"{a:.0f}%", ha="center", fontsize=8)
@@ -323,7 +324,10 @@ ax1.set_title("baseline arm: gain rises with wasted SMs on 4/5 (768,2x2 is the e
               fontsize=10.5, loc="left")
 ax1.legend(frameon=False, fontsize=8.5, loc="upper right")
 despine(ax1)
-ax1.annotate("split penalty (89.5% this arm)\neats this one's gain",
+_bp = 100 * (pdf.loc[pdf["shape"] == "768, 2x2", "base_split"].iloc[0]
+             - pdf.loc[pdf["shape"] == "768, 2x2", "base_full"].iloc[0]) \
+      / pdf.loc[pdf["shape"] == "768, 2x2", "base_full"].iloc[0]
+ax1.annotate(f"split penalty ({_bp:.1f}% this arm), and\nthe deletion is not applied to 384,8x8",
              xy=(0.16, 4), xytext=(0.55, 58), fontsize=7.8, color="#777777",
              ha="center", arrowprops=dict(arrowstyle="->", color="#AAAAAA", lw=0.9,
                                           connectionstyle="arc3,rad=0.25"))
@@ -783,7 +787,8 @@ for k in PIPE_ORDER:
     diffs[NICE[k]] = dict(diff_ms=dd, t=dt, p=dp, sigma_equiv=dsig)
     L.append(f"| {PRETTY[NICE[k]]} | {tb_:.1f} | {tm_:.1f} | {dd:+.4f} ms | {dt:.1f} | "
              f"{dp:.4f}{'' if dp < 0.05 else ' **n.s.**'} |")
-L.append(f"| **freq-wtd aggregate** | | | **{ad:+.3f} ms** | **{at:.1f}** | **{ap:.5f}** |")
+aggd = sum(pipe[k]["freq"] * diffs[NICE[k]]["diff_ms"] for k in PIPE_ORDER)
+L.append(f"| **freq-wtd aggregate** | | | **{aggd:+.3f} ms** | **{at:.1f}** | **{ap:.5f}** |")
 blocks["S3_STATS"] = "\n".join(L)
 a2["arm_difference_per_shape"] = diffs
 
@@ -798,19 +803,53 @@ L.append("| MoDiff GN, % of its stage | " + " | ".join(
     + f" | {100*sw:.1f} |")
 L.append("| conv / GN | " + " | ".join(
     f"{gg2[SH[k]].conv_modiff/gg2[SH[k]].gn_modiff:.2f}" for k in PIPE_ORDER) + " | — |")
-L.append("| **GN time running inside a conv** | " + " | ".join("100%" for _ in PIPE_ORDER) + " | **100%** |")
-L.append("| paired share of wall time (2·GN) | " + " | ".join(
-    f"{200*gg2[SH[k]].gn_modiff/gg2[SH[k]].modiff_total_ms:.1f}%" for k in PIPE_ORDER)
-    + f" | {200*sw:.1f}% |")
-L.append("| a_hat as % of baseline stage (cap) | " + " | ".join(
-    f"{100*gg2[SH[k]].a_hat_ms/gg2[SH[k]].base_total_ms:.1f}" for k in PIPE_ORDER)
-    + f" | {a2['gn_hiding_cap']['cap_pp_freq_wtd']:.1f} |")
+# ROUND-5 AUDIT: revision 5 hard-coded "100%" and used 2*s (the N->infinity limit) for a 6-stage
+# chain. Correct: stream 2 waits on ev_offset after stream 1's FIRST GN, so that GN runs solo; of the
+# 2N GNs per chain, 2N-1 are inside a conv. Paired wall time = (2N-1)*g against a wall of g+N(g+c),
+# i.e. (2N-1)s/(N+s) with s = g/(g+c) -- 11s/(6+s) at N=6.
+NST = 6
+L.append(f"| GN launches inside a conv (of {2*NST}) | " + " | ".join(
+    f"{2*NST-1}/{2*NST}" for _ in PIPE_ORDER) + f" | **{100*(2*NST-1)/(2*NST):.1f}%** |")
+_ps = {}
+for k in PIPE_ORDER:
+    _s = gg2[SH[k]].gn_modiff / gg2[SH[k]].modiff_total_ms
+    _ps[k] = 100 * (2 * NST - 1) * _s / (NST + _s)
+_pw = sum(pipe[k]["freq"] * _ps[k] for k in PIPE_ORDER) / sum(pipe[k]["freq"] for k in PIPE_ORDER)
+L.append("| paired share of wall time, N=6 | " + " | ".join(f"{_ps[k]:.1f}%" for k in PIPE_ORDER)
+         + f" | {_pw:.1f}% |")
+# MEASURED counterpart: if co-execution happened as modelled, pipe/split ~ (N+s)/2N ~ 0.53.
+L.append("| **measured** pipe / split | " + " | ".join(
+    f"{pipe[k]['med']['modiff_pipe']/pipe[k]['med']['modiff_split']:.3f}" for k in PIPE_ORDER)
+    + " | — |")
+L.append("| modelled pipe / split | " + " | ".join(
+    f"{(NST + gg2[SH[k]].gn_modiff/gg2[SH[k]].modiff_total_ms)/(2*NST):.3f}" for k in PIPE_ORDER)
+    + " | — |")
 blocks["S3_PHASE"] = "\n".join(L)
 a2["phase_model"] = dict(
-    gn_fully_inside_conv=bool((gg.conv_modiff > gg.gn_modiff).all()),
-    paired_wall_pct_freq_wtd=200 * sw,
-    paired_wall_pct_range=[200 * float((gg.gn_modiff / gg.modiff_total_ms).min()),
-                           200 * float((gg.gn_modiff / gg.modiff_total_ms).max())])
+    c_gt_g_all_shapes=bool((gg.conv_modiff > gg.gn_modiff).all()),
+    gn_inside_conv_fraction=(2 * 6 - 1) / (2 * 6),
+    paired_wall_pct_per_shape={NICE[k]: _ps[k] for k in PIPE_ORDER},
+    paired_wall_pct_call_wtd=_pw,
+    measured_pipe_over_split={NICE[k]: pipe[k]["med"]["modiff_pipe"] / pipe[k]["med"]["modiff_split"]
+                              for k in PIPE_ORDER},
+    # c > g must survive halving the batch, since g and c above are batch-128 ablation durations.
+    # Conv scales by wave count, GN linearly.
+    half_batch_conv_over_gn={
+        NICE[k]: float((gg2[SH[k]].conv_modiff
+                        * (math.ceil((b / 2) / SMS) / math.ceil(b / SMS)))
+                       / (gg2[SH[k]].gn_modiff * 0.5))
+        for k, b in zip(PIPE_ORDER, [24, 192, 2048, 768, 96])},
+    # the cap's second endpoint, previously hand-computed and undisclosed
+    cap_pct_of_pipeline_harness_overhead=float(
+        100 * a2["gn_hiding_cap"]["cap_pp_freq_wtd"]
+        / (100 * (sum(pipe[k]["med"]["modiff_full"] * pipe[k]["freq"] for k in PIPE_ORDER)
+                  - sum(pipe[k]["med"]["base_full"] * pipe[k]["freq"] for k in PIPE_ORDER))
+           / sum(pipe[k]["med"]["base_full"] * pipe[k]["freq"] for k in PIPE_ORDER))),
+    identity_residual=float((gg.a_hat_ms + gg.o_hat_ms
+                             - (gg.modiff_total_ms - gg.base_total_ms)).abs().max()))
+# retired statistics: keep them out of derived.json so they cannot be re-quoted
+audit.pop("n_cells_resolved", None)
+a2.pop("in_phase_pct", None)
 
 # --- §4 occupancy table (base_gain must track the CURRENT run) ---
 L = ["| shape | real grid | blocks | waves | last wave full | SM waste | base gain |",
@@ -846,4 +885,6 @@ with open(f"{HERE}/data/derived.json", "w") as f:
 print("\n=== 8. GENERATED TABLES ===")
 print("injected:", ", ".join(blocks))
 print(f"verdict aggregate: {ad:+.3f} ms, t={at:.2f} (df=4), p={ap:.5f}, sigma-equiv={asig:.2f}")
-print(f"phase: GN fully inside conv on all 5; paired wall time {200*sw:.1f}% freq-wtd")
+print(f"phase: c>g on all 5; {2*NST-1}/{2*NST} GNs inside a conv; paired wall {_pw:.1f}% (call-wtd); "
+      f"measured pipe/split {min(a2['phase_model']['measured_pipe_over_split'].values()):.3f}"
+      f"-{max(a2['phase_model']['measured_pipe_over_split'].values()):.3f} vs modelled ~0.53")
