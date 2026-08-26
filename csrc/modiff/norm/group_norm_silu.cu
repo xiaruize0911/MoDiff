@@ -979,23 +979,48 @@ __global__ void gn_stats_partials_chanmajor_vec2_kernel(
     const TIn* __restrict__ X,
     float* __restrict__ part_sum,      // [N, G, nblocks]
     float* __restrict__ part_sumsq,
-    int C, long HW, int G, int nblocks
+    int C, long HW, int G, int nblocks,
+    // Same optional split / concat-emitting contract as the scalar twin above. A vec2 pair at an
+    // even channel NEVER straddles the C1 boundary, because every C1 this UNet concatenates is a
+    // multiple of 32: an even c < C1 has c+1 <= C1-1, and an even c >= C1 has both halves past it.
+    // gn_stats_from_cat2 TORCH_CHECKs C1 % 2 rather than trusting that.
+    const TIn* __restrict__ X2 = nullptr,
+    TIn* __restrict__ OutCat = nullptr,
+    int C1 = 0
 ) {
     const int CPG = C / G;
     const int t = threadIdx.x;
     const int n = blockIdx.y;
     const long C2 = C / 2;
+    const int c = 2 * t;                       // this thread's first channel, always even
+    const bool split = (X2 != nullptr);
+    const int c2w = C - C1;
     // Both halves of the pair live in the same group whenever CPG is even; when CPG is odd the
     // pair can straddle a group boundary, which is FINE -- the two accumulators are written to
     // their own channel slots in shared memory and the group combine reads by channel index.
-    const __half2* a_base = reinterpret_cast<const __half2*>(X + (long)n * HW * C);
+    const __half2* a_base = reinterpret_cast<const __half2*>(
+        X + (long)n * HW * (split ? C1 : C));
+    const __half2* b_base = split
+        ? reinterpret_cast<const __half2*>(X2 + (long)n * HW * c2w) : nullptr;
+    __half2* cat_base = (OutCat != nullptr)
+        ? reinterpret_cast<__half2*>(OutCat + (long)n * HW * C) : nullptr;
+    // Which buffer this thread reads, and at what pair offset, is loop-invariant.
+    const __half2* src = (!split) ? a_base : (c < C1 ? a_base : b_base);
+    const long src_pairs = (!split) ? C2 : (c < C1 ? (long)C1 / 2 : (long)c2w / 2);
+    const long src_t = (!split || c < C1) ? (long)t : (long)(c - C1) / 2;
     float sa = 0.0f, sqa = 0.0f, sb = 0.0f, sqb = 0.0f;
     long hw = blockIdx.x;
     for (; hw + 3L * nblocks < HW; hw += 4L * nblocks) {
-        const __half2 r0 = a_base[(hw) * C2 + t];
-        const __half2 r1 = a_base[(hw + nblocks) * C2 + t];
-        const __half2 r2 = a_base[(hw + 2L * nblocks) * C2 + t];
-        const __half2 r3 = a_base[(hw + 3L * nblocks) * C2 + t];
+        const __half2 r0 = src[(hw) * src_pairs + src_t];
+        const __half2 r1 = src[(hw + nblocks) * src_pairs + src_t];
+        const __half2 r2 = src[(hw + 2L * nblocks) * src_pairs + src_t];
+        const __half2 r3 = src[(hw + 3L * nblocks) * src_pairs + src_t];
+        if (cat_base != nullptr) {             // a pure bit copy, exactly as the scalar twin
+            cat_base[(hw) * C2 + t] = r0;
+            cat_base[(hw + nblocks) * C2 + t] = r1;
+            cat_base[(hw + 2L * nblocks) * C2 + t] = r2;
+            cat_base[(hw + 3L * nblocks) * C2 + t] = r3;
+        }
         const float2 f0 = __half22float2(r0), f1 = __half22float2(r1);
         const float2 f2 = __half22float2(r2), f3 = __half22float2(r3);
         sa += f0.x; sqa += f0.x * f0.x; sb += f0.y; sqb += f0.y * f0.y;
@@ -1004,7 +1029,9 @@ __global__ void gn_stats_partials_chanmajor_vec2_kernel(
         sa += f3.x; sqa += f3.x * f3.x; sb += f3.y; sqb += f3.y * f3.y;
     }
     for (; hw < HW; hw += nblocks) {
-        const float2 v = __half22float2(a_base[hw * C2 + t]);
+        const __half2 r = src[hw * src_pairs + src_t];
+        if (cat_base != nullptr) cat_base[hw * C2 + t] = r;
+        const float2 v = __half22float2(r);
         sa += v.x; sqa += v.x * v.x;
         sb += v.y; sqb += v.y * v.y;
     }
@@ -1331,6 +1358,19 @@ std::vector<torch::Tensor> cat2_gn_stats_fp16(
     dim3 grid((unsigned)nblocks, (unsigned)N);
     cudaStream_t st = at::cuda::getCurrentCUDAStream();
 #define GN_CAT2(KK)                                                                                    gn_stats_partials_chanmajor_kernel<__half, KK><<<grid, BLK, shmem, st>>>(                              reinterpret_cast<const __half*>(a.data_ptr<at::Half>()),                                           part_sum.data_ptr<float>(), part_sumsq.data_ptr<float>(),                                          C, HW, (int)num_groups, nblocks,                                                                   reinterpret_cast<const __half*>(b.data_ptr<at::Half>()),                                           reinterpret_cast<__half*>(cat.data_ptr<at::Half>()), C1)
+    // VEC2 FAST PATH for the fold, same kernel and same invariants as the non-split dispatch in
+    // gn_launch_group_stats. Requires C1 even so a pair never straddles the halves' boundary.
+    static const char* _v2c = std::getenv("MODIFF_GN_STATS_VEC2");
+    const int BLK2 = C / 2;
+    if (((_v2c == nullptr) || (_v2c[0] != '0')) && (C % 2) == 0 && (C1 % 2) == 0
+        && BLK2 <= 1024 && BLK2 >= (int)num_groups) {
+        gn_stats_partials_chanmajor_vec2_kernel<__half><<<grid, BLK2, shmem, st>>>(
+            reinterpret_cast<const __half*>(a.data_ptr<at::Half>()),
+            part_sum.data_ptr<float>(), part_sumsq.data_ptr<float>(),
+            C, HW, (int)num_groups, nblocks,
+            reinterpret_cast<const __half*>(b.data_ptr<at::Half>()),
+            reinterpret_cast<__half*>(cat.data_ptr<at::Half>()), C1);
+    } else
     switch (K) {
         case 1: GN_CAT2(1); break;
         case 2: GN_CAT2(2); break;

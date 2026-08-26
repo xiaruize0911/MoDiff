@@ -9,15 +9,15 @@ one ULP and the two arms are different functions, not one function measured twic
 
 | | before | after | delta |
 |---|--:|--:|--:|
-| GN stats (`gn_stats_partials_chanmajor` → `_vec2`) | 3.435 | 2.625 | **-0.811** |
-| GN+resize+delta (`..._resize_nhwc_kernel`, a_hat vec2) | 3.184 | 2.719 | **-0.465** |
-| GN apply (unchanged — see §3) | 7.791 | 7.788 | -0.003 |
-| stats reduce (unchanged) | 0.341 | 0.328 | -0.012 |
-| **GN family total** | **14.751** | **13.459** | **-1.292** (-8.8%) |
-| GPU busy, whole step | 75.964 | 74.443 | -1.521 |
+| GN stats (`gn_stats_partials_chanmajor` → `_vec2`) | 3.435 | 2.665 | **-0.770** |
+| GN+resize+delta (`..._resize_nhwc_kernel`, a_hat vec2) | 3.184 | 2.713 | **-0.471** |
+| GN apply (unchanged — see §3) | 7.791 | 7.778 | -0.013 |
+| stats reduce (unchanged) | 0.341 | 0.330 | -0.010 |
+| **GN family total** | **14.751** | **13.487** | **-1.264** (-8.6%) |
+| GPU busy, whole step | 75.964 | 74.512 | -1.452 |
 
-Attributed conservatively: the two targeted kernels account for **-1.276 ms/step**
-= **1.66% of the 77.00 ms steady step**. The larger GPU-busy delta
+Attributed conservatively: the two targeted kernels account for **-1.241 ms/step**
+= **1.61% of the 77.00 ms steady step**. The larger GPU-busy delta
 includes a few hundredths spread across untouched kernels, which is run-to-run drift, not effect.
 
 ---
@@ -96,7 +96,7 @@ precondition is that `ci` be even, which holds because `c_start = g·CPG` with C
 now a `TORCH_CHECK` in the launcher rather than a comment, since a misaligned `reinterpret_cast`
 is undefined behaviour that can appear to work.
 
-In-model: **3.184 → 2.719 ms/step**.
+In-model: **3.184 → 2.713 ms/step**.
 
 Gate: [`test_gn_resize_ahat_vec2.py`](../../integration/tests/test_gn_resize_ahat_vec2.py), a
 two-build capture/compare over 4 shapes × {upsample, downsample} × {int8, packed int4} ×
@@ -131,12 +131,30 @@ genuinely bandwidth-bound, which is consistent with
 [ahat_overlap_2026-08-26](../ahat_overlap_2026-08-26/FINDINGS.md): a_hat's 4 B/elem are
 irreducible without changing what is stored.
 
+## 4. Two honest nulls from finishing the job
+
+**The decoder skip-concat fold was still on the scalar kernel** — 14.2 of 58.9 stats calls per
+step in the W4A4 arm (the W8A8 arm does not take that path). It was extended to vec2 too, with
+the boundary argument that a pair never straddles C1 because every C1 here is a multiple of 32,
+and it is now covered by phase 2 of the gate. **The gain is 0.049 ms/step: neutral.** Recorded
+because the conversion is real, correct and measured — not because it bought anything.
+
+**Unexplained, and orthogonal to this change: the same stats kernel costs 36% more in the W4A4
+arm than in W8A8** — 3.624 vs 2.665 ms/step, on identical shapes with
+identical call counts (19.0 at C=384, 22.8 at C=768, 8.5 at C=192, …, verified per block size in
+the trace). The GN input is fp16 in both arms, so the kernel does the same work on the same bytes.
+It predates this change — the pre-cat2 W4A4 trace shows the same gap — so it is not a regression,
+but it is 0.96 ms/step sitting in the W4A4 arm with no explanation, and worth its own look.
+
 ## Scope and limitations
 
 - **The cat2 / skip-concat variant of the stats kernel is untouched.** It also writes a
   concatenation, and folding a vectorised store into it is a separate change with its own gate.
 - **Odd channels-per-group** falls back to the scalar stats kernel and is rejected outright by
   the resize launcher. Every C in this UNet is a multiple of 32 with G = 32, so CPG is even.
+- **C1 + C2 > 2048 declines vec2** (block would exceed 1024 threads) and correctly falls back to
+  the scalar K-split kernel; the 1536+768 fold is the one such shape and the gate asserts the
+  fallback rather than treating it as a pass by accident.
 - **In-model numbers come from one nsys trace per arm**, windowed to the second sample batch
   (20 DDIM steps). Kernel durations are CUPTI activity records and are not inflated by the
   profiler; wall time is, which is why GPU-busy rather than wall is quoted throughout.
