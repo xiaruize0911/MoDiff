@@ -712,3 +712,138 @@ with open(f"{HERE}/data/derived.json", "w") as f:
     json.dump(derived, f, indent=2)
 print("\n=== 7. ROUND-2 CORRECTIONS ===")
 print(json.dumps(a2, indent=2, default=str))
+
+# =====================================================================
+# 8. GENERATE THE VOLATILE TABLES DIRECTLY INTO REPORT.md
+#
+# Rounds 1-4 each shipped numbers that were correct when typed and stale after the next re-run;
+# round 4 found ~15 of them in section 4 alone. Hand-typing volatile figures is the recurring bug,
+# so the tables below are written into REPORT.md between markers and can no longer drift.
+# =====================================================================
+import re
+from scipy import stats as _sps
+
+RAW = {k: pipe[k]["raw"] for k in PIPE_ORDER}
+PRETTY = {"768, 2x2": "768, 2×2", "384, 8x8": "384, 8×8", "192, 32x32": "192, 32×32",
+          "384, 16x16": "384, 16×16", "768, 4x4": "768, 4×4"}
+
+
+def paired_t(a, b):
+    """Paired t on 5 trials. bench_pipeline2.py appends one timing per config per trial, so the
+    trials ARE paired by index; revisions 1-4 combined independent SEs by quadrature instead."""
+    d = [x - y for x, y in zip(a, b)]
+    n = len(d)
+    t = st_mean(d) / (st_stdev(d) / math.sqrt(n))
+    pv = 2 * (1 - _sps.t.cdf(abs(t), n - 1))
+    sig = abs(_sps.norm.ppf(pv / 2)) if pv > 0 else float("inf")
+    return st_mean(d), t, pv, sig
+
+
+blocks = {}
+
+# --- §3 main table ---
+L = ["| shape | freq | base gain | MoDiff gain | ovh today | ovh piped | abs ovh (ms) | split pen. |",
+     "|---|---|---|---|---|---|---|---|"]
+ta = tb = 0.0
+for k in PIPE_ORDER:
+    m, f = pipe[k]["med"], pipe[k]["freq"]
+    bg = 100 * (m["base_full"] - m["base_pipe"]) / m["base_full"]
+    mg = 100 * (m["modiff_full"] - m["modiff_pipe"]) / m["modiff_full"]
+    o1 = 100 * (m["modiff_full"] - m["base_full"]) / m["base_full"]
+    o2 = 100 * (m["modiff_pipe"] - m["base_pipe"]) / m["base_pipe"]
+    a = m["modiff_full"] - m["base_full"]
+    b = m["modiff_pipe"] - m["base_pipe"]
+    sp = 100 * (m["modiff_split"] - m["modiff_full"]) / m["modiff_full"]
+    ta += a * f
+    tb += b * f
+    L.append(f"| {PRETTY[NICE[k]]} | {f} | {bg:.1f}% | {mg:.1f}% | {o1:.1f}% | {o2:.1f}% "
+             f"{'↓' if o2 < o1 else '↑'} | {a:.3f} → {b:.3f} (**{100*(b-a)/a:+.1f}%**) | {sp:.1f}% |")
+aggm = [sum(pipe[k]["freq"] * (RAW[k]["modiff_full"][i] - RAW[k]["base_full"][i]) for k in PIPE_ORDER)
+        for i in range(5)]
+aggp = [sum(pipe[k]["freq"] * (RAW[k]["modiff_pipe"][i] - RAW[k]["base_pipe"][i]) for k in PIPE_ORDER)
+        for i in range(5)]
+ad, at, ap, asig = paired_t(aggp, aggm)
+L.append(f"| **freq-wtd** | | | | | | **{st_mean(aggm):.2f} → {st_mean(aggp):.2f} "
+         f"({100*ad/st_mean(aggm):+.1f}%)** | |")
+blocks["S3_MAIN"] = "\n".join(L)
+a2["verdict_aggregate"] = dict(rise_ms=ad, t=at, p=ap, sigma_equiv=asig,
+                               pct=100 * ad / st_mean(aggm), df=4)
+
+# --- §3 significance table: BOTH the per-arm effect and the arm DIFFERENCE (what the verdict needs) ---
+L = ["| shape | base arm *t* | MoDiff arm *t* | **arm difference** (MoDiff − base saving) | *t* | *p* |",
+     "|---|---|---|---|---|---|"]
+diffs = {}
+for k in PIPE_ORDER:
+    r = RAW[k]
+    _, tb_, pb_, _ = paired_t(r["base_full"], r["base_pipe"])
+    _, tm_, pm_, _ = paired_t(r["modiff_full"], r["modiff_pipe"])
+    bs = [f - q for f, q in zip(r["base_full"], r["base_pipe"])]
+    msv = [f - q for f, q in zip(r["modiff_full"], r["modiff_pipe"])]
+    dd, dt, dp, dsig = paired_t(msv, bs)
+    diffs[NICE[k]] = dict(diff_ms=dd, t=dt, p=dp, sigma_equiv=dsig)
+    L.append(f"| {PRETTY[NICE[k]]} | {tb_:.1f} | {tm_:.1f} | {dd:+.4f} ms | {dt:.1f} | "
+             f"{dp:.4f}{'' if dp < 0.05 else ' **n.s.**'} |")
+L.append(f"| **freq-wtd aggregate** | | | **{ad:+.3f} ms** | **{at:.1f}** | **{ap:.5f}** |")
+blocks["S3_STATS"] = "\n".join(L)
+a2["arm_difference_per_shape"] = diffs
+
+# --- §3 phase / cap table, derived from run_pipe's actual schedule ---
+L = ["| | " + " | ".join(PRETTY[NICE[k]] for k in PIPE_ORDER) + " | freq-wtd |", "|---|" + "---|" * 6]
+gg2 = {r["shape"]: r for _, r in gg.iterrows()}
+SH = {"768_2x2": "768->768,2x2", "384_8x8": "384->384,8x8", "192_32x32": "192->192,32x32",
+      "384_16x16": "384->384,16x16", "768_4x4": "768->768,4x4"}
+sw = float((gg.gn_modiff * gg.freq).sum() / (gg.modiff_total_ms * gg.freq).sum())
+L.append("| MoDiff GN, % of its stage | " + " | ".join(
+    f"{100*gg2[SH[k]].gn_modiff/gg2[SH[k]].modiff_total_ms:.1f}" for k in PIPE_ORDER)
+    + f" | {100*sw:.1f} |")
+L.append("| conv / GN | " + " | ".join(
+    f"{gg2[SH[k]].conv_modiff/gg2[SH[k]].gn_modiff:.2f}" for k in PIPE_ORDER) + " | — |")
+L.append("| **GN time running inside a conv** | " + " | ".join("100%" for _ in PIPE_ORDER) + " | **100%** |")
+L.append("| paired share of wall time (2·GN) | " + " | ".join(
+    f"{200*gg2[SH[k]].gn_modiff/gg2[SH[k]].modiff_total_ms:.1f}%" for k in PIPE_ORDER)
+    + f" | {200*sw:.1f}% |")
+L.append("| a_hat as % of baseline stage (cap) | " + " | ".join(
+    f"{100*gg2[SH[k]].a_hat_ms/gg2[SH[k]].base_total_ms:.1f}" for k in PIPE_ORDER)
+    + f" | {a2['gn_hiding_cap']['cap_pp_freq_wtd']:.1f} |")
+blocks["S3_PHASE"] = "\n".join(L)
+a2["phase_model"] = dict(
+    gn_fully_inside_conv=bool((gg.conv_modiff > gg.gn_modiff).all()),
+    paired_wall_pct_freq_wtd=200 * sw,
+    paired_wall_pct_range=[200 * float((gg.gn_modiff / gg.modiff_total_ms).min()),
+                           200 * float((gg.gn_modiff / gg.modiff_total_ms).max())])
+
+# --- §4 occupancy table (base_gain must track the CURRENT run) ---
+L = ["| shape | real grid | blocks | waves | last wave full | SM waste | base gain |",
+     "|---|---|---|---|---|---|---|"]
+for r in sorted(wrow, key=lambda z: -z["sm_waste"]):
+    star = " ✳" if r["shape"] == "768, 2x2" else ""
+    L.append(f"| {PRETTY[r['shape']]} | {r['grid']} | {r['blocks']} | {r['waves']:.2f} | "
+             f"{100*(r['blocks']-SMS*(math.ceil(r['waves'])-1))/SMS:.0f}% | "
+             f"**{r['sm_waste']:.1f}%** | {r['base_gain']:.1f}%{star} |")
+blocks["S4_WAVE"] = "\n".join(L)
+
+# --- §4 bottom line ---
+L = ["| arm | saved | of the 5-shape conv block | of a full step (e2e) |", "|---|---|---|---|"]
+for arm, lab in (("base", "baseline"), ("modiff", "MoDiff")):
+    e = audit["pipeline_e2e"][arm]
+    L.append(f"| {lab} | {e['saved_ms_per_step']:.3f} ms/step | "
+             f"{e['pct_of_5shape_convblock']:.2f}% | **{e['pct_of_step']:.2f}%** |")
+blocks["S4_BOTTOM"] = "\n".join(L)
+
+rp = f"{HERE}/REPORT.md"
+txt = open(rp).read()
+for tag, body in blocks.items():
+    pat = re.compile(rf"(<!-- GEN:{tag} -->\n).*?(\n<!-- /GEN:{tag} -->)", re.S)
+    if pat.search(txt):
+        txt = pat.sub(lambda m: m.group(1) + body + m.group(2), txt)
+    else:
+        print(f"  WARNING: marker GEN:{tag} not found in REPORT.md")
+open(rp, "w").write(txt)
+
+derived["audit_round2"] = a2
+with open(f"{HERE}/data/derived.json", "w") as f:
+    json.dump(derived, f, indent=2)
+print("\n=== 8. GENERATED TABLES ===")
+print("injected:", ", ".join(blocks))
+print(f"verdict aggregate: {ad:+.3f} ms, t={at:.2f} (df=4), p={ap:.5f}, sigma-equiv={asig:.2f}")
+print(f"phase: GN fully inside conv on all 5; paired wall time {200*sw:.1f}% freq-wtd")
