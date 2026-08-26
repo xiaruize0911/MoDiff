@@ -401,68 +401,6 @@
       }
     ],
     "absolute_overhead_weighted_change_pct": 10.598579312818181,
-    "effect_over_sigma": {
-      "768, 2x2|base": {
-        "effect_ms": 0.0016691791824996471,
-        "se_ms": 0.00016738637679851226,
-        "t": 9.972013340780329,
-        "resolved": true
-      },
-      "768, 2x2|modiff": {
-        "effect_ms": 0.0035178614780306816,
-        "se_ms": 0.0002322633205405072,
-        "t": 15.146005274720764,
-        "resolved": true
-      },
-      "384, 8x8|base": {
-        "effect_ms": 0.10786544065922499,
-        "se_ms": 0.0015852601823017592,
-        "t": 68.04273636811277,
-        "resolved": true
-      },
-      "384, 8x8|modiff": {
-        "effect_ms": 0.0254440912976861,
-        "se_ms": 0.004105369133325319,
-        "t": 6.197759682836748,
-        "resolved": true
-      },
-      "192, 32x32|base": {
-        "effect_ms": 0.03673778614029288,
-        "se_ms": 0.014871531465360105,
-        "t": 2.470343167135497,
-        "resolved": false
-      },
-      "192, 32x32|modiff": {
-        "effect_ms": -0.14792264439165592,
-        "se_ms": 0.015194755894181448,
-        "t": 9.735111601779675,
-        "resolved": true
-      },
-      "384, 16x16|base": {
-        "effect_ms": 0.14015639666467905,
-        "se_ms": 0.01873734224875969,
-        "t": 7.4800574598009835,
-        "resolved": true
-      },
-      "384, 16x16|modiff": {
-        "effect_ms": 0.10051005287095904,
-        "se_ms": 0.011442221914095937,
-        "t": 8.784137698565205,
-        "resolved": true
-      },
-      "768, 4x4|base": {
-        "effect_ms": 0.29889623634517193,
-        "se_ms": 0.002390786191025132,
-        "t": 125.02006137864208,
-        "resolved": true
-      },
-      "768, 4x4|modiff": {
-        "effect_ms": 0.3352316562086344,
-        "se_ms": 0.0022390877006952274,
-        "t": 149.71796598433653,
-        "resolved": true
-      }
-    },
     "spearman": {
       "rho_all_5": 0.0,
       "rho_excl_768_2x2_n4": 1.0,
@@ -589,7 +527,6 @@
       "base_saves_ms": 0.29889623634517193,
       "diff_ms": 0.03633541986346245,
       "se_ms": 0.002032109788702974,
-      "t": 17.880638174896102,
       "modiff_specific_pct_of_gain": 10.838898770600823
     },
     "baseline_saves_more_abs": {
@@ -758,7 +695,7 @@
         "384, 16x16": 60.85112139757406,
         "768, 4x4": 45.05447225948244
       },
-      "paired_wall_pct_call_wtd": 53.345853963306546,
+      "paired_wall_pct_call_wtd": 60.15180962005385,
       "measured_pipe_over_split": {
         "768, 2x2": 0.5297252061459958,
         "384, 8x8": 0.7834424211008778,
@@ -774,7 +711,33 @@
         "768, 4x4": 2.9024817250281867
       },
       "cap_pct_of_pipeline_harness_overhead": 78.29262466554496,
+      "spearman_blocks_vs_pipe_split_modiff": 0.9999999999999999,
+      "spearman_blocks_vs_pipe_split_base": 0.9999999999999999,
+      "max_arm_gap_in_pipe_split": 0.09950647436757132,
+      "work_conservation_floor": {
+        "768, 2x2": 0.5334398496253384,
+        "384, 8x8": 0.7980484233937202,
+        "192, 32x32": 0.9564092201762359,
+        "384, 16x16": 0.9518318997664835,
+        "768, 4x4": 0.9551367261990333
+      },
       "identity_residual": 1.3877787807814457e-16
+    },
+    "position_confound": {
+      "drift_pct_per_position": 0.05589540632779326,
+      "p": 0.003722237387886233,
+      "mean_positions": {
+        "base_full": 2.8,
+        "base_split": 2.6,
+        "base_pipe": 2.4,
+        "modiff_full": 2.2,
+        "modiff_split": 2,
+        "modiff_pipe": 3
+      },
+      "net_tilt_positions": 1.1999999999999997,
+      "bias_on_arm_difference_ms": -0.011852666822695392,
+      "effect_ms": 1.9529860885813832,
+      "bias_pct_of_effect": 0.6068997056351269
     }
   }
 }

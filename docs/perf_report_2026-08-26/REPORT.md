@@ -2,22 +2,23 @@
 
 **Date** 2026-08-26 · **GPU** NVIDIA A40 (GA102, 84 SMs, 696 GB/s, 299 dense-int8 TOPS) · **Batch** 128
 
-> **Revision 6.** Five independent audit rounds. Each found real errors in the revision before it, and
-> **rounds 2–5 each found that the *fix* for the previous round's blocker was itself wrong.**
+> **Revision 7.** Six independent audit rounds. Each found real errors in the revision before it, and
+> **rounds 2–6 each found that the *fix* for the previous round's blocker was itself wrong.**
 >
 > | round | found | headline problem |
 > |---|---|---|
-> | 1 | 5 blockers, 20 lesser | o_hat's byte count was +2 B not +4 B, breaking §2's framing; a "1.80× ceiling" violated on 60% of calls; a circular byte-count inversion; ρ = 0.00 computed by this report's own script but left unpublished while only the post-deletion ρ = 1.00 appeared |
+> | 1 | 5 blockers, 20 lesser | o_hat's byte count was +2 B not +4 B, breaking §2's framing; a "1.80× ceiling" violated on 60% of calls; a circular byte-count inversion; ρ = 0.00 computed by this report's own script but left unpublished |
 > | 2 | 3 blockers, 22 lesser | revision 2 fixed the prose but **not the figures**; its new defence of §3 used the wrong arm and the wrong shape |
 > | 3 | 5 blockers, 18 lesser | the wrong arm **again**; the cap was the wrong quantity; every σ was a dispersion, not a standard error |
-> | 4 | 6 blockers, 11 lesser | §4 never regenerated after a re-run (~15 stale numbers); phase wrong a **third** time; revision 4's σ fix over-corrected (*t* on df = 4 as Gaussian σ) |
-> | 5 | 6 blockers, 24 lesser | phase wrong a **fourth** time — revision 5 hard-coded a "100%" its own harness contradicts, used the *N* → ∞ limit for a 6-stage chain, and never checked the claim against the run's own timings; the new generated-table mechanism shipped a sign-inverted aggregate |
+> | 4 | 6 blockers, 11 lesser | §4 never regenerated after a re-run (~15 stale numbers); phase wrong a **third** time; revision 4's σ fix over-corrected |
+> | 5 | 6 blockers, 24 lesser | phase wrong a **fourth** time — a hard-coded "100%" the harness contradicts, and the *N* → ∞ limit used for a 6-stage chain; the new generated-table mechanism shipped a sign-inverted aggregate |
+> | 6 | 6 blockers, 8 lesser | the phase *fix* was finally correct, but the wrong-shape/wrong-arm bug reappeared **next door** in a new §4 sentence, and the retired claim survived in all three summary locations |
 >
-> **The substantive change in revision 6.** §3's phase question is no longer answered by a model at
-> all. The schedule *offers* the `conv ‖ GN` pairing on 11 of 12 GN launches, but the run's own
-> `pipe/split` ratios show co-execution was **realised only where the conv left SMs free** — on
-> `192,32×32` the pipelined run is within 2.4% of fully serial. That measured row is now the direct
-> evidence for §3's mechanism, replacing four revisions of arithmetic about shares.
+> **The change in revision 7.** §3's evidence is no longer a model at all. `pipe/split` is compared
+> against the **work-conservation floor** rather than a capacity-free ideal, and the load-bearing
+> statistic is model-free: `pipe/split` rank-orders **perfectly with conv block count** (ρ = 1.00, n = 5,
+> no point deletion) and does so **identically on the baseline arm** — which is what shows the effect is
+> arm-independent occupancy and has nothing to do with a_hat.
 >
 > **Findings 1–2 survive as stated. §3 is refuted. §4's mechanism claim is a correlation only.**
 
@@ -30,7 +31,7 @@ derived values land in [`data/derived.json`](data/derived.json). Revisions 1 and
   stated at the point of use;
 - **read from source** — the byte-count table in §2 and the exactness argument in §3;
 - **hand-computed** — §2's four per-shape bandwidth-efficiency figures and the ±30% gap; §4's 89.3%
-  baseline split penalty and its 83.5→79.1 / 162.6→84.1 µs per-pair figures; the `70, 0, 0` call
+  baseline split penalty and its 83.5→79.1 / 162.9→84.1 µs per-pair figures; the `70, 0, 0` call
   counts (a transcription of a `print()` in `warmup_cost_w1.py`); the L2 residency sizes in the
   limitations; and one-line derivations quoted inline (9.6×/10.3×, 7.1×, 5.9:1, "22% relative",
   "33% swing", "81% more / 2.19×", "~3.7% of throughput", "~89%").
@@ -44,7 +45,7 @@ listed, and the two plot strings that previously hard-coded stale values are now
 |---|---|---|
 | 1. What does warm-up cost? | **4.11%** (W8A8) / **4.41%** (W4A4) of a 200-step **cold** sample; scales as 1/steps. Dropping 5→1 rounds is worth **1.036×**/**1.038×** | high — 3 controls, drift-bounded |
 | 2. What do a_hat/o_hat cost? | a_hat **14.8%**/**20.4%** of conv-block time (**6.4%**/**6.6%** of a step); o_hat **2.0–2.6%**. Per *byte*, a_hat is **2.35×**/**4.06×** dearer (element-corrected) | high on the shares; the per-byte ratio is weighting-dependent |
-| 3. Can a_hat be overlapped away? | **No.** Batch-split pipelining leaves the ratio flat or worse; absolute overhead **rises 11.1%, p = 0.0004**. Every GN ran fully inside a conv, so the mechanism *was* tested | aggregate p = 0.0004; 4 of 5 shapes' arm differences reach p < 0.05 |
+| 3. Can a_hat be overlapped away? | **No.** Batch-split pipelining leaves the ratio flat or worse; absolute overhead **rises 11.1%, p = 0.0004**. The schedule offered the pairing on 11 of 12 GN launches, but co-execution was realised only where the conv left SMs free | aggregate p = 0.0004; 4 of 5 shapes' arm differences reach p < 0.05 |
 | 4. Why did the *baseline* get faster? | Conv **occupancy**, not anything MoDiff-specific. Correlates with wave quantization, but the block-level mechanism is **not established** | medium — see §4's downgrade |
 
 > **The one-line takeaway.** The 28% speedup batch-split pipelining produced on `768,4x4` is real but
@@ -334,29 +335,41 @@ of *g* + *N*(*g*+*c*), i.e. **(2N−1)s/(N+s)** = 11*s*/(6+*s*) at *N* = 6 — n
 | MoDiff GN, % of its stage | 22.6 | 37.4 | 37.2 | 35.1 | 25.6 | 34.7 |
 | conv / GN | 3.42 | 1.67 | 1.69 | 1.85 | 2.90 | — |
 | GN launches inside a conv (of 12) | 11/12 | 11/12 | 11/12 | 11/12 | 11/12 | **91.7%** |
-| paired share of wall time, N=6 | 40.0% | 64.6% | 64.2% | 60.9% | 45.1% | 53.3% |
+| paired share of wall time, N=6 | 40.0% | 64.6% | 64.2% | 60.9% | 45.1% | 60.2% |
 | **measured** pipe / split | 0.530 | 0.783 | 0.976 | 0.926 | 0.687 | — |
-| modelled pipe / split | 0.519 | 0.531 | 0.531 | 0.529 | 0.521 | — |
+| measured pipe / split, **baseline** arm | 0.527 | 0.684 | 0.949 | 0.916 | 0.673 | — |
+| work-conservation floor (full / split) | 0.533 | 0.798 | 0.956 | 0.952 | 0.955 | — |
+| conv blocks (from §4) | 24 | 192 | 2048 | 768 | 96 | — |
 <!-- /GEN:S3_PHASE -->
 
-**What actually happened.** The last two rows are the check revision 5 omitted. If co-execution
-occurred as modelled, `modiff_pipe / modiff_split` would sit near 0.53 on every shape. It does so only
-on `768,2×2` (0.530). On `192,32×32` the pipelined run is within **2.4%** of the fully serial split, and
-on `384,16×16` within 7.4% — **essentially no co-execution at all**, on the two shapes carrying most of
-the weight.
+**What actually happened.** The last four rows are the check revision 5 omitted. The honest comparison
+is not the capacity-free model — which predicts ≈0.53 on every shape regardless of block count, and so
+is guaranteed to fail on a 24-wave shape — but the **work-conservation floor** `full/split`: pipelining
+can at best match the un-split full-batch run, so beating that floor is real concurrency gain.
 
-**And that pattern is the finding, not a defect of the experiment.** Those are exactly the shapes whose
-conv already saturates the 84 SMs (2048 and 768 blocks, §4). The second stream's blocks cannot get
-slots, so the two streams serialise no matter what the schedule offers. Where the conv leaves SMs free
-— `768,4×4` (96 blocks) and `384,8×8` (192) — co-execution does appear (0.687, 0.783). So the direct
-evidence for §3's mechanism claim is this row, not an appeal to bandwidth.
+By that measure, concurrency was realised on `768,4×4` (0.687 against a 0.955 floor — a large gain),
+partially on `384,8×8` and `384,16×16`, marginally on `768,2×2` (whose split is already near-optimal),
+and **not at all on `192,32×32`**, where the pipelined run is 0.976 against a 0.956 floor — i.e. slower
+than simply not splitting. So the accurate statement is **"no benefit from concurrency" on the
+saturated shapes**, not "no co-execution": under SM time-slicing the two are indistinguishable without
+a trace, and none exists. **[R7]**
 
-**Verdict.** The pairing was scheduled throughout and realised only where occupancy permitted; the
+**The pattern is exactly monotone in conv block count.** `pipe/split` rank-orders perfectly with
+blocks — **Spearman ρ = 1.00 over all five shapes** (24 → 0.530, 96 → 0.687, 192 → 0.783, 768 → 0.926,
+2048 → 0.976). That is a model-free statement, and unlike §4's ρ it needs no point deletion. It also
+holds **identically on the baseline arm** (ρ = 1.00; the two arms' ratios differ by at most 0.100),
+which independently confirms the effect is arm-independent occupancy and has nothing to do with a_hat.
+**[R7]**
+
+**Verdict.** The pairing was scheduled throughout and paid off only where occupancy permitted; the
 overall result is negative (aggregate +1.95 ms, p = 0.0004). **Batch-split 2-stream pipelining is
-refuted as a route to hiding a_hat.** What is *not* established is the counterfactual — a schedule that
-forced co-execution on the saturated shapes is impossible for the reason above, so there is no
-"phase-enforced rerun" that would rescue it. Revisions 3–4 called this "untested"/"under-tested" and
-revision 5 called it "fully exercised"; both were wrong, in opposite directions. **[R6]**
+refuted as a route to hiding a_hat.** On the saturated shapes the binding limit is
+work-conservation — no schedule can beat the work bound on a 24-wave conv — so re-running with
+enforced phase would not change those shapes. What that argument does *not* establish is the stronger
+claim that co-residency could never help at full occupancy: a bandwidth-bound GN sharing an SM with a
+compute-bound conv is precisely what `ncu` would settle, and `ncu` is unavailable here. Revision 6
+wrote "impossible"; that was an overreach. **[R7]** Revisions 3–4 called this "untested"/"under-tested"
+and revision 5 "fully exercised"; all three were wrong.
 
 Two caveats on the model. *g* and *c* are batch-128 **ablation** durations applied to half-batch
 pipelined stages; scaling conv by wave count and GN linearly, `c > g` survives with a margin of
@@ -413,8 +426,11 @@ tail effects, or L2 residency.
 Revision 1 wrote that at half batch "the other stream's GN blocks move into the free SMs." **That can
 account for at most 12.2 of the 30.5 points.** At `768,4x4` the baseline GN is 19.7 µs of a 161.1 µs
 GN+conv pair = 12.2%, so even perfect GN hiding caps the gain there. The residual must come from the
-conv side, and §3's measured `pipe/split` row shows the two streams barely co-executed on this shape at all
-(0.976 against a modelled 0.53). **[R6]**
+conv side, and §3's measured `pipe/split` row shows this shape *did* co-execute — 0.687 against a
+work-conservation floor of 0.955, the largest concurrency gain of the five. So the residual is
+conv-side, and it is consistent: this is the shape with the most wasted SMs for a second stream to
+fill. **[R7]** (Revision 6 wrote 0.976 here, which is `192,32×32`'s MoDiff-arm figure, and drew the
+opposite conclusion from §3 about the same shape.)
 
 What the data supports is the **correlation** between conv occupancy waste and realized gain **in the
 baseline arm**. Revision 2 added "plus the arm-independence (both arms recover similar amounts)" —
@@ -434,7 +450,7 @@ half-batch grids (48 blocks etc.) are arithmetic, not traced. **[R2]**
 dominated, `base_pipe` (24 launches) could not be 0.500 ms while `base_split` (24 launches) is
 0.949 ms. The cause is **single-wave latency**: at 24 blocks the conv is one wave at *both* batch
 sizes, so per-pair time barely moves (83.5 → 79.1 µs, −5.3%) and splitting nearly doubles GPU
-work-time. Contrast `768,4x4`: 162.6 → 84.1 µs (−48.3%), because 96 blocks (2 waves) → 48 (1 wave).
+work-time. Contrast `768,4×4`: 162.9 → 84.1 µs (−48.4%), because 96 blocks (2 waves) → 48 (1 wave).
 This is the same wave argument and a better explanation. Note also the 87.5% is the *MoDiff* arm's
 penalty (the baseline's is 89.3%), and that batch splitting doubles **weight** traffic, since weights
 are batch-invariant — a real production cost not accounted for anywhere here. **[R2]**
@@ -456,7 +472,7 @@ also the most bandwidth-bound, at 25.3% of peak).
 <!-- /GEN:S4_BOTTOM -->
 
 Revision 1 quoted only the middle column and called it "worth ~5%" in the takeaway box and the
-action item. The 82.92/100.53 ms figures behind it are **6-stage-chain units × call counts**, not
+action item. The 82.82/100.45 ms figures behind it are **6-stage-chain units × call counts**, not
 per-step times. Two scope factors compound: these 5 shapes are 50.6% of the 20-shape conv-block
 time (baseline weighting; 50.1% on the MoDiff arm), and the conv block is 41.9%/43.3% of a step.
 
@@ -484,8 +500,8 @@ with that assembly or needs a hand-written tile scheduler must be read out of th
 
 ## 5. Plausibility audit
 
-Revision 1 shipped its own audit table; five audit rounds then found 25 blockers and 95 lesser
-issues across revisions 1–5 (see the preamble). The table below is the state after round 5. Most
+Revision 1 shipped its own audit table; six audit rounds then found 31 blockers and 103 lesser
+issues across revisions 1–6 (see the preamble). The table below is the state after round 6. Most
 checks are computed in [`analyze.py`](scripts/analyze.py) §5–§7; rows 12–13 are source readings and
 manual comparisons, flagged as such. **[R4]**
 
@@ -508,11 +524,11 @@ manual comparisons, flagged as such. **[R4]**
 | 15 | Warm-up scope | ⚠️ per *cold* sample at 200 steps; 14.7%/15.7% at 50; shipped throughput harness pays ≈none **[R3]** |
 | 16 | "worth ~5%" scope | ❌ **was unscoped** — it is 5.05% of a 5-shape conv-block subset in chain units, **≈1.06% end-to-end** **[R3]** |
 | 17 | Cross-harness absolute ms/step | ✅ 5-shape totals agree to **+0.21%** (MoDiff) / **−1.16%** (baseline); per-shape spread **−3.3% … +0.6%**, worst on `768,2×2` **[R5]** |
-| 18 | §3 tested its own mechanism | ✅ **yes** — c > g on 5/5, so every GN ran fully inside a conv; paired 69% of wall time. Revisions 3–4's downgrades were wrong **[R5]** |
+| 18 | §3 tested its own mechanism | ⚠️ **offered, not realised** — the schedule pairs 11 of 12 GN launches (paired 60.2% of wall time), but measured `pipe/split` shows concurrency materialised only on the under-occupied shapes. Revisions 3–5 were wrong in both directions **[R7]** |
 | 19 | "baseline gains at least as much in every shape" | ❌ **was false** on `768,2x2` and self-contradictory; now stated per metric (4/5 by %, 3/5 by absolute ms) **[R4]** |
 | 20 | Figures match the text | ❌ **twice not** — revisions 2 and 3 each shipped a refuted claim in a plot title; all four plots re-cut **[R4]** |
 | 21 | §4 arm-independence | ❌ **withdrawn** — baseline recovers 81% more absolute ms and the arms have opposite signs on `192,32×32` **[R5]** |
-| 22 | σ is a standard error | ❌ wrong twice — a dispersion (√5 too **large**) in revisions 1–3, then *t* on df = 4 mislabelled as Gaussian σ in revision 4. Now paired *t* with *p* **[R5]** |
+| 22 | σ is a standard error | ❌ wrong twice — a dispersion (≈1.79× too **large** for a median) in revisions 1–3, then *t* on df = 4 mislabelled as Gaussian σ in revision 4. Now paired *t* with *p* **[R5]** |
 | 23 | GN-hiding cap on the verdict | ❌ wrong quantity in revision 4 (whole MoDiff GN share); correct cap is the a_hat increment, **16.7 pp**, i.e. **78–85%** depending on harness — and `a_hat+o_hat = overhead` is an identity, so the per-shape comparison is not a finding **[R5]** |
 
 ### Known limitations
@@ -546,8 +562,9 @@ manual comparisons, flagged as such. **[R4]**
 
 1. **a_hat, at 14.8%/20.4% of conv-block time (6.4%/6.6% of a step), remains the largest
    MoDiff-specific cost, and batch-split 2-stream pipelining *as implemented* is closed as a route to
-   it.** Revision 5 withdraws revisions 3–4's narrowing: the schedule put **every GN fully inside a conv**,
-   so inter-kernel concurrency was genuinely tested here and is refuted, not merely untried. **[R5]**
+   it.** The schedule offered the `conv ‖ GN` pairing on 11 of 12 GN launches, but the run's own `pipe/split`
+   ratios show concurrency was realised only where the conv left SMs free — so the route is refuted on
+   the shapes that matter, for a reason (SM saturation) that no rescheduling removes. **[R7]**
    With C5 (epilogue fusion, 0.5×) and C10 (group-major merge, regression), the other two
    "restructure the kernels" routes are measured negative.
 2. **The remaining lever is reducing a_hat's bytes, not hiding them** — e.g. an int8/fp8 cache,

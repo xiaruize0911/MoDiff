@@ -17,7 +17,7 @@ import csv
 import json
 import math
 import os
-from statistics import mean as st_mean, stdev as st_stdev
+from statistics import mean as st_mean, stdev as st_stdev, median as st_median
 
 import matplotlib
 matplotlib.use("Agg")
@@ -808,22 +808,32 @@ L.append("| conv / GN | " + " | ".join(
 # 2N GNs per chain, 2N-1 are inside a conv. Paired wall time = (2N-1)*g against a wall of g+N(g+c),
 # i.e. (2N-1)s/(N+s) with s = g/(g+c) -- 11s/(6+s) at N=6.
 NST = 6
+_BLK = {'768_2x2': 24, '384_8x8': 192, '192_32x32': 2048, '384_16x16': 768, '768_4x4': 96}
 L.append(f"| GN launches inside a conv (of {2*NST}) | " + " | ".join(
     f"{2*NST-1}/{2*NST}" for _ in PIPE_ORDER) + f" | **{100*(2*NST-1)/(2*NST):.1f}%** |")
 _ps = {}
 for k in PIPE_ORDER:
     _s = gg2[SH[k]].gn_modiff / gg2[SH[k]].modiff_total_ms
     _ps[k] = 100 * (2 * NST - 1) * _s / (NST + _s)
-_pw = sum(pipe[k]["freq"] * _ps[k] for k in PIPE_ORDER) / sum(pipe[k]["freq"] for k in PIPE_ORDER)
+# Wall-time weighted -- Sum(f*11g) / Sum(f*(g+6(g+c))) -- which is algebraically 11s/(6+s) on the
+# time-weighted s printed in the row above. Revision 6 published a call-weighted MEAN of the
+# per-shape percentages (53.3%), which corresponds to a different s than the one shown.
+_pw = 100 * sum(pipe[k]["freq"] * 11 * gg2[SH[k]].gn_modiff for k in PIPE_ORDER) / sum(
+    pipe[k]["freq"] * (gg2[SH[k]].gn_modiff + 6 * gg2[SH[k]].modiff_total_ms) for k in PIPE_ORDER)
 L.append("| paired share of wall time, N=6 | " + " | ".join(f"{_ps[k]:.1f}%" for k in PIPE_ORDER)
          + f" | {_pw:.1f}% |")
 # MEASURED counterpart: if co-execution happened as modelled, pipe/split ~ (N+s)/2N ~ 0.53.
 L.append("| **measured** pipe / split | " + " | ".join(
     f"{pipe[k]['med']['modiff_pipe']/pipe[k]['med']['modiff_split']:.3f}" for k in PIPE_ORDER)
     + " | — |")
-L.append("| modelled pipe / split | " + " | ".join(
-    f"{(NST + gg2[SH[k]].gn_modiff/gg2[SH[k]].modiff_total_ms)/(2*NST):.3f}" for k in PIPE_ORDER)
-    + " | — |")
+L.append("| measured pipe / split, **baseline** arm | " + " | ".join(
+    f"{pipe[k]['med']['base_pipe']/pipe[k]['med']['base_split']:.3f}" for k in PIPE_ORDER) + " | — |")
+# Work-conservation floor: pipelining can at best match the un-split full-batch run, so full/split --
+# not the capacity-free model -- is the honest comparison. Below the floor = real concurrency gain.
+L.append("| work-conservation floor (full / split) | " + " | ".join(
+    f"{pipe[k]['med']['modiff_full']/pipe[k]['med']['modiff_split']:.3f}" for k in PIPE_ORDER) + " | — |")
+L.append("| conv blocks (from §4) | " + " | ".join(
+    str(_BLK[k]) for k in PIPE_ORDER) + " | — |")
 blocks["S3_PHASE"] = "\n".join(L)
 a2["phase_model"] = dict(
     c_gt_g_all_shapes=bool((gg.conv_modiff > gg.gn_modiff).all()),
@@ -845,11 +855,24 @@ a2["phase_model"] = dict(
         / (100 * (sum(pipe[k]["med"]["modiff_full"] * pipe[k]["freq"] for k in PIPE_ORDER)
                   - sum(pipe[k]["med"]["base_full"] * pipe[k]["freq"] for k in PIPE_ORDER))
            / sum(pipe[k]["med"]["base_full"] * pipe[k]["freq"] for k in PIPE_ORDER))),
+    spearman_blocks_vs_pipe_split_modiff=float(_sps.spearmanr(
+        [_BLK[k] for k in PIPE_ORDER],
+        [pipe[k]["med"]["modiff_pipe"] / pipe[k]["med"]["modiff_split"] for k in PIPE_ORDER]).statistic),
+    spearman_blocks_vs_pipe_split_base=float(_sps.spearmanr(
+        [_BLK[k] for k in PIPE_ORDER],
+        [pipe[k]["med"]["base_pipe"] / pipe[k]["med"]["base_split"] for k in PIPE_ORDER]).statistic),
+    max_arm_gap_in_pipe_split=float(max(
+        abs(pipe[k]["med"]["modiff_pipe"] / pipe[k]["med"]["modiff_split"]
+            - pipe[k]["med"]["base_pipe"] / pipe[k]["med"]["base_split"]) for k in PIPE_ORDER)),
+    work_conservation_floor={NICE[k]: pipe[k]["med"]["modiff_full"] / pipe[k]["med"]["modiff_split"]
+                             for k in PIPE_ORDER},
     identity_residual=float((gg.a_hat_ms + gg.o_hat_ms
                              - (gg.modiff_total_ms - gg.base_total_ms)).abs().max()))
 # retired statistics: keep them out of derived.json so they cannot be re-quoted
 audit.pop("n_cells_resolved", None)
 a2.pop("in_phase_pct", None)
+audit.pop("effect_over_sigma", None)      # retired unpaired-quadrature t values
+a2.get("arm_asymmetry_768_4x4", {}).pop("t", None)   # superseded by the paired t in S3_STATS
 
 # --- §4 occupancy table (base_gain must track the CURRENT run) ---
 L = ["| shape | real grid | blocks | waves | last wave full | SM waste | base gain |",
@@ -878,6 +901,27 @@ for tag, body in blocks.items():
     else:
         print(f"  WARNING: marker GEN:{tag} not found in REPORT.md")
 open(rp, "w").write(txt)
+
+# (M) position confound, quantified. The rotation gives PARTIAL protection: each config occupies 5 of
+#     6 positions, leaving a net tilt on the arm-difference metric. Fit the drift and sign the bias.
+_NM = ["base_full", "base_split", "base_pipe", "modiff_full", "modiff_split", "modiff_pipe"]
+_xs, _ys = [], []
+for k in PIPE_ORDER:
+    for t in range(5):
+        rot = _NM[t % 6:] + _NM[:t % 6]
+        for pos, nm in enumerate(rot):
+            med = st_median(pipe[k]["raw"][nm])
+            _xs.append(pos)
+            _ys.append(100 * (pipe[k]["raw"][nm][t] - med) / med)
+_fit = _sps.linregress(_xs, _ys)
+_mp = {nm: st_mean([(_NM[t % 6:] + _NM[:t % 6]).index(nm) for t in range(5)]) for nm in _NM}
+_tilt = (_mp["modiff_pipe"] - _mp["modiff_full"]) - (_mp["base_pipe"] - _mp["base_full"])
+a2["position_confound"] = dict(
+    drift_pct_per_position=_fit.slope, p=_fit.pvalue, mean_positions=_mp,
+    net_tilt_positions=_tilt,
+    bias_on_arm_difference_ms=-_tilt * (_fit.slope / 100) * st_mean(aggm),
+    effect_ms=ad,
+    bias_pct_of_effect=abs(_tilt * (_fit.slope / 100) * st_mean(aggm) / ad) * 100)
 
 derived["audit_round2"] = a2
 with open(f"{HERE}/data/derived.json", "w") as f:
