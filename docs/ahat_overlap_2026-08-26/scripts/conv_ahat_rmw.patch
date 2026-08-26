@@ -1,0 +1,191 @@
+diff --git a/csrc/modiff/conv/conv2d_evt.cu b/csrc/modiff/conv/conv2d_evt.cu
+index 2f02896..c165c14 100644
+--- a/csrc/modiff/conv/conv2d_evt.cu
++++ b/csrc/modiff/conv/conv2d_evt.cu
+@@ -154,7 +154,10 @@ void run_d2(ElemAB* xp, ElemAB* wp, const float* alpha_ptr, ES* wsp, EC* ohatp,
+ template <class EvtT, class ElemAB>
+ void run_d2nr(ElemAB* xp, ElemAB* wp, const float* alpha_ptr, ES* wsp, EC* ohatp,
+               cutlass::conv::Conv2dProblemSize const& problem, int C, int R, int S, int K,
+-              int64_t M, int64_t ldK, cudaStream_t stream) {
++              int64_t M, int64_t ldK, cudaStream_t stream,
++              // EXPERIMENTAL a_hat RMW probe, default OFF. See implicit_gemm_conv_evt.h.
++              __half* ahat = nullptr, int8_t const* code = nullptr,
++              float ahat_inv_scale = 0.f, long ahat_numel = 0) {
+   ES z(0); EC ze(0); int64_t MK = M * K;
+   typename EvtT::EVTD2nr::Arguments ep{
+     {                                                          // E_OhatNew
+@@ -168,6 +171,10 @@ void run_d2nr(ElemAB* xp, ElemAB* wp, const float* alpha_ptr, ES* wsp, EC* ohatp
+   typename EvtT::KernelD2nr::TensorRefA refA{xp, LN({C, problem.W*C, problem.H*problem.W*C})};
+   typename EvtT::KernelD2nr::TensorRefB refB{wp, LN({C, S*C, R*S*C})};
+   typename EvtT::OpD2nr::Arguments args{problem, refA, refB, ep};
++  args.ptr_ahat = ahat;
++  args.ptr_code = code;
++  args.ahat_inv_scale = ahat_inv_scale;
++  args.ahat_numel = ahat_numel;
+   typename EvtT::OpD2nr op;
+   TORCH_CHECK(op.can_implement(args) == cutlass::Status::kSuccess, "evt d2nr can_implement");
+   auto ws = torch::empty({(long)op.get_workspace_size(args)}, torch::TensorOptions().dtype(torch::kByte).device(torch::kCUDA));
+@@ -243,6 +250,32 @@ torch::Tensor conv2d_int8_evt_o_hat(
+   return o_hat;
+ }
+ 
++// EXPERIMENTAL, 2026-08-26. Same conv as conv2d_int8_evt_o_hat plus MoDiff's a_hat update,
++// CTA-partitioned inside the conv kernel instead of paid in the bandwidth-bound GN kernel.
++// A measurement instrument: it prices what the conv charges to absorb that traffic. `a_hat` and
++// `code` are the SAME tensors the GN kernel would have written / did write.
++torch::Tensor conv2d_int8_evt_o_hat_ahat(
++    torch::Tensor input, torch::Tensor weight, torch::Tensor inv_scale, torch::Tensor weight_scales,
++    torch::Tensor o_hat, torch::Tensor a_hat, torch::Tensor code, double ahat_inv_scale,
++    int sh, int sw, int ph, int pw, int dh, int dw, bool post_epilogue) {
++  CHECK_CUDA(o_hat); TORCH_CHECK(o_hat.scalar_type()==torch::kFloat16, "o_hat fp16");
++  CHECK_CUDA(a_hat); TORCH_CHECK(a_hat.scalar_type()==torch::kFloat16, "a_hat fp16");
++  TORCH_CHECK(a_hat.numel() % 2 == 0, "a_hat numel must be even (vec2 RMW)");
++  TORCH_CHECK(code.numel() == a_hat.numel(), "code and a_hat must have the same element count");
++  int N=input.size(0),C=input.size(1),H=input.size(2),W=input.size(3),K=weight.size(0),R=weight.size(1),S=weight.size(2);
++  int P,Q; auto problem = make_problem(N,H,W,C,K,R,S,sh,sw,ph,pw,dh,dw,P,Q);
++  int64_t M=(int64_t)N*P*Q, ldK=K;
++  run_d2nr<I8,int8_t>(
++      input.data_ptr<int8_t>(), weight.data_ptr<int8_t>(), inv_scale.data_ptr<float>(),
++      weight_scales.data_ptr<float>(),
++      reinterpret_cast<EC*>(o_hat.data_ptr<at::Half>()), problem, C,R,S,K,M,ldK,
++      at::cuda::getCurrentCUDAStream(),
++      reinterpret_cast<__half*>(a_hat.data_ptr<at::Half>()),
++      code.data_ptr<int8_t>(), (float)ahat_inv_scale,
++      post_epilogue ? -(long)a_hat.numel() : (long)a_hat.numel());
++  return o_hat;
++}
++
+ torch::Tensor conv2d_int4_evt_o_hat(
+     torch::Tensor input, torch::Tensor weight_packed, torch::Tensor inv_scale, torch::Tensor weight_scales,
+     torch::Tensor o_hat, int sh, int sw, int ph, int pw, int dh, int dw) {
+diff --git a/csrc/modiff/conv/implicit_gemm_conv_evt.h b/csrc/modiff/conv/implicit_gemm_conv_evt.h
+index 0748308..11b93be 100644
+--- a/csrc/modiff/conv/implicit_gemm_conv_evt.h
++++ b/csrc/modiff/conv/implicit_gemm_conv_evt.h
+@@ -25,6 +25,7 @@
+ // Params-first (5 args) and call it as (accumulators, tile_offset, problem_shape, thread_idx).
+ // No split-K (Sm80 EVT does not support it; these convs use a single K-slice).
+ #pragma once
++#include <cuda_fp16.h>
+ #include "cutlass/cutlass.h"
+ #include "cutlass/aligned_buffer.h"
+ #include "cutlass/array.h"
+@@ -104,6 +105,17 @@ struct ImplicitGemmConvolutionEVT {
+       cutlass::conv::SplitKMode const &split_k_mode = cutlass::conv::SplitKMode::kSerial
+     ): problem_size(problem_size), ref_A(ref_A), ref_B(ref_B), output_op(output_op),
+        split_k_mode(split_k_mode) {}
++
++    // ---- EXPERIMENTAL a_hat RMW probe (2026-08-26), default OFF (ptr_ahat == nullptr) ----
++    // Moves MoDiff's `a_hat += q/scale` out of the bandwidth-bound GN kernel and into this
++    // compute-bound one, so its bytes are issued from SMs the conv already owns. Measured on the
++    // GN side first: eliding the write there is worth 2.024 ms/step (W8A8) / 1.742 (W4A4). What
++    // this probe prices is the other half -- what the conv charges to absorb it.
++    // Set post-construction; nothing reads these unless ptr_ahat is non-null.
++    __half* ptr_ahat = nullptr;          // [numel] fp16 channels_last, in place
++    int8_t const* ptr_code = nullptr;    // the same int8 delta codes this conv consumes as A
++    float ahat_inv_scale = 0.f;          // 1/scale, matching the GN kernel's inv_scale
++    long ahat_numel = 0;
+   };
+ 
+   // ---- Params (device) ----
+@@ -120,6 +132,10 @@ struct ImplicitGemmConvolutionEVT {
+     typename Mma::IteratorB::Element const *ptr_B;
+     typename Epilogue::Params output_op;                       // EVT device params
+     cute::Shape<int32_t,int32_t,int32_t> problem_shape;
++    __half* ptr_ahat = nullptr;         // see Arguments -- a_hat RMW probe, nullptr => off
++    int8_t const* ptr_code = nullptr;
++    float ahat_inv_scale = 0.f;
++    long ahat_numel = 0;
+ 
+     CUTLASS_HOST_DEVICE Params(): swizzle_log_tile(0), gemm_k_iterations(0) {}
+ 
+@@ -142,6 +158,10 @@ struct ImplicitGemmConvolutionEVT {
+         cutlass::conv::implicit_gemm_problem_size(kConvolutionalOperator, args.problem_size).n(),
+         int32_t(1)))
+     {
++      ptr_ahat = args.ptr_ahat;
++      ptr_code = args.ptr_code;
++      ahat_inv_scale = args.ahat_inv_scale;
++      ahat_numel = args.ahat_numel;
+       gemm_k_iterations = cutlass::conv::implicit_gemm_k_iterations(
+         kConvolutionalOperator, ThreadblockShape::kK, args.problem_size,
+         kIteratorAlgorithm, kGroupMode, ThreadblockShape::kN);
+@@ -163,8 +183,35 @@ struct ImplicitGemmConvolutionEVT {
+ 
+   CUTLASS_HOST_DEVICE ImplicitGemmConvolutionEVT() {}
+ 
++  // EXPERIMENTAL a_hat RMW body, shared by the two placements under test (see operator()).
++  CUTLASS_DEVICE
++  void ahat_rmw(Params const &params) {
++    const long npairs = (params.ahat_numel < 0 ? -params.ahat_numel : params.ahat_numel) >> 1;
++    const long nblocks = (long)gridDim.x * gridDim.y * gridDim.z;
++    const long bid = blockIdx.x + (long)gridDim.x * (blockIdx.y + (long)gridDim.y * blockIdx.z);
++    const long stride = nblocks * blockDim.x;
++    const float inv_s = params.ahat_inv_scale;
++    __half2* ah = reinterpret_cast<__half2*>(params.ptr_ahat);
++    const char2* qc = reinterpret_cast<const char2*>(params.ptr_code);
++    for (long i = bid * blockDim.x + threadIdx.x; i < npairs; i += stride) {
++      char2 q = qc[i];
++      float2 c = __half22float2(ah[i]);
++      ah[i] = __float22half2_rn(make_float2(c.x + (float)q.x * inv_s,
++                                            c.y + (float)q.y * inv_s));
++    }
++  }
++
+   CUTLASS_DEVICE
+   void operator()(Params const &params, SharedStorage &shared_storage) {
++    // ---- EXPERIMENTAL a_hat RMW, default OFF (ptr_ahat == nullptr). Two placements under test,
++    // selected by the SIGN of ahat_numel: positive => before the mainloop, negative => after the
++    // epilogue (where o_hat's own traffic lives, and o_hat is measured 2.35x/4.06x cheaper per
++    // byte). The partition is over the flat tensor and independent of the tile this CTA computes,
++    // so each element is visited exactly once -- no ownership predicate, no R*S multiple-visit
++    // problem. It runs BEFORE the swizzle bounds check so CTAs that return early still take a
++    // share. The expression matches gn_apply_delta_quantize_flat_vec2_kernel's store
++    // (group_norm_silu.cu:1770) element-for-element: fp32 accumulate, __float2half_rn round.
++    if (params.ptr_ahat != nullptr && params.ahat_numel > 0) { ahat_rmw(params); }
+     ThreadblockSwizzle threadblock_swizzle;
+     cutlass::gemm::GemmCoord threadblock_tile_idx =
+         threadblock_swizzle.get_tile_offset(params.swizzle_log_tile);
+@@ -195,6 +242,8 @@ struct ImplicitGemmConvolutionEVT {
+     threadblock_tile_idx = threadblock_swizzle.get_tile_offset(params.swizzle_log_tile);
+     Epilogue epilogue(params.output_op, shared_storage.epilogue, thread_idx, warp_idx, lane_idx);
+     epilogue(accumulators, threadblock_tile_idx, params.problem_shape, thread_idx);
++
++    if (params.ptr_ahat != nullptr && params.ahat_numel < 0) { ahat_rmw(params); }
+   }
+ };
+ 
+diff --git a/csrc/modiff_kernels_api.h b/csrc/modiff_kernels_api.h
+index d7f64cb..9565f8a 100644
+--- a/csrc/modiff_kernels_api.h
++++ b/csrc/modiff_kernels_api.h
+@@ -241,6 +241,14 @@ torch::Tensor conv2d_int4_evt_o_hat_residual(
+ torch::Tensor conv2d_int8_evt_o_hat(
+     torch::Tensor input, torch::Tensor weight, torch::Tensor inv_scale, torch::Tensor weight_scales,
+     torch::Tensor o_hat, int sh, int sw, int ph, int pw, int dh, int dw);
++
++// EXPERIMENTAL, 2026-08-26, measurement instrument. Same conv, plus MoDiff's a_hat update
++// (`a_hat += code/scale`) CTA-partitioned inside the conv kernel -- prices what a compute-bound
++// kernel charges to absorb traffic the bandwidth-bound GN kernel pays full freight for.
++torch::Tensor conv2d_int8_evt_o_hat_ahat(
++    torch::Tensor input, torch::Tensor weight, torch::Tensor inv_scale, torch::Tensor weight_scales,
++    torch::Tensor o_hat, torch::Tensor a_hat, torch::Tensor code, double ahat_inv_scale,
++    int sh, int sw, int ph, int pw, int dh, int dw, bool post_epilogue);
+ torch::Tensor conv2d_int4_evt_o_hat(
+     torch::Tensor input, torch::Tensor weight_packed, torch::Tensor inv_scale, torch::Tensor weight_scales,
+     torch::Tensor o_hat, int sh, int sw, int ph, int pw, int dh, int dw);
+diff --git a/csrc/pybind.cpp b/csrc/pybind.cpp
+index 9093909..761942b 100644
+--- a/csrc/pybind.cpp
++++ b/csrc/pybind.cpp
+@@ -127,6 +127,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+           "EVT INT4 conv: o_hat[elem] += acc*alpha*weight_scale[k] (in place) ; out = o_hat_new + residual -> fp16 (dual store, no fp32 round-trip)");
+     m.def("conv2d_int8_evt_o_hat", &conv2d_int8_evt_o_hat,
+           "EVT INT8 conv: o_hat[elem] += acc*alpha*weight_scale[k] (in place, no residual, no fp32 round-trip)");
++    m.def("conv2d_int8_evt_o_hat_ahat", &conv2d_int8_evt_o_hat_ahat,
++          "EXPERIMENTAL measurement instrument: conv2d_int8_evt_o_hat plus MoDiff's a_hat RMW "
++          "CTA-partitioned inside the conv kernel, to price moving that traffic out of the "
++          "bandwidth-bound GN kernel. Not a production path.");
+     m.def("conv2d_int4_evt_o_hat", &conv2d_int4_evt_o_hat,
+           "EVT INT4 conv: o_hat[elem] += acc*alpha*weight_scale[k] (in place, no residual, no fp32 round-trip)");
+ 
