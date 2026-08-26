@@ -514,6 +514,8 @@ the set each one needs *before* the first GPU second is spent. Install under the
 
 ---
 
+| **C15** **[new 2026-08-26]** | int8/fixed-point a_hat cache | ~2.0 ms/step W8A8, 1.7 W4A4 (the a_hat-write ceiling from C12) | **RE-SCOPED, not built.** The idea was floated as "free": `a_hat += q/scale` is an exact integer step, so store a_hat as an integer at grid spacing `1/scale`. **That is only exact if `scale` is constant across all 200 DDIM steps — it is not.** `_delta_scale_args` reads a per-step table, and real calibration data already on disk ([delta_calibration.json](modiff_correctness_2026-08-03/data/delta_calibration.json), 70 layers) shows `step_gain_tail` (scale at the tail ÷ scale at step 0) has **median 12.45×, max 124.5×**. A fixed a_hat grid re-quantizes on every update, and by linearity that error accumulates in `conv(a_hat) − o_hat` — it does not cancel. A no-CUDA simulation using the real step0/tail scale values ([int8_ahat_cache_2026-08-26](int8_ahat_cache_2026-08-26/FINDINGS.md)) found the storage drift is a tolerable 2–3× the code's own quantum at step 0 but **14.5× to 7137×** the quantum by the tail — for the high-gain layer the drift never stops growing. A flat 8-bit grid for the whole schedule is very likely not viable on most layers | **open, and harder than first stated.** Needs either a periodic refresh/rescale of a_hat's own grid (cuts into the ceiling), a wider format (halves the saving), or per-layer gating on `step_gain_tail` — and even a variant that preserves the bookkeeping invariant still needs an FID measurement, which this check does not provide |
+
 ## What is settled and should not be re-litigated
 
 So the list above is read against a fixed background, not an open one:
