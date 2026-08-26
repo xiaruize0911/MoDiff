@@ -1,0 +1,69 @@
+{
+ "steps": 200,
+ "batch": 128,
+ "gpu": "NVIDIA A40",
+ "modiff_warmup_steps": 5,
+ "modes": {
+  "fp16": {
+   "label": "fp16",
+   "n_forwards": 200,
+   "step0_ms": 105.6236801147461,
+   "step1_ms": 103.95865631103516,
+   "steady_median_ms": 104.33158111572266,
+   "excess_ms": 1.2920989990234375,
+   "total_ms": 20865.90811920166,
+   "excess_pct_of_sample": 0.006192392833525397,
+   "modiff_warmup_ms": 1.7808647155761719,
+   "modiff_warmup_pct": 0.008534805700296109
+  },
+  "int8_baseline": {
+   "label": "W8A8 PTQ",
+   "n_forwards": 200,
+   "step0_ms": 63.30147171020508,
+   "step1_ms": 65.13158416748047,
+   "steady_median_ms": 65.8845443725586,
+   "excess_ms": -2.5830726623535156,
+   "total_ms": 13175.470180511475,
+   "excess_pct_of_sample": -0.01960516495399362,
+   "modiff_warmup_ms": -2.0943069458007812,
+   "modiff_warmup_pct": -0.01589550063191354
+  },
+  "int8": {
+   "label": "W8A8 MoDiff",
+   "n_forwards": 200,
+   "step0_ms": 738.3202514648438,
+   "step1_ms": 74.90444946289062,
+   "steady_median_ms": 77.0005111694336,
+   "excess_ms": 661.3197402954102,
+   "total_ms": 16084.900131225586,
+   "excess_pct_of_sample": 4.111432056774735,
+   "modiff_warmup_ms": 661.8085060119629,
+   "modiff_warmup_pct": 4.114470718579068
+  },
+  "int4_baseline": {
+   "label": "W4A4 PTQ",
+   "n_forwards": 200,
+   "step0_ms": 57.0016975402832,
+   "step1_ms": 56.874080657958984,
+   "steady_median_ms": 57.49046325683594,
+   "excess_ms": -0.4887657165527344,
+   "total_ms": 11498.86005783081,
+   "excess_pct_of_sample": -0.004250558003963891,
+   "modiff_warmup_ms": 0.0,
+   "modiff_warmup_pct": 0.0
+  },
+  "int4": {
+   "label": "W4A4 MoDiff",
+   "n_forwards": 200,
+   "step0_ms": 704.4148559570312,
+   "step1_ms": 74.61459350585938,
+   "steady_median_ms": 68.27062225341797,
+   "excess_ms": 636.1442337036133,
+   "total_ms": 14451.302635192871,
+   "excess_pct_of_sample": 4.401985411020514,
+   "modiff_warmup_ms": 636.632999420166,
+   "modiff_warmup_pct": 4.4053675678328865
+  }
+ },
+ "first_step_floor_ms": -0.4887657165527344
+}

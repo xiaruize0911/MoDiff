@@ -1,0 +1,69 @@
+{
+ "steps": 200,
+ "batch": 128,
+ "gpu": "NVIDIA A40",
+ "modiff_warmup_steps": 1,
+ "modes": {
+  "fp16": {
+   "label": "fp16",
+   "n_forwards": 200,
+   "step0_ms": 106.34944152832031,
+   "step1_ms": 104.04512023925781,
+   "steady_median_ms": 104.6822738647461,
+   "excess_ms": 1.6671676635742188,
+   "total_ms": 20944.924896240234,
+   "excess_pct_of_sample": 0.007959769117498662,
+   "modiff_warmup_ms": 0.7804145812988281,
+   "modiff_warmup_pct": 0.003726031891567767
+  },
+  "int8_baseline": {
+   "label": "W8A8 PTQ",
+   "n_forwards": 200,
+   "step0_ms": 64.46454620361328,
+   "step1_ms": 66.25497436523438,
+   "steady_median_ms": 66.01913452148438,
+   "excess_ms": -1.5545883178710938,
+   "total_ms": 13214.8296585083,
+   "excess_pct_of_sample": -0.011763967890953327,
+   "modiff_warmup_ms": -2.4413414001464844,
+   "modiff_warmup_pct": -0.018474255538925084
+  },
+  "int8": {
+   "label": "W8A8 MoDiff",
+   "n_forwards": 200,
+   "step0_ms": 170.84364318847656,
+   "step1_ms": 75.92704010009766,
+   "steady_median_ms": 77.0676498413086,
+   "excess_ms": 93.77599334716797,
+   "total_ms": 15508.318901062012,
+   "excess_pct_of_sample": 0.6046818739376463,
+   "modiff_warmup_ms": 92.88924026489258,
+   "modiff_warmup_pct": 0.5989639551359207
+  },
+  "int4_baseline": {
+   "label": "W4A4 PTQ",
+   "n_forwards": 200,
+   "step0_ms": 58.6044807434082,
+   "step1_ms": 56.990657806396484,
+   "steady_median_ms": 57.71772766113281,
+   "excess_ms": 0.8867530822753906,
+   "total_ms": 11542.453887939453,
+   "excess_pct_of_sample": 0.007682535194720998,
+   "modiff_warmup_ms": 0.0,
+   "modiff_warmup_pct": 0.0
+  },
+  "int4": {
+   "label": "W4A4 MoDiff",
+   "n_forwards": 200,
+   "step0_ms": 166.53372192382812,
+   "step1_ms": 67.82588958740234,
+   "steady_median_ms": 68.0465316772461,
+   "excess_ms": 98.48719024658203,
+   "total_ms": 13765.027465820312,
+   "excess_pct_of_sample": 0.7154885123995123,
+   "modiff_warmup_ms": 97.60043716430664,
+   "modiff_warmup_pct": 0.7090464396577232
+  }
+ },
+ "first_step_floor_ms": 0.8867530822753906
+}
