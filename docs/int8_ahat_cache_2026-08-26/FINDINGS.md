@@ -208,3 +208,145 @@ analysis has reached the limit of what it can decide here.
 - [`scripts/simulate_drift_fp8.py`](scripts/simulate_drift_fp8.py)
 - [`scripts/simulate_drift_refresh.py`](scripts/simulate_drift_refresh.py)
 - [`data/bits_needed_70layers.json`](data/bits_needed_70layers.json)
+
+---
+
+## Follow-up 2026-08-26 (1.5): real a_hat value distribution — companding does not close the gap
+
+**Prompted by:** checking whether a_hat's REAL value distribution (not the synthetic AR(1) proxy)
+is skewed enough for non-uniform (companding) quantization to meaningfully help.
+
+[`scripts/capture_real_ahat.py`](scripts/capture_real_ahat.py) hooks
+`group_norm_silu_delta_quantize_nhwc` (same technique as
+[ahat_zero_skip_2026-08-26](../ahat_zero_skip_2026-08-26/FINDINGS.md)) and captures real a_hat
+values from an actual 20-step int8 generation (batch 4; same uncalibrated caveat as that doc — the
+run had no delta calibration file).
+
+**Real distribution, 4.7M samples across all layers:**
+
+| p1 | p50 | p99 | p99.9 | p99.99 | max |
+|--:|--:|--:|--:|--:|--:|
+| −0.284 | −0.023 | 1.330 | 2.479 | 4.469 | **11.047** |
+
+Skewed as expected from SiLU's asymmetric shape (89.5% of mass within ±1 std of the mean vs 68.3%
+for a true Gaussian — more peaked than Gaussian, consistent with companding having *something* to
+work with). But the real range is wider than the synthetic ±1.2 assumption the first drift
+simulation used — a small number of outlier elements reach 11, nearly 10x the typical (p99) scale.
+
+**Combining aggressive clipping (accept 1% of elements clipping, range → p99 = ±1.33) with an
+optimistic +1 bit companding estimate**: median-gain layer still needs **8.56 bits** — over
+budget even under the most favorable assumptions tested. Harder layers need more. This confirms
+rather than overturns the bit-budget conclusion above; real data made the range assumption *worse*
+(wider) than the synthetic guess, not better.
+
+### Files (this sub-section)
+
+- [`scripts/capture_real_ahat.py`](scripts/capture_real_ahat.py)
+- [`data/real_ahat_capture.npz`](data/real_ahat_capture.npz)
+
+---
+
+## Follow-up 2026-08-26 (2): skip-K a_hat writes — mechanically cheap, numerically severe
+
+**Prompted by:** the project owner proposing "skip a few steps between a_hat updates" as a
+plausible idea, given small error is now tolerable and this is structurally different from the
+int8/fp8 storage-format line above (a_hat stays full fp16 precision; only its update *cadence*
+changes).
+
+### The mechanism, and why the ceiling looked attractive
+
+Skipping a_hat's WRITE for K−1 out of every K steps reuses an already-built, already-measured
+kernel variant — the `w0c1` probe from [ahat_overlap_2026-08-26](../ahat_overlap_2026-08-26/FINDINGS.md)
+(read x, read a_hat, skip the write, still write a fresh code every step so `o_hat`/conv keeps
+updating normally). The ceiling is known: `(K−1)/K × 2.024` ms/step (W8A8), e.g. **~1.52 ms/step at
+K=4** — matching `MODIFF_DELTA_REFRESH`'s existing cadence, and larger than nearly every other idea
+tried on a_hat this session.
+
+### The risk, and a direct precedent already in this project
+
+Freezing a_hat for K−1 steps means the delta being quantized each step is measured against an
+increasingly stale reference, widening across the window — exactly the mechanism
+[OPEN_ITEMS C7](../OPEN_ITEMS.md) already measured to cost **+13.08% FID** in a related context
+(fewer warm-up reconstruction rounds at t=T). That precedent is for the *initial* reconstruction,
+not periodic mid-schedule skipping, so it does not settle this case on its own — it motivated a
+direct, quantitative check before recommending an FID run.
+
+### Simulation, and a bug that mattered
+
+[`scripts/simulate_skip_write.py`](scripts/simulate_skip_write.py): quantize a fresh code every
+step against a_hat frozen for K−1 steps, using the real step0/tail delta-scale trajectory for two
+real layers. **The first version had a flaw**: its synthetic "true activation" trajectory used a
+constant-variance random walk, which does not shrink the way the calibrated scale table implies
+real per-step deltas do — it produced a **32.5% clip rate at K=1**, contradicting the real
+calibration file's own field (`obs_clipped_frac: 0.0` for every real layer). Fixed by scaling each
+step's synthetic innovation inversely with that step's calibrated scale, restoring a 0% K=1
+baseline that matches the real data.
+
+With that fixed, the result is decisive:
+
+| layer | K=1 (today) | K=2 | K=4 (existing refresh cadence) | K=8 | K=16 |
+|---|--:|--:|--:|--:|--:|
+| median gain (12.45×) | 0.0% | **7.5%** | **85.5%** | 82.5% | 88.5% |
+| max gain (124.5×) | 0.0% | **20.0%** | **85.5%** | 76.5% | 81.0% |
+
+Clip rate = fraction of the 200 steps whose code saturates at ±127 — a hard error floor for that
+step, not a graceful degradation. **Even K=2, the mildest possible skip, jumps clip rate from 0% to
+7.5–20%.** K=4 — the cadence already precedented elsewhere in this codebase, and the one that
+looked most natural to try — clips **82.5–85.5% of all steps**. This is not a small-error result;
+it is a near-total breakdown of the delta-coding scheme's precision at exactly the cadence that
+looked most attractive.
+
+**Mechanism, confirmed by the calibration data itself**: `delta_scale` grows exponentially across
+the schedule (12.45×–124.5× for these two layers). The scheme's entire premise is that each step's
+delta is small enough for THAT step's increasingly fine scale. Freezing a_hat for K steps replaces
+a single fine-grained increment with a K-step *cumulative* drift, whose variance grows with K —
+measured against a scale that, by the end of the window, has been calibrated for an increment far
+smaller than what K steps actually produced.
+
+### Verdict
+
+**Refuted, more decisively than the int8/fp8 storage-format line.** The attractive ceiling
+(~1.52 ms/step at K=4) is paired with a cost (82.5–85.5% clip rate) far outside anything "small
+error" should mean. K=2's more modest ceiling (1.01 ms/step) still costs a real, meaningful
+increase in clipping (0% → 7.5–20%) versus the shipped baseline. Not recommended for an FID
+follow-up — the proxy signal here is unambiguous, unlike the storage-format line where the proxy
+metric could not by itself decide the question.
+
+### Files
+
+- [`scripts/simulate_skip_write.py`](scripts/simulate_skip_write.py)
+
+
+### Correction: the failure is structural, not just a bad numerics roll
+
+A trace through the actual failing steps (K=4, median-gain layer, steps 0-3) exposed something
+more fundamental than "the clip rate is high": **the scheme as specified is not internally
+consistent, independent of numerics.**
+
+```
+t=0  true=1.00  a_hat(frozen)=0.00  delta=1.00  code~47
+t=1  true=1.62  a_hat(frozen)=0.00  delta=1.62  code~76
+t=2  true=1.98  a_hat(frozen)=0.00  delta=1.98  code~94
+t=3  true=1.73  a_hat(frozen)=0.00  delta=1.73  code~83
+-- refresh: acc = 47/46.6 + 76/47.0 + 94/47.5 + 83/47.9 ~ 6.34 -- but the true value never left [1.0, 2.0]
+```
+
+Every code in the window is computed against the **same frozen anchor** — each is an independent
+*"how far is the true value from the anchor right now"* re-measurement, not an increment relative
+to the previous step. `o_hat += conv(code)` accumulates every one of them, so four overlapping
+re-measurements of essentially the same drift get **summed as if they were four independent
+increments** — the reconstructed a_hat overshoots the true trajectory by ~3-4x within one window,
+before any rounding or scale-clipping is even considered.
+
+**The general point:** keeping `o_hat`'s per-step accumulation correct requires each code to be an
+increment relative to the *immediately preceding* true value. That requires tracking that
+preceding value somewhere — which is exactly what a_hat's per-step write already does. Deferring
+a_hat's write while still sending o_hat a fresh code every step is not a numerics trade-off; it
+removes the one piece of state the scheme needs to stay coherent. Any fix (e.g. a separate
+per-element buffer that tracks the true incremental reference between a_hat writes) would need to
+be read and written every step anyway, at the same cost a_hat already pays — the deferred-write
+premise does not survive contact with what `o_hat`'s accumulation actually requires.
+
+The catastrophic clip rates measured above are a real, correct consequence of this — not a
+separate finding to weigh against it. **Refuted at the design level, before the numerics question
+is even reached.**
