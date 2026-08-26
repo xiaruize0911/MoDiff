@@ -348,7 +348,8 @@ is guaranteed to fail on a 24-wave shape — but the **work-conservation floor**
 can at best match the un-split full-batch run, so beating that floor is real concurrency gain.
 
 By that measure, concurrency was realised on `768,4×4` (0.687 against a 0.955 floor — a large gain),
-partially on `384,8×8` and `384,16×16`, marginally on `768,2×2` (whose split is already near-optimal),
+partially on `384,8×8` and `384,16×16`, marginally on `768,2×2` (whose pipelined run already sits at its work-conservation bound —
+its split is the *worst* of the five, at an 87.5% penalty, which is why that bound is so low),
 and **not at all on `192,32×32`**, where the pipelined run is 0.976 against a 0.956 floor — i.e. slower
 than simply not splitting. So the accurate statement is **"no benefit from concurrency" on the
 saturated shapes**, not "no co-execution": under SM time-slicing the two are indistinguishable without
@@ -427,9 +428,10 @@ Revision 1 wrote that at half batch "the other stream's GN blocks move into the 
 account for at most 12.2 of the 30.5 points.** At `768,4x4` the baseline GN is 19.7 µs of a 161.1 µs
 GN+conv pair = 12.2%, so even perfect GN hiding caps the gain there. The residual must come from the
 conv side, and §3's measured `pipe/split` row shows this shape *did* co-execute — 0.687 against a
-work-conservation floor of 0.955, the largest concurrency gain of the five. So the residual is
-conv-side, and it is consistent: this is the shape with the most wasted SMs for a second stream to
-fill. **[R7]** (Revision 6 wrote 0.976 here, which is `192,32×32`'s MoDiff-arm figure, and drew the
+work-conservation floor of 0.955, the largest concurrency gain of the five (and on the baseline arm,
+whose gain this paragraph is about, 0.673 against a 0.969 floor — larger still). So the residual is
+conv-side, and it is consistent: this is the shape with the most wasted SMs among those whose split is not itself work-bound
+(`768,2×2` wastes more, 71.4%, but cannot use them — see the ✳ note below). **[R7]** (Revision 6 wrote 0.976 here, which is `192,32×32`'s MoDiff-arm figure, and drew the
 opposite conclusion from §3 about the same shape.)
 
 What the data supports is the **correlation** between conv occupancy waste and realized gain **in the
@@ -548,8 +550,13 @@ manual comparisons, flagged as such. **[R4]**
   shapes, against 6 MB of L2) that a real chain would find L2-resident are always cold. That
   penalizes the serial arms and likely **flatters** the pipelined gain. The arms are also asymmetric
   (`conv_base` writes a preallocated buffer; `conv_modiff` RMWs in place), every GN allocates a fresh
-  int8 output, and 6 configs × 5 trials cannot balance position, so monotone drift leaves a residual.
-- **§3's position confound** — 6 configs over 5 trials cannot balance position, so the paired *t* carries no protection against monotone within-trial drift (phase, above).
+  int8 output. (Position balance is covered by the next bullet.)
+- **§3's position confound is quantified, not just flagged.** 6 configs rotated over 5 trials leaves
+  each config in 5 of 6 positions, a net tilt of 1.2 position-units on the arm-difference metric.
+  Fitting the drift (**+0.056%/position, p = 0.004**) puts the bias at **−0.012 ms, 0.61% of the
+  −1.95 ms effect, and against the reported conclusion** — i.e. conservative. Published here because a
+  statistic this report's own script computes and omits is exactly what round 1 blocked on; the
+  difference is that this one helps the report, which is the asymmetry §6 item 5 warns about. **[R7]**
 - **The e2e figures bridge three harnesses.** Numerators come from `bench_pipeline2.py` and the
   ablation microbenchmark, denominators from the warm-up harness's in-model steady step. The two
   microbenchmarks agree on the 5-shape **absolute** ms/step to **+0.21%** (MoDiff) and **−1.16%**

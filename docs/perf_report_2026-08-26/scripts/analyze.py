@@ -808,7 +808,7 @@ L.append("| conv / GN | " + " | ".join(
 # 2N GNs per chain, 2N-1 are inside a conv. Paired wall time = (2N-1)*g against a wall of g+N(g+c),
 # i.e. (2N-1)s/(N+s) with s = g/(g+c) -- 11s/(6+s) at N=6.
 NST = 6
-_BLK = {'768_2x2': 24, '384_8x8': 192, '192_32x32': 2048, '384_16x16': 768, '768_4x4': 96}
+_BLK = {k: next(r['blocks'] for r in wrow if r['shape'] == NICE[k]) for k in PIPE_ORDER}
 L.append(f"| GN launches inside a conv (of {2*NST}) | " + " | ".join(
     f"{2*NST-1}/{2*NST}" for _ in PIPE_ORDER) + f" | **{100*(2*NST-1)/(2*NST):.1f}%** |")
 _ps = {}
@@ -839,7 +839,7 @@ a2["phase_model"] = dict(
     c_gt_g_all_shapes=bool((gg.conv_modiff > gg.gn_modiff).all()),
     gn_inside_conv_fraction=(2 * 6 - 1) / (2 * 6),
     paired_wall_pct_per_shape={NICE[k]: _ps[k] for k in PIPE_ORDER},
-    paired_wall_pct_call_wtd=_pw,
+    paired_wall_pct_wall_time_wtd=_pw,
     measured_pipe_over_split={NICE[k]: pipe[k]["med"]["modiff_pipe"] / pipe[k]["med"]["modiff_split"]
                               for k in PIPE_ORDER},
     # c > g must survive halving the batch, since g and c above are batch-128 ablation durations.
@@ -848,7 +848,7 @@ a2["phase_model"] = dict(
         NICE[k]: float((gg2[SH[k]].conv_modiff
                         * (math.ceil((b / 2) / SMS) / math.ceil(b / SMS)))
                        / (gg2[SH[k]].gn_modiff * 0.5))
-        for k, b in zip(PIPE_ORDER, [24, 192, 2048, 768, 96])},
+        for k, b in ((k2, _BLK[k2]) for k2 in PIPE_ORDER)},
     # the cap's second endpoint, previously hand-computed and undisclosed
     cap_pct_of_pipeline_harness_overhead=float(
         100 * a2["gn_hiding_cap"]["cap_pp_freq_wtd"]
@@ -929,6 +929,6 @@ with open(f"{HERE}/data/derived.json", "w") as f:
 print("\n=== 8. GENERATED TABLES ===")
 print("injected:", ", ".join(blocks))
 print(f"verdict aggregate: {ad:+.3f} ms, t={at:.2f} (df=4), p={ap:.5f}, sigma-equiv={asig:.2f}")
-print(f"phase: c>g on all 5; {2*NST-1}/{2*NST} GNs inside a conv; paired wall {_pw:.1f}% (call-wtd); "
+print(f"phase: c>g on all 5; {2*NST-1}/{2*NST} GNs inside a conv; paired wall {_pw:.1f}% (wall-time-wtd); "
       f"measured pipe/split {min(a2['phase_model']['measured_pipe_over_split'].values()):.3f}"
       f"-{max(a2['phase_model']['measured_pipe_over_split'].values()):.3f} vs modelled ~0.53")
