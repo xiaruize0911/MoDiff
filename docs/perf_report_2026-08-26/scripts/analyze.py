@@ -204,9 +204,12 @@ for arm in ("base", "modiff"):
         total_ms=float(tot), saved_ms=float(sav), saved_pct=float(100 * sav / tot))
 derived["pipeline"] = prow
 
-# plot 3: the refutation -- both arms gain about the same, so the overhead ratio does not shrink
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.4))
+# plot 3: the refutation. Panel 3 carries the audit's correction -- the RATIO metric can rise while
+# the ABSOLUTE MoDiff-specific overhead falls (768,4x4), so both are shown.
+fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(16.5, 4.6))
 x = np.arange(len(pdf))
+pdf["abs_ovh_today"] = pdf.modiff_full - pdf.base_full
+pdf["abs_ovh_piped"] = pdf.modiff_pipe - pdf.base_pipe
 ax1.bar(x - bw / 2, pdf.base_gain, bw, color=C_BASE, label="baseline arm", zorder=3)
 ax1.bar(x + bw / 2, pdf.modiff_gain, bw, color=C_MOD, label="MoDiff arm", zorder=3)
 ax1.axhline(0, color="#888888", lw=1, zorder=2)
@@ -216,7 +219,7 @@ for i, (a, b) in enumerate(zip(pdf.base_gain, pdf.modiff_gain)):
 ax1.set_xticks(x)
 ax1.set_xticklabels(pdf["shape"], rotation=25, ha="right", fontsize=8.5)
 ax1.set_ylabel("% faster from batch-split pipelining")
-ax1.set_title("both arms gain -- so nothing MoDiff-specific was hidden", fontsize=11, loc="left")
+ax1.set_title("baseline gains >= MoDiff on 4/5 (768,2x2 both within noise)", fontsize=11, loc="left")
 ax1.legend(frameon=False, fontsize=9)
 despine(ax1)
 
@@ -231,6 +234,19 @@ ax2.set_ylabel("MoDiff overhead vs its own baseline (%)")
 ax2.set_title("the overhead ratio does not shrink (it rises on 4/5)", fontsize=11, loc="left")
 ax2.legend(frameon=False, fontsize=9, loc="upper left")
 despine(ax2)
+
+ax3.bar(x - bw / 2, pdf.abs_ovh_today, bw, color=C_GREY, label="absolute overhead, today", zorder=3)
+ax3.bar(x + bw / 2, pdf.abs_ovh_piped, bw, color=C_MOD, label="absolute overhead, pipelined", zorder=3)
+for i, (a, b) in enumerate(zip(pdf.abs_ovh_today, pdf.abs_ovh_piped)):
+    ax3.text(i, max(a, b) + 0.03, f"{100*(b-a)/a:+.0f}%", ha="center", fontsize=8,
+             color=("#2E7D32" if b < a else "#B23A3A"))
+ax3.set_xticks(x)
+ax3.set_xticklabels(pdf["shape"], rotation=25, ha="right", fontsize=8.5)
+ax3.set_ylabel("MoDiff overhead, ms per 6-stage chain")
+ax3.set_title("but in ABSOLUTE ms it falls on 2/5 (green)", fontsize=11, loc="left")
+ax3.legend(frameon=False, fontsize=9, loc="upper left")
+despine(ax3)
+
 fig.tight_layout()
 fig.savefig(f"{HERE}/plots/3_pipeline.png", dpi=150)
 plt.close(fig)
@@ -359,9 +375,11 @@ for prec, pred in (("W8A8", 9 / 5), ("W4A4", 8.5 / 4.5)):
 #     extent is not a multiple of the 128-wide tile there is a second, intra-tile waste on top.
 for r in wrow:
     nm = r["shape"]
-    Cout = int(nm.split(",")[0])
-    n_tiles = math.ceil(Cout / 128)
-    tile_fill = Cout / (128 * n_tiles)
+    # NOTE: these 5 shapes are Cin == Cout by construction, so parsing the leading field is
+    # unambiguous. Named Cin_eq_Cout to avoid implying it generalises (audit finding 25).
+    Cin_eq_Cout = int(nm.split(",")[0])
+    n_tiles = math.ceil(Cin_eq_Cout / 128)
+    tile_fill = Cin_eq_Cout / (128 * n_tiles)
     sm_occ = r["sm_efficiency"] / 100
     ceiling = 100 * sm_occ * tile_fill
     checks.setdefault("roofline", {})[nm] = dict(
@@ -387,3 +405,132 @@ with open(f"{HERE}/data/derived.json", "w") as f:
 
 print("\n=== 5. PLAUSIBILITY CHECKS ===")
 print(json.dumps(checks, indent=2))
+
+# =====================================================================
+# 6. AUDIT-DRIVEN CORRECTIONS (2026-08-26 independent audit)
+# =====================================================================
+audit = {}
+
+# (A) o_hat's INCREMENTAL bytes are +2, not +4. Verified in source: conv2d_int8_evt_o_hat
+#     (csrc/modiff/conv/conv2d_evt.cu:231) does an in-place RMW on o_hat and RETURNS o_hat -- there is
+#     no separate output tensor. The baseline conv2d_int8_evt_bias_residual_fp16
+#     (csrc/baseline/conv/conv2d_evt.cu:153) writes a separate fp16 `output`. So MoDiff's o_hat store
+#     REPLACES a store the baseline was already paying, and only the o_hat READ is new.
+audit["byte_model"] = {
+    "conv_baseline_B_per_elem": 1 + 2,          # read x_int8, write fp16 out
+    "conv_modiff_B_per_elem": 1 + 2 + 2,        # read x_int8, read o_hat, write o_hat
+    "o_hat_incremental_B": 2,
+    "gn_baseline_B_per_elem": 2 + 2 + 1,        # read x (stats), re-read x (apply), write int8
+    "gn_modiff_B_per_elem": 2 + 2 + 2 + 1 + 2,  # + read a_hat, + write a_hat
+    "a_hat_incremental_B": 4,
+}
+for prec in ("W8A8", "W4A4"):
+    a_pct, o_pct = wsum[prec]["a_hat_pct_freq"], wsum[prec]["o_hat_pct_freq"]
+    audit["byte_model"][f"price_per_byte_ratio_{prec}"] = (a_pct / 4) / (o_pct / 2)
+
+# (B) The 9/5 figure is NOT a ceiling: per-shape GN ratios exceed it on most calls.
+for prec, pred in (("W8A8", 9 / 5), ("W4A4", 8.5 / 4.5)):
+    g = ab[ab.precision == prec].copy()
+    g["r"] = g.gn_modiff / g.gn_base
+    over = g[g.r > pred]
+    audit[f"gn_ratio_spread_{prec}"] = dict(
+        model=pred, aggregate_time_weighted=float((g.gn_modiff * g.freq).sum() / (g.gn_base * g.freq).sum()),
+        per_shape_min=float(g.r.min()), per_shape_max=float(g.r.max()),
+        shapes_over_model=f"{len(over)}/{len(g)}", calls_over_model=f"{int(over.freq.sum())}/{int(g.freq.sum())}")
+audit["total_calls_in_ablation_freq_column"] = int(ab[ab.precision == "W8A8"].freq.sum())
+
+# (C) ABSOLUTE MoDiff-specific overhead (ms), not the scale-free ratio. On 768,4x4 the ratio rises
+#     while the absolute overhead FALLS, because the denominator shrank 31%.
+abs_rows, ta, tb = [], 0.0, 0.0
+for k in PIPE_ORDER:
+    m, f = pipe[k]["med"], pipe[k]["freq"]
+    a = m["modiff_full"] - m["base_full"]
+    b = m["modiff_pipe"] - m["base_pipe"]
+    ta += a * f
+    tb += b * f
+    abs_rows.append(dict(shape=NICE[k], freq=f, abs_ovh_today=a, abs_ovh_piped=b,
+                         change_pct=100 * (b - a) / a))
+audit["absolute_overhead"] = abs_rows
+audit["absolute_overhead_weighted_change_pct"] = 100 * (tb - ta) / ta
+
+# (D) effect / sigma per cell -- "sd <= 1.7%" was the sd of a timing, not of the effect.
+eff = {}
+for k in PIPE_ORDER:
+    m, s = pipe[k]["med"], pipe[k]["sd"]
+    for arm in ("base", "modiff"):
+        d = m[f"{arm}_full"] - m[f"{arm}_pipe"]
+        # sd of a difference of two independent medians, conservatively via quadrature
+        sd_d = math.sqrt(s[f"{arm}_full"] ** 2 + s[f"{arm}_pipe"] ** 2)
+        eff[f"{NICE[k]}|{arm}"] = dict(effect_ms=d, sd_ms=sd_d,
+                                       effect_over_sigma=(abs(d) / sd_d if sd_d else float("inf")),
+                                       resolved=bool(sd_d and abs(d) / sd_d >= 3))
+audit["effect_over_sigma"] = eff
+
+# (E) Spearman honestly: all 5 points, the n=4 subset, and the post-hoc-selection p-value.
+#     Enumerating all 120 rank permutations: what fraction admit SOME single-point deletion that
+#     leaves a perfectly increasing sequence? That is the real null for "delete one, get rho=1".
+from itertools import permutations
+n_admit = sum(
+    1 for perm in permutations(range(5))
+    if any(all(sub[i] < sub[i + 1] for i in range(3))
+           for sub in [tuple(v for j, v in enumerate(perm) if j != drop) for drop in range(5)]))
+audit["spearman"] = dict(
+    rho_all_5=derived["wave_spearman_all"],
+    rho_excl_768_2x2_n4=derived["wave_spearman_excl_768_2x2"],
+    p_exact_if_n4_were_prespecified=1 / 24,
+    p_effective_post_hoc_deletion=n_admit / 120,
+    n_permutations_admitting_a_deletion=f"{n_admit}/120")
+# collinearity: SM waste is a deterministic decreasing function of block count over this set, so
+# "tracks wasted SMs" is not separable from "tracks how few blocks launch" at n=4.
+_u = wdf[wdf["shape"] != "768, 2x2"]
+audit["spearman"]["rho_neg_blocks_vs_gain_n4"] = float(
+    (-_u["blocks"]).corr(_u["base_gain"], method="spearman"))
+# sensitivity to the 1-block/SM premise
+for bps in (2, 3):
+    waste = [100 * (1 - b / (SMS * bps * math.ceil(b / (SMS * bps)))) for b in wdf["blocks"]]
+    t = wdf.assign(w2=waste)
+    t = t[t["shape"] != "768, 2x2"]
+    audit["spearman"][f"rho_n4_if_{bps}_blocks_per_SM"] = float(
+        t["w2"].corr(t["base_gain"], method="spearman"))
+# the trace's own columns settle the premise
+k0 = [r for r in cut][0]
+audit["one_block_per_sm_evidence"] = dict(
+    threads_per_block=int(k0["BlkX"]), regs_per_thread=int(k0["Reg/Trd"]),
+    regs_per_block=int(k0["BlkX"]) * int(k0["Reg/Trd"]), regs_available_per_sm=65536,
+    dyn_smem_MB=float(k0["DymSMem (MB)"]), smem_available_per_sm_KB=100)
+
+# (F) end-to-end scope of the pipelining gain. The 5.16%/2.26% are shares of a 5-shape conv-block
+#     subset measured in 6-stage-chain units, NOT per-step time.
+steady = {"base": w["w5"]["modes"]["int8_baseline"]["steady_median_ms"],
+          "modiff": w["w5"]["modes"]["int8"]["steady_median_ms"]}
+for arm in ("base", "modiff"):
+    saved_per_step = sum((pipe[k]["med"][f"{arm}_full"] - pipe[k]["med"][f"{arm}_pipe"]) * pipe[k]["freq"]
+                         for k in PIPE_ORDER) / N_STAGES_CHAIN if (N_STAGES_CHAIN := 6) else 0
+    audit.setdefault("pipeline_e2e", {})[arm] = dict(
+        saved_ms_per_step=saved_per_step, steady_step_ms=steady[arm],
+        pct_of_step=100 * saved_per_step / steady[arm],
+        pct_of_5shape_convblock=derived["pipeline_weighted"][arm]["saved_pct"])
+
+# (G) how much of 768,4x4's 31.1pp gain could GN-behind-conv possibly explain?
+r44 = ab[(ab.precision == "W8A8") & (ab["shape"] == "768->768,4x4")].iloc[0]
+audit["gn_share_of_768_4x4_pair"] = dict(
+    gn_base_ms=float(r44.gn_base), pair_ms=float(r44.base_total_ms),
+    gn_pct_of_pair=float(100 * r44.gn_base / r44.base_total_ms),
+    measured_base_gain_pct=float(gain_by["768, 4x4"]))
+
+# (H) a_hat/o_hat as a share of a FULL step, not just the conv block.
+for prec, key in (("W8A8", "int8"), ("W4A4", "int4")):
+    step = w["w5"]["modes"][key]["steady_median_ms"]
+    blk = wsum[prec]["total_modiff_ms_per_step"]
+    g = ab[ab.precision == prec]
+    audit.setdefault("share_of_full_step", {})[prec] = dict(
+        conv_block_ms=blk, step_ms=step, conv_block_pct_of_step=100 * blk / step,
+        a_hat_ms=float((g.a_hat_ms * g.freq).sum()), o_hat_ms=float((g.o_hat_ms * g.freq).sum()),
+        a_hat_pct_of_step=float(100 * (g.a_hat_ms * g.freq).sum() / step),
+        o_hat_pct_of_step=float(100 * (g.o_hat_ms * g.freq).sum() / step))
+
+derived["audit"] = audit
+with open(f"{HERE}/data/derived.json", "w") as f:
+    json.dump(derived, f, indent=2)
+print("\n=== 6. AUDIT-DRIVEN CORRECTIONS ===")
+print(json.dumps(audit, indent=2, default=str))

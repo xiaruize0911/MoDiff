@@ -334,5 +334,192 @@
       "pipeline_harness": 1.2124688248875142,
       "rel_diff_pct": 1.3536294290901987
     }
+  },
+  "audit": {
+    "byte_model": {
+      "conv_baseline_B_per_elem": 3,
+      "conv_modiff_B_per_elem": 5,
+      "o_hat_incremental_B": 2,
+      "gn_baseline_B_per_elem": 5,
+      "gn_modiff_B_per_elem": 9,
+      "a_hat_incremental_B": 4,
+      "price_per_byte_ratio_W8A8": 2.9442868099432777,
+      "price_per_byte_ratio_W4A4": 3.914705891496361
+    },
+    "gn_ratio_spread_W8A8": {
+      "model": 1.8,
+      "aggregate_time_weighted": 1.6853703991801368,
+      "per_shape_min": 1.4103283544210117,
+      "per_shape_max": 3.0264427730397587,
+      "shapes_over_model": "13/20",
+      "calls_over_model": "37/62"
+    },
+    "gn_ratio_spread_W4A4": {
+      "model": 1.8888888888888888,
+      "aggregate_time_weighted": 1.680621409079914,
+      "per_shape_min": 1.4501610421480204,
+      "per_shape_max": 2.9015711118882654,
+      "shapes_over_model": "8/20",
+      "calls_over_model": "25/62"
+    },
+    "total_calls_in_ablation_freq_column": 62,
+    "absolute_overhead": [
+      {
+        "shape": "768, 2x2",
+        "freq": 12,
+        "abs_ovh_today": 0.046908052172511816,
+        "abs_ovh_piped": 0.04505800316110253,
+        "change_pct": -3.9439902654781602
+      },
+      {
+        "shape": "384, 8x8",
+        "freq": 8,
+        "abs_ovh_today": 0.31898984452709556,
+        "abs_ovh_piped": 0.40004500187933445,
+        "change_pct": 25.40994917013853
+      },
+      {
+        "shape": "192, 32x32",
+        "freq": 7,
+        "abs_ovh_today": 1.0430206428281963,
+        "abs_ovh_piped": 1.2406608555465937,
+        "change_pct": 18.94883040689274
+      },
+      {
+        "shape": "384, 16x16",
+        "freq": 7,
+        "abs_ovh_today": 0.8251045481301844,
+        "abs_ovh_piped": 0.8545535034500062,
+        "change_pct": 3.569118045289868
+      },
+      {
+        "shape": "768, 4x4",
+        "freq": 7,
+        "abs_ovh_today": 0.2036463120020926,
+        "abs_ovh_piped": 0.17325574299320579,
+        "change_pct": -14.923211085980546
+      }
+    ],
+    "absolute_overhead_weighted_change_pct": 11.37030320179056,
+    "effect_over_sigma": {
+      "768, 2x2|base": {
+        "effect_ms": 0.0011196942068636417,
+        "sd_ms": 0.00039133743027943335,
+        "effect_over_sigma": 2.8611988535421395,
+        "resolved": false
+      },
+      "768, 2x2|modiff": {
+        "effect_ms": 0.0029697432182729244,
+        "sd_ms": 0.0025590045769046466,
+        "effect_over_sigma": 1.1605071929434,
+        "resolved": false
+      },
+      "384, 8x8|base": {
+        "effect_ms": 0.11135450331494212,
+        "sd_ms": 0.006706352435157547,
+        "effect_over_sigma": 16.604332145023356,
+        "resolved": true
+      },
+      "384, 8x8|modiff": {
+        "effect_ms": 0.030299345962703228,
+        "sd_ms": 0.009868957206516312,
+        "effect_over_sigma": 3.0701669212525373,
+        "resolved": true
+      },
+      "192, 32x32|base": {
+        "effect_ms": 0.044226355385035276,
+        "sd_ms": 0.03181059115551333,
+        "effect_over_sigma": 1.3903028450123625,
+        "resolved": false
+      },
+      "192, 32x32|modiff": {
+        "effect_ms": -0.1534138573333621,
+        "sd_ms": 0.03186241451713892,
+        "effect_over_sigma": 4.814884862251735,
+        "resolved": true
+      },
+      "384, 16x16|base": {
+        "effect_ms": 0.13485124800354242,
+        "sd_ms": 0.055805651499132476,
+        "effect_over_sigma": 2.4164442915900506,
+        "resolved": false
+      },
+      "384, 16x16|modiff": {
+        "effect_ms": 0.10540229268372059,
+        "sd_ms": 0.03698997589630802,
+        "effect_over_sigma": 2.8494825998045816,
+        "resolved": false
+      },
+      "768, 4x4|base": {
+        "effect_ms": 0.30306698754429817,
+        "sd_ms": 0.007573388317834559,
+        "effect_over_sigma": 40.01735746609034,
+        "resolved": true
+      },
+      "768, 4x4|modiff": {
+        "effect_ms": 0.333457556553185,
+        "sd_ms": 0.009160394268267518,
+        "effect_over_sigma": 36.402096546031196,
+        "resolved": true
+      }
+    },
+    "spearman": {
+      "rho_all_5": 0.0,
+      "rho_excl_768_2x2_n4": 1.0,
+      "p_exact_if_n4_were_prespecified": 0.041666666666666664,
+      "p_effective_post_hoc_deletion": 0.14166666666666666,
+      "n_permutations_admitting_a_deletion": "17/120",
+      "rho_neg_blocks_vs_gain_n4": 1.0,
+      "rho_n4_if_2_blocks_per_SM": 0.9486832980505139,
+      "rho_n4_if_3_blocks_per_SM": 0.9486832980505139
+    },
+    "one_block_per_sm_evidence": {
+      "threads_per_block": 256,
+      "regs_per_thread": 240,
+      "regs_per_block": 61440,
+      "regs_available_per_sm": 65536,
+      "dyn_smem_MB": 0.098,
+      "smem_available_per_sm_KB": 100
+    },
+    "pipeline_e2e": {
+      "base": {
+        "saved_ms_per_step": 0.7132140822553387,
+        "steady_step_ms": 65.8845443725586,
+        "pct_of_step": 1.0825210814577595,
+        "pct_of_5shape_convblock": 5.1609434357034605
+      },
+      "modiff": {
+        "saved_ms_per_step": 0.3793589382742842,
+        "steady_step_ms": 77.0005111694336,
+        "pct_of_step": 0.4926706751849147,
+        "pct_of_5shape_convblock": 2.264065202714763
+      }
+    },
+    "gn_share_of_768_4x4_pair": {
+      "gn_base_ms": 0.0196564001962542,
+      "pair_ms": 0.1610937966033816,
+      "gn_pct_of_pair": 12.201835583184451,
+      "measured_base_gain_pct": 31.06146146455719
+    },
+    "share_of_full_step": {
+      "W8A8": {
+        "conv_block_ms": 33.33316437359899,
+        "step_ms": 77.0005111694336,
+        "conv_block_pct_of_step": 43.28953648145526,
+        "a_hat_ms": 4.909392598085102,
+        "o_hat_ms": 0.8164390195161069,
+        "a_hat_pct_of_step": 6.37579221686252,
+        "o_hat_pct_of_step": 1.0603033760640845
+      },
+      "W4A4": {
+        "conv_block_ms": 22.249508606269956,
+        "step_ms": 68.27062225341797,
+        "conv_block_pct_of_step": 32.590165245133726,
+        "a_hat_ms": 4.687281606998292,
+        "o_hat_ms": 0.4511049836873973,
+        "a_hat_pct_of_step": 6.865737343947562,
+        "o_hat_pct_of_step": 0.6607600294207261
+      }
+    }
   }
 }
