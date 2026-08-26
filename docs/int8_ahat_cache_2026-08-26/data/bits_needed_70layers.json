@@ -1,0 +1,352 @@
+[
+ {
+  "layer": "output_blocks.3.0.in_conv",
+  "step_gain_tail": 0.24509804292158494,
+  "bits_needed": 5.96011555638904
+ },
+ {
+  "layer": "output_blocks.4.0.in_conv",
+  "step_gain_tail": 0.24509804598650847,
+  "bits_needed": 5.960115574429779
+ },
+ {
+  "layer": "output_blocks.7.0.in_conv",
+  "step_gain_tail": 1.3106294558211025,
+  "bits_needed": 8.378944547914314
+ },
+ {
+  "layer": "output_blocks.5.0.in_conv",
+  "step_gain_tail": 1.660130726364903,
+  "bits_needed": 8.719981537291725
+ },
+ {
+  "layer": "output_blocks.2.1.in_conv",
+  "step_gain_tail": 2.34746989612091,
+  "bits_needed": 9.219791343694645
+ },
+ {
+  "layer": "output_blocks.0.0.out_conv",
+  "step_gain_tail": 2.543092252061933,
+  "bits_needed": 9.335268484300872
+ },
+ {
+  "layer": "output_blocks.1.0.in_conv",
+  "step_gain_tail": 2.543092433298377,
+  "bits_needed": 9.335268587116218
+ },
+ {
+  "layer": "output_blocks.11.2.out_conv",
+  "step_gain_tail": 3.051710766582538,
+  "bits_needed": 9.598302920441801
+ },
+ {
+  "layer": "output_blocks.2.1.out_conv",
+  "step_gain_tail": 3.0517108756228133,
+  "bits_needed": 9.598302971990547
+ },
+ {
+  "layer": "middle_block.0.out_conv",
+  "step_gain_tail": 3.0517108916532587,
+  "bits_needed": 9.598302979568933
+ },
+ {
+  "layer": "input_blocks.1.0.out_conv",
+  "step_gain_tail": 3.051710937528131,
+  "bits_needed": 9.598303001256259
+ },
+ {
+  "layer": "output_blocks.5.0.out_conv",
+  "step_gain_tail": 3.3907896500013655,
+  "bits_needed": 9.75030597531932
+ },
+ {
+  "layer": "input_blocks.14.0.out_conv",
+  "step_gain_tail": 3.390789846360911,
+  "bits_needed": 9.750306058865325
+ },
+ {
+  "layer": "input_blocks.11.0.out_conv",
+  "step_gain_tail": 3.390789869484166,
+  "bits_needed": 9.750306068703685
+ },
+ {
+  "layer": "output_blocks.8.2.out_conv",
+  "step_gain_tail": 4.359586836480775,
+  "bits_needed": 10.112876102232057
+ },
+ {
+  "layer": "input_blocks.9.0.out_conv",
+  "step_gain_tail": 4.35958719902613,
+  "bits_needed": 10.112876222207271
+ },
+ {
+  "layer": "output_blocks.2.0.in_conv",
+  "step_gain_tail": 7.904716711285173,
+  "bits_needed": 10.971398447072776
+ },
+ {
+  "layer": "output_blocks.12.0.in_conv",
+  "step_gain_tail": 10.060549071761072,
+  "bits_needed": 11.319321826513715
+ },
+ {
+  "layer": "input_blocks.14.0.in_conv",
+  "step_gain_tail": 10.265852980483464,
+  "bits_needed": 11.34846628631868
+ },
+ {
+  "layer": "input_blocks.13.0.in_conv",
+  "step_gain_tail": 10.265853435008667,
+  "bits_needed": 11.348466350194643
+ },
+ {
+  "layer": "middle_block.0.in_conv",
+  "step_gain_tail": 10.265853442115066,
+  "bits_needed": 11.348466351193329
+ },
+ {
+  "layer": "middle_block.2.in_conv",
+  "step_gain_tail": 10.2658536256788,
+  "bits_needed": 11.34846637699016
+ },
+ {
+  "layer": "output_blocks.1.0.out_conv",
+  "step_gain_tail": 10.334148355765862,
+  "bits_needed": 11.358032281836602
+ },
+ {
+  "layer": "input_blocks.12.0.out_conv",
+  "step_gain_tail": 10.37581733773893,
+  "bits_needed": 11.363837768495758
+ },
+ {
+  "layer": "input_blocks.3.0.out_conv",
+  "step_gain_tail": 10.375817385058845,
+  "bits_needed": 11.363837775075307
+ },
+ {
+  "layer": "output_blocks.0.0.in_conv",
+  "step_gain_tail": 10.629409710094306,
+  "bits_needed": 11.398674262633376
+ },
+ {
+  "layer": "middle_block.2.out_conv",
+  "step_gain_tail": 10.647453078535655,
+  "bits_needed": 11.401121153856952
+ },
+ {
+  "layer": "output_blocks.9.0.out_conv",
+  "step_gain_tail": 11.09905717326018,
+  "bits_needed": 11.461049911457165
+ },
+ {
+  "layer": "output_blocks.4.0.out_conv",
+  "step_gain_tail": 11.319072676046252,
+  "bits_needed": 11.489368550741876
+ },
+ {
+  "layer": "output_blocks.14.0.out_conv",
+  "step_gain_tail": 11.514179943488173,
+  "bits_needed": 11.514024445626362
+ },
+ {
+  "layer": "input_blocks.4.0.out_conv",
+  "step_gain_tail": 11.7274048331065,
+  "bits_needed": 11.540496575193282
+ },
+ {
+  "layer": "input_blocks.13.0.out_conv",
+  "step_gain_tail": 12.422027842002295,
+  "bits_needed": 11.623513488132186
+ },
+ {
+  "layer": "output_blocks.11.0.out_conv",
+  "step_gain_tail": 12.450980071744278,
+  "bits_needed": 11.626872089333993
+ },
+ {
+  "layer": "output_blocks.12.0.out_conv",
+  "step_gain_tail": 12.450980247468463,
+  "bits_needed": 11.626872109695155
+ },
+ {
+  "layer": "input_blocks.10.0.out_conv",
+  "step_gain_tail": 12.450980314647504,
+  "bits_needed": 11.62687211747919
+ },
+ {
+  "layer": "input_blocks.5.0.out_conv",
+  "step_gain_tail": 12.450980398706275,
+  "bits_needed": 11.626872127219078
+ },
+ {
+  "layer": "output_blocks.2.0.out_conv",
+  "step_gain_tail": 12.7935328789931,
+  "bits_needed": 11.666027494917364
+ },
+ {
+  "layer": "output_blocks.13.0.out_conv",
+  "step_gain_tail": 12.918909246427459,
+  "bits_needed": 11.680097048966966
+ },
+ {
+  "layer": "output_blocks.5.2.out_conv",
+  "step_gain_tail": 13.618921490338144,
+  "bits_needed": 11.756225239624131
+ },
+ {
+  "layer": "input_blocks.7.0.out_conv",
+  "step_gain_tail": 13.677984525725543,
+  "bits_needed": 11.762468443977006
+ },
+ {
+  "layer": "output_blocks.7.0.out_conv",
+  "step_gain_tail": 13.834422441095224,
+  "bits_needed": 11.778875197290766
+ },
+ {
+  "layer": "input_blocks.6.0.out_conv",
+  "step_gain_tail": 14.093355457465536,
+  "bits_needed": 11.805627922442607
+ },
+ {
+  "layer": "output_blocks.3.0.out_conv",
+  "step_gain_tail": 14.109920634804604,
+  "bits_needed": 11.807322654775723
+ },
+ {
+  "layer": "output_blocks.6.0.out_conv",
+  "step_gain_tail": 14.488495864521353,
+  "bits_needed": 11.845520609719822
+ },
+ {
+  "layer": "output_blocks.8.0.out_conv",
+  "step_gain_tail": 14.680579075099637,
+  "bits_needed": 11.864521658035313
+ },
+ {
+  "layer": "output_blocks.13.0.in_conv",
+  "step_gain_tail": 15.258553743708386,
+  "bits_needed": 11.920231006894904
+ },
+ {
+  "layer": "output_blocks.14.0.in_conv",
+  "step_gain_tail": 15.258554551800199,
+  "bits_needed": 11.920231083299917
+ },
+ {
+  "layer": "input_blocks.5.0.in_conv",
+  "step_gain_tail": 15.258555043586044,
+  "bits_needed": 11.920231129798228
+ },
+ {
+  "layer": "input_blocks.8.0.out_conv",
+  "step_gain_tail": 15.318864644338182,
+  "bits_needed": 11.925922157729154
+ },
+ {
+  "layer": "output_blocks.10.0.out_conv",
+  "step_gain_tail": 15.563725153243857,
+  "bits_needed": 11.948800190113438
+ },
+ {
+  "layer": "input_blocks.2.0.out_conv",
+  "step_gain_tail": 15.563726187191374,
+  "bits_needed": 11.948800285956233
+ },
+ {
+  "layer": "output_blocks.6.0.in_conv",
+  "step_gain_tail": 18.616538640519085,
+  "bits_needed": 12.207197640250902
+ },
+ {
+  "layer": "output_blocks.5.2.in_conv",
+  "step_gain_tail": 19.861270630677144,
+  "bits_needed": 12.300570704321277
+ },
+ {
+  "layer": "input_blocks.11.0.in_conv",
+  "step_gain_tail": 20.644245386929008,
+  "bits_needed": 12.35635246602819
+ },
+ {
+  "layer": "input_blocks.12.0.in_conv",
+  "step_gain_tail": 24.60744677664486,
+  "bits_needed": 12.609707755840653
+ },
+ {
+  "layer": "input_blocks.10.0.in_conv",
+  "step_gain_tail": 29.960076061818874,
+  "bits_needed": 12.893654068135417
+ },
+ {
+  "layer": "output_blocks.9.0.in_conv",
+  "step_gain_tail": 31.12745165600989,
+  "bits_needed": 12.94880025266109
+ },
+ {
+  "layer": "output_blocks.8.0.in_conv",
+  "step_gain_tail": 33.74540280327106,
+  "bits_needed": 13.06530375627719
+ },
+ {
+  "layer": "output_blocks.8.2.in_conv",
+  "step_gain_tail": 37.99679182140951,
+  "bits_needed": 13.236490394459624
+ },
+ {
+  "layer": "output_blocks.10.0.in_conv",
+  "step_gain_tail": 38.380598381917046,
+  "bits_needed": 13.250989986050941
+ },
+ {
+  "layer": "input_blocks.8.0.in_conv",
+  "step_gain_tail": 40.2132713865973,
+  "bits_needed": 13.318284487139834
+ },
+ {
+  "layer": "input_blocks.7.0.in_conv",
+  "step_gain_tail": 40.21327167443328,
+  "bits_needed": 13.318284497466264
+ },
+ {
+  "layer": "input_blocks.9.0.in_conv",
+  "step_gain_tail": 40.856768030974415,
+  "bits_needed": 13.341187866051188
+ },
+ {
+  "layer": "output_blocks.11.0.in_conv",
+  "step_gain_tail": 41.503267558391926,
+  "bits_needed": 13.363837706184452
+ },
+ {
+  "layer": "output_blocks.11.2.in_conv",
+  "step_gain_tail": 45.730652630978184,
+  "bits_needed": 13.503774289930957
+ },
+ {
+  "layer": "input_blocks.1.0.in_conv",
+  "step_gain_tail": 62.25489980119998,
+  "bits_needed": 13.948800171301354
+ },
+ {
+  "layer": "input_blocks.6.0.in_conv",
+  "step_gain_tail": 62.2549008579925,
+  "bits_needed": 13.948800195791465
+ },
+ {
+  "layer": "input_blocks.2.0.in_conv",
+  "step_gain_tail": 62.25490222951509,
+  "bits_needed": 13.948800227575127
+ },
+ {
+  "layer": "input_blocks.4.0.in_conv",
+  "step_gain_tail": 62.25490376005457,
+  "bits_needed": 13.948800263043847
+ },
+ {
+  "layer": "input_blocks.3.0.in_conv",
+  "step_gain_tail": 124.50980667228704,
+  "bits_needed": 14.948800253220133
+ }
+]

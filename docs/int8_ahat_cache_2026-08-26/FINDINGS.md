@@ -109,3 +109,102 @@ question this script does not answer.
   still be quality-neutral, or a drift that looks small could still matter — this script cannot
   distinguish those; it can only tell you the flat-8-bit idea, AS STATED, does not preserve the
   invariant the way a constant-scale schedule would have, and by how much.
+
+---
+
+## Follow-up 2026-08-26: fp8, a periodic-refresh attempt, and a data-grounded bit budget
+
+**Prompted by:** the project owner relaxing the constraint from "strictly no numerics change" to
+"small error is acceptable." This reopens the a_hat storage-format question, but the answer below
+is still negative for a plain int8 format — the reopened constraint does not change how many bits
+the problem needs.
+
+### fp8 is worse than int8-fixed, not better
+
+Floating-exponent fp8 (`torch.float8_e4m3fn` / `float8_e5m2`, both natively supported in this
+torch build) was the natural next guess — its floating exponent tracks magnitude the way fp16
+already does, seemingly avoiding int8-fixed's "flat grid can't track a moving target" problem.
+[`scripts/simulate_drift_fp8.py`](scripts/simulate_drift_fp8.py) tested this against the same real
+step0/tail scale trajectories as the original simulation, and found the opposite:
+
+| layer | storage | drift ÷ step0 quantum | drift ÷ tail quantum |
+|---|---|--:|--:|
+| median gain (12.45×) | int8-fixed | 2.38x | 14.5x |
+| median gain (12.45×) | **e4m3** | 38.83x | **236.9x** |
+| median gain (12.45×) | **e5m2** | 55.24x | **337.0x** |
+| max gain (124.5×) | int8-fixed | 3.44x | 7137x |
+| max gain (124.5×) | **e4m3** | 14.19x | **29410x** |
+| max gain (124.5×) | **e5m2** | 29.71x | **61577x** |
+
+**Mechanism, confirmed directly:** at magnitude ≈1.0 (a_hat's typical range), fp8's LSB is **0.125**
+(e4m3) or **0.25** (e5m2) — 13× to 27× coarser than a dedicated int8 fixed-point grid's **0.0094**
+over the same ±1.2 range. fp8 spends 4–5 of its 8 bits on an exponent a_hat's already-bounded
+magnitude does not need (GroupNorm keeps it in a narrow range throughout the schedule), leaving
+fewer effective mantissa bits than a purpose-built fixed format that spends all 8 bits on
+precision. **The real problem was never a_hat's own dynamic range; it is the delta code's shrinking
+quantum**, which fp8's exponent — driven by a_hat's value, not by the schedule's scale table — does
+not track at all.
+
+### The "periodic refresh" idea had a bug, and fixing it exposes why refresh cannot work either
+
+The first version of a K-step-refreshed grid ([`scripts/simulate_drift_refresh.py`](scripts/simulate_drift_refresh.py))
+showed drift of 50–7900× the tail quantum — far worse than the unrefreshed case. That run had a
+bug: the refresh derived a_hat's grid from `headroom / scale`, which shrank the *represented range*
+at every refresh rather than the *resolution*, so a_hat's own value (≈1.0) was catastrophically
+clipped against a grid sized for the much smaller delta.
+
+Fixing the bug exposes the real constraint directly, and it has nothing to do with cadence:
+
+```
+levels needed = 2 * a_hat_range / quantum_at_tail
+```
+
+For the median-gain layer: `2 × 1.2 / 0.0035 ≈ 683 levels ≈ 9.4 bits`. For the max-gain layer:
+`2 × 1.2 / 0.000021 ≈ 116,000 levels ≈ 16.8 bits`. **No refresh cadence creates more quantization
+levels** — 8 bits is 256 levels, full stop, regardless of how often the grid is re-derived.
+Refreshing only changes *where* the grid sits, never *how many* distinct values it can represent.
+
+### Data-grounded: how many of the 70 real layers could ever fit in 8 bits
+
+[`data/bits_needed_70layers.json`](data/bits_needed_70layers.json), computed directly from
+`activation_scale` (a proxy for a_hat's own range) and `delta_scale_tail` for all 70 calibrated
+layers in the committed calibration file:
+
+| | bits needed to span a_hat's range at the tail's resolution |
+|---|--:|
+| min | 6.0 |
+| p25 | 11.3 |
+| **median** | **11.6** |
+| p75 | 12.3 |
+| max | 14.9 |
+
+**Only 2 of 70 layers (2.9%) need ≤ 8 bits** — both `step_gain_tail ≈ 0.25×` (the delta actually
+gets *coarser*, not finer, toward the tail for these two). The median real layer needs **11.6
+bits**; int8 offers 8. This is not a marginal shortfall an acceptable-error budget can obviously
+absorb — it is roughly an order of magnitude short, matching the earlier drift simulation's
+10×–7000× figures.
+
+### What this means for "small error is now acceptable"
+
+The relaxed constraint does not rescue a flat 8-bit format for a_hat — the shortfall is a bit-count
+problem, not a rounding-mode or refresh-cadence problem, and no variant tested here (fixed, fp8,
+refreshed-fixed) changes that. **The only way to make further progress on this specific idea is an
+actual FID measurement**: truncate a real layer's a_hat to int8 (median-layer shortfall ≈ 3.6 bits,
+i.e. roughly 12× coarser resolution than what an 11.6-bit-adequate format would give) and see
+whether that specific, now-quantified magnitude of extra error is visible in samples. Proxy-metric
+analysis has reached the limit of what it can decide here.
+
+**Two structurally different directions this does NOT rule out, both unexplored:**
+- **Per-layer gating on `step_gain_tail`**: a small number of real layers (the ~2.9% needing ≤8
+  bits, and plausibly a few more that would tolerate a *little* extra error) could adopt int8 a_hat
+  near-losslessly. The win is capped by how few such layers exist, likely too small to be worth the
+  engineering on its own.
+- **Non-uniform (companding) 8-bit quantization** — concentrate levels where a_hat's value actually
+  spends its time rather than spacing them uniformly across its full range. Not evaluated
+  quantitatively here; would need real a_hat value *histograms*, not just range, to size properly.
+
+### Files
+
+- [`scripts/simulate_drift_fp8.py`](scripts/simulate_drift_fp8.py)
+- [`scripts/simulate_drift_refresh.py`](scripts/simulate_drift_refresh.py)
+- [`data/bits_needed_70layers.json`](data/bits_needed_70layers.json)
