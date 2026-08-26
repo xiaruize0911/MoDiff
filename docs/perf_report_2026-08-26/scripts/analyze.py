@@ -1,4 +1,9 @@
-"""Derive every number and plot in REPORT.md from the source data. Nothing is hand-transcribed.
+"""Derive the numbers and plots in REPORT.md from the source data.
+
+NOT everything in REPORT.md comes from here. Figures quoted from other reports (the FID block, the
+gn_stats bandwidth range), source-code readings (the byte-count table), and a handful of
+hand-computed values are enumerated in REPORT.md's preamble. Revisions 1 and 2 both claimed
+"nothing is hand-transcribed"; that was false both times.
 
 Sources (all committed under this report's data/, or under the two prior report folders):
   warm-up          docs/warmup1_speedup_2026-08-25/data/warmup_cost_w{1,5}.json
@@ -95,7 +100,7 @@ for i, (a, b) in enumerate(zip(warm.warm_pct_w5, warm.warm_pct_w1)):
         ax1.text(i + bw / 2, b + 0.06, f"{b:.2f}%", ha="center", fontsize=8.5)
 ax1.set_xticks(x)
 ax1.set_xticklabels(warm["mode"], rotation=20, ha="right", fontsize=8.5)
-ax1.set_ylabel("warm-up % of a 200-step sample")
+ax1.set_ylabel("warm-up % of a 200-step COLD sample")
 ax1.set_title("MoDiff warm-up cost", fontsize=11, loc="left")
 ax1.legend(frameon=False, fontsize=8.5)
 despine(ax1)
@@ -112,7 +117,7 @@ ax2.set_xticks(x2)
 ax2.set_xticklabels(mo["mode"], fontsize=9)
 ax2.set_ylim(0.99, 1.07)
 ax2.set_ylabel("e2e speedup, warm-up 5 -> 1")
-ax2.set_title("consistency check: measured vs predicted", fontsize=11, loc="left")
+ax2.set_title("W8A8 agrees (0.07pp); W4A4 does not (1.15pp = its drift)", fontsize=10.5, loc="left")
 ax2.legend(frameon=False, fontsize=8.5, loc="upper left")
 despine(ax2)
 fig.tight_layout()
@@ -219,19 +224,19 @@ for i, (a, b) in enumerate(zip(pdf.base_gain, pdf.modiff_gain)):
 ax1.set_xticks(x)
 ax1.set_xticklabels(pdf["shape"], rotation=25, ha="right", fontsize=8.5)
 ax1.set_ylabel("% faster from batch-split pipelining")
-ax1.set_title("baseline gains >= MoDiff on 4/5 (768,2x2 both within noise)", fontsize=11, loc="left")
+ax1.set_title("% gain: baseline >= MoDiff on 4/5 (in absolute ms, only 3/5)", fontsize=11, loc="left")
 ax1.legend(frameon=False, fontsize=9)
 despine(ax1)
 
 ax2.bar(x - bw / 2, pdf.ovh_today, bw, color=C_GREY, label="MoDiff overhead, today", zorder=3)
 ax2.bar(x + bw / 2, pdf.ovh_piped, bw, color=C_MOD, label="MoDiff overhead, pipelined", zorder=3)
 for i, (a, b) in enumerate(zip(pdf.ovh_today, pdf.ovh_piped)):
-    ax2.text(i - bw / 2, a + 1.0, f"{a:.0f}", ha="center", fontsize=8)
-    ax2.text(i + bw / 2, b + 1.0, f"{b:.0f}", ha="center", fontsize=8)
+    ax2.text(i - bw / 2, a + 1.0, f"{a:.1f}", ha="center", fontsize=8)
+    ax2.text(i + bw / 2, b + 1.0, f"{b:.1f}", ha="center", fontsize=8)
 ax2.set_xticks(x)
 ax2.set_xticklabels(pdf["shape"], rotation=25, ha="right", fontsize=8.5)
 ax2.set_ylabel("MoDiff overhead vs its own baseline (%)")
-ax2.set_title("the overhead ratio does not shrink (it rises on 4/5)", fontsize=11, loc="left")
+ax2.set_title("overhead ratio rises on 4/5; 768,2x2 shrinks 0.35pp (noise)", fontsize=11, loc="left")
 ax2.legend(frameon=False, fontsize=9, loc="upper left")
 despine(ax2)
 
@@ -313,10 +318,10 @@ ax1.set_xticklabels([f"{s}\n{int(b)} blk\n{w:.2f} wave" for s, b, w in
                      zip(srt["shape"], srt.blocks, srt.waves)], fontsize=7.5, linespacing=1.5)
 ax1.set_ylabel("%")
 ax1.set_ylim(0, 84)
-ax1.set_title("the gain tracks wasted SMs, not bytes moved", fontsize=11, loc="left")
+ax1.set_title("gain correlates with wasted SMs (baseline arm)", fontsize=11, loc="left")
 ax1.legend(frameon=False, fontsize=8.5, loc="upper right")
 despine(ax1)
-ax1.annotate("split penalty (87.5%)\neats this one's gain",
+ax1.annotate("split penalty (89.5% this arm)\neats this one's gain",
              xy=(0.16, 4), xytext=(0.55, 58), fontsize=7.8, color="#777777",
              ha="center", arrowprops=dict(arrowstyle="->", color="#AAAAAA", lw=0.9,
                                           connectionstyle="arc3,rad=0.25"))
@@ -327,7 +332,7 @@ for _, r in wdf.iterrows():
                  xytext=(7, -3), fontsize=8, color=INK)
 ax2.set_xlabel("conv SM waste (%)")
 ax2.set_ylabel("baseline gain from pipelining (%)")
-ax2.set_title("monotonic, once the split-penalty-blocked shape is set aside", fontsize=11, loc="left")
+ax2.set_title("rho=0.00 over all 5; rho=1.00 over 4 (post-hoc, p_eff=0.14)", fontsize=10.5, loc="left")
 despine(ax2)
 ax2.xaxis.grid(True, color=GRID, zorder=0)
 fig.tight_layout()
@@ -534,3 +539,123 @@ with open(f"{HERE}/data/derived.json", "w") as f:
     json.dump(derived, f, indent=2)
 print("\n=== 6. AUDIT-DRIVEN CORRECTIONS ===")
 print(json.dumps(audit, indent=2, default=str))
+
+# =====================================================================
+# 7. ROUND-2 AUDIT CORRECTIONS
+# =====================================================================
+a2 = {}
+FIVE_AB = ["768->768,2x2", "384->384,8x8", "192->192,32x32", "384->384,16x16", "768->768,4x4"]
+g5 = ab[(ab.precision == "W8A8") & (ab["shape"].isin(FIVE_AB))].copy()
+
+# (A) GN's share of its own GN+conv stage, PER ARM. Revision 2 quoted 12.2% -- which is the
+#     BASELINE arm's share on the single shape 768,4x4, i.e. the minimum of the set -- and used it
+#     both as "the offset is 8-12% of a stage" and as a cap on what GN hiding could be worth. The
+#     quantity a cap needs is the MoDiff GN's share, which is 1.4x larger.
+a2["gn_share_of_stage"] = {
+    r["shape"]: dict(baseline_pct=100 * r.gn_base / r.base_total_ms,
+                     modiff_pct=100 * r.gn_modiff / r.modiff_total_ms)
+    for _, r in g5.iterrows()}
+a2["gn_share_of_stage"]["freq_weighted"] = dict(
+    baseline_pct=float(100 * (g5.gn_base * g5.freq).sum() / (g5.base_total_ms * g5.freq).sum()),
+    modiff_pct=float(100 * (g5.gn_modiff * g5.freq).sum() / (g5.modiff_total_ms * g5.freq).sum()))
+
+# (B) The verdict's aggregate, WITH an uncertainty (revision 2 asserted it without one).
+ta = tb = va = vb = 0.0
+for k in PIPE_ORDER:
+    m, s, f = pipe[k]["med"], pipe[k]["sd"], pipe[k]["freq"]
+    ta += (m["modiff_full"] - m["base_full"]) * f
+    tb += (m["modiff_pipe"] - m["base_pipe"]) * f
+    va += f * f * (s["modiff_full"] ** 2 + s["base_full"] ** 2)
+    vb += f * f * (s["modiff_pipe"] ** 2 + s["base_pipe"] ** 2)
+a2["aggregate_abs_overhead_rise"] = dict(
+    today_ms=ta, piped_ms=tb, rise_ms=tb - ta, sd_ms=math.sqrt(va + vb),
+    sigma=abs(tb - ta) / math.sqrt(va + vb), pct=100 * (tb - ta) / ta)
+
+# (C) Which arm saves more, in ABSOLUTE ms rather than percent. The ratio metric says 4/5; absolute
+#     ms -- the column the report itself calls the honest one -- says 3/5.
+cnt = 0
+det = {}
+for k in PIPE_ORDER:
+    m = pipe[k]["med"]
+    b = m["base_full"] - m["base_pipe"]
+    d = m["modiff_full"] - m["modiff_pipe"]
+    cnt += b > d
+    det[NICE[k]] = dict(base_saves_ms=b, modiff_saves_ms=d, baseline_saves_more=bool(b > d))
+a2["baseline_saves_more_abs"] = dict(count=f"{cnt}/5", detail=det)
+
+# (D) Per-byte price ratio: element counts are NOT equal (a_hat lives on Cin, o_hat on Cout), so
+#     dividing percentages by per-element byte counts is biased. Report the range, not a point.
+for prec in ("W8A8", "W4A4"):
+    q = ab[ab.precision == prec]
+    e_in = float((q.Cin * q.H * q.W * q.freq).sum())
+    e_out = float((q.Cout * q.H * q.W * q.freq).sum())
+    a_tot = float((q.a_hat_ms * q.freq).sum())
+    o_tot = float((q.o_hat_ms * q.freq).sum())
+    a2.setdefault("per_byte_price", {})[prec] = dict(
+        ahat_over_ohat_elements=e_in / e_out,
+        incremental_byte_ratio=(4 * e_in) / (2 * e_out),
+        from_freq_weighting=(wsum[prec]["a_hat_pct_freq"] / 4) / (wsum[prec]["o_hat_pct_freq"] / 2),
+        from_time_weighting=(wsum[prec]["a_hat_pct_time"] / 4) / (wsum[prec]["o_hat_pct_time"] / 2),
+        from_totals_element_corrected=(a_tot / (4 * e_in)) / (o_tot / (2 * e_out)))
+
+# (E) Warm-up share at 50 steps, on THIS report's own definition (share of the sample).
+for key, tag in (("int8", "W8A8"), ("int4", "W4A4")):
+    m5 = w["w5"]["modes"][key]
+    a2.setdefault("warmup_share_at_50_steps", {})[tag] = \
+        100 * m5["modiff_warmup_ms"] / (50 * m5["steady_median_ms"] + m5["modiff_warmup_ms"])
+
+# (F) Subset criterion, stated correctly: Cin == Cout is 9 of 20 shapes; the 5 used also need freq>=7.
+q8 = ab[ab.precision == "W8A8"]
+eq = q8[q8.Cin == q8.Cout]
+a2["subset"] = dict(cin_eq_cout_shapes=len(eq), cin_eq_cout_calls=int(eq.freq.sum()),
+                    used_shapes=5, used_calls=int(g5.freq.sum()),
+                    dropped_freq1=sorted(set(eq["shape"]) - set(FIVE_AB)))
+
+# (G) The low-ratio shapes that carry the aggregate: there are FOUR 32x32 shapes, not three, and
+#     they are the four lowest ratios. Weight is by the denominator (baseline GN time).
+q8 = q8.copy()
+q8["r"] = q8.gn_modiff / q8.gn_base
+h = q8[q8.H == 32]
+a2["low_ratio_shapes"] = dict(
+    n_32x32=len(h), ratios=sorted(h.r.round(3).tolist()),
+    are_the_n_lowest=bool(set(h.r.nsmallest(4)) == set(q8.r.nsmallest(4))),
+    share_of_base_gn_time=float(100 * (h.gn_base * h.freq).sum() / (q8.gn_base * q8.freq).sum()))
+
+# (H) Negative-control spread, labelled correctly (revision 2 said "+-2.6 ms", which is the largest
+#     single magnitude, not the spread).
+exc = [w["w5"]["modes"][k]["excess_ms"] for k in ("fp16", "int8_baseline", "int4_baseline")]
+a2["control_excess"] = dict(values_ms=exc, spread_ms=max(exc) - min(exc),
+                            pct_of_sample=100 * (max(exc) - min(exc)) / w["w5"]["modes"]["int8"]["total_ms"])
+
+# (I) Two-sided p for the post-hoc deletion (revision 2's 0.142 is one-sided).
+from itertools import permutations as _pm
+def _lis_ge4(perm, inc=True):
+    return any(all((sub[i] < sub[i + 1]) if inc else (sub[i] > sub[i + 1]) for i in range(3))
+               for sub in [tuple(v for j, v in enumerate(perm) if j != d) for d in range(5)])
+_all = list(_pm(range(5)))
+a2["p_post_hoc"] = dict(one_sided=sum(_lis_ge4(p_) for p_ in _all) / 120,
+                        two_sided=sum(_lis_ge4(p_) or _lis_ge4(p_, False) for p_ in _all) / 120)
+
+# (J) Cross-harness agreement on ABSOLUTE ms/step for the 5 shapes (revision 2 published only the
+#     ratio-level check). This is the missing validity argument for the e2e figures.
+for arm, col in (("base", "base_total_ms"), ("modiff", "modiff_total_ms")):
+    pipe_ms = sum(pipe[k]["med"][f"{arm}_full"] * pipe[k]["freq"] for k in PIPE_ORDER) / 6
+    abl_ms = float((g5[col] * g5.freq).sum())
+    a2.setdefault("cross_harness_absolute", {})[arm] = dict(
+        pipeline_ms_per_step=pipe_ms, ablation_ms_per_step=abl_ms,
+        rel_diff_pct=100 * (pipe_ms - abl_ms) / abl_ms)
+
+# (K) Share-of-step under a CONSISTENT weighting (revision 2 mixed freq and time weightings).
+for prec, key in (("W8A8", "int8"), ("W4A4", "int4")):
+    step = w["w5"]["modes"][key]["steady_median_ms"]
+    q = ab[ab.precision == prec]
+    blk = float((q.modiff_total_ms * q.freq).sum())
+    a2.setdefault("share_of_step_freq_weighted", {})[prec] = dict(
+        a_hat_pct=wsum[prec]["a_hat_pct_freq"] * blk / step,
+        o_hat_pct=wsum[prec]["o_hat_pct_freq"] * blk / step)
+
+derived["audit_round2"] = a2
+with open(f"{HERE}/data/derived.json", "w") as f:
+    json.dump(derived, f, indent=2)
+print("\n=== 7. ROUND-2 CORRECTIONS ===")
+print(json.dumps(a2, indent=2, default=str))

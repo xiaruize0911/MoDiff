@@ -521,5 +521,149 @@
         "o_hat_pct_of_step": 0.6607600294207261
       }
     }
+  },
+  "audit_round2": {
+    "gn_share_of_stage": {
+      "768->768,2x2": {
+        "baseline_pct": 14.636296741107966,
+        "modiff_pct": 22.636839491349452
+      },
+      "384->384,8x8": {
+        "baseline_pct": 21.438181261186813,
+        "modiff_pct": 37.42940916844974
+      },
+      "192->192,32x32": {
+        "baseline_pct": 30.085467833387124,
+        "modiff_pct": 37.171634407148396
+      },
+      "384->384,16x16": {
+        "baseline_pct": 22.53200418484695,
+        "modiff_pct": 35.1351703209731
+      },
+      "768->768,4x4": {
+        "baseline_pct": 12.201835583184451,
+        "modiff_pct": 25.624719613332136
+      },
+      "freq_weighted": {
+        "baseline_pct": 24.84874604238826,
+        "modiff_pct": 34.70803344750267
+      }
+    },
+    "aggregate_abs_overhead_rise": {
+      "today_ms": 17.61721590301022,
+      "piped_ms": 19.620346766896546,
+      "rise_ms": 2.0031308638863266,
+      "sd_ms": 0.5796310463135881,
+      "sigma": 3.455872277073658,
+      "pct": 11.37030320179056
+    },
+    "baseline_saves_more_abs": {
+      "count": "3/5",
+      "detail": {
+        "768, 2x2": {
+          "base_saves_ms": 0.0011196942068636417,
+          "modiff_saves_ms": 0.0029697432182729244,
+          "baseline_saves_more": false
+        },
+        "384, 8x8": {
+          "base_saves_ms": 0.11135450331494212,
+          "modiff_saves_ms": 0.030299345962703228,
+          "baseline_saves_more": true
+        },
+        "192, 32x32": {
+          "base_saves_ms": 0.044226355385035276,
+          "modiff_saves_ms": -0.1534138573333621,
+          "baseline_saves_more": true
+        },
+        "384, 16x16": {
+          "base_saves_ms": 0.13485124800354242,
+          "modiff_saves_ms": 0.10540229268372059,
+          "baseline_saves_more": true
+        },
+        "768, 4x4": {
+          "base_saves_ms": 0.30306698754429817,
+          "modiff_saves_ms": 0.333457556553185,
+          "baseline_saves_more": false
+        }
+      }
+    },
+    "per_byte_price": {
+      "W8A8": {
+        "ahat_over_ohat_elements": 1.2790161414296695,
+        "incremental_byte_ratio": 2.558032282859339,
+        "from_freq_weighting": 2.9442868099432777,
+        "from_time_weighting": 3.00658866169505,
+        "from_totals_element_corrected": 2.3507042360969113
+      },
+      "W4A4": {
+        "ahat_over_ohat_elements": 1.2790161414296695,
+        "incremental_byte_ratio": 2.558032282859339,
+        "from_freq_weighting": 3.914705891496361,
+        "from_time_weighting": 5.195333432900447,
+        "from_totals_element_corrected": 4.061976440026131
+      }
+    },
+    "warmup_share_at_50_steps": {
+      "W8A8": 14.668281159132205,
+      "W4A4": 15.718696373798986
+    },
+    "subset": {
+      "cin_eq_cout_shapes": 9,
+      "cin_eq_cout_calls": 45,
+      "used_shapes": 5,
+      "used_calls": 41,
+      "dropped_freq1": [
+        "192->192,16x16",
+        "384->384,32x32",
+        "384->384,4x4",
+        "768->768,8x8"
+      ]
+    },
+    "low_ratio_shapes": {
+      "n_32x32": 4,
+      "ratios": [
+        1.41,
+        1.511,
+        1.511,
+        1.532
+      ],
+      "are_the_n_lowest": true,
+      "share_of_base_gn_time": 64.16016139665861
+    },
+    "control_excess": {
+      "values_ms": [
+        1.2920989990234375,
+        -2.5830726623535156,
+        -0.4887657165527344
+      ],
+      "spread_ms": 3.875171661376953,
+      "pct_of_sample": 0.024091984592767783
+    },
+    "p_post_hoc": {
+      "one_sided": 0.14166666666666666,
+      "two_sided": 0.2833333333333333
+    },
+    "cross_harness_absolute": {
+      "base": {
+        "pipeline_ms_per_step": 13.819451639816785,
+        "ablation_ms_per_step": 13.964826177246868,
+        "rel_diff_pct": -1.0410049905737047
+      },
+      "modiff": {
+        "pipeline_ms_per_step": 16.75565429031849,
+        "ablation_ms_per_step": 16.705782003328203,
+        "rel_diff_pct": 0.29853308860579264
+      }
+    },
+    "share_of_step_freq_weighted": {
+      "W8A8": {
+        "a_hat_pct": 6.421934913091455,
+        "o_hat_pct": 1.090575634718001
+      },
+      "W4A4": {
+        "a_hat_pct": 6.648755735970309,
+        "o_hat_pct": 0.8492024586588908
+      }
+    }
   }
 }
