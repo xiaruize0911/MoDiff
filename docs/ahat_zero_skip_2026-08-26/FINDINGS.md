@@ -55,3 +55,43 @@ budget on it — the measurement was the whole cost.
 
 - [`scripts/measure_zero_code_rate.py`](scripts/measure_zero_code_rate.py) — self-contained,
   reproduces the capture against a real (if uncalibrated) generation run
+
+## Follow-up 2026-08-26: is a_hat's SHAPE sparse — checked by channel and by spatial position, not just by warp
+
+Prompted by "a_hat的shape可以做sparse吗" (can a_hat's shape support a sparse representation). The
+original measurement above only scored zeros at the kernel's actual memory-access unit (64
+consecutive flat-NHWC elements = up to 64 consecutive channels at one spatial position) — it never
+asked whether zeros cluster along a *structural* axis (a channel that is reliably near-zero, or a
+spatial position that is), which a coarser skip (per-channel or per-tile) could exploit even if
+the fine-grained warp view looks scattered.
+
+[`scripts/measure_zero_code_structure.py`](scripts/measure_zero_code_structure.py) captures the
+real `(N, C, H, W)` delta-code tensor for one representative layer (192 channels, 32×32, same
+20-step/batch-4 uncalibrated regime as the original measurement, 266 calls) and computes zero-rate
+and whole-slice-zero rate along both axes:
+
+| axis | zero-rate mean ± std (range) | whole-slice-zero-this-call rate: mean / **max** |
+|---|---|---|
+| per-channel (192 channels) | 47.2% ± 2.8% (37.8–53.6%) | 1.5% / **4.5%** |
+| per-spatial-position (1024 positions) | 47.2% ± 0.6% (45.6–48.8%) | 0.5% / **1.1%** |
+
+Both axes are close to flat — the small per-channel spread (std 2.8%, vs. 0.6% spatially) is the
+only hint of structure, and it does not translate into anything actionable: **no single channel is
+ever fully zero more than 4.5% of the 266 calls**, and spatially the ceiling is 1.1%. Neither comes
+anywhere close to a rate a per-channel or per-tile skip could use.
+
+### Verdict
+
+**Refuted at every granularity now checked**: element (the original 64-wide warp, 1.7%), channel
+(4.5% ceiling), and spatial position (1.1% ceiling). The ~50% zero rate is spread almost perfectly
+evenly across every axis this data supports grouping by — there is no structural axis along which
+reshaping or regrouping a_hat's traffic would concentrate zeros into skippable blocks. Any sparse
+encoding (mask, index list, run-length) would be paying overhead against a density that is not
+sparse enough (~50%, not the 90%+ regime sparse formats need to pay for themselves) while also
+losing the coalesced-access bandwidth the dense write already gets (73–81% of peak, §1 above). "Make
+a_hat's shape sparse" is dead, on the same uncalibrated-regime caveat as the parent measurement.
+
+### Files
+
+- [`scripts/measure_zero_code_structure.py`](scripts/measure_zero_code_structure.py)
+- [`data/zero_code_structure.npz`](data/zero_code_structure.npz)
