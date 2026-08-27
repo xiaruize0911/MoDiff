@@ -168,6 +168,7 @@ except ImportError:
     def _gnq(name):                     # every native path is gated on native_ok/HAS_*, so unreachable
         raise RuntimeError("modiff_cutlass is not importable")
     HAS_GN_SILU_DELTA_QUANTIZE_RESIZE = False
+    HAS_GN_SILU_QUANTIZE_RESIZE = False
     HAS_NATIVE_GN_SILU = False
     HAS_GN_SILU_QUANTIZE = False
     HAS_GN_SILU_QUANTIZE_PACK = False

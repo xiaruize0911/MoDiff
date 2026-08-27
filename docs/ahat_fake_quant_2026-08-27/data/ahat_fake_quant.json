@@ -1,0 +1,40 @@
+{
+ "seed": 20260805,
+ "steps": 50,
+ "n": 6,
+ "warmup_rounds": 5,
+ "delta_refresh": 4,
+ "relL2": {
+  "fp16 reference": {
+   "relL2_vs_fp16": 0.0,
+   "mean_ahat_snap_relL2": 0.0,
+   "bits": 0,
+   "quantize_ahat": false
+  },
+  "W8A8 MoDiff  a_hat fp32": {
+   "relL2_vs_fp16": 0.075424924492836,
+   "mean_ahat_snap_relL2": 0.0,
+   "bits": 8,
+   "quantize_ahat": false
+  },
+  "W8A8 MoDiff  a_hat int8": {
+   "relL2_vs_fp16": 0.1225387454032898,
+   "mean_ahat_snap_relL2": 0.0488679463788867,
+   "bits": 8,
+   "quantize_ahat": true
+  },
+  "W4A4 MoDiff  a_hat fp32": {
+   "relL2_vs_fp16": 0.29760080575942993,
+   "mean_ahat_snap_relL2": 0.0,
+   "bits": 4,
+   "quantize_ahat": false
+  },
+  "W4A4 MoDiff  a_hat int4": {
+   "relL2_vs_fp16": 0.8008882999420166,
+   "mean_ahat_snap_relL2": 0.2079816604319219,
+   "bits": 4,
+   "quantize_ahat": true
+  }
+ },
+ "out": "docs/ahat_fake_quant_2026-08-27/plots/ahat_fake_quant_grid.png"
+}

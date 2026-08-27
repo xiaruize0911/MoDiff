@@ -1,0 +1,87 @@
+{
+ "seed": 20260805,
+ "steps": 50,
+ "n": 6,
+ "K": [
+  1,
+  2,
+  4,
+  8
+ ],
+ "warmup_rounds": 5,
+ "relL2": {
+  "fp16 reference": {
+   "relL2_vs_fp16": 0.0,
+   "bits": 0,
+   "skip_k": 0,
+   "n_commit": 0,
+   "n_skip": 0,
+   "mean_delta_relL2": 0.0
+  },
+  "W8A8 MoDiff  skip-K=1": {
+   "relL2_vs_fp16": 0.03465390205383301,
+   "bits": 8,
+   "skip_k": 1,
+   "n_commit": 3500,
+   "n_skip": 0,
+   "mean_delta_relL2": 0.08615381375027131
+  },
+  "W8A8 MoDiff  skip-K=2": {
+   "relL2_vs_fp16": 0.03834055736660957,
+   "bits": 8,
+   "skip_k": 2,
+   "n_commit": 1750,
+   "n_skip": 1750,
+   "mean_delta_relL2": 0.12361762892439929
+  },
+  "W8A8 MoDiff  skip-K=4": {
+   "relL2_vs_fp16": 0.03187873959541321,
+   "bits": 8,
+   "skip_k": 4,
+   "n_commit": 910,
+   "n_skip": 2590,
+   "mean_delta_relL2": 0.19678419240921433
+  },
+  "W8A8 MoDiff  skip-K=8": {
+   "relL2_vs_fp16": 0.0656924694776535,
+   "bits": 8,
+   "skip_k": 8,
+   "n_commit": 490,
+   "n_skip": 3010,
+   "mean_delta_relL2": 0.327969691967293
+  },
+  "W4A4 MoDiff  skip-K=1": {
+   "relL2_vs_fp16": 0.2932855784893036,
+   "bits": 4,
+   "skip_k": 1,
+   "n_commit": 3500,
+   "n_skip": 0,
+   "mean_delta_relL2": 0.16203333228261757
+  },
+  "W4A4 MoDiff  skip-K=2": {
+   "relL2_vs_fp16": 0.31029385328292847,
+   "bits": 4,
+   "skip_k": 2,
+   "n_commit": 1750,
+   "n_skip": 1750,
+   "mean_delta_relL2": 0.2744818244933805
+  },
+  "W4A4 MoDiff  skip-K=4": {
+   "relL2_vs_fp16": 0.34423327445983887,
+   "bits": 4,
+   "skip_k": 4,
+   "n_commit": 910,
+   "n_skip": 2590,
+   "mean_delta_relL2": 0.4291268811229231
+  },
+  "W4A4 MoDiff  skip-K=8": {
+   "relL2_vs_fp16": 0.3826029598712921,
+   "bits": 4,
+   "skip_k": 8,
+   "n_commit": 490,
+   "n_skip": 3010,
+   "mean_delta_relL2": 0.595931355703728
+  }
+ },
+ "out": "docs/ahat_fake_quant_2026-08-27/plots/ahat_skip_k_grid.png"
+}

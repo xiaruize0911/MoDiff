@@ -1,0 +1,44 @@
+{
+ "seed": 20260805,
+ "steps": 50,
+ "n": 6,
+ "K": [
+  1,
+  8,
+  16,
+  32
+ ],
+ "modes": [
+  "int8"
+ ],
+ "relL2": {
+  "fp16 reference": {
+   "relL2_vs_fp16": 0.0
+  },
+  "W8A8 MoDiff  skip-K=1": {
+   "relL2_vs_fp16": 0.1194269210100174,
+   "skip_k": 1,
+   "n_commit": 0,
+   "n_skip": 0
+  },
+  "W8A8 MoDiff  skip-K=8": {
+   "relL2_vs_fp16": 0.3280024528503418,
+   "skip_k": 8,
+   "n_commit": 372,
+   "n_skip": 2666
+  },
+  "W8A8 MoDiff  skip-K=16": {
+   "relL2_vs_fp16": 0.4294775426387787,
+   "skip_k": 16,
+   "n_commit": 186,
+   "n_skip": 2852
+  },
+  "W8A8 MoDiff  skip-K=32": {
+   "relL2_vs_fp16": 0.6144102811813354,
+   "skip_k": 32,
+   "n_commit": 62,
+   "n_skip": 2976
+  }
+ },
+ "out": "docs/ahat_fake_quant_2026-08-27/plots/ahat_skip_k_real_w8a8_largek.png"
+}

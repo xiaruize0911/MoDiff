@@ -1,0 +1,52 @@
+{
+ "seed": 20260805,
+ "steps": 50,
+ "n": 6,
+ "K": [
+  1,
+  2,
+  4
+ ],
+ "relL2": {
+  "fp16 reference": {
+   "relL2_vs_fp16": 0.0
+  },
+  "W8A8 MoDiff  skip-K=1": {
+   "relL2_vs_fp16": 0.11822879314422607,
+   "skip_k": 1,
+   "n_commit": 0,
+   "n_skip": 0
+  },
+  "W8A8 MoDiff  skip-K=2": {
+   "relL2_vs_fp16": 0.145929217338562,
+   "skip_k": 2,
+   "n_commit": 1488,
+   "n_skip": 1550
+  },
+  "W8A8 MoDiff  skip-K=4": {
+   "relL2_vs_fp16": 0.19429470598697662,
+   "skip_k": 4,
+   "n_commit": 744,
+   "n_skip": 2294
+  },
+  "W4A4 MoDiff  skip-K=1": {
+   "relL2_vs_fp16": 0.3198937475681305,
+   "skip_k": 1,
+   "n_commit": 0,
+   "n_skip": 0
+  },
+  "W4A4 MoDiff  skip-K=2": {
+   "relL2_vs_fp16": 0.3370581567287445,
+   "skip_k": 2,
+   "n_commit": 1488,
+   "n_skip": 1550
+  },
+  "W4A4 MoDiff  skip-K=4": {
+   "relL2_vs_fp16": 0.38809284567832947,
+   "skip_k": 4,
+   "n_commit": 744,
+   "n_skip": 2294
+  }
+ },
+ "out": "docs/ahat_fake_quant_2026-08-27/plots/ahat_skip_k_real_grid.png"
+}

@@ -1167,7 +1167,10 @@ class BenchmarkRunner:
             set_calibrating_linear(model.model.diffusion_model, True)
         
         from integration.kernels.modiff_attention import reset_attention_modiff
-        with torch.no_grad():
+        # Same autocast as _generate_samples: quantized attention's packed flash path
+        # TORCH_CHECKs fp16 (`qkv fp16 CUDA`). Live calibration without a .pt file used
+        # to run in fp32 and crash on the first step.
+        with torch.no_grad(), torch.amp.autocast("cuda", enabled=True, dtype=torch.float16):
             for _ in range(num_runs):
                 reset_modiff_state_int8(model.model.diffusion_model)
                 if HAS_INT8_LINEAR:
@@ -1205,7 +1208,7 @@ class BenchmarkRunner:
         # every round would move the target.
         for _ in range(max(0, int(refine_rounds))):
             set_calibrating_int8(model.model.diffusion_model, True)
-            with torch.no_grad():
+            with torch.no_grad(), torch.amp.autocast("cuda", enabled=True, dtype=torch.float16):
                 for _ in range(num_runs):
                     reset_modiff_state_int8(model.model.diffusion_model)
                     if HAS_INT8_LINEAR:
@@ -1260,7 +1263,7 @@ class BenchmarkRunner:
         # not set_calibrating_int4. No-op when no attention layers were converted.
         set_calibrating_int8(model.model.diffusion_model, True)
 
-        with torch.no_grad():
+        with torch.no_grad(), torch.amp.autocast("cuda", enabled=True, dtype=torch.float16):
             for _ in range(num_runs):
                 reset_modiff_state_int4(model.model.diffusion_model)
                 if HAS_INT4_LINEAR:
