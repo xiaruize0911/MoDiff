@@ -350,3 +350,201 @@ premise does not survive contact with what `o_hat`'s accumulation actually requi
 The catastrophic clip rates measured above are a real, correct consequence of this — not a
 separate finding to weigh against it. **Refuted at the design level, before the numerics question
 is even reached.**
+
+## Follow-up 2026-08-26 (3): real FID measurement — a_hat int8 storage confirmed catastrophic, not just theoretically
+
+Everything above (C15–C19) is proxy math or a synthetic-trajectory simulation. At the project
+owner's explicit request ("试试quantize a_hat，试试看对W8A8 quantize到8 bit，试试效果" — actually try
+it, don't just reason about it), this ran the real pipeline end to end.
+
+**Method: fake quantization.** No CUDA kernel or dtype was touched. All three methods that write
+`self.a_hat_cache` in
+[`OptimizedInt8Conv2d`](../../integration/kernels/int8_optimized.py:52) (`forward`,
+`forward_gn_fused_modiff`, `forward_modiff_fused_silu_residual`) were monkey-patched so that
+immediately after each real call returns, `a_hat_cache` is rounded to a fixed ±8.0 int8 grid
+(`lsb = 8.0/127`) and dequantized straight back to fp16 in place. This reproduces exactly the value
+precision an int8 storage buffer would hold, while leaving every other kernel path (o_hat, conv,
+GroupNorm, code quantization) untouched — isolating the QUALITY question from the bandwidth
+question (already answered: 2.024/1.742 ms/step ceiling, [ahat_overlap_2026-08-26](../ahat_overlap_2026-08-26/FINDINGS.md)).
+
+Script: [`scripts/fid_ahat_int8.py`](scripts/fid_ahat_int8.py). Three matched sample sets (seed
+1234, same DDIM schedule) on the real LSUN-churches checkpoint
+(`models/ldm/lsun_churches256/model.ckpt`), N=200 samples, 50 DDIM steps, W8A8+MoDiff:
+
+| comparison | FID |
+|---|--:|
+| fp16 reference vs int8+MoDiff (baseline, a_hat fp16) | **8.243** |
+| fp16 reference vs int8+MoDiff (a_hat fake-quantized to int8) | **304.648** |
+| baseline vs a_hat-int8 (direct) | 302.343 |
+
+A dry run at N=8/20-steps had already shown the same direction (10.0 → 158.9); the full N=200/50-step
+run confirms it at production scale and shows it is *worse*, not better, once the full 50-step
+schedule (where `step_gain_tail` reaches 12–124x) is run out. Visually, the a_hat-int8 arm produces
+images with garish color-block artifacts overlaid on the church structure — not a subtle blur or
+desaturation, but a qualitatively different, broken output.
+
+### Verdict
+
+**Refuted by direct measurement**, consistent with every proxy computed earlier in this document
+(C15's bit-budget shortfall, C16's fp8-is-worse finding, the real a_hat companding check). A single
+fixed-range int8 grid for a_hat is not viable at any point in this pipeline: a +3595% FID
+regression is not "small error" by any reading, including the relaxed bar the project owner set
+after this result ("下面可以允许小的误差"). Per-DDIM-step *rescaling* of the int8 grid (mirroring
+`static_delta_scale`'s existing per-step table for codes) was not tested here and remains the only
+theoretically live variant of this idea — it was out of scope for this measurement, which used one
+fixed range across the whole schedule to isolate the simplest, cheapest version first.
+
+### Files
+
+- [`scripts/fid_ahat_int8.py`](scripts/fid_ahat_int8.py)
+- Sample images: `docs/int8_ahat_cache_2026-08-26/fid_run/{fp16_ref,int8_modiff_baseline,int8_modiff_ahat_int8}/` (200 images each, indices 0-199 line up 1:1 across the three directories since all share seed 1234 and the same DDIM schedule)
+
+## Follow-up 2026-08-26 (4): re-run with a fair per-layer, per-step calibrated range — still catastrophic
+
+The project owner pushed back on (3), correctly: "你的quantize是怎么做的，这个结果明显有问题" (how exactly
+did you quantize, this result clearly has a problem). Re-examining the range choice that had
+already been captured in
+[`data/real_ahat_capture.npz`](data/real_ahat_capture.npz) confirmed the objection — `±8.0` was one
+global constant used for *every* layer at *every* step, chosen from a distribution pooled across
+all ~70 layers and all 50 steps. That is unfair: even a single representative layer's own
+`max|a_hat|` swings from **1.68 to 16.48 across the 50-step schedule** (the same `step_gain_tail`
+growth C15's calibration already measured). A static global range simultaneously clips whenever a
+layer's true peak exceeds it, and wastes nearly the whole 8-bit budget at every step where the true
+range is far smaller than the peak — (3) was measuring the worst-case naive design, not a fair
+"can a_hat live in 8 bits" test.
+
+**Corrected method**
+([`scripts/fid_ahat_int8_calibrated.py`](scripts/fid_ahat_int8_calibrated.py)): calibrate a range
+**per layer AND per DDIM step** first — mirroring how `static_delta_scale` already works for the
+quantized codes — then fake-quantize each layer's `a_hat_cache` against its own step-appropriate
+range instead of one constant. Calibration used a disjoint seed (999, 32 samples) from the eval set
+(seed 1234, 200 samples) to avoid overfitting the range to the images being measured; range =
+`1.15x` the largest `|a_hat|` observed for that `(layer_name, step_count)` during calibration
+(3108 entries, 70 layers, steps 0-49).
+
+An N=8/20-step dry run of the corrected version looked promising — FID delta dropped from +1484%
+(naive) to +549% (calibrated) — suggesting the range-choice bug explained most of the earlier
+result. **The full N=200/50-step run did not bear this out**: the improvement that looked large at
+N=8 mostly evaporated at production scale.
+
+| comparison | FID (naive, single global range) | FID (per-layer, per-step calibrated) |
+|---|--:|--:|
+| fp16 ref vs int8+MoDiff baseline | 8.243 | 8.284 |
+| fp16 ref vs int8+MoDiff, a_hat quantized | 304.648 | **258.035** |
+| delta vs baseline | +3595.6% | **+3014.9%** |
+
+Fixing the range-calibration bug bought about **15% relative improvement** (304.6 -> 258.0), not
+the ~2-3x the small dry run implied. **The conclusion is unchanged**: a_hat cannot be stored in
+int8 at this checkpoint's actual dynamic range, even with best-effort per-layer, per-step
+calibration matching the sophistication already used for the code-quantization scale table. This
+is consistent with the original C15 argument (re-expressing a_hat's absolute value onto any grid —
+fixed or recalibrated — introduces a rounding term `conv(a_hat) - o_hat` does not cancel, since
+`o_hat` only ever sees `conv(code) * dequant`, never a_hat's own storage error) and rules out "the
+proxy math was too pessimistic" as an explanation.
+
+### Verdict
+
+**Refuted, and now on a methodologically solid footing.** The FID=304.6 in (3) was a real number
+but measured a strawman (one static range for 70 layers x 50 steps); FID=258.0 measures the fair,
+best-effort version and is still a >30x degradation versus the int8 baseline's own FID of 8.3. No
+further variant of "quantize a_hat's absolute value to int8" is worth testing without a
+fundamentally different mechanism (e.g. quantizing something other than a_hat's raw value — out of
+scope for a conv-layer-local change per the standing constraint on this line of work).
+
+### Files
+
+- [`scripts/fid_ahat_int8_calibrated.py`](scripts/fid_ahat_int8_calibrated.py)
+- Sample images: `docs/int8_ahat_cache_2026-08-26/fid_run_calibrated/{fp16_ref,int8_modiff_baseline,int8_modiff_ahat_int8_calibrated}/`
+
+## Follow-up 2026-08-26 (5): dynamic (zero-calibration) quantization — still catastrophic, closes the methodology question
+
+The project owner still suspected the calibration step itself in (4) ("我怀疑你的calib有问题") --
+reasonable, since it depends on a *separate* calibration run (seed 999) whose per-`(layer_name,
+step_count)` table is then applied to a *different* eval run (seed 1234), leaving room for a
+lookup bug, an indexing mismatch, or plain distribution drift between the two runs to explain the
+result instead of a_hat's real precision requirement. They asked whether a **dynamic** quant route
+exists -- i.e. no separate calibration pass at all, compute the quantization range from the tensor's
+own actual data at the moment of quantization.
+
+[`scripts/fid_ahat_int8_dynamic.py`](scripts/fid_ahat_int8_dynamic.py) implements exactly that:
+at every single `a_hat_cache` write, `range = a_hat_cache.detach().abs().max()` **at that exact
+call**, no calibration table, no separate run, no lookup. This is the best a uniform symmetric
+8-bit quantizer can ever do for that tensor at that moment -- by construction it never clips and
+always spends the entire code range on whatever the real values are, for literally every call. If
+this still degrades FID sharply, no calibration methodology (static or dynamic) is left to blame --
+the result is about a_hat's real per-step precision requirement, full stop.
+
+| comparison | naive (1 global range) | calibrated table (per-layer, per-step) | dynamic (per-call, zero-calibration) |
+|---|--:|--:|--:|
+| fp16 ref vs int8+MoDiff baseline | 8.243 | 8.284 | 8.267 |
+| fp16 ref vs int8+MoDiff, a_hat quantized | 304.648 | 258.035 | **182.383** |
+| delta vs baseline | +3595.6% | +3014.9% | **+2106.2%** |
+
+Dynamic quantization is the best of the three (as expected -- it cannot clip and always uses full
+resolution), and the gap versus the calibrated-table version confirms (4)'s table did carry *some*
+avoidable error (stale/ mismatched range entries). But the improvement plateaus far short of
+usable: **+2106% FID is still a ~22x degradation** over the int8 baseline's own FID of 8.3, using
+the theoretically best possible range choice at every single step. There is no better range-choice
+variant left to try -- what remains (only 254 representable levels for a_hat's own value at each
+step) is exactly the resolution shortfall C15's bit-budget analysis predicted from calibration data
+alone, now confirmed by the best-case empirical measurement.
+
+### Verdict
+
+**Refuted, and the calibration-methodology question is closed.** Three independent range-selection
+strategies (one global constant, a per-layer per-step calibrated table, and a per-call exact
+dynamic range) all produce catastrophic FID (>20x degradation at minimum). The remaining variance
+between them (304.6 -> 258.0 -> 182.4) is exactly the kind of improvement better range selection
+*should* buy, and it still falls far short of viable. Storing a_hat's absolute value in 8 bits is
+not viable on this checkpoint at any calibration sophistication tested.
+
+### Files
+
+- [`scripts/fid_ahat_int8_dynamic.py`](scripts/fid_ahat_int8_dynamic.py)
+- Sample images: `docs/int8_ahat_cache_2026-08-26/fid_run_dynamic/{fp16_ref,int8_modiff_baseline,int8_modiff_ahat_int8_dynamic}/`
+
+## Follow-up 2026-08-26 (6): temporal gating — quantizing a_hat only in the SECOND half of the schedule is a real, meaningful improvement
+
+Every variant above quantized a_hat for the *whole* 50-step schedule. This asks a different
+question: what if a_hat is only int8 for a **subset** of steps, fp16 for the rest? Uses the dynamic
+(per-call exact `abs().max()`, the best range strategy from follow-up (5)) quantizer, gated to a
+step window via `self.step_count`.
+
+| variant | FID (fp16 ref) |
+|---|--:|
+| baseline (a_hat fp16 throughout) | 8.265 |
+| a_hat int8, steps 1–25 only (first half) | 156.801 |
+| **a_hat int8, steps 26–50 only (second half)** | **44.565** |
+| a_hat int8, all 50 steps (follow-up 5) | 182.383 |
+
+N=200, 50 DDIM steps, seed 1234, same reference/baseline sample sets reused from follow-up (5).
+Script: [`scripts/fid_ahat_int8_temporal_gate.py`](scripts/fid_ahat_int8_temporal_gate.py).
+
+**This is not symmetric, and the asymmetry is real** (a small N=8/20-step dry run showed the same
+direction, 163 vs 130, before the full run sharpened the gap to 157 vs 45). Quantizing only the
+second half is **~4x better than the full schedule** and **~3.5x better than quantizing only the
+first half**. The mechanism: an error injected into a_hat at step `t` propagates through `50-t`
+more steps of the DDIM trajectory before generation ends — early errors compound through nearly
+the whole remaining schedule, late errors have little runway left to do damage. This is consistent
+with (and gives an empirical handle on) the C15 finding that `delta_scale` — and by extension the
+system's sensitivity to a_hat's own precision — evolves smoothly across the schedule rather than
+being uniform.
+
+**Still not a solved problem**: 44.6 vs baseline's 8.3 is a >5x degradation, well outside "small
+error" even under the relaxed bar. But it is the first result in this whole investigation that
+lands within the same order of magnitude as the baseline rather than 20-35x away, and it points at
+an unexplored axis — *how late, and how narrow, can the window get before quality is acceptable* —
+that every earlier (all-or-nothing) test could not see.
+
+### Verdict
+
+**Promising enough to narrow further, not yet a usable result on its own.** Worth checking: a
+narrower late window (e.g. last quarter, last 10 steps, last 5 steps) to see whether the FID curve
+keeps improving as the window shrinks, and by how much — since a smaller window also means less of
+a_hat's I/O is actually being saved, there is a real trade-off to characterize here, not just a
+threshold to clear.
+
+### Files
+
+- [`scripts/fid_ahat_int8_temporal_gate.py`](scripts/fid_ahat_int8_temporal_gate.py)
+- Sample images: `docs/int8_ahat_cache_2026-08-26/fid_run_temporal/{int8_ahat_first_half,int8_ahat_second_half}/`
