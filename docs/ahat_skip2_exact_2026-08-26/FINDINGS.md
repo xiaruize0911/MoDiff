@@ -579,3 +579,50 @@ end to end and over the full cadence at kernel level, and the two gate defects i
 (cadence-blind probes, a gate that never re-ran the patched arm) are fixed.
 
 Data: [`cadence_kernel_bench.json`](data/cadence_kernel_bench.json).
+
+## 2026-08-27 SELF-CORRECTION: the "refresh cadence" mechanism in a397406 is WRONG
+
+`_delta_gn_dynamic_args`'s **first statement** is a static-mode early return:
+
+```python
+if not self.delta_dynamic:
+    e = self._empty_f32_arg(device)
+    return e, e, e, e, 127.0, False, 1.0, False
+```
+
+So in the shipped **static** delta mode production ALWAYS passes empty reduction buffers, the
+refresh branch is unreachable, and the probe kernels' argument pattern **does** match production on
+every step. Confirmed in a real static-mode run: `_scale_buf` holds the same uninitialised value
+(-0.0014323) at every step, i.e. the kernel never writes it. The mechanism story committed in
+a397406 -- "production takes the refresh branch every R'th step and runs an extra reduction the
+probes don't implement" -- is therefore **false for the configuration that was failing**.
+
+**What that story was built on, and why it was not evidence.** One observation each of
+`MODIFF_DELTA_REFRESH=4` (diverged) and `=1000` (bit-exact). The patched path was *later* measured to
+be run-to-run unstable at that point (78/255 in one invocation, 0/255 in another), so a single draw
+of an unstable quantity was used to identify a mechanism. That is the same n=1 error this repo keeps
+recording, committed by me while documenting an instance of it.
+
+**Consequences, stated rather than smoothed over:**
+
+1. **The root cause of the original divergence is UNKNOWN again.** The fix in a397406 (delegate
+   phase 0 and phase R-1) does make the gate pass -- bit-exact and deterministic at K in
+   {2,3,4,5,6,8}, three comparisons each -- but it works by writing a_hat *more often* (3 of every 4
+   steps at K=2, versus 2 of 4 before), so it may be **masking** the defect rather than removing it.
+   "Fixed" should be read as **"no longer reproduces under this gate"**, not as a root-cause fix.
+2. **The kernel-level cadence benchmark's `unpatched` arm is not representative**: its phase 0 issues
+   a refresh-args call that static mode never makes, worth ~11.2% of that one step in four. Both
+   arms share it, so the **K=1 vs K=2 vs K=3 comparison is unaffected** and its conclusion stands
+   (deferring writes is monotonically worse with launch counts matched: -1.34 and -4.89 points).
+   The absolute "vs unpatched" column should be re-run with plain args on all four steps.
+3. What is unaffected: the gate improvements (re-run the patched arm; assert non-zero patched calls),
+   the e2e resolution analysis (instrument noise 1.8x the effect), and the retraction in 546612a.
+
+**The one thing worth measuring next, since it is now cheap and interesting on its own:** the
+refresh-args call path measured **+11.23% on the GN-fused kernel** (0.0586 ms/call freq-weighted, so
+~1.11 ms/batch-step across the 19 dominant calls, ~1.3% of the step) and it is **not** free -- with
+real buffers the kernel *ignores the passed scale and quantizes with its own measured absmax*
+(verified bit-exact: passing the measured 17.7388 with empty buffers reproduces the refresh arm
+exactly, against the 50.0 that was passed). That is a genuine property of the DYNAMIC path worth
+knowing: on refresh steps the quantize scale is measured, and whether the conv's dequant alpha
+follows it is a question the dynamic path's own bookkeeping has to answer.
