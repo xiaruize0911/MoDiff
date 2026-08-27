@@ -520,3 +520,62 @@ an instrument that cannot resolve the quantity. Data:
 not neutrality. The correctness result (bit-exact and deterministic at every K, at the shipped
 refresh cadence) is what this session establishes; the speed question needs the paired in-process
 CUDA-event instrument and is left open.
+
+## 2026-08-27, kernel level at the REAL cadence: the scheme is a net LOSS, and a csrc port would not rescue it
+
+The e2e benchmark cannot resolve this effect (previous section), so the question was re-asked with
+the right instrument: [`cadence_kernel_bench.py`](scripts/cadence_kernel_bench.py), pure CUDA
+kernels, no sampler, batch 128, 7 trials x 30 reps with rotated arm order, gated bit-exact on the
+full cadence before any timing is reported.
+
+**What changed versus `sweep_k.py`, and why it matters.** That sweep compared K windows of the probe
+kernel against production called with **all-empty reduction buffers** -- production's non-refresh
+branch -- and let *every* step be deferrable. Neither holds in production: one step in
+R = `MODIFF_DELTA_REFRESH` (default 4) takes the refresh branch, and the 2026-08-27 fix must delegate
+it and close the window before it. So the honest unit is **one R-step cadence, patched vs
+unpatched**, which is what this measures. Three arms, all bit-exact against production over the full
+cadence:
+
+| arm | launches/windowed step | writes saved per 4 steps | freq-weighted ms/batch-step | vs unpatched |
+|---|--:|--:|--:|--:|
+| unpatched (production, fused) | 1 | 0 | 0.5225 | +0.00% |
+| **K=1** (probe path, writes every step) | 2 | 0 | 0.5256 | **−0.59%** |
+| K=2 | 2 | 1 | 0.5326 | **−1.93%** |
+| K=3 | 2 | 2 | 0.5511 | **−5.48%** |
+
+Consistent on every dominant shape (K=2 −1.8 to −2.3%, K=3 −5.4 to −6.4%); `768x2x2` is the usual
+launch-bound outlier (−25%, −42%) and is excluded from the weighting as everywhere else in this
+document.
+
+**The K=1 arm is the load-bearing control.** It runs the probe path with the same two launches per
+step but writes a_hat every step, so it isolates implementation overhead from the scheme:
+
+* extra launch / non-fused stats pass: **−0.59%** — this is the part a real fused `csrc/` host
+  function would recover.
+* deferring 1 write per 4 steps (K=2): a **further −1.34 points**, with launch counts matched.
+* deferring 2 writes per 4 steps (K=3): a **further −4.89 points**, matched.
+
+So deferring writes is monotonically *worse*, and the cost is not launch overhead. Reconstructing
+the reference costs more than the write it elides: at window position p the kernel reads p pending
+code arrays and replays p sequential fp16 round-trips, and at the real cadence only 1-2 writes in 4
+can be elided (versus every other step in the sweep's idealised window), so the byte model's
+"2 B write saved vs 1 B code read added" no longer nets positive.
+
+### Consequence: the recommendation changes from "hold" to "closed"
+
+Earlier sections closed with *"hold unless the project owner wants to fund the `csrc/` port"*.
+**That port would not rescue this.** Adding back the full 0.59% the non-fused stats pass costs still
+leaves **K=2 at −1.34% and K=3 at −4.89%** against production, because those deltas are already
+measured with launch counts matched. The +13.0%/+14.5% in the sweep above is real for the cadence it
+measured -- a cadence with no refresh steps, which production does not run.
+
+To make the scheme profitable, the refresh branch itself would have to be implemented inside the
+windowed kernel so refresh steps stop being delegated and every step becomes deferrable. That is
+strictly more work than the `csrc/` port that was already judged disproportionate, for a scheme
+whose ceiling at the shipped cadence is now measured negative. **Recommend closing this line.**
+
+The correctness work stands and is reusable: bit-exact by induction, gated at K in {2,3,4,5,6,8}
+end to end and over the full cadence at kernel level, and the two gate defects it exposed
+(cadence-blind probes, a gate that never re-ran the patched arm) are fixed.
+
+Data: [`cadence_kernel_bench.json`](data/cadence_kernel_bench.json).
