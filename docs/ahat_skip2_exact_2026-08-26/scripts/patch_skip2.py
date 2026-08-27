@@ -45,6 +45,31 @@ def _skip2_forward_gn_fused_modiff(self, x, gn_weight, gn_bias, num_groups, eps,
         _stats["fallback_calls"] += 1
         return _ORIGINAL(self, x, gn_weight, gn_bias, num_groups, eps,
                          mod_scale2d, mod_shift2d, residual)
+    # BUG FIX 2026-08-27: the delta-REFRESH cadence must be respected, or this patch is wrong on a
+    # real run. `_delta_gn_dynamic_args` hands the production kernel REAL absmax reduction buffers
+    # (and sets `_delta_seeded`) on every step where `_delta_should_refresh()` is true -- step_count
+    # 1, 1+R, 1+2R, ... for R = MODIFF_DELTA_REFRESH, default 4 -- and the kernel then runs an extra
+    # reduction/publish pass. probe_skip/probe_catchup take no such arguments, so they implement ONLY
+    # the non-refresh branch. verify_and_bench.py/sweep_k.py never caught this because they compared
+    # against production called with ALL-EMPTY buffers, i.e. the non-refresh branch only.
+    #
+    # Measured before this fix, batch 4 / 12 steps / N=4, patched-vs-baseline on real samples:
+    # run 1 matched bit-exactly, run 2 in the SAME process differed by 91/255 on 59.9% of pixels --
+    # i.e. the patch was not even run-to-run stable, because which generation a refresh step lands
+    # in shifts with the window parity. validate_e2e.py could not see it: it ran the BASELINE twice
+    # but the PATCHED path only once. With this fix all three comparisons are bit-exact.
+    #
+    # Refresh steps, and the last non-refresh step of each run, delegate to production: the former
+    # because its semantics are not implemented here, the latter so a_hat is written and current
+    # before the next refresh step reads it. The skip/catch-up pair therefore runs on phases 1..2
+    # of each R-step run, saving one a_hat write in every R steps rather than one in every two.
+    R = max(1, int(getattr(self, "delta_refresh", 1)))
+    if R > 1:
+        phase = self.step_count % R          # step_count is PRE-increment here
+        if phase == 0 or phase == R - 1:
+            _stats["refresh_delegated"] = _stats.get("refresh_delegated", 0) + 1
+            return _ORIGINAL(self, x, gn_weight, gn_bias, num_groups, eps,
+                             mod_scale2d, mod_shift2d, residual)
     _stats["patched_calls"] += 1
 
     self.step_count += 1
@@ -80,7 +105,8 @@ def _skip2_forward_gn_fused_modiff(self, x, gn_weight, gn_bias, num_groups, eps,
     else:
         si = empty16
 
-    is_skip_step = (self.step_count % 2) == 1
+    # phase 1 of each R-step run is the skip step, phase 2 the catch-up (see the fix note above)
+    is_skip_step = ((self.step_count % R) == 1) if R > 1 else ((self.step_count % 2) == 1)
     ne, ss = N * C * H * W, C * H * W
     if is_skip_step:
         pcode_key = (N, C, H, W, x.device)
@@ -136,6 +162,7 @@ def install():
     _Cls.forward_gn_fused_modiff = _skip2_forward_gn_fused_modiff
     _stats["patched_calls"] = 0
     _stats["fallback_calls"] = 0
+    _stats["refresh_delegated"] = 0
 
 
 def uninstall():
@@ -144,4 +171,5 @@ def uninstall():
 
 def report():
     print(f"skip2 patch: {_stats['patched_calls']} calls patched, "
-          f"{_stats['fallback_calls']} fell back to the original kernel")
+          f"{_stats['fallback_calls']} fell back to the original kernel, "
+          f"{_stats.get('refresh_delegated', 0)} delegated on refresh/close steps")

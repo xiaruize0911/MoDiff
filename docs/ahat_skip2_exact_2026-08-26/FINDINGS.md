@@ -342,3 +342,83 @@ window size to target, not larger.
   correctness gates (12-step bit-exact; 50-step confounded by pre-existing pipeline nondeterminism)
 - [`scripts/generate_samples.py`](scripts/generate_samples.py) — real FID + timing measurement,
   N=16/20 and N=200/50, samples in `fid_run/{fp16_ref,int8_baseline,int8_skip2}/`
+
+## Correction 2026-08-27: the production patch was wrong on real runs, and its gate could not see it
+
+**Two defects, both in the Python integration, both now fixed and gated.** The kernel math and the
+isolated-kernel benchmarks in this document stand; what follows invalidates the *end-to-end*
+correctness claim above ("bit-exact", "FID(baseline, skip2) direct = -0.000") as stated, because
+that claim was measured in a configuration that happened to be correct on the FIRST generation of a
+process and diverged afterwards.
+
+### Defect 1: the delta-REFRESH cadence was ignored
+
+`OptimizedInt8Conv2d.forward_gn_fused_modiff` calls `_delta_gn_dynamic_args(x.device)` on **every**
+step and passes its 8 trailing arguments to `group_norm_silu_delta_quantize_nhwc`. On steps where
+`_delta_should_refresh()` is true -- `step_count` = 1, 1+R, 1+2R, ... for
+`R = MODIFF_DELTA_REFRESH`, **default 4** -- that returns REAL absmax reduction buffers
+(`_absmax_buf`, `_scale_buf`, `_inv_scale_buf`, `_retire_count`) and sets `_delta_seeded`; the
+kernel then runs an extra reduction/publish pass. On the other steps it returns empty buffers and
+the kernel skips that pass.
+
+`probe_skip` / `probe_catchup` / `probe_window_step` take **no such arguments at all**, so they
+implement only the non-refresh branch. **`sweep_k.py` and `verify_and_bench.py` could not detect
+this**: both call production with all-empty buffers (`empty32, empty16, ..., 127.0, False, 1.0`),
+i.e. they only ever compared against the non-refresh branch. That is why an isolated-kernel gate
+reported bit-exact on 7 shapes and 4 values of K while a real generation diverges.
+
+Measured, batch 4 / 12 steps / N=4 real samples, patched vs unpatched:
+
+| `MODIFF_DELTA_REFRESH` | patched run1 vs run2 | run1 vs baseline | run2 vs baseline |
+|---|--:|--:|--:|
+| **4 (shipped default)** | **78/255 on 11.8% px** | 0/255 | **78/255 on 11.8% px** |
+| 1000 (only step 1 refreshes) | 0/255 | 0/255 | 0/255 |
+
+The unpatched pipeline is deterministic in this configuration -- 4 runs, all 6 pairs bit-exact -- so
+these are real divergences, not harness noise.
+
+**Fix:** refresh steps delegate to the original method, and the deferred-write window covers only
+the run of non-refresh steps between two refresh steps, closing (writing a_hat) before the next
+refresh step reads it. Consequence for the economics: with the default R=4 the longest usable
+window is **3**, and `patch_skip2`'s K=2 pair now saves one a_hat write per 4 steps rather than one
+per 2 -- so the ceiling measured in the sections above is **not** reachable at the shipped refresh
+cadence without also implementing the refresh branch in the kernel.
+
+### Defect 2: the gate never ran the patched path twice
+
+`validate_e2e.py` runs the BASELINE twice (to establish pipeline determinism) but the PATCHED path
+only ONCE. Defect 1 is invisible to that design: the first generation in a process matched
+bit-exactly and the second did not (91/255 on 59.9% of pixels for the committed K=2 patch). Any
+gate for a stateful patch has to re-run the patched arm, not just the reference arm.
+
+**Fix:** [`gate_skipk_full.py`](scripts/gate_skipk_full.py) runs each arm twice and compares
+run1-vs-run2, run1-vs-baseline and run2-vs-baseline, and fails if the patched call count is zero
+(an earlier version of this gate reported BIT-EXACT on **0 patched calls**, because it drove the
+model through `_setup_model` instead of `run_mode` and never reached the patched entry point --
+the same vacuous-gate failure `gn_fast_reduce_2026-08-16` section 3 records).
+
+### Post-fix gate
+
+[`patch_skipk.py`](scripts/patch_skipk.py) (generalized K, one code path via `probe_window_step`)
+and the fixed [`patch_skip2.py`](scripts/patch_skip2.py), at the shipped `MODIFF_DELTA_REFRESH=4`:
+
+| K | run1 vs run2 | run1 vs baseline | run2 vs baseline | verdict |
+|--:|--:|--:|--:|---|
+| 2, 3, 4, 5, 6, 8 | 0/255 | 0/255 | 0/255 | **bit-exact and deterministic** |
+
+660 patched calls and 330 refresh-delegated calls per run at every K. K=4, 5, 6 and 8 produce
+**identical** results to K=3 because `K_eff = min(K, R-1) = 3` at the default refresh cadence --
+so K>3 is unreachable without changing `MODIFF_DELTA_REFRESH`, independent of what the
+isolated-kernel sweep's K curve says.
+
+### Hypotheses ruled out by measurement, not argument
+
+- **Another a_hat reader.** `OptimizedInt8Conv2d.forward` runs 140 times per generation, but its
+  body contains no `a_hat_cache` access at all.
+- **The table's alpha vs 1/scale.** Substituting `d_scale.reciprocal()` for `static_delta_alpha[i]`
+  in the reconstruction left the divergence unchanged.
+- **`act_q` varying with the cadence.** Instrumented: in static mode production passes
+  `act_q=127.0, report=False, safety=1.0, a4=False` on both branches -- constant, and matching what
+  the probe kernel assumes.
+- **Windows not dividing the step count.** An earlier fix attempt tied the window to an independent
+  counter; the set of failing K then *inverted* rather than shrinking, which is what ruled this out.
