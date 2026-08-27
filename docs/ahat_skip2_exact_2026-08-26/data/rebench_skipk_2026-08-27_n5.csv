@@ -1,0 +1,12 @@
+config,repeat,ms_per_step
+int8_skipk_K2,1,0.66
+int8_skipk_K2,2,0.67
+int8_skipk_K2,3,0.66
+int8_skipk_K2,4,0.67
+int8_skipk_K2,5,0.66
+int8_skipk_K3,1,0.67
+int8_skipk_K3,2,0.67
+int8_skipk_K3,3,0.67
+int8_skipk_K3,4,0.67
+int8_skipk_K3,5,0.67
+ALL DONE

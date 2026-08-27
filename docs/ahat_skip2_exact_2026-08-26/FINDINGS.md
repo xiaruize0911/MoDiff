@@ -459,3 +459,64 @@ Two incidental notes for whoever reads the speed numbers:
   the int4 temporal delta needs a COARSER grid than the activation grid, not a finer one, where the
   int8 table's median gain is 12.45×. That is independent corroboration of A9/A23's finding that
   W4A4's dominant error is in the weights, not the activations.
+
+### Correction to the table above: that benchmark cannot resolve this effect at all
+
+The row "the deferred-write patch is now exactly neutral" **overstated what the data supports**, in
+two ways that are worth recording because both are unit/resolution errors of the class this repo
+keeps catching.
+
+**Unit error.** `benchmark_ldm.py` reports `total_time / (num_gen * steps)`, i.e. ms per **sample**
+per step. Every ms/step figure elsewhere in this document (the 0.5671 kernel saving, the 77.00 step,
+ahat_overlap's 2.024 ceiling) is ms per **batch** step. At batch 128 those differ by 128×:
+
+| | ms/batch-step | ms/sample-step |
+|---|--:|--:|
+| isolated-kernel saving, pre-fix | 0.5671 | 0.004430 |
+| same, after the refresh fix (~half the headroom) | ~0.28 | ~0.002215 |
+| printed precision of `Per-step:` | — | **0.01** |
+
+So the pre-fix effect is **0.44 of one least-significant printed digit**, and the post-fix effect
+**0.22 of one**. The rounded printout could not have shown it under any circumstances.
+
+**Resolution error, which survives full precision.** Recomputing from the saved
+`results.json` (full float, not the 2-decimal printout) gives the unpatched int8 arm a run-to-run
+spread of **0.61% = 0.004060 ms/sample-step over 5 repeats** — **1.8× larger than the entire
+post-fix effect (0.002215)**. The signal-to-noise ratio is below 1. More repeats shrink the
+standard error of the median but do not change what is being measured: this instrument measures
+sample throughput across processes, and the effect lives two orders of magnitude below its noise.
+
+**Therefore the correct verdict on the timing is "uninformative", not "neutral".** The K=2/K=3
+deltas measured here (+0.0009 and −0.0051 ms/sample-step) are inside ±0.004 of noise and should not
+be read as either a win or a loss. (They were also computed on n=1 for the skipK arms: the sweep
+script wrote all five repeats of each K to the same `--output_dir`, so `results.json` retained only
+the last. Fixed and re-run with per-repeat directories.)
+
+The same caveat applies to two other rows: `int4_baseline` and `int4 + MoDiff` carry 6.06% and 5.69%
+spread, so **the "int4_baseline overtakes int8_baseline" ordering is not resolved by this
+instrument** either — that claim needs the paired in-process instrument below, or many more repeats.
+
+**The instrument that can resolve it** is the one this repo already uses for sub-1% effects: a
+paired, in-process A/B timing the UNet step with CUDA events and asserting call counts per arm
+(`integration/tests/ab_gn_fast_reduce.py` is the pattern; `gn_fast_reduce_2026-08-16` §4 explains why
+the counters are what make it trustworthy). Cross-process sample-throughput timing is the wrong tool
+for a 0.3% change, independent of repeat count.
+
+#### The skipK arms re-run properly (n=5, distinct output dirs, full precision)
+
+| arm | n | median ms/sample-step | min | max | spread | vs unpatched int8 |
+|---|--:|--:|--:|--:|--:|--:|
+| int8 + MoDiff (unpatched) | 5 | 0.664823 | 0.661521 | 0.665581 | 0.61% | — |
+| + skipK K=2 | 5 | 0.663529 | 0.661292 | 0.665677 | 0.66% | +0.001294 (faster) |
+| + skipK K=3 | 5 | 0.667628 | 0.666851 | 0.668705 | 0.28% | −0.002805 (slower) |
+
+Worst observed run-to-run range among these three arms: **0.004386 ms/sample-step**, against a
+post-fix effect of **~0.002215** → **SNR 0.51**. Both deltas are smaller than the noise of the arm
+they are measured against, and they point in OPPOSITE directions, which is what a null looks like on
+an instrument that cannot resolve the quantity. Data:
+[`rebench_skipk_2026-08-27_n5.csv`](data/rebench_skipk_2026-08-27_n5.csv).
+
+**Nothing about the patch's speed can be concluded from this benchmark** — not a win, not a loss,
+not neutrality. The correctness result (bit-exact and deterministic at every K, at the shipped
+refresh cadence) is what this session establishes; the speed question needs the paired in-process
+CUDA-event instrument and is left open.
