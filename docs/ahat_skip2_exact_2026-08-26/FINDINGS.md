@@ -422,3 +422,40 @@ isolated-kernel sweep's K curve says.
   the probe kernel assumes.
 - **Windows not dividing the step count.** An earlier fix attempt tied the window to an independent
   counter; the set of failing K then *inverted* rather than shrinking, which is what ruled this out.
+
+### Post-fix end-to-end timing, 5 repeats per arm
+
+Every arm re-measured after the fix, in independent processes, **batch 128 / 200 DDIM steps /
+128 samples** on the A40. `benchmark_ldm.py` warms up with a full schedule per mode before timing.
+Median of 5; `spread` is (max-min)/median. Data: [`rebench_2026-08-27_b128.csv`](data/rebench_2026-08-27_b128.csv).
+
+| arm | n | median ms/step | min | max | spread | vs fp32 | vs fp16 |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| fp32 | 5 | 2.350 | 2.35 | 2.35 | 0.0% | 1.00× | 0.35× |
+| fp16 | 5 | 0.820 | 0.82 | 0.82 | 0.0% | 2.87× | 1.00× |
+| **int8_baseline** | 5 | **0.580** | 0.58 | 0.58 | 0.0% | **4.05×** | **1.41×** |
+| int8 + MoDiff | 5 | 0.660 | 0.66 | 0.67 | 1.5% | 3.56× | 1.24× |
+| int8 + MoDiff + skipK, K=2 | 5 | 0.660 | 0.66 | 0.67 | 1.5% | 3.56× | 1.24× |
+| int8 + MoDiff + skipK, K=3 | 5 | 0.670 | 0.67 | 0.67 | 0.0% | 3.51× | 1.22× |
+| **int4_baseline** | 5 | **0.540** | 0.53 | 0.56 | 5.6% | **4.35×** | **1.52×** |
+| int4 + MoDiff | 5 | 0.640 | 0.63 | 0.67 | 6.3% | 3.67× | 1.28× |
+
+**The deferred-write patch is now exactly neutral, not a win**: K=2 lands on the same 0.660 ms/step
+as unpatched MoDiff, and K=3 is 0.010 ms/step *worse*. That is the predicted consequence of the
+fix -- with the shipped `MODIFF_DELTA_REFRESH=4` only one a_hat write in four can be deferred, so
+the ~0.567 ms/step isolated-kernel saving has roughly a quarter of its former headroom, and what
+remains is inside the Python round-trip cost the earlier sections already measured. The verdict of
+this document is unchanged and now rests on correct arithmetic rather than a cadence coincidence:
+**hold unless someone funds both the fused `csrc/` host function AND the refresh branch inside it.**
+
+Two incidental notes for whoever reads the speed numbers:
+- **int4_baseline overtakes int8_baseline at this batch** (1.52× vs 1.41×) but carries a 5.6-6.3%
+  spread against int8's 0-1.5%, so the two int4 rows need more repeats before their gap to each
+  other is claimed to better than ~0.05 ms/step.
+- `int4_delta_calibration.pt` did not exist on this tree, so every earlier int4+MoDiff number ran
+  the uncalibrated full-activation fallback. It was generated with the int8 protocol
+  (`live absmax, STEPS=20/BATCH=4/ROUNDS=6`) and the row above uses it. Its acceptance statistic is
+  worth recording on its own: **median tail step-gain 0.7×, range 0.1-2.9×** -- i.e. for most layers
+  the int4 temporal delta needs a COARSER grid than the activation grid, not a finer one, where the
+  int8 table's median gain is 12.45×. That is independent corroboration of A9/A23's finding that
+  W4A4's dominant error is in the weights, not the activations.
