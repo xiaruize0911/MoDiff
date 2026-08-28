@@ -1,0 +1,43 @@
+{
+ "gpu": "NVIDIA A40",
+ "batch": 128,
+ "steps": 50,
+ "seed": 20260827,
+ "arms": [
+  {
+   "label": "INT8 K=1 (full compute)",
+   "k": "1",
+   "ms_step": 93.36484140250832,
+   "speedup_vs_k1": 1.0,
+   "pct_vs_k1": 0.0
+  },
+  {
+   "label": "INT8 replay-K=2",
+   "k": "2",
+   "ms_step": 74.77060745935887,
+   "speedup_vs_k1": 1.2486837351596514,
+   "pct_vs_k1": 19.915670249989734
+  },
+  {
+   "label": "INT8 replay-K=4",
+   "k": "4",
+   "ms_step": 65.94687578268349,
+   "speedup_vs_k1": 1.4157583705735506,
+   "pct_vs_k1": 29.36647801030616
+  },
+  {
+   "label": "INT8 replay-K=8",
+   "k": "8",
+   "ms_step": 61.47072883788496,
+   "speedup_vs_k1": 1.5188504051861302,
+   "pct_vs_k1": 34.16073126191429
+  },
+  {
+   "label": "INT8 baseline",
+   "k": "na",
+   "ms_step": 73.07599902153015,
+   "speedup_vs_k1": 1.2776403012294164,
+   "pct_vs_k1": 21.730709415025142
+  }
+ ]
+}

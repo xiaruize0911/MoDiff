@@ -61,12 +61,22 @@ def _maybe_restore(conv, a_snap, o_snap, sc_before):
     _STATS["skip"] += 1
 
 
+def _detach_if_cache(conv, out):
+    # Non-residual MoDiff convs return `self.o_hat_cache`. Restoring that tensor
+    # in place would replace this step's `out = o_hat_old + conv` with o_hat_old.
+    oh = getattr(conv, "o_hat_cache", None)
+    if out is oh:
+        return out.clone()
+    return out
+
+
 def _wrap_conv_method(orig):
     def wrapped(self, *args, **kwargs):
         if not getattr(self, "modiff_enabled", False) or _K <= 1:
             return orig(self, *args, **kwargs)
         a_snap, o_snap, sc0 = _snap(self)
         out = orig(self, *args, **kwargs)
+        out = _detach_if_cache(self, out)
         _maybe_restore(self, a_snap, o_snap, sc0)
         return out
     return wrapped
@@ -79,6 +89,7 @@ def _wrap_resize(orig):
         a_snap, o_snap, sc0 = _snap(conv)
         out = orig(x, gn, conv, *args, **kwargs)
         if out is not None:
+            out = _detach_if_cache(conv, out)
             _maybe_restore(conv, a_snap, o_snap, sc0)
         return out
     return wrapped
@@ -91,6 +102,7 @@ def _wrap_upsample_forward(orig):
             return orig(self, x)
         a_snap, o_snap, sc0 = _snap(conv)
         out = orig(self, x)
+        out = _detach_if_cache(conv, out)
         _maybe_restore(conv, a_snap, o_snap, sc0)
         return out
     return wrapped

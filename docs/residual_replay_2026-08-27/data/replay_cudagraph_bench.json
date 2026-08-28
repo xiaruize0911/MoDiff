@@ -1,0 +1,42 @@
+{
+  "gpu": "NVIDIA A40",
+  "arms": [
+    {
+      "label": "eager K=1",
+      "ms_step": 93.3693316578865
+    },
+    {
+      "label": "eager K=4",
+      "ms_step": 65.0809324812144
+    },
+    {
+      "label": "graph K=4",
+      "ms_step": 64.05873216222972,
+      "stats": {
+        "num_graphs": 3,
+        "capture_count": 3,
+        "replay_count": 97,
+        "phases": [
+          "first",
+          "modulated",
+          "residual_replay"
+        ],
+        "disabled": false,
+        "replay_k": 4
+      }
+    }
+  ],
+  "graph_vs_eager_relL2": 0.08173950761556625,
+  "precapture_stats": {
+    "num_graphs": 3,
+    "capture_count": 3,
+    "replay_count": 47,
+    "phases": [
+      "first",
+      "modulated",
+      "residual_replay"
+    ],
+    "disabled": false,
+    "replay_k": 4
+  }
+}

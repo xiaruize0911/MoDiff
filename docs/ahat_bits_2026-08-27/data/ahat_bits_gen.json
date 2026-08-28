@@ -1,0 +1,203 @@
+{
+ "seed": 20260805,
+ "steps": 50,
+ "n": 6,
+ "relL2": {
+  "fp16 reference": {
+   "relL2_vs_fp16": 0.0
+  },
+  "W8A8 full  a_hat fp16": {
+   "relL2_vs_fp16": 0.11968211829662323,
+   "scheme": "full",
+   "skip_k": 1,
+   "replay_k": 1,
+   "ahat_bits": 16,
+   "refresh": 0
+  },
+  "W8A8 full  a_hat int8 held": {
+   "relL2_vs_fp16": 0.692053496837616,
+   "scheme": "full",
+   "skip_k": 1,
+   "replay_k": 1,
+   "ahat_bits": 8,
+   "refresh": 0
+  },
+  "W8A8 full  a_hat int8 refresh": {
+   "relL2_vs_fp16": 0.791820228099823,
+   "scheme": "full",
+   "skip_k": 1,
+   "replay_k": 1,
+   "ahat_bits": 8,
+   "refresh": 1
+  },
+  "W8A8 full  a_hat int4 held": {
+   "relL2_vs_fp16": 2.416224956512451,
+   "scheme": "full",
+   "skip_k": 1,
+   "replay_k": 1,
+   "ahat_bits": 4,
+   "refresh": 0
+  },
+  "W8A8 full  a_hat int4 refresh": {
+   "relL2_vs_fp16": 4.83544921875,
+   "scheme": "full",
+   "skip_k": 1,
+   "replay_k": 1,
+   "ahat_bits": 4,
+   "refresh": 1
+  },
+  "W8A8 skip-K=4  a_hat fp16": {
+   "relL2_vs_fp16": 0.1559402495622635,
+   "scheme": "skip-K=4",
+   "skip_k": 4,
+   "replay_k": 1,
+   "ahat_bits": 16,
+   "refresh": 0
+  },
+  "W8A8 skip-K=4  a_hat int8 held": {
+   "relL2_vs_fp16": 0.25549793243408203,
+   "scheme": "skip-K=4",
+   "skip_k": 4,
+   "replay_k": 1,
+   "ahat_bits": 8,
+   "refresh": 0
+  },
+  "W8A8 skip-K=4  a_hat int8 refresh": {
+   "relL2_vs_fp16": 0.5205492973327637,
+   "scheme": "skip-K=4",
+   "skip_k": 4,
+   "replay_k": 1,
+   "ahat_bits": 8,
+   "refresh": 1
+  },
+  "W8A8 skip-K=4  a_hat int4 held": {
+   "relL2_vs_fp16": 0.8932947516441345,
+   "scheme": "skip-K=4",
+   "skip_k": 4,
+   "replay_k": 1,
+   "ahat_bits": 4,
+   "refresh": 0
+  },
+  "W8A8 skip-K=4  a_hat int4 refresh": {
+   "relL2_vs_fp16": 1.168239951133728,
+   "scheme": "skip-K=4",
+   "skip_k": 4,
+   "replay_k": 1,
+   "ahat_bits": 4,
+   "refresh": 1
+  },
+  "W8A8 replay-K=4  a_hat fp16": {
+   "relL2_vs_fp16": 0.2855611741542816,
+   "scheme": "replay-K=4",
+   "skip_k": 1,
+   "replay_k": 4,
+   "ahat_bits": 16,
+   "refresh": 0
+  },
+  "W8A8 replay-K=4  a_hat int8 held": {
+   "relL2_vs_fp16": 0.3372955024242401,
+   "scheme": "replay-K=4",
+   "skip_k": 1,
+   "replay_k": 4,
+   "ahat_bits": 8,
+   "refresh": 0
+  },
+  "W8A8 replay-K=4  a_hat int8 refresh": {
+   "relL2_vs_fp16": 0.4503573179244995,
+   "scheme": "replay-K=4",
+   "skip_k": 1,
+   "replay_k": 4,
+   "ahat_bits": 8,
+   "refresh": 1
+  },
+  "W8A8 replay-K=4  a_hat int4 held": {
+   "relL2_vs_fp16": 0.7973507642745972,
+   "scheme": "replay-K=4",
+   "skip_k": 1,
+   "replay_k": 4,
+   "ahat_bits": 4,
+   "refresh": 0
+  },
+  "W8A8 replay-K=4  a_hat int4 refresh": {
+   "relL2_vs_fp16": 0.9578293561935425,
+   "scheme": "replay-K=4",
+   "skip_k": 1,
+   "replay_k": 4,
+   "ahat_bits": 4,
+   "refresh": 1
+  },
+  "W4A4 full  a_hat fp16": {
+   "relL2_vs_fp16": 0.32032254338264465,
+   "scheme": "full",
+   "skip_k": 1,
+   "replay_k": 1,
+   "ahat_bits": 16,
+   "refresh": 0
+  },
+  "W4A4 full  a_hat int4 held": {
+   "relL2_vs_fp16": 1.029421329498291,
+   "scheme": "full",
+   "skip_k": 1,
+   "replay_k": 1,
+   "ahat_bits": 4,
+   "refresh": 0
+  },
+  "W4A4 full  a_hat int4 refresh": {
+   "relL2_vs_fp16": 1.1812373399734497,
+   "scheme": "full",
+   "skip_k": 1,
+   "replay_k": 1,
+   "ahat_bits": 4,
+   "refresh": 1
+  },
+  "W4A4 skip-K=4  a_hat fp16": {
+   "relL2_vs_fp16": 0.3694223165512085,
+   "scheme": "skip-K=4",
+   "skip_k": 4,
+   "replay_k": 1,
+   "ahat_bits": 16,
+   "refresh": 0
+  },
+  "W4A4 skip-K=4  a_hat int4 held": {
+   "relL2_vs_fp16": 0.657285749912262,
+   "scheme": "skip-K=4",
+   "skip_k": 4,
+   "replay_k": 1,
+   "ahat_bits": 4,
+   "refresh": 0
+  },
+  "W4A4 skip-K=4  a_hat int4 refresh": {
+   "relL2_vs_fp16": 0.6428418755531311,
+   "scheme": "skip-K=4",
+   "skip_k": 4,
+   "replay_k": 1,
+   "ahat_bits": 4,
+   "refresh": 1
+  },
+  "W4A4 replay-K=4  a_hat fp16": {
+   "relL2_vs_fp16": 0.4216870367527008,
+   "scheme": "replay-K=4",
+   "skip_k": 1,
+   "replay_k": 4,
+   "ahat_bits": 16,
+   "refresh": 0
+  },
+  "W4A4 replay-K=4  a_hat int4 held": {
+   "relL2_vs_fp16": 0.6761831045150757,
+   "scheme": "replay-K=4",
+   "skip_k": 1,
+   "replay_k": 4,
+   "ahat_bits": 4,
+   "refresh": 0
+  },
+  "W4A4 replay-K=4  a_hat int4 refresh": {
+   "relL2_vs_fp16": 0.6531677842140198,
+   "scheme": "replay-K=4",
+   "skip_k": 1,
+   "replay_k": 4,
+   "ahat_bits": 4,
+   "refresh": 1
+  }
+ },
+ "out": "docs/ahat_bits_2026-08-27/plots/ahat_bits_grid.png"
+}

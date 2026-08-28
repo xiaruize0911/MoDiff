@@ -1,0 +1,69 @@
+{
+ "seed": 20260805,
+ "steps": 50,
+ "n": 6,
+ "K": [
+  1,
+  2,
+  4,
+  8
+ ],
+ "modes": [
+  "int8",
+  "int4"
+ ],
+ "relL2": {
+  "fp16 reference": {
+   "relL2_vs_fp16": 0.0
+  },
+  "W8A8 replay-K=1": {
+   "relL2_vs_fp16": 0.12064170092344284,
+   "replay_k": 1,
+   "n_compute": 3430,
+   "n_replay": 0
+  },
+  "W8A8 replay-K=2": {
+   "relL2_vs_fp16": 0.18571306765079498,
+   "replay_k": 2,
+   "n_compute": 1680,
+   "n_replay": 1750
+  },
+  "W8A8 replay-K=4": {
+   "relL2_vs_fp16": 0.28554874658584595,
+   "replay_k": 4,
+   "n_compute": 840,
+   "n_replay": 2590
+  },
+  "W8A8 replay-K=8": {
+   "relL2_vs_fp16": 0.4021485447883606,
+   "replay_k": 8,
+   "n_compute": 420,
+   "n_replay": 3010
+  },
+  "W4A4 replay-K=1": {
+   "relL2_vs_fp16": 0.3205786347389221,
+   "replay_k": 1,
+   "n_compute": 3430,
+   "n_replay": 0
+  },
+  "W4A4 replay-K=2": {
+   "relL2_vs_fp16": 0.3456288278102875,
+   "replay_k": 2,
+   "n_compute": 1680,
+   "n_replay": 1750
+  },
+  "W4A4 replay-K=4": {
+   "relL2_vs_fp16": 0.42191851139068604,
+   "replay_k": 4,
+   "n_compute": 840,
+   "n_replay": 2590
+  },
+  "W4A4 replay-K=8": {
+   "relL2_vs_fp16": 0.5510650277137756,
+   "replay_k": 8,
+   "n_compute": 420,
+   "n_replay": 3010
+  }
+ },
+ "out": "docs/residual_replay_2026-08-27/plots/replay_grid.png"
+}

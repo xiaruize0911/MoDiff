@@ -1,0 +1,6 @@
+{
+  "gpu": "NVIDIA A40",
+  "arms": [],
+  "block_vs_perconv_relL2": 0.0,
+  "perconv_repeat_relL2": 0.0
+}

@@ -227,6 +227,7 @@ class OptimizedInt4Conv2d(nn.Module):
         self.is_first_step = True
         self.a_hat_cache: Optional[torch.Tensor] = None
         self.o_hat_cache: Optional[torch.Tensor] = None
+        self._ahat_qscale: Optional[torch.Tensor] = None
         self.step_count = 0
         #: 5 rounds, per the paper's Appendix D.5 warm-up. See OptimizedInt8Conv2d.warmup_steps for
         #: the measured contraction; at 4 bits it is 0.4006 -> 0.00001 over 5 rounds, and 0 over any
@@ -436,6 +437,207 @@ class OptimizedInt4Conv2d(nn.Module):
         # window is an fp32-flavoured pipeline, and the one consumer that requires fp16 enforces it
         # itself (quantized_std_attention._proj_with_residual).
         return self.o_hat_cache
+
+    def _skip_cache_store(self) -> bool:
+        """Naive freeze: skip in-place a_hat/o_hat stores on K-1 of every K modulated steps.
+
+        Cadence matches the quality grid: after step_count increment, commit iff
+        step_count % K == 0. t=T never increments and always commits. K=1 (the
+        default until the skip-K bench lands) is today's store-every-step path.
+        """
+        try:
+            k = int(os.environ.get("MODIFF_CACHE_SKIP_K", "1"))
+        except (TypeError, ValueError):
+            k = 1
+        return k > 1 and self.step_count > 0 and (self.step_count % k) != 0
+
+    def _replay_residual(self) -> bool:
+        """See OptimizedInt8Conv2d._replay_residual. Same cadence, same env."""
+        if self.calibrating or not self.modiff_enabled:
+            return False
+        from integration.kernels.graph_phase import get_force_replay
+        forced = get_force_replay()
+        if forced is not None:
+            return bool(forced) and self.o_hat_cache is not None and self.a_hat_cache is not None
+        try:
+            k = int(os.environ.get("MODIFF_REPLAY_K", "1"))
+        except (TypeError, ValueError):
+            k = 1
+        return (k > 1 and self.step_count > 0 and (self.step_count % k) != 0
+                and self.o_hat_cache is not None and self.a_hat_cache is not None)
+
+    def _peek_replay(self) -> bool:
+        """See OptimizedInt8Conv2d._peek_replay."""
+        if self.calibrating or not self.modiff_enabled or self.is_first_step:
+            return False
+        from integration.kernels.graph_phase import get_force_replay
+        forced = get_force_replay()
+        if forced is not None:
+            return bool(forced) and self.o_hat_cache is not None and self.a_hat_cache is not None
+        try:
+            k = int(os.environ.get("MODIFF_REPLAY_K", "1"))
+        except (TypeError, ValueError):
+            k = 1
+        if k <= 1 or self.o_hat_cache is None or self.a_hat_cache is None:
+            return False
+        nxt = self.step_count + 1
+        return nxt > 0 and (nxt % k) != 0
+
+    def _replay_out(self, residual=None) -> torch.Tensor:
+        """IO for compute: read frozen o_hat, optionally add the live skip tensor."""
+        oh = self.o_hat_cache
+        if residual is None:
+            return self._module_output()
+        buf = getattr(self, "_replay_out_buf", None)
+        if (buf is None or buf.shape != oh.shape or buf.dtype != oh.dtype
+                or buf.device != oh.device):
+            self._replay_out_buf = torch.empty_like(oh)
+            buf = self._replay_out_buf
+        if residual.dtype != oh.dtype or not residual.is_contiguous(
+                memory_format=torch.channels_last):
+            residual = residual.to(dtype=oh.dtype).contiguous(memory_format=torch.channels_last)
+        torch.add(oh, residual, out=buf)
+        return buf
+
+    def _ahat_bits(self) -> int:
+        try:
+            return int(os.environ.get("MODIFF_AHAT_BITS", "16"))
+        except (TypeError, ValueError):
+            return 16
+
+    def _ahat_want_int8(self) -> bool:
+        return self.is_calibrated and 0 < self._ahat_bits() < 16
+
+    def _ahat_qmax(self) -> float:
+        return 127.0 if self._ahat_bits() >= 8 else 7.0
+
+    @staticmethod
+    def _ahat_refresh() -> bool:
+        return os.environ.get("MODIFF_AHAT_REFRESH", "0") == "1"
+
+    def _empty_f32_arg(self, device):
+        if getattr(self, "_empty_f32", None) is None or self._empty_f32.device != device:
+            self._empty_f32 = torch.empty(0, device=device, dtype=torch.float32)
+        return self._empty_f32
+
+    def _ahat_scale_arg(self) -> torch.Tensor:
+        s = getattr(self, "_ahat_qscale", None)
+        if s is None:
+            dev = self.a_hat_cache.device if self.a_hat_cache is not None else torch.device("cpu")
+            return self._empty_f32_arg(dev)
+        return s
+
+    def _ensure_ahat_qscale(self, device) -> None:
+        qmax = self._ahat_qmax()
+        s = getattr(self, "_ahat_qscale", None)
+        if s is None or s.numel() < 2 or s.device != device:
+            self._ahat_qscale = torch.tensor([1.0, qmax], device=device, dtype=torch.float32)
+        else:
+            self._ahat_qscale[1] = qmax
+
+    def _pack_ahat_int8(self) -> None:
+        a = self.a_hat_cache
+        if a is None or a.dtype == torch.int8:
+            return
+        qmax = self._ahat_qmax()
+        a_f = a.float()
+        amax = a_f.abs().amax().clamp_min(1e-6)
+        self._ensure_ahat_qscale(a.device)
+        self._ahat_qscale[0] = amax / qmax
+        q = a_f.mul(qmax / amax).round_().clamp_(-qmax, qmax).to(torch.int8)
+        self.a_hat_cache = q.contiguous(memory_format=torch.channels_last)
+
+    def _unpack_ahat_to_fp16(self) -> None:
+        a = self.a_hat_cache
+        if a is None or a.dtype != torch.int8:
+            return
+        s = self._ahat_qscale[0]
+        self.a_hat_cache = (a.float() * s).to(torch.float16).contiguous(
+            memory_format=torch.channels_last)
+
+    def _begin_ahat_kernel(self, write_ahat: bool) -> None:
+        if write_ahat and self._ahat_refresh() and self.a_hat_cache is not None \
+                and self.a_hat_cache.dtype == torch.int8:
+            self._unpack_ahat_to_fp16()
+
+    def _write_ahat_now(self) -> bool:
+        w = not self._skip_cache_store()
+        self._begin_ahat_kernel(w)
+        return w
+
+    def _ahat_dtype_ok(self, t=None) -> bool:
+        a = self.a_hat_cache if t is None else t
+        return a is not None and a.dtype in (torch.float16, torch.int8)
+
+    def _maybe_quantize_ahat(self) -> None:
+        """See OptimizedInt8Conv2d._maybe_quantize_ahat. Same env, same cadence."""
+        if self.calibrating or self.a_hat_cache is None:
+            return
+        if self.a_hat_cache.dtype == torch.int8:
+            return
+        bits = self._ahat_bits()
+        if bits >= 16:
+            return
+        if self.step_count > 0 and self._skip_cache_store():
+            return
+        qmax = 127.0 if bits >= 8 else 7.0
+        a = self.a_hat_cache
+        scale = qmax / a.abs().amax().float().clamp_min(1e-6)
+        a.mul_(scale).round_().clamp_(-qmax, qmax).div_(scale)
+
+    def _after_ahat_write(self, out):
+        if (self._ahat_want_int8() and self.a_hat_cache is not None
+                and self.a_hat_cache.dtype != torch.int8):
+            self._pack_ahat_int8()
+        else:
+            self._maybe_quantize_ahat()
+        return out
+
+    def _skip_out_buf(self) -> torch.Tensor:
+        buf = getattr(self, "_skip_ohat_out", None)
+        oh = self.o_hat_cache
+        if (buf is None or buf.shape != oh.shape or buf.dtype != oh.dtype
+                or buf.device != oh.device):
+            self._skip_ohat_out = torch.empty_like(oh)
+        return self._skip_ohat_out
+
+    def _evt_ohat(self, x_packed: torch.Tensor, alpha: torch.Tensor) -> torch.Tensor:
+        """MoDiff o_hat conv. Skip-K writes `out = o_hat_old + conv` and leaves the cache."""
+        strides = (self.stride[0], self.stride[1], self.padding[0], self.padding[1],
+                   self.dilation[0], self.dilation[1])
+        wscale = self.weight_scale_channel.view(-1)
+        if self._skip_cache_store():
+            out = self._skip_out_buf()
+            if (self.o_hat_cache.dtype == torch.float16
+                    and hasattr(modiff_cutlass, "conv2d_int4_evt_o_hat_skip")):
+                modiff_cutlass.conv2d_int4_evt_o_hat_skip(
+                    x_packed, self.weight_packed, alpha, wscale, self.o_hat_cache, out, *strides)
+                return self._zpw_add_to_out(x_packed, alpha, out)
+            out.copy_(self.o_hat_cache)
+            (modiff_cutlass.conv2d_int4_evt_o_hat if out.dtype == torch.float16
+             else modiff_cutlass.conv2d_int4_fprop_o_hat)(
+                x_packed, self.weight_packed, alpha, wscale, out, *strides)
+            return self._zpw_add_to_out(x_packed, alpha, out)
+        (modiff_cutlass.conv2d_int4_evt_o_hat if self.o_hat_cache.dtype == torch.float16
+         else modiff_cutlass.conv2d_int4_fprop_o_hat)(
+            x_packed, self.weight_packed, alpha, wscale, self.o_hat_cache, *strides)
+        self._zpw_add_to_ohat(x_packed, alpha)
+        return self._module_output()
+
+    def _evt_ohat_residual(self, x_packed: torch.Tensor, alpha: torch.Tensor,
+                           residual: torch.Tensor, out: torch.Tensor) -> torch.Tensor:
+        strides = (self.stride[0], self.stride[1], self.padding[0], self.padding[1],
+                   self.dilation[0], self.dilation[1])
+        skip = (self._skip_cache_store()
+                and hasattr(modiff_cutlass, "conv2d_int4_evt_o_hat_residual_skip"))
+        fn = (modiff_cutlass.conv2d_int4_evt_o_hat_residual_skip if skip
+              else modiff_cutlass.conv2d_int4_evt_o_hat_residual)
+        fn(x_packed, self.weight_packed, alpha, self.weight_scale_channel.view(-1),
+           self.o_hat_cache, residual, out, *strides)
+        if skip:
+            return self._zpw_add_to_out(x_packed, alpha, out)
+        self._zpw_add_to_ohat_and_out(x_packed, alpha, out)
+        return out
 
     # ==================================================================
     # Quantization helpers
@@ -917,7 +1119,7 @@ class OptimizedInt4Conv2d(nn.Module):
         return (self.fuse_input_silu and self.modiff_enabled and not self.is_first_step
                 and self.is_calibrated and HAS_CUTLASS and self.use_cutlass
                 and self.a_hat_cache is not None
-                and self.a_hat_cache.dtype == torch.float16
+                and self._ahat_dtype_ok()
                 and self.a_hat_cache.shape == x.shape
                 and x.dtype == torch.float16)
 
@@ -984,7 +1186,7 @@ class OptimizedInt4Conv2d(nn.Module):
                 and self.is_calibrated and HAS_CUTLASS and self.use_cutlass
                 and getattr(self, 'groups', 1) == 1):
             return False
-        if self.a_hat_cache is None or self.a_hat_cache.dtype != torch.float16:
+        if self.a_hat_cache is None or not self._ahat_dtype_ok():
             return False
         if a.dtype != torch.float16 or b.dtype != torch.float16 or not a.is_cuda:
             return False
@@ -1000,6 +1202,8 @@ class OptimizedInt4Conv2d(nn.Module):
         separate F.silu(x) Python call over the whole activation tensor first.
         """
         self.step_count += 1
+        if self._replay_residual():
+            return self._replay_out()
         if not x.is_contiguous(memory_format=torch.channels_last):
             x = x.contiguous(memory_format=torch.channels_last)
 
@@ -1022,25 +1226,17 @@ class OptimizedInt4Conv2d(nn.Module):
             self.a_hat_cache,
             d_scale,
             self._smooth_inv_flat,
+            self._write_ahat_now(),
+            self._ahat_scale_arg(),
         )
         profiler.stop("MoDiff INT4 Static Step1 (fused SiLU)", p_step1)
         if self._delta_calib:
             self._observe_delta_absmax()
 
         p_conv = profiler.start("MoDiff INT4 Static Conv2d")
-        (modiff_cutlass.conv2d_int4_evt_o_hat if self.o_hat_cache.dtype == torch.float16 else modiff_cutlass.conv2d_int4_fprop_o_hat)(
-            x_packed,
-            self.weight_packed,
-            d_alpha,
-            self.weight_scale_channel.view(-1),
-            self.o_hat_cache,
-            self.stride[0], self.stride[1],
-            self.padding[0], self.padding[1],
-            self.dilation[0], self.dilation[1]
-        )
-        self._zpw_add_to_ohat(x_packed, d_alpha)      # fix #4, in place on the cache
+        out = self._evt_ohat(x_packed, d_alpha)
         profiler.stop("MoDiff INT4 Static Conv2d", p_conv)
-        return self._module_output()
+        return self._after_ahat_write(out)
 
     def can_gn_fuse_modiff(self, x: torch.Tensor) -> bool:
         """Eligibility for the fused GroupNorm+SiLU+delta-quantize+pack modiff
@@ -1069,6 +1265,12 @@ class OptimizedInt4Conv2d(nn.Module):
         bit-exactness against cat2 + this same path in integration/tests/test_cat2_gn_fold.py.
         """
         self.step_count += 1
+        if self._replay_residual():
+            out = self._replay_out(residual)
+            if x2 is not None:
+                cat = torch.cat((x, x2), dim=1)
+                return out, cat
+            return out
         if x2 is not None:
             if not x.is_contiguous(memory_format=torch.channels_last):
                 x = x.contiguous(memory_format=torch.channels_last)
@@ -1110,19 +1312,21 @@ class OptimizedInt4Conv2d(nn.Module):
             d_alpha = self._inv_scale_buf.view(1)
 
         cat = None
+        write_ahat = self._write_ahat_now()
+        ahat_scale = self._ahat_scale_arg()
         if x2 is not None:
             p_step1 = profiler.start("MoDiff INT4 GN-fused Step1 cat2 (concat+GN+SiLU+delta+pack)")
             x_packed, cat = modiff_cutlass.group_norm_silu_delta_quantize_pack_cat2_nhwc(
                 x, x2, gn_weight, gn_bias, self.a_hat_cache, num_groups, eps, True,
                 d_scale, self._smooth_inv_flat,
-                mod_scale2d, mod_shift2d, *gn_dyn)
+                mod_scale2d, mod_shift2d, *gn_dyn, write_ahat, ahat_scale)
             profiler.stop("MoDiff INT4 GN-fused Step1 cat2 (concat+GN+SiLU+delta+pack)", p_step1)
         else:
             p_step1 = profiler.start("MoDiff INT4 GN-fused Step1 (GN+SiLU+delta+pack)")
             x_packed = modiff_cutlass.group_norm_silu_delta_quantize_pack_nhwc(
                 x, gn_weight, gn_bias, self.a_hat_cache, num_groups, eps, True,
                 d_scale, self._smooth_inv_flat,
-                mod_scale2d, mod_shift2d, *gn_dyn)
+                mod_scale2d, mod_shift2d, *gn_dyn, write_ahat, ahat_scale)
             profiler.stop("MoDiff INT4 GN-fused Step1 (GN+SiLU+delta+pack)", p_step1)
         if self._delta_calib:
             self._observe_delta_absmax()
@@ -1135,25 +1339,14 @@ class OptimizedInt4Conv2d(nn.Module):
             residual = residual.to(torch.float16).contiguous(memory_format=torch.channels_last)
             out = torch.empty_like(self.o_hat_cache)
             p_conv = profiler.start("MoDiff INT4 Static Conv2d (o_hat+residual)")
-            modiff_cutlass.conv2d_int4_evt_o_hat_residual(
-                x_packed, self.weight_packed, d_alpha,
-                self.weight_scale_channel.view(-1), self.o_hat_cache, residual, out,
-                self.stride[0], self.stride[1], self.padding[0], self.padding[1],
-                self.dilation[0], self.dilation[1])
-            self._zpw_add_to_ohat_and_out(x_packed, d_alpha, out)   # fix #4, cache AND out
+            self._evt_ohat_residual(x_packed, d_alpha, residual, out)
             profiler.stop("MoDiff INT4 Static Conv2d (o_hat+residual)", p_conv)
-            return (out, cat) if cat is not None else out
+            return self._after_ahat_write((out, cat) if cat is not None else out)
 
         p_conv = profiler.start("MoDiff INT4 Static Conv2d")
-        (modiff_cutlass.conv2d_int4_evt_o_hat if self.o_hat_cache.dtype == torch.float16 else modiff_cutlass.conv2d_int4_fprop_o_hat)(
-            x_packed, self.weight_packed, d_alpha,
-            self.weight_scale_channel.view(-1), self.o_hat_cache,
-            self.stride[0], self.stride[1], self.padding[0], self.padding[1],
-            self.dilation[0], self.dilation[1])
-        self._zpw_add_to_ohat(x_packed, d_alpha)      # fix #4, in place on the cache
+        out = self._evt_ohat(x_packed, d_alpha)
         profiler.stop("MoDiff INT4 Static Conv2d", p_conv)
-        out = self._module_output()
-        return (out, cat) if cat is not None else out
+        return self._after_ahat_write((out, cat) if cat is not None else out)
 
     def forward_modiff_fused_silu_residual(self, x: torch.Tensor, residual: torch.Tensor) -> torch.Tensor:
         """int4 counterpart of OptimizedInt8Conv2d.forward_modiff_fused_silu_residual:
@@ -1162,6 +1355,8 @@ class OptimizedInt4Conv2d(nn.Module):
         residual; o_hat cache write is byte-identical to the non-residual path.
         Caller must have verified _can_fuse_input_silu(x)."""
         self.step_count += 1
+        if self._replay_residual():
+            return self._replay_out(residual)
         if not x.is_contiguous(memory_format=torch.channels_last):
             x = x.contiguous(memory_format=torch.channels_last)
         if self._cached_alpha_tensor is None or self._cached_alpha_tensor.device != x.device:
@@ -1179,7 +1374,8 @@ class OptimizedInt4Conv2d(nn.Module):
         p_step1 = profiler.start("MoDiff INT4 Static Step1 (fused SiLU)")
         self._zp_unsupported("step1_static_quantize_pack_int4_fprop_silu", grid="delta")
         x_packed = modiff_cutlass.step1_static_quantize_pack_int4_fprop_silu(
-            x, self.a_hat_cache, d_scale, self._smooth_inv_flat)
+            x, self.a_hat_cache, d_scale, self._smooth_inv_flat, self._write_ahat_now(),
+            self._ahat_scale_arg())
         profiler.stop("MoDiff INT4 Static Step1 (fused SiLU)", p_step1)
         if self._delta_calib:
             self._observe_delta_absmax()
@@ -1189,14 +1385,9 @@ class OptimizedInt4Conv2d(nn.Module):
         p_conv = profiler.start("MoDiff INT4 Static Conv2d (o_hat+residual)")
         # EVT dual-store (see int8 counterpart): o_hat RMW + residual in one conv pass,
         # no fp32 round-trip. Bit-exact o_hat + out vs conv2d_int4_fprop_o_hat_residual.
-        modiff_cutlass.conv2d_int4_evt_o_hat_residual(
-            x_packed, self.weight_packed, d_alpha,
-            self.weight_scale_channel.view(-1), self.o_hat_cache, residual, out,
-            self.stride[0], self.stride[1], self.padding[0], self.padding[1],
-            self.dilation[0], self.dilation[1])
-        self._zpw_add_to_ohat_and_out(x_packed, d_alpha, out)   # fix #4, cache AND out
+        self._evt_ohat_residual(x_packed, d_alpha, residual, out)
         profiler.stop("MoDiff INT4 Static Conv2d (o_hat+residual)", p_conv)
-        return out
+        return self._after_ahat_write(out)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         fwd_start = profiler.start("Layer: OptimizedInt4Conv2d.forward")
@@ -1340,20 +1531,9 @@ class OptimizedInt4Conv2d(nn.Module):
             self.o_hat_cache = torch.zeros(shape, device=x_packed.device, dtype=dtype
                                            ).contiguous(memory_format=torch.channels_last)
         p = profiler.start("MoDiff INT4 Static Conv2d (from codes)")
-        (modiff_cutlass.conv2d_int4_evt_o_hat if self.o_hat_cache.dtype == torch.float16
-         else modiff_cutlass.conv2d_int4_fprop_o_hat)(
-            x_packed, self.weight_packed, alpha, self.weight_scale_channel.view(-1),
-            self.o_hat_cache,
-            self.stride[0], self.stride[1], self.padding[0], self.padding[1],
-            self.dilation[0], self.dilation[1])
-        if self._has_weight_zp:
-            # These entries accumulate INTO o_hat_cache in place and _module_output() returns that same
-            # tensor, so correcting the cache corrects the return value too -- one add, not two. Doing
-            # it the other way round (correcting the return and not the cache) would leave the MoDiff
-            # recursion reading an uncorrected o_hat at every later step, and would fail silently.
-            self.o_hat_cache.add_(self._zpw_correction(x_packed, alpha).to(self.o_hat_cache.dtype))
+        out = self._evt_ohat(x_packed, alpha)
         profiler.stop("MoDiff INT4 Static Conv2d (from codes)", p)
-        return self._module_output()
+        return out
 
     def _conv_from_int4(self, x_packed: torch.Tensor, h_in: int, w_in: int,
                         residual: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -1643,7 +1823,9 @@ class OptimizedInt4Conv2d(nn.Module):
         cache_dtype = self._cache_dtype()
         self.a_hat_cache = a_hat.to(cache_dtype).contiguous(memory_format=torch.channels_last)
         self.o_hat_cache = o_hat.to(cache_dtype).contiguous(memory_format=torch.channels_last)
-        return self._module_output()
+        if self._ahat_want_int8():
+            self._pack_ahat_int8()
+        return self._after_ahat_write(self._module_output())
 
     def _forward_modulated(self, x: torch.Tensor) -> torch.Tensor:
         """MoDiff modulated step (t<T).  No periodic reset per paper.
@@ -1652,6 +1834,8 @@ class OptimizedInt4Conv2d(nn.Module):
         SmoothQuant multiply is fused into sub_absmax_scale when applicable.
         """
         self.step_count += 1
+        if self._replay_residual():
+            return self._replay_out()
 
         if self.a_hat_cache is None or self.a_hat_cache.shape != x.shape:
             self.is_first_step = True
@@ -1660,7 +1844,7 @@ class OptimizedInt4Conv2d(nn.Module):
             out = self._forward_first_step(x)
             self.is_first_step = False
             return out
-        if self.a_hat_cache.dtype != self._cache_dtype():
+        if self.a_hat_cache.dtype != self._cache_dtype() and not self._ahat_dtype_ok():
             self.is_first_step = True
             if not self._smooth_is_identity:
                 x = x * self._smooth_inv
@@ -1689,25 +1873,17 @@ class OptimizedInt4Conv2d(nn.Module):
                 self.a_hat_cache,
                 d_scale,
                 self._smooth_inv_flat,
+                self._write_ahat_now(),
+                self._ahat_scale_arg(),
             )
             profiler.stop("MoDiff INT4 Static Step1", p_step1)
             if self._delta_calib:
                 self._observe_delta_absmax()
 
             p_conv = profiler.start("MoDiff INT4 Static Conv2d")
-            (modiff_cutlass.conv2d_int4_evt_o_hat if self.o_hat_cache.dtype == torch.float16 else modiff_cutlass.conv2d_int4_fprop_o_hat)(
-                x_packed,
-                self.weight_packed,
-                d_alpha,
-                self.weight_scale_channel.view(-1),
-                self.o_hat_cache,
-                self.stride[0], self.stride[1],
-                self.padding[0], self.padding[1],
-                self.dilation[0], self.dilation[1]
-            )
-            self._zpw_add_to_ohat(x_packed, d_alpha)      # fix #4, in place on the cache
+            out = self._evt_ohat(x_packed, d_alpha)
             profiler.stop("MoDiff INT4 Static Conv2d", p_conv)
-            return self._module_output()
+            return self._after_ahat_write(out)
 
         # Lazy-init persistent buffers (reused across timesteps, never reallocated)
         if self._residual_buf is None or self._residual_buf.shape != x.shape:
@@ -1727,7 +1903,9 @@ class OptimizedInt4Conv2d(nn.Module):
         # Kernel 1 Fused C++ Backend Call:
         # Fuses sub_absmax_scale, scale_quantize_and_pack, and dequant_accumulate into 1 python launch.
         p_step1 = profiler.start("MoDiff INT4 Fused Step1")
-        x_packed = modiff_cutlass.step1_quantize_pack_int4_fprop(
+        step1 = (modiff_cutlass.step1_quantize_pack_int4_no_ahat_fprop if self._skip_cache_store()
+                 else modiff_cutlass.step1_quantize_pack_int4_fprop)
+        x_packed = step1(
             x, self.a_hat_cache, self._residual_buf,
             self._absmax_buf, self._scale_buf, self._inv_scale_buf,
             self._retire_count, 7.0, self._smooth_inv_flat
@@ -1735,19 +1913,9 @@ class OptimizedInt4Conv2d(nn.Module):
         profiler.stop("MoDiff INT4 Fused Step1", p_step1)
 
         p_conv = profiler.start("MoDiff INT4 Fused Conv2d")
-        (modiff_cutlass.conv2d_int4_evt_o_hat if self.o_hat_cache.dtype == torch.float16 else modiff_cutlass.conv2d_int4_fprop_o_hat)(
-            x_packed,
-            self.weight_packed,
-            self._inv_scale_buf.view(1),
-            self.weight_scale_channel.view(-1),
-            self.o_hat_cache,
-            self.stride[0], self.stride[1],
-            self.padding[0], self.padding[1],
-            self.dilation[0], self.dilation[1]
-        )
-        self._zpw_add_to_ohat(x_packed, self._inv_scale_buf.view(1))   # fix #4, in place
+        out = self._evt_ohat(x_packed, self._inv_scale_buf.view(1))
         profiler.stop("MoDiff INT4 Fused Conv2d", p_conv)
-        return self._module_output()
+        return self._after_ahat_write(out)
 
     # ==================================================================
     # MoDiff controls
@@ -2093,6 +2261,9 @@ def reset_modiff_state(model: nn.Module):
     for module in model.modules():
         if isinstance(module, OptimizedInt4Conv2d):
             module.reset_state()
+    manager = getattr(model, '_cuda_graph_manager', None)
+    if manager is not None:
+        manager.reset_sequence()
 
 
 def set_standard_output_fp16(model: nn.Module, enabled: bool = True):

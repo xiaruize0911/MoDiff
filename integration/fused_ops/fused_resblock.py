@@ -663,10 +663,13 @@ def _prequant_gn_resize_conv_modiff(x, gn, h_upd, conv, mod_scale=None, mod_shif
     # Bail rather than reshape if it is not there yet -- a wrong-shaped cache would silently
     # corrupt o_hat for every remaining timestep.
     ah = getattr(conv, 'a_hat_cache', None)
-    if ah is None or ah.dtype != torch.float16 or ah.numel() != N * C * Ho * Wo:
+    if (ah is None or ah.dtype not in (torch.float16, torch.int8)
+            or ah.numel() != N * C * Ho * Wo):
         return None
 
     conv.step_count += 1
+    if conv._replay_residual():
+        return conv._replay_out()
     w, b = gn._cast_params(x.dtype)
     d_scale, d_alpha = (conv._delta_scale_args_i4(x.device) if is_int4
                         else conv._delta_scale_args(x.device))
@@ -693,12 +696,18 @@ def _prequant_gn_resize_conv_modiff(x, gn, h_upd, conv, mod_scale=None, mod_shif
         ms2d = sh2d = x.new_empty(0)
 
     _zp_unsupported(conv, "group_norm_silu_delta_quantize_resize_nhwc", grid="delta")
+    write_ahat = not conv._skip_cache_store()
+    conv._begin_ahat_kernel(write_ahat) if hasattr(conv, '_begin_ahat_kernel') else None
+    ahat_scale = conv._ahat_scale_arg() if hasattr(conv, '_ahat_scale_arg') else torch.empty(
+        0, device=x.device, dtype=torch.float32)
     x_q = modiff_cutlass.group_norm_silu_delta_quantize_resize_nhwc(
-        x, w, b, ng, eps, True, d_scale, smooth_inv, ms2d, sh2d, 0, direction, is_int4, ah, *dyn)
+        x, w, b, ng, eps, True, d_scale, smooth_inv, ms2d, sh2d, 0, direction, is_int4, ah, *dyn,
+        write_ahat, ahat_scale)
     if conv._delta_calib:
         conv._observe_delta_absmax() if is_int4 else conv._observe_delta_codes(x_q)
-    return (conv._conv_from_int4_o_hat(x_q, Ho, Wo, d_alpha) if is_int4
-            else conv._conv_from_int8_o_hat(x_q, d_alpha))
+    out = (conv._conv_from_int4_o_hat(x_q, Ho, Wo, d_alpha) if is_int4
+           else conv._conv_from_int8_o_hat(x_q, d_alpha))
+    return conv._after_ahat_write(out)
 
 
 def _prequant_gn_resize_conv(x, gn, h_upd, conv, mod_scale=None, mod_shift=None):
@@ -999,7 +1008,7 @@ class FusedResBlock(TimestepBlock):
         if isinstance(x, tuple):
             x = _skip_concat_fallback(*x)
         return self._forward_resnet(x, emb)
-    
+
     def _forward_openai(self, x, emb, split=0):
         """Fused forward for openaimodel.ResBlock"""
         # THE DECODER SKIP-CONCAT FOLD ARRIVES AS A TUPLE. openaimodel's decoder loop hands
@@ -1060,20 +1069,27 @@ class FusedResBlock(TimestepBlock):
                 h = self.fused_in_norm_silu(x)
                 h = self.in_conv(h)
 
-        # Time embedding
-        emb_out = self.emb_layers(emb).type(h.dtype)
-        while len(emb_out.shape) < len(h.shape):
-            emb_out = emb_out[..., None]
-        
-        # Skip/residual source (computed with the live x, after any updown resize).
-        # When split==0 we hand it to the out-conv so the skip-add is fused into the
-        # conv's store epilogue; the split>0 path can't fuse and adds it at the end.
+        # Skip/residual is independent of emb_layers. If out_conv will replay, the
+        # time-embed projection and out GN are unused — skip them.
         if split > 0:
             skip = self.skip_connection(x, split=split)
             residual_arg = None
         else:
             skip = self.skip_connection(x)
             residual_arg = skip
+
+        if (os.environ.get("MODIFF_REPLAY_BLOCK", "1") not in ("0", "false", "off")
+                and hasattr(self.out_conv, "_peek_replay") and self.out_conv._peek_replay()):
+            self.out_conv.step_count += 1
+            if residual_arg is None:
+                return torch.add(skip, self.out_conv._replay_out())
+            return self.out_conv._replay_out(skip)
+
+        # Time embedding
+        emb_out = self.emb_layers(emb).type(h.dtype)
+        while len(emb_out.shape) < len(h.shape):
+            emb_out = emb_out[..., None]
+        
         residual_fused = False
 
         # int8-conv-output quality probe: round-trip in_conv's output through int8
@@ -1283,7 +1299,8 @@ class FusedUpsample(nn.Module):
                     return False
             ah = getattr(conv, 'a_hat_cache', None)
             n, c, h, w = x.shape
-            if ah is None or ah.dtype != torch.float16 or ah.numel() != n * c * h * 2 * w * 2:
+            if (ah is None or ah.dtype not in (torch.float16, torch.int8)
+                    or ah.numel() != n * c * h * 2 * w * 2):
                 return False
         return True
 
@@ -1303,6 +1320,8 @@ class FusedUpsample(nn.Module):
         modiff = getattr(conv, 'modiff_enabled', False)
         if modiff:
             conv.step_count += 1
+            if conv._replay_residual():
+                return conv._replay_out()
             ah = conv.a_hat_cache
             d_scale, d_alpha = (conv._delta_scale_args_i4(x.device) if is_int4
                                 else conv._delta_scale_args(x.device))
@@ -1320,6 +1339,11 @@ class FusedUpsample(nn.Module):
             #                   apply, and passing it would corrupt the cache update.
             # The kernel TORCH_CHECKs the second case, so this branch cannot get it wrong silently.
             zp = getattr(conv, "_zp_float", 0.0)
+            write_ahat = (not conv._skip_cache_store()) if modiff else True
+            if modiff and hasattr(conv, '_begin_ahat_kernel'):
+                conv._begin_ahat_kernel(write_ahat)
+            ahat_scale = (conv._ahat_scale_arg() if hasattr(conv, '_ahat_scale_arg')
+                          else torch.empty(0, device=x.device, dtype=torch.float32))
             if zp != 0.0 and not modiff:
                 if not HAS_UPSAMPLE_QUANTIZE_PACK_ZP:
                     raise RuntimeError(
@@ -1330,12 +1354,25 @@ class FusedUpsample(nn.Module):
             else:
                 _zp_unsupported(conv, "upsample2x_quantize_pack_noahat_fprop",
                                 grid="delta" if modiff else "activation")
-                x_q = modiff_cutlass.upsample2x_quantize_pack_noahat_fprop(x, d_scale, smooth_inv, ah)
-            return (conv._conv_from_int4_o_hat(x_q, x.shape[2] * 2, x.shape[3] * 2, d_alpha)
-                    if modiff else conv._conv_from_int4(x_q, x.shape[2] * 2, x.shape[3] * 2))
-        x_q = modiff_cutlass.upsample2x_quantize_noahat_fprop(x, d_scale, smooth_inv, ah)
-        return (conv._conv_from_int8_o_hat(x_q, d_alpha) if modiff
-                else conv._conv_from_int8(x_q))
+                x_q = modiff_cutlass.upsample2x_quantize_pack_noahat_fprop(
+                    x, d_scale, smooth_inv, ah, write_ahat, ahat_scale)
+            out = (conv._conv_from_int4_o_hat(x_q, x.shape[2] * 2, x.shape[3] * 2, d_alpha)
+                   if modiff else conv._conv_from_int4(x_q, x.shape[2] * 2, x.shape[3] * 2))
+            if modiff:
+                return conv._after_ahat_write(out)
+            return out
+        write_ahat = (not conv._skip_cache_store()) if modiff else True
+        if modiff and hasattr(conv, '_begin_ahat_kernel'):
+            conv._begin_ahat_kernel(write_ahat)
+        ahat_scale = (conv._ahat_scale_arg() if hasattr(conv, '_ahat_scale_arg')
+                      else torch.empty(0, device=x.device, dtype=torch.float32))
+        x_q = modiff_cutlass.upsample2x_quantize_noahat_fprop(
+            x, d_scale, smooth_inv, ah, write_ahat, ahat_scale)
+        out = (conv._conv_from_int8_o_hat(x_q, d_alpha) if modiff
+               else conv._conv_from_int8(x_q))
+        if modiff:
+            return conv._after_ahat_write(out)
+        return out
 
 
 def convert_upsample_to_fused(module):

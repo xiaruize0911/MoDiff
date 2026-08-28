@@ -46,10 +46,16 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
               return step1_static_quantize_fprop(x, a_hat_cache, scale_buf, smooth_inv, false);
           },
           "Fused static-scale subtract + dequant + quantize for INT8 step 1");
-    m.def("step1_static_quantize_fprop", &step1_static_quantize_fprop,
+    m.def("step1_static_quantize_fprop",
+          [](torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor scale_buf,
+             torch::Tensor smooth_inv, bool a4, bool write_ahat) {
+              return step1_static_quantize_fprop(x, a_hat_cache, scale_buf, smooth_inv, a4, write_ahat);
+          },
           "Same, plus the datapath's activation bit-width (a4: true => saturate at 7, false => 127). "
           "Required for a reused scale to saturate rather than just refine the grid -- see "
           "docs/delta_clip_2026-08-06/FINDINGS.md");
+    m.def("step1_static_quantize_fprop", &step1_static_quantize_fprop,
+          "Same, plus optional ahat_scale for int8 a_hat storage (MODIFF_AHAT_BITS=8)");
     m.def("step1_static_quantize_fprop_silu",
           [](torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor scale_buf,
              torch::Tensor smooth_inv) {
@@ -57,23 +63,56 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           },
           "Same as step1_static_quantize_fprop but applies SiLU to x inline (FP16 a_hat_cache only) -- "
           "fuses a ResBlock's activation function into the quantize step");
-    m.def("step1_static_quantize_fprop_silu", &step1_static_quantize_fprop_silu,
+    m.def("step1_static_quantize_fprop_silu",
+          [](torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor scale_buf,
+             torch::Tensor smooth_inv, bool a4, bool write_ahat) {
+              return step1_static_quantize_fprop_silu(x, a_hat_cache, scale_buf, smooth_inv, a4, write_ahat);
+          },
           "Same, plus the datapath's activation bit-width (a4: true => saturate at 7, false => 127)");
+    m.def("step1_static_quantize_fprop_silu", &step1_static_quantize_fprop_silu,
+          "Same, plus optional ahat_scale for int8 a_hat storage");
     m.def("step1_quantize_pack_int4_fprop", &step1_quantize_pack_int4_fprop, "Fused sub_absmax_scale + dequant + quantize+pack for INT4 step 1");
-    m.def("step1_static_quantize_pack_int4_fprop", &step1_static_quantize_pack_int4_fprop, "Fused static-scale subtract + dequant + quantize+pack for INT4 step 1");
+    m.def("step1_static_quantize_pack_int4_fprop",
+          [](torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor scale_buf,
+             torch::Tensor smooth_inv, bool write_ahat) {
+              return step1_static_quantize_pack_int4_fprop(x, a_hat_cache, scale_buf, smooth_inv, write_ahat);
+          },
+          "Fused static-scale subtract + dequant + quantize+pack for INT4 step 1");
+    m.def("step1_static_quantize_pack_int4_fprop", &step1_static_quantize_pack_int4_fprop,
+          "Same, plus optional ahat_scale for int8 a_hat storage");
     m.def("step1_static_quantize_noahat_fprop", &step1_static_quantize_noahat_fprop, "cache-free static int8 quantize (baseline conv, no a_hat)");
     m.def("step1_static_quantize_pack_int4_noahat_fprop", &step1_static_quantize_pack_int4_noahat_fprop, "cache-free static int4 quantize+pack (baseline conv, no a_hat)");
     m.def("step1_static_quantize_pack_int4_noahat_fprop_zp", &step1_static_quantize_pack_int4_noahat_fprop_zp,
           "activation-zero-point variant (fix #2); no a_hat, so z applies unconditionally");
-    m.def("upsample2x_quantize_noahat_fprop", &upsample2x_quantize_noahat_fprop, "fused Upsample(nearest,2x) + static int8 quantize (baseline conv, no a_hat)");
-    m.def("upsample2x_quantize_pack_noahat_fprop", &upsample2x_quantize_pack_noahat_fprop, "fused Upsample(nearest,2x) + static int4 quantize+pack (baseline conv, no a_hat)");
+    m.def("upsample2x_quantize_noahat_fprop",
+          [](torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv,
+             torch::Tensor a_hat_cache, bool write_ahat) {
+              return upsample2x_quantize_noahat_fprop(x, scale_buf, smooth_inv, a_hat_cache, write_ahat);
+          },
+          "fused Upsample(nearest,2x) + static int8 quantize (baseline conv, no a_hat)");
+    m.def("upsample2x_quantize_noahat_fprop", &upsample2x_quantize_noahat_fprop,
+          "Same, plus optional ahat_scale for int8 a_hat storage");
+    m.def("upsample2x_quantize_pack_noahat_fprop",
+          [](torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv,
+             torch::Tensor a_hat_cache, bool write_ahat) {
+              return upsample2x_quantize_pack_noahat_fprop(x, scale_buf, smooth_inv, a_hat_cache, write_ahat);
+          },
+          "fused Upsample(nearest,2x) + static int4 quantize+pack (baseline conv, no a_hat)");
+    m.def("upsample2x_quantize_pack_noahat_fprop", &upsample2x_quantize_pack_noahat_fprop,
+          "Same, plus optional ahat_scale for int8 a_hat storage");
     m.def("upsample2x_quantize_pack_noahat_fprop_zp", &upsample2x_quantize_pack_noahat_fprop_zp,
           "activation-zero-point variant (fix #2); legal only with an EMPTY a_hat cache -- with a "
           "cache this kernel quantizes a delta, where z is undefined");
     m.def("avgpool2x_quantize_noahat_fprop", &avgpool2x_quantize_noahat_fprop, "fused Downsample(avg_pool,2x2) + static int8 quantize (baseline conv, no a_hat)");
     m.def("avgpool2x_quantize_pack_noahat_fprop", &avgpool2x_quantize_pack_noahat_fprop, "fused Downsample(avg_pool,2x2) + static int4 quantize+pack (baseline conv, no a_hat)");
+    m.def("step1_static_quantize_pack_int4_fprop_silu",
+          [](torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor scale_buf,
+             torch::Tensor smooth_inv, bool write_ahat) {
+              return step1_static_quantize_pack_int4_fprop_silu(x, a_hat_cache, scale_buf, smooth_inv, write_ahat);
+          },
+          "Same as step1_static_quantize_pack_int4_fprop but applies SiLU to x inline");
     m.def("step1_static_quantize_pack_int4_fprop_silu", &step1_static_quantize_pack_int4_fprop_silu,
-          "Same as step1_static_quantize_pack_int4_fprop but applies SiLU to x inline (FP16 a_hat_cache only)");
+          "Same, plus optional ahat_scale for int8 a_hat storage");
     m.def("step1_quantize_pack_int4_no_ahat_fprop", &step1_quantize_pack_int4_no_ahat_fprop,
           "Benchmark-only: INT4 counterpart of step1_quantize_no_ahat_fprop -- see that entry for why this "
           "still takes a_hat_cache. For a true cache-free baseline use dynamic_quantize_pack_int4_fprop.");
@@ -129,6 +168,14 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "EVT INT8 conv: o_hat[elem] += acc*alpha*weight_scale[k] (in place, no residual, no fp32 round-trip)");
     m.def("conv2d_int4_evt_o_hat", &conv2d_int4_evt_o_hat,
           "EVT INT4 conv: o_hat[elem] += acc*alpha*weight_scale[k] (in place, no residual, no fp32 round-trip)");
+    m.def("conv2d_int8_evt_o_hat_skip", &conv2d_int8_evt_o_hat_skip,
+          "EVT INT8 skip-K: out = o_hat_old + conv (no o_hat store)");
+    m.def("conv2d_int4_evt_o_hat_skip", &conv2d_int4_evt_o_hat_skip,
+          "EVT INT4 skip-K: out = o_hat_old + conv (no o_hat store)");
+    m.def("conv2d_int8_evt_o_hat_residual_skip", &conv2d_int8_evt_o_hat_residual_skip,
+          "EVT INT8 skip-K: out = o_hat_old + conv + residual (no o_hat store)");
+    m.def("conv2d_int4_evt_o_hat_residual_skip", &conv2d_int4_evt_o_hat_residual_skip,
+          "EVT INT4 skip-K: out = o_hat_old + conv + residual (no o_hat store)");
 
     // Attention Conv1d layout-transform fusions (kernels/layout_transform.cu)
     m.def("fp16_ncw_to_fp32_cl", &fp16_ncw_to_fp32_cl,
@@ -150,8 +197,21 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("gn_stats_fp16", &gn_stats_fp16,
           "the shipped channel-major GroupNorm stats pass alone -> {mean, inv_std}");
     m.def("group_norm_silu_delta_quantize_pack_cat2_nhwc",
-          &group_norm_silu_delta_quantize_pack_cat2_nhwc,
+          [](torch::Tensor a, torch::Tensor b, torch::Tensor weight, torch::Tensor bias,
+             torch::Tensor a_hat_cache, int64_t num_groups, double eps, bool apply_silu,
+             torch::Tensor scale, torch::Tensor smooth_inv, torch::Tensor mod_scale,
+             torch::Tensor mod_shift, torch::Tensor absmax_buf, torch::Tensor scale_out,
+             torch::Tensor inv_scale_out, torch::Tensor retire_count, double Q_level,
+             bool report_next, double safety, bool write_ahat) {
+              return group_norm_silu_delta_quantize_pack_cat2_nhwc(
+                  a, b, weight, bias, a_hat_cache, num_groups, eps, apply_silu, scale, smooth_inv,
+                  mod_scale, mod_shift, absmax_buf, scale_out, inv_scale_out, retire_count,
+                  Q_level, report_next, safety, write_ahat);
+          },
           "decoder skip-concat fold + delta-quantize apply -> {packed, cat}");
+    m.def("group_norm_silu_delta_quantize_pack_cat2_nhwc",
+          &group_norm_silu_delta_quantize_pack_cat2_nhwc,
+          "Same, plus optional ahat_scale for int8 a_hat storage");
 
     // Native channels_last GroupNorm(+SiLU) (kernels/group_norm_silu.cu)
     m.def("group_norm_silu_nhwc", &group_norm_silu_nhwc,
@@ -208,10 +268,23 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "update (fuses the modiff GN+step1_static_quantize_fprop_silu two-kernel pass). Pass "
           "empty absmax_buf/scale_out/inv_scale_out/retire_count for the static scale, or real "
           "1-element buffers for the dynamic per-call scale (adds one reduction pass, cannot clip)");
-    m.def("group_norm_silu_delta_quantize_nhwc", &group_norm_silu_delta_quantize_nhwc,
+    m.def("group_norm_silu_delta_quantize_nhwc",
+          [](torch::Tensor x, torch::Tensor weight, torch::Tensor bias, torch::Tensor a_hat_cache,
+             int64_t num_groups, double eps, bool apply_silu, torch::Tensor scale,
+             torch::Tensor smooth_inv, torch::Tensor mod_scale, torch::Tensor mod_shift,
+             torch::Tensor absmax_buf, torch::Tensor scale_out, torch::Tensor inv_scale_out,
+             torch::Tensor retire_count, double Q_level, bool report_next, double safety,
+             bool a4, bool write_ahat) {
+              return group_norm_silu_delta_quantize_nhwc(
+                  x, weight, bias, a_hat_cache, num_groups, eps, apply_silu, scale, smooth_inv,
+                  mod_scale, mod_shift, absmax_buf, scale_out, inv_scale_out, retire_count,
+                  Q_level, report_next, safety, a4, write_ahat);
+          },
           "Same, with a trailing a4 flag naming the datapath's activation bit-width. Q_level sets the "
           "NEXT step's scale, a4 sets where THIS step's codes saturate (7 vs 127) -- a reused scale is "
           "exactly where the two differ (docs/delta_clip_2026-08-06/FINDINGS.md)");
+    m.def("group_norm_silu_delta_quantize_nhwc", &group_norm_silu_delta_quantize_nhwc,
+          "Same, plus optional ahat_scale for int8 a_hat storage (MODIFF_AHAT_BITS=8)");
     // 11-argument form first (a4 defaulted), matching the two overloads registered above.
     m.def("group_norm_silu_delta_quantize_nhwc_fused",
           [](torch::Tensor x, torch::Tensor weight, torch::Tensor bias, torch::Tensor a_hat_cache,
@@ -245,6 +318,21 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "MoDiff-fused GroupNorm(+mod)+SiLU + 2x resize + temporal-delta quantize + in-place "
           "a_hat update (the updown ResBlocks' fusion, previously modiff-excluded). Static scale.");
     m.def("group_norm_silu_delta_quantize_resize_nhwc", &group_norm_silu_delta_quantize_resize_nhwc,
+          "Same, plus optional ahat_scale for int8 a_hat storage");
+    m.def("group_norm_silu_delta_quantize_resize_nhwc",
+          [](torch::Tensor x, torch::Tensor weight, torch::Tensor bias, int64_t num_groups,
+             double eps, bool apply_silu, torch::Tensor scale, torch::Tensor smooth_inv,
+             torch::Tensor mod_scale, torch::Tensor mod_shift, int64_t k_pad, int64_t resize,
+             bool pack, torch::Tensor a_hat_cache,
+             torch::Tensor absmax_buf, torch::Tensor scale_out, torch::Tensor inv_scale_out,
+             torch::Tensor retire_count, double Q_level, bool report_next, double safety,
+             bool a4, bool write_ahat) {
+              return group_norm_silu_delta_quantize_resize_nhwc(
+                  x, weight, bias, num_groups, eps, apply_silu, scale, smooth_inv, mod_scale,
+                  mod_shift, k_pad, resize, pack, a_hat_cache,
+                  absmax_buf, scale_out, inv_scale_out, retire_count, Q_level, report_next, safety,
+                  a4, write_ahat);
+          },
           "Same, plus the dynamic-scale contract of the non-resize sibling: real 1-element "
           "absmax_buf/scale_out/inv_scale_out/retire_count make the kernel measure this call's "
           "delta range instead of being handed a scale, so a REFRESH step can stay fused. "
@@ -252,10 +340,23 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "true publishes for a later step from the quantize pass at no extra pass. The trailing "
           "a4 flag names the datapath, so THIS call's codes saturate at 7 or 127 -- which Q_level always "
           "agrees with now that the clip ratio is retired, and stops agreeing on a reused scale.");
-    m.def("group_norm_silu_delta_quantize_pack_nhwc", &group_norm_silu_delta_quantize_pack_nhwc,
+    m.def("group_norm_silu_delta_quantize_pack_nhwc",
+          [](torch::Tensor x, torch::Tensor weight, torch::Tensor bias, torch::Tensor a_hat_cache,
+             int64_t num_groups, double eps, bool apply_silu, torch::Tensor scale,
+             torch::Tensor smooth_inv, torch::Tensor mod_scale, torch::Tensor mod_shift,
+             torch::Tensor absmax_buf, torch::Tensor scale_out, torch::Tensor inv_scale_out,
+             torch::Tensor retire_count, double Q_level, bool report_next, double safety,
+             bool write_ahat) {
+              return group_norm_silu_delta_quantize_pack_nhwc(
+                  x, weight, bias, a_hat_cache, num_groups, eps, apply_silu, scale, smooth_inv,
+                  mod_scale, mod_shift, absmax_buf, scale_out, inv_scale_out, retire_count,
+                  Q_level, report_next, safety, write_ahat);
+          },
           "MoDiff-fused GroupNorm(+mod)+SiLU + INT4 delta-quantize+pack + in-place a_hat update "
           "(int4 counterpart; requires even channels-per-group). Same static/dynamic scale "
           "contract as the INT8 sibling, Q_level 7.0");
+    m.def("group_norm_silu_delta_quantize_pack_nhwc", &group_norm_silu_delta_quantize_pack_nhwc,
+          "Same, plus optional ahat_scale for int8 a_hat storage");
     m.def("gn_stats_from_tiles", &gn_stats_from_tiles,
           "PROTOTYPE: GroupNorm per-(n,group) partial sums produced on the conv EVT tile grid. "
           "Stage A of docs/gn_stats_in_epilogue_2026-08-11 -- measures whether the scatter into "

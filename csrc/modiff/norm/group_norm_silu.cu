@@ -25,6 +25,7 @@
 #include "gn_block_size.h"
 #include <cuda_fp16.h>
 #include <cstdlib>
+#include <type_traits>
 
 // Explicit relative path, NOT bare: a bare include resolves through the global -I csrc and would
 // pick a different tree's copy. See csrc/README.md.
@@ -55,6 +56,8 @@ __device__ __forceinline__ void gn_store2(float* p, long i, float2 v) {
 __device__ __forceinline__ void gn_store2(__half* p, long i, float2 v) {
     reinterpret_cast<__half2*>(p)[i >> 1] = __float22half2_rn(v);
 }
+
+#include "../common/ahat_cache.cuh"
 
 // ---- COPY of gns_silu ----
 // =========================================================================
@@ -245,8 +248,14 @@ __global__ void group_norm_silu_delta_quantize_resize_nhwc_kernel(
     float safety,
     // reduce_only: measure the range and publish, store NOTHING -- neither codes nor a_hat.
     // scale_ptr is not dereferenced, which is what lets this pass run BEFORE the step has a scale.
-    bool reduce_only
+    bool reduce_only,
+    // skip-K: still form codes against a_hat, but do not commit the cache (naive freeze).
+    bool write_ahat,
+    bool ahat_i8 = false,
+    const float* ahat_qscale = nullptr
 ) {
+    float ahat_s, ahat_inv, ahat_lim;
+    ahat_qparams(ahat_i8, ahat_qscale, ahat_s, ahat_inv, ahat_lim);
     const int CPG = C / G;
     const long group_size = (long)CPG * HW;
     const int KpadH = Kpad / 2;    // bytes per spatial position in the output
@@ -389,7 +398,7 @@ __global__ void group_norm_silu_delta_quantize_resize_nhwc_kernel(
                     const long ci = (long)n * HW_OUT * C + hw_out * (long)C + c_global0;
                     // vec2: ci is even (c_start = g*CPG with CPG even, plus 2*cpair), so this
                     // is one naturally-aligned 4-byte load instead of two 2-byte ones. Same values.
-                    const float2 cpv = gn_load2(a_hat_cache, ci);
+                    const float2 cpv = ahat_load2(a_hat_cache, ci, ahat_i8, ahat_s);
                     const float c0 = cpv.x, c1 = cpv.y;
                     const float d0 = o0 - c0, d1 = o1 - c1;
                     // Reduced BEFORE the clamp, so the report is the true delta range.
@@ -399,8 +408,10 @@ __global__ void group_norm_silu_delta_quantize_resize_nhwc_kernel(
                     const float q1 = fmaxf(-lim, fminf(lim, roundf(d1 * scale)));
                     // one 4-byte store. __float22half2_rn rounds each component to nearest
                     // even, exactly as the two __float2half_rn calls it replaces.
-                    gn_store2(a_hat_cache, ci,
-                              make_float2(c0 + q0 * inv_scale, c1 + q1 * inv_scale));
+                    if (write_ahat)
+                        ahat_store2(a_hat_cache, ci,
+                                  make_float2(c0 + q0 * inv_scale, c1 + q1 * inv_scale),
+                                  ahat_i8, ahat_inv, ahat_lim);
                     const int8_t i0 = (int8_t)q0, i1 = (int8_t)q1;
                     if constexpr (PACK)
                         yqp_base[hw_out * row_bytes + (c_global0 >> 1)] =
@@ -433,7 +444,7 @@ __global__ void group_norm_silu_delta_quantize_resize_nhwc_kernel(
             a1 *= 0.25f;
             const float lim = (PACK || a4) ? 7.0f : 127.0f;
             const long ci = (long)n * HW_OUT * C + hwo * (long)C + c_global0;
-            const float2 cpv = gn_load2(a_hat_cache, ci);   // vec2, see the UP path above
+            const float2 cpv = ahat_load2(a_hat_cache, ci, ahat_i8, ahat_s);
             const float c0 = cpv.x, c1 = cpv.y;
             const float d0 = a0 - c0, d1 = a1 - c1;
             // Reduced BEFORE the clamp, so the report is the true delta range.
@@ -441,7 +452,9 @@ __global__ void group_norm_silu_delta_quantize_resize_nhwc_kernel(
             if (reduce_only) continue;
             const float q0 = fmaxf(-lim, fminf(lim, roundf(d0 * scale)));
             const float q1 = fmaxf(-lim, fminf(lim, roundf(d1 * scale)));
-            gn_store2(a_hat_cache, ci, make_float2(c0 + q0 * inv_scale, c1 + q1 * inv_scale));
+            if (write_ahat)
+                ahat_store2(a_hat_cache, ci, make_float2(c0 + q0 * inv_scale, c1 + q1 * inv_scale),
+                            ahat_i8, ahat_inv, ahat_lim);
             const int8_t i0 = (int8_t)q0, i1 = (int8_t)q1;
             if constexpr (PACK)
                 yqp_base[hwo * row_bytes + (c_global0 >> 1)] =
@@ -497,10 +510,12 @@ torch::Tensor group_norm_silu_delta_quantize_resize_nhwc(
     torch::Tensor scale, torch::Tensor smooth_inv,
     torch::Tensor mod_scale, torch::Tensor mod_shift,
     int64_t k_pad, int64_t resize, bool pack,
-    torch::Tensor a_hat_cache,         // fp16, POST-resize shape, updated in place
+    torch::Tensor a_hat_cache,         // fp16 or int8, POST-resize shape, updated in place
     torch::Tensor absmax_buf, torch::Tensor scale_out, torch::Tensor inv_scale_out,
     torch::Tensor retire_count, double Q_level, bool report_next, double safety,
-    bool a4
+    bool a4,
+    bool write_ahat,
+    torch::Tensor ahat_scale
 ) {
     CHECK_CUDA(x);
     CHECK_CONTIGUOUS(x);
@@ -508,8 +523,9 @@ torch::Tensor group_norm_silu_delta_quantize_resize_nhwc(
     TORCH_CHECK(x.scalar_type() == torch::kFloat16 || x.scalar_type() == torch::kFloat32,
                 "gn_quantize_resize: only fp16/fp32 supported");
     TORCH_CHECK(resize == 1 || resize == -1, "gn_quantize_resize: resize must be +1 or -1");
-    TORCH_CHECK(a_hat_cache.scalar_type() == torch::kHalf,
-                "gn_delta_quantize_resize: a_hat_cache must be fp16 (calibrated MoDiff path)");
+    bool ahat_i8 = false;
+    const float* ahat_qscale_ptr = nullptr;
+    __half* cache_ptr = nullptr;
     const bool has_mod = mod_scale.numel() > 0;
     const int N = x.size(0), C = x.size(1), H = x.size(2), W = x.size(3);
     TORCH_CHECK(C % num_groups == 0, "channels must divide into groups");
@@ -554,7 +570,8 @@ torch::Tensor group_norm_silu_delta_quantize_resize_nhwc(
     TORCH_CHECK((C / num_groups) % 2 == 0,
                 "gn_delta_quantize_resize: channels-per-group must be even for the vec2 a_hat "
                 "access (C=", C, ", groups=", num_groups, ")");
-    __half* cache_ptr = reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>());
+    bind_ahat_cache(a_hat_cache, ahat_scale, cache_ptr, ahat_i8, ahat_qscale_ptr,
+                    "group_norm_silu_delta_quantize_resize_nhwc");
 
     // Dynamic scale, exactly as group_norm_silu_delta_quantize_nhwc defines it:
     //   dynamic -- a reduction-only launch measures THIS call's delta range and publishes
@@ -596,7 +613,8 @@ torch::Tensor group_norm_silu_delta_quantize_resize_nhwc(
             has_mod ? reinterpret_cast<const T*>(mod_shift.data_ptr<ATT>()) : nullptr,      \
             (SCALEP), smooth_ptr, C, HW, (int)num_groups, (float)eps,                       \
             apply_silu, Kpad, W, a4,                                              \
-            (AMAX), (NSC), (NIV), (RET), (float)Q_level, (float)safety, (RONLY))
+            (AMAX), (NSC), (NIV), (RET), (float)Q_level, (float)safety, (RONLY),   \
+            write_ahat, ahat_i8, ahat_qscale_ptr)
 #define MODIFF_GNDQR_DISPATCH(T, ATT, SCALEP, AMAX, NSC, NIV, RET, RONLY)                    \
     do {                                                                                    \
         if (up &&  pack) MODIFF_GNDQR_LAUNCH(T, ATT, true,  true,  SCALEP, AMAX, NSC, NIV, RET, RONLY); \
@@ -1632,7 +1650,10 @@ __global__ void gn_apply_delta_quantize_flat_kernel(
     // (or forget the argument, which THIS kernel did until 2026-08-10) and a 4-bit layer
     // silently stayed 8-bit. A bool has no such value to get wrong; the saturation limit
     // is derived from the datapath below.
-    bool a4
+    bool a4,
+    bool write_ahat,
+    bool ahat_i8 = false,
+    const float* ahat_qscale = nullptr
 ) {
     const int CPG = C / G;
     const float scale = *scale_ptr;
@@ -1640,6 +1661,8 @@ __global__ void gn_apply_delta_quantize_flat_kernel(
     // Q_b for this datapath: 7 at 4 bits, 127 at 8. Derived, not passed, so it cannot
     // disagree with the bit-width the scale was built for.
     const float a4_lim = a4 ? 7.0f : 127.0f;
+    float ahat_s, ahat_inv, ahat_lim;
+    ahat_qparams(ahat_i8, ahat_qscale, ahat_s, ahat_inv, ahat_lim);
     for (long i = (long)blockIdx.x * blockDim.x + threadIdx.x; i < num_elements;
          i += (long)blockDim.x * gridDim.x) {
         int c = (int)(i % C);
@@ -1660,9 +1683,9 @@ __global__ void gn_apply_delta_quantize_flat_kernel(
         float normed_h = __half2float(__float2half(normed));
         float out = apply_silu ? gns_silu(normed_h) : normed_h;
         if (smooth_inv != nullptr) out *= smooth_inv[c];
-        float cache = __half2float(a_hat_cache[i]);
+        float cache = ahat_load(a_hat_cache, i, ahat_i8, ahat_s);
         float q = fmaxf(-a4_lim, fminf(a4_lim, roundf((out - cache) * scale)));
-        a_hat_cache[i] = __float2half_rn(cache + q * inv_scale);
+        if (write_ahat) ahat_store(a_hat_cache, i, cache + q * inv_scale, ahat_i8, ahat_inv, ahat_lim);
         Yq[i] = (int8_t)q;
     }
 }
@@ -1696,10 +1719,13 @@ __global__ void gn_delta_absmax_flat_kernel(
     unsigned int* __restrict__ retire_count, // [1], must be 0 on entry (self-resetting)
     const float* __restrict__ smooth_inv, // [C] or nullptr
     float Q_level,                        // 7.0 for INT4, 127.0 for INT8
-    int C, int G, long sample_stride, long num_elements, bool apply_silu
+    int C, int G, long sample_stride, long num_elements, bool apply_silu,
+    bool ahat_i8 = false,
+    const float* ahat_qscale = nullptr
 ) {
     extern __shared__ float sdata[];
     const int CPG = C / G;
+    const float ahat_s = ahat_i8 ? *ahat_qscale : 1.0f;
     float local_max = 0.0f;
     for (long i = (long)blockIdx.x * blockDim.x + threadIdx.x; i < num_elements;
          i += (long)blockDim.x * gridDim.x) {
@@ -1719,7 +1745,7 @@ __global__ void gn_delta_absmax_flat_kernel(
         float normed_h = __half2float(__float2half(normed));
         float out = apply_silu ? gns_silu(normed_h) : normed_h;
         if (smooth_inv != nullptr) out *= smooth_inv[c];
-        local_max = fmaxf(local_max, fabsf(out - __half2float(a_hat_cache[i])));
+        local_max = fmaxf(local_max, fabsf(out - ahat_load(a_hat_cache, i, ahat_i8, ahat_s)));
     }
 
     // Same block reduction + atomic float-max + last-block-retires election as
@@ -1779,10 +1805,13 @@ __global__ void gn_delta_absmax_flat_vec2_kernel(
     unsigned int* __restrict__ retire_count,
     const float* __restrict__ smooth_inv,
     float Q_level,
-    int C, int G, long sample_stride, long num_elements, bool apply_silu
+    int C, int G, long sample_stride, long num_elements, bool apply_silu,
+    bool ahat_i8 = false,
+    const float* ahat_qscale = nullptr
 ) {
     extern __shared__ float sdata[];
     const int CPG = C / G;
+    const float ahat_s = ahat_i8 ? *ahat_qscale : 1.0f;
     float local_max = 0.0f;
     const long stride = (long)blockDim.x * gridDim.x;
     for (long base = 2 * ((long)blockIdx.x * blockDim.x + threadIdx.x);
@@ -1815,7 +1844,7 @@ __global__ void gn_delta_absmax_flat_vec2_kernel(
             o0 *= smooth_inv[c0];
             o1 *= smooth_inv[c0 + 1];
         }
-        float2 c = gn_load2(a_hat_cache, base);   // same overload the vec2 quantize kernel uses
+        float2 c = ahat_load2(a_hat_cache, base, ahat_i8, ahat_s);
         local_max = fmaxf(local_max, fmaxf(fabsf(o0 - c.x), fabsf(o1 - c.y)));
     }
 
@@ -1854,7 +1883,7 @@ __global__ void gn_delta_absmax_flat_vec2_kernel(
 // into one int16 store. Requires CPG even (so a pair's c0/c0+1 always share one group and
 // hence one mean/inv_std, exactly like the pack kernel below) -- the caller (host wrapper)
 // only dispatches here when that holds, else falls back to the scalar kernel above.
-template <typename TIn>
+template <typename TIn, bool AhatI8>
 __global__ void gn_apply_delta_quantize_flat_vec2_kernel(
     const TIn* __restrict__ X,
     __half* __restrict__ a_hat_cache,     // [N,H,W,C] fp16 channels_last, in place
@@ -1883,7 +1912,9 @@ __global__ void gn_apply_delta_quantize_flat_vec2_kernel(
     // (or forget the argument, which THIS kernel did until 2026-08-10) and a 4-bit layer
     // silently stayed 8-bit. A bool has no such value to get wrong; the saturation limit
     // is derived from the datapath below.
-    bool a4
+    bool a4,
+    bool write_ahat,
+    const float* ahat_qscale = nullptr
 ) {
     extern __shared__ float sdata[];
     const int CPG = C / G;
@@ -1892,6 +1923,8 @@ __global__ void gn_apply_delta_quantize_flat_vec2_kernel(
     // Q_b for this datapath: 7 at 4 bits, 127 at 8. Derived, not passed, so it cannot
     // disagree with the bit-width the scale was built for.
     const float a4_lim = a4 ? 7.0f : 127.0f;
+    float ahat_s, ahat_inv, ahat_lim;
+    ahat_qparams(AhatI8, ahat_qscale, ahat_s, ahat_inv, ahat_lim);
     float local_max = 0.0f;
     const long stride = (long)blockDim.x * gridDim.x;
     for (long base = 2 * ((long)blockIdx.x * blockDim.x + threadIdx.x);
@@ -1919,13 +1952,23 @@ __global__ void gn_apply_delta_quantize_flat_vec2_kernel(
         float o0 = apply_silu ? gns_silu(n0h) : n0h;
         float o1 = apply_silu ? gns_silu(n1h) : n1h;
         if (smooth_inv != nullptr) { o0 *= smooth_inv[c0]; o1 *= smooth_inv[c0 + 1]; }
-        float2 cache = gn_load2(a_hat_cache, base);
+        float2 cache;
+        if constexpr (AhatI8)
+            cache = ahat_load2_i8(reinterpret_cast<const int8_t*>(a_hat_cache), base, ahat_s);
+        else
+            cache = gn_load2(a_hat_cache, base);
         const float d0 = o0 - cache.x, d1 = o1 - cache.y;
         // Reduced BEFORE the clamp, so the report is the true delta range, not a clipped lower bound.
         local_max = fmaxf(local_max, fmaxf(fabsf(d0), fabsf(d1)));
         float q0 = fmaxf(-a4_lim, fminf(a4_lim, roundf(d0 * scale)));
         float q1 = fmaxf(-a4_lim, fminf(a4_lim, roundf(d1 * scale)));
-        gn_store2(a_hat_cache, base, make_float2(cache.x + q0 * inv_scale, cache.y + q1 * inv_scale));
+        if (write_ahat) {
+            float2 neu = make_float2(cache.x + q0 * inv_scale, cache.y + q1 * inv_scale);
+            if constexpr (AhatI8)
+                ahat_store2_i8(reinterpret_cast<int8_t*>(a_hat_cache), base, neu, ahat_inv, ahat_lim);
+            else
+                gn_store2(a_hat_cache, base, neu);
+        }
         int8_t i0 = (int8_t)q0, i1 = (int8_t)q1;
         reinterpret_cast<int16_t*>(Yq)[base >> 1] =
             (int16_t)(((unsigned char)i0) | (((unsigned char)i1) << 8));
@@ -1970,7 +2013,9 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc(
     // Only matters when the scale is deliberately larger than Q_b/absmax -- which is what a clip
     // ratio is, and why the ratio was not a clip below A8 before this existed
     // (docs/delta_clip_2026-08-06/FINDINGS.md).
-    bool a4
+    bool a4,
+    bool write_ahat,
+    torch::Tensor ahat_scale
 ) {
     CHECK_CUDA(x);
     CHECK_CONTIGUOUS(x);
@@ -1979,8 +2024,6 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc(
                 "group_norm_silu_delta_quantize_nhwc: weight/bias dtype must match input dtype");
     TORCH_CHECK(x.scalar_type() == torch::kFloat32 || x.scalar_type() == torch::kFloat16,
                 "group_norm_silu_delta_quantize_nhwc: only float32 and float16 are supported");
-    TORCH_CHECK(a_hat_cache.scalar_type() == torch::kFloat16,
-                "group_norm_silu_delta_quantize_nhwc: a_hat_cache must be fp16 (calibrated modiff path)");
     TORCH_CHECK(a_hat_cache.sizes() == x.sizes(),
                 "group_norm_silu_delta_quantize_nhwc: a_hat_cache must match x shape");
     const bool has_mod = mod_scale.numel() > 0;
@@ -2006,7 +2049,11 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc(
     gn_launch_group_stats(x, N, C, HW, (int)num_groups, eps, mean, inv_std);
 
     const float* smooth_ptr = (smooth_inv.numel() > 0) ? smooth_inv.data_ptr<float>() : nullptr;
-    __half* cache_ptr = reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>());
+    bool ahat_i8 = false;
+    const float* ahat_qscale_ptr = nullptr;
+    __half* cache_ptr = nullptr;
+    bind_ahat_cache(a_hat_cache, ahat_scale, cache_ptr, ahat_i8, ahat_qscale_ptr,
+                    "group_norm_silu_delta_quantize_nhwc");
     const long num_elements = (long)N * C * HW;
     const long sample_stride = (long)C * HW;
     const int ablock = 256;
@@ -2046,7 +2093,8 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc(
                 inv_scale_out.data_ptr<float>(),
                 (unsigned int*)retire_count.data_ptr<int>(),
                 smooth_ptr, (float)Q_level,
-                C, (int)num_groups, sample_stride, num_elements, apply_silu);
+                C, (int)num_groups, sample_stride, num_elements, apply_silu,
+                ahat_i8, ahat_qscale_ptr);
             else
             gn_delta_absmax_flat_kernel<float><<<rgrid, ablock, ablock * sizeof(float), stream>>>(
                 x.data_ptr<float>(), cache_ptr,
@@ -2058,7 +2106,8 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc(
                 inv_scale_out.data_ptr<float>(),
                 (unsigned int*)retire_count.data_ptr<int>(),
                 smooth_ptr, (float)Q_level,
-                C, (int)num_groups, sample_stride, num_elements, apply_silu);
+                C, (int)num_groups, sample_stride, num_elements, apply_silu,
+                ahat_i8, ahat_qscale_ptr);
         } else {
             if (rvec2)
             gn_delta_absmax_flat_vec2_kernel<__half><<<rgrid, ablock, ablock * sizeof(float), stream>>>(
@@ -2072,7 +2121,8 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc(
                 inv_scale_out.data_ptr<float>(),
                 (unsigned int*)retire_count.data_ptr<int>(),
                 smooth_ptr, (float)Q_level,
-                C, (int)num_groups, sample_stride, num_elements, apply_silu);
+                C, (int)num_groups, sample_stride, num_elements, apply_silu,
+                ahat_i8, ahat_qscale_ptr);
             else
             gn_delta_absmax_flat_kernel<__half><<<rgrid, ablock, ablock * sizeof(float), stream>>>(
                 reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), cache_ptr,
@@ -2085,7 +2135,8 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc(
                 inv_scale_out.data_ptr<float>(),
                 (unsigned int*)retire_count.data_ptr<int>(),
                 smooth_ptr, (float)Q_level,
-                C, (int)num_groups, sample_stride, num_elements, apply_silu);
+                C, (int)num_groups, sample_stride, num_elements, apply_silu,
+                ahat_i8, ahat_qscale_ptr);
         }
         scale_ptr_eff = scale_out.data_ptr<float>();
     }
@@ -2095,20 +2146,24 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc(
             // Shared memory sized for the free-absmax reduction (gn_report_delta_absmax). Always
             // allocated: it is one float per thread, and the kernel's extern __shared__ must be
             // backed even on the non-reporting path where the helper returns immediately.
-            gn_apply_delta_quantize_flat_vec2_kernel<float>
-                <<<agrid_vec2, ablock, ablock * sizeof(float), stream>>>(
-                x.data_ptr<float>(), cache_ptr, reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
-                weight.data_ptr<float>(), bias.data_ptr<float>(),
-                has_mod ? mod_scale.data_ptr<float>() : nullptr,
-                has_mod ? mod_shift.data_ptr<float>() : nullptr,
-                mean.data_ptr<float>(), inv_std.data_ptr<float>(),
-                scale_ptr_eff, smooth_ptr,
-                C, (int)num_groups, sample_stride, num_elements, apply_silu,
-                report ? absmax_buf.data_ptr<float>() : nullptr,
-                report ? scale_out.data_ptr<float>() : nullptr,
-                report ? inv_scale_out.data_ptr<float>() : nullptr,
-                report ? (unsigned int*)retire_count.data_ptr<int>() : nullptr,
-                (float)Q_level, (float)safety, a4);
+            auto launch_f = [&](auto a8tag) {
+                constexpr bool A8 = decltype(a8tag)::value;
+                gn_apply_delta_quantize_flat_vec2_kernel<float, A8>
+                    <<<agrid_vec2, ablock, ablock * sizeof(float), stream>>>(
+                    x.data_ptr<float>(), cache_ptr, reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
+                    weight.data_ptr<float>(), bias.data_ptr<float>(),
+                    has_mod ? mod_scale.data_ptr<float>() : nullptr,
+                    has_mod ? mod_shift.data_ptr<float>() : nullptr,
+                    mean.data_ptr<float>(), inv_std.data_ptr<float>(),
+                    scale_ptr_eff, smooth_ptr,
+                    C, (int)num_groups, sample_stride, num_elements, apply_silu,
+                    report ? absmax_buf.data_ptr<float>() : nullptr,
+                    report ? scale_out.data_ptr<float>() : nullptr,
+                    report ? inv_scale_out.data_ptr<float>() : nullptr,
+                    report ? (unsigned int*)retire_count.data_ptr<int>() : nullptr,
+                    (float)Q_level, (float)safety, a4, write_ahat, ahat_qscale_ptr);
+            };
+            if (ahat_i8) launch_f(std::true_type{}); else launch_f(std::false_type{});
         } else {
             gn_apply_delta_quantize_flat_kernel<float><<<agrid_scalar, ablock, 0, stream>>>(
                 x.data_ptr<float>(), cache_ptr, reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
@@ -2117,26 +2172,31 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc(
                 has_mod ? mod_shift.data_ptr<float>() : nullptr,
                 mean.data_ptr<float>(), inv_std.data_ptr<float>(),
                 scale_ptr_eff, smooth_ptr,
-                C, (int)num_groups, sample_stride, num_elements, apply_silu, a4);
+                C, (int)num_groups, sample_stride, num_elements, apply_silu, a4, write_ahat,
+                ahat_i8, ahat_qscale_ptr);
         }
     } else {
         if (use_vec2) {
-            gn_apply_delta_quantize_flat_vec2_kernel<__half>
-                <<<agrid_vec2, ablock, ablock * sizeof(float), stream>>>(
-                reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), cache_ptr,
-                reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
-                reinterpret_cast<const __half*>(weight.data_ptr<at::Half>()),
-                reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
-                has_mod ? reinterpret_cast<const __half*>(mod_scale.data_ptr<at::Half>()) : nullptr,
-                has_mod ? reinterpret_cast<const __half*>(mod_shift.data_ptr<at::Half>()) : nullptr,
-                mean.data_ptr<float>(), inv_std.data_ptr<float>(),
-                scale_ptr_eff, smooth_ptr,
-                C, (int)num_groups, sample_stride, num_elements, apply_silu,
-                report ? absmax_buf.data_ptr<float>() : nullptr,
-                report ? scale_out.data_ptr<float>() : nullptr,
-                report ? inv_scale_out.data_ptr<float>() : nullptr,
-                report ? (unsigned int*)retire_count.data_ptr<int>() : nullptr,
-                (float)Q_level, (float)safety, a4);
+            auto launch_h = [&](auto a8tag) {
+                constexpr bool A8 = decltype(a8tag)::value;
+                gn_apply_delta_quantize_flat_vec2_kernel<__half, A8>
+                    <<<agrid_vec2, ablock, ablock * sizeof(float), stream>>>(
+                    reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), cache_ptr,
+                    reinterpret_cast<int8_t*>(yq.data_ptr<int8_t>()),
+                    reinterpret_cast<const __half*>(weight.data_ptr<at::Half>()),
+                    reinterpret_cast<const __half*>(bias.data_ptr<at::Half>()),
+                    has_mod ? reinterpret_cast<const __half*>(mod_scale.data_ptr<at::Half>()) : nullptr,
+                    has_mod ? reinterpret_cast<const __half*>(mod_shift.data_ptr<at::Half>()) : nullptr,
+                    mean.data_ptr<float>(), inv_std.data_ptr<float>(),
+                    scale_ptr_eff, smooth_ptr,
+                    C, (int)num_groups, sample_stride, num_elements, apply_silu,
+                    report ? absmax_buf.data_ptr<float>() : nullptr,
+                    report ? scale_out.data_ptr<float>() : nullptr,
+                    report ? inv_scale_out.data_ptr<float>() : nullptr,
+                    report ? (unsigned int*)retire_count.data_ptr<int>() : nullptr,
+                    (float)Q_level, (float)safety, a4, write_ahat, ahat_qscale_ptr);
+            };
+            if (ahat_i8) launch_h(std::true_type{}); else launch_h(std::false_type{});
         } else {
             gn_apply_delta_quantize_flat_kernel<__half><<<agrid_scalar, ablock, 0, stream>>>(
                 reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), cache_ptr,
@@ -2147,7 +2207,8 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc(
                 has_mod ? reinterpret_cast<const __half*>(mod_shift.data_ptr<at::Half>()) : nullptr,
                 mean.data_ptr<float>(), inv_std.data_ptr<float>(),
                 scale_ptr_eff, smooth_ptr,
-                C, (int)num_groups, sample_stride, num_elements, apply_silu, a4);
+                C, (int)num_groups, sample_stride, num_elements, apply_silu, a4, write_ahat,
+                ahat_i8, ahat_qscale_ptr);
         }
     }
     return yq;
@@ -2239,7 +2300,8 @@ __global__ void gn_delta_quantize_fused_groupmajor_vec2_kernel(
     const float* __restrict__ smooth_inv, // [C] or nullptr
     int C, long HW, int G, float eps, bool apply_silu,
     // Activation bit-width of THIS datapath, not a magnitude -- same contract as the flat kernel.
-    bool a4
+    bool a4,
+    bool write_ahat
 ) {
     const int CPG = C / G;
     const long group_size = (long)CPG * HW;
@@ -2339,8 +2401,9 @@ __global__ void gn_delta_quantize_fused_groupmajor_vec2_kernel(
         const float d0 = o0 - cache.x, d1 = o1 - cache.y;
         const float q0 = fmaxf(-a4_lim, fminf(a4_lim, roundf(d0 * scale)));
         const float q1 = fmaxf(-a4_lim, fminf(a4_lim, roundf(d1 * scale)));
-        gn_store2(cache_base, mem_idx0,
-                  make_float2(cache.x + q0 * inv_scale, cache.y + q1 * inv_scale));
+        if (write_ahat)
+            gn_store2(cache_base, mem_idx0,
+                      make_float2(cache.x + q0 * inv_scale, cache.y + q1 * inv_scale));
         const int8_t i0 = (int8_t)q0, i1 = (int8_t)q1;
         reinterpret_cast<int16_t*>(yq_base)[mem_idx0 >> 1] =
             (int16_t)(((unsigned char)i0) | (((unsigned char)i1) << 8));
@@ -2364,7 +2427,8 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc_fused(
     torch::Tensor smooth_inv,
     torch::Tensor mod_scale,
     torch::Tensor mod_shift,
-    bool a4
+    bool a4,
+    bool write_ahat = true
 ) {
     CHECK_CUDA(x);
     CHECK_CONTIGUOUS(x);
@@ -2414,7 +2478,7 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc_fused(
             has_mod ? mod_scale.data_ptr<float>() : nullptr,
             has_mod ? mod_shift.data_ptr<float>() : nullptr,
             scale.data_ptr<float>(), smooth_ptr,
-            C, HW, (int)num_groups, (float)eps, apply_silu, a4);
+            C, HW, (int)num_groups, (float)eps, apply_silu, a4, write_ahat);
     } else {
         gn_delta_quantize_fused_groupmajor_vec2_kernel<__half><<<grid, block, shmem_bytes, stream>>>(
             reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), cache_ptr,
@@ -2424,7 +2488,7 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc_fused(
             has_mod ? reinterpret_cast<const __half*>(mod_scale.data_ptr<at::Half>()) : nullptr,
             has_mod ? reinterpret_cast<const __half*>(mod_shift.data_ptr<at::Half>()) : nullptr,
             scale.data_ptr<float>(), smooth_ptr,
-            C, HW, (int)num_groups, (float)eps, apply_silu, a4);
+            C, HW, (int)num_groups, (float)eps, apply_silu, a4, write_ahat);
     }
     C10_CUDA_CHECK(cudaGetLastError());
     return yq;
@@ -2455,12 +2519,17 @@ __global__ void gn_apply_delta_quantize_pack_flat_vec2_kernel(
     // Free absmax reporting, INT4 twin of the int8 sibling. See gn_report_delta_absmax.
     float* __restrict__ absmax_buf, float* __restrict__ next_scale_out,
     float* __restrict__ next_inv_out, unsigned int* __restrict__ retire_count,
-    float Q_level, float safety
+    float Q_level, float safety,
+    bool write_ahat,
+    bool ahat_i8 = false,
+    const float* ahat_qscale = nullptr
 ) {
     extern __shared__ float sdata[];
     const int CPG = C / G;
     const float scale = *scale_ptr;
     const float inv_scale = 1.0f / scale;
+    float ahat_s, ahat_inv, ahat_lim;
+    ahat_qparams(ahat_i8, ahat_qscale, ahat_s, ahat_inv, ahat_lim);
     float local_max = 0.0f;
     const long stride = (long)blockDim.x * gridDim.x;
     for (long base = 2 * ((long)blockIdx.x * blockDim.x + threadIdx.x);
@@ -2486,13 +2555,15 @@ __global__ void gn_apply_delta_quantize_pack_flat_vec2_kernel(
         float o0 = apply_silu ? gns_silu(__half2float(__float2half(n0))) : __half2float(__float2half(n0));
         float o1 = apply_silu ? gns_silu(__half2float(__float2half(n1))) : __half2float(__float2half(n1));
         if (smooth_inv != nullptr) { o0 *= smooth_inv[c0]; o1 *= smooth_inv[c0 + 1]; }
-        float2 cache = gn_load2(a_hat_cache, base);
+        float2 cache = ahat_load2(a_hat_cache, base, ahat_i8, ahat_s);
         const float d0 = o0 - cache.x, d1 = o1 - cache.y;
         // Reduced BEFORE the clamp, so the report is the true range and not a clipped lower bound.
         local_max = fmaxf(local_max, fmaxf(fabsf(d0), fabsf(d1)));
         float q0 = fmaxf(-7.0f, fminf(7.0f, roundf(d0 * scale)));
         float q1 = fmaxf(-7.0f, fminf(7.0f, roundf(d1 * scale)));
-        gn_store2(a_hat_cache, base, make_float2(cache.x + q0 * inv_scale, cache.y + q1 * inv_scale));
+        if (write_ahat)
+            ahat_store2(a_hat_cache, base, make_float2(cache.x + q0 * inv_scale, cache.y + q1 * inv_scale),
+                        ahat_i8, ahat_inv, ahat_lim);
         int8_t i0 = (int8_t)q0, i1 = (int8_t)q1;
         Yqp[base / 2] = (int8_t)((i0 & 0x0F) | ((i1 & 0x0F) << 4));
     }
@@ -2529,7 +2600,9 @@ static torch::Tensor gn_delta_pack_impl(
     torch::Tensor retire_count,
     double Q_level,
     bool report_next,        // see the INT8 sibling
-    double safety
+    double safety,
+    bool write_ahat = true,
+    torch::Tensor ahat_scale = {}
 ) {
     CHECK_CUDA(x);
     CHECK_CONTIGUOUS(x);
@@ -2538,8 +2611,9 @@ static torch::Tensor gn_delta_pack_impl(
                 "group_norm_silu_delta_quantize_pack_nhwc: weight/bias dtype must match input dtype");
     TORCH_CHECK(x.scalar_type() == torch::kFloat32 || x.scalar_type() == torch::kFloat16,
                 "group_norm_silu_delta_quantize_pack_nhwc: only float32 and float16 are supported");
-    TORCH_CHECK(a_hat_cache.scalar_type() == torch::kFloat16,
-                "group_norm_silu_delta_quantize_pack_nhwc: a_hat_cache must be fp16 (calibrated modiff path)");
+    TORCH_CHECK(a_hat_cache.scalar_type() == torch::kFloat16
+                    || a_hat_cache.scalar_type() == torch::kInt8,
+                "group_norm_silu_delta_quantize_pack_nhwc: a_hat_cache must be fp16 or int8");
     TORCH_CHECK(a_hat_cache.sizes() == x.sizes(),
                 "group_norm_silu_delta_quantize_pack_nhwc: a_hat_cache must match x shape");
     const bool has_mod = mod_scale.numel() > 0;
@@ -2577,7 +2651,11 @@ static torch::Tensor gn_delta_pack_impl(
     }
 
     const float* smooth_ptr = (smooth_inv.numel() > 0) ? smooth_inv.data_ptr<float>() : nullptr;
-    __half* cache_ptr = reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>());
+    __half* cache_ptr = nullptr;
+    bool ahat_i8 = false;
+    const float* ahat_qscale_ptr = nullptr;
+    bind_ahat_cache(a_hat_cache, ahat_scale, cache_ptr, ahat_i8, ahat_qscale_ptr,
+                    "group_norm_silu_delta_quantize_pack_nhwc");
     const long num_elements = (long)N * C * HW;
     const long sample_stride = (long)C * HW;
     const int ablock = 256;
@@ -2613,7 +2691,8 @@ static torch::Tensor gn_delta_pack_impl(
                 inv_scale_out.data_ptr<float>(),
                 (unsigned int*)retire_count.data_ptr<int>(),
                 smooth_ptr, (float)Q_level,
-                C, (int)num_groups, sample_stride, num_elements, apply_silu);
+                C, (int)num_groups, sample_stride, num_elements, apply_silu,
+                ahat_i8, ahat_qscale_ptr);
             else
             gn_delta_absmax_flat_kernel<float><<<rgrid, ablock, ablock * sizeof(float), stream>>>(
                 x.data_ptr<float>(), cache_ptr,
@@ -2625,7 +2704,8 @@ static torch::Tensor gn_delta_pack_impl(
                 inv_scale_out.data_ptr<float>(),
                 (unsigned int*)retire_count.data_ptr<int>(),
                 smooth_ptr, (float)Q_level,
-                C, (int)num_groups, sample_stride, num_elements, apply_silu);
+                C, (int)num_groups, sample_stride, num_elements, apply_silu,
+                ahat_i8, ahat_qscale_ptr);
         } else {
             if (rvec2)
             gn_delta_absmax_flat_vec2_kernel<__half><<<rgrid, ablock, ablock * sizeof(float), stream>>>(
@@ -2639,7 +2719,8 @@ static torch::Tensor gn_delta_pack_impl(
                 inv_scale_out.data_ptr<float>(),
                 (unsigned int*)retire_count.data_ptr<int>(),
                 smooth_ptr, (float)Q_level,
-                C, (int)num_groups, sample_stride, num_elements, apply_silu);
+                C, (int)num_groups, sample_stride, num_elements, apply_silu,
+                ahat_i8, ahat_qscale_ptr);
             else
             gn_delta_absmax_flat_kernel<__half><<<rgrid, ablock, ablock * sizeof(float), stream>>>(
                 reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), cache_ptr,
@@ -2652,7 +2733,8 @@ static torch::Tensor gn_delta_pack_impl(
                 inv_scale_out.data_ptr<float>(),
                 (unsigned int*)retire_count.data_ptr<int>(),
                 smooth_ptr, (float)Q_level,
-                C, (int)num_groups, sample_stride, num_elements, apply_silu);
+                C, (int)num_groups, sample_stride, num_elements, apply_silu,
+                ahat_i8, ahat_qscale_ptr);
         }
         scale_ptr_eff = scale_out.data_ptr<float>();
     }
@@ -2672,7 +2754,7 @@ static torch::Tensor gn_delta_pack_impl(
             report ? scale_out.data_ptr<float>() : nullptr,
             report ? inv_scale_out.data_ptr<float>() : nullptr,
             report ? (unsigned int*)retire_count.data_ptr<int>() : nullptr,
-            (float)Q_level, (float)safety);
+            (float)Q_level, (float)safety, write_ahat, ahat_i8, ahat_qscale_ptr);
     } else {
         gn_apply_delta_quantize_pack_flat_vec2_kernel<__half><<<agrid, ablock, ablock * sizeof(float), stream>>>(
             reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), cache_ptr,
@@ -2688,7 +2770,7 @@ static torch::Tensor gn_delta_pack_impl(
             report ? scale_out.data_ptr<float>() : nullptr,
             report ? inv_scale_out.data_ptr<float>() : nullptr,
             report ? (unsigned int*)retire_count.data_ptr<int>() : nullptr,
-            (float)Q_level, (float)safety);
+            (float)Q_level, (float)safety, write_ahat, ahat_i8, ahat_qscale_ptr);
     }
     return yqp;
 }
@@ -2699,11 +2781,12 @@ torch::Tensor group_norm_silu_delta_quantize_pack_nhwc(
     int64_t num_groups, double eps, bool apply_silu, torch::Tensor scale,
     torch::Tensor smooth_inv, torch::Tensor mod_scale, torch::Tensor mod_shift,
     torch::Tensor absmax_buf, torch::Tensor scale_out, torch::Tensor inv_scale_out,
-    torch::Tensor retire_count, double Q_level, bool report_next, double safety
+    torch::Tensor retire_count, double Q_level, bool report_next, double safety,
+    bool write_ahat, torch::Tensor ahat_scale
 ) {
     return gn_delta_pack_impl(torch::Tensor(), torch::Tensor(), x, weight, bias, a_hat_cache, num_groups, eps, apply_silu, scale, smooth_inv,
         mod_scale, mod_shift, absmax_buf, scale_out, inv_scale_out, retire_count,
-        Q_level, report_next, safety);
+        Q_level, report_next, safety, write_ahat, ahat_scale);
 }
 
 // THE FOLD, wired: takes the two halves the decoder would have concatenated, produces the
@@ -2725,12 +2808,12 @@ std::vector<torch::Tensor> group_norm_silu_delta_quantize_pack_cat2_nhwc(
     torch::Tensor scale, torch::Tensor smooth_inv, torch::Tensor mod_scale,
     torch::Tensor mod_shift, torch::Tensor absmax_buf, torch::Tensor scale_out,
     torch::Tensor inv_scale_out, torch::Tensor retire_count, double Q_level,
-    bool report_next, double safety
+    bool report_next, double safety, bool write_ahat, torch::Tensor ahat_scale
 ) {
     auto fold = cat2_gn_stats_fp16(a, b, num_groups, eps);
     torch::Tensor x = fold[0];
     auto yqp = gn_delta_pack_impl(fold[1], fold[2], x, weight, bias, a_hat_cache, num_groups, eps, apply_silu, scale, smooth_inv,
         mod_scale, mod_shift, absmax_buf, scale_out, inv_scale_out, retire_count,
-        Q_level, report_next, safety);
+        Q_level, report_next, safety, write_ahat, ahat_scale);
     return {yqp, x};
 }

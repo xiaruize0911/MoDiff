@@ -1,0 +1,206 @@
+{
+ "gpu": "NVIDIA A40",
+ "batch": 128,
+ "steps": 50,
+ "seed": 20260827,
+ "arms": [
+  {
+   "label": "full a_hat fp16",
+   "mode": "int8",
+   "skip_k": 1,
+   "replay_k": 1,
+   "ahat_bits": 16,
+   "refresh": 0,
+   "ms_step": 93.44276152085513,
+   "speedup_vs_fp16_full": 1.0,
+   "pct_vs_fp16_full": 0.0
+  },
+  {
+   "label": "full a_hat int8 held",
+   "mode": "int8",
+   "skip_k": 1,
+   "replay_k": 1,
+   "ahat_bits": 8,
+   "refresh": 0,
+   "ms_step": 94.34837197884917,
+   "speedup_vs_fp16_full": 0.9904014193461964,
+   "pct_vs_fp16_full": -0.9691606318718696
+  },
+  {
+   "label": "full a_hat int8 refresh",
+   "mode": "int8",
+   "skip_k": 1,
+   "replay_k": 1,
+   "ahat_bits": 8,
+   "refresh": 1,
+   "ms_step": 186.13363769836724,
+   "speedup_vs_fp16_full": 0.5020197460078695,
+   "pct_vs_fp16_full": -99.19535196616036
+  },
+  {
+   "label": "full a_hat int4 held",
+   "mode": "int8",
+   "skip_k": 1,
+   "replay_k": 1,
+   "ahat_bits": 4,
+   "refresh": 0,
+   "ms_step": 95.11231295764446,
+   "speedup_vs_fp16_full": 0.9824465267968742,
+   "pct_vs_fp16_full": -1.7867102915368283
+  },
+  {
+   "label": "full a_hat int4 refresh",
+   "mode": "int8",
+   "skip_k": 1,
+   "replay_k": 1,
+   "ahat_bits": 4,
+   "refresh": 1,
+   "ms_step": 186.67174777947366,
+   "speedup_vs_fp16_full": 0.500572596723338,
+   "pct_vs_fp16_full": -99.77122330423755
+  },
+  {
+   "label": "skip-K=4 a_hat fp16",
+   "mode": "int8",
+   "skip_k": 4,
+   "replay_k": 1,
+   "ahat_bits": 16,
+   "refresh": 0,
+   "ms_step": 92.18882449902594,
+   "speedup_vs_fp16_full": 1.0136018332877477,
+   "pct_vs_fp16_full": 1.3419306123025125
+  },
+  {
+   "label": "skip-K=4 a_hat int8 held",
+   "mode": "int8",
+   "skip_k": 4,
+   "replay_k": 1,
+   "ahat_bits": 8,
+   "refresh": 0,
+   "ms_step": 93.85554566048086,
+   "speedup_vs_fp16_full": 0.9956019206247123,
+   "pct_vs_fp16_full": -0.44175079257862093
+  },
+  {
+   "label": "skip-K=4 a_hat int4 held",
+   "mode": "int8",
+   "skip_k": 4,
+   "replay_k": 1,
+   "ahat_bits": 4,
+   "refresh": 0,
+   "ms_step": 94.065699595958,
+   "speedup_vs_fp16_full": 0.9933776277880398,
+   "pct_vs_fp16_full": -0.6666520391350319
+  },
+  {
+   "label": "replay-K=4 a_hat fp16",
+   "mode": "int8",
+   "skip_k": 1,
+   "replay_k": 4,
+   "ahat_bits": 16,
+   "refresh": 0,
+   "ms_step": 66.43112438265234,
+   "speedup_vs_fp16_full": 1.406611168924555,
+   "pct_vs_fp16_full": 28.90714775394792
+  },
+  {
+   "label": "replay-K=4 a_hat int8 held",
+   "mode": "int8",
+   "skip_k": 1,
+   "replay_k": 4,
+   "ahat_bits": 8,
+   "refresh": 0,
+   "ms_step": 67.75133357848972,
+   "speedup_vs_fp16_full": 1.3792018043837022,
+   "pct_vs_fp16_full": 27.494294393933806
+  },
+  {
+   "label": "replay-K=4 a_hat int4 held",
+   "mode": "int8",
+   "skip_k": 1,
+   "replay_k": 4,
+   "ahat_bits": 4,
+   "refresh": 0,
+   "ms_step": 67.84181243740022,
+   "speedup_vs_fp16_full": 1.3773623988462529,
+   "pct_vs_fp16_full": 27.397466285006068
+  },
+  {
+   "label": "W4A4 full a_hat fp16",
+   "mode": "int4",
+   "skip_k": 1,
+   "replay_k": 1,
+   "ahat_bits": 16,
+   "refresh": 0,
+   "ms_step": 88.59038151800632,
+   "speedup_vs_fp16_full": 1.0547732148761833,
+   "pct_vs_fp16_full": 5.1928901970280705
+  },
+  {
+   "label": "W4A4 full a_hat int4 held",
+   "mode": "int4",
+   "skip_k": 1,
+   "replay_k": 1,
+   "ahat_bits": 4,
+   "refresh": 0,
+   "ms_step": 89.87152385991067,
+   "speedup_vs_fp16_full": 1.039737143730991,
+   "pct_vs_fp16_full": 3.8218451625569854
+  },
+  {
+   "label": "W4A4 full a_hat int4 refresh",
+   "mode": "int4",
+   "skip_k": 1,
+   "replay_k": 1,
+   "ahat_bits": 4,
+   "refresh": 1,
+   "ms_step": 176.2485943036154,
+   "speedup_vs_fp16_full": 0.530175925033964,
+   "pct_vs_fp16_full": -88.61663700326231
+  },
+  {
+   "label": "W4A4 skip-K=4 a_hat fp16",
+   "mode": "int4",
+   "skip_k": 4,
+   "replay_k": 1,
+   "ahat_bits": 16,
+   "refresh": 0,
+   "ms_step": 86.91687983926386,
+   "speedup_vs_fp16_full": 1.0750818677989782,
+   "pct_vs_fp16_full": 6.983827934210598
+  },
+  {
+   "label": "W4A4 skip-K=4 a_hat int4 held",
+   "mode": "int4",
+   "skip_k": 4,
+   "replay_k": 1,
+   "ahat_bits": 4,
+   "refresh": 0,
+   "ms_step": 88.4699077391997,
+   "speedup_vs_fp16_full": 1.056209550894016,
+   "pct_vs_fp16_full": 5.321818084909187
+  },
+  {
+   "label": "W4A4 replay-K=4 a_hat fp16",
+   "mode": "int4",
+   "skip_k": 1,
+   "replay_k": 4,
+   "ahat_bits": 16,
+   "refresh": 0,
+   "ms_step": 64.74661443848163,
+   "speedup_vs_fp16_full": 1.443206912535,
+   "pct_vs_fp16_full": 30.709866248943122
+  },
+  {
+   "label": "W4A4 replay-K=4 a_hat int4 held",
+   "mode": "int4",
+   "skip_k": 1,
+   "replay_k": 4,
+   "ahat_bits": 4,
+   "refresh": 0,
+   "ms_step": 65.87612115778029,
+   "speedup_vs_fp16_full": 1.4184618019183282,
+   "pct_vs_fp16_full": 29.50109769275424
+  }
+ ]
+}

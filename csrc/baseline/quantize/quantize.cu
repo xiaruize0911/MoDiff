@@ -1245,9 +1245,15 @@ __global__ void upsample2x_quantize_noahat_kernel(
     // serves both modes -- no cloned MoDiff twin. The loop already grids over OUTPUT elements,
     // which is what makes this work: nearest-2x upsample gives each output position its own a_hat
     // entry, and a clone gridding over input positions would have had to quantize four times.
-    __half* __restrict__ a_hat_cache) {
+    __half* __restrict__ a_hat_cache,
+    bool write_ahat,
+    bool ahat_i8 = false,
+    const float* ahat_qscale = nullptr) {
     float scale = *scale_ptr;
     const float inv_scale = 1.0f / scale;
+    const float ahat_s = ahat_i8 ? ahat_qscale[0] : 1.0f;
+    const float ahat_inv = ahat_i8 ? (1.0f / ahat_s) : 1.0f;
+    const float ahat_lim = ahat_i8 ? ahat_qscale[1] : 127.0f;
     const int Wo = W * 2, Ho = H * 2;
     long idx = (long)blockIdx.x * blockDim.x + threadIdx.x;
     for (long i = idx; i < num_elements_out; i += (long)blockDim.x * gridDim.x) {
@@ -1261,9 +1267,21 @@ __global__ void upsample2x_quantize_noahat_kernel(
         long i_in = ((n * H + hi) * (long)W + wi) * C + c;
         float xval = load_as_float(x, (int)i_in);
         if (smooth_inv != nullptr) xval *= smooth_inv[c % num_channels];
-        const float cache = (a_hat_cache != nullptr) ? __half2float(a_hat_cache[i]) : 0.0f;
+        float cache = 0.0f;
+        if (a_hat_cache != nullptr) {
+            if (ahat_i8) cache = (float)reinterpret_cast<const int8_t*>(a_hat_cache)[i] * ahat_s;
+            else cache = __half2float(a_hat_cache[i]);
+        }
         float q = fmaxf(-127.0f, fminf(127.0f, roundf((xval - cache) * scale)));
-        if (a_hat_cache != nullptr) a_hat_cache[i] = __float2half_rn(cache + q * inv_scale);
+        if (a_hat_cache != nullptr && write_ahat) {
+            float neu = cache + q * inv_scale;
+            if (ahat_i8) {
+                reinterpret_cast<int8_t*>(a_hat_cache)[i] =
+                    (int8_t)fmaxf(-ahat_lim, fminf(ahat_lim, roundf(neu * ahat_inv)));
+            } else {
+                a_hat_cache[i] = __float2half_rn(neu);
+            }
+        }
         output_int8[i] = static_cast<int8_t>(q);
     }
 }
@@ -1274,6 +1292,7 @@ __global__ void upsample2x_quantize_pack_noahat_kernel(
     const float* __restrict__ scale_ptr, const float* __restrict__ smooth_inv,
     int C, int H, int W, int num_channels, long num_elements_out,
     __half* __restrict__ a_hat_cache,     // nullptr => baseline, bit-identical (see int8 sibling)
+    bool write_ahat,
     // ACTIVATION ZERO POINT (plan fix #2), AND THIS KERNEL HAS TWO ROLES:
     //   a_hat_cache == nullptr  -> quantizes the ACTIVATION on the activation grid, feeding a conv
     //                              that adds the zp-corrected bias.  z applies.
@@ -1284,9 +1303,14 @@ __global__ void upsample2x_quantize_pack_noahat_kernel(
     //                              bias at all.
     // The host wrapper TORCH_CHECKs the second case, so this parameter is only ever non-zero in the
     // first. z == 0 reproduces the old kernel exactly in both.
-    float zp = 0.0f) {
+    float zp = 0.0f,
+    bool ahat_i8 = false,
+    const float* ahat_qscale = nullptr) {
     float scale = *scale_ptr;
     const float inv_scale = 1.0f / scale;
+    const float ahat_s = ahat_i8 ? ahat_qscale[0] : 1.0f;
+    const float ahat_inv = ahat_i8 ? (1.0f / ahat_s) : 1.0f;
+    const float ahat_lim = ahat_i8 ? ahat_qscale[1] : 127.0f;
     const int Wo = W * 2, Ho = H * 2;
     long idx = (long)blockIdx.x * blockDim.x + threadIdx.x;
     long stride = (long)blockDim.x * gridDim.x;
@@ -1301,17 +1325,38 @@ __global__ void upsample2x_quantize_pack_noahat_kernel(
         long pix_in = (n * H + hi) * (long)W + wi;
         float x0 = load_as_float(x, (int)(pix_in * C + c0));
         if (smooth_inv != nullptr) x0 *= smooth_inv[c0 % num_channels];
-        const float c_0 = (a_hat_cache != nullptr) ? __half2float(a_hat_cache[base]) : 0.0f;
+        float c_0 = 0.0f;
+        if (a_hat_cache != nullptr) {
+            c_0 = ahat_i8 ? (float)reinterpret_cast<const int8_t*>(a_hat_cache)[base] * ahat_s
+                          : __half2float(a_hat_cache[base]);
+        }
         float q0 = fmaxf(-7.0f, fminf(7.0f, roundf((x0 - c_0) * scale) + zp));
-        if (a_hat_cache != nullptr) a_hat_cache[base] = __float2half_rn(c_0 + q0 * inv_scale);
+        if (a_hat_cache != nullptr && write_ahat) {
+            float neu = c_0 + q0 * inv_scale;
+            if (ahat_i8)
+                reinterpret_cast<int8_t*>(a_hat_cache)[base] =
+                    (int8_t)fmaxf(-ahat_lim, fminf(ahat_lim, roundf(neu * ahat_inv)));
+            else
+                a_hat_cache[base] = __float2half_rn(neu);
+        }
         float q1 = 0.0f;
         if (base + 1 < num_elements_out) {
             float x1 = load_as_float(x, (int)(pix_in * C + c0 + 1));
             if (smooth_inv != nullptr) x1 *= smooth_inv[(c0 + 1) % num_channels];
-            const float c_1 = (a_hat_cache != nullptr) ? __half2float(a_hat_cache[base + 1]) : 0.0f;
+            float c_1 = 0.0f;
+            if (a_hat_cache != nullptr) {
+                c_1 = ahat_i8 ? (float)reinterpret_cast<const int8_t*>(a_hat_cache)[base + 1] * ahat_s
+                              : __half2float(a_hat_cache[base + 1]);
+            }
             q1 = fmaxf(-7.0f, fminf(7.0f, roundf((x1 - c_1) * scale) + zp));
-            if (a_hat_cache != nullptr)
-                a_hat_cache[base + 1] = __float2half_rn(c_1 + q1 * inv_scale);
+            if (a_hat_cache != nullptr && write_ahat) {
+                float neu = c_1 + q1 * inv_scale;
+                if (ahat_i8)
+                    reinterpret_cast<int8_t*>(a_hat_cache)[base + 1] =
+                        (int8_t)fmaxf(-ahat_lim, fminf(ahat_lim, roundf(neu * ahat_inv)));
+                else
+                    a_hat_cache[base + 1] = __float2half_rn(neu);
+            }
         }
         output_packed[base / 2] = (static_cast<int8_t>(q0) & 0x0F) | ((static_cast<int8_t>(q1) & 0x0F) << 4);
     }
@@ -1322,7 +1367,7 @@ __global__ void upsample2x_quantize_pack_noahat_kernel(
 // Output: INT8 [N,C,2H,2W] channels_last -- feeds the Upsample.conv's conv2d_int*_evt_* directly.
 torch::Tensor upsample2x_quantize_noahat_fprop(
     torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv,
-    torch::Tensor a_hat_cache) {
+    torch::Tensor a_hat_cache, bool write_ahat, torch::Tensor ahat_scale) {
     // Name kept for pybind/API compatibility (csrc/modiff_kernels_api.h notes the _noahat spelling
     // is load-bearing); an EMPTY a_hat_cache is the no-a_hat baseline it was named for.
     TORCH_CHECK(x.dim() == 4, "upsample2x_quantize_noahat_fprop: x must be [N,C,H,W]");
@@ -1336,24 +1381,36 @@ torch::Tensor upsample2x_quantize_noahat_fprop(
     const float* smooth_ptr = (smooth_inv.numel() > 0) ? smooth_inv.data_ptr<float>() : nullptr;
     int num_channels = (smooth_inv.numel() > 0) ? (int)smooth_inv.numel() : C;
     __half* cache_ptr = nullptr;
+    bool ahat_i8 = false;
+    const float* ahat_qscale_ptr = nullptr;
     if (a_hat_cache.numel() > 0) {
-        TORCH_CHECK(a_hat_cache.scalar_type() == torch::kHalf,
-                    "upsample2x_quantize_noahat_fprop: a_hat_cache must be fp16");
+        TORCH_CHECK(a_hat_cache.scalar_type() == torch::kHalf
+                        || a_hat_cache.scalar_type() == torch::kInt8,
+                    "upsample2x_quantize_noahat_fprop: a_hat_cache must be fp16 or int8");
         TORCH_CHECK(a_hat_cache.numel() == num_elements_out,
                     "upsample2x_quantize_noahat_fprop: a_hat_cache must be POST-upsample sized "
                     "(N*C*2H*2W)");
-        cache_ptr = reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>());
+        if (a_hat_cache.scalar_type() == torch::kInt8) {
+            TORCH_CHECK(ahat_scale.defined() && ahat_scale.numel() >= 2
+                        && ahat_scale.scalar_type() == torch::kFloat32,
+                        "upsample2x_quantize_noahat_fprop: int8 a_hat needs fp32 [scale, qmax]");
+            cache_ptr = reinterpret_cast<__half*>(a_hat_cache.data_ptr<int8_t>());
+            ahat_i8 = true;
+            ahat_qscale_ptr = ahat_scale.data_ptr<float>();
+        } else {
+            cache_ptr = reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>());
+        }
     }
     if (x.scalar_type() == torch::kHalf) {
         upsample2x_quantize_noahat_kernel<__half><<<grid_size, block_size, 0, stream>>>(
             reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), y.data_ptr<int8_t>(),
             scale_buf.data_ptr<float>(), smooth_ptr, C, H, W, num_channels, num_elements_out,
-            cache_ptr);
+            cache_ptr, write_ahat, ahat_i8, ahat_qscale_ptr);
     } else {
         upsample2x_quantize_noahat_kernel<float><<<grid_size, block_size, 0, stream>>>(
             x.data_ptr<float>(), y.data_ptr<int8_t>(),
             scale_buf.data_ptr<float>(), smooth_ptr, C, H, W, num_channels, num_elements_out,
-            cache_ptr);
+            cache_ptr, write_ahat, ahat_i8, ahat_qscale_ptr);
     }
     return y;
 }
@@ -1363,10 +1420,9 @@ torch::Tensor upsample2x_quantize_noahat_fprop(
 // (channel-pair packing), matching every other int4 quantize kernel in this file.
 static torch::Tensor upsample2x_quantize_pack_noahat_fprop_impl(
     torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv,
-    torch::Tensor a_hat_cache, double zero_point) {
+    torch::Tensor a_hat_cache, double zero_point, bool write_ahat,
+    torch::Tensor ahat_scale) {
     TORCH_CHECK(x.dim() == 4, "upsample2x_quantize_pack_noahat_fprop: x must be [N,C,H,W]");
-    // See the kernel's zp comment: with an a_hat cache this kernel quantizes a DELTA, where the
-    // zero point is undefined and would also break the a_hat update. Refuse rather than pick.
     TORCH_CHECK(a_hat_cache.numel() == 0 || zero_point == 0.0,
                 "upsample2x_quantize_pack_noahat_fprop: a non-zero activation zero point was passed "
                 "together with an a_hat cache, i.e. to a DELTA quantize. The zero point belongs to "
@@ -1383,23 +1439,35 @@ static torch::Tensor upsample2x_quantize_pack_noahat_fprop_impl(
     const float* smooth_ptr = (smooth_inv.numel() > 0) ? smooth_inv.data_ptr<float>() : nullptr;
     int num_channels = (smooth_inv.numel() > 0) ? (int)smooth_inv.numel() : C;
     __half* cache_ptr = nullptr;
+    bool ahat_i8 = false;
+    const float* ahat_qscale_ptr = nullptr;
     if (a_hat_cache.numel() > 0) {
-        TORCH_CHECK(a_hat_cache.scalar_type() == torch::kHalf,
-                    "upsample2x_quantize_pack_noahat_fprop: a_hat_cache must be fp16");
+        TORCH_CHECK(a_hat_cache.scalar_type() == torch::kHalf
+                        || a_hat_cache.scalar_type() == torch::kInt8,
+                    "upsample2x_quantize_pack_noahat_fprop: a_hat_cache must be fp16 or int8");
         TORCH_CHECK(a_hat_cache.numel() == num_elements_out,
                     "upsample2x_quantize_pack_noahat_fprop: a_hat_cache must be POST-upsample sized");
-        cache_ptr = reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>());
+        if (a_hat_cache.scalar_type() == torch::kInt8) {
+            TORCH_CHECK(ahat_scale.defined() && ahat_scale.numel() >= 2
+                        && ahat_scale.scalar_type() == torch::kFloat32,
+                        "upsample2x_quantize_pack_noahat_fprop: int8 a_hat needs fp32 [scale, qmax]");
+            cache_ptr = reinterpret_cast<__half*>(a_hat_cache.data_ptr<int8_t>());
+            ahat_i8 = true;
+            ahat_qscale_ptr = ahat_scale.data_ptr<float>();
+        } else {
+            cache_ptr = reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>());
+        }
     }
     if (x.scalar_type() == torch::kHalf) {
         upsample2x_quantize_pack_noahat_kernel<__half><<<grid_size, block_size, 0, stream>>>(
             reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), x_packed.data_ptr<int8_t>(),
             scale_buf.data_ptr<float>(), smooth_ptr, C, H, W, num_channels, num_elements_out, cache_ptr,
-            (float)zero_point);
+            write_ahat, (float)zero_point, ahat_i8, ahat_qscale_ptr);
     } else {
         upsample2x_quantize_pack_noahat_kernel<float><<<grid_size, block_size, 0, stream>>>(
             x.data_ptr<float>(), x_packed.data_ptr<int8_t>(),
             scale_buf.data_ptr<float>(), smooth_ptr, C, H, W, num_channels, num_elements_out, cache_ptr,
-            (float)zero_point);
+            write_ahat, (float)zero_point, ahat_i8, ahat_qscale_ptr);
     }
     return x_packed.view({N, H * 2, W * 2, C / 2});
 }
@@ -1407,15 +1475,15 @@ static torch::Tensor upsample2x_quantize_pack_noahat_fprop_impl(
 // Two arities, same rationale as the other _zp pairs in this tree.
 torch::Tensor upsample2x_quantize_pack_noahat_fprop(
     torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv,
-    torch::Tensor a_hat_cache) {
-    return upsample2x_quantize_pack_noahat_fprop_impl(x, scale_buf, smooth_inv, a_hat_cache, 0.0);
+    torch::Tensor a_hat_cache, bool write_ahat, torch::Tensor ahat_scale) {
+    return upsample2x_quantize_pack_noahat_fprop_impl(x, scale_buf, smooth_inv, a_hat_cache, 0.0, write_ahat, ahat_scale);
 }
 
 torch::Tensor upsample2x_quantize_pack_noahat_fprop_zp(
     torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv,
     torch::Tensor a_hat_cache, double zero_point) {
     return upsample2x_quantize_pack_noahat_fprop_impl(x, scale_buf, smooth_inv, a_hat_cache,
-                                                      zero_point);
+                                                      zero_point, true, torch::Tensor());
 }
 
 // Op: fused Downsample(avg_pool,2x2,stride2) + cache-free static int8 quantize (baseline conv, no

@@ -87,10 +87,10 @@ torch::Tensor step1_quantize_no_ahat_fprop(
 // (MODIFF_DELTA_REFRESH > 1) scale depends on once the delta has outgrown it -- see
 // docs/delta_clip_2026-08-06/FINDINGS.md, whose clip ratio is itself now retired.
 torch::Tensor step1_static_quantize_fprop(
-    torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor scale_buf, torch::Tensor smooth_inv, bool a4 = false);
+    torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor scale_buf, torch::Tensor smooth_inv, bool a4 = false, bool write_ahat = true, torch::Tensor ahat_scale = {});
 
 torch::Tensor step1_static_quantize_fprop_silu(
-    torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor scale_buf, torch::Tensor smooth_inv, bool a4 = false);
+    torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor scale_buf, torch::Tensor smooth_inv, bool a4 = false, bool write_ahat = true, torch::Tensor ahat_scale = {});
 
 torch::Tensor step1_quantize_pack_int4_fprop(
     torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor residual_buf,
@@ -98,7 +98,7 @@ torch::Tensor step1_quantize_pack_int4_fprop(
     torch::Tensor retire_count, float Q_level, torch::Tensor smooth_inv);
 
 torch::Tensor step1_static_quantize_pack_int4_fprop(
-    torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor scale_buf, torch::Tensor smooth_inv);
+    torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor scale_buf, torch::Tensor smooth_inv, bool write_ahat = true, torch::Tensor ahat_scale = {});
 
 // cache-free static quantize (baseline conv, NO a_hat read/write)
 torch::Tensor step1_static_quantize_noahat_fprop(
@@ -119,10 +119,10 @@ torch::Tensor step1_static_quantize_pack_int4_noahat_fprop_zp(
 // already grids over output elements and so already visits each a_hat entry exactly once.
 torch::Tensor upsample2x_quantize_noahat_fprop(
     torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv,
-    torch::Tensor a_hat_cache);
+    torch::Tensor a_hat_cache, bool write_ahat = true, torch::Tensor ahat_scale = {});
 torch::Tensor upsample2x_quantize_pack_noahat_fprop(
     torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv,
-    torch::Tensor a_hat_cache);
+    torch::Tensor a_hat_cache, bool write_ahat = true, torch::Tensor ahat_scale = {});
 //: Activation-zero-point variant (plan fix #2). Only legal with an EMPTY a_hat_cache: with a cache
 //: this kernel quantizes a delta, where z is undefined and would also corrupt the cache update.
 torch::Tensor upsample2x_quantize_pack_noahat_fprop_zp(
@@ -139,7 +139,7 @@ torch::Tensor avgpool2x_quantize_pack_noahat_fprop(
     torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv);
 
 torch::Tensor step1_static_quantize_pack_int4_fprop_silu(
-    torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor scale_buf, torch::Tensor smooth_inv);
+    torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor scale_buf, torch::Tensor smooth_inv, bool write_ahat = true, torch::Tensor ahat_scale = {});
 
 torch::Tensor step1_quantize_pack_int4_no_ahat_fprop(
     torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor residual_buf,
@@ -244,6 +244,20 @@ torch::Tensor conv2d_int8_evt_o_hat(
 torch::Tensor conv2d_int4_evt_o_hat(
     torch::Tensor input, torch::Tensor weight_packed, torch::Tensor inv_scale, torch::Tensor weight_scales,
     torch::Tensor o_hat, int sh, int sw, int ph, int pw, int dh, int dw);
+torch::Tensor conv2d_int8_evt_o_hat_skip(
+    torch::Tensor input, torch::Tensor weight, torch::Tensor inv_scale, torch::Tensor weight_scales,
+    torch::Tensor o_hat, torch::Tensor output, int sh, int sw, int ph, int pw, int dh, int dw);
+torch::Tensor conv2d_int4_evt_o_hat_skip(
+    torch::Tensor input, torch::Tensor weight_packed, torch::Tensor inv_scale, torch::Tensor weight_scales,
+    torch::Tensor o_hat, torch::Tensor output, int sh, int sw, int ph, int pw, int dh, int dw);
+torch::Tensor conv2d_int8_evt_o_hat_residual_skip(
+    torch::Tensor input, torch::Tensor weight, torch::Tensor inv_scale, torch::Tensor weight_scales,
+    torch::Tensor o_hat, torch::Tensor residual, torch::Tensor output,
+    int sh, int sw, int ph, int pw, int dh, int dw);
+torch::Tensor conv2d_int4_evt_o_hat_residual_skip(
+    torch::Tensor input, torch::Tensor weight_packed, torch::Tensor inv_scale, torch::Tensor weight_scales,
+    torch::Tensor o_hat, torch::Tensor residual, torch::Tensor output,
+    int sh, int sw, int ph, int pw, int dh, int dw);
 
 // ---- csrc/kernels/conv/conv2d_int4.cu ----
 torch::Tensor conv2d_int4_fprop(
@@ -339,7 +353,7 @@ std::vector<torch::Tensor> group_norm_silu_delta_quantize_pack_cat2_nhwc(
     torch::Tensor scale, torch::Tensor smooth_inv, torch::Tensor mod_scale,
     torch::Tensor mod_shift, torch::Tensor absmax_buf, torch::Tensor scale_out,
     torch::Tensor inv_scale_out, torch::Tensor retire_count, double Q_level,
-    bool report_next, double safety);
+    bool report_next, double safety, bool write_ahat = true, torch::Tensor ahat_scale = {});
 
 // ---- csrc/kernels/norm/group_norm_silu.cu ----
 torch::Tensor group_norm_silu_nhwc(
@@ -411,7 +425,7 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc(
     torch::Tensor mod_scale, torch::Tensor mod_shift,
     torch::Tensor absmax_buf, torch::Tensor scale_out, torch::Tensor inv_scale_out,
     torch::Tensor retire_count, double Q_level, bool report_next, double safety,
-    bool a4 = false);
+    bool a4 = false, bool write_ahat = true, torch::Tensor ahat_scale = {});
 // SINGLE-KERNEL (group-major) twin of the above's static path. **A FAILED EXPERIMENT, kept as
 // executable evidence under the dead-code policy at the top of this file** -- it is 0.44x-0.98x the
 // two-kernel path (slower everywhere, worst at the CPG the UNet uses most), because one-block-
@@ -422,7 +436,7 @@ torch::Tensor group_norm_silu_delta_quantize_nhwc_fused(
     torch::Tensor x, torch::Tensor weight, torch::Tensor bias, torch::Tensor a_hat_cache,
     int64_t num_groups, double eps, bool apply_silu,
     torch::Tensor scale, torch::Tensor smooth_inv,
-    torch::Tensor mod_scale, torch::Tensor mod_shift, bool a4 = false);
+    torch::Tensor mod_scale, torch::Tensor mod_shift, bool a4 = false, bool write_ahat = true);
 // MoDiff twin of group_norm_silu_quantize_resize_nhwc: fuses GN(+mod)(+SiLU)+2x resize+delta
 // quantize+in-place a_hat for the eight updown ResBlocks, which get no fusion otherwise.
 // The trailing eight arguments are the same dynamic-scale contract as the non-resize sibling
@@ -440,7 +454,7 @@ torch::Tensor group_norm_silu_delta_quantize_resize_nhwc(
     int64_t k_pad, int64_t resize, bool pack, torch::Tensor a_hat_cache,
     torch::Tensor absmax_buf, torch::Tensor scale_out, torch::Tensor inv_scale_out,
     torch::Tensor retire_count, double Q_level, bool report_next, double safety,
-    bool a4);
+    bool a4, bool write_ahat = true, torch::Tensor ahat_scale = {});
 
 torch::Tensor group_norm_silu_delta_quantize_pack_nhwc(
     torch::Tensor x, torch::Tensor weight, torch::Tensor bias, torch::Tensor a_hat_cache,
@@ -448,7 +462,8 @@ torch::Tensor group_norm_silu_delta_quantize_pack_nhwc(
     torch::Tensor scale, torch::Tensor smooth_inv,
     torch::Tensor mod_scale, torch::Tensor mod_shift,
     torch::Tensor absmax_buf, torch::Tensor scale_out, torch::Tensor inv_scale_out,
-    torch::Tensor retire_count, double Q_level, bool report_next, double safety);
+    torch::Tensor retire_count, double Q_level, bool report_next, double safety,
+    bool write_ahat = true, torch::Tensor ahat_scale = {});
 
 // ---- csrc/kernels/norm/fused_gn_qkv.cu ----
 torch::Tensor fused_gn_qkv(
