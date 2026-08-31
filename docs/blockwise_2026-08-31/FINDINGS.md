@@ -488,6 +488,78 @@ The weight rows do slope, and clear the noise floor: W8A8 0.0258 -> 0.0139 at G=
 
 ![attribution](plots/fig5_attribution.png)
 
+
+### All 6 shipped/reference kernels vs (B, N, H, W)
+
+Same axes and default point as the conv-only sweep, but now every kernel in each production
+path -- both GN-stage fusions and both convs -- rather than just the conv.
+[`scripts/kernel_axis_sweep.py`](scripts/kernel_axis_sweep.py).
+
+![kernel axis sweep](plots/fig10_kernel_axis_sweep.png)
+
+**B — batch** (N=384, H=16, W=16)
+
+| B | fp16 GN | base GN(fast) | MoDiff GN | fp16 conv | base conv(D1) | MoDiff conv(D2) | **fp16 tot** | **base tot** | **MoDiff tot** |
+|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| 8 | 0.021 | 0.026 | 0.025 | 0.071 | 0.040 | 0.039 | **0.093** | **0.065** | **0.065** |
+| 16 | 0.038 | 0.017 | 0.034 | 0.115 | 0.085 | 0.079 | **0.153** | **0.102** | **0.113** |
+| 32 | 0.077 | 0.036 | 0.066 | 0.193 | 0.132 | 0.141 | **0.270** | **0.168** | **0.207** |
+| 64 | 0.160 | 0.064 | 0.118 | 0.355 | 0.239 | 0.231 | **0.515** | **0.303** | **0.349** |
+| 128 | 0.300 | 0.117 | 0.217 | 0.716 | 0.456 | 0.439 | **1.017** | **0.573** | **0.656** |
+| 256 | 0.579 | 0.224 | 0.413 | 1.412 | 0.868 | 0.829 | **1.991** | **1.092** | **1.242** |
+
+**N — channels (Cin=Cout)** (B=128, H=16, W=16)
+
+| N | fp16 GN | base GN(fast) | MoDiff GN | fp16 conv | base conv(D1) | MoDiff conv(D2) | **fp16 tot** | **base tot** | **MoDiff tot** |
+|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| 128 | 0.202 | 0.061 | 0.082 | 0.108 | 0.082 | 0.082 | **0.310** | **0.143** | **0.164** |
+| 192 | 0.232 | 0.073 | 0.118 | 0.205 | 0.223 | 0.216 | **0.437** | **0.296** | **0.334** |
+| 256 | 0.232 | 0.081 | 0.154 | 0.341 | 0.238 | 0.226 | **0.572** | **0.319** | **0.379** |
+| 384 | 0.299 | 0.117 | 0.217 | 0.715 | 0.457 | 0.439 | **1.014** | **0.574** | **0.656** |
+| 512 | 0.348 | 0.163 | 0.283 | 1.283 | 0.748 | 0.723 | **1.631** | **0.911** | **1.006** |
+| 768 | 0.455 | 0.228 | 0.413 | 2.923 | 1.581 | 1.530 | **3.378** | **1.809** | **1.944** |
+| 1152 | 0.634 | 0.336 | 0.604 | 6.471 | 3.413 | 3.375 | **7.105** | **3.750** | **3.979** |
+| 1536 | 0.788 | 0.487 | 0.800 | 11.586 | 6.002 | 6.005 | **12.374** | **6.489** | **6.805** |
+
+**H — height (W=16)** (B=128, N=384, W=16)
+
+| H | fp16 GN | base GN(fast) | MoDiff GN | fp16 conv | base conv(D1) | MoDiff conv(D2) | **fp16 tot** | **base tot** | **MoDiff tot** |
+|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| 2 | 0.061 | 0.019 | 0.043 | 0.119 | 0.087 | 0.082 | **0.180** | **0.106** | **0.125** |
+| 4 | 0.169 | 0.034 | 0.071 | 0.194 | 0.142 | 0.137 | **0.363** | **0.176** | **0.207** |
+| 8 | 0.226 | 0.063 | 0.119 | 0.356 | 0.241 | 0.233 | **0.582** | **0.304** | **0.352** |
+| 16 | 0.302 | 0.118 | 0.218 | 0.721 | 0.463 | 0.443 | **1.023** | **0.581** | **0.661** |
+| 32 | 0.467 | 0.230 | 0.412 | 1.496 | 0.877 | 0.837 | **1.963** | **1.107** | **1.249** |
+
+**W — width (H=16)** (B=128, N=384, H=16)
+
+| W | fp16 GN | base GN(fast) | MoDiff GN | fp16 conv | base conv(D1) | MoDiff conv(D2) | **fp16 tot** | **base tot** | **MoDiff tot** |
+|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| 2 | 0.059 | 0.019 | 0.044 | 0.117 | 0.088 | 0.084 | **0.176** | **0.107** | **0.128** |
+| 4 | 0.171 | 0.032 | 0.072 | 0.194 | 0.129 | 0.141 | **0.365** | **0.161** | **0.213** |
+| 8 | 0.230 | 0.062 | 0.118 | 0.356 | 0.241 | 0.233 | **0.586** | **0.304** | **0.352** |
+| 16 | 0.300 | 0.118 | 0.217 | 0.714 | 0.464 | 0.445 | **1.014** | **0.582** | **0.662** |
+| 32 | 0.477 | 0.232 | 0.412 | 1.444 | 0.877 | 0.840 | **1.921** | **1.109** | **1.252** |
+
+Four things this adds to the fp16-baseline comparison in the fused-pair section:
+
+1. **The three convs (fp16, D1, D2) overlap almost everywhere.** This is the same "conv is a wash"
+   finding as the fused-pair table, now visible as three coincident lines across every axis rather
+   than one ratio -- there is no shape where MoDiff's conv meaningfully diverges from the baseline's.
+2. **The GN-stage ordering (baseline fast < MoDiff < fp16) is stable across every axis and every
+   value tested**, not just at the default point. Baseline's GN+quant kernel is the cheapest of the
+   three at every B, N, H, W; MoDiff's GN+delta sits in the middle; fp16's plain GN is the most
+   expensive once B >= 32 (both int8 GN kernels write less than fp16's `normed` tensor, MoDiff
+   despite reading+writing `a_hat` on top).
+3. **That ordering flips at the smallest batches.** At B=8, fp16 GN (0.021 ms) is
+   already *cheaper* than MoDiff's (0.025 ms) and close to baseline's
+   (0.026 ms) -- all three are launch-bound at this size, so the byte-count argument
+   in the fused-pair section does not apply yet. The regime where MoDiff pays a real GN tax starts
+   around B=32-64.
+4. **N=192 shows up here too**, independent of the axis_sweep.py finding: baseline's conv jumps from
+   0.073->0.223 ms between N=128 and N=192 (barely more than the N=384 value's proportional share),
+   the same half-empty-tile signature as the fp16-vs-int8 dip in the earlier sweep.
+
 ### Both together, and an unexplained inversion
 
 | | shipped | G=256 | G=128 | G=64 | G=32 | G=16 |

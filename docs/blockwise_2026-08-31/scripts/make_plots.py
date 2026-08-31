@@ -472,6 +472,54 @@ def fig_pair(d):
     plt.close(fig)
 
 
+def fig_kernel_axes(d):
+    """All 6 shipped/reference kernels' time vs each of B, N, H, W."""
+    axes_order = [k for k in ("B", "N", "H", "W") if k in d["sweeps"]]
+    fig, ax = plt.subplots(2, len(axes_order), figsize=(4.2 * len(axes_order), 7.6))
+    if len(axes_order) == 1:
+        ax = ax.reshape(2, 1)
+    dflt = d["default"]
+    kernels = [("fp16_gn_ms", "fp16 GN+SiLU", "#8c959f", "o", "-"),
+               ("base_gn_ms", "baseline GN+quant (fast)", "#bf8700", "s", "-"),
+               ("modiff_gn_ms", "MoDiff GN+delta", "#d1242f", "^", "-"),
+               ("fp16_conv_ms", "fp16 conv", "#57606a", "o", "--"),
+               ("base_conv_ms", "baseline conv (D1)", "#9a6700", "s", "--"),
+               ("modiff_conv_ms", "MoDiff conv (D2)", "#8250df", "^", "--")]
+    totals = [("fp16_total", "fp16 total", "#57606a", "o"),
+              ("base_total", "baseline total (shipped)", "#bf8700", "s"),
+              ("modiff_total", "MoDiff total (shipped)", "#8250df", "^")]
+
+    for j, axis in enumerate(axes_order):
+        rows = d["sweeps"][axis]
+        xs = [r[axis] for r in rows]
+        held = ", ".join(f"{k}={v}" for k, v in dflt.items() if k != axis)
+
+        top = ax[0][j]
+        for key, lab, col, mk, ls in kernels:
+            top.plot(xs, [r[key] for r in rows], ls, marker=mk, ms=4, color=col,
+                     linewidth=1.3, label=lab)
+        top.set_xscale("log", base=2)
+        top.set_yscale("log")
+        _style(top, axis, "ms / call" if j == 0 else "",
+               f"per-kernel time vs {axis}   ({held})")
+        if j == 0:
+            top.legend(fontsize=6.5, frameon=False)
+
+        bot = ax[1][j]
+        for key, lab, col, mk in totals:
+            bot.plot(xs, [r[key] for r in rows], marker=mk, color=col, linewidth=1.6,
+                     label=lab)
+        bot.set_xscale("log", base=2)
+        bot.set_yscale("log")
+        _style(bot, axis, "ms / step (2-kernel path)" if j == 0 else "",
+               f"fused-pair total vs {axis}")
+        if j == 0:
+            bot.legend(fontsize=7.5, frameon=False)
+    fig.tight_layout()
+    fig.savefig(os.path.join(P, "fig10_kernel_axis_sweep.png"), dpi=150)
+    plt.close(fig)
+
+
 def main() -> int:
     os.makedirs(P, exist_ok=True)
     made = []
@@ -483,7 +531,8 @@ def main() -> int:
                      ("blockwise_cost.json", fig_tradeoff),
                      ("axis_sweep.json", fig_axes),
                      ("path_kernels.json", fig_path),
-                     ("fused_pair.json", fig_pair)):
+                     ("fused_pair.json", fig_pair),
+                     ("kernel_axis_sweep.json", fig_kernel_axes)):
         d = _cost() if fn in (fig_cost,) else _load(name)
         if d is None:
             print(f"skip {fn.__name__}: {name} not present")
