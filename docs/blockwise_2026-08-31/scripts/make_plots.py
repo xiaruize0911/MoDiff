@@ -144,31 +144,44 @@ def fig_cost(d):
     """Relative speedup on conv, per shape and freq-weighted, plus where it goes."""
     fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.3))
 
-    # left: every shape's speedup vs the fused per-tensor call, over G. The point is
-    # that the curves cluster by G rather than spreading by block count.
+    # left: speedup against FP16 -- the question quantization is supposed to answer.
+    # int8 per-tensor sits above 1.0; every blockwise arm falls below it, i.e. blockwise
+    # makes quantizing the conv slower than not quantizing at all.
     ax = axes[0]
+    w = d["freq_weighted_ms"]
+    has_fp16 = "fp16" in w
+    ref = "fp16" if has_fp16 else "fused"
+    key = "vs_fp16" if has_fp16 else "vs_fused"
     for r in d["shapes"]:
         gs = sorted((int(g) for g in r["splits"]), reverse=True)
-        if not gs:
+        if not gs or key not in r["splits"][str(gs[0])]:
             continue
-        ax.plot(gs, [r["splits"][str(g)]["vs_fused"] for g in gs], marker="o", ms=3,
-                color="#57606a", alpha=0.45, linewidth=0.9)
-    w = d["freq_weighted_ms"]
-    ks = sorted((k for k in w if k != "fused"), key=lambda k: -int(k.split("=")[1]))
+        xs = [0.5] + gs if has_fp16 else gs
+        ys = ([r["int8_vs_fp16"]] if has_fp16 else []) + \
+             [r["splits"][str(g)][key] for g in gs]
+        ax.plot(xs, ys, marker="o", ms=3, color="#57606a", alpha=0.4, linewidth=0.8)
+    ks = sorted((k for k in w if k.startswith("G=")), key=lambda k: -int(k.split("=")[1]))
     gs = [int(k.split("=")[1]) for k in ks]
-    ax.plot(gs, [w["fused"] / w[k] for k in ks], marker="o", color=CG, linewidth=2.2,
-            label="freq-weighted, all 20 shapes")
-    ax.plot([], [], color="#57606a", alpha=0.45, linewidth=0.9, label="individual shapes")
-    ax.axhline(1.0, color=INK, linewidth=1.0, linestyle=":", label="fused per-tensor = 1.0x")
-    for g, k in zip(gs, ks):
-        ax.annotate(f"{w['fused'] / w[k]:.3f}x", (g, w["fused"] / w[k]), fontsize=7.5,
-                    color=CG, textcoords="offset points", xytext=(5, 5))
+    ys = [w[ref] / w[k] for k in ks]
+    if has_fp16:
+        gs = [0.5] + gs                      # per-tensor plotted at the left edge
+        ys = [w["fp16"] / w["fused"]] + ys
+    ax.plot(gs, ys, marker="o", color=CG, linewidth=2.2, label="freq-weighted, all 20 shapes")
+    ax.plot([], [], color="#57606a", alpha=0.4, linewidth=0.8, label="individual shapes")
+    ax.axhline(1.0, color=C4, linewidth=1.2, linestyle="--",
+               label="fp16 = 1.0x (below this, quantizing loses)")
+    for gg, yy in zip(gs, ys):
+        ax.annotate(f"{yy:.2f}x", (gg, yy), fontsize=7.5, color=CG,
+                    textcoords="offset points", xytext=(4, 5))
     ax.set_xscale("log", base=2)
     ax.set_yscale("log")
     ax.invert_xaxis()
-    _style(ax, "block size G (input channels)", "speedup vs fused per-tensor",
-           "Conv speedup with everything blockwise")
-    ax.legend(fontsize=8, frameon=False, loc="lower left")
+    ax.set_xticks([0.5] + [g for g in gs if g >= 1])
+    ax.set_xticklabels(["per-tensor\n(shipped)"] + [str(int(g)) for g in gs if g >= 1],
+                       fontsize=8)
+    _style(ax, "block size G (input channels)", "conv speedup vs fp16",
+           "Blockwise turns int8 into a net loss vs fp16")
+    ax.legend(fontsize=7.5, frameon=False, loc="lower left")
 
     # right: where a single split call's time goes
     a = d.get("attribution")

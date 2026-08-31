@@ -37,7 +37,12 @@ from integration.utils.preflight import preflight  # noqa: E402
 preflight("torch", what="blockwise_cost.py")
 
 import torch  # noqa: E402
+import torch.nn.functional as F  # noqa: E402
 import modiff_cutlass  # noqa: E402
+
+#: cuDNN picks a bad algo for some of these shapes without autotuning, and an
+#: under-tuned fp16 baseline would flatter every int8 arm.
+torch.backends.cudnn.benchmark = True
 
 JSON_OUT = "docs/blockwise_2026-08-31/data/blockwise_cost.json"
 BLOCKS = (256, 128, 64, 32, 16)
@@ -69,6 +74,7 @@ SHAPES = (
     (576, 192, 32, 1),
 )
 
+
 def _mk(b, cin, cout, hw, dev="cuda"):
     x = torch.randint(-127, 127, (b, cin, hw, hw), device=dev, dtype=torch.int8
                       ).contiguous(memory_format=torch.channels_last)
@@ -79,6 +85,16 @@ def _mk(b, cin, cout, hw, dev="cuda"):
     o = torch.zeros(b, cout, hw, hw, device=dev, dtype=torch.float16
                     ).contiguous(memory_format=torch.channels_last)
     return x, w, alpha, ws, o
+
+
+def _mk_fp16(b, cin, cout, hw, dev="cuda"):
+    """fp16 baseline operands, channels_last -- the `torch_conv2d_fp16` reference this
+    tree uses elsewhere (docs/bench_report_2026-08-13_postzp/scripts/kernel_speedup.py)."""
+    x = torch.randn(b, cin, hw, hw, device=dev, dtype=torch.float16
+                    ).contiguous(memory_format=torch.channels_last)
+    w = torch.randn(cout, cin, 3, 3, device=dev, dtype=torch.float16
+                    ).contiguous(memory_format=torch.channels_last)
+    return x, w
 
 
 def _time(fn, reps=30, warmup=8):
@@ -115,9 +131,19 @@ def main() -> int:
             fn(x, w, alpha, ws, o, *st)
 
         base = min(_time(full, a.reps) for _ in range(a.trials))
+
+        # fp16 reference: same conv, same layout, no quantization anywhere.
+        xh, wh = _mk_fp16(a.batch, cin, cout, hw)
+
+        def fp16():
+            F.conv2d(xh, wh, None, 1, 1, 1, 1)
+
+        f16 = min(_time(fp16, a.reps) for _ in range(a.trials))
+
         rec = {"cin": cin, "cout": cout, "hw": hw, "freq": freq, "fused_ms": base,
-               "splits": {}}
-        print(f"\n{cin}->{cout}, {hw}x{hw} (freq {freq}): fused {base:.3f} ms", flush=True)
+               "fp16_ms": f16, "int8_vs_fp16": f16 / base, "splits": {}}
+        print(f"\n{cin}->{cout}, {hw}x{hw} (freq {freq}): fp16 {f16:.3f} ms, "
+              f"int8 fused {base:.3f} ms ({f16 / base:.2f}x vs fp16)", flush=True)
 
         for g in BLOCKS:
             if g > cin:
@@ -140,12 +166,15 @@ def main() -> int:
                     fn(xs[i], wsl[i], als[i], wss[i], o, *st)
 
             t = min(_time(split, a.reps) for _ in range(a.trials))
-            rec["splits"][str(g)] = {"n_blocks": nb, "ms": t, "vs_fused": base / t}
-            print(f"  G={g:4d}  {nb:3d} calls  {t:8.3f} ms  {base / t:.3f}x", flush=True)
+            rec["splits"][str(g)] = {"n_blocks": nb, "ms": t, "vs_fused": base / t,
+                                     "vs_fp16": f16 / t}
+            print(f"  G={g:4d}  {nb:3d} calls  {t:8.3f} ms  "
+                  f"{base / t:.3f}x vs int8-fused  {f16 / t:.3f}x vs fp16", flush=True)
         rows.append(rec)
 
     # frequency-weighted totals over the sampled shapes
-    wsum = {"fused": sum(r["fused_ms"] * r["freq"] for r in rows)}
+    wsum = {"fp16": sum(r["fp16_ms"] * r["freq"] for r in rows),
+            "fused": sum(r["fused_ms"] * r["freq"] for r in rows)}
     for g in BLOCKS:
         gs = [r for r in rows if str(g) in r["splits"]]
         if len(gs) == len(rows):
@@ -155,9 +184,10 @@ def main() -> int:
         print(f"\nexcluded from the weighted total (not every Cin divides G): "
               f"{missing} -- per-shape rows above still stand", flush=True)
     print("\nfreq-weighted over ALL 20 UNet shapes, 62 calls/step "
-          "(ms, conv path only):", flush=True)
+          "(ms, conv kernel only):", flush=True)
     for k, v in wsum.items():
-        print(f"  {k:8s} {v:8.2f}  {wsum['fused'] / v:.3f}x vs fused", flush=True)
+        print(f"  {k:8s} {v:8.2f} ms   {wsum['fp16'] / v:6.3f}x vs fp16   "
+              f"{wsum['fused'] / v:6.3f}x vs int8-fused", flush=True)
 
     # ---- where the slowdown comes from ----
     # The per-shape ratios cluster by G rather than by block count, so "the epilogue runs

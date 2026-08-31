@@ -7,8 +7,8 @@ NVIDIA A40 · LSUN-Churches LDM-8 · 50 步 DDIM · n=24 · 3 个种子。全文
 
 > **G=32 通道**是合适的块大小，但**只值得用在权重上**。激活做 blockwise 在所有块大小上都没有收益
 > （曲线对 G 完全平），在现行 refresh 节奏下反而更差。权重 blockwise 在 W8A8 上值 ~1.9×。
-> 但现有 epilogue 无法承载任何 blockwise，唯一能跑的实现在 G=32 时让 conv 路径慢 **5.0×**——
-> 这是一个 mainloop 工程，不是一个开关。
+> 但现有 epilogue 无法承载任何 blockwise，唯一能跑的实现在 G=32 时让 conv 慢 **5.0×**——
+> 换算成对 fp16 就是 **0.29×**，即比不量化还慢。这是一个 mainloop 工程，不是一个开关。
 
 英文完整版见 [FINDINGS.md](FINDINGS.md)。
 
@@ -55,12 +55,41 @@ split-K blockwise vs 参考实现: relerr 3.7e-04   （残差是 fp16 o_hat 累�
 A40, B=128，**全部 20 个 UNet ResBlock conv 形状**、按每步调用次数加权（62 calls/step），
 与 [`conv_kernel_sweep_2026-08-28`](../conv_kernel_sweep_2026-08-28/FINDINGS.md) §5 同一组形状同一套权重。
 
+**先看对 fp16 的 speedup**（量化的意义就在这里）。fp16 基准 = channels-last fp16 的 `F.conv2d`、
+开 `cudnn.benchmark`，即这棵树在
+[`kernel_speedup.py`](../bench_report_2026-08-13_postzp/scripts/kernel_speedup.py) 里用的
+`torch_conv2d_fp16` 约定。
+
+| | ms/step | **vs fp16** | vs int8 per-tensor |
+|---|--:|--:|--:|
+| fp16 | 31.11 | 1.000× | 0.692× |
+| **int8 per-tensor（现行）** | 21.51 | **1.446×** | 1.000× |
+| int8 blockwise G=64 | 55.45 | **0.561×** | 0.388× |
+| int8 blockwise G=32 | 108.77 | **0.286×** | 0.198× |
+| int8 blockwise G=16 | 215.57 | **0.144×** | 0.100× |
+
+> per-tensor int8 对 fp16 是 **1.45×**。改成 blockwise 不只是把这 1.45× 还回去，而是变成
+> **比 fp16 慢 1.8×–6.9×**。测过的每一个块大小上，blockwise int8 conv 都比干脆不量化更慢。
+
+对 fp16 的盈亏平衡点在 G=64 以上：能覆盖全部形状的最粗那一档就已经输给 fp16 了。逐形状看，
+只有少数空间大的 conv 在 G=128 还站在 1.0× 以上（如 `384->384 32x32` 的 1.30×）。
+
+1.446× 这个基准数有两点要注意：
+
+* 它**低于已提交的 conv suite 1.78×**（[`KERNEL_SPEEDUP.md`](../bench_report_2026-08-13_postzp/KERNEL_SPEEDUP.md)），
+  而那份文档自己解释了为什么它偏乐观：它 fp16 arm 的 12 条 conv 记录激活是 fp32 进来的，
+  autocast 的 fp32→fp16 转换被算进了计时区间。这里两边都喂 fp16 channels-last，是纯算术比较。
+* 这里的 int8 arm 是 **MoDiff 的 `o_hat` RMW** conv（要读写 `o_hat`）。已提交的 sweep 把它定在
+  baseline int8 EVT 的 0.966×，所以非 MoDiff 的 int8 conv 在这个 harness 里大约是对 fp16 1.50×。
+
+**对 int8 per-tensor：**
+
 | | ms/step | vs fused | 慢多少 |
 |---|--:|--:|--:|
 | fused per-tensor（现行） | 21.51 | 1.000× | — |
-| G=64 | 55.22 | **0.390×** | 2.57× |
-| G=32 | 108.51 | **0.198×** | 5.04× |
-| G=16 | 215.33 | **0.100×** | 10.01× |
+| G=64 | 55.45 | **0.388×** | 2.58× |
+| G=32 | 108.77 | **0.198×** | 5.06× |
+| G=16 | 215.57 | **0.100×** | 10.02× |
 
 `Cin` 必须能被 G 整除，所以只有 G∈{16,32,64} 覆盖全部形状（192 和 576 不被 128/256 整除）；
 更粗的 G 逐形状测了但不进加权总和。**这已经是下界**（切块拷贝没计入计时）。
@@ -131,8 +160,8 @@ per-tensor scale 由全局最差的块决定，对其他块都偏松，窗口内
 blockwise 小得多：权重 scale 是静态的、load 时就知道、可以排成合并访存；而激活块 scale 必须每步由
 GN/delta-quantize kernel 产出再喂进 mainloop。
 
-**不要上 split-K 版本。** 拿 conv 路径 5.0× 去换一个本来就比 W4A4 小 10 倍的 W8A8 误差项上的
-1.9×，不值。可选项只有两个：
+**不要上 split-K 版本。** 它不只是相对 per-tensor int8 贵 5.0×，而是落到 **0.29× fp16**——
+这条 conv 不量化反而更快。拿这个去换一个本来就比 W4A4 小 10 倍的 W8A8 误差项上的 1.9×，不值。可选项只有两个：
 
 1. **先放着，改看 refresh 节奏。** 同进程同种子配对比较，三次运行里 r=1 都比 r=4 好
    （+.0033 / +.0033 / +.0014），符号一致但两次只是刚过 .0033 的跨进程噪声底，所以算

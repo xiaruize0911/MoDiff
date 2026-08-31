@@ -9,7 +9,8 @@ were done. The short answer:
 > Blockwise *activations* are worthless at every block size tested — the curve is flat in G — and
 > at the shipped refresh cadence they are actively harmful. Blockwise weights are worth ~1.9x at
 > W8A8. But no blockwise variant is implementable on the current epilogue: the only working
-> implementation costs **5.0x** the conv path at G=32, so this is a mainloop project, not a knob.
+> implementation costs **5.0x** the conv path at G=32 — which puts a blockwise int8 conv at
+> **0.29x fp16**, i.e. slower than not quantizing at all. This is a mainloop project, not a knob.
 
 Throughout, **G counts input channels**. A weight block is G channels x all R*S taps; an
 activation block is G channels at one (n,h,w). Weights and activations share the same C-block
@@ -131,14 +132,50 @@ call counts (62 calls/step), the same shape set and weighting as
 [`conv_kernel_sweep_2026-08-28`](../conv_kernel_sweep_2026-08-28/FINDINGS.md) section 5.
 [`scripts/blockwise_cost.py`](scripts/blockwise_cost.py).
 
+### The number that matters: speedup against fp16
+
+Quantization exists to beat fp16, so that is the denominator. fp16 reference is
+`F.conv2d` on channels_last fp16 with `cudnn.benchmark=True` — the `torch_conv2d_fp16`
+convention this tree uses in
+[`kernel_speedup.py`](../bench_report_2026-08-13_postzp/scripts/kernel_speedup.py).
 Freq-weighted, conv kernel only:
+
+| | ms/step | **vs fp16** | vs int8 per-tensor |
+|---|--:|--:|--:|
+| fp16 | 31.11 | 1.000x | 0.692x |
+| **int8, per-tensor (shipped)** | 21.51 | **1.446x** | 1.000x |
+| int8, blockwise G=64 | 55.45 | **0.561x** | 0.388x |
+| int8, blockwise G=32 | 108.77 | **0.286x** | 0.198x |
+| int8, blockwise G=16 | 215.57 | **0.144x** | 0.100x |
+
+> Per-tensor int8 buys **1.45x** over fp16. Going blockwise does not merely give that back —
+> it goes **1.8x to 6.9x slower than fp16**. At every block size tested, a blockwise int8 conv
+> is slower than just not quantizing.
+
+Break-even against fp16 sits above G=64: even the coarsest block size that covers every shape
+already loses to fp16. Per shape, only a handful of the large-spatial convs stay above 1.0x at
+G=128 (e.g. `384->384 32x32` at 1.30x), and none do at G=64 or below except `384->384 32x32`
+(0.71x) — which is still a loss.
+
+Two caveats on the 1.446x baseline figure:
+
+* It is **lower than the committed 1.78x** for the conv suite in
+  [`KERNEL_SPEEDUP.md`](../bench_report_2026-08-13_postzp/KERNEL_SPEEDUP.md), and that doc explains
+  why its own number is optimistic: for 12 of its fp16-arm conv records the activation arrives as
+  fp32, so autocast's fp32→fp16 conversion is inside the timed region. Here both arms are fed fp16
+  channels_last, so this is the arithmetic-only comparison.
+* The int8 arm here is the **MoDiff `o_hat` RMW** conv, which reads and writes `o_hat`. The
+  committed sweep puts that at 0.966x of the baseline int8 EVT, so a non-MoDiff int8 conv would be
+  around 1.50x vs fp16 in this harness.
+
+### Against int8 per-tensor
 
 | | ms/step | vs fused | slowdown |
 |---|--:|--:|--:|
 | fused, per-tensor (shipped) | 21.51 | 1.000x | — |
-| G=64 | 55.22 | **0.390x** | 2.57x |
-| G=32 | 108.51 | **0.198x** | 5.04x |
-| G=16 | 215.33 | **0.100x** | 10.01x |
+| G=64 | 55.45 | **0.388x** | 2.58x |
+| G=32 | 108.77 | **0.198x** | 5.06x |
+| G=16 | 215.57 | **0.100x** | 10.02x |
 
 `Cin` must divide `G`, so only G in {16,32,64} covers every shape (192 and 576 are not divisible by
 128 or 256); the coarser G are measured per-shape but excluded from the weighted total.
@@ -264,7 +301,8 @@ weight scales are static, known at load time, and can be laid out for coalesced 
 activation block scale would have to be produced every step by the GN/delta-quantize kernel and
 consumed in the mainloop.
 
-**Do not ship the split-K version.** 5.0x on the conv path to buy 1.9x on a W8A8 error term that is
+**Do not ship the split-K version.** It does not just cost 5.0x against per-tensor int8 — it lands at
+**0.29x fp16**, so the conv would be faster unquantized. Paying that to buy 1.9x on a W8A8 error term
 already 10x smaller than the W4A4 error is not a trade worth making. The honest options are:
 
 1. **Leave it, and look at refresh cadence instead.** Paired within-run (same process, same seeds),
