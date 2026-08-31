@@ -290,6 +290,62 @@ def fig_tradeoff(_ignored):
     plt.close(fig)
 
 
+def fig_axes(d):
+    """Time and speedup-vs-fp16 along each of B, N, H, W independently."""
+    axes_order = [k for k in ("B", "N", "H", "W") if k in d["sweeps"]]
+    fig, ax = plt.subplots(2, len(axes_order), figsize=(4.0 * len(axes_order), 7.2))
+    if len(axes_order) == 1:
+        ax = ax.reshape(2, 1)
+    dflt = d["default"]
+    arms = [("fp16_ms", "fp16_vs", "fp16", "#57606a", "o"),
+            ("int8_ms", "int8_vs_fp16", "int8 per-tensor", C8, "s")]
+    for g in d["blocks"]:
+        arms.append((f"bw{g}_ms", f"bw{g}_vs_fp16", f"int8 blockwise G={g}",
+                     CG if g == 64 else C4, "^" if g == 64 else "v"))
+
+    for j, axis in enumerate(axes_order):
+        rows = d["sweeps"][axis]
+        xs = [r[axis] for r in rows]
+
+        top = ax[0][j]
+        for mk, _vk, lab, col, m in arms:
+            ys = [r.get(mk) for r in rows]
+            if any(y is None for y in ys):
+                continue
+            top.plot(xs, ys, marker=m, color=col, linewidth=1.5, label=lab)
+        top.set_xscale("log", base=2)
+        top.set_yscale("log")
+        held = ", ".join(f"{k}={v}" for k, v in dflt.items() if k != axis)
+        _style(top, axis, "ms / call" if j == 0 else "", f"time vs {axis}   ({held})")
+        if j == 0:
+            top.legend(fontsize=7.5, frameon=False)
+
+        bot = ax[1][j]
+        for _mk, vk, lab, col, m in arms:
+            if vk == "fp16_vs":
+                continue
+            ys = [r.get(vk) for r in rows]
+            if any(y is None for y in ys):
+                continue
+            bot.plot(xs, ys, marker=m, color=col, linewidth=1.5, label=lab)
+        bot.axhline(1.0, color="#57606a", linestyle="--", linewidth=1.2,
+                    label="fp16 = 1.0x")
+        bot.set_xscale("log", base=2)
+        bot.set_ylim(0, 2.1)
+        _style(bot, axis, "speedup vs fp16" if j == 0 else "", f"speedup vs {axis}")
+        # mark any point where int8 fails to beat fp16
+        for r in rows:
+            if r["int8_vs_fp16"] < 1.0:
+                bot.annotate(f"{r['int8_vs_fp16']:.2f}x", (r[axis], r["int8_vs_fp16"]),
+                             fontsize=7.5, color=C4, fontweight="bold",
+                             textcoords="offset points", xytext=(-6, -13))
+        if j == 0:
+            bot.legend(fontsize=7.5, frameon=False, loc="upper left")
+    fig.tight_layout()
+    fig.savefig(os.path.join(P, "fig7_axis_sweep.png"), dpi=150)
+    plt.close(fig)
+
+
 def main() -> int:
     os.makedirs(P, exist_ok=True)
     made = []
@@ -298,7 +354,8 @@ def main() -> int:
                      ("blockwise_e2e.json", fig_clip),
                      ("blockwise_cost.json", fig_cost),
                      ("blockwise_wonly.json", fig_attrib),
-                     ("blockwise_cost.json", fig_tradeoff)):
+                     ("blockwise_cost.json", fig_tradeoff),
+                     ("axis_sweep.json", fig_axes)):
         d = _cost() if fn in (fig_cost,) else _load(name)
         if d is None:
             print(f"skip {fn.__name__}: {name} not present")

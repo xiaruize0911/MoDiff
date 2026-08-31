@@ -181,6 +181,75 @@ Two caveats on the 1.446x baseline figure:
 128 or 256); the coarser G are measured per-shape but excluded from the weighted total.
 **These are a floor** — the block-slicing copies are hoisted out of the timed region.
 
+### How it moves with (B, N, H, W)
+
+A single weighted total hides the trend, so each axis is swept independently from the same default
+point the committed sweep uses, `B=128, N=384, H=16, W=16`.
+[`scripts/axis_sweep.py`](scripts/axis_sweep.py). `N` is both Cin and Cout.
+
+![axis sweep](plots/fig7_axis_sweep.png)
+
+**B — batch** (N=384, H=16, W=16)
+
+| B | fp16 ms | int8 ms | bw G=64 ms | bw G=32 ms | **int8/fp16** | bw64/fp16 | bw32/fp16 |
+|--:|--:|--:|--:|--:|--:|--:|--:|
+| 8 | 0.070 | 0.040 | 0.104 | 0.207 | 1.77x | 0.68x | 0.34x |
+| 16 | 0.115 | 0.079 | 0.199 | 0.395 | 1.46x | 0.58x | 0.29x |
+| 32 | 0.193 | 0.130 | 0.382 | 0.747 | 1.48x | 0.50x | 0.26x |
+| 64 | 0.353 | 0.238 | 0.656 | 1.288 | 1.49x | 0.54x | 0.27x |
+| 128 | 0.708 | 0.457 | 1.158 | 2.278 | 1.55x | 0.61x | 0.31x |
+| 256 | 1.409 | 0.879 | 2.195 | 4.280 | 1.60x | 0.64x | 0.33x |
+
+**N — channels (Cin=Cout)** (B=128, H=16, W=16)
+
+| N | fp16 ms | int8 ms | bw G=64 ms | bw G=32 ms | **int8/fp16** | bw64/fp16 | bw32/fp16 |
+|--:|--:|--:|--:|--:|--:|--:|--:|
+| 128 | 0.104 | 0.078 | 0.161 | 0.320 | 1.33x | 0.65x | 0.33x |
+| 192 | 0.206 | 0.209 | 0.408 | 0.805 | **0.98x** | 0.50x | 0.26x |
+| 256 | 0.340 | 0.232 | 0.549 | 1.088 | 1.46x | 0.62x | 0.31x |
+| 384 | 0.708 | 0.459 | 1.155 | 2.288 | 1.54x | 0.61x | 0.31x |
+| 512 | 1.277 | 0.763 | 2.008 | 3.914 | 1.67x | 0.64x | 0.33x |
+| 768 | 2.920 | 1.643 | 4.376 | 8.577 | 1.78x | 0.67x | 0.34x |
+| 1152 | 6.533 | 3.490 | 9.690 | 19.136 | 1.87x | 0.67x | 0.34x |
+| 1536 | 11.585 | 6.158 | 17.009 | 33.335 | 1.88x | 0.68x | 0.35x |
+
+**H — height (W=16)** (B=128, N=384, W=16)
+
+| H | fp16 ms | int8 ms | bw G=64 ms | bw G=32 ms | **int8/fp16** | bw64/fp16 | bw32/fp16 |
+|--:|--:|--:|--:|--:|--:|--:|--:|
+| 2 | 0.114 | 0.079 | 0.201 | 0.397 | 1.45x | 0.57x | 0.29x |
+| 4 | 0.194 | 0.139 | 0.395 | 0.731 | 1.40x | 0.49x | 0.27x |
+| 8 | 0.356 | 0.243 | 0.660 | 1.291 | 1.46x | 0.54x | 0.28x |
+| 16 | 0.718 | 0.469 | 1.167 | 2.274 | 1.53x | 0.62x | 0.32x |
+| 32 | 1.457 | 0.891 | 2.217 | 4.332 | 1.64x | 0.66x | 0.34x |
+
+**W — width (H=16)** (B=128, N=384, H=16)
+
+| W | fp16 ms | int8 ms | bw G=64 ms | bw G=32 ms | **int8/fp16** | bw64/fp16 | bw32/fp16 |
+|--:|--:|--:|--:|--:|--:|--:|--:|
+| 2 | 0.114 | 0.079 | 0.204 | 0.397 | 1.44x | 0.56x | 0.29x |
+| 4 | 0.195 | 0.137 | 0.392 | 0.737 | 1.42x | 0.50x | 0.26x |
+| 8 | 0.358 | 0.242 | 0.662 | 1.290 | 1.48x | 0.54x | 0.28x |
+| 16 | 0.715 | 0.469 | 1.172 | 2.283 | 1.52x | 0.61x | 0.31x |
+| 32 | 1.505 | 0.892 | 2.225 | 4.309 | 1.69x | 0.68x | 0.35x |
+
+Four things this says that the weighted total could not:
+
+1. **Blockwise never beats fp16 on any axis.** G=64 stays in 0.49-0.68x and G=32 in 0.26-0.35x
+   across every B, N, H and W tested. The conclusion is not shape-dependent — there is no corner of
+   the parameter space where blockwise pays.
+2. **int8's win grows with channel count**: 1.33x at N=128 rising monotonically to 1.88x at
+   N=1536. The int8 conv is more tensor-core-bound, so it benefits more as the GEMM gets fatter.
+3. **N=192 is a hole: int8 is 0.98x, i.e. it loses to fp16.** This is the half-empty N-tile that
+   [`conv_kernel_sweep_2026-08-28`](../conv_kernel_sweep_2026-08-28/FINDINGS.md) section 3 found
+   (`N=192` costs the same as `N=256`, 97 TFLOPS, its worst point) — and it is bad enough to erase
+   the entire quantization win. 192 is a real channel count here: five of the 20 UNet conv shapes
+   have Cin or Cout at 192, and the 20-shape table agrees (`192->192 32x32` at 1.06x,
+   `192->192 16x16` at 1.00x).
+4. **B, H and W barely matter.** All three are flat-to-mildly-rising (1.40-1.77x), and H and W
+   behave identically, which is expected since both enter GEMM-M as `B*H*W`. The B=8 point reads
+   high (1.77x) because fp16 is launch-bound there, not because int8 got better.
+
 Per shape at G=32 the slowdown runs 3.8x-6.7x, and it tracks **G, not the block count**:
 `1536->768 2x2` splits into 48 blocks and `192->192 32x32` into 6, yet they land at 0.167x and
 0.262x. So the naive model — cost = block count x fused, because the epilogue re-runs per block —
