@@ -1,0 +1,220 @@
+{
+ "gpu": "NVIDIA A40",
+ "batch": 128,
+ "reps": 30,
+ "trials": 3,
+ "gn_groups": 32,
+ "note": "chanmajor = group_norm_silu_delta_quantize_nhwc (shipped). groupmajor_fast = group_norm_silu_delta_quantize_nhwc_fused, the group-major single kernel carrying the same ~six-pairs-per-thread block-size heuristic as the baseline's fast_reduce path.",
+ "shapes": [
+  {
+   "cin": 768,
+   "H": 2,
+   "W": 2,
+   "freq": 12,
+   "HW": 4,
+   "chanmajor_ms": 0.02067520022392273,
+   "groupmajor_fast_ms": 0.012703999876976013,
+   "ratio": 1.6274559527817103
+  },
+  {
+   "cin": 384,
+   "H": 8,
+   "W": 8,
+   "freq": 8,
+   "HW": 64,
+   "chanmajor_ms": 0.06651413440704346,
+   "groupmajor_fast_ms": 0.08773972988128662,
+   "ratio": 0.7580845586946556
+  },
+  {
+   "cin": 192,
+   "H": 32,
+   "W": 32,
+   "freq": 7,
+   "HW": 1024,
+   "chanmajor_ms": 0.40428800582885743,
+   "groupmajor_fast_ms": 1.0001279830932617,
+   "ratio": 0.40423627042056043
+  },
+  {
+   "cin": 384,
+   "H": 16,
+   "W": 16,
+   "freq": 7,
+   "HW": 256,
+   "chanmajor_ms": 0.21043306986490887,
+   "groupmajor_fast_ms": 0.3774293263753255,
+   "ratio": 0.5575429760210228
+  },
+  {
+   "cin": 768,
+   "H": 4,
+   "W": 4,
+   "freq": 7,
+   "HW": 16,
+   "chanmajor_ms": 0.039817599455515544,
+   "groupmajor_fast_ms": 0.03757866621017456,
+   "ratio": 1.0595799018735472
+  },
+  {
+   "cin": 1536,
+   "H": 2,
+   "W": 2,
+   "freq": 3,
+   "HW": 4,
+   "chanmajor_ms": 0.026963200171788534,
+   "groupmajor_fast_ms": 0.013851733009020487,
+   "ratio": 1.946557889487881
+  },
+  {
+   "cin": 1536,
+   "H": 4,
+   "W": 4,
+   "freq": 2,
+   "HW": 16,
+   "chanmajor_ms": 0.09334186712900798,
+   "groupmajor_fast_ms": 0.06133973201115926,
+   "ratio": 1.5217195130886243
+  },
+  {
+   "cin": 768,
+   "H": 8,
+   "W": 8,
+   "freq": 2,
+   "HW": 64,
+   "chanmajor_ms": 0.1214186668395996,
+   "groupmajor_fast_ms": 0.15584959983825683,
+   "ratio": 0.7790758973113169
+  },
+  {
+   "cin": 768,
+   "H": 16,
+   "W": 16,
+   "freq": 2,
+   "HW": 256,
+   "chanmajor_ms": 0.40092585881551107,
+   "groupmajor_fast_ms": 0.6047733306884766,
+   "ratio": 0.6629357454620152
+  },
+  {
+   "cin": 384,
+   "H": 32,
+   "W": 32,
+   "freq": 2,
+   "HW": 1024,
+   "chanmajor_ms": 0.7861194610595703,
+   "groupmajor_fast_ms": 1.8385461171468098,
+   "ratio": 0.4275766888456015
+  },
+  {
+   "cin": 192,
+   "H": 16,
+   "W": 16,
+   "freq": 1,
+   "HW": 256,
+   "chanmajor_ms": 0.11559039751688639,
+   "groupmajor_fast_ms": 0.2490623950958252,
+   "ratio": 0.46410216794234915
+  },
+  {
+   "cin": 192,
+   "H": 16,
+   "W": 16,
+   "freq": 1,
+   "HW": 256,
+   "chanmajor_ms": 0.11569813092549643,
+   "groupmajor_fast_ms": 0.24869759877522787,
+   "ratio": 0.46521611585829603
+  },
+  {
+   "cin": 384,
+   "H": 4,
+   "W": 4,
+   "freq": 1,
+   "HW": 16,
+   "chanmajor_ms": 0.020522665977478028,
+   "groupmajor_fast_ms": 0.01446399986743927,
+   "ratio": 1.4188790214024936
+  },
+  {
+   "cin": 384,
+   "H": 4,
+   "W": 4,
+   "freq": 1,
+   "HW": 16,
+   "chanmajor_ms": 0.02068906625111898,
+   "groupmajor_fast_ms": 0.014441600441932679,
+   "ratio": 1.4326020398020525
+  },
+  {
+   "cin": 1152,
+   "H": 4,
+   "W": 4,
+   "freq": 1,
+   "HW": 16,
+   "chanmajor_ms": 0.05886079867680868,
+   "groupmajor_fast_ms": 0.052084267139434814,
+   "ratio": 1.130107072817832
+  },
+  {
+   "cin": 768,
+   "H": 8,
+   "W": 8,
+   "freq": 1,
+   "HW": 64,
+   "chanmajor_ms": 0.12126826445261638,
+   "groupmajor_fast_ms": 0.15601812998453776,
+   "ratio": 0.7772703368809427
+  },
+  {
+   "cin": 1152,
+   "H": 8,
+   "W": 8,
+   "freq": 1,
+   "HW": 64,
+   "chanmajor_ms": 0.1806048075358073,
+   "groupmajor_fast_ms": 0.19609920183817545,
+   "ratio": 0.9209869588599631
+  },
+  {
+   "cin": 576,
+   "H": 16,
+   "W": 16,
+   "freq": 1,
+   "HW": 256,
+   "chanmajor_ms": 0.3067743937174479,
+   "groupmajor_fast_ms": 0.4633493423461914,
+   "ratio": 0.662080131945545
+  },
+  {
+   "cin": 384,
+   "H": 32,
+   "W": 32,
+   "freq": 1,
+   "HW": 1024,
+   "chanmajor_ms": 0.7866495768229167,
+   "groupmajor_fast_ms": 1.8345717112223308,
+   "ratio": 0.4287919474670146
+  },
+  {
+   "cin": 576,
+   "H": 32,
+   "W": 32,
+   "freq": 1,
+   "HW": 1024,
+   "chanmajor_ms": 1.1671370188395183,
+   "groupmajor_fast_ms": 2.558672078450521,
+   "ratio": 0.45614951156473027
+  }
+ ],
+ "freq_weighted": {
+  "chanmajor_ms": 11.140282632907235,
+  "groupmajor_fast_ms": 21.910350750883424,
+  "oracle_ms": 10.906534360845885,
+  "rule_hw_le_16_ms": 10.906534360845885,
+  "groupmajor_vs_chanmajor": 0.5084483931622162,
+  "oracle_vs_chanmajor": 1.021431947521341,
+  "oracle_saving_ms": 0.23374827206134974,
+  "rule_matches_oracle": true
+ }
+}

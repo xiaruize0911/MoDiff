@@ -119,11 +119,46 @@ MoDiff 路径变成 28.64 ms =
 > [`cache_schemes_report_2026-08-28`](../cache_schemes_report_2026-08-28/BRIEF.md) 测到的
 > replay 2.65× / skip ~1.00×。它逐步的理由是质量理由：和 baseline 同一速度档，但激活位宽更低。
 
-这里唯一具体的工程项：**把 fast-reduce 移植到 delta kernel。** 它给 baseline 带来了
-2.04×。M1 已经在 58% 峰值，不会有那么多，但 405 到 696 GB/s
-之间的余量最多值 4.7 ms/step。
-
 ![融合对](plots/fig9_fused_pair.png)
+
+#### 撤回："把 fast-reduce 移植到 delta kernel"是错的
+
+本节早先的版本建议把 fast-reduce 移植到 MoDiff 的 delta kernel，并估了最多 4.7 ms/step。
+这个建议撤回——两半都错。[`scripts/gn_decomposition.py`](scripts/gn_decomposition.py)。
+
+**fast-reduce 是什么。** 就是 GroupNorm 组统计量那趟 reduction 的一个 block-size 策略，别无其他
+（[`csrc/gn_block_size.h`](../../csrc/gn_block_size.h)、
+[`baseline/norm/group_norm_silu.cu:552`](../../csrc/baseline/norm/group_norm_silu.cu:552)）：
+
+| | block_size |
+|---|---|
+| generic | 32，翻倍直到覆盖 `group_size`，上限 1024 |
+| fast | 128，当 `block_size*12 < group_size` 时翻倍，上限 512 —— 约每线程六对 |
+
+两边 grid 都是 `N * num_groups`；数学完全相同，只有 reduction **顺序**变了。收益纯粹是 occupancy——
+一个 group 填不满 1024 线程时那是灾难性的——所以形状越小收益越大（8×8 和 4×4 上 4.5–4.9×，2×2 上 1.1×）。
+
+**为什么 MoDiff 不需要它。** 生产的 delta kernel 根本不走 group-major 分解：`gn_launch_group_stats`
+默认走 **channel-major**（`BLK = C/K`），它的 block size 与 batch 无关，所以没有 fast-reduce 要修的那个
+occupancy 问题。带同一套 fast 启发式的 group-major delta kernel **已经存在**——
+`group_norm_silu_delta_quantize_nhwc_fused`，用 `MODIFF_GN_GROUPMAJOR=1` 可达——并且作为
+"已测为回退"的死代码留在树里。在 20 个真实形状、B=128 上正面对比：
+
+| GN 阶段变体 | ms/step | |
+|---|--:|---|
+| channel-major（生产） | 11.14 | |
+| group-major + fast-reduce | 21.91 | **0.508×** —— 移植版慢约 2× |
+
+这既确认了已提交的"回退"判断，也和带宽表早就暗示的一致：MoDiff 的 GN kernel 在 58% 峰值，
+baseline `_fast` 只有 43%，它从来不是没调好的那个。**对 baseline 那 4.9 ms 的差距是每元素 7 vs 3 字节，
+任何 reduction 策略的改动都碰不到它。** `gn_block_size.h` 从另一个方向得出同样结论，并写在头注里：
+该策略对 MoDiff 默认关闭，而且"前提已被驳倒，应保持关闭"。
+
+**唯一还剩的东西很小。** group-major 在很小的空间尺寸上确实赢（2×2 和 4×4 上 1.05–2.6×），
+而 `HW <= 16 → group-major` 在这组形状上把两者分得干干净净。逐形状分派值
+0.23 ms/step（1.021×）——真实、可复现，但大概不值一个分派分支，
+因为它帮到的恰好是对总数几乎没有贡献的那些形状。
+
 
 blockwise 顺带一提（各自套在自己的 conv 上）：MoDiff G=64 0.680× fp16、
 G=32 0.378×；baseline G=64 0.723×、
@@ -377,6 +412,7 @@ int4 的 split-K 罚款没测，所以 W4A4 的代价是外推。要低比特激
 - W4A4 权重/激活的超加性（1.16× × 1.17× → 1.53×）测到了但没解释。
 - 全部只有 relL2，没跑 FID。W8A8 的效应贴着噪声底，这个样本量的 FID 也分不开；W4A4 的
   .279 → .150 够大，值得补一次 FID，但没做。
-- **把 fast-reduce 移植到 `group_norm_silu_delta_quantize_nhwc`。** 它给 baseline kernel 带来 2.04×，
-  而 MoDiff 这一侧没有；最多 4.7 ms/step 的余量（§3）。
+- MoDiff 的 GN 阶段已在 A40 带宽的 58%，它对 baseline 那 4.9 ms/step 的赤字是时序缓存强制的
+  7 vs 3 字节。没有已知杠杆能补上——fast-reduce 已查证并驳倒（§3）。能补上的是**根本不搬 `a_hat`**，
+  也就是 replay 在做的事。
 - `a_hat` blockwise 是免费的（§1）却没测。鉴于激活粒度是平的，它大概率无关，但它是唯一零成本的 blockwise。

@@ -204,11 +204,52 @@ MoDiff's path 28.64 ms =
 > measured replay at 2.65x and skip at ~1.00x. Its per-step case is a quality case: same speed
 > class as the baseline, lower activation bits.
 
-The one concrete engineering item here: **port fast-reduce to the delta kernel.** It gave the
-baseline 2.04x. M1 is already at 58% of peak so it will not give that much, but the
-headroom between 405 and 696 GB/s is worth up to 4.7 ms/step.
-
 ![fused pair](plots/fig9_fused_pair.png)
+
+#### Retraction: "port fast-reduce to the delta kernel" was wrong
+
+An earlier revision of this section recommended porting fast-reduce to the MoDiff delta kernel and
+put up to 4.7 ms/step on it. That recommendation is withdrawn; it was wrong on both halves.
+[`scripts/gn_decomposition.py`](scripts/gn_decomposition.py).
+
+**What fast-reduce is.** A block-size policy for the GroupNorm group-statistics reduction, and
+nothing else ([`csrc/gn_block_size.h`](../../csrc/gn_block_size.h),
+[`baseline/norm/group_norm_silu.cu:552`](../../csrc/baseline/norm/group_norm_silu.cu:552)):
+
+| | block_size |
+|---|---|
+| generic | 32, double until it covers `group_size`, cap 1024 |
+| fast | 128, double while `block_size*12 < group_size`, cap 512 — ~six pairs/thread |
+
+Grid is `N * num_groups` either way; the math is identical and only the reduction *order* changes.
+The win is pure occupancy — 1024 threads are catastrophic when one group cannot fill them — so it is
+largest at the smallest shapes (4.5-4.9x at 8x8 and 4x4, 1.1x at 2x2).
+
+**Why MoDiff does not want it.** The shipped delta kernel never takes the group-major
+decomposition: `gn_launch_group_stats` defaults to **channel-major** (`BLK = C/K`), whose block size
+is independent of batch, so it does not have the occupancy problem fast-reduce fixes. A group-major
+delta kernel carrying the same fast heuristic already exists —
+`group_norm_silu_delta_quantize_nhwc_fused`, reachable via `MODIFF_GN_GROUPMAJOR=1` — and is kept
+in the tree as measured-regression dead code. Timed head to head on the 20 real shapes at B=128:
+
+| GN stage variant | ms/step | |
+|---|--:|---|
+| channel-major (shipped) | 11.14 | |
+| group-major + fast-reduce | 21.91 | **0.508x** — the ported version loses ~2x |
+
+Which confirms the committed "regression" verdict and matches what the bandwidth table already
+implied: MoDiff's GN kernel is at 58% of peak against the baseline `_fast` kernel's 43%, so it was
+never the badly-tuned one. **The 4.9 ms gap against the baseline is the 7-vs-3 bytes per element,
+and no reduction-strategy change touches that.** `gn_block_size.h` reaches the same conclusion from
+the other direction and says so in its header: the policy is default-OFF for MoDiff and "the premise
+is refuted, so it should stay off."
+
+**The one thing left on the table is small.** Group-major does win at the tiny spatial shapes
+(1.05-2.6x at 2x2 and 4x4), and `HW <= 16 -> group-major` separates the two perfectly on this shape
+set. A per-shape dispatch is worth 0.23 ms/step (1.021x) — real, reproducible,
+and probably not worth a dispatch branch, because the shapes it helps are exactly the ones that
+contribute almost nothing to the total.
+
 
 Blockwise, for completeness, applied to each arm's own conv: MoDiff G=64
 0.680x fp16, G=32 0.378x; baseline G=64
@@ -545,7 +586,9 @@ lever is not granularity.
 * Everything here is relL2 on 72 latents. No FID was run: at W8A8 the effects are at or near the
   0.003 noise floor and FID at this sample count would not resolve them. The W4A4 blockwise gain
   (0.279 -> 0.150) is large enough to be worth an FID confirmation, which was not done.
-* Port fast-reduce to `group_norm_silu_delta_quantize_nhwc`. It gave the baseline kernel 2.04x
-  and does not exist for the MoDiff twin; up to 4.7 ms/step of headroom (section 4).
+* MoDiff's GN stage is at 58% of the A40's bandwidth and its 4.9 ms/step deficit against the
+  baseline is the 7-vs-3 bytes the temporal cache forces. No known lever closes it -- fast-reduce
+  was checked and refuted (section 4). What would close it is not moving `a_hat` at all, which is
+  what replay does.
 * `a_hat` blockwise is cheap (section 1) and untested here. It is very likely irrelevant given that
   activation granularity is flat, but it is the one blockwise variant that would cost nothing.
