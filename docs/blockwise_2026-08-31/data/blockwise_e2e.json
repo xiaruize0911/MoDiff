@@ -1,0 +1,1805 @@
+{
+ "seeds": [
+  20260805,
+  41,
+  1234
+ ],
+ "steps": 50,
+ "n": 24,
+ "groups": [
+  256,
+  128,
+  64,
+  32,
+  16
+ ],
+ "warmup_rounds": 5,
+ "delta_refresh": 4,
+ "note": "all-blockwise fake-quant; weights along Cin*kH*kW per out-channel, act/delta along C per (n,h,w). Granularity is the ONLY thing that varies between arms; warmup and refresh cadence held at shipped values unless the label says r=. o_hat not quantized.",
+ "agg": {
+  "fp16": {
+   "bits": 0,
+   "w_block": null,
+   "w_rule": null,
+   "act_per_tensor": null,
+   "act_block": null,
+   "refresh": 0,
+   "clip_frac": 0.0,
+   "relL2_mean": 0.0,
+   "relL2_min": 0.0,
+   "relL2_max": 0.0,
+   "relL2_all": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "n_seeds": 3
+  },
+  "W8A8 shipped": {
+   "bits": 8,
+   "w_block": null,
+   "w_rule": "absmax",
+   "act_per_tensor": true,
+   "act_block": null,
+   "refresh": 4,
+   "clip_frac": 2.265911987902234e-06,
+   "relL2_mean": 0.027305154129862785,
+   "relL2_min": 0.023543165996670723,
+   "relL2_max": 0.03408588469028473,
+   "relL2_all": [
+    0.03408588469028473,
+    0.023543165996670723,
+    0.024286411702632904
+   ],
+   "n_seeds": 3
+  },
+  "W8A8 token act": {
+   "bits": 8,
+   "w_block": null,
+   "w_rule": "absmax",
+   "act_per_tensor": false,
+   "act_block": 1000000000,
+   "refresh": 4,
+   "clip_frac": 0.001712793787886948,
+   "relL2_mean": 0.04129841489096483,
+   "relL2_min": 0.023646337911486626,
+   "relL2_max": 0.06351816654205322,
+   "relL2_all": [
+    0.06351816654205322,
+    0.023646337911486626,
+    0.03673074021935463
+   ],
+   "n_seeds": 3
+  },
+  "W8A8 bw G=256": {
+   "bits": 8,
+   "w_block": 256,
+   "w_rule": "absmax",
+   "act_per_tensor": false,
+   "act_block": 256,
+   "refresh": 4,
+   "clip_frac": 0.0020873459887336587,
+   "relL2_mean": 0.04366194705168406,
+   "relL2_min": 0.031574297696352005,
+   "relL2_max": 0.06264573335647583,
+   "relL2_all": [
+    0.06264573335647583,
+    0.031574297696352005,
+    0.03676581010222435
+   ],
+   "n_seeds": 3
+  },
+  "W8A8 bw G=128": {
+   "bits": 8,
+   "w_block": 128,
+   "w_rule": "absmax",
+   "act_per_tensor": false,
+   "act_block": 128,
+   "refresh": 4,
+   "clip_frac": 0.003461862689500889,
+   "relL2_mean": 0.047887515276670456,
+   "relL2_min": 0.041059281677007675,
+   "relL2_max": 0.0586901530623436,
+   "relL2_all": [
+    0.0586901530623436,
+    0.041059281677007675,
+    0.043913111090660095
+   ],
+   "n_seeds": 3
+  },
+  "W8A8 bw G=64": {
+   "bits": 8,
+   "w_block": 64,
+   "w_rule": "absmax",
+   "act_per_tensor": false,
+   "act_block": 64,
+   "refresh": 4,
+   "clip_frac": 0.005893560149596539,
+   "relL2_mean": 0.05039770528674126,
+   "relL2_min": 0.042122580111026764,
+   "relL2_max": 0.06248438358306885,
+   "relL2_all": [
+    0.06248438358306885,
+    0.042122580111026764,
+    0.04658615216612816
+   ],
+   "n_seeds": 3
+  },
+  "W8A8 bw G=32": {
+   "bits": 8,
+   "w_block": 32,
+   "w_rule": "absmax",
+   "act_per_tensor": false,
+   "act_block": 32,
+   "refresh": 4,
+   "clip_frac": 0.009994368785589909,
+   "relL2_mean": 0.05026490489641825,
+   "relL2_min": 0.0427863635122776,
+   "relL2_max": 0.06305792182683945,
+   "relL2_all": [
+    0.06305792182683945,
+    0.0427863635122776,
+    0.04495042935013771
+   ],
+   "n_seeds": 3
+  },
+  "W8A8 bw G=16": {
+   "bits": 8,
+   "w_block": 16,
+   "w_rule": "absmax",
+   "act_per_tensor": false,
+   "act_block": 16,
+   "refresh": 4,
+   "clip_frac": 0.017225559391592465,
+   "relL2_mean": 0.05428760498762131,
+   "relL2_min": 0.04315567761659622,
+   "relL2_max": 0.06788955628871918,
+   "relL2_all": [
+    0.06788955628871918,
+    0.04315567761659622,
+    0.05181758105754852
+   ],
+   "n_seeds": 3
+  },
+  "W8A8 bw G=32 W-only": {
+   "bits": 8,
+   "w_block": 32,
+   "w_rule": "absmax",
+   "act_per_tensor": true,
+   "act_block": null,
+   "refresh": 4,
+   "clip_frac": 2.0506533079337202e-06,
+   "relL2_mean": 0.014415681672592958,
+   "relL2_min": 0.012717574834823608,
+   "relL2_max": 0.015301366336643696,
+   "relL2_all": [
+    0.015301366336643696,
+    0.012717574834823608,
+    0.01522810384631157
+   ],
+   "n_seeds": 3
+  },
+  "W8A8 bw G=32 A-only": {
+   "bits": 8,
+   "w_block": null,
+   "w_rule": "absmax",
+   "act_per_tensor": false,
+   "act_block": 32,
+   "refresh": 4,
+   "clip_frac": 0.010000480208827585,
+   "relL2_mean": 0.052098438143730164,
+   "relL2_min": 0.038762688636779785,
+   "relL2_max": 0.07060493528842926,
+   "relL2_all": [
+    0.07060493528842926,
+    0.038762688636779785,
+    0.046927690505981445
+   ],
+   "n_seeds": 3
+  },
+  "W8A8 shipped r=1": {
+   "bits": 8,
+   "w_block": null,
+   "w_rule": "absmax",
+   "act_per_tensor": true,
+   "act_block": null,
+   "refresh": 1,
+   "clip_frac": 0.0,
+   "relL2_mean": 0.023975545540452003,
+   "relL2_min": 0.02146824263036251,
+   "relL2_max": 0.02676403895020485,
+   "relL2_all": [
+    0.02676403895020485,
+    0.02369435504078865,
+    0.02146824263036251
+   ],
+   "n_seeds": 3
+  },
+  "W8A8 token act r=1": {
+   "bits": 8,
+   "w_block": null,
+   "w_rule": "absmax",
+   "act_per_tensor": false,
+   "act_block": 1000000000,
+   "refresh": 1,
+   "clip_frac": 0.0,
+   "relL2_mean": 0.023644666497906048,
+   "relL2_min": 0.02133224904537201,
+   "relL2_max": 0.026122163981199265,
+   "relL2_all": [
+    0.026122163981199265,
+    0.023479586467146873,
+    0.02133224904537201
+   ],
+   "n_seeds": 3
+  },
+  "W8A8 bw G=256 r=1": {
+   "bits": 8,
+   "w_block": 256,
+   "w_rule": "absmax",
+   "act_per_tensor": false,
+   "act_block": 256,
+   "refresh": 1,
+   "clip_frac": 0.0,
+   "relL2_mean": 0.029607204720377922,
+   "relL2_min": 0.021906621754169464,
+   "relL2_max": 0.03642473369836807,
+   "relL2_all": [
+    0.03049025870859623,
+    0.03642473369836807,
+    0.021906621754169464
+   ],
+   "n_seeds": 3
+  },
+  "W8A8 bw G=128 r=1": {
+   "bits": 8,
+   "w_block": 128,
+   "w_rule": "absmax",
+   "act_per_tensor": false,
+   "act_block": 128,
+   "refresh": 1,
+   "clip_frac": 0.0,
+   "relL2_mean": 0.021620275763173897,
+   "relL2_min": 0.013936563394963741,
+   "relL2_max": 0.030855931341648102,
+   "relL2_all": [
+    0.030855931341648102,
+    0.013936563394963741,
+    0.02006833255290985
+   ],
+   "n_seeds": 3
+  },
+  "W8A8 bw G=64 r=1": {
+   "bits": 8,
+   "w_block": 64,
+   "w_rule": "absmax",
+   "act_per_tensor": false,
+   "act_block": 64,
+   "refresh": 1,
+   "clip_frac": 0.0,
+   "relL2_mean": 0.02185902278870344,
+   "relL2_min": 0.014024474658071995,
+   "relL2_max": 0.029204705730080605,
+   "relL2_all": [
+    0.022347887977957726,
+    0.014024474658071995,
+    0.029204705730080605
+   ],
+   "n_seeds": 3
+  },
+  "W8A8 bw G=32 r=1": {
+   "bits": 8,
+   "w_block": 32,
+   "w_rule": "absmax",
+   "act_per_tensor": false,
+   "act_block": 32,
+   "refresh": 1,
+   "clip_frac": 0.0,
+   "relL2_mean": 0.013000226269165674,
+   "relL2_min": 0.01281219907104969,
+   "relL2_max": 0.013300147838890553,
+   "relL2_all": [
+    0.01281219907104969,
+    0.013300147838890553,
+    0.012888331897556782
+   ],
+   "n_seeds": 3
+  },
+  "W8A8 bw G=16 r=1": {
+   "bits": 8,
+   "w_block": 16,
+   "w_rule": "absmax",
+   "act_per_tensor": false,
+   "act_block": 16,
+   "refresh": 1,
+   "clip_frac": 0.0,
+   "relL2_mean": 0.011592279809216658,
+   "relL2_min": 0.00864325650036335,
+   "relL2_max": 0.01678837463259697,
+   "relL2_all": [
+    0.01678837463259697,
+    0.00864325650036335,
+    0.009345208294689655
+   ],
+   "n_seeds": 3
+  },
+  "W8A8 bw G=32 W-only r=1": {
+   "bits": 8,
+   "w_block": 32,
+   "w_rule": "absmax",
+   "act_per_tensor": true,
+   "act_block": null,
+   "refresh": 1,
+   "clip_frac": 0.0,
+   "relL2_mean": 0.012805497894684473,
+   "relL2_min": 0.012476518750190735,
+   "relL2_max": 0.013046057894825935,
+   "relL2_all": [
+    0.012476518750190735,
+    0.01289391703903675,
+    0.013046057894825935
+   ],
+   "n_seeds": 3
+  },
+  "W8A8 bw G=32 A-only r=1": {
+   "bits": 8,
+   "w_block": null,
+   "w_rule": "absmax",
+   "act_per_tensor": false,
+   "act_block": 32,
+   "refresh": 1,
+   "clip_frac": 0.0,
+   "relL2_mean": 0.024972553675373394,
+   "relL2_min": 0.023292867466807365,
+   "relL2_max": 0.02636599726974964,
+   "relL2_all": [
+    0.02636599726974964,
+    0.02525879628956318,
+    0.023292867466807365
+   ],
+   "n_seeds": 3
+  },
+  "W4A4 shipped": {
+   "bits": 4,
+   "w_block": null,
+   "w_rule": "mse",
+   "act_per_tensor": true,
+   "act_block": null,
+   "refresh": 4,
+   "clip_frac": 8.350705285788821e-06,
+   "relL2_mean": 0.27877681454022724,
+   "relL2_min": 0.2720644474029541,
+   "relL2_max": 0.2867549955844879,
+   "relL2_all": [
+    0.2867549955844879,
+    0.2720644474029541,
+    0.27751100063323975
+   ],
+   "n_seeds": 3
+  },
+  "W4A4 token act": {
+   "bits": 4,
+   "w_block": null,
+   "w_rule": "mse",
+   "act_per_tensor": false,
+   "act_block": 1000000000,
+   "refresh": 4,
+   "clip_frac": 0.0014743380632556559,
+   "relL2_mean": 0.23826949298381805,
+   "relL2_min": 0.23261822760105133,
+   "relL2_max": 0.24789075553417206,
+   "relL2_all": [
+    0.24789075553417206,
+    0.23261822760105133,
+    0.23429949581623077
+   ],
+   "n_seeds": 3
+  },
+  "W4A4 bw G=256": {
+   "bits": 4,
+   "w_block": 256,
+   "w_rule": "absmax",
+   "act_per_tensor": false,
+   "act_block": 256,
+   "refresh": 4,
+   "clip_frac": 0.0017523198106168052,
+   "relL2_mean": 0.19681609670321146,
+   "relL2_min": 0.17474424839019775,
+   "relL2_max": 0.20972180366516113,
+   "relL2_all": [
+    0.2059822380542755,
+    0.20972180366516113,
+    0.17474424839019775
+   ],
+   "n_seeds": 3
+  },
+  "W4A4 bw G=128": {
+   "bits": 4,
+   "w_block": 128,
+   "w_rule": "absmax",
+   "act_per_tensor": false,
+   "act_block": 128,
+   "refresh": 4,
+   "clip_frac": 0.0028567372508918336,
+   "relL2_mean": 0.18445620437463126,
+   "relL2_min": 0.16883252561092377,
+   "relL2_max": 0.1996944397687912,
+   "relL2_all": [
+    0.1996944397687912,
+    0.18484164774417877,
+    0.16883252561092377
+   ],
+   "n_seeds": 3
+  },
+  "W4A4 bw G=64": {
+   "bits": 4,
+   "w_block": 64,
+   "w_rule": "absmax",
+   "act_per_tensor": false,
+   "act_block": 64,
+   "refresh": 4,
+   "clip_frac": 0.004839902494463624,
+   "relL2_mean": 0.17310705284277597,
+   "relL2_min": 0.16618981957435608,
+   "relL2_max": 0.18670150637626648,
+   "relL2_all": [
+    0.18670150637626648,
+    0.16642983257770538,
+    0.16618981957435608
+   ],
+   "n_seeds": 3
+  },
+  "W4A4 bw G=32": {
+   "bits": 4,
+   "w_block": 32,
+   "w_rule": "absmax",
+   "act_per_tensor": false,
+   "act_block": 32,
+   "refresh": 4,
+   "clip_frac": 0.008269856936530736,
+   "relL2_mean": 0.16683966914812723,
+   "relL2_min": 0.15710435807704926,
+   "relL2_max": 0.175660640001297,
+   "relL2_all": [
+    0.16775400936603546,
+    0.175660640001297,
+    0.15710435807704926
+   ],
+   "n_seeds": 3
+  },
+  "W4A4 bw G=16": {
+   "bits": 4,
+   "w_block": 16,
+   "w_rule": "absmax",
+   "act_per_tensor": false,
+   "act_block": 16,
+   "refresh": 4,
+   "clip_frac": 0.014358127216889227,
+   "relL2_mean": 0.149461030960083,
+   "relL2_min": 0.14027650654315948,
+   "relL2_max": 0.15966244041919708,
+   "relL2_all": [
+    0.14844414591789246,
+    0.15966244041919708,
+    0.14027650654315948
+   ],
+   "n_seeds": 3
+  },
+  "W4A4 bw G=32 W-only": {
+   "bits": 4,
+   "w_block": 32,
+   "w_rule": "absmax",
+   "act_per_tensor": true,
+   "act_block": null,
+   "refresh": 4,
+   "clip_frac": 7.2328395910519915e-06,
+   "relL2_mean": 0.22114363312721252,
+   "relL2_min": 0.20111845433712006,
+   "relL2_max": 0.2371823936700821,
+   "relL2_all": [
+    0.22513005137443542,
+    0.20111845433712006,
+    0.2371823936700821
+   ],
+   "n_seeds": 3
+  },
+  "W4A4 bw G=32 A-only": {
+   "bits": 4,
+   "w_block": null,
+   "w_rule": "mse",
+   "act_per_tensor": false,
+   "act_block": 32,
+   "refresh": 4,
+   "clip_frac": 0.00845341444850867,
+   "relL2_mean": 0.24042458832263947,
+   "relL2_min": 0.2334243506193161,
+   "relL2_max": 0.25128960609436035,
+   "relL2_all": [
+    0.25128960609436035,
+    0.2334243506193161,
+    0.23655980825424194
+   ],
+   "n_seeds": 3
+  },
+  "W4A4 shipped r=1": {
+   "bits": 4,
+   "w_block": null,
+   "w_rule": "mse",
+   "act_per_tensor": true,
+   "act_block": null,
+   "refresh": 1,
+   "clip_frac": 0.0,
+   "relL2_mean": 0.2781545917193095,
+   "relL2_min": 0.2707829773426056,
+   "relL2_max": 0.29040947556495667,
+   "relL2_all": [
+    0.29040947556495667,
+    0.2707829773426056,
+    0.2732713222503662
+   ],
+   "n_seeds": 3
+  },
+  "W4A4 token act r=1": {
+   "bits": 4,
+   "w_block": null,
+   "w_rule": "mse",
+   "act_per_tensor": false,
+   "act_block": 1000000000,
+   "refresh": 1,
+   "clip_frac": 0.0,
+   "relL2_mean": 0.23618626594543457,
+   "relL2_min": 0.22902557253837585,
+   "relL2_max": 0.24619725346565247,
+   "relL2_all": [
+    0.24619725346565247,
+    0.22902557253837585,
+    0.2333359718322754
+   ],
+   "n_seeds": 3
+  },
+  "W4A4 bw G=256 r=1": {
+   "bits": 4,
+   "w_block": 256,
+   "w_rule": "absmax",
+   "act_per_tensor": false,
+   "act_block": 256,
+   "refresh": 1,
+   "clip_frac": 0.0,
+   "relL2_mean": 0.20215297738711038,
+   "relL2_min": 0.18801674246788025,
+   "relL2_max": 0.20942744612693787,
+   "relL2_all": [
+    0.20942744612693787,
+    0.20901474356651306,
+    0.18801674246788025
+   ],
+   "n_seeds": 3
+  },
+  "W4A4 bw G=128 r=1": {
+   "bits": 4,
+   "w_block": 128,
+   "w_rule": "absmax",
+   "act_per_tensor": false,
+   "act_block": 128,
+   "refresh": 1,
+   "clip_frac": 0.0,
+   "relL2_mean": 0.18523673713207245,
+   "relL2_min": 0.1741236001253128,
+   "relL2_max": 0.19485324621200562,
+   "relL2_all": [
+    0.19485324621200562,
+    0.18673336505889893,
+    0.1741236001253128
+   ],
+   "n_seeds": 3
+  },
+  "W4A4 bw G=64 r=1": {
+   "bits": 4,
+   "w_block": 64,
+   "w_rule": "absmax",
+   "act_per_tensor": false,
+   "act_block": 64,
+   "refresh": 1,
+   "clip_frac": 0.0,
+   "relL2_mean": 0.16987689832846323,
+   "relL2_min": 0.16049890220165253,
+   "relL2_max": 0.18064066767692566,
+   "relL2_all": [
+    0.18064066767692566,
+    0.16849112510681152,
+    0.16049890220165253
+   ],
+   "n_seeds": 3
+  },
+  "W4A4 bw G=32 r=1": {
+   "bits": 4,
+   "w_block": 32,
+   "w_rule": "absmax",
+   "act_per_tensor": false,
+   "act_block": 32,
+   "refresh": 1,
+   "clip_frac": 0.0,
+   "relL2_mean": 0.1656753569841385,
+   "relL2_min": 0.15625426173210144,
+   "relL2_max": 0.17484141886234283,
+   "relL2_all": [
+    0.1659303903579712,
+    0.17484141886234283,
+    0.15625426173210144
+   ],
+   "n_seeds": 3
+  },
+  "W4A4 bw G=16 r=1": {
+   "bits": 4,
+   "w_block": 16,
+   "w_rule": "absmax",
+   "act_per_tensor": false,
+   "act_block": 16,
+   "refresh": 1,
+   "clip_frac": 0.0,
+   "relL2_mean": 0.15401707092920938,
+   "relL2_min": 0.14654052257537842,
+   "relL2_max": 0.16723118722438812,
+   "relL2_all": [
+    0.14827950298786163,
+    0.16723118722438812,
+    0.14654052257537842
+   ],
+   "n_seeds": 3
+  },
+  "W4A4 bw G=32 W-only r=1": {
+   "bits": 4,
+   "w_block": 32,
+   "w_rule": "absmax",
+   "act_per_tensor": true,
+   "act_block": null,
+   "refresh": 1,
+   "clip_frac": 0.0,
+   "relL2_mean": 0.2140941321849823,
+   "relL2_min": 0.19349466264247894,
+   "relL2_max": 0.22807100415229797,
+   "relL2_all": [
+    0.22807100415229797,
+    0.19349466264247894,
+    0.22071672976016998
+   ],
+   "n_seeds": 3
+  },
+  "W4A4 bw G=32 A-only r=1": {
+   "bits": 4,
+   "w_block": null,
+   "w_rule": "mse",
+   "act_per_tensor": false,
+   "act_block": 32,
+   "refresh": 1,
+   "clip_frac": 0.0,
+   "relL2_mean": 0.23617018262545267,
+   "relL2_min": 0.22870218753814697,
+   "relL2_max": 0.24622197449207306,
+   "relL2_all": [
+    0.24622197449207306,
+    0.22870218753814697,
+    0.233586385846138
+   ],
+   "n_seeds": 3
+  }
+ },
+ "per_seed": {
+  "20260805": {
+   "fp16": {
+    "relL2_vs_fp16": 0.0,
+    "bits": 0,
+    "w_block": null,
+    "w_rule": null,
+    "act_per_tensor": null,
+    "act_block": null,
+    "refresh": 0,
+    "clip_frac": 0.0
+   },
+   "W8A8 shipped": {
+    "relL2_vs_fp16": 0.03408588469028473,
+    "bits": 8,
+    "w_block": null,
+    "w_rule": "absmax",
+    "act_per_tensor": true,
+    "act_block": null,
+    "refresh": 4,
+    "clip_frac": 2.265911987902234e-06
+   },
+   "W8A8 token act": {
+    "relL2_vs_fp16": 0.06351816654205322,
+    "bits": 8,
+    "w_block": null,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 1000000000,
+    "refresh": 4,
+    "clip_frac": 0.001712793787886948
+   },
+   "W8A8 bw G=256": {
+    "relL2_vs_fp16": 0.06264573335647583,
+    "bits": 8,
+    "w_block": 256,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 256,
+    "refresh": 4,
+    "clip_frac": 0.0020873459887336587
+   },
+   "W8A8 bw G=128": {
+    "relL2_vs_fp16": 0.0586901530623436,
+    "bits": 8,
+    "w_block": 128,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 128,
+    "refresh": 4,
+    "clip_frac": 0.003461862689500889
+   },
+   "W8A8 bw G=64": {
+    "relL2_vs_fp16": 0.06248438358306885,
+    "bits": 8,
+    "w_block": 64,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 64,
+    "refresh": 4,
+    "clip_frac": 0.005893560149596539
+   },
+   "W8A8 bw G=32": {
+    "relL2_vs_fp16": 0.06305792182683945,
+    "bits": 8,
+    "w_block": 32,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 32,
+    "refresh": 4,
+    "clip_frac": 0.009994368785589909
+   },
+   "W8A8 bw G=16": {
+    "relL2_vs_fp16": 0.06788955628871918,
+    "bits": 8,
+    "w_block": 16,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 16,
+    "refresh": 4,
+    "clip_frac": 0.017225559391592465
+   },
+   "W8A8 bw G=32 W-only": {
+    "relL2_vs_fp16": 0.015301366336643696,
+    "bits": 8,
+    "w_block": 32,
+    "w_rule": "absmax",
+    "act_per_tensor": true,
+    "act_block": null,
+    "refresh": 4,
+    "clip_frac": 2.0506533079337202e-06
+   },
+   "W8A8 bw G=32 A-only": {
+    "relL2_vs_fp16": 0.07060493528842926,
+    "bits": 8,
+    "w_block": null,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 32,
+    "refresh": 4,
+    "clip_frac": 0.010000480208827585
+   },
+   "W8A8 shipped r=1": {
+    "relL2_vs_fp16": 0.02676403895020485,
+    "bits": 8,
+    "w_block": null,
+    "w_rule": "absmax",
+    "act_per_tensor": true,
+    "act_block": null,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W8A8 token act r=1": {
+    "relL2_vs_fp16": 0.026122163981199265,
+    "bits": 8,
+    "w_block": null,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 1000000000,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W8A8 bw G=256 r=1": {
+    "relL2_vs_fp16": 0.03049025870859623,
+    "bits": 8,
+    "w_block": 256,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 256,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W8A8 bw G=128 r=1": {
+    "relL2_vs_fp16": 0.030855931341648102,
+    "bits": 8,
+    "w_block": 128,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 128,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W8A8 bw G=64 r=1": {
+    "relL2_vs_fp16": 0.022347887977957726,
+    "bits": 8,
+    "w_block": 64,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 64,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W8A8 bw G=32 r=1": {
+    "relL2_vs_fp16": 0.01281219907104969,
+    "bits": 8,
+    "w_block": 32,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 32,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W8A8 bw G=16 r=1": {
+    "relL2_vs_fp16": 0.01678837463259697,
+    "bits": 8,
+    "w_block": 16,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 16,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W8A8 bw G=32 W-only r=1": {
+    "relL2_vs_fp16": 0.012476518750190735,
+    "bits": 8,
+    "w_block": 32,
+    "w_rule": "absmax",
+    "act_per_tensor": true,
+    "act_block": null,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W8A8 bw G=32 A-only r=1": {
+    "relL2_vs_fp16": 0.02636599726974964,
+    "bits": 8,
+    "w_block": null,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 32,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W4A4 shipped": {
+    "relL2_vs_fp16": 0.2867549955844879,
+    "bits": 4,
+    "w_block": null,
+    "w_rule": "mse",
+    "act_per_tensor": true,
+    "act_block": null,
+    "refresh": 4,
+    "clip_frac": 8.350705285788821e-06
+   },
+   "W4A4 token act": {
+    "relL2_vs_fp16": 0.24789075553417206,
+    "bits": 4,
+    "w_block": null,
+    "w_rule": "mse",
+    "act_per_tensor": false,
+    "act_block": 1000000000,
+    "refresh": 4,
+    "clip_frac": 0.0014743380632556559
+   },
+   "W4A4 bw G=256": {
+    "relL2_vs_fp16": 0.2059822380542755,
+    "bits": 4,
+    "w_block": 256,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 256,
+    "refresh": 4,
+    "clip_frac": 0.0017523198106168052
+   },
+   "W4A4 bw G=128": {
+    "relL2_vs_fp16": 0.1996944397687912,
+    "bits": 4,
+    "w_block": 128,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 128,
+    "refresh": 4,
+    "clip_frac": 0.0028567372508918336
+   },
+   "W4A4 bw G=64": {
+    "relL2_vs_fp16": 0.18670150637626648,
+    "bits": 4,
+    "w_block": 64,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 64,
+    "refresh": 4,
+    "clip_frac": 0.004839902494463624
+   },
+   "W4A4 bw G=32": {
+    "relL2_vs_fp16": 0.16775400936603546,
+    "bits": 4,
+    "w_block": 32,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 32,
+    "refresh": 4,
+    "clip_frac": 0.008269856936530736
+   },
+   "W4A4 bw G=16": {
+    "relL2_vs_fp16": 0.14844414591789246,
+    "bits": 4,
+    "w_block": 16,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 16,
+    "refresh": 4,
+    "clip_frac": 0.014358127216889227
+   },
+   "W4A4 bw G=32 W-only": {
+    "relL2_vs_fp16": 0.22513005137443542,
+    "bits": 4,
+    "w_block": 32,
+    "w_rule": "absmax",
+    "act_per_tensor": true,
+    "act_block": null,
+    "refresh": 4,
+    "clip_frac": 7.2328395910519915e-06
+   },
+   "W4A4 bw G=32 A-only": {
+    "relL2_vs_fp16": 0.25128960609436035,
+    "bits": 4,
+    "w_block": null,
+    "w_rule": "mse",
+    "act_per_tensor": false,
+    "act_block": 32,
+    "refresh": 4,
+    "clip_frac": 0.00845341444850867
+   },
+   "W4A4 shipped r=1": {
+    "relL2_vs_fp16": 0.29040947556495667,
+    "bits": 4,
+    "w_block": null,
+    "w_rule": "mse",
+    "act_per_tensor": true,
+    "act_block": null,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W4A4 token act r=1": {
+    "relL2_vs_fp16": 0.24619725346565247,
+    "bits": 4,
+    "w_block": null,
+    "w_rule": "mse",
+    "act_per_tensor": false,
+    "act_block": 1000000000,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W4A4 bw G=256 r=1": {
+    "relL2_vs_fp16": 0.20942744612693787,
+    "bits": 4,
+    "w_block": 256,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 256,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W4A4 bw G=128 r=1": {
+    "relL2_vs_fp16": 0.19485324621200562,
+    "bits": 4,
+    "w_block": 128,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 128,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W4A4 bw G=64 r=1": {
+    "relL2_vs_fp16": 0.18064066767692566,
+    "bits": 4,
+    "w_block": 64,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 64,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W4A4 bw G=32 r=1": {
+    "relL2_vs_fp16": 0.1659303903579712,
+    "bits": 4,
+    "w_block": 32,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 32,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W4A4 bw G=16 r=1": {
+    "relL2_vs_fp16": 0.14827950298786163,
+    "bits": 4,
+    "w_block": 16,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 16,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W4A4 bw G=32 W-only r=1": {
+    "relL2_vs_fp16": 0.22807100415229797,
+    "bits": 4,
+    "w_block": 32,
+    "w_rule": "absmax",
+    "act_per_tensor": true,
+    "act_block": null,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W4A4 bw G=32 A-only r=1": {
+    "relL2_vs_fp16": 0.24622197449207306,
+    "bits": 4,
+    "w_block": null,
+    "w_rule": "mse",
+    "act_per_tensor": false,
+    "act_block": 32,
+    "refresh": 1,
+    "clip_frac": 0.0
+   }
+  },
+  "41": {
+   "fp16": {
+    "relL2_vs_fp16": 0.0,
+    "bits": 0,
+    "w_block": null,
+    "w_rule": null,
+    "act_per_tensor": null,
+    "act_block": null,
+    "refresh": 0,
+    "clip_frac": 0.0
+   },
+   "W8A8 shipped": {
+    "relL2_vs_fp16": 0.023543165996670723,
+    "bits": 8,
+    "w_block": null,
+    "w_rule": "absmax",
+    "act_per_tensor": true,
+    "act_block": null,
+    "refresh": 4,
+    "clip_frac": 2.3696208089729747e-06
+   },
+   "W8A8 token act": {
+    "relL2_vs_fp16": 0.023646337911486626,
+    "bits": 8,
+    "w_block": null,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 1000000000,
+    "refresh": 4,
+    "clip_frac": 0.0017176217959708603
+   },
+   "W8A8 bw G=256": {
+    "relL2_vs_fp16": 0.031574297696352005,
+    "bits": 8,
+    "w_block": 256,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 256,
+    "refresh": 4,
+    "clip_frac": 0.0020933160557294723
+   },
+   "W8A8 bw G=128": {
+    "relL2_vs_fp16": 0.041059281677007675,
+    "bits": 8,
+    "w_block": 128,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 128,
+    "refresh": 4,
+    "clip_frac": 0.0034602374253496436
+   },
+   "W8A8 bw G=64": {
+    "relL2_vs_fp16": 0.042122580111026764,
+    "bits": 8,
+    "w_block": 64,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 64,
+    "refresh": 4,
+    "clip_frac": 0.005913876870382818
+   },
+   "W8A8 bw G=32": {
+    "relL2_vs_fp16": 0.0427863635122776,
+    "bits": 8,
+    "w_block": 32,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 32,
+    "refresh": 4,
+    "clip_frac": 0.010054847598014465
+   },
+   "W8A8 bw G=16": {
+    "relL2_vs_fp16": 0.04315567761659622,
+    "bits": 8,
+    "w_block": 16,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 16,
+    "refresh": 4,
+    "clip_frac": 0.01734479080456675
+   },
+   "W8A8 bw G=32 W-only": {
+    "relL2_vs_fp16": 0.012717574834823608,
+    "bits": 8,
+    "w_block": 32,
+    "w_rule": "absmax",
+    "act_per_tensor": true,
+    "act_block": null,
+    "refresh": 4,
+    "clip_frac": 2.057458736991144e-06
+   },
+   "W8A8 bw G=32 A-only": {
+    "relL2_vs_fp16": 0.038762688636779785,
+    "bits": 8,
+    "w_block": null,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 32,
+    "refresh": 4,
+    "clip_frac": 0.010054466937819579
+   },
+   "W8A8 shipped r=1": {
+    "relL2_vs_fp16": 0.02369435504078865,
+    "bits": 8,
+    "w_block": null,
+    "w_rule": "absmax",
+    "act_per_tensor": true,
+    "act_block": null,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W8A8 token act r=1": {
+    "relL2_vs_fp16": 0.023479586467146873,
+    "bits": 8,
+    "w_block": null,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 1000000000,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W8A8 bw G=256 r=1": {
+    "relL2_vs_fp16": 0.03642473369836807,
+    "bits": 8,
+    "w_block": 256,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 256,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W8A8 bw G=128 r=1": {
+    "relL2_vs_fp16": 0.013936563394963741,
+    "bits": 8,
+    "w_block": 128,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 128,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W8A8 bw G=64 r=1": {
+    "relL2_vs_fp16": 0.014024474658071995,
+    "bits": 8,
+    "w_block": 64,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 64,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W8A8 bw G=32 r=1": {
+    "relL2_vs_fp16": 0.013300147838890553,
+    "bits": 8,
+    "w_block": 32,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 32,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W8A8 bw G=16 r=1": {
+    "relL2_vs_fp16": 0.00864325650036335,
+    "bits": 8,
+    "w_block": 16,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 16,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W8A8 bw G=32 W-only r=1": {
+    "relL2_vs_fp16": 0.01289391703903675,
+    "bits": 8,
+    "w_block": 32,
+    "w_rule": "absmax",
+    "act_per_tensor": true,
+    "act_block": null,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W8A8 bw G=32 A-only r=1": {
+    "relL2_vs_fp16": 0.02525879628956318,
+    "bits": 8,
+    "w_block": null,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 32,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W4A4 shipped": {
+    "relL2_vs_fp16": 0.2720644474029541,
+    "bits": 4,
+    "w_block": null,
+    "w_rule": "mse",
+    "act_per_tensor": true,
+    "act_block": null,
+    "refresh": 4,
+    "clip_frac": 6.891384585301251e-06
+   },
+   "W4A4 token act": {
+    "relL2_vs_fp16": 0.23261822760105133,
+    "bits": 4,
+    "w_block": null,
+    "w_rule": "mse",
+    "act_per_tensor": false,
+    "act_block": 1000000000,
+    "refresh": 4,
+    "clip_frac": 0.0014955232159673062
+   },
+   "W4A4 bw G=256": {
+    "relL2_vs_fp16": 0.20972180366516113,
+    "bits": 4,
+    "w_block": 256,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 256,
+    "refresh": 4,
+    "clip_frac": 0.0017606651307722745
+   },
+   "W4A4 bw G=128": {
+    "relL2_vs_fp16": 0.18484164774417877,
+    "bits": 4,
+    "w_block": 128,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 128,
+    "refresh": 4,
+    "clip_frac": 0.0028658513694422875
+   },
+   "W4A4 bw G=64": {
+    "relL2_vs_fp16": 0.16642983257770538,
+    "bits": 4,
+    "w_block": 64,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 64,
+    "refresh": 4,
+    "clip_frac": 0.004887684299540456
+   },
+   "W4A4 bw G=32": {
+    "relL2_vs_fp16": 0.175660640001297,
+    "bits": 4,
+    "w_block": 32,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 32,
+    "refresh": 4,
+    "clip_frac": 0.00834558242509379
+   },
+   "W4A4 bw G=16": {
+    "relL2_vs_fp16": 0.15966244041919708,
+    "bits": 4,
+    "w_block": 16,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 16,
+    "refresh": 4,
+    "clip_frac": 0.014512722154295755
+   },
+   "W4A4 bw G=32 W-only": {
+    "relL2_vs_fp16": 0.20111845433712006,
+    "bits": 4,
+    "w_block": 32,
+    "w_rule": "absmax",
+    "act_per_tensor": true,
+    "act_block": null,
+    "refresh": 4,
+    "clip_frac": 8.252618340895952e-06
+   },
+   "W4A4 bw G=32 A-only": {
+    "relL2_vs_fp16": 0.2334243506193161,
+    "bits": 4,
+    "w_block": null,
+    "w_rule": "mse",
+    "act_per_tensor": false,
+    "act_block": 32,
+    "refresh": 4,
+    "clip_frac": 0.008510142581857926
+   },
+   "W4A4 shipped r=1": {
+    "relL2_vs_fp16": 0.2707829773426056,
+    "bits": 4,
+    "w_block": null,
+    "w_rule": "mse",
+    "act_per_tensor": true,
+    "act_block": null,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W4A4 token act r=1": {
+    "relL2_vs_fp16": 0.22902557253837585,
+    "bits": 4,
+    "w_block": null,
+    "w_rule": "mse",
+    "act_per_tensor": false,
+    "act_block": 1000000000,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W4A4 bw G=256 r=1": {
+    "relL2_vs_fp16": 0.20901474356651306,
+    "bits": 4,
+    "w_block": 256,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 256,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W4A4 bw G=128 r=1": {
+    "relL2_vs_fp16": 0.18673336505889893,
+    "bits": 4,
+    "w_block": 128,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 128,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W4A4 bw G=64 r=1": {
+    "relL2_vs_fp16": 0.16849112510681152,
+    "bits": 4,
+    "w_block": 64,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 64,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W4A4 bw G=32 r=1": {
+    "relL2_vs_fp16": 0.17484141886234283,
+    "bits": 4,
+    "w_block": 32,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 32,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W4A4 bw G=16 r=1": {
+    "relL2_vs_fp16": 0.16723118722438812,
+    "bits": 4,
+    "w_block": 16,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 16,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W4A4 bw G=32 W-only r=1": {
+    "relL2_vs_fp16": 0.19349466264247894,
+    "bits": 4,
+    "w_block": 32,
+    "w_rule": "absmax",
+    "act_per_tensor": true,
+    "act_block": null,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W4A4 bw G=32 A-only r=1": {
+    "relL2_vs_fp16": 0.22870218753814697,
+    "bits": 4,
+    "w_block": null,
+    "w_rule": "mse",
+    "act_per_tensor": false,
+    "act_block": 32,
+    "refresh": 1,
+    "clip_frac": 0.0
+   }
+  },
+  "1234": {
+   "fp16": {
+    "relL2_vs_fp16": 0.0,
+    "bits": 0,
+    "w_block": null,
+    "w_rule": null,
+    "act_per_tensor": null,
+    "act_block": null,
+    "refresh": 0,
+    "clip_frac": 0.0
+   },
+   "W8A8 shipped": {
+    "relL2_vs_fp16": 0.024286411702632904,
+    "bits": 8,
+    "w_block": null,
+    "w_rule": "absmax",
+    "act_per_tensor": true,
+    "act_block": null,
+    "refresh": 4,
+    "clip_frac": 2.0407410525674727e-06
+   },
+   "W8A8 token act": {
+    "relL2_vs_fp16": 0.03673074021935463,
+    "bits": 8,
+    "w_block": null,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 1000000000,
+    "refresh": 4,
+    "clip_frac": 0.001705711555399819
+   },
+   "W8A8 bw G=256": {
+    "relL2_vs_fp16": 0.03676581010222435,
+    "bits": 8,
+    "w_block": 256,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 256,
+    "refresh": 4,
+    "clip_frac": 0.002076665766253867
+   },
+   "W8A8 bw G=128": {
+    "relL2_vs_fp16": 0.043913111090660095,
+    "bits": 8,
+    "w_block": 128,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 128,
+    "refresh": 4,
+    "clip_frac": 0.0034465271354542784
+   },
+   "W8A8 bw G=64": {
+    "relL2_vs_fp16": 0.04658615216612816,
+    "bits": 8,
+    "w_block": 64,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 64,
+    "refresh": 4,
+    "clip_frac": 0.005869332822152111
+   },
+   "W8A8 bw G=32": {
+    "relL2_vs_fp16": 0.04495042935013771,
+    "bits": 8,
+    "w_block": 32,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 32,
+    "refresh": 4,
+    "clip_frac": 0.009990128855343023
+   },
+   "W8A8 bw G=16": {
+    "relL2_vs_fp16": 0.05181758105754852,
+    "bits": 8,
+    "w_block": 16,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 16,
+    "refresh": 4,
+    "clip_frac": 0.01724076183244209
+   },
+   "W8A8 bw G=32 W-only": {
+    "relL2_vs_fp16": 0.01522810384631157,
+    "bits": 8,
+    "w_block": 32,
+    "w_rule": "absmax",
+    "act_per_tensor": true,
+    "act_block": null,
+    "refresh": 4,
+    "clip_frac": 2.1364608917012377e-06
+   },
+   "W8A8 bw G=32 A-only": {
+    "relL2_vs_fp16": 0.046927690505981445,
+    "bits": 8,
+    "w_block": null,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 32,
+    "refresh": 4,
+    "clip_frac": 0.009971487157769531
+   },
+   "W8A8 shipped r=1": {
+    "relL2_vs_fp16": 0.02146824263036251,
+    "bits": 8,
+    "w_block": null,
+    "w_rule": "absmax",
+    "act_per_tensor": true,
+    "act_block": null,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W8A8 token act r=1": {
+    "relL2_vs_fp16": 0.02133224904537201,
+    "bits": 8,
+    "w_block": null,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 1000000000,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W8A8 bw G=256 r=1": {
+    "relL2_vs_fp16": 0.021906621754169464,
+    "bits": 8,
+    "w_block": 256,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 256,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W8A8 bw G=128 r=1": {
+    "relL2_vs_fp16": 0.02006833255290985,
+    "bits": 8,
+    "w_block": 128,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 128,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W8A8 bw G=64 r=1": {
+    "relL2_vs_fp16": 0.029204705730080605,
+    "bits": 8,
+    "w_block": 64,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 64,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W8A8 bw G=32 r=1": {
+    "relL2_vs_fp16": 0.012888331897556782,
+    "bits": 8,
+    "w_block": 32,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 32,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W8A8 bw G=16 r=1": {
+    "relL2_vs_fp16": 0.009345208294689655,
+    "bits": 8,
+    "w_block": 16,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 16,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W8A8 bw G=32 W-only r=1": {
+    "relL2_vs_fp16": 0.013046057894825935,
+    "bits": 8,
+    "w_block": 32,
+    "w_rule": "absmax",
+    "act_per_tensor": true,
+    "act_block": null,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W8A8 bw G=32 A-only r=1": {
+    "relL2_vs_fp16": 0.023292867466807365,
+    "bits": 8,
+    "w_block": null,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 32,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W4A4 shipped": {
+    "relL2_vs_fp16": 0.27751100063323975,
+    "bits": 4,
+    "w_block": null,
+    "w_rule": "mse",
+    "act_per_tensor": true,
+    "act_block": null,
+    "refresh": 4,
+    "clip_frac": 1.1234135988597291e-05
+   },
+   "W4A4 token act": {
+    "relL2_vs_fp16": 0.23429949581623077,
+    "bits": 4,
+    "w_block": null,
+    "w_rule": "mse",
+    "act_per_tensor": false,
+    "act_block": 1000000000,
+    "refresh": 4,
+    "clip_frac": 0.0014787374772530606
+   },
+   "W4A4 bw G=256": {
+    "relL2_vs_fp16": 0.17474424839019775,
+    "bits": 4,
+    "w_block": 256,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 256,
+    "refresh": 4,
+    "clip_frac": 0.001759705375014069
+   },
+   "W4A4 bw G=128": {
+    "relL2_vs_fp16": 0.16883252561092377,
+    "bits": 4,
+    "w_block": 128,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 128,
+    "refresh": 4,
+    "clip_frac": 0.0028491503144242227
+   },
+   "W4A4 bw G=64": {
+    "relL2_vs_fp16": 0.16618981957435608,
+    "bits": 4,
+    "w_block": 64,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 64,
+    "refresh": 4,
+    "clip_frac": 0.0048491322836507
+   },
+   "W4A4 bw G=32": {
+    "relL2_vs_fp16": 0.15710435807704926,
+    "bits": 4,
+    "w_block": 32,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 32,
+    "refresh": 4,
+    "clip_frac": 0.00828585753585351
+   },
+   "W4A4 bw G=16": {
+    "relL2_vs_fp16": 0.14027650654315948,
+    "bits": 4,
+    "w_block": 16,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 16,
+    "refresh": 4,
+    "clip_frac": 0.014431174917062296
+   },
+   "W4A4 bw G=32 W-only": {
+    "relL2_vs_fp16": 0.2371823936700821,
+    "bits": 4,
+    "w_block": 32,
+    "w_rule": "absmax",
+    "act_per_tensor": true,
+    "act_block": null,
+    "refresh": 4,
+    "clip_frac": 9.372111420842165e-06
+   },
+   "W4A4 bw G=32 A-only": {
+    "relL2_vs_fp16": 0.23655980825424194,
+    "bits": 4,
+    "w_block": null,
+    "w_rule": "mse",
+    "act_per_tensor": false,
+    "act_block": 32,
+    "refresh": 4,
+    "clip_frac": 0.008510857891629505
+   },
+   "W4A4 shipped r=1": {
+    "relL2_vs_fp16": 0.2732713222503662,
+    "bits": 4,
+    "w_block": null,
+    "w_rule": "mse",
+    "act_per_tensor": true,
+    "act_block": null,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W4A4 token act r=1": {
+    "relL2_vs_fp16": 0.2333359718322754,
+    "bits": 4,
+    "w_block": null,
+    "w_rule": "mse",
+    "act_per_tensor": false,
+    "act_block": 1000000000,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W4A4 bw G=256 r=1": {
+    "relL2_vs_fp16": 0.18801674246788025,
+    "bits": 4,
+    "w_block": 256,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 256,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W4A4 bw G=128 r=1": {
+    "relL2_vs_fp16": 0.1741236001253128,
+    "bits": 4,
+    "w_block": 128,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 128,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W4A4 bw G=64 r=1": {
+    "relL2_vs_fp16": 0.16049890220165253,
+    "bits": 4,
+    "w_block": 64,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 64,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W4A4 bw G=32 r=1": {
+    "relL2_vs_fp16": 0.15625426173210144,
+    "bits": 4,
+    "w_block": 32,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 32,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W4A4 bw G=16 r=1": {
+    "relL2_vs_fp16": 0.14654052257537842,
+    "bits": 4,
+    "w_block": 16,
+    "w_rule": "absmax",
+    "act_per_tensor": false,
+    "act_block": 16,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W4A4 bw G=32 W-only r=1": {
+    "relL2_vs_fp16": 0.22071672976016998,
+    "bits": 4,
+    "w_block": 32,
+    "w_rule": "absmax",
+    "act_per_tensor": true,
+    "act_block": null,
+    "refresh": 1,
+    "clip_frac": 0.0
+   },
+   "W4A4 bw G=32 A-only r=1": {
+    "relL2_vs_fp16": 0.233586385846138,
+    "bits": 4,
+    "w_block": null,
+    "w_rule": "mse",
+    "act_per_tensor": false,
+    "act_block": 32,
+    "refresh": 1,
+    "clip_frac": 0.0
+   }
+  }
+ }
+}
