@@ -346,6 +346,57 @@ def fig_axes(d):
     plt.close(fig)
 
 
+def fig_path(d):
+    """Stacked kernel breakdown per arm: the conv is not the whole path."""
+    t = d["freq_weighted_ms"]
+    # (label, [(stage, ms, colour)])
+    K1, K2, K3 = "#8c959f", "#bf8700", C8
+    arms = [
+        ("fp16\n(GN + conv)", [("K1 GN+SiLU", t["k1_gn_ms"], K1),
+                               ("K3 conv fp16", t["fp16_conv_ms"], "#57606a")]),
+        ("int8, 3 kernels\n(GN, quant, conv)", [("K1 GN+SiLU", t["k1_gn_ms"], K1),
+                                                ("K2 quantize", t["k2_quant_ms"], K2),
+                                                ("K3 conv int8", t["k3_conv_ms"], K3)]),
+        ("int8, GN+quant fused\n(shipped)", [("K1+K2 fused", t["k12_fused_ms"], K2),
+                                             ("K3 conv int8", t["k3_conv_ms"], K3)]),
+    ]
+    for g in d["blocks"]:
+        k = f"bw{g}_conv_ms"
+        if k in t:
+            arms.append((f"int8 blockwise G={g}",
+                         [("K1+K2 fused", t["k12_fused_ms"], K2),
+                          ("K3 conv, blockwise split", t[k], C4)]))
+
+    fig, ax = plt.subplots(figsize=(9.5, 5.2))
+    base = t["fp16_total"]
+    seen = set()
+    for i, (lab, parts) in enumerate(arms):
+        bottom = 0.0
+        for stage, ms, col in parts:
+            ax.bar(i, ms, bottom=bottom, color=col, width=0.62,
+                   label=stage if stage not in seen else None)
+            seen.add(stage)
+            if ms / base > 0.06:
+                ax.text(i, bottom + ms / 2, f"{ms:.1f}", ha="center", va="center",
+                        fontsize=8, color="white", fontweight="bold")
+            bottom += ms
+        ax.text(i, bottom + base * 0.02, f"{bottom:.1f} ms\n{base / bottom:.2f}x",
+                ha="center", fontsize=9,
+                color=INK if base / bottom >= 1.0 else C4,
+                fontweight="bold")
+    ax.axhline(base, color="#57606a", linestyle="--", linewidth=1.2,
+               label="fp16 path total")
+    ax.set_xticks(range(len(arms)))
+    ax.set_xticklabels([a[0] for a in arms], fontsize=8)
+    ax.set_ylim(0, max(sum(p[1] for p in a[1]) for a in arms) * 1.18)
+    _style(ax, "", "ms / step (freq-weighted, 62 conv calls)",
+           "The conv is 2 of 3 kernels: quantize is what int8 pays extra")
+    ax.legend(fontsize=8, frameon=False, loc="upper left")
+    fig.tight_layout()
+    fig.savefig(os.path.join(P, "fig8_path_kernels.png"), dpi=150)
+    plt.close(fig)
+
+
 def main() -> int:
     os.makedirs(P, exist_ok=True)
     made = []
@@ -355,7 +406,8 @@ def main() -> int:
                      ("blockwise_cost.json", fig_cost),
                      ("blockwise_wonly.json", fig_attrib),
                      ("blockwise_cost.json", fig_tradeoff),
-                     ("axis_sweep.json", fig_axes)):
+                     ("axis_sweep.json", fig_axes),
+                     ("path_kernels.json", fig_path)):
         d = _cost() if fn in (fig_cost,) else _load(name)
         if d is None:
             print(f"skip {fn.__name__}: {name} not present")

@@ -8,7 +8,7 @@ NVIDIA A40 · LSUN-Churches LDM-8 · 50 步 DDIM · n=24 · 3 个种子。全文
 > **G=32 通道**是合适的块大小，但**只值得用在权重上**。激活做 blockwise 在所有块大小上都没有收益
 > （曲线对 G 完全平），在现行 refresh 节奏下反而更差。权重 blockwise 在 W8A8 上值 ~1.9×。
 > 但现有 epilogue 无法承载任何 blockwise，唯一能跑的实现在 G=32 时让 conv 慢 **5.0×**——
-> 换算成对 fp16 就是 **0.29×**，即比不量化还慢。这是一个 mainloop 工程，不是一个开关。
+> 整条三-kernel 路径换算成对 fp16 是 **0.38×**，即比不量化还慢。这是一个 mainloop 工程，不是一个开关。
 
 英文完整版见 [FINDINGS.md](FINDINGS.md)。
 
@@ -55,7 +55,57 @@ split-K blockwise vs 参考实现: relerr 3.7e-04   （残差是 fp16 o_hat 累�
 A40, B=128，**全部 20 个 UNet ResBlock conv 形状**、按每步调用次数加权（62 calls/step），
 与 [`conv_kernel_sweep_2026-08-28`](../conv_kernel_sweep_2026-08-28/FINDINGS.md) §5 同一组形状同一套权重。
 
-**先看对 fp16 的 speedup**（量化的意义就在这里）。fp16 基准 = channels-last fp16 的 `F.conv2d`、
+### 到底在量什么：三个 kernel，不是一个
+
+这棵树里一个 ResBlock conv 是**三个阶段**，而只有 int8 arm 三个都要付：
+
+| | 阶段 | kernel |
+|---|---|---|
+| K1 | GroupNorm + SiLU | `group_norm_silu_nhwc` |
+| K2 | 对 `a_hat` 求 delta 并量化、写 `a_hat` | `step1_static_quantize_fprop_silu` —— **仅 int8** |
+| K3 | conv | `conv2d_int8_evt_o_hat`，fp16 arm 是 `F.conv2d` |
+
+生产路径把 K1+K2 融成 `group_norm_silu_delta_quantize_nhwc`，这也是
+[`conv_layer_microbench`](../cache_schemes_report_2026-08-28/scripts/conv_layer_microbench.py)
+把 conv path 记成两个 kernel 的原因。两种拆法都量了。
+[`scripts/path_kernels.py`](scripts/path_kernels.py)。
+
+频次加权，20 个 UNet 形状、62 calls/step：
+
+| kernel | ms/step |
+|---|--:|
+| K1 GN+SiLU（两个 arm 都有） | 14.05 |
+| K2 quantize（仅 int8） | 8.19 |
+| K1+K2 融合（生产） | **11.23** —— 省 11.02 |
+| K3 conv, int8 | 21.59 |
+| K3 conv, fp16 | 30.83 |
+
+| 路径 | ms/step | **vs fp16 路径** |
+|---|--:|--:|
+| fp16 (K1 + K3) | 44.89 | 1.000× |
+| int8，三个 kernel (K1+K2+K3) | 43.84 | **1.024×** |
+| int8，K1+K2 融合（生产） | 32.82 | **1.368×** |
+| int8 blockwise G=64 | 66.47 | 0.675× |
+| int8 blockwise G=32 | 119.63 | 0.375× |
+
+三点，第一点是对本文档自己之前说法的修正：
+
+1. **只看 conv 会高估路径 speedup。** conv 单独是 1.43×，
+   但路径上诚实的数字是 **1.37×** —— int8 还得跑 K2，fp16 不用。
+2. **不做 GN+quantize 融合的话，int8 几乎赢不了 fp16：只有 1.02×。**
+   K2 要 8.19 ms，而 conv 那边只赢 9.24 ms，
+   量化那一步几乎把收益全吃掉。融合不是"在已有收益上再优化"——**它本身就是收益的来源**。
+3. **融合后的 K1+K2 比 fp16 的 K1 还便宜**（11.23 vs 14.05 ms）。
+   这一阶段是带宽瓶颈，融合 kernel 写出的是 1 字节的码，而 fp16 的 GN 要写 2 字节的 `normed`，
+   所以量化连 norm 那步一起加速了。1.37× 里有很大一部分来自这里。
+
+对 blockwise 来说，路径视角比纯 conv 视角**稍微没那么惨**（这里 0.68×/0.38×，纯 conv 是 0.56×/0.29×），
+只是因为 K1+K2 不随块数翻倍。但在每个 G 上它都还是输给 fp16。**而且这些 blockwise 总数是下界的下界**：
+真实实现需要 K2 输出逐块 absmax 而不是一个标量，那笔额外 reduction 没有建模 —— K2 是按原样计时的。
+
+![路径 kernel](plots/fig8_path_kernels.png)
+
+**只看 conv kernel（K3）对 fp16 的 speedup**（量化的意义就在这里）。fp16 基准 = channels-last fp16 的 `F.conv2d`、
 开 `cudnn.benchmark`，即这棵树在
 [`kernel_speedup.py`](../bench_report_2026-08-13_postzp/scripts/kernel_speedup.py) 里用的
 `torch_conv2d_fp16` 约定。
@@ -226,8 +276,8 @@ per-tensor scale 由全局最差的块决定，对其他块都偏松，窗口内
 blockwise 小得多：权重 scale 是静态的、load 时就知道、可以排成合并访存；而激活块 scale 必须每步由
 GN/delta-quantize kernel 产出再喂进 mainloop。
 
-**不要上 split-K 版本。** 它不只是相对 per-tensor int8 贵 5.0×，而是落到 **0.29× fp16**——
-这条 conv 不量化反而更快。拿这个去换一个本来就比 W4A4 小 10 倍的 W8A8 误差项上的 1.9×，不值。可选项只有两个：
+**不要上 split-K 版本。** 它不只是相对 per-tensor int8 贵 5.0×，整条三-kernel 路径落到 **0.38× fp16**——
+这一层不量化反而更快。拿这个去换一个本来就比 W4A4 小 10 倍的 W8A8 误差项上的 1.9×，不值。可选项只有两个：
 
 1. **先放着，改看 refresh 节奏。** 同进程同种子配对比较，三次运行里 r=1 都比 r=4 好
    （+.0033 / +.0033 / +.0014），符号一致但两次只是刚过 .0033 的跨进程噪声底，所以算

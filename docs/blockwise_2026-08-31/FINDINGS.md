@@ -9,8 +9,8 @@ were done. The short answer:
 > Blockwise *activations* are worthless at every block size tested — the curve is flat in G — and
 > at the shipped refresh cadence they are actively harmful. Blockwise weights are worth ~1.9x at
 > W8A8. But no blockwise variant is implementable on the current epilogue: the only working
-> implementation costs **5.0x** the conv path at G=32 — which puts a blockwise int8 conv at
-> **0.29x fp16**, i.e. slower than not quantizing at all. This is a mainloop project, not a knob.
+> implementation costs **5.0x** the conv kernel at G=32, which puts the whole three-kernel layer
+> path at **0.38x fp16** — slower than not quantizing at all. This is a mainloop project, not a knob.
 
 Throughout, **G counts input channels**. A weight block is G channels x all R*S taps; an
 activation block is G channels at one (n,h,w). Weights and activations share the same C-block
@@ -132,9 +132,64 @@ call counts (62 calls/step), the same shape set and weighting as
 [`conv_kernel_sweep_2026-08-28`](../conv_kernel_sweep_2026-08-28/FINDINGS.md) section 5.
 [`scripts/blockwise_cost.py`](scripts/blockwise_cost.py).
 
-### The number that matters: speedup against fp16
+### What is actually being timed: three kernels, not one
 
-Quantization exists to beat fp16, so that is the denominator. fp16 reference is
+A ResBlock conv in this tree is **three stages**, and only the int8 arm pays all three:
+
+| | stage | kernel |
+|---|---|---|
+| K1 | GroupNorm + SiLU | `group_norm_silu_nhwc` |
+| K2 | quantize the delta against `a_hat`, write `a_hat` | `step1_static_quantize_fprop_silu` — **int8 only** |
+| K3 | conv | `conv2d_int8_evt_o_hat`, or `F.conv2d` in the fp16 arm |
+
+The shipped path fuses K1+K2 into `group_norm_silu_delta_quantize_nhwc`, which is why
+[`conv_layer_microbench`](../cache_schemes_report_2026-08-28/scripts/conv_layer_microbench.py)
+reports the conv path as two kernels. Both decompositions are measured.
+[`scripts/path_kernels.py`](scripts/path_kernels.py).
+
+Freq-weighted over the 20 UNet shapes, 62 calls/step:
+
+| kernel | ms/step |
+|---|--:|
+| K1 GN+SiLU (both arms) | 14.05 |
+| K2 quantize (int8 only) | 8.19 |
+| K1+K2 fused (shipped) | **11.23** — saves 11.02 |
+| K3 conv, int8 | 21.59 |
+| K3 conv, fp16 | 30.83 |
+
+| path | ms/step | **vs fp16 path** |
+|---|--:|--:|
+| fp16 (K1 + K3) | 44.89 | 1.000x |
+| int8, 3 kernels (K1 + K2 + K3) | 43.84 | **1.024x** |
+| int8, K1+K2 fused (shipped) | 32.82 | **1.368x** |
+| int8 blockwise G=64 | 66.47 | 0.675x |
+| int8 blockwise G=32 | 119.63 | 0.375x |
+
+Three things follow, and the first one corrects this document's own earlier framing:
+
+1. **The conv-only speedup overstates the path speedup.** Conv alone is
+   1.43x, but the honest path number is
+   **1.37x**, because int8 also has to run K2 and fp16 does not.
+2. **Without the GN+quantize fusion, int8 barely beats fp16 at all: 1.02x.**
+   K2 costs 8.19 ms against a conv win of only
+   9.24 ms, so the quantize step eats nearly the whole gain. The
+   fusion is not an optimization on top of a working win — it is what creates the win.
+3. **The fused K1+K2 is cheaper than fp16's K1 alone** (11.23 vs 14.05 ms).
+   That stage is bandwidth-bound and the fused kernel writes 1-byte codes where the fp16 GN writes a
+   2-byte `normed` tensor, so quantizing speeds up the norm as well as the conv. This is where a
+   large part of the 1.37x comes from.
+
+For blockwise the path view is slightly *less* damning than the conv-only view (0.68x/0.38x here
+against 0.56x/0.29x conv-only) simply because K1+K2 does not multiply with the block count. It is
+still a loss against fp16 at every G. **And these blockwise totals are a floor on a floor**: a real
+implementation needs K2 to emit a per-block absmax instead of one scalar, and that extra reduction is
+not modelled — K2 is timed unchanged.
+
+![path kernels](plots/fig8_path_kernels.png)
+
+### The conv kernel alone (K3), against fp16
+
+This is the K3-only view. Quantization exists to beat fp16, so that is the denominator. fp16 reference is
 `F.conv2d` on channels_last fp16 with `cudnn.benchmark=True` — the `torch_conv2d_fp16`
 convention this tree uses in
 [`kernel_speedup.py`](../bench_report_2026-08-13_postzp/scripts/kernel_speedup.py).
@@ -370,8 +425,8 @@ weight scales are static, known at load time, and can be laid out for coalesced 
 activation block scale would have to be produced every step by the GN/delta-quantize kernel and
 consumed in the mainloop.
 
-**Do not ship the split-K version.** It does not just cost 5.0x against per-tensor int8 — it lands at
-**0.29x fp16**, so the conv would be faster unquantized. Paying that to buy 1.9x on a W8A8 error term
+**Do not ship the split-K version.** It does not just cost 5.0x against per-tensor int8 — the whole
+three-kernel path lands at **0.38x fp16**, so the layer would be faster unquantized. Paying that to buy 1.9x on a W8A8 error term
 already 10x smaller than the W4A4 error is not a trade worth making. The honest options are:
 
 1. **Leave it, and look at refresh cadence instead.** Paired within-run (same process, same seeds),
