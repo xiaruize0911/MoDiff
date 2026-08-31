@@ -41,16 +41,33 @@ import modiff_cutlass  # noqa: E402
 
 JSON_OUT = "docs/blockwise_2026-08-31/data/blockwise_cost.json"
 BLOCKS = (256, 128, 64, 32, 16)
-#: (Cin, Cout, HW, freq) -- the high-frequency UNet ResBlock conv shapes at B=128,
-#: taken from docs/conv_kernel_sweep_2026-08-28/FINDINGS.md section 5.
+#: (Cin, Cout, HW, freq) -- the full 20 UNet ResBlock conv shapes at B=128 with their
+#: per-step call counts (62 calls/step), from docs/conv_kernel_sweep_2026-08-28/FINDINGS.md
+#: section 5. Cin must be divisible by G for a block split, so only G in {16,32,64} covers
+#: every shape (192 and 576 are not divisible by 128 or 256); coarser G are reported
+#: per-shape but excluded from the freq-weighted total, and the exclusion is logged.
 SHAPES = (
+    (768, 768, 2, 12),
+    (384, 384, 8, 8),
     (192, 192, 32, 7),
     (384, 384, 16, 7),
-    (384, 384, 8, 8),
-    (768, 768, 8, 1),
     (768, 768, 4, 7),
+    (1536, 768, 2, 3),
+    (1536, 768, 4, 2),
+    (768, 384, 8, 2),
+    (768, 384, 16, 2),
+    (384, 192, 32, 2),
+    (192, 192, 16, 1),
+    (192, 384, 16, 1),
+    (384, 384, 4, 1),
+    (384, 768, 4, 1),
+    (1152, 768, 4, 1),
+    (768, 768, 8, 1),
+    (1152, 384, 8, 1),
+    (576, 384, 16, 1),
+    (384, 384, 32, 1),
+    (576, 192, 32, 1),
 )
-
 
 def _mk(b, cin, cout, hw, dev="cuda"):
     x = torch.randint(-127, 127, (b, cin, hw, hw), device=dev, dtype=torch.int8
@@ -133,13 +150,49 @@ def main() -> int:
         gs = [r for r in rows if str(g) in r["splits"]]
         if len(gs) == len(rows):
             wsum[f"G={g}"] = sum(r["splits"][str(g)]["ms"] * r["freq"] for r in rows)
-    print("\nfreq-weighted over the sampled shapes (ms, conv path only):", flush=True)
+    missing = [g for g in BLOCKS if f"G={g}" not in wsum]
+    if missing:
+        print(f"\nexcluded from the weighted total (not every Cin divides G): "
+              f"{missing} -- per-shape rows above still stand", flush=True)
+    print("\nfreq-weighted over ALL 20 UNet shapes, 62 calls/step "
+          "(ms, conv path only):", flush=True)
     for k, v in wsum.items():
         print(f"  {k:8s} {v:8.2f}  {wsum['fused'] / v:.3f}x vs fused", flush=True)
 
+    # ---- where the slowdown comes from ----
+    # The per-shape ratios cluster by G rather than by block count, so "the epilogue runs
+    # nb times" cannot be the whole story. Split the per-call cost into the epilogue (an
+    # o_hat-sized fp16 RMW, which reuse_o_hat_add measures directly with no GEMM at all)
+    # and the rest, which is the K-thin GEMM: each call reduces over K = G*R*S instead of
+    # Cin*R*S, so it runs far below the efficiency of the fused call's mainloop.
+    cin, cout, hw, _f = 768, 768, 8, 1
+    g = 32
+    nb = cin // g
+    x, w, alpha, ws, o = _mk(a.batch, cin, cout, hw)
+    st = (1, 1, 1, 1, 1, 1)
+    fused = min(_time(lambda: fn(x, w, alpha, ws, o, *st), a.reps) for _ in range(a.trials))
+    xg, wg, _a, _w, _o = _mk(a.batch, g, cout, hw)
+    one = min(_time(lambda: fn(xg, wg, alpha, ws, o, *st), a.reps) for _ in range(a.trials))
+    o2 = torch.zeros_like(o)
+    epi = min(_time(lambda: modiff_cutlass.reuse_o_hat_add(o, o2, o2), a.reps)
+              for _ in range(a.trials))
+    attrib = {"shape": f"{cin}->{cout} {hw}x{hw}", "G": g, "n_blocks": nb,
+              "fused_us": fused * 1e3, "ideal_per_call_us": fused * 1e3 / nb,
+              "standalone_cin_g_us": one * 1e3, "epilogue_only_us": epi * 1e3,
+              "per_call_vs_ideal": one / (fused / nb),
+              "nb_x_standalone_vs_fused": one * nb / fused,
+              "epilogue_share_of_per_call": epi / one}
+    print(f"\nattribution on {cin}->{cout} {hw}x{hw}, G={g}, nb={nb}:", flush=True)
+    print(f"  fused (K={cin * 9})                {fused * 1e3:8.1f} us", flush=True)
+    print(f"  1/nb of fused (ideal per call)  {fused * 1e3 / nb:8.1f} us", flush=True)
+    print(f"  standalone Cin=G conv (K={g * 9})   {one * 1e3:8.1f} us  "
+          f"= {one / (fused / nb):.2f}x ideal", flush=True)
+    print(f"  epilogue only (o_hat RMW)       {epi * 1e3:8.1f} us  "
+          f"= {epi / one * 100:.0f}% of the per-call cost", flush=True)
+
     os.makedirs(os.path.dirname(a.out), exist_ok=True)
     json.dump({"gpu": torch.cuda.get_device_name(0), "batch": a.batch,
-               "reps": a.reps, "trials": a.trials,
+               "reps": a.reps, "trials": a.trials, "attribution": attrib,
                "method": "channel-block split-K on conv2d_int8_evt_o_hat; the D2 epilogue "
                          "RMW into o_hat makes the per-block accumulation exact. Block slicing "
                          "copies are hoisted out of the timed region, so these are a FLOOR.",

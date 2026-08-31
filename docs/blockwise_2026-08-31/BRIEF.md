@@ -7,7 +7,7 @@ NVIDIA A40 · LSUN-Churches LDM-8 · 50 步 DDIM · n=24 · 3 个种子。全文
 
 > **G=32 通道**是合适的块大小，但**只值得用在权重上**。激活做 blockwise 在所有块大小上都没有收益
 > （曲线对 G 完全平），在现行 refresh 节奏下反而更差。权重 blockwise 在 W8A8 上值 ~1.9×。
-> 但现有 epilogue 无法承载任何 blockwise，唯一能跑的实现在 G=32 时让 conv 路径慢 **4.7×**——
+> 但现有 epilogue 无法承载任何 blockwise，唯一能跑的实现在 G=32 时让 conv 路径慢 **5.0×**——
 > 这是一个 mainloop 工程，不是一个开关。
 
 英文完整版见 [FINDINGS.md](FINDINGS.md)。
@@ -50,17 +50,40 @@ D2 epilogue 是对 `o_hat` 的 read-modify-write，所以**按通道块逐块调
 split-K blockwise vs 参考实现: relerr 3.7e-04   （残差是 fp16 o_hat 累加）
 ```
 
-## 3. 代价（A40, B=128, 频次加权 conv 路径）
+## 3. 代价：conv 上的相对 speedup
 
-| | ms/step | vs fused |
-|---|--:|--:|
-| fused per-tensor（现行） | 10.44 | 1.000× |
-| G=64 | 25.19 | **0.415×** |
-| G=32 | 49.17 | **0.212×** |
-| G=16 | 97.41 | **0.107×** |
+A40, B=128，**全部 20 个 UNet ResBlock conv 形状**、按每步调用次数加权（62 calls/step），
+与 [`conv_kernel_sweep_2026-08-28`](../conv_kernel_sweep_2026-08-28/FINDINGS.md) §5 同一组形状同一套权重。
 
-严格线性于 `Cin/G`：MAC 没变，但每块都要重跑一遍整个 `N*P*Q*K` epilogue。**这已经是下界**
-（切块的拷贝没计入计时）。参照：W8A8 full 32.47 ms/step，W4A4 full 21.47 ms/step。
+| | ms/step | vs fused | 慢多少 |
+|---|--:|--:|--:|
+| fused per-tensor（现行） | 21.51 | 1.000× | — |
+| G=64 | 55.22 | **0.390×** | 2.57× |
+| G=32 | 108.51 | **0.198×** | 5.04× |
+| G=16 | 215.33 | **0.100×** | 10.01× |
+
+`Cin` 必须能被 G 整除，所以只有 G∈{16,32,64} 覆盖全部形状（192 和 576 不被 128/256 整除）；
+更粗的 G 逐形状测了但不进加权总和。**这已经是下界**（切块拷贝没计入计时）。
+
+逐形状看，G=32 时慢 3.8×–6.7×，而且它跟的是 **G，不是块数**：`1536->768 2x2` 切 48 块、
+`192->192 32x32` 切 6 块，却分别落在 0.167× 和 0.262×。所以"代价 = 块数 × fused，因为 epilogue
+每块重跑一遍"这个朴素模型是**错的**。真实关系是 `nb × (一个 Cin=G 的独立 conv)`，而那个独立调用
+同时吃两笔罚款。在 `768->768 8x8`、G=32、nb=24 上测：
+
+| | µs | |
+|---|--:|---|
+| fused, K=6912 | 380.3 | |
+| fused 的 1/nb（理想每次调用） | 15.8 | 免费切分该花多少 |
+| Cin=G 独立 conv, K=288 | 117.3 | 理想值的 **7.4×** |
+| 只有 epilogue（`o_hat` 大小的 fp16 RMW，无 GEMM） | 68.1 | 每次调用的 **58%** |
+
+所以 epilogue 重跑是较大的一项，但只是勉强过半：另外 42% 是 **K 太薄的 GEMM** ——每次调用的
+reduction 只有 `K = G*R*S = 288` 而不是 6912，摊不开 mainloop。两项的比例随形状变（空间大的
+epilogue 主导，空间小、通道深的薄 GEMM 主导），这正是为什么总和上的倍数反而比较均匀。
+
+参照：已提交的 conv-set 基准是 W8A8 full 32.47 ms/step、W4A4 full 21.47。那套 harness
+（独立 L=8 chain）还包含 quantize 步，跟上面 21.51 ms 的纯 conv kernel 数字不可直接比；
+blockwise 的倍数只作用在 conv 那部分，所以端到端一步的变慢会小于 5×。
 
 ![代价](plots/fig4_cost.png)
 
@@ -108,7 +131,7 @@ per-tensor scale 由全局最差的块决定，对其他块都偏松，窗口内
 blockwise 小得多：权重 scale 是静态的、load 时就知道、可以排成合并访存；而激活块 scale 必须每步由
 GN/delta-quantize kernel 产出再喂进 mainloop。
 
-**不要上 split-K 版本。** 拿 conv 路径 4.7× 去换一个本来就比 W4A4 小 10 倍的 W8A8 误差项上的
+**不要上 split-K 版本。** 拿 conv 路径 5.0× 去换一个本来就比 W4A4 小 10 倍的 W8A8 误差项上的
 1.9×，不值。可选项只有两个：
 
 1. **先放着，改看 refresh 节奏。** 同进程同种子配对比较，三次运行里 r=1 都比 r=4 好
@@ -117,11 +140,13 @@ GN/delta-quantize kernel 产出再喂进 mainloop。
    而且这棵树已经为了让逐步 refresh 变便宜做了 free absmax reporting。W4A4 上同一比较是
    +.0006 / −.0001 / +.0007，节奏没用。
 2. **写一个融合的 blockwise-权重 mainloop。** 一次 epilogue，权重 scale 在 reduction 内按 K 块折进去。
-   开销应是每个 K-tile 多一次 scale 读取，而不是 4.7× 的 epilogue 倍数。工程量与现有手搭的
+   开销应是每个 K-tile 多一次 scale 读取，而不是 split-K 那 5.0×（既重跑 epilogue，又把 K 从 6912 砍到 288）。工程量与现有手搭的
    `ImplicitGemmConvolutionEVT` 相当（CUTLASS 4.6.1 没有 EVT-on-conv，这里也没有库可抄）。
 
-**blockwise 救不了 W4A4。** 最好的 blockwise W4A4 是 .1495，而 W8A8 是 .0259——还差 5.8×，代价却是
-直接用 8 bit 的 3 倍。要低比特激活，粒度不是那个杠杆。
+**blockwise 救不了 W4A4。** 最好的 blockwise W4A4 是 .1495，而 W8A8 是 .0259——还差 5.8×。
+代价上，拿已提交的 conv-set 数字（W8A8 full 32.47、W4A4 full 21.47）套上实测的 split-K 倍数，
+blockwise W4A4 在 G=32 约是纯 W8A8 的 3.3×、G=16 约 6.6×。这个倍数是在 **int8** conv 上测的，
+int4 的 split-K 罚款没测，所以 W4A4 的代价是外推。要低比特激活，粒度不是那个杠杆。
 
 ## 7. 未解
 

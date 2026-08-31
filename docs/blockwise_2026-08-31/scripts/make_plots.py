@@ -31,6 +31,11 @@ def _load(name):
     return json.load(open(p)) if os.path.exists(p) else None
 
 
+def _cost():
+    """Full 20-shape UNet cost data if present, else the 5-shape subset."""
+    return _load("blockwise_cost_unet20.json") or _load("blockwise_cost.json")
+
+
 def _style(ax, xlab, ylab, title):
     ax.set_xlabel(xlab)
     ax.set_ylabel(ylab)
@@ -136,35 +141,51 @@ def fig_clip(d):
 
 
 def fig_cost(d):
-    """Measured channel-block split-K cost vs G."""
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))
+    """Relative speedup on conv, per shape and freq-weighted, plus where it goes."""
+    fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.3))
+
+    # left: every shape's speedup vs the fused per-tensor call, over G. The point is
+    # that the curves cluster by G rather than spreading by block count.
     ax = axes[0]
     for r in d["shapes"]:
         gs = sorted((int(g) for g in r["splits"]), reverse=True)
         if not gs:
             continue
-        lab = f"{r['cin']}->{r['cout']} {r['hw']}x{r['hw']}"
-        ax.plot(gs, [r["splits"][str(g)]["ms"] for g in gs], marker="o", label=lab)
-        ax.scatter([max(gs) * 2], [r["fused_ms"]], marker="*", s=90)
+        ax.plot(gs, [r["splits"][str(g)]["vs_fused"] for g in gs], marker="o", ms=3,
+                color="#57606a", alpha=0.45, linewidth=0.9)
+    w = d["freq_weighted_ms"]
+    ks = sorted((k for k in w if k != "fused"), key=lambda k: -int(k.split("=")[1]))
+    gs = [int(k.split("=")[1]) for k in ks]
+    ax.plot(gs, [w["fused"] / w[k] for k in ks], marker="o", color=CG, linewidth=2.2,
+            label="freq-weighted, all 20 shapes")
+    ax.plot([], [], color="#57606a", alpha=0.45, linewidth=0.9, label="individual shapes")
+    ax.axhline(1.0, color=INK, linewidth=1.0, linestyle=":", label="fused per-tensor = 1.0x")
+    for g, k in zip(gs, ks):
+        ax.annotate(f"{w['fused'] / w[k]:.3f}x", (g, w["fused"] / w[k]), fontsize=7.5,
+                    color=CG, textcoords="offset points", xytext=(5, 5))
     ax.set_xscale("log", base=2)
     ax.set_yscale("log")
     ax.invert_xaxis()
-    _style(ax, "block size G (input channels)", "ms / call",
-           "Split-K cost per shape (star = fused, per-tensor)")
-    ax.legend(fontsize=7, frameon=False)
-
-    ax = axes[1]
-    w = d["freq_weighted_ms"]
-    ks = [k for k in w if k != "fused"]
-    gs = [int(k.split("=")[1]) for k in ks]
-    ratio = [w["fused"] / w[k] for k in ks]
-    ax.plot(gs, ratio, marker="o", color=CG)
-    ax.axhline(1.0, color=INK, linewidth=1.0, linestyle=":", label="fused per-tensor = 1.0x")
-    ax.set_xscale("log", base=2)
-    ax.invert_xaxis()
     _style(ax, "block size G (input channels)", "speedup vs fused per-tensor",
-           "Freq-weighted conv path (lower = blockwise costs more)")
-    ax.legend(fontsize=8, frameon=False)
+           "Conv speedup with everything blockwise")
+    ax.legend(fontsize=8, frameon=False, loc="lower left")
+
+    # right: where a single split call's time goes
+    a = d.get("attribution")
+    if a:
+        ax = axes[1]
+        bars = [("1/nb of fused\n(free split)", a["ideal_per_call_us"], "#8c959f"),
+                ("epilogue only\n(o_hat RMW, no GEMM)", a["epilogue_only_us"], "#bf8700"),
+                ("actual per call\n(Cin=G conv)", a["standalone_cin_g_us"], C4)]
+        ax.bar([b[0] for b in bars], [b[1] for b in bars],
+               color=[b[2] for b in bars], width=0.6)
+        for i, b in enumerate(bars):
+            ax.text(i, b[1] + 2, f"{b[1]:.1f} us", ha="center", fontsize=8.5, color=INK)
+        ax.set_ylim(0, a["standalone_cin_g_us"] * 1.22)
+        _style(ax, "", "µs per split call",
+               f"{a['shape']}, G={a['G']}, {a['n_blocks']} blocks: "
+               f"{a['epilogue_share_of_per_call'] * 100:.0f}% epilogue, rest is the thin GEMM")
+        ax.tick_params(axis="x", labelsize=7.5)
     fig.tight_layout()
     fig.savefig(os.path.join(P, "fig4_cost.png"), dpi=150)
     plt.close(fig)
@@ -220,7 +241,7 @@ def fig_attrib(_ignored):
 def fig_tradeoff(_ignored):
     """Quality against measured cost, so the block-size choice is visible in one place."""
     e = _load("blockwise_e2e_mse.json") or _load("blockwise_e2e.json")
-    c = _load("blockwise_cost.json")
+    c = _cost()
     if not (e and c):
         print("skip fig_tradeoff: data missing")
         return
@@ -265,7 +286,7 @@ def main() -> int:
                      ("blockwise_cost.json", fig_cost),
                      ("blockwise_wonly.json", fig_attrib),
                      ("blockwise_cost.json", fig_tradeoff)):
-        d = _load(name)
+        d = _cost() if fn in (fig_cost,) else _load(name)
         if d is None:
             print(f"skip {fn.__name__}: {name} not present")
             continue

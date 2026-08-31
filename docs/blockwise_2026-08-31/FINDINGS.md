@@ -9,7 +9,7 @@ were done. The short answer:
 > Blockwise *activations* are worthless at every block size tested — the curve is flat in G — and
 > at the shipped refresh cadence they are actively harmful. Blockwise weights are worth ~1.9x at
 > W8A8. But no blockwise variant is implementable on the current epilogue: the only working
-> implementation costs **4.7x** the conv path at G=32, so this is a mainloop project, not a knob.
+> implementation costs **5.0x** the conv path at G=32, so this is a mainloop project, not a knob.
 
 Throughout, **G counts input channels**. A weight block is G channels x all R*S taps; an
 activation block is G channels at one (n,h,w). Weights and activations share the same C-block
@@ -126,26 +126,47 @@ Two things follow:
 
 ## 4. Cost of blockwise on the real kernel
 
-Channel-block split-K, A40, B=128, on the high-frequency UNet ResBlock conv shapes.
+Channel-block split-K, A40, B=128, over **all 20 UNet ResBlock conv shapes** with their per-step
+call counts (62 calls/step), the same shape set and weighting as
+[`conv_kernel_sweep_2026-08-28`](../conv_kernel_sweep_2026-08-28/FINDINGS.md) section 5.
 [`scripts/blockwise_cost.py`](scripts/blockwise_cost.py).
 
-Freq-weighted over the sampled shapes, conv path only:
+Freq-weighted, conv kernel only:
 
-| | ms/step | vs fused |
-|---|--:|--:|
-| fused, per-tensor (shipped) | 10.44 | 1.000x |
-| G=64 | 25.19 | **0.415x** |
-| G=32 | 49.17 | **0.212x** |
-| G=16 | 97.41 | **0.107x** |
+| | ms/step | vs fused | slowdown |
+|---|--:|--:|--:|
+| fused, per-tensor (shipped) | 21.51 | 1.000x | — |
+| G=64 | 55.22 | **0.390x** | 2.57x |
+| G=32 | 108.51 | **0.198x** | 5.04x |
+| G=16 | 215.33 | **0.100x** | 10.01x |
 
-Dead linear in `Cin/G`, which is the prediction: the MAC work is unchanged (K is merely
-partitioned) but every block re-runs the full `N*P*Q*K` epilogue, so accumulator and `o_hat`
-traffic multiply by the block count. **These are a floor** — the block-slicing copies are hoisted
-out of the timed region.
+`Cin` must divide `G`, so only G in {16,32,64} covers every shape (192 and 576 are not divisible by
+128 or 256); the coarser G are measured per-shape but excluded from the weighted total.
+**These are a floor** — the block-slicing copies are hoisted out of the timed region.
 
-For scale: W8A8 full is 32.47 ms/step and W4A4 full is 21.47 ms/step on the committed conv-set
-benchmark. Blockwise W4A4 at G=32 would land near 100 ms/step — three times the cost of just
-using 8 bits.
+Per shape at G=32 the slowdown runs 3.8x-6.7x, and it tracks **G, not the block count**:
+`1536->768 2x2` splits into 48 blocks and `192->192 32x32` into 6, yet they land at 0.167x and
+0.262x. So the naive model — cost = block count x fused, because the epilogue re-runs per block —
+is wrong. Split cost is `nb x (a standalone conv with Cin=G)`, and that standalone call has two
+separate penalties. Measured on `768->768 8x8`, G=32, nb=24:
+
+| | µs | |
+|---|--:|---|
+| fused, K=6912 | 380.3 | |
+| 1/nb of fused (ideal per call) | 15.8 | what a free split would cost |
+| standalone Cin=G conv, K=288 | 117.3 | **7.4x** the ideal |
+| epilogue only (`o_hat`-sized fp16 RMW, no GEMM) | 68.1 | **58%** of the per-call cost |
+
+So the epilogue re-run is the larger term but only just: the other 42% is the **K-thin GEMM** —
+each call reduces over `K = G*R*S = 288` instead of 6912, far too shallow to amortize the
+mainloop, so it runs well below the fused call's efficiency. The mix shifts by shape (epilogue
+dominates at large spatial extent, the thin GEMM dominates at small spatial extent and deep
+channels), which is why the aggregate slowdown comes out roughly uniform.
+
+For scale: the committed conv-set benchmark puts W8A8 full at 32.47 ms/step and W4A4 full at
+21.47 ms/step. That harness (independent L=8 chain) also includes the quantize step, so it is not
+directly comparable to the 21.51 ms conv-kernel figure above; the blockwise multiplier applies
+only to the conv part, so an end-to-end step slows by less than 5x at G=32.
 
 ![cost](plots/fig4_cost.png)
 
@@ -229,7 +250,7 @@ despite clipping just as much.
 **Block size: G = 32 input channels.** It is the knee of the only curve that slopes (weights), and:
 
 * G=16 adds 0.0006 relL2 at W8A8 and 0.0003 at W4A4 — both inside the noise floor — while doubling
-  the cost again (0.212x -> 0.107x).
+  the cost again (0.198x -> 0.100x).
 * 32 divides every UNet channel count exactly (192, 384, 576, 768, 1152, 1536), so no block ever
   needs padding.
 * 32 int8 channels = 32 B = two 16-B vectorized NHWC accesses, so a block boundary never splits a
@@ -243,7 +264,7 @@ weight scales are static, known at load time, and can be laid out for coalesced 
 activation block scale would have to be produced every step by the GN/delta-quantize kernel and
 consumed in the mainloop.
 
-**Do not ship the split-K version.** 4.7x on the conv path to buy 1.9x on a W8A8 error term that is
+**Do not ship the split-K version.** 5.0x on the conv path to buy 1.9x on a W8A8 error term that is
 already 10x smaller than the W4A4 error is not a trade worth making. The honest options are:
 
 1. **Leave it, and look at refresh cadence instead.** Paired within-run (same process, same seeds),
@@ -256,12 +277,15 @@ already 10x smaller than the W4A4 error is not a trade worth making. The honest 
    [`int8_optimized.py:279`](../../integration/kernels/int8_optimized.py:279)). At W4A4 the same
    comparison is +0.0006 / -0.0001 / +0.0007 — cadence does nothing there.
 2. **Build a fused blockwise-weight mainloop.** One epilogue pass, a weight scale folded per K-block
-   inside the reduction. Expected overhead is a scale load per K-tile rather than a 4.7x epilogue
-   multiplier. Scope is comparable to the existing hand-assembled `ImplicitGemmConvolutionEVT`
+   inside the reduction. Expected overhead is a scale load per K-tile, against the 5.0x that split-K
+   pays for re-running the epilogue and for reducing over a K of 288 instead of 6912. Scope is comparable to the existing hand-assembled `ImplicitGemmConvolutionEVT`
    (CUTLASS 4.6.1 has no EVT-on-conv path, so there is no library shortcut here either).
 
 **Blockwise does not rescue W4A4.** Best blockwise W4A4 is 0.1495 relL2 against W8A8's 0.0259 —
-still 5.8x worse, at 3x the cost of just using 8 bits. If the goal is low-bit activations, the
+still 5.8x worse. On cost, taking the committed conv-set figures (W8A8 full 32.47 ms/step, W4A4
+full 21.47) and applying the measured split-K multiplier, blockwise W4A4 lands at roughly 3.3x
+plain W8A8 at G=32 and 6.6x at G=16. That multiplier was measured on the **int8** conv; the int4
+split-K penalty was not measured, so treat the W4A4 cost as an extrapolation. If the goal is low-bit activations, the
 lever is not granularity.
 
 ---
