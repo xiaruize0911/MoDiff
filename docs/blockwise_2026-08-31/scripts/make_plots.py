@@ -31,11 +31,6 @@ def _load(name):
     return json.load(open(p)) if os.path.exists(p) else None
 
 
-def _cost():
-    """Full 20-shape UNet cost data if present, else the 5-shape subset."""
-    return _load("blockwise_cost_unet20.json") or _load("blockwise_cost.json")
-
-
 def _style(ax, xlab, ylab, title):
     ax.set_xlabel(xlab)
     ax.set_ylabel(ylab)
@@ -254,7 +249,7 @@ def fig_attrib(_ignored):
 def fig_tradeoff(_ignored):
     """Quality against measured cost, so the block-size choice is visible in one place."""
     e = _load("blockwise_e2e_mse.json") or _load("blockwise_e2e.json")
-    c = _cost()
+    c = _load("blockwise_cost_unet20.json")
     if not (e and c):
         print("skip fig_tradeoff: data missing")
         return
@@ -573,15 +568,15 @@ def main() -> int:
     for name, fn in (("weight_granularity.json", fig_weights),
                      ("blockwise_e2e.json", fig_e2e),
                      ("blockwise_e2e.json", fig_clip),
-                     ("blockwise_cost.json", fig_cost),
+                     ("blockwise_cost_unet20.json", fig_cost),
                      ("blockwise_wonly.json", fig_attrib),
-                     ("blockwise_cost.json", fig_tradeoff),
+                     ("blockwise_cost_unet20.json", fig_tradeoff),
                      ("axis_sweep.json", fig_axes),
                      ("path_kernels.json", fig_path),
                      ("fused_pair.json", fig_pair),
                      ("kernel_axis_sweep.json", fig_kernel_axes),
                      ("kernel_axis_sweep.json", fig_speedup_axes)):
-        d = _cost() if fn in (fig_cost,) else _load(name)
+        d = _load(name)
         if d is None:
             print(f"skip {fn.__name__}: {name} not present")
             continue

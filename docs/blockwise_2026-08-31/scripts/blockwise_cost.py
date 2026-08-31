@@ -44,7 +44,7 @@ import modiff_cutlass  # noqa: E402
 #: under-tuned fp16 baseline would flatter every int8 arm.
 torch.backends.cudnn.benchmark = True
 
-JSON_OUT = "docs/blockwise_2026-08-31/data/blockwise_cost.json"
+JSON_OUT = "docs/blockwise_2026-08-31/data/blockwise_cost_unet20.json"
 BLOCKS = (256, 128, 64, 32, 16)
 #: (Cin, Cout, HW, freq) -- the full 20 UNet ResBlock conv shapes at B=128 with their
 #: per-step call counts (62 calls/step), from docs/conv_kernel_sweep_2026-08-28/FINDINGS.md
