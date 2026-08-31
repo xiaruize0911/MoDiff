@@ -132,6 +132,91 @@ call counts (62 calls/step), the same shape set and weighting as
 [`conv_kernel_sweep_2026-08-28`](../conv_kernel_sweep_2026-08-28/FINDINGS.md) section 5.
 [`scripts/blockwise_cost.py`](scripts/blockwise_cost.py).
 
+### Fused pair vs fused pair: MoDiff against the int8 baseline
+
+The fp16 comparison above answers "does quantizing pay". It does not answer "what does the
+temporal cache cost", because that needs MoDiff's fused pair against the **baseline's** fused
+pair -- two kernels each, both in production form.
+[`scripts/fused_pair.py`](scripts/fused_pair.py).
+
+| arm | GN stage | conv |
+|---|---|---|
+| fp16 | `group_norm_silu_nhwc` | `F.conv2d` fp16 |
+| baseline int8 | `group_norm_silu_quantize_nhwc_fast` | `conv2d_int8_evt_bias_residual_fp16` (D1) |
+| MoDiff int8 | `group_norm_silu_delta_quantize_nhwc` | `conv2d_int8_evt_o_hat` (D2) |
+
+**One asymmetry has to be stated before the numbers.** The fast-reduce variant
+([`gn_fast_reduce_2026-08-16`](../gn_fast_reduce_2026-08-16) -- 128-512 threads, pair-major pass 1)
+was only ever ported to the **baseline** entry point. There is no
+`group_norm_silu_delta_quantize_nhwc_fast` in the tree, so the shipped baseline runs the fast
+reduction and the shipped MoDiff arm runs the plain one. My first attempt at this table compared
+plain against plain and made MoDiff look 1.04x *faster* than baseline; that was not the shipped
+configuration. Both baseline variants are below.
+
+Freq-weighted over the 20 UNet shapes, 62 calls/step:
+
+| kernel | ms/step | |
+|---|--:|---|
+| baseline GN stage, `_fast` (shipped) | 6.62 | |
+| baseline GN stage, plain | 13.51 | fast-reduce is worth **2.04x** here |
+| MoDiff GN stage (delta + `a_hat`) | 11.32 | **0.585x** vs baseline `_fast` |
+| baseline conv (D1) | 21.86 | |
+| MoDiff conv (D2) | 22.06 | **0.991x** vs D1 |
+
+| 2-kernel path | ms/step | vs fp16 | vs baseline |
+|---|--:|--:|--:|
+| fp16 | 45.30 | 1.000x | 0.629x |
+| **baseline int8 (shipped)** | 28.49 | **1.590x** | 1.000x |
+| baseline int8, GN_FAST=0 | 35.38 | 1.281x | 0.805x |
+| **MoDiff int8 (shipped)** | 33.38 | **1.357x** | **0.853x** |
+| MoDiff blockwise G=64 | 66.60 | 0.680x | 0.428x |
+| MoDiff blockwise G=32 | 119.71 | 0.378x | 0.238x |
+
+So on the shipped configuration **MoDiff's two-kernel path is 0.853x the baseline's**, i.e.
+17% slower. The conv is a wash
+(0.991x, consistent with the 0.966x that
+[`conv_kernel_sweep`](../conv_kernel_sweep_2026-08-28/FINDINGS.md) measured for the fused EVT).
+The entire 4.9 ms gap is the GN stage.
+
+**And that gap is bytes, not tuning.** Effective bandwidth of the GN stage, against the A40's
+696 GB/s:
+
+| kernel | bytes / input elem | ms | GB/s | % of peak |
+|---|--:|--:|--:|--:|
+| fp16 GN+SiLU | 4 (r2 + w2) | 14.64 | 179 | 26% |
+| baseline, plain | 3 (r2 + w1) | 13.51 | 145 | 21% |
+| baseline, `_fast` | 3 (r2 + w1) | 6.62 | 296 | 43% |
+| **MoDiff delta** | **7** (r2 x + r2 `a_hat` + w1 + w2 `a_hat`) | 11.32 | **405** | **58%** |
+
+MoDiff's delta kernel is the **most** bandwidth-efficient of the four -- 58% of peak against the
+baseline `_fast` kernel's 43%. It loses on wall clock only because the temporal cache forces it to
+move **7 bytes per element instead of 3**: it must read `a_hat` and write it back. That is inherent
+to the method, not a missing optimization.
+
+Which bounds the upside. Put M1 at the full 696 GB/s and it would take 6.58 ms, making
+MoDiff's path 28.64 ms =
+**0.995x the baseline** -- a dead heat. So:
+
+> **MoDiff's per-step kernels cannot beat the baseline's, at any level of tuning.** A perfect GN
+> stage draws level and no better. MoDiff's speed case has to rest on skipping work entirely
+> (replay), which is exactly what
+> [`cache_schemes_report_2026-08-28`](../cache_schemes_report_2026-08-28/BRIEF.md) found when it
+> measured replay at 2.65x and skip at ~1.00x. Its per-step case is a quality case: same speed
+> class as the baseline, lower activation bits.
+
+The one concrete engineering item here: **port fast-reduce to the delta kernel.** It gave the
+baseline 2.04x. M1 is already at 58% of peak so it will not give that much, but the
+headroom between 405 and 696 GB/s is worth up to 4.7 ms/step.
+
+![fused pair](plots/fig9_fused_pair.png)
+
+Blockwise, for completeness, applied to each arm's own conv: MoDiff G=64
+0.680x fp16, G=32 0.378x; baseline G=64
+0.723x, G=32 0.388x. Both lose to fp16, as before. Note the
+baseline blockwise rows are a **timing proxy only**: D1 writes its output instead of accumulating,
+so nb calls do not sum and the result would be wrong -- a correct baseline blockwise needs an
+accumulating D1 or a reduction pass, and would cost more.
+
 ### What is actually being timed: three kernels, not one
 
 A ResBlock conv in this tree is **three stages**, and only the int8 arm pays all three:
@@ -460,5 +545,7 @@ lever is not granularity.
 * Everything here is relL2 on 72 latents. No FID was run: at W8A8 the effects are at or near the
   0.003 noise floor and FID at this sample count would not resolve them. The W4A4 blockwise gain
   (0.279 -> 0.150) is large enough to be worth an FID confirmation, which was not done.
+* Port fast-reduce to `group_norm_silu_delta_quantize_nhwc`. It gave the baseline kernel 2.04x
+  and does not exist for the MoDiff twin; up to 4.7 ms/step of headroom (section 4).
 * `a_hat` blockwise is cheap (section 1) and untested here. It is very likely irrelevant given that
   activation granularity is flat, but it is the one blockwise variant that would cost nothing.

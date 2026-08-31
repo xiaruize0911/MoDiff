@@ -55,6 +55,82 @@ split-K blockwise vs 参考实现: relerr 3.7e-04   （残差是 fp16 o_hat 累�
 A40, B=128，**全部 20 个 UNet ResBlock conv 形状**、按每步调用次数加权（62 calls/step），
 与 [`conv_kernel_sweep_2026-08-28`](../conv_kernel_sweep_2026-08-28/FINDINGS.md) §5 同一组形状同一套权重。
 
+### 融合后 2-kernel 对 2-kernel：MoDiff vs int8 baseline
+
+上面对 fp16 的比较回答的是"量化值不值"，而不是"时序缓存要付多少代价"——后者需要拿 MoDiff 的融合对
+去比 **baseline 的**融合对，两边各两个 kernel，都用生产形态。
+[`scripts/fused_pair.py`](scripts/fused_pair.py)。
+
+| arm | GN 阶段 | conv |
+|---|---|---|
+| fp16 | `group_norm_silu_nhwc` | `F.conv2d` fp16 |
+| baseline int8 | `group_norm_silu_quantize_nhwc_fast` | `conv2d_int8_evt_bias_residual_fp16` (D1) |
+| MoDiff int8 | `group_norm_silu_delta_quantize_nhwc` | `conv2d_int8_evt_o_hat` (D2) |
+
+**先说一个必须交代的不对称。** fast-reduce 变体
+（[`gn_fast_reduce_2026-08-16`](../gn_fast_reduce_2026-08-16)，128–512 线程、pair-major pass 1）
+只移植到了 **baseline** 的入口。树里没有 `group_norm_silu_delta_quantize_nhwc_fast`，
+所以生产的 baseline 跑 fast reduction，生产的 MoDiff 跑 plain。我第一次做这张表时是 plain 对 plain，
+得出 MoDiff 比 baseline **快** 1.04×——那不是生产配置。两个 baseline 变体都列在下面。
+
+频次加权，20 个 UNet 形状、62 calls/step：
+
+| kernel | ms/step | |
+|---|--:|---|
+| baseline GN 阶段 `_fast`（生产） | 6.62 | |
+| baseline GN 阶段 plain | 13.51 | fast-reduce 在这里值 **2.04×** |
+| MoDiff GN 阶段（delta + `a_hat`） | 11.32 | 对 baseline `_fast` 是 **0.585×** |
+| baseline conv (D1) | 21.86 | |
+| MoDiff conv (D2) | 22.06 | 对 D1 是 **0.991×** |
+
+| 2-kernel 路径 | ms/step | vs fp16 | vs baseline |
+|---|--:|--:|--:|
+| fp16 | 45.30 | 1.000× | 0.629× |
+| **baseline int8（生产）** | 28.49 | **1.590×** | 1.000× |
+| baseline int8, GN_FAST=0 | 35.38 | 1.281× | 0.805× |
+| **MoDiff int8（生产）** | 33.38 | **1.357×** | **0.853×** |
+| MoDiff blockwise G=64 | 66.60 | 0.680× | 0.428× |
+| MoDiff blockwise G=32 | 119.71 | 0.378× | 0.238× |
+
+所以在生产配置下 **MoDiff 的两-kernel 路径是 baseline 的 0.853×**，
+即慢 17%。conv 基本打平（0.991×，
+和 [`conv_kernel_sweep`](../conv_kernel_sweep_2026-08-28/FINDINGS.md) 对融合 EVT 测到的 0.966× 一致）。
+那 4.9 ms 的差距**全部**在 GN 阶段。
+
+**而这个差距是字节数，不是调优。** GN 阶段的有效带宽，对 A40 的 696 GB/s：
+
+| kernel | 字节/输入元素 | ms | GB/s | 占峰值 |
+|---|--:|--:|--:|--:|
+| fp16 GN+SiLU | 4（读2 + 写2） | 14.64 | 179 | 26% |
+| baseline plain | 3（读2 + 写1） | 13.51 | 145 | 21% |
+| baseline `_fast` | 3（读2 + 写1） | 6.62 | 296 | 43% |
+| **MoDiff delta** | **7**（读2 x + 读2 `a_hat` + 写1 + 写2 `a_hat`） | 11.32 | **405** | **58%** |
+
+MoDiff 的 delta kernel 是四个里带宽效率**最高**的——58% 峰值，而 baseline `_fast` 只有 43%。
+它在墙钟上输，纯粹因为时序缓存迫使它每元素搬 **7 字节而不是 3**：必须读 `a_hat` 再写回去。
+这是方法本身的代价，不是漏掉的优化。
+
+这也就框住了上限。把 M1 拉到满带宽 696 GB/s，它需要 6.58 ms，
+MoDiff 路径变成 28.64 ms =
+**baseline 的 0.995×**——刚好打平。所以：
+
+> **MoDiff 的逐步 kernel 在任何调优水平下都赢不了 baseline。** 完美的 GN 阶段只能打平。
+> MoDiff 的速度理由必须建立在**整块跳过计算**（replay）上，这也正是
+> [`cache_schemes_report_2026-08-28`](../cache_schemes_report_2026-08-28/BRIEF.md) 测到的
+> replay 2.65× / skip ~1.00×。它逐步的理由是质量理由：和 baseline 同一速度档，但激活位宽更低。
+
+这里唯一具体的工程项：**把 fast-reduce 移植到 delta kernel。** 它给 baseline 带来了
+2.04×。M1 已经在 58% 峰值，不会有那么多，但 405 到 696 GB/s
+之间的余量最多值 4.7 ms/step。
+
+![融合对](plots/fig9_fused_pair.png)
+
+blockwise 顺带一提（各自套在自己的 conv 上）：MoDiff G=64 0.680× fp16、
+G=32 0.378×；baseline G=64 0.723×、
+G=32 0.388×。两边都输给 fp16，和之前一致。注意 baseline 的 blockwise 行
+只是**计时代理**：D1 是写出而不是累加，nb 次调用不会求和、结果是错的——正确的 baseline blockwise
+需要一个会累加的 D1 或者额外一趟 reduction，只会更贵。
+
 ### 到底在量什么：三个 kernel，不是一个
 
 这棵树里一个 ResBlock conv 是**三个阶段**，而只有 int8 arm 三个都要付：
@@ -301,4 +377,6 @@ int4 的 split-K 罚款没测，所以 W4A4 的代价是外推。要低比特激
 - W4A4 权重/激活的超加性（1.16× × 1.17× → 1.53×）测到了但没解释。
 - 全部只有 relL2，没跑 FID。W8A8 的效应贴着噪声底，这个样本量的 FID 也分不开；W4A4 的
   .279 → .150 够大，值得补一次 FID，但没做。
+- **把 fast-reduce 移植到 `group_norm_silu_delta_quantize_nhwc`。** 它给 baseline kernel 带来 2.04×，
+  而 MoDiff 这一侧没有；最多 4.7 ms/step 的余量（§3）。
 - `a_hat` blockwise 是免费的（§1）却没测。鉴于激活粒度是平的，它大概率无关，但它是唯一零成本的 blockwise。

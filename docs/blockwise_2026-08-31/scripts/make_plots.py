@@ -397,6 +397,81 @@ def fig_path(d):
     plt.close(fig)
 
 
+def fig_pair(d):
+    """Both arms as fused 2-kernel paths, plus the GN stage's bandwidth."""
+    t, roof = d["freq_weighted_ms"], d.get("roofline")
+    GN, CONV = "#bf8700", C8
+    arms = [
+        ("fp16\nGN + conv", [("GN stage", t["f1_ms"], "#8c959f"),
+                             ("conv", t["f2_ms"], "#57606a")]),
+        ("baseline int8\n(GN_FAST=0)", [("GN stage", t["b1_plain_ms"], GN),
+                                        ("conv", t["b2_ms"], CONV)]),
+        ("baseline int8\n(shipped, _fast)", [("GN stage", t["b1_ms"], GN),
+                                             ("conv", t["b2_ms"], CONV)]),
+        ("MoDiff int8\n(shipped)", [("GN stage", t["m1_ms"], GN),
+                                    ("conv", t["m2_ms"], CONV)]),
+    ]
+    if roof:
+        arms.append(("MoDiff, M1 at\nroofline (hypothetical)",
+                     [("GN stage", roof["m1_at_roofline_ms"], "#2da44e"),
+                      ("conv", t["m2_ms"], CONV)]))
+    for g in d["blocks"]:
+        if f"modiff_bw{g}_total" in t:
+            arms.append((f"MoDiff blockwise\nG={g}",
+                         [("GN stage", t["m1_ms"], GN),
+                          ("conv", t[f"m2_bw{g}_ms"], C4)]))
+
+    fig, axes = plt.subplots(1, 2, figsize=(13.5, 5.0),
+                             gridspec_kw={"width_ratios": [1.75, 1]})
+    ax = axes[0]
+    base_fp16, base_int8 = t["fp16_total"], t["baseline_total"]
+    seen = set()
+    for i, (lab, parts) in enumerate(arms):
+        bottom = 0.0
+        for stage, ms, col in parts:
+            ax.bar(i, ms, bottom=bottom, color=col, width=0.62,
+                   label=stage if stage not in seen else None)
+            seen.add(stage)
+            if ms / base_fp16 > 0.07:
+                ax.text(i, bottom + ms / 2, f"{ms:.1f}", ha="center", va="center",
+                        fontsize=8, color="white", fontweight="bold")
+            bottom += ms
+        ax.text(i, bottom + base_fp16 * 0.02,
+                f"{bottom:.1f}\n{base_fp16 / bottom:.2f}x fp16\n{base_int8 / bottom:.2f}x base",
+                ha="center", fontsize=7.5,
+                color=INK if base_int8 / bottom >= 0.99 else C4)
+    ax.axhline(base_int8, color=CG, linestyle="--", linewidth=1.2,
+               label="baseline int8 total (shipped)")
+    ax.axhline(base_fp16, color="#57606a", linestyle=":", linewidth=1.2, label="fp16 total")
+    ax.set_xticks(range(len(arms)))
+    ax.set_xticklabels([a[0] for a in arms], fontsize=7.5)
+    ax.set_ylim(0, max(sum(p[1] for p in a[1]) for a in arms) * 1.2)
+    _style(ax, "", "ms / step (freq-weighted, 62 conv calls)",
+           "Fused 2-kernel paths: MoDiff's cache costs it the GN stage")
+    ax.legend(fontsize=8, frameon=False, loc="upper left")
+
+    if roof:
+        ax = axes[1]
+        labs = [("fp16 GN\n4 B/el", "f1_ms", "#8c959f"),
+                ("baseline plain\n3 B/el", "b1_plain_ms", "#d4a72c"),
+                ("baseline _fast\n3 B/el", "b1_ms", GN),
+                ("MoDiff delta\n7 B/el", "m1_ms", C4)]
+        gbs = [roof["gbs"][k] for _l, k, _c in labs]
+        ax.bar([l for l, _k, _c in labs], gbs, color=[c for _l, _k, c in labs], width=0.6)
+        for i, g in enumerate(gbs):
+            ax.text(i, g + 12, f"{g:.0f}", ha="center", fontsize=9, fontweight="bold")
+        ax.axhline(roof["peak_gbs"], color=C4, linestyle="--", linewidth=1.2,
+                   label=f"A40 peak {roof['peak_gbs']:.0f} GB/s")
+        ax.set_ylim(0, roof["peak_gbs"] * 1.1)
+        _style(ax, "", "effective GB/s",
+               "The GN stage: MoDiff is the most efficient,\nit just moves 2.3x the bytes")
+        ax.tick_params(axis="x", labelsize=7.5)
+        ax.legend(fontsize=8, frameon=False)
+    fig.tight_layout()
+    fig.savefig(os.path.join(P, "fig9_fused_pair.png"), dpi=150)
+    plt.close(fig)
+
+
 def main() -> int:
     os.makedirs(P, exist_ok=True)
     made = []
@@ -407,7 +482,8 @@ def main() -> int:
                      ("blockwise_wonly.json", fig_attrib),
                      ("blockwise_cost.json", fig_tradeoff),
                      ("axis_sweep.json", fig_axes),
-                     ("path_kernels.json", fig_path)):
+                     ("path_kernels.json", fig_path),
+                     ("fused_pair.json", fig_pair)):
         d = _cost() if fn in (fig_cost,) else _load(name)
         if d is None:
             print(f"skip {fn.__name__}: {name} not present")
