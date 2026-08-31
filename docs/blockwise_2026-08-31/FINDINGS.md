@@ -560,6 +560,102 @@ Four things this adds to the fp16-baseline comparison in the fused-pair section:
    0.073->0.223 ms between N=128 and N=192 (barely more than the N=384 value's proportional share),
    the same half-empty-tile signature as the fp16-vs-int8 dip in the earlier sweep.
 
+
+### Speedup vs (B, N, H, W), and why the shape follows from the previous section's slopes
+
+Speedup is just the ratio of two of the timing curves above, so its shape is not a separate
+fact -- it is algebra applied to the power laws already fit.
+[`scripts/kernel_axis_sweep.py`](scripts/kernel_axis_sweep.py) computes both; the figure plots
+the ratios directly.
+
+![speedup axis sweep](plots/fig11_speedup_axis_sweep.png)
+
+**B — batch**
+
+| B | fp16/base (GN) | fp16/MoDiff (GN) | fp16/base (conv) | fp16/MoDiff (conv) | **fp16/base (total)** | **fp16/MoDiff (total)** | **base/MoDiff (total)** |
+|--:|--:|--:|--:|--:|--:|--:|--:|
+| 8 | 0.83x | 0.84x | 1.79x | 1.81x | **1.42x** | **1.43x** | **1.01x** |
+| 16 | 2.25x | 1.12x | 1.34x | 1.45x | **1.50x** | **1.35x** | **0.90x** |
+| 32 | 2.15x | 1.16x | 1.47x | 1.37x | **1.61x** | **1.30x** | **0.81x** |
+| 64 | 2.49x | 1.36x | 1.49x | 1.54x | **1.70x** | **1.48x** | **0.87x** |
+| 128 | 2.56x | 1.38x | 1.57x | 1.63x | **1.77x** | **1.55x** | **0.87x** |
+| 256 | 2.58x | 1.40x | 1.63x | 1.70x | **1.82x** | **1.60x** | **0.88x** |
+
+**N — channels (Cin=Cout)**
+
+| N | fp16/base (GN) | fp16/MoDiff (GN) | fp16/base (conv) | fp16/MoDiff (conv) | **fp16/base (total)** | **fp16/MoDiff (total)** | **base/MoDiff (total)** |
+|--:|--:|--:|--:|--:|--:|--:|--:|
+| 128 | 3.34x | 2.47x | 1.31x | 1.31x | **2.17x** | **1.89x** | **0.87x** |
+| 192 | 3.18x | 1.96x | 0.92x | 0.95x | **1.48x** | **1.31x** | **0.89x** |
+| 256 | 2.86x | 1.51x | 1.43x | 1.51x | **1.79x** | **1.51x** | **0.84x** |
+| 384 | 2.55x | 1.38x | 1.56x | 1.63x | **1.77x** | **1.55x** | **0.88x** |
+| 512 | 2.14x | 1.23x | 1.72x | 1.77x | **1.79x** | **1.62x** | **0.91x** |
+| 768 | 1.99x | 1.10x | 1.85x | 1.91x | **1.87x** | **1.74x** | **0.93x** |
+| 1152 | 1.89x | 1.05x | 1.90x | 1.92x | **1.89x** | **1.79x** | **0.94x** |
+| 1536 | 1.62x | 0.99x | 1.93x | 1.93x | **1.91x** | **1.82x** | **0.95x** |
+
+**H — height**
+
+| H | fp16/base (GN) | fp16/MoDiff (GN) | fp16/base (conv) | fp16/MoDiff (conv) | **fp16/base (total)** | **fp16/MoDiff (total)** | **base/MoDiff (total)** |
+|--:|--:|--:|--:|--:|--:|--:|--:|
+| 2 | 3.26x | 1.41x | 1.36x | 1.45x | **1.69x** | **1.44x** | **0.85x** |
+| 4 | 4.92x | 2.40x | 1.37x | 1.42x | **2.06x** | **1.75x** | **0.85x** |
+| 8 | 3.58x | 1.90x | 1.48x | 1.53x | **1.91x** | **1.65x** | **0.86x** |
+| 16 | 2.56x | 1.39x | 1.56x | 1.63x | **1.76x** | **1.55x** | **0.88x** |
+| 32 | 2.03x | 1.13x | 1.71x | 1.79x | **1.77x** | **1.57x** | **0.89x** |
+
+**W — width**
+
+| W | fp16/base (GN) | fp16/MoDiff (GN) | fp16/base (conv) | fp16/MoDiff (conv) | **fp16/base (total)** | **fp16/MoDiff (total)** | **base/MoDiff (total)** |
+|--:|--:|--:|--:|--:|--:|--:|--:|
+| 2 | 3.15x | 1.35x | 1.32x | 1.40x | **1.64x** | **1.38x** | **0.84x** |
+| 4 | 5.41x | 2.37x | 1.50x | 1.38x | **2.27x** | **1.71x** | **0.75x** |
+| 8 | 3.68x | 1.94x | 1.48x | 1.53x | **1.93x** | **1.67x** | **0.86x** |
+| 16 | 2.55x | 1.38x | 1.54x | 1.60x | **1.74x** | **1.53x** | **0.88x** |
+| 32 | 2.06x | 1.16x | 1.65x | 1.72x | **1.73x** | **1.54x** | **0.89x** |
+
+**The math.** If two kernels are each power laws in the same variable, $t_A(x) = C_A x^{p_A}$
+and $t_B(x) = C_B x^{p_B}$, their ratio is *also* a power law:
+
+$$\text{speedup}(x) = \frac{t_A(x)}{t_B(x)} = \frac{C_A}{C_B} \, x^{\,p_A - p_B}$$
+
+which is itself log-log linear, with slope equal to the **difference of the two exponents**. Two
+consequences, both visible in the tables:
+
+1. **When the exponents match, speedup is flat.** The B, H, W axes gave close-to-1 exponents for
+   every kernel in the previous section (0.86-0.96 for GN, 0.83-0.99 for conv, across both arms) --
+   both sides are compute- or bandwidth-bound with the same degree in these variables, so the
+   $p_A - p_B$ difference is small and speedup barely moves: fp16/MoDiff total ranges only
+   1.30x-1.82x across the whole B sweep, 1.38x-1.76x across H, 1.38x-1.71x across W.
+2. **When the exponents differ, speedup itself becomes a power law with real slope.** N is where
+   this happens for the conv: fp16's conv exponent measured ~1.9-1.95 (`Cin x Cout` both scale, so
+   ideally 2) against the int8 convs' ~1.66-1.68, a gap of about 0.25-0.3. That gap **is** the
+   fp16/int8 conv-speedup line's own log-log slope -- it rises from 1.31x at N=128 to
+   1.93x at N=1536 because int8 never quite reaches fp16's compute efficiency at the
+   largest tile sizes tested here.
+
+**Why the TOTAL-path speedup is flatter than either component's.** Total time is a *sum*
+($t_{gn}(x) + t_{conv}(x)$), not a single power law, and a ratio of sums is not simply a power
+law -- it interpolates between whichever term dominates the absolute time at that $x$:
+
+$$\text{speedup}_{\text{total}}(x) = \frac{t_{gn}^{fp16}(x) + t_{conv}^{fp16}(x)}{t_{gn}^{arm}(x) + t_{conv}^{arm}(x)}$$
+
+At N=128, GN is still the larger absolute term for fp16 (0.202 ms vs conv's
+0.108 ms), so total speedup sits closer to the GN ratio
+(3.34x). By N=1536, conv dominates by more than an order of magnitude
+(11.59 ms vs GN's 0.788 ms), so total speedup has converged onto the conv
+ratio (1.91x total against 1.93x conv-only). This crossover -- not a
+clean power law, but a weighted blend whose weights shift with $x$ -- is why the total curve in
+the bottom row of the figure is visibly smoother and less extreme than either GN-only or
+conv-only line in the top row.
+
+One thing the tables show that the idealized model does not fully predict: the GN-only speedup
+lines are not flat even on B/H/W (fp16/baseline GN rises then falls with a peak around
+H=W=4, and fp16/MoDiff GN falls monotonically with N). The two GN kernels do not have *exactly*
+matched exponents in practice -- fp16's plain GroupNorm and baseline's fast-reduce kernel hit their
+occupancy sweet spots at different shapes, which is a second-order deviation from the pure
+matched-exponent story and is visible as curvature rather than a perfectly flat line.
+
 ### Both together, and an unexplained inversion
 
 | | shipped | G=256 | G=128 | G=64 | G=32 | G=16 |

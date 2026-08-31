@@ -520,6 +520,53 @@ def fig_kernel_axes(d):
     plt.close(fig)
 
 
+def fig_speedup_axes(d):
+    """Speedup curves (ratio of two power laws) vs each of B, N, H, W."""
+    axes_order = [k for k in ("B", "N", "H", "W") if k in d["sweeps"]]
+    fig, ax = plt.subplots(2, len(axes_order), figsize=(4.2 * len(axes_order), 7.4))
+    if len(axes_order) == 1:
+        ax = ax.reshape(2, 1)
+    dflt = d["default"]
+    total_pairs = [("fp16_total", "base_total", "fp16 / baseline (total)", "#bf8700", "s"),
+                   ("fp16_total", "modiff_total", "fp16 / MoDiff (total)", "#8250df", "^"),
+                   ("base_total", "modiff_total", "baseline / MoDiff (total)", C4, "o")]
+    comp_pairs = [("fp16_gn_ms", "base_gn_ms", "fp16 / baseline (GN)", "#bf8700", "s", "-"),
+                  ("fp16_gn_ms", "modiff_gn_ms", "fp16 / MoDiff (GN)", "#8250df", "^", "-"),
+                  ("fp16_conv_ms", "base_conv_ms", "fp16 / baseline (conv)", "#bf8700", "s", "--"),
+                  ("fp16_conv_ms", "modiff_conv_ms", "fp16 / MoDiff (conv)", "#8250df", "^", "--")]
+
+    for j, axis in enumerate(axes_order):
+        rows = d["sweeps"][axis]
+        xs = [r[axis] for r in rows]
+        held = ", ".join(f"{k}={v}" for k, v in dflt.items() if k != axis)
+
+        top = ax[0][j]
+        for num, den, lab, col, mk, ls in comp_pairs:
+            top.plot(xs, [r[num] / r[den] for r in rows], ls, marker=mk, ms=4,
+                     color=col, linewidth=1.3, label=lab)
+        top.axhline(1.0, color="#57606a", linestyle=":", linewidth=1.0)
+        top.set_xscale("log", base=2)
+        top.set_yscale("log")
+        _style(top, axis, "speedup (ratio)" if j == 0 else "",
+               f"per-kernel speedup vs {axis}   ({held})")
+        if j == 0:
+            top.legend(fontsize=6.5, frameon=False)
+
+        bot = ax[1][j]
+        for num, den, lab, col, mk in total_pairs:
+            bot.plot(xs, [r[num] / r[den] for r in rows], marker=mk, color=col,
+                     linewidth=1.6, label=lab)
+        bot.axhline(1.0, color="#57606a", linestyle=":", linewidth=1.0)
+        bot.set_xscale("log", base=2)
+        _style(bot, axis, "speedup (ratio)" if j == 0 else "",
+               f"2-kernel path speedup vs {axis}")
+        if j == 0:
+            bot.legend(fontsize=7.5, frameon=False)
+    fig.tight_layout()
+    fig.savefig(os.path.join(P, "fig11_speedup_axis_sweep.png"), dpi=150)
+    plt.close(fig)
+
+
 def main() -> int:
     os.makedirs(P, exist_ok=True)
     made = []
@@ -532,7 +579,8 @@ def main() -> int:
                      ("axis_sweep.json", fig_axes),
                      ("path_kernels.json", fig_path),
                      ("fused_pair.json", fig_pair),
-                     ("kernel_axis_sweep.json", fig_kernel_axes)):
+                     ("kernel_axis_sweep.json", fig_kernel_axes),
+                     ("kernel_axis_sweep.json", fig_speedup_axes)):
         d = _cost() if fn in (fig_cost,) else _load(name)
         if d is None:
             print(f"skip {fn.__name__}: {name} not present")
