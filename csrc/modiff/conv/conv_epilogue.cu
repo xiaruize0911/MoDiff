@@ -33,6 +33,9 @@
 // =========================================================================
 
 #include <ATen/cuda/CUDAContext.h>
+#include <cstdint>
+#include <cuda_fp16.h>
+#include <vector_types.h>
 
 #include "conv_epilogue.cuh"
 
@@ -175,4 +178,81 @@ __global__ void scale_accumulate_residual_half_cache_vec2_kernel(
             output[base] = __float2half_rn(new_val + __half2float(residual[base]));
         }
     }
+}
+
+// Replay primitive: skip GN+quantize+conv and emit the stored conv result.
+// o_hat is the accumulated conv output (o_hat += conv(Q(delta)) on commit steps).
+// reuse_o_hat:        out = o_hat
+// reuse_o_hat_add:    out = o_hat + residual   (ResBlock live skip)
+__global__ void reuse_o_hat_u4_kernel(const uint4* __restrict__ in,
+                                      uint4* __restrict__ out, int n8) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n8) out[i] = in[i];
+}
+
+__global__ void reuse_o_hat_scalar_kernel(const __half* __restrict__ in,
+                                          __half* __restrict__ out, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) out[i] = in[i];
+}
+
+__global__ void reuse_o_hat_add_kernel(const __half* __restrict__ o_hat,
+                                       const __half* __restrict__ residual,
+                                       __half* __restrict__ out, int n) {
+    int i = (blockIdx.x * blockDim.x + threadIdx.x) * 2;
+    if (i + 1 < n) {
+        __half2 a = *reinterpret_cast<const __half2*>(o_hat + i);
+        __half2 b = *reinterpret_cast<const __half2*>(residual + i);
+        *reinterpret_cast<__half2*>(out + i) = __hadd2(a, b);
+    } else if (i < n) {
+        out[i] = __hadd(o_hat[i], residual[i]);
+    }
+}
+
+static void _check_fp16_same(const torch::Tensor& a, const torch::Tensor& b, const char* name) {
+    TORCH_CHECK(a.is_cuda() && b.is_cuda(), name, " must be CUDA");
+    TORCH_CHECK(a.scalar_type() == torch::kFloat16 && b.scalar_type() == torch::kFloat16,
+                name, " must be fp16");
+    TORCH_CHECK(a.sizes() == b.sizes(), name, " shape mismatch");
+    TORCH_CHECK(a.is_contiguous(at::MemoryFormat::ChannelsLast)
+                && b.is_contiguous(at::MemoryFormat::ChannelsLast),
+                name, " must be channels_last contiguous");
+}
+
+torch::Tensor reuse_o_hat(torch::Tensor o_hat, torch::Tensor out) {
+    _check_fp16_same(o_hat, out, "reuse_o_hat");
+    const int n = static_cast<int>(o_hat.numel());
+    auto stream = at::cuda::getCurrentCUDAStream();
+    auto* in_p = reinterpret_cast<const __half*>(o_hat.data_ptr<at::Half>());
+    auto* out_p = reinterpret_cast<__half*>(out.data_ptr<at::Half>());
+    const bool align16 = (reinterpret_cast<uintptr_t>(in_p) % 16 == 0)
+                         && (reinterpret_cast<uintptr_t>(out_p) % 16 == 0)
+                         && (n % 8 == 0);
+    if (align16) {
+        int n8 = n / 8;
+        int threads = 256;
+        int blocks = (n8 + threads - 1) / threads;
+        reuse_o_hat_u4_kernel<<<blocks, threads, 0, stream>>>(
+            reinterpret_cast<const uint4*>(in_p), reinterpret_cast<uint4*>(out_p), n8);
+    } else {
+        int threads = 256;
+        int blocks = (n + threads - 1) / threads;
+        reuse_o_hat_scalar_kernel<<<blocks, threads, 0, stream>>>(in_p, out_p, n);
+    }
+    return out;
+}
+
+torch::Tensor reuse_o_hat_add(torch::Tensor o_hat, torch::Tensor residual, torch::Tensor out) {
+    _check_fp16_same(o_hat, residual, "reuse_o_hat_add residual");
+    _check_fp16_same(o_hat, out, "reuse_o_hat_add out");
+    const int n = static_cast<int>(o_hat.numel());
+    auto stream = at::cuda::getCurrentCUDAStream();
+    int threads = 256;
+    int n2 = (n + 1) / 2;
+    int blocks = (n2 + threads - 1) / threads;
+    reuse_o_hat_add_kernel<<<blocks, threads, 0, stream>>>(
+        reinterpret_cast<const __half*>(o_hat.data_ptr<at::Half>()),
+        reinterpret_cast<const __half*>(residual.data_ptr<at::Half>()),
+        reinterpret_cast<__half*>(out.data_ptr<at::Half>()), n);
+    return out;
 }

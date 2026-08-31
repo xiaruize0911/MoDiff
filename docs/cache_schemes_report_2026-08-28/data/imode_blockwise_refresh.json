@@ -1,0 +1,72 @@
+{
+ "seed": 20260805,
+ "steps": 50,
+ "n": 6,
+ "blocks": [
+  "tensor",
+  128,
+  64,
+  32
+ ],
+ "note": "channel-group I-MoDiff; s* refreshed every step from per-block absmax(x); a_hat requantized onto the new grid; MoDiff fp32-a_hat uses delta refresh=1; fake-quant; o_hat not quantized",
+ "relL2": {
+  "fp16": {
+   "relL2_vs_fp16": 0.0
+  },
+  "W8A8 MoDiff  a_hat fp32  refresh=1": {
+   "relL2_vs_fp16": 0.036020588129758835
+  },
+  "W8A8 I-MoDiff tensor  refresh": {
+   "relL2_vs_fp16": 0.06955277919769287,
+   "max_sat": 1.0,
+   "sat_frac": 0.003150765034852129,
+   "n_hooks": 70
+  },
+  "W8A8 I-MoDiff B=128  refresh": {
+   "relL2_vs_fp16": 0.038053035736083984,
+   "max_sat": 1.0,
+   "sat_frac": 0.008148637472565574,
+   "n_hooks": 70
+  },
+  "W8A8 I-MoDiff B=64  refresh": {
+   "relL2_vs_fp16": 0.050586603581905365,
+   "max_sat": 1.0,
+   "sat_frac": 0.01632315142674743,
+   "n_hooks": 70
+  },
+  "W8A8 I-MoDiff B=32  refresh": {
+   "relL2_vs_fp16": 0.04137479513883591,
+   "max_sat": 1.0,
+   "sat_frac": 0.0326505248233268,
+   "n_hooks": 70
+  },
+  "W4A4 MoDiff  a_hat fp32  refresh=1": {
+   "relL2_vs_fp16": 0.29290467500686646
+  },
+  "W4A4 I-MoDiff tensor  refresh": {
+   "relL2_vs_fp16": 0.5828819274902344,
+   "max_sat": 1.0,
+   "sat_frac": 0.004475111719817091,
+   "n_hooks": 70
+  },
+  "W4A4 I-MoDiff B=128  refresh": {
+   "relL2_vs_fp16": 0.3037138879299164,
+   "max_sat": 1.0,
+   "sat_frac": 0.011257871618664836,
+   "n_hooks": 70
+  },
+  "W4A4 I-MoDiff B=64  refresh": {
+   "relL2_vs_fp16": 0.28400954604148865,
+   "max_sat": 1.0,
+   "sat_frac": 0.022496727393439338,
+   "n_hooks": 70
+  },
+  "W4A4 I-MoDiff B=32  refresh": {
+   "relL2_vs_fp16": 0.29658591747283936,
+   "max_sat": 1.0,
+   "sat_frac": 0.044930527138450915,
+   "n_hooks": 70
+  }
+ },
+ "out": "docs/cache_schemes_report_2026-08-28/plots/imode_blockwise_refresh_grid.png"
+}

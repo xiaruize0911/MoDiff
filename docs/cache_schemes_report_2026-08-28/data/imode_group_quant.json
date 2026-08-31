@@ -1,0 +1,71 @@
+{
+ "seed": 20260805,
+ "steps": 50,
+ "n": 6,
+ "groups": [
+  128,
+  64,
+  32
+ ],
+ "note": "group quant everywhere: weights (Cin\u00b7kH\u00b7kW), act/delta and I-MoDiff a_hat (along C). Same G per arm. s* refresh every step. fake-quant; o_hat not quantized",
+ "relL2": {
+  "fp16": {
+   "relL2_vs_fp16": 0.0
+  },
+  "W8A8 MoDiff G=128  w/act/\u03b4 group": {
+   "relL2_vs_fp16": 0.03455705568194389
+  },
+  "W8A8 I-MoDiff G=128  refresh": {
+   "relL2_vs_fp16": 0.043168697506189346,
+   "max_sat": 1.0,
+   "sat_frac": 0.008149470603927667,
+   "n_hooks": 70
+  },
+  "W8A8 MoDiff G=64  w/act/\u03b4 group": {
+   "relL2_vs_fp16": 0.030448829755187035
+  },
+  "W8A8 I-MoDiff G=64  refresh": {
+   "relL2_vs_fp16": 0.029382692649960518,
+   "max_sat": 1.0,
+   "sat_frac": 0.016322958306424076,
+   "n_hooks": 70
+  },
+  "W8A8 MoDiff G=32  w/act/\u03b4 group": {
+   "relL2_vs_fp16": 0.025271639227867126
+  },
+  "W8A8 I-MoDiff G=32  refresh": {
+   "relL2_vs_fp16": 0.02125002257525921,
+   "max_sat": 1.0,
+   "sat_frac": 0.03265097427753281,
+   "n_hooks": 70
+  },
+  "W4A4 MoDiff G=128  w/act/\u03b4 group": {
+   "relL2_vs_fp16": 0.16173791885375977
+  },
+  "W4A4 I-MoDiff G=128  refresh": {
+   "relL2_vs_fp16": 0.26331958174705505,
+   "max_sat": 1.0,
+   "sat_frac": 0.011109161878265201,
+   "n_hooks": 70
+  },
+  "W4A4 MoDiff G=64  w/act/\u03b4 group": {
+   "relL2_vs_fp16": 0.15914466977119446
+  },
+  "W4A4 I-MoDiff G=64  refresh": {
+   "relL2_vs_fp16": 0.2076527625322342,
+   "max_sat": 1.0,
+   "sat_frac": 0.022194316045526755,
+   "n_hooks": 70
+  },
+  "W4A4 MoDiff G=32  w/act/\u03b4 group": {
+   "relL2_vs_fp16": 0.15485887229442596
+  },
+  "W4A4 I-MoDiff G=32  refresh": {
+   "relL2_vs_fp16": 0.1573936641216278,
+   "max_sat": 1.0,
+   "sat_frac": 0.04420772532328226,
+   "n_hooks": 70
+  }
+ },
+ "out": "docs/cache_schemes_report_2026-08-28/plots/imode_group_quant_grid.png"
+}

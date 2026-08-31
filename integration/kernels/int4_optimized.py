@@ -484,7 +484,11 @@ class OptimizedInt4Conv2d(nn.Module):
         return nxt > 0 and (nxt % k) != 0
 
     def _replay_out(self, residual=None) -> torch.Tensor:
-        """IO for compute: read frozen o_hat, optionally add the live skip tensor."""
+        """IO for compute: read frozen o_hat, optionally add the live skip tensor.
+
+        With a live skip this launches reuse_o_hat_add. No-residual replay
+        still returns the o_hat view.
+        """
         oh = self.o_hat_cache
         if residual is None:
             return self._module_output()
@@ -496,6 +500,10 @@ class OptimizedInt4Conv2d(nn.Module):
         if residual.dtype != oh.dtype or not residual.is_contiguous(
                 memory_format=torch.channels_last):
             residual = residual.to(dtype=oh.dtype).contiguous(memory_format=torch.channels_last)
+        if (HAS_CUTLASS and oh.dtype == torch.float16
+                and hasattr(modiff_cutlass, "reuse_o_hat_add")
+                and oh.is_contiguous(memory_format=torch.channels_last)):
+            return modiff_cutlass.reuse_o_hat_add(oh, residual, buf)
         torch.add(oh, residual, out=buf)
         return buf
 

@@ -176,6 +176,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "EVT INT8 skip-K: out = o_hat_old + conv + residual (no o_hat store)");
     m.def("conv2d_int4_evt_o_hat_residual_skip", &conv2d_int4_evt_o_hat_residual_skip,
           "EVT INT4 skip-K: out = o_hat_old + conv + residual (no o_hat store)");
+    m.def("reuse_o_hat", &reuse_o_hat,
+          "Replay: out = o_hat (stored conv result). No GN/quantize/conv.");
+    m.def("reuse_o_hat_add", &reuse_o_hat_add,
+          "Replay with live skip: out = o_hat + residual.");
 
     // Attention Conv1d layout-transform fusions (kernels/layout_transform.cu)
     m.def("fp16_ncw_to_fp32_cl", &fp16_ncw_to_fp32_cl,

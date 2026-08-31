@@ -254,6 +254,9 @@ torch::Tensor conv2d_int8_evt_o_hat_residual_skip(
     torch::Tensor input, torch::Tensor weight, torch::Tensor inv_scale, torch::Tensor weight_scales,
     torch::Tensor o_hat, torch::Tensor residual, torch::Tensor output,
     int sh, int sw, int ph, int pw, int dh, int dw);
+// Replay: emit stored conv result. No GN, no quantize, no conv.
+torch::Tensor reuse_o_hat(torch::Tensor o_hat, torch::Tensor out);
+torch::Tensor reuse_o_hat_add(torch::Tensor o_hat, torch::Tensor residual, torch::Tensor out);
 torch::Tensor conv2d_int4_evt_o_hat_residual_skip(
     torch::Tensor input, torch::Tensor weight_packed, torch::Tensor inv_scale, torch::Tensor weight_scales,
     torch::Tensor o_hat, torch::Tensor residual, torch::Tensor output,

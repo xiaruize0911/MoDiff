@@ -1,0 +1,129 @@
+{
+  "gpu": "NVIDIA A40",
+  "batch": 128,
+  "steps": 50,
+  "seed0": 20260805,
+  "n_fid": 2048,
+  "n_rell2": 6,
+  "decode_chunk": 32,
+  "calib": "integration/calibration/int8_calibration_realckpt.pt",
+  "note": "BLOCK=out skips emb+out-GN+out_conv; BLOCK=full also skips in-GN+in_conv. in == in+emb. Skip-K=1. MODIFF_LINEAR=0. realckpt + static delta.",
+  "mode_map": {
+    "0": "perconv",
+    "perconv": "perconv",
+    "1": "out",
+    "out": "out",
+    "in": "full",
+    "in+emb": "full",
+    "in_emb": "full",
+    "full": "full",
+    "2": "full"
+  },
+  "bugs_fixed": [
+    "skip_in already required both peek_in and peek_out; mode already in scope at the out-only peek.",
+    "Added hasattr(in_conv/out_conv, 'step_count') so Identity/non-MoDiff in_conv cannot take the skip_in path even if peek were wrongly True."
+  ],
+  "verdict": "drop_full_block",
+  "verdict_reason": "full is not faster than out (in_conv already self-replays). K=2 full vs out relL2=0; K=4 relL2=0.003. FID N=2048 full K=2/4 matches out within session noise. Do not ship K=2-full as a separate arm.",
+  "timing": [
+    {
+      "label": "K=1 full compute",
+      "k": 1,
+      "block": "out",
+      "ms_step": 93.32945134025067,
+      "speedup_vs_k1": 1.0,
+      "vs_k1_ms": 0.0
+    },
+    {
+      "label": "K=2 BLOCK=out",
+      "k": 2,
+      "block": "out",
+      "ms_step": 74.1336526395753,
+      "speedup_vs_k1": 1.2589350182703387,
+      "vs_k1_ms": 19.19579870067537
+    },
+    {
+      "label": "K=2 BLOCK=full",
+      "k": 2,
+      "block": "full",
+      "ms_step": 74.3004348827526,
+      "speedup_vs_k1": 1.2561090858690962,
+      "vs_k1_ms": 19.029016457498074
+    },
+    {
+      "label": "K=4 BLOCK=out",
+      "k": 4,
+      "block": "out",
+      "ms_step": 65.19355094060302,
+      "speedup_vs_k1": 1.431574902635414,
+      "vs_k1_ms": 28.135900399647653
+    },
+    {
+      "label": "K=4 BLOCK=full",
+      "k": 4,
+      "block": "full",
+      "ms_step": 65.27741922065616,
+      "speedup_vs_k1": 1.4297356184497845,
+      "vs_k1_ms": 28.052032119594514
+    }
+  ],
+  "rell2": {
+    "full_k2_vs_fp16": 0.18297088146209717,
+    "full_k4_vs_fp16": 0.28539687395095825,
+    "out_k2_vs_fp16": 0.18297088146209717,
+    "out_k4_vs_fp16": 0.2856141924858093,
+    "full_k2_vs_out_k2": 0.0,
+    "full_k4_vs_out_k4": 0.003324529156088829,
+    "w8a8_k1_vs_fp16": 0.08752822875976562,
+    "full_k2_vs_w8a8_k1": 0.15264572203159332,
+    "full_k4_vs_w8a8_k1": 0.26956993341445923,
+    "out_k2_vs_w8a8_k1": 0.15264572203159332,
+    "out_k4_vs_w8a8_k1": 0.2697471082210541
+  },
+  "fid": {
+    "fp16": {
+      "n": 2048,
+      "fid_vs_fp16": 0.0,
+      "fid_vs_w8a8_full": 0.9203278717471903
+    },
+    "w8a8_full": {
+      "n": 2048,
+      "fid_vs_fp16": 0.9203279118918886,
+      "fid_vs_w8a8_full": 0.0
+    },
+    "replay2_full": {
+      "n": 2048,
+      "fid_vs_fp16": 5.2083923045346125,
+      "fid_vs_w8a8_full": 4.661805594143914
+    },
+    "replay4_full": {
+      "n": 2048,
+      "fid_vs_fp16": 15.99205494113994,
+      "fid_vs_w8a8_full": 14.89648280722463
+    }
+  },
+  "existing_out_fid": {
+    "replay2": {
+      "fid_vs_fp16": 5.396568097849752,
+      "fid_vs_w8a8_full": 4.793709096611906,
+      "ms_step": 74.8,
+      "relL2": 0.19,
+      "block": "out"
+    },
+    "replay4": {
+      "fid_vs_fp16": 16.346218773385715,
+      "fid_vs_w8a8_full": 15.222052804398146,
+      "ms_step": 66.0,
+      "relL2": 0.29,
+      "block": "out"
+    },
+    "w8a8_full": {
+      "fid_vs_fp16": 0.9203298739598154,
+      "fid_vs_w8a8_full": 0.0,
+      "ms_step": 93.4,
+      "relL2": 0.12,
+      "block": "n/a"
+    }
+  },
+  "fid_n_note": "N=2048"
+}

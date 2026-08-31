@@ -21,6 +21,7 @@
 // -I csrc and would pick csrc/common.cuh -- the un-migrated copy -- making this
 // tree's own copy decoration. See csrc/README.md.
 #include "../common/common.cuh"
+#include "../../modiff/common/ahat_cache.cuh"
 
 // Fused scale + quantize to INT8 kernel (vectorized float4 loads).
 // Replaces: x_scaled = x * scale; x_int8 = x_scaled.round().clamp(-127, 127).to(int8)
@@ -1251,9 +1252,8 @@ __global__ void upsample2x_quantize_noahat_kernel(
     const float* ahat_qscale = nullptr) {
     float scale = *scale_ptr;
     const float inv_scale = 1.0f / scale;
-    const float ahat_s = ahat_i8 ? ahat_qscale[0] : 1.0f;
-    const float ahat_inv = ahat_i8 ? (1.0f / ahat_s) : 1.0f;
-    const float ahat_lim = ahat_i8 ? ahat_qscale[1] : 127.0f;
+    float ahat_s, ahat_inv, ahat_lim;
+    ahat_qparams(ahat_i8, ahat_qscale, ahat_s, ahat_inv, ahat_lim);
     const int Wo = W * 2, Ho = H * 2;
     long idx = (long)blockIdx.x * blockDim.x + threadIdx.x;
     for (long i = idx; i < num_elements_out; i += (long)blockDim.x * gridDim.x) {
@@ -1267,20 +1267,12 @@ __global__ void upsample2x_quantize_noahat_kernel(
         long i_in = ((n * H + hi) * (long)W + wi) * C + c;
         float xval = load_as_float(x, (int)i_in);
         if (smooth_inv != nullptr) xval *= smooth_inv[c % num_channels];
-        float cache = 0.0f;
+        float q;
         if (a_hat_cache != nullptr) {
-            if (ahat_i8) cache = (float)reinterpret_cast<const int8_t*>(a_hat_cache)[i] * ahat_s;
-            else cache = __half2float(a_hat_cache[i]);
-        }
-        float q = fmaxf(-127.0f, fminf(127.0f, roundf((xval - cache) * scale)));
-        if (a_hat_cache != nullptr && write_ahat) {
-            float neu = cache + q * inv_scale;
-            if (ahat_i8) {
-                reinterpret_cast<int8_t*>(a_hat_cache)[i] =
-                    (int8_t)fmaxf(-ahat_lim, fminf(ahat_lim, roundf(neu * ahat_inv)));
-            } else {
-                a_hat_cache[i] = __float2half_rn(neu);
-            }
+            q = ahat_quant_update(a_hat_cache, i, xval, scale, inv_scale, 127.0f,
+                                  ahat_i8, ahat_s, ahat_inv, ahat_lim, write_ahat);
+        } else {
+            q = fmaxf(-127.0f, fminf(127.0f, roundf(xval * scale)));
         }
         output_int8[i] = static_cast<int8_t>(q);
     }
@@ -1384,22 +1376,11 @@ torch::Tensor upsample2x_quantize_noahat_fprop(
     bool ahat_i8 = false;
     const float* ahat_qscale_ptr = nullptr;
     if (a_hat_cache.numel() > 0) {
-        TORCH_CHECK(a_hat_cache.scalar_type() == torch::kHalf
-                        || a_hat_cache.scalar_type() == torch::kInt8,
-                    "upsample2x_quantize_noahat_fprop: a_hat_cache must be fp16 or int8");
         TORCH_CHECK(a_hat_cache.numel() == num_elements_out,
                     "upsample2x_quantize_noahat_fprop: a_hat_cache must be POST-upsample sized "
                     "(N*C*2H*2W)");
-        if (a_hat_cache.scalar_type() == torch::kInt8) {
-            TORCH_CHECK(ahat_scale.defined() && ahat_scale.numel() >= 2
-                        && ahat_scale.scalar_type() == torch::kFloat32,
-                        "upsample2x_quantize_noahat_fprop: int8 a_hat needs fp32 [scale, qmax]");
-            cache_ptr = reinterpret_cast<__half*>(a_hat_cache.data_ptr<int8_t>());
-            ahat_i8 = true;
-            ahat_qscale_ptr = ahat_scale.data_ptr<float>();
-        } else {
-            cache_ptr = reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>());
-        }
+        bind_ahat_cache(a_hat_cache, ahat_scale, cache_ptr, ahat_i8, ahat_qscale_ptr,
+                        "upsample2x_quantize_noahat_fprop");
     }
     if (x.scalar_type() == torch::kHalf) {
         upsample2x_quantize_noahat_kernel<__half><<<grid_size, block_size, 0, stream>>>(

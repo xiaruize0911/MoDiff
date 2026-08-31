@@ -1,0 +1,148 @@
+{
+  "gpu": "NVIDIA A40",
+  "model": "one OptimizedInt8Conv2d",
+  "shape": {
+    "N": 128,
+    "C": 192,
+    "H": 32,
+    "steps": 200
+  },
+  "method": "untimed t=T first_step, then 200 modulated forwards, CUDA event / 200",
+  "arms": [
+    {
+      "label": "W8A8 full fp16",
+      "skip_k": 1,
+      "replay_k": 1,
+      "bits": 16,
+      "refresh": 0,
+      "ms_step": 1.0475308990478516,
+      "vs_full": 1.0
+    },
+    {
+      "label": "W8A8 skip-K=2 fp16",
+      "skip_k": 2,
+      "replay_k": 1,
+      "bits": 16,
+      "refresh": 0,
+      "ms_step": 1.0068682861328124,
+      "vs_full": 1.0403852355616605
+    },
+    {
+      "label": "W8A8 skip-K=4 fp16",
+      "skip_k": 4,
+      "replay_k": 1,
+      "bits": 16,
+      "refresh": 0,
+      "ms_step": 0.9815309143066406,
+      "vs_full": 1.0672418807998867
+    },
+    {
+      "label": "W8A8 skip-K=8 fp16",
+      "skip_k": 8,
+      "replay_k": 1,
+      "bits": 16,
+      "refresh": 0,
+      "ms_step": 0.9666374206542969,
+      "vs_full": 1.0836854405437766
+    },
+    {
+      "label": "W8A8 replay-K=2",
+      "skip_k": 1,
+      "replay_k": 2,
+      "bits": 16,
+      "refresh": 0,
+      "ms_step": 0.5286484909057617,
+      "vs_full": 1.981526320548198
+    },
+    {
+      "label": "W8A8 replay-K=4",
+      "skip_k": 1,
+      "replay_k": 4,
+      "bits": 16,
+      "refresh": 0,
+      "ms_step": 0.2636979293823242,
+      "vs_full": 3.972465394406195
+    },
+    {
+      "label": "W8A8 replay-K=8",
+      "skip_k": 1,
+      "replay_k": 8,
+      "bits": 16,
+      "refresh": 0,
+      "ms_step": 0.1303331184387207,
+      "vs_full": 8.03733472809042
+    },
+    {
+      "label": "W8A8 a_hat int8 held",
+      "skip_k": 1,
+      "replay_k": 1,
+      "bits": 8,
+      "refresh": 0,
+      "ms_step": 0.9794294738769531,
+      "vs_full": 1.0695317294274669
+    },
+    {
+      "label": "W8A8 a_hat int8 refresh",
+      "skip_k": 1,
+      "replay_k": 1,
+      "bits": 8,
+      "refresh": 1,
+      "ms_step": 3.9516290283203124,
+      "vs_full": 0.26508837027475657
+    },
+    {
+      "label": "W8A8 a_hat int4 held",
+      "skip_k": 1,
+      "replay_k": 1,
+      "bits": 4,
+      "refresh": 0,
+      "ms_step": 0.9745687866210937,
+      "vs_full": 1.0748660468387492
+    },
+    {
+      "label": "W8A8 a_hat int4 refresh",
+      "skip_k": 1,
+      "replay_k": 1,
+      "bits": 4,
+      "refresh": 1,
+      "ms_step": 3.9517092895507813,
+      "vs_full": 0.2650829861947997
+    },
+    {
+      "label": "W8A8 skip-K=4 int8 held",
+      "skip_k": 4,
+      "replay_k": 1,
+      "bits": 8,
+      "refresh": 0,
+      "ms_step": 0.9390790557861328,
+      "vs_full": 1.1154874476152918
+    },
+    {
+      "label": "W8A8 skip-K=4 int4 held",
+      "skip_k": 4,
+      "replay_k": 1,
+      "bits": 4,
+      "refresh": 0,
+      "ms_step": 0.9452407836914063,
+      "vs_full": 1.1082159351577874
+    },
+    {
+      "label": "W8A8 replay-K=4 int8 held",
+      "skip_k": 1,
+      "replay_k": 4,
+      "bits": 8,
+      "refresh": 0,
+      "ms_step": 0.24493696212768554,
+      "vs_full": 4.276736716044409
+    },
+    {
+      "label": "W8A8 replay-K=4 int4 held",
+      "skip_k": 1,
+      "replay_k": 4,
+      "bits": 4,
+      "refresh": 0,
+      "ms_step": 0.24460256576538086,
+      "vs_full": 4.282583446212202
+    }
+  ]
+}
