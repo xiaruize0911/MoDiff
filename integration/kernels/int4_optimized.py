@@ -177,6 +177,9 @@ class OptimizedInt4Conv2d(nn.Module):
         #: integration/tests/test_zpw_additive.py, which measures the whole route at 1.65e-4 against a
         #: float64 reference while the uncorrected kernel sits at 6.0-6.8e-1.
         self.register_buffer('weight_zp', torch.zeros(K, dtype=torch.float32))
+        #: Host mirror of "is weight_zp nonzero?". `torch.any(zp != 0)` is a device reduction and
+        #: illegal during CUDA-graph capture (and a sync in eager). Tests and AdaRound assign
+        #: `module.weight_zp = ...`; `__setattr__` refreshes the flag. Init zeros -> False.
 
         w_quant = (w_flat / ch_scale.unsqueeze(1)).round().clamp(-7, 7).to(torch.int8)
         w_quant = w_quant.reshape_as(w_data)
@@ -333,11 +336,23 @@ class OptimizedInt4Conv2d(nn.Module):
     def _cache_dtype(self) -> torch.dtype:
         return torch.float16 if self.is_calibrated else torch.float32
 
+    def __setattr__(self, name, value):
+        super().__setattr__(name, value)
+        if name == "weight_zp":
+            self._refresh_has_weight_zp()
+
+    def _refresh_has_weight_zp(self) -> None:
+        zp = getattr(self, "weight_zp", None)
+        if zp is None or not torch.is_tensor(zp) or zp.numel() == 0:
+            object.__setattr__(self, "_has_weight_zp_flag", False)
+            return
+        flag = bool((zp.detach().cpu() != 0).any().item())
+        object.__setattr__(self, "_has_weight_zp_flag", flag)
+
     # ---------------- fix #4: the weight zero point, applied additively -----------------------------
     @property
     def _has_weight_zp(self) -> bool:
-        zp = getattr(self, "weight_zp", None)
-        return zp is not None and bool(torch.any(zp != 0))
+        return bool(getattr(self, "_has_weight_zp_flag", False))
 
     def _zpw_correction(self, x_packed: torch.Tensor, alpha: torch.Tensor) -> torch.Tensor:
         """`zp[k] * ws[k] * alpha * S[p]`, to be ADDED to the conv output.
@@ -484,7 +499,11 @@ class OptimizedInt4Conv2d(nn.Module):
         return nxt > 0 and (nxt % k) != 0
 
     def _replay_out(self, residual=None) -> torch.Tensor:
-        """IO for compute: read frozen o_hat, optionally add the live skip tensor."""
+        """IO for compute: read frozen o_hat, optionally add the live skip tensor.
+
+        With a live skip this launches reuse_o_hat_add. No-residual replay
+        still returns the o_hat view.
+        """
         oh = self.o_hat_cache
         if residual is None:
             return self._module_output()
@@ -496,6 +515,10 @@ class OptimizedInt4Conv2d(nn.Module):
         if residual.dtype != oh.dtype or not residual.is_contiguous(
                 memory_format=torch.channels_last):
             residual = residual.to(dtype=oh.dtype).contiguous(memory_format=torch.channels_last)
+        if (HAS_CUTLASS and oh.dtype == torch.float16
+                and hasattr(modiff_cutlass, "reuse_o_hat_add")
+                and oh.is_contiguous(memory_format=torch.channels_last)):
+            return modiff_cutlass.reuse_o_hat_add(oh, residual, buf)
         torch.add(oh, residual, out=buf)
         return buf
 
@@ -2206,10 +2229,15 @@ def convert_model_to_optimized_int4(model: nn.Module, prefix: str = "", use_comp
             is_final_out = full_name.startswith('out.')
             is_pointwise = child.kernel_size == (1, 1)
             is_grouped = child.groups != 1
+            # MODIFF_QUANT_SKIP_OUT=1 wraps ResBlock skip 1x1s and out.2 (the ~2.2 ms
+            # unquantized tail). Default stays off: those layers have no shipped calibration.
+            quant_skip_out = os.environ.get("MODIFF_QUANT_SKIP_OUT", "0") == "1"
 
-            if is_skip or is_final_out or is_grouped:
+            if is_grouped:
                 continue
-            if is_pointwise and skip_pointwise:
+            if (is_skip or is_final_out) and not quant_skip_out:
+                continue
+            if is_pointwise and skip_pointwise and not quant_skip_out:
                 continue
 
             hit = _memo.get(id(child))

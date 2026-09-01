@@ -41,6 +41,7 @@
 // -I csrc and would pick csrc/common.cuh -- the un-migrated copy -- making this
 // tree's own copy decoration. See csrc/README.md.
 #include "../common/common.cuh"
+#include <type_traits>
 
 // Scalar-load helper so the static-scale half-cache kernels below can be
 // templated on the input activation's dtype (fp32 or fp16) instead of always
@@ -292,9 +293,8 @@ __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache(
         if (smooth_inv != nullptr) {
             xval *= smooth_inv[i % num_channels];
         }
-        float cache = ahat_load(a_hat_cache, i, ahat_i8, ahat_s);
-        float q = fmaxf(-lim, fminf(lim, roundf((xval - cache) * scale)));
-        if (write_ahat) ahat_store(a_hat_cache, i, cache + q * inv_scale, ahat_i8, ahat_inv, ahat_lim);
+        float q = ahat_quant_update(a_hat_cache, i, xval, scale, inv_scale, lim,
+                                    ahat_i8, ahat_s, ahat_inv, ahat_lim, write_ahat);
         output_int8[i] = static_cast<int8_t>(q);
     }
 }
@@ -306,7 +306,7 @@ __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache(
 // num_channels % 2 == 0 for the smooth_inv fast path (same pre-existing, unenforced
 // channels-last-contiguity assumption this file's float4 kernels already rely on for %4==0 --
 // not a new risk); the caller only dispatches here when that holds.
-template <typename T_IN>
+template <typename T_IN, bool WriteAhat>
 __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache_vec2(
     const T_IN* __restrict__ x,
     __half* __restrict__ a_hat_cache,
@@ -315,13 +315,7 @@ __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache_vec2(
     const float* __restrict__ smooth_inv,
     int num_channels,
     int num_elements,
-    // Activation bit-width of THIS datapath, not a magnitude. It replaced a
-    // `float code_ceiling`, whose failure mode was a plausible-but-wrong number: pass 127
-    // (or forget the argument) on a 4-bit layer and it silently stayed 8-bit, which is what
-    // the updown resize kernel did for months. A bool has no such value to get wrong, and
-    // the saturation limit below is now a property of the datapath rather than an argument.
     bool a4,
-    bool write_ahat,
     bool ahat_i8 = false,
     const float* ahat_qscale = nullptr
 ) {
@@ -343,21 +337,17 @@ __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache_vec2(
                 float2 sm = *reinterpret_cast<const float2*>(&smooth_inv[c0]);
                 xv.x *= sm.x; xv.y *= sm.y;
             }
-            float2 cache = ahat_load2(a_hat_cache, base, ahat_i8, ahat_s);
-            float q0 = fmaxf(-lim, fminf(lim, roundf((xv.x - cache.x) * scale)));
-            float q1 = fmaxf(-lim, fminf(lim, roundf((xv.y - cache.y) * scale)));
-            if (write_ahat)
-                ahat_store2(a_hat_cache, base, make_float2(cache.x + q0 * inv_scale, cache.y + q1 * inv_scale),
-                            ahat_i8, ahat_inv, ahat_lim);
+            float q0, q1;
+            ahat_quant_update2_w<WriteAhat>(a_hat_cache, base, xv.x, xv.y, scale, inv_scale, lim,
+                               ahat_i8, ahat_s, ahat_inv, ahat_lim, q0, q1);
             output_int8[base] = static_cast<int8_t>(q0);
             output_int8[base + 1] = static_cast<int8_t>(q1);
         } else {
             // odd num_elements: single leftover element, same math as the scalar kernel.
             float xval = load_as_float(x, base);
             if (smooth_inv != nullptr) xval *= smooth_inv[base % num_channels];
-            float cache = ahat_load(a_hat_cache, base, ahat_i8, ahat_s);
-            float q = fmaxf(-lim, fminf(lim, roundf((xval - cache) * scale)));
-            if (write_ahat) ahat_store(a_hat_cache, base, cache + q * inv_scale, ahat_i8, ahat_inv, ahat_lim);
+            float q = ahat_quant_update_w<WriteAhat>(a_hat_cache, base, xval, scale, inv_scale, lim,
+                                        ahat_i8, ahat_s, ahat_inv, ahat_lim);
             output_int8[base] = static_cast<int8_t>(q);
         }
     }
@@ -403,9 +393,8 @@ __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache_silu(
         if (smooth_inv != nullptr) {
             xval *= smooth_inv[i % num_channels];
         }
-        float cache = ahat_load(a_hat_cache, i, ahat_i8, ahat_s);
-        float q = fmaxf(-lim, fminf(lim, roundf((xval - cache) * scale)));
-        if (write_ahat) ahat_store(a_hat_cache, i, cache + q * inv_scale, ahat_i8, ahat_inv, ahat_lim);
+        float q = ahat_quant_update(a_hat_cache, i, xval, scale, inv_scale, lim,
+                                    ahat_i8, ahat_s, ahat_inv, ahat_lim, write_ahat);
         output_int8[i] = static_cast<int8_t>(q);
     }
 }
@@ -413,7 +402,7 @@ __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache_silu(
 // Vectorized (half2/float2) counterpart of
 // static_quantize_and_update_ahat_kernel_int8_half_cache_silu. Same pair-major
 // grid-stride loop + odd-leftover epilogue as the non-silu vec2 kernel above.
-template <typename T_IN>
+template <typename T_IN, bool WriteAhat>
 __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache_silu_vec2(
     const T_IN* __restrict__ x,
     __half* __restrict__ a_hat_cache,
@@ -422,13 +411,7 @@ __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache_silu_vec2
     const float* __restrict__ smooth_inv,
     int num_channels,
     int num_elements,
-    // Activation bit-width of THIS datapath, not a magnitude. It replaced a
-    // `float code_ceiling`, whose failure mode was a plausible-but-wrong number: pass 127
-    // (or forget the argument) on a 4-bit layer and it silently stayed 8-bit, which is what
-    // the updown resize kernel did for months. A bool has no such value to get wrong, and
-    // the saturation limit below is now a property of the datapath rather than an argument.
     bool a4,
-    bool write_ahat,
     bool ahat_i8 = false,
     const float* ahat_qscale = nullptr
 ) {
@@ -451,20 +434,16 @@ __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache_silu_vec2
                 float2 sm = *reinterpret_cast<const float2*>(&smooth_inv[c0]);
                 xv.x *= sm.x; xv.y *= sm.y;
             }
-            float2 cache = ahat_load2(a_hat_cache, base, ahat_i8, ahat_s);
-            float q0 = fmaxf(-lim, fminf(lim, roundf((xv.x - cache.x) * scale)));
-            float q1 = fmaxf(-lim, fminf(lim, roundf((xv.y - cache.y) * scale)));
-            if (write_ahat)
-                ahat_store2(a_hat_cache, base, make_float2(cache.x + q0 * inv_scale, cache.y + q1 * inv_scale),
-                            ahat_i8, ahat_inv, ahat_lim);
+            float q0, q1;
+            ahat_quant_update2_w<WriteAhat>(a_hat_cache, base, xv.x, xv.y, scale, inv_scale, lim,
+                               ahat_i8, ahat_s, ahat_inv, ahat_lim, q0, q1);
             output_int8[base] = static_cast<int8_t>(q0);
             output_int8[base + 1] = static_cast<int8_t>(q1);
         } else {
             float xval = silu_f(load_as_float(x, base));
             if (smooth_inv != nullptr) xval *= smooth_inv[base % num_channels];
-            float cache = ahat_load(a_hat_cache, base, ahat_i8, ahat_s);
-            float q = fmaxf(-lim, fminf(lim, roundf((xval - cache) * scale)));
-            if (write_ahat) ahat_store(a_hat_cache, base, cache + q * inv_scale, ahat_i8, ahat_inv, ahat_lim);
+            float q = ahat_quant_update_w<WriteAhat>(a_hat_cache, base, xval, scale, inv_scale, lim,
+                                        ahat_i8, ahat_s, ahat_inv, ahat_lim);
             output_int8[base] = static_cast<int8_t>(q);
         }
     }
@@ -1327,7 +1306,8 @@ torch::Tensor step1_static_quantize_fprop(
     }
 
     if (a_hat_cache.scalar_type() == torch::kFloat16
-            || a_hat_cache.scalar_type() == torch::kInt8) {
+            || a_hat_cache.scalar_type() == torch::kInt8
+            || a_hat_cache.scalar_type() == torch::kInt16) {
         bool ahat_i8 = false;
         const float* ahat_qscale_ptr = nullptr;
         __half* cache_ptr = nullptr;
@@ -1342,16 +1322,20 @@ torch::Tensor step1_static_quantize_fprop(
         const int grid_size_vec2 = (num_work_items_vec2 + block_size - 1) / block_size;
         if (x.scalar_type() == torch::kHalf) {
             if (use_vec2) {
-                static_quantize_and_update_ahat_kernel_int8_half_cache_vec2<__half><<<grid_size_vec2, block_size, 0, stream>>>(
-                    reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
-                    cache_ptr,
-                    x_int8.data_ptr<int8_t>(),
-                    scale_buf.data_ptr<float>(),
-                    smooth_ptr,
-                    num_channels,
-                    num_elements,
-                    a4, write_ahat, ahat_i8, ahat_qscale_ptr
-                );
+                auto launch = [&](auto wtag) {
+                    constexpr bool WA = decltype(wtag)::value;
+                    static_quantize_and_update_ahat_kernel_int8_half_cache_vec2<__half, WA><<<grid_size_vec2, block_size, 0, stream>>>(
+                        reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
+                        cache_ptr,
+                        x_int8.data_ptr<int8_t>(),
+                        scale_buf.data_ptr<float>(),
+                        smooth_ptr,
+                        num_channels,
+                        num_elements,
+                        a4, ahat_i8, ahat_qscale_ptr
+                    );
+                };
+                if (write_ahat) launch(std::true_type{}); else launch(std::false_type{});
             } else {
                 static_quantize_and_update_ahat_kernel_int8_half_cache<__half><<<grid_size, block_size, 0, stream>>>(
                     reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
@@ -1366,16 +1350,20 @@ torch::Tensor step1_static_quantize_fprop(
             }
         } else {
             if (use_vec2) {
-                static_quantize_and_update_ahat_kernel_int8_half_cache_vec2<float><<<grid_size_vec2, block_size, 0, stream>>>(
-                    x.data_ptr<float>(),
-                    cache_ptr,
-                    x_int8.data_ptr<int8_t>(),
-                    scale_buf.data_ptr<float>(),
-                    smooth_ptr,
-                    num_channels,
-                    num_elements,
-                    a4, write_ahat, ahat_i8, ahat_qscale_ptr
-                );
+                auto launch = [&](auto wtag) {
+                    constexpr bool WA = decltype(wtag)::value;
+                    static_quantize_and_update_ahat_kernel_int8_half_cache_vec2<float, WA><<<grid_size_vec2, block_size, 0, stream>>>(
+                        x.data_ptr<float>(),
+                        cache_ptr,
+                        x_int8.data_ptr<int8_t>(),
+                        scale_buf.data_ptr<float>(),
+                        smooth_ptr,
+                        num_channels,
+                        num_elements,
+                        a4, ahat_i8, ahat_qscale_ptr
+                    );
+                };
+                if (write_ahat) launch(std::true_type{}); else launch(std::false_type{});
             } else {
                 static_quantize_and_update_ahat_kernel_int8_half_cache<float><<<grid_size, block_size, 0, stream>>>(
                     x.data_ptr<float>(),
@@ -1438,8 +1426,9 @@ torch::Tensor step1_static_quantize_fprop_silu(
     torch::Tensor ahat_scale
 ) {
     TORCH_CHECK(a_hat_cache.scalar_type() == torch::kFloat16
-                    || a_hat_cache.scalar_type() == torch::kInt8,
-                "step1_static_quantize_fprop_silu: a_hat_cache must be fp16 or int8");
+                    || a_hat_cache.scalar_type() == torch::kInt8
+                    || a_hat_cache.scalar_type() == torch::kInt16,
+                "step1_static_quantize_fprop_silu: a_hat_cache must be fp16, int8, or int16");
 
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
@@ -1469,16 +1458,20 @@ torch::Tensor step1_static_quantize_fprop_silu(
 
     if (x.scalar_type() == torch::kHalf) {
         if (use_vec2) {
-            static_quantize_and_update_ahat_kernel_int8_half_cache_silu_vec2<__half><<<grid_size_vec2, block_size, 0, stream>>>(
-                reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
-                cache_ptr,
-                x_int8.data_ptr<int8_t>(),
-                scale_buf.data_ptr<float>(),
-                smooth_ptr,
-                num_channels,
-                num_elements,
-                a4, write_ahat, ahat_i8, ahat_qscale_ptr
-            );
+            auto launch = [&](auto wtag) {
+                constexpr bool WA = decltype(wtag)::value;
+                static_quantize_and_update_ahat_kernel_int8_half_cache_silu_vec2<__half, WA><<<grid_size_vec2, block_size, 0, stream>>>(
+                    reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
+                    cache_ptr,
+                    x_int8.data_ptr<int8_t>(),
+                    scale_buf.data_ptr<float>(),
+                    smooth_ptr,
+                    num_channels,
+                    num_elements,
+                    a4, ahat_i8, ahat_qscale_ptr
+                );
+            };
+            if (write_ahat) launch(std::true_type{}); else launch(std::false_type{});
         } else {
             static_quantize_and_update_ahat_kernel_int8_half_cache_silu<__half><<<grid_size, block_size, 0, stream>>>(
                 reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
@@ -1493,16 +1486,20 @@ torch::Tensor step1_static_quantize_fprop_silu(
         }
     } else {
         if (use_vec2) {
-            static_quantize_and_update_ahat_kernel_int8_half_cache_silu_vec2<float><<<grid_size_vec2, block_size, 0, stream>>>(
-                x.data_ptr<float>(),
-                cache_ptr,
-                x_int8.data_ptr<int8_t>(),
-                scale_buf.data_ptr<float>(),
-                smooth_ptr,
-                num_channels,
-                num_elements,
-                a4, write_ahat, ahat_i8, ahat_qscale_ptr
-            );
+            auto launch = [&](auto wtag) {
+                constexpr bool WA = decltype(wtag)::value;
+                static_quantize_and_update_ahat_kernel_int8_half_cache_silu_vec2<float, WA><<<grid_size_vec2, block_size, 0, stream>>>(
+                    x.data_ptr<float>(),
+                    cache_ptr,
+                    x_int8.data_ptr<int8_t>(),
+                    scale_buf.data_ptr<float>(),
+                    smooth_ptr,
+                    num_channels,
+                    num_elements,
+                    a4, ahat_i8, ahat_qscale_ptr
+                );
+            };
+            if (write_ahat) launch(std::true_type{}); else launch(std::false_type{});
         } else {
             static_quantize_and_update_ahat_kernel_int8_half_cache_silu<float><<<grid_size, block_size, 0, stream>>>(
                 x.data_ptr<float>(),
@@ -1607,7 +1604,8 @@ torch::Tensor step1_static_quantize_pack_int4_fprop(
     }
 
     if (a_hat_cache.scalar_type() == torch::kFloat16
-            || a_hat_cache.scalar_type() == torch::kInt8) {
+            || a_hat_cache.scalar_type() == torch::kInt8
+            || a_hat_cache.scalar_type() == torch::kInt16) {
         bool ahat_i8 = false;
         const float* ahat_qscale_ptr = nullptr;
         __half* cache_ptr = nullptr;

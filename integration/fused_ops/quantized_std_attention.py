@@ -838,9 +838,30 @@ class QuantizedStandardAttentionBlock(TokenMajorAttentionBlock):
         possible at all; without it _calibrate_int8 crashes inside its own sampling pass and the only
         way to get scales is to load a file, which in this tree describes a different random network
         than the one loading it. See docs/modiff_correctness_2026-08-03/FINDINGS.md.
+
+        MODIFF_ATTN_REPLAY_K>1 reuses the previous attention residual (out-x) on
+        steps where step_count % K != 0. t=T / first call always computes.
+        MODIFF_ATTN_REPLAY_HD24=1 limits this to head_dim==24 blocks (~63% of attn).
         """
+        try:
+            replay_k = int(os.environ.get("MODIFF_ATTN_REPLAY_K", "1"))
+        except (TypeError, ValueError):
+            replay_k = 1
+        hd24_only = os.environ.get("MODIFF_ATTN_REPLAY_HD24", "0") == "1"
+        use_replay = replay_k > 1 and (not hd24_only or getattr(self, "head_dim", 0) == 24)
+        if use_replay:
+            step = getattr(self, "_attn_step", 0)
+            self._attn_step = step + 1
+            delta = getattr(self, "_attn_delta", None)
+            if delta is not None and (step % replay_k) != 0:
+                out = x + delta
+                return out if out.dtype == x.dtype else out.to(x.dtype)
         out = self._forward_routes(x)
-        return out if out.dtype == x.dtype else out.to(x.dtype)
+        if out.dtype != x.dtype:
+            out = out.to(x.dtype)
+        if use_replay:
+            self._attn_delta = (out - x).detach()
+        return out
 
     def _forward_routes(self, x):
         b, c, H, W = x.shape
@@ -1359,3 +1380,11 @@ def convert_attention_to_quantized_std(module, *, bits=8, static=False, verbose=
         else:
             n += convert_attention_to_quantized_std(child, bits=bits, static=static, verbose=verbose)
     return n
+
+
+def reset_attn_replay(model):
+    """Clear attention residual-replay caches. Call once per sample, outside the timer."""
+    for m in model.modules():
+        if isinstance(m, QuantizedStandardAttentionBlock):
+            m._attn_step = 0
+            m._attn_delta = None

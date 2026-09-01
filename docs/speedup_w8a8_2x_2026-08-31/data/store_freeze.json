@@ -1,0 +1,37 @@
+{
+  "gpu": "NVIDIA A40",
+  "fp16_ms_step": 105.6582470703125,
+  "arms": [
+    {
+      "arm": "store_freeze_k3",
+      "ms_step": 71.56922119140626,
+      "trials": [
+        71.540927734375,
+        71.5975146484375
+      ],
+      "vs_fp16": 1.4763084648879694,
+      "skip_k": 3,
+      "relL2_vs_fp16": 0.15866221487522125
+    },
+    {
+      "arm": "store_freeze_k5",
+      "ms_step": 71.5953955078125,
+      "trials": [
+        71.45873046875,
+        71.732060546875
+      ],
+      "vs_fp16": 1.4757687463125064,
+      "skip_k": 5,
+      "relL2_vs_fp16": 0.17852433025836945
+    }
+  ],
+  "quality": {
+    "store_freeze_k3": {
+      "relL2_vs_fp16": 0.15866221487522125
+    },
+    "store_freeze_k5": {
+      "relL2_vs_fp16": 0.17852433025836945
+    }
+  },
+  "grid": "docs/speedup_w8a8_2x_2026-08-31/plots/store_freeze.png"
+}

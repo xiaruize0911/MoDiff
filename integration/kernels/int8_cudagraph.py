@@ -307,16 +307,10 @@ class UNetCudaGraphManager:
         self._prepare_module_state_buffers()
 
     def _prepare_module_state_buffers(self):
-        C, H, W = self.shape
-        example = torch.zeros(
-            self.batch_size, C, H, W,
-            device=next(self.diffusion_model.parameters()).device,
-            dtype=torch.float32,
-        ).contiguous(memory_format=torch.channels_last)
-        for module in _iter_graph_int8_modules(self.diffusion_model):
-            ensure_state = getattr(module, '_ensure_state_buffers', None)
-            if ensure_state is not None:
-                ensure_state(example)
+        # Do not pre-size a_hat/o_hat from the UNet input shape: most convs have
+        # different (C, H, W). Wrong-sized buffers make t=T reallocate during
+        # CUDA-graph capture. Warmup in `_capture_phase` allocates the real shapes.
+        return
 
     def reset_sequence(self):
         self.phase_index = 0
@@ -407,14 +401,28 @@ class UNetCudaGraphManager:
                 else:
                     current.copy_(saved)
 
-    def _warmup_phase(self, static_x: torch.Tensor, static_t: torch.Tensor, static_kwargs: Dict[str, Any]):
+    def _warmup_phase(self, static_x: torch.Tensor, static_t: torch.Tensor,
+                      static_kwargs: Dict[str, Any], keep_cache_buffers: bool = False):
         snapshot = self._snapshot_module_state()
         with torch.inference_mode():
             with torch.cuda.stream(self._warmup_stream):
                 for _ in range(self._num_warmup):
                     _ = self.diffusion_wrapper(static_x, static_t, **static_kwargs)
             self._warmup_stream.synchronize()
-        self._restore_module_state(snapshot)
+        if keep_cache_buffers:
+            # Warmup allocated correctly-shaped a_hat/o_hat. Restore only the
+            # step counters so capture records the intended phase; leave the
+            # buffers so t=T can copy_ instead of allocating inside the graph.
+            for snap in snapshot:
+                module = snap['module']
+                if snap['is_first_step'] is not None:
+                    module.is_first_step = snap['is_first_step']
+                if snap['step_count'] is not None and hasattr(module, 'step_count'):
+                    module.step_count = snap['step_count']
+                if snap['_state_ready'] is not None and hasattr(module, '_state_ready'):
+                    module._state_ready = snap['_state_ready']
+        else:
+            self._restore_module_state(snapshot)
 
     def _capture_phase(self, phase: str, x: torch.Tensor, t: torch.Tensor, model_kwargs: Dict[str, Any]) -> torch.Tensor:
         from integration.kernels.graph_phase import set_force_replay
@@ -437,7 +445,8 @@ class UNetCudaGraphManager:
             set_force_replay(False)
 
         try:
-            self._warmup_phase(static_x, static_t, static_kwargs)
+            self._warmup_phase(static_x, static_t, static_kwargs,
+                               keep_cache_buffers=(phase == 'first'))
 
             graph = torch.cuda.CUDAGraph()
             torch.cuda.synchronize()

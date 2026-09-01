@@ -1,0 +1,58 @@
+{
+  "gpu": "NVIDIA A40",
+  "protocol": {
+    "model": "LDM-8 LSUN-Churches",
+    "batch": 128,
+    "ddim_steps": 50,
+    "samples_n": 4,
+    "seed": 20260805,
+    "timer": "CUDA events; MoDiff state reset outside the timer",
+    "quant": "W8A8 CUTLASS, static delta, flash attn, warmup=1"
+  },
+  "fp16_ms_step": 105.6582470703125,
+  "schemes": [
+    {
+      "id": "A",
+      "name": "Full MoDiff",
+      "name_zh": "完整 MoDiff",
+      "old_names": ["modiff_k1", "int8_modiff_k1_w1"],
+      "ms_step": 73.8866650390625,
+      "vs_fp16": 1.4300042776927737,
+      "relL2_vs_fp16": 0.09733831882476807,
+      "env": {"MODIFF_REPLAY_K": "1", "MODIFF_REPLAY_DROP_OHAT": "0"}
+    },
+    {
+      "id": "B",
+      "name": "Frozen Residual",
+      "name_zh": "冻结残差",
+      "old_names": ["replay_k3_keep_ohat", "modiff_replay3_w1", "o_hat replay"],
+      "ms_step": 48.55598388671875,
+      "vs_fp16": 2.1760087761132283,
+      "relL2_vs_fp16": 0.2601335942745209,
+      "K": 3,
+      "env": {"MODIFF_REPLAY_K": "3", "MODIFF_REPLAY_DROP_OHAT": "0"}
+    },
+    {
+      "id": "C",
+      "name": "Layer Skip",
+      "name_zh": "整层跳过",
+      "old_names": ["skip_layer_k3_drop_ohat"],
+      "ms_step": 46.707705078125,
+      "vs_fp16": 2.262116001922695,
+      "relL2_vs_fp16": 1.1000993251800537,
+      "K": 3,
+      "env": {"MODIFF_REPLAY_K": "3", "MODIFF_REPLAY_DROP_OHAT": "1"}
+    }
+  ],
+  "grid": "docs/speedup_w8a8_2x_2026-08-31/plots/four_schemes.png",
+  "store_freeze_k3": {
+    "id": "D",
+    "name": "Store Freeze",
+    "name_zh": "冻结写入",
+    "ms_step": 71.56922119140626,
+    "vs_fp16": 1.4763084648879694,
+    "relL2_vs_fp16": 0.15866221487522125,
+    "K": 3,
+    "env": {"MODIFF_CACHE_SKIP_K": "3", "MODIFF_REPLAY_K": "1"}
+  }
+}

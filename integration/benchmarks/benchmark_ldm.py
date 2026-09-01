@@ -361,6 +361,11 @@ def _reset_wxax_modiff_safe(model):
         reset_wxax_modiff(model)
     except Exception:
         pass
+    try:
+        from integration.fused_ops.quantized_std_attention import reset_attn_replay
+        reset_attn_replay(model)
+    except Exception:
+        pass
 
 
 #: STATIC Q-DIFFUSION is the shipped configuration, because it is the paper's.
@@ -1072,10 +1077,15 @@ class BenchmarkRunner:
         # Class-conditional models (e.g. cin256) need cross-attention class
         # conditioning and a model-specific latent shape; derive both here so the
         # unconditional path (churches) is untouched.
-        if getattr(model, 'cond_stage_key', None) == 'class_label':
+        if getattr(model, 'cond_stage_key', None) in ('class_label', 'txt'):
             self.shape = (model.channels, model.image_size, model.image_size)
-            print(f"Class-conditional model: latent shape -> {self.shape}, "
-                  f"sampling class {getattr(self, 'sample_class', 0)}")
+            if model.cond_stage_key == 'class_label':
+                print(f"Class-conditional model: latent shape -> {self.shape}, "
+                      f"sampling class {getattr(self, 'sample_class', 0)}")
+            else:
+                prompt = getattr(self, 'prompt', None) or os.environ.get('MODIFF_SD_PROMPT', '')
+                print(f"Text-conditional model: latent shape -> {self.shape}, "
+                      f"prompt={prompt!r}")
 
         return model, DDIMSampler(model)
 
@@ -1119,13 +1129,22 @@ class BenchmarkRunner:
 
     def _cond_kwargs(self, model, batch):
         """Extra sampler.sample kwargs: class-conditioning for class-conditional
-        models (cin256), empty for unconditional (churches)."""
-        if getattr(model, 'cond_stage_key', None) == 'class_label':
+        models (cin256), CLIP text for SD, empty for unconditional (churches)."""
+        key = getattr(model, 'cond_stage_key', None)
+        if key == 'class_label':
             cls = int(getattr(self, 'sample_class', 0))
             dev = next(model.parameters()).device
-            xc = {model.cond_stage_key: torch.full((batch,), cls, dtype=torch.long, device=dev)}
+            xc = {key: torch.full((batch,), cls, dtype=torch.long, device=dev)}
             with torch.no_grad():
                 c = model.get_learned_conditioning(xc)
+            return {'conditioning': c}
+        if key == 'txt':
+            prompt = getattr(self, 'prompt', None)
+            if prompt is None:
+                prompt = os.environ.get('MODIFF_SD_PROMPT', '')
+            prompts = [prompt] * int(batch)
+            with torch.no_grad():
+                c = model.get_learned_conditioning(prompts)
             return {'conditioning': c}
         return {}
     

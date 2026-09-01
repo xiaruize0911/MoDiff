@@ -71,6 +71,23 @@ def _fake_quant_int8_out(h):
         return (torch.round(h / s).clamp_(-127, 127)) * s
     return h
 
+
+def _replay_block_mode() -> str:
+    """ResBlock-level replay: which compute to skip when out_conv would replay.
+
+    `out` (default, env 1): skip emb + out-GN + out_conv; in_conv still runs.
+    `full` / `in`: also skip in-GN + in_conv. Out-GN consumes in_conv's output, so
+    skipping in_conv forces skipping emb+out too — `in` and `in+emb` are one path.
+    `perconv` (env 0): both convs run; each may self-replay.
+    """
+    v = os.environ.get("MODIFF_REPLAY_BLOCK", "1").strip().lower()
+    if v in ("0", "false", "off", "perconv"):
+        return "perconv"
+    if v in ("in", "in_conv", "full", "2", "in+emb", "in_emb"):
+        return "full"
+    return "out"
+
+
 # Import TimestepBlock for proper integration with TimestepEmbedSequential
 try:
     from ldm.modules.diffusionmodules.openaimodel import TimestepBlock
@@ -1028,6 +1045,39 @@ class FusedResBlock(TimestepBlock):
                 x_halves = None
             else:
                 x = None            # materialized below, either by the fold or by the fallback
+
+        # MODIFF_REPLAY_BLOCK:
+        #   0 / perconv — both convs run (each may self-replay)
+        #   1 / out     — skip emb + out-GN + out_conv; in_conv still runs (shipped)
+        #   in / full   — also skip in-GN + in_conv. Out-GN needs in_conv's output, so
+        #                 skipping in_conv forces skipping emb+out too: `in` and `in+emb`
+        #                 are the same path. Live skip_connection(x) still runs.
+        #                 t=T never peeks (_peek_replay checks is_first_step).
+        mode = _replay_block_mode()
+        peek_in = hasattr(self.in_conv, "_peek_replay") and self.in_conv._peek_replay()
+        peek_out = hasattr(self.out_conv, "_peek_replay") and self.out_conv._peek_replay()
+        # Both peeks required: Identity / non-MoDiff in_conv has no _peek_replay (or
+        # returns False), so skip_in stays off and the in path still runs. `mode` is
+        # reused at the out-only peek below — do not re-read the env there.
+        skip_in = (mode == "full" and peek_in and peek_out
+                   and hasattr(self.in_conv, "step_count")
+                   and hasattr(self.out_conv, "step_count"))
+        if skip_in:
+            if x_halves is not None:
+                x = _skip_concat_fallback(*x_halves)
+                x_halves = None
+            if self.updown:
+                x = self.x_upd(x)
+            self.in_conv.step_count += 1
+            if split > 0:
+                skip = self.skip_connection(x, split=split)
+                residual_arg = None
+            else:
+                skip = self.skip_connection(x)
+                residual_arg = skip
+            self.out_conv.step_count += 1
+            return self.out_conv._replay_out(skip)
+
         if self.updown:
             # GroupNorm+SiLU+quantize+resize in one kernel (see _prequant_gn_resize_conv),
             # which takes the RAW x -- the normalisation happens inside it. GroupNorm is
@@ -1078,11 +1128,9 @@ class FusedResBlock(TimestepBlock):
             skip = self.skip_connection(x)
             residual_arg = skip
 
-        if (os.environ.get("MODIFF_REPLAY_BLOCK", "1") not in ("0", "false", "off")
+        if (mode != "perconv"
                 and hasattr(self.out_conv, "_peek_replay") and self.out_conv._peek_replay()):
             self.out_conv.step_count += 1
-            if residual_arg is None:
-                return torch.add(skip, self.out_conv._replay_out())
             return self.out_conv._replay_out(skip)
 
         # Time embedding

@@ -1,0 +1,72 @@
+{
+  "gpu": "NVIDIA A40",
+  "fp16_ms_step": 105.8533056640625,
+  "target_ms": 52.92665283203125,
+  "arms": [
+    {
+      "arm": "fp16",
+      "ms_step": 105.8533056640625,
+      "vs_fp16": 1.0,
+      "replay_k": 1,
+      "warmup": 1,
+      "relL2_vs_fp16": 0.0
+    },
+    {
+      "arm": "int8_ptq",
+      "ms_step": 64.65216796875,
+      "vs_fp16": 1.6372738763412744,
+      "replay_k": 1,
+      "warmup": 1,
+      "relL2_vs_fp16": 0.3400730788707733
+    },
+    {
+      "arm": "modiff_k1_w1",
+      "ms_step": 74.20720458984376,
+      "vs_fp16": 1.4264559115133404,
+      "replay_k": 1,
+      "warmup": 1,
+      "relL2_vs_fp16": 0.29213955998420715
+    },
+    {
+      "arm": "modiff_replay2_w1",
+      "ms_step": 54.937431640625,
+      "vs_fp16": 1.9267974949485327,
+      "replay_k": 2,
+      "warmup": 1,
+      "relL2_vs_fp16": 0.2605355679988861
+    },
+    {
+      "arm": "modiff_replay3_w1",
+      "ms_step": 48.7685107421875,
+      "vs_fp16": 2.1705256948208067,
+      "replay_k": 3,
+      "warmup": 1,
+      "relL2_vs_fp16": 0.2725081145763397
+    }
+  ],
+  "quality": {
+    "fp16": {
+      "relL2_vs_fp16": 0.0
+    },
+    "int8_ptq": {
+      "relL2_vs_fp16": 0.3400730788707733
+    },
+    "modiff_k1_w1": {
+      "relL2_vs_fp16": 0.29213955998420715
+    },
+    "modiff_replay2_w1": {
+      "relL2_vs_fp16": 0.2605355679988861
+    },
+    "modiff_replay3_w1": {
+      "relL2_vs_fp16": 0.2725081145763397
+    }
+  },
+  "grid": "docs/speedup_w8a8_2x_2026-08-31/plots/modiff_combo.png",
+  "timing_relL2_batch128_protocol": {
+    "int8_ptq": 0.2949,
+    "modiff_k1_w1": 0.1176,
+    "modiff_replay2_w1": 0.1992,
+    "modiff_replay3_w1": 0.2602
+  },
+  "note": "ms/step from modiff_combo.py same-process run (fp16 105.85). Grid is n=4 visual; report relL2 uses the timing-run protocol (matches modiff_levers.json)."
+}

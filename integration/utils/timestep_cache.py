@@ -54,13 +54,17 @@ class TimestepEmbeddingCache:
         device_key = (str(timesteps.device), dim, max_period, repeat_only)
         table = self.device_cache.get(device_key)
 
-        if torch.cuda.is_current_stream_capturing():
-            return table
-
-        required_size = int(timesteps.max().item()) + 1 if timesteps.numel() > 0 else 1
+        # DDIM/LDM timesteps live in [0, 1000]. Never call timesteps.max().item()
+        # here: that is a device->host sync on every UNet forward (illegal during
+        # CUDA-graph capture, and a drain even in eager once the table exists).
+        required_size = 1001
         if table is None or table.shape[0] < required_size:
-            all_timesteps = torch.arange(required_size, device=timesteps.device, dtype=timesteps.dtype)
-            table = _original_timestep_embedding(all_timesteps, dim, max_period, repeat_only).contiguous()
+            if torch.cuda.is_current_stream_capturing():
+                return table
+            all_timesteps = torch.arange(
+                required_size, device=timesteps.device, dtype=timesteps.dtype)
+            table = _original_timestep_embedding(
+                all_timesteps, dim, max_period, repeat_only).contiguous()
             self.device_cache[device_key] = table
             self.misses += 1
         else:

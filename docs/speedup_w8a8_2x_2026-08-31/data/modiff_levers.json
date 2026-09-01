@@ -1,0 +1,109 @@
+{
+  "gpu": "NVIDIA A40",
+  "fp16_ms_step": 105.766201171875,
+  "target_ms": 52.8831005859375,
+  "arms": [
+    {
+      "arm": "fp16",
+      "ms_step": 105.766201171875,
+      "trials": [
+        105.625234375,
+        105.90716796875
+      ],
+      "vs_fp16": 1.0,
+      "replay_k": 1,
+      "warmup": 5
+    },
+    {
+      "arm": "int8_ptq",
+      "ms_step": 64.82096923828125,
+      "trials": [
+        64.7239990234375,
+        64.917939453125
+      ],
+      "vs_fp16": 1.6316664563141516,
+      "replay_k": 1,
+      "warmup": 5
+    },
+    {
+      "arm": "int8_modiff_k1",
+      "ms_step": 85.6006494140625,
+      "trials": [
+        85.522568359375,
+        85.67873046875
+      ],
+      "vs_fp16": 1.2355770884432062,
+      "replay_k": 1,
+      "warmup": 5
+    },
+    {
+      "arm": "int8_modiff_k1_w1",
+      "ms_step": 74.4687744140625,
+      "trials": [
+        74.393232421875,
+        74.54431640625
+      ],
+      "vs_fp16": 1.4202758404991607,
+      "replay_k": 1,
+      "warmup": 1
+    },
+    {
+      "arm": "int8_modiff_replay2",
+      "ms_step": 66.3810546875,
+      "trials": [
+        66.421630859375,
+        66.340478515625
+      ],
+      "vs_fp16": 1.593319082828485,
+      "replay_k": 2,
+      "warmup": 5
+    },
+    {
+      "arm": "int8_modiff_replay4",
+      "ms_step": 57.15107421875,
+      "trials": [
+        57.1958447265625,
+        57.1063037109375
+      ],
+      "vs_fp16": 1.850642400299371,
+      "replay_k": 4,
+      "warmup": 5
+    },
+    {
+      "arm": "int8_modiff_replay2_graph",
+      "ms_step": NaN,
+      "trials": [],
+      "vs_fp16": NaN,
+      "error": "graph disabled",
+      "stats": {
+        "num_graphs": 0,
+        "capture_count": 0,
+        "replay_count": 0,
+        "phases": [],
+        "disabled": true,
+        "replay_k": 2
+      }
+    }
+  ],
+  "quality": {
+    "fp16": {
+      "relL2_vs_fp16": 0.0
+    },
+    "int8_ptq": {
+      "relL2_vs_fp16": 0.29327937960624695
+    },
+    "int8_modiff_k1": {
+      "relL2_vs_fp16": 0.10836701095104218
+    },
+    "int8_modiff_k1_w1": {
+      "relL2_vs_fp16": 0.1096111610531807
+    },
+    "int8_modiff_replay2": {
+      "relL2_vs_fp16": 0.1911875158548355
+    },
+    "int8_modiff_replay4": {
+      "relL2_vs_fp16": 0.2920113205909729
+    }
+  },
+  "grid": "docs/speedup_w8a8_2x_2026-08-31/plots/modiff_quality.png"
+}
