@@ -14,8 +14,7 @@ Implementation details:
 - baseline mode captures one per-step UNet graph (`standard`)
 - MoDiff mode captures per-step UNet graphs:
     * `first`             : t=T warm-up
-    * `modulated`         : full residual compute (commit steps)
-    * `residual_replay`   : skip GN+conv, reuse o_hat (when MODIFF_REPLAY_K>1)
+    * `modulated`         : full residual compute (every later step)
 - DDIM itself stays as the outer Python loop, but each UNet invocation in that
     loop is replayed from a captured CUDA graph using fixed static buffers.
 
@@ -296,10 +295,6 @@ class UNetCudaGraphManager:
         self._previous_cudnn_benchmark = torch.backends.cudnn.benchmark
         self._warmup_stream = torch.cuda.Stream()
         self._num_warmup = 3
-        try:
-            self.replay_k = int(os.environ.get("MODIFF_REPLAY_K", "1"))
-        except (TypeError, ValueError):
-            self.replay_k = 1
 
         # cuDNN algorithm search is not capture-safe; freeze engine selection.
         torch.backends.cudnn.benchmark = False
@@ -320,21 +315,7 @@ class UNetCudaGraphManager:
             return 'standard'
         if self.phase_index == 0:
             return 'first'
-        # Residual-replay cadence matches eager: after t=T, step_count == call index,
-        # replay iff step_count % K != 0. phase_index is that call index.
-        if self.replay_k > 1 and (self.phase_index % self.replay_k) != 0:
-            return 'residual_replay'
         return 'modulated'
-
-    def _ensure_replay_bufs(self):
-        for module in _iter_graph_int8_modules(self.diffusion_model):
-            oh = getattr(module, 'o_hat_cache', None)
-            if oh is None:
-                continue
-            buf = getattr(module, '_replay_out_buf', None)
-            if (buf is None or buf.shape != oh.shape or buf.dtype != oh.dtype
-                    or buf.device != oh.device):
-                module._replay_out_buf = torch.empty_like(oh)
 
     def _copy_structure(self, obj: Any) -> Any:
         if torch.is_tensor(obj):
@@ -425,8 +406,6 @@ class UNetCudaGraphManager:
             self._restore_module_state(snapshot)
 
     def _capture_phase(self, phase: str, x: torch.Tensor, t: torch.Tensor, model_kwargs: Dict[str, Any]) -> torch.Tensor:
-        from integration.kernels.graph_phase import set_force_replay
-
         static_x = torch.empty_like(x)
         static_t = torch.empty_like(t)
         static_kwargs = self._copy_structure(model_kwargs)
@@ -435,14 +414,8 @@ class UNetCudaGraphManager:
 
         if phase == 'first':
             self._set_module_first_step(True)
-            set_force_replay(False)
-        elif phase == 'residual_replay':
-            self._set_module_first_step(False)
-            self._ensure_replay_bufs()
-            set_force_replay(True)
         else:
             self._set_module_first_step(False)
-            set_force_replay(False)
 
         try:
             self._warmup_phase(static_x, static_t, static_kwargs,
@@ -453,11 +426,9 @@ class UNetCudaGraphManager:
             with torch.cuda.graph(graph):
                 static_output = self.diffusion_wrapper(static_x, static_t, **static_kwargs)
         except Exception:
-            set_force_replay(None)
             print(f"CUDA graph capture failed for phase={phase}:\n{traceback.format_exc()}", flush=True)
             raise
 
-        set_force_replay(None)
         record = _GraphRecord(graph, static_x, static_t, static_kwargs, static_output)
         self.records[phase] = record
         self.capture_count += 1
@@ -503,7 +474,6 @@ class UNetCudaGraphManager:
             'replay_count': self.replay_count,
             'phases': sorted(self.records.keys()),
             'disabled': self._disabled,
-            'replay_k': self.replay_k,
         }
 
 

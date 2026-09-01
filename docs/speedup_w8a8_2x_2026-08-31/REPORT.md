@@ -1,5 +1,7 @@
 # W8A8 MoDiff：四种跳步方案与 ≥2× 路径
 
+**2026-09-01：** B、C 已从内核删除。生产路径只有完整 MoDiff（A）。重测见 [`docs/scheme_a_only_2026-09-01/REPORT.md`](../scheme_a_only_2026-09-01/REPORT.md)。下文是删除前的四种方案记录。
+
 LDM-8 LSUN-Churches · NVIDIA A40 · torch 2.4.1+cu124 · W8A8 CUTLASS  
 batch 128 · DDIM 50 · seed `20260805` · static delta · `MODIFF_QUANT_LINEAR=1` `MODIFF_QUANT_ATTN=1` `MODIFF_QATTN_FLASH=1` `MODIFF_LINEAR=0`
 
@@ -30,7 +32,7 @@ ResBlock：`out = 卷积支路 + skip(x)`。四种方案差在跳过步上 **算
 | **B** | 冻结残差 | **不算** 卷积；`out = o_hat_冻结 + skip(x)` | `REPLAY_K=K` |
 | **C** | 整层跳过 | **不算** 卷积；`out = skip(x)`（丢掉 `o_hat`） | `REPLAY_K=K` + `DROP_OHAT=1` |
 
-B 与 D 正交，不要同时开。C 只作诊断，默认关。
+B 与 D 正交，不要同时开。**B、C 都不是推荐模式**（C 一开始就是诊断；B 被 A S=25 支配）。默认关。
 
 ---
 
@@ -47,6 +49,8 @@ fp16 = 105.66 ms。2.00× 线 = 52.83 ms。
 | **C 整层跳过 K=3** | 不算卷积；只要 skip | 46.71 | 2.26× | 1.58× | 1.100 | 色块 |
 
 只有 **B** 过 2× 且图还能看。
+
+**2026-09-01 撤回：** 上表锁死 DDIM 50。一旦允许改步数，**A S=25** 是 2.77× / relL2 0.225，B 和 C 都不必留。见结论和下文 [bc_identity_halfstep](../bc_identity_halfstep_2026-09-01/FINDINGS.md)。
 
 ![four schemes](plots/four_schemes.png)
 
@@ -95,7 +99,7 @@ export MODIFF_REPLAY_K=1
 
 ---
 
-## B · 冻结残差（≥2× 路径）
+## B · 冻结残差（已撤回，不是 2× 路径）
 
 跳过步 **不跑** GN+量化+卷积：
 
@@ -234,9 +238,10 @@ GEMM 上 skip 几乎不赢（无 residual 甚至更慢：多写一份 `out`）�
 |---|---|
 | W8A8 PTQ（无 MoDiff） | ~64.7 ms，1.64×，relL2 ~0.3，结构没了 |
 | Attention residual replay `ATTN_REPLAY_K>1` | 曾到 2.03×，质量是 PTQ 级；**不用**。MoDiff 方程必须留在 conv |
-| C 整层跳过 | 2.26×，relL2 1.10，色块 |
+| C 整层跳过 | 2.26×，relL2 1.10，色块。**模式无意义**（丢掉 `o_hat` = 丢掉卷积支路） |
 | D 把 K 加到 20 | 仍 1.48×，只伤质量 |
 | B 把 K 加到 5+ | 更快，图垮到 PTQ 级 |
+| **B 冻结残差（任意 K）** | **2026-09-01 撤回作为 2× 路径。** 跳的是 50 步时刻表上的 conv，不是 DDIM step。A S=25 完整 MoDiff 是 **2.77×**、relL2 0.225，严格优于 B K=3 的 2.17× / 0.258。隔步复用 ε 与 S=25 一样快，质量更差。→ [bc_identity_halfstep_2026-09-01](../bc_identity_halfstep_2026-09-01/FINDINGS.md) |
 
 CUDA graph：MoDiff 路径 capture 失败（attention epilogue 在 capture 中建 `torch.tensor`）。PTQ graph 可以，不是这条 2× 路径。
 
@@ -245,8 +250,8 @@ CUDA graph：MoDiff 路径 capture 失败（attention epilogue 在 capture 中�
 ## 结论
 
 - **D 冻结写入**：算还在，只冻 store。\(S \approx 2\,\mathrm{ms}\)，任意 K 都是 ~1.48×。  
-- **B 冻结残差 K=3**：不算卷积，输出仍加冻结 `o_hat` → **2.17–2.18×**，教堂可认。这是 W8A8 ≥2× 路径。  
-- **C** 丢掉 `o_hat` 会垮。不要走 D 或 C 冲 2×，也不要把 B 的 K 加到 5 以上。
+- **B、C 都不是路径。** C 丢掉 `o_hat` 会垮（relL2 1.10）。B 在 50 步上能到 2.17×，但是用跳 conv 去近似「少做一半工作」，被 **A S=25 完整 MoDiff（2.77×）** 同时在速度和质量上压过。默认 `REPLAY_K=1` `DROP_OHAT=0`，不要开。  
+- W8A8 ≥2× 且图仍是 MoDiff 教堂：**25 步完整 MoDiff（A）**，不是 B。
 
 ---
 

@@ -466,62 +466,6 @@ class OptimizedInt4Conv2d(nn.Module):
             k = 1
         return k > 1 and self.step_count > 0 and (self.step_count % k) != 0
 
-    def _replay_residual(self) -> bool:
-        """See OptimizedInt8Conv2d._replay_residual. Same cadence, same env."""
-        if self.calibrating or not self.modiff_enabled:
-            return False
-        from integration.kernels.graph_phase import get_force_replay
-        forced = get_force_replay()
-        if forced is not None:
-            return bool(forced) and self.o_hat_cache is not None and self.a_hat_cache is not None
-        try:
-            k = int(os.environ.get("MODIFF_REPLAY_K", "1"))
-        except (TypeError, ValueError):
-            k = 1
-        return (k > 1 and self.step_count > 0 and (self.step_count % k) != 0
-                and self.o_hat_cache is not None and self.a_hat_cache is not None)
-
-    def _peek_replay(self) -> bool:
-        """See OptimizedInt8Conv2d._peek_replay."""
-        if self.calibrating or not self.modiff_enabled or self.is_first_step:
-            return False
-        from integration.kernels.graph_phase import get_force_replay
-        forced = get_force_replay()
-        if forced is not None:
-            return bool(forced) and self.o_hat_cache is not None and self.a_hat_cache is not None
-        try:
-            k = int(os.environ.get("MODIFF_REPLAY_K", "1"))
-        except (TypeError, ValueError):
-            k = 1
-        if k <= 1 or self.o_hat_cache is None or self.a_hat_cache is None:
-            return False
-        nxt = self.step_count + 1
-        return nxt > 0 and (nxt % k) != 0
-
-    def _replay_out(self, residual=None) -> torch.Tensor:
-        """IO for compute: read frozen o_hat, optionally add the live skip tensor.
-
-        With a live skip this launches reuse_o_hat_add. No-residual replay
-        still returns the o_hat view.
-        """
-        oh = self.o_hat_cache
-        if residual is None:
-            return self._module_output()
-        buf = getattr(self, "_replay_out_buf", None)
-        if (buf is None or buf.shape != oh.shape or buf.dtype != oh.dtype
-                or buf.device != oh.device):
-            self._replay_out_buf = torch.empty_like(oh)
-            buf = self._replay_out_buf
-        if residual.dtype != oh.dtype or not residual.is_contiguous(
-                memory_format=torch.channels_last):
-            residual = residual.to(dtype=oh.dtype).contiguous(memory_format=torch.channels_last)
-        if (HAS_CUTLASS and oh.dtype == torch.float16
-                and hasattr(modiff_cutlass, "reuse_o_hat_add")
-                and oh.is_contiguous(memory_format=torch.channels_last)):
-            return modiff_cutlass.reuse_o_hat_add(oh, residual, buf)
-        torch.add(oh, residual, out=buf)
-        return buf
-
     def _ahat_bits(self) -> int:
         try:
             return int(os.environ.get("MODIFF_AHAT_BITS", "16"))
@@ -1225,8 +1169,6 @@ class OptimizedInt4Conv2d(nn.Module):
         separate F.silu(x) Python call over the whole activation tensor first.
         """
         self.step_count += 1
-        if self._replay_residual():
-            return self._replay_out()
         if not x.is_contiguous(memory_format=torch.channels_last):
             x = x.contiguous(memory_format=torch.channels_last)
 
@@ -1288,12 +1230,6 @@ class OptimizedInt4Conv2d(nn.Module):
         bit-exactness against cat2 + this same path in integration/tests/test_cat2_gn_fold.py.
         """
         self.step_count += 1
-        if self._replay_residual():
-            out = self._replay_out(residual)
-            if x2 is not None:
-                cat = torch.cat((x, x2), dim=1)
-                return out, cat
-            return out
         if x2 is not None:
             if not x.is_contiguous(memory_format=torch.channels_last):
                 x = x.contiguous(memory_format=torch.channels_last)
@@ -1378,8 +1314,6 @@ class OptimizedInt4Conv2d(nn.Module):
         residual; o_hat cache write is byte-identical to the non-residual path.
         Caller must have verified _can_fuse_input_silu(x)."""
         self.step_count += 1
-        if self._replay_residual():
-            return self._replay_out(residual)
         if not x.is_contiguous(memory_format=torch.channels_last):
             x = x.contiguous(memory_format=torch.channels_last)
         if self._cached_alpha_tensor is None or self._cached_alpha_tensor.device != x.device:
@@ -1857,8 +1791,6 @@ class OptimizedInt4Conv2d(nn.Module):
         SmoothQuant multiply is fused into sub_absmax_scale when applicable.
         """
         self.step_count += 1
-        if self._replay_residual():
-            return self._replay_out()
 
         if self.a_hat_cache is None or self.a_hat_cache.shape != x.shape:
             self.is_first_step = True

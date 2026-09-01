@@ -829,84 +829,6 @@ class OptimizedInt8Conv2d(nn.Module):
             k = 1
         return k > 1 and self.step_count > 0 and (self.step_count % k) != 0
 
-    def _replay_residual(self) -> bool:
-        """Replay scheme: skip GN+quantize+conv, reuse the last committed residual.
-
-        o_hat already holds the accumulated conv contribution A(Q(delta))+...
-        from the last commit. Skip steps return `o_hat [+ current ResBlock skip]`
-        and leave both caches frozen. Cadence matches skip-K: after step_count
-        increment, replay iff `step_count % K != 0`. t=T (step_count==0) always
-        computes. K=1 (default) is a no-op. Orthogonal to MODIFF_CACHE_SKIP_K —
-        replay never launches those kernels, so there is nothing to store-skip.
-        """
-        if self.calibrating or not self.modiff_enabled:
-            return False
-        from integration.kernels.graph_phase import get_force_replay
-        forced = get_force_replay()
-        if forced is not None:
-            return bool(forced) and self.o_hat_cache is not None and self.a_hat_cache is not None
-        try:
-            k = int(os.environ.get("MODIFF_REPLAY_K", "1"))
-        except (TypeError, ValueError):
-            k = 1
-        return (k > 1 and self.step_count > 0 and (self.step_count % k) != 0
-                and self.o_hat_cache is not None and self.a_hat_cache is not None)
-
-    def _peek_replay(self) -> bool:
-        """True if the next increment would take `_replay_residual`. Does not mutate.
-
-        Used by FusedResBlock to skip in_conv, emb_layers, and out GN before any of
-        those run. Must stay equivalent to increment-then-`_replay_residual`.
-        """
-        if self.calibrating or not self.modiff_enabled or self.is_first_step:
-            return False
-        from integration.kernels.graph_phase import get_force_replay
-        forced = get_force_replay()
-        if forced is not None:
-            return bool(forced) and self.o_hat_cache is not None and self.a_hat_cache is not None
-        try:
-            k = int(os.environ.get("MODIFF_REPLAY_K", "1"))
-        except (TypeError, ValueError):
-            k = 1
-        if k <= 1 or self.o_hat_cache is None or self.a_hat_cache is None:
-            return False
-        nxt = self.step_count + 1
-        return nxt > 0 and (nxt % k) != 0
-
-    def _replay_out(self, residual: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """IO for compute: read frozen o_hat, optionally add the live skip tensor.
-
-        With a live skip this launches reuse_o_hat_add (out = o_hat + residual).
-        No-residual replay still returns the o_hat view — a copy kernel would
-        only add bandwidth.
-
-        MODIFF_REPLAY_DROP_OHAT=1: true layer skip. Return the live skip only
-        (`out = skip(x)`), dropping the frozen conv residual. Diagnostic; default off.
-        """
-        oh = self.o_hat_cache
-        if residual is not None and os.environ.get("MODIFF_REPLAY_DROP_OHAT", "0") == "1":
-            if residual.dtype != oh.dtype or not residual.is_contiguous(
-                    memory_format=torch.channels_last):
-                residual = residual.to(dtype=oh.dtype).contiguous(
-                    memory_format=torch.channels_last)
-            return residual
-        if residual is None:
-            return self._module_output()
-        buf = getattr(self, "_replay_out_buf", None)
-        if (buf is None or buf.shape != oh.shape or buf.dtype != oh.dtype
-                or buf.device != oh.device):
-            self._replay_out_buf = torch.empty_like(oh)
-            buf = self._replay_out_buf
-        if residual.dtype != oh.dtype or not residual.is_contiguous(
-                memory_format=torch.channels_last):
-            residual = residual.to(dtype=oh.dtype).contiguous(memory_format=torch.channels_last)
-        if (HAS_CUTLASS and oh.dtype == torch.float16
-                and hasattr(modiff_cutlass, "reuse_o_hat_add")
-                and oh.is_contiguous(memory_format=torch.channels_last)):
-            return modiff_cutlass.reuse_o_hat_add(oh, residual, buf)
-        torch.add(oh, residual, out=buf)
-        return buf
-
     def _maybe_quantize_ahat(self) -> None:
         """Snap a_hat onto an N-bit dynamic-absmax grid after a real cache write.
 
@@ -914,7 +836,7 @@ class OptimizedInt8Conv2d(nn.Module):
         buffer in place — same values as storing int8/int4 and dequantizing.
         LSB is re-derived every commit (the refreshed grid in
         docs/int8_ahat_cache_2026-08-26, not a flat schedule-wide grid).
-        Skip-K skip steps and residual-replay skips do not write, so they skip.
+        Skip-K skip steps do not write, so they skip.
         """
         if self.calibrating or self.a_hat_cache is None:
             return
@@ -1168,8 +1090,6 @@ class OptimizedInt8Conv2d(nn.Module):
         F.silu(x) Python call over the whole activation tensor beforehand.
         """
         self.step_count += 1
-        if self._replay_residual():
-            return self._replay_out()
         if not x.is_contiguous(memory_format=torch.channels_last):
             x = x.contiguous(memory_format=torch.channels_last)
         self._ensure_state_buffers(x)
@@ -1226,8 +1146,6 @@ class OptimizedInt8Conv2d(nn.Module):
         can_gn_fuse_modiff(x). `mod_scale2d`/`mod_shift2d` are [N,C] (or empty)
         matching x.dtype; `residual` (fp16, or None) is added to the output."""
         self.step_count += 1
-        if self._replay_residual():
-            return self._replay_out(residual)
         if not x.is_contiguous(memory_format=torch.channels_last):
             x = x.contiguous(memory_format=torch.channels_last)
         self._ensure_state_buffers(x)
@@ -1303,8 +1221,6 @@ class OptimizedInt8Conv2d(nn.Module):
         _can_fuse_input_silu(x). `residual` is the ResBlock skip (cast to fp16
         channels_last here)."""
         self.step_count += 1
-        if self._replay_residual():
-            return self._replay_out(residual)
         if not x.is_contiguous(memory_format=torch.channels_last):
             x = x.contiguous(memory_format=torch.channels_last)
         self._ensure_state_buffers(x)
@@ -1843,8 +1759,6 @@ class OptimizedInt8Conv2d(nn.Module):
         SmoothQuant multiply is fused into sub_absmax_scale when applicable.
         """
         self.step_count += 1
-        if self._replay_residual():
-            return self._replay_out()
 
         if self.a_hat_cache is None or self.a_hat_cache.shape != x.shape:
             self.is_first_step = True

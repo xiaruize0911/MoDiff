@@ -54,6 +54,8 @@ ARMS = {
     "int4":             ("int4", {}),
     "int8_attn_modiff": ("int8_attn_modiff", {}),
     "int4_linmodiff":   ("int4", {"MODIFF_LINEAR": "1"}),
+    # MoDiff convs still run every step; skip in-place a_hat/o_hat stores on K-1 of K.
+    "int8_skip":        ("int8", {"MODIFF_CACHE_SKIP_K": "5"}),
 }
 _ALL_MODES = list(ARMS)
 _MODE_FILTER = [x.strip() for x in os.environ.get("E2EBENCH_MODES", "").split(",") if x.strip()]
@@ -108,6 +110,8 @@ def set_env(label):
     # catch it (expected_eligible flips to 0), which is why that guard reads the MODULE and not
     # the environment.
     os.environ["MODIFF_LINEAR"] = "0"
+    os.environ["MODIFF_CACHE_SKIP_K"] = "1"
+    os.environ["MODIFF_REPLAY_K"] = "1"
     for k, v in extra.items():
         os.environ[k] = v
     return mode
