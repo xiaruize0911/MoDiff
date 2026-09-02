@@ -1,0 +1,226 @@
+{
+ "seed": 20260805,
+ "steps": 50,
+ "n": 6,
+ "relL2": {
+  "fp16": {
+   "relL2_vs_fp16": 0.0
+  },
+  "w8a8_full": {
+   "relL2_vs_fp16": 0.12100950628519058,
+   "n_int": 0,
+   "max_sat": 0.0,
+   "n_over": 0
+  },
+  "frozen_s": {
+   "relL2_vs_fp16": 0.11870355904102325,
+   "n_int": 0,
+   "max_sat": 0.0,
+   "n_over": 0
+  },
+  "imode16": {
+   "relL2_vs_fp16": 0.4091649651527405,
+   "n_int": 70,
+   "max_sat": 0.19379253517258216,
+   "n_over": 0
+  },
+  "imode8": {
+   "relL2_vs_fp16": 0.44580867886543274,
+   "n_int": 70,
+   "max_sat": 1.0,
+   "n_over": 66
+  },
+  "imode4": {
+   "relL2_vs_fp16": 0.7551171779632568,
+   "n_int": 70,
+   "max_sat": 1.0,
+   "n_over": 70
+  }
+ },
+ "one_layer": [
+  {
+   "label": "full_fp16",
+   "imode": false,
+   "bits": 16,
+   "replay_k": 1,
+   "ms_step": 1.052340316772461
+  },
+  {
+   "label": "imode16",
+   "imode": true,
+   "bits": 16,
+   "replay_k": 1,
+   "ms_step": 1.0642025756835938
+  },
+  {
+   "label": "imode8",
+   "imode": true,
+   "bits": 8,
+   "replay_k": 1,
+   "ms_step": 0.9886897277832031
+  },
+  {
+   "label": "imode4",
+   "imode": true,
+   "bits": 4,
+   "replay_k": 1,
+   "ms_step": 0.9792094421386719
+  }
+ ],
+ "e2e": [
+  {
+   "label": "full_fp16",
+   "imode": false,
+   "bits": 16,
+   "replay_k": 1,
+   "ms_step": 93.41621322091669
+  },
+  {
+   "label": "imode16",
+   "imode": true,
+   "bits": 16,
+   "replay_k": 1,
+   "ms_step": 84.63253648020327
+  },
+  {
+   "label": "imode8",
+   "imode": true,
+   "bits": 8,
+   "replay_k": 1,
+   "ms_step": 82.7169382199645
+  },
+  {
+   "label": "imode4",
+   "imode": true,
+   "bits": 4,
+   "replay_k": 1,
+   "ms_step": 82.54550681915134
+  }
+ ],
+ "fid": {
+  "fp16": {
+   "n": 2048,
+   "fid_vs_fp16": 0.0,
+   "fid_vs_w8a8_full": 0.920341358010802,
+   "ms_step": null,
+   "speedup": null,
+   "relL2": 0.0
+  },
+  "w8a8_full": {
+   "n": 2048,
+   "fid_vs_fp16": 0.9203413737844244,
+   "fid_vs_w8a8_full": 0.0,
+   "ms_step": 93.4,
+   "speedup": 1.0,
+   "relL2": 0.12
+  },
+  "frozen_s": {
+   "n": 2048,
+   "fid_vs_fp16": 1.5108963348517932,
+   "fid_vs_w8a8_full": 0.9607435849225965
+  },
+  "imode16": {
+   "n": 2048,
+   "fid_vs_fp16": 28.768364882147125,
+   "fid_vs_w8a8_full": 28.46696716821748
+  },
+  "imode8": {
+   "n": 2048,
+   "fid_vs_fp16": 76.34237238789689,
+   "fid_vs_w8a8_full": 75.90254638843106
+  },
+  "imode4": {
+   "n": 2048,
+   "fid_vs_fp16": 343.8357052070521,
+   "fid_vs_w8a8_full": 343.9180618845006
+  }
+ },
+ "e2e_warmup_steps": 5,
+ "e2e_note": "Default MODIFF_WARMUP_STEPS=5. I-mode skips residual warmup at t=T, so e2e looks faster than full. Fair same-work comparison is e2e_warmup1 (WARMUP=1).",
+ "e2e_warmup1": [
+  {
+   "label": "full_fp16",
+   "imode": false,
+   "bits": 16,
+   "replay_k": 1,
+   "ms_step": 82.52686372026801
+  },
+  {
+   "label": "imode16",
+   "imode": true,
+   "bits": 16,
+   "replay_k": 1,
+   "ms_step": 84.19234899803996
+  },
+  {
+   "label": "imode8",
+   "imode": true,
+   "bits": 8,
+   "replay_k": 1,
+   "ms_step": 82.60104721877724
+  },
+  {
+   "label": "imode4",
+   "imode": true,
+   "bits": 4,
+   "replay_k": 1,
+   "ms_step": 82.42988570127636
+  }
+ ],
+ "conv_layer": [
+  {
+   "label": "full_fp16",
+   "ms_step": 32.350832843780516,
+   "vs_w8_full": 1.0
+  },
+  {
+   "label": "imode16",
+   "ms_step": 33.10651498238245,
+   "vs_w8_full": 0.9771742166457549
+  },
+  {
+   "label": "imode8",
+   "ms_step": 32.384603762626654,
+   "vs_w8_full": 0.9989571921554553
+  },
+  {
+   "label": "imode4",
+   "ms_step": 32.314276051521304,
+   "vs_w8_full": 1.0011312892234048
+  }
+ ],
+ "invariant": {
+  "imode16": {
+   "I2": 0.0011,
+   "max_da": 1,
+   "sat": 0.001,
+   "status": "PASS"
+  },
+  "imode8": {
+   "I2": 0.0011,
+   "max_da": 1,
+   "sat": 0.244,
+   "status": "PASS"
+  },
+  "imode4": {
+   "I2": 0.5892,
+   "max_da": 1,
+   "sat": 1.0,
+   "status": "PASS"
+  },
+  "increment": {
+   "max_da": 2,
+   "I2": 0.0004,
+   "sat": 0.001,
+   "status": "PASS"
+  },
+  "note": "Synthetic layer; begin_delta_calibration seeds act-sized s* so x/s* fits int16. Real-table overflow is in relL2."
+ },
+ "verdict": {
+  "ship_imode16": false,
+  "drop_8_4": true,
+  "drop_whole_because_freeze": false,
+  "replay_k2": "not run; quality does not hold",
+  "reason": "I2 holds on all bits. frozen_s FID 1.51 is close to full 0.92, so freeze-the-table is fine. imode16 FID 28.8 is not close to frozen_s (integer path, not freeze). Cause: s*=step0 delta scale is residual-sized, so sat_i8(x/s*) clips at t=T and later q saturates. imode8/4 overflow 66/70 and 70/70, FID 76 / 344. Speed: int16 same DRAM as fp16; conv-set 0.977x; fair e2e (WARMUP=1) +2%. e2e vs 93.4 looks faster only because I-mode skips 5-round residual warmup. Do not invent a second s* this round."
+ }
+}

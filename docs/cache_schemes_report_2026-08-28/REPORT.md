@@ -10,8 +10,11 @@ Skip and replay are never enabled together.
 |---|---|---|
 | `MODIFF_CACHE_SKIP_K` | `1` | Still compute every step; skip in-place `a_hat`/`o_hat` stores on K−1 of K steps |
 | `MODIFF_REPLAY_K` | `1` | Skip GN+quantize+conv; `out = o_hat` [+ live ResBlock skip] |
-| `MODIFF_AHAT_BITS` | `16` | `16` = fp16. `8` = int8 storage. `4` = int4-grid in unpacked int8 bytes |
+| `MODIFF_REPLAY_BLOCK` | `1` / `out` | Skip emb+out-GN+out_conv on replay. `full`/`in` also skip in-GN+in_conv (same path: out-GN has no input without in_conv) |
+| `MODIFF_AHAT_BITS` | `16` | `IMODE=0`: `16` = fp16, `8`/`4` = held dequant. `IMODE=1`: integer storage width (int16 / int8 / unpacked qmax=7) |
 | `MODIFF_AHAT_REFRESH` | `0` | `1` = unpack int8→fp16 on commit, pack with a fresh absmax |
+| `MODIFF_IMODE` | `0` | `1` = I-MoDiff: integer `a_hat`, frozen `s*` = step0 δ, no dequant. Default stays fp16 + per-step table |
+| `MODIFF_DELTA_FREEZE` | `0` | `1` = freeze scale[0] without integer math (control arm for I-MoDiff) |
 
 ---
 
@@ -97,6 +100,43 @@ fp16 reference, then W8A8 and W4A4 replay K=1 / 2 / 4 / 8:
 
 ![replay K sweep](../residual_replay_2026-08-27/plots/replay_grid.png)
 
+Replay does **not** zero the conv branch. It freezes the increment: `conv(Q(delta)) = 0`, so `out = o_hat_frozen + skip(x_now)`. Current `x` is unused on the conv path; `a_hat`/`o_hat` stay put. Attention and the skip 1×1 still run.
+
+### `reuse_o_hat` kernel (conv-layer)
+
+CUDA primitive: copy stored `o_hat`, or `out = o_hat + residual`. Wired into `OptimizedInt8Conv2d._replay_out` / int4 twin as `reuse_o_hat_add` when a live skip is present. No-residual replay still returns the `o_hat` **view** (a copy kernel would only add bandwidth).
+
+Same protocol as `one_layer_200.py` / `conv_layer_microbench.py`. This-run full: 1.123 ms one-layer, 32.17 ms conv-set.
+
+| Primitive | one-layer | vs full | conv-set | vs full |
+|---|--:|--:|--:|--:|
+| full GN+quant+conv | 1.123 | 1.00× | 32.17 | 1.00× |
+| `reuse_o_hat` copy | 0.179 | **6.29×** | 3.71 | **8.67×** |
+| `reuse_o_hat_add` | 0.263 | 4.27× | 5.44 | 5.91× |
+| `torch.add` (old Python) | 0.266 | 4.23× | 5.48 | 5.87× |
+| K=4 mix copy / add | 0.415 / 0.478 | 2.71 / 2.35× | 10.83 / 12.12 | 2.97 / **2.65×** |
+
+K=4 add matches the previous `torch.add` replay mix (12.24 ms, 2.65×). The kernel is not faster than aten; skip-add is bandwidth-bound. Python replay-K=4 at **3.97×** on one layer was a view with no store — do not replace that with a copy.
+
+Samples after wiring (n=6, seed `20260805`, 50 DDIM): K=2 stays close to fp16; K=4 smears. Arithmetic matches the old add.
+
+![reuse_o_hat pipeline samples](plots/fig_reuse_o_hat_samples.png)
+
+### Whole ResBlock (`MODIFF_REPLAY_BLOCK=full`)
+
+Tried skipping in-GN+in_conv as well. Same-process W8A8, batch 128, 50 DDIM, vs K=1 = 93.33 ms:
+
+| Arm | ms/step | vs K=1 | relL2 vs fp16 | FID vs fp16 (N=2048) |
+|---|--:|--:|--:|--:|
+| K=2 `out` | 74.13 | 1.26× | 0.183 | 5.40 (prior folder) |
+| K=2 `full` | 74.30 | 1.26× | 0.183 | **5.21** |
+| K=4 `out` | 65.19 | 1.43× | 0.286 | 16.3 (prior folder) |
+| K=4 `full` | 65.28 | 1.43× | 0.285 | **16.0** |
+
+K=2 full vs out relL2 = **0**. `in_conv` already self-replays on those steps; the early-out is not faster. Drop `full` as a separate arm. Keep shipping `BLOCK=out`.
+
+Source: `data/replay_block_full.json`, `data/reuse_o_hat_microbench.json`.
+
 ---
 
 ## 3. Quant — quantize the `a_hat` cache
@@ -178,9 +218,80 @@ Same six seeds across full / skip-K=4 / replay-K=4 × fp16 / int8 / int4 (held a
 
 ---
 
+## 5. I-MoDiff — integer `a_hat` (16 / 8 / 4)
+
+Held int8 (`MODIFF_AHAT_BITS=8`, IMODE off) still does `code * s → float`, subtracts from fp16 `x`, then snaps on a finer per-step δ table. That is the FID-121 path. I-MoDiff changes the formula, not the conv:
+
+```
+s*     = frozen static_delta_scale[0] reciprocal (step0 α)
+x_i    = sat(round(x / s*))          # only float→int
+q      = sat_i8(x_i − a_hat)         # integer sub, W8A8 ±127
+a_hat += q                           # sat to ±qmax(bits)
+o_hat += conv(q), α = s*
+```
+
+`bits=16` stores int16 NHWC (same DRAM as fp16). `bits=8/4` use int8 / unpacked int4-grid (`qmax=127/7`). Default remains fp16 `a_hat` + per-step table. Control arm `frozen_s` (`MODIFF_DELTA_FREEZE=1`) freezes scale[0] without integer math. Replay-K was not mixed with I-mode.
+
+Source: `data/imode.json`. Invariants: `integration/tests/test_imode.py`.
+
+### Invariants (synthetic layer)
+
+I2 is `o_hat ≈ conv(a_hat.float() * s*)` with SmoothQuant weights. Increment identity: `Δa_hat` equals `q` except at saturation.
+
+| Arm | I2 | max\|Δa\| | sat |
+|---|--:|--:|--:|
+| imode16 | 0.0011 | 1 | 0.001 |
+| imode8 | 0.0011 | 1 | 0.244 |
+| imode4 | 0.5892 | 1 | 1.000 |
+| increment | 0.0004 | 2 | 0.001 |
+
+Synthetic I2 is good because calibration seeds an activation-sized `s*`, so `x/s*` fits. Real-table overflow is below.
+
+### Quality (n=6 relL2, then FID N=2048 vs fp16)
+
+Same seed `20260805`, `MODIFF_LINEAR=0`, 50 DDIM.
+
+| Arm | relL2 | max \|a_hat\|/qmax | n_over | FID vs fp16 | vs W8A8-full |
+|---|--:|--:|--:|--:|--:|
+| W8A8 full fp16 | 0.121 | — | 0 | **0.92** | 0 |
+| frozen_s (fp16, scale[0] only) | 0.119 | — | 0 | **1.51** | 0.96 |
+| I-MoDiff int16 | 0.409 | 0.194 | 0/70 | **28.8** | 28.5 |
+| I-MoDiff int8 | 0.446 | 1.0 | 66/70 | **76.3** | 75.9 |
+| I-MoDiff int4 | 0.755 | 1.0 | 70/70 | **344** | 344 |
+| int8 held (prior) | 0.692 | — | — | **121** | 120 |
+
+Freeze-the-table is free: `frozen_s` ≈ full. Integer math is not. `s*` is the step0 **delta** scale (residual-sized), so `|x|/s*` ≫ 127. t=T `q0 = sat_i8(round(x/s*))` clips; later `q` saturates ±127/step trying to catch up. imode16 peak `|a_hat|` ≈ 0.194×32767 ≈ 6360 ≈ 50×127. imode16 is better than held-121 but far from frozen_s (replay-K=4 territory, FID 16, is already a drop). 8/4 overflow as predicted.
+
+### Speed
+
+int16 matches fp16 bandwidth. ALU saved is not DRAM. 8/4 would be a storage win if quality held; it does not.
+
+| Arm | one-layer ms | conv-set ms | e2e (warmup=5) | e2e (warmup=1) |
+|---|--:|--:|--:|--:|
+| W8A8 full fp16 | 1.052 | 32.35 | **93.42** | 82.53 |
+| I-MoDiff int16 | 1.064 | 33.11 (0.977×) | 84.63 | 84.19 |
+| I-MoDiff int8 | 0.989 | 32.38 | 82.72 | 82.60 |
+| I-MoDiff int4 | 0.979 | 32.31 | 82.55 | 82.43 |
+
+e2e vs 93.4 looks faster because I-mode skips the 5-round residual warmup at t=T (no-op on this grid). Fair same-work comparison is `MODIFF_WARMUP_STEPS=1`: imode16 is **+2%**. Conv-set imode16 is 2% slower. 8/4 are not faster at e2e.
+
+imode16 + replay-K=2 was **not** timed: quality does not hold.
+
+### Judgment
+
+- **Do not ship I-mode.** I2 holds, but imode16 FID 28.8 is not close to `frozen_s` 1.51, and it is not a DRAM win.
+- **Drop 8/4.** Overflow 66/70 and 70/70; FID 76 / 344.
+- **Do not drop because freeze wrecked FID.** `frozen_s` is fine. The failure is `sat_i8(x/s*)` when `s*` is residual-sized. A second `s*` strategy is out of this round's scope.
+
+---
+
 ## Takeaways
 
-1. **Replay** is the only real speed lever (K=4 ≈ 1.41× W8A8 / 1.44× W4A4). Quality cost: 0.12 → 0.29 W8A8, 0.32 → 0.42 W4A4.
+1. **Replay** is the only real speed lever (K=2 ≈ 1.25× with FID 5.4; K=4 ≈ 1.41–1.42× with FID 16). Quality cost at K=2 is the shippable point.
 2. **Skip** is ~1–2% e2e. Quality stays high through K=4 on W8A8; K≥8 hazes out.
 3. **Quant** (in-kernel int8/int4 `a_hat`) is not faster. Held t=T scale breaks full-step images (int8 0.69, int4 2.42). Refresh is a 2× tax and worse.
 4. **Skip or replay + int8 held** keeps most of replay's speed (1.38×) and restores structure that full int8 loses (0.255 / 0.337 vs 0.692). **Int4 a_hat** is not viable even in combination.
+5. **`reuse_o_hat_add`** is now the ResBlock replay epilogue. It matches `torch.add`. Do not copy `o_hat` when a view suffices.
+6. **`BLOCK=full`** (skip in_conv too) is not faster than `out` and is bit-identical at K=2. Drop it.
+7. **I-MoDiff** (integer `a_hat`, frozen `s*`) keeps I2 and freeze quality, but integer `sat_i8(x/s*)` with residual-sized `s*` yields FID 28.8 / 76 / 344. Not a speed lever. Do not ship; do not mix with replay this round.
+8. Leftover e2e time is skip 1×1 (never quantized) and attention (`MODIFF_LINEAR=0`). Per-layer K is the remaining knob inside the 32 ms conv bucket.

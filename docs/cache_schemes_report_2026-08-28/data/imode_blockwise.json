@@ -1,0 +1,72 @@
+{
+ "seed": 20260805,
+ "steps": 50,
+ "n": 6,
+ "blocks": [
+  "tensor",
+  128,
+  64,
+  32
+ ],
+ "note": "channel-group I-MoDiff; s* frozen at t=T per-block absmax(x); fake-quant pipeline; o_hat not quantized",
+ "relL2": {
+  "fp16": {
+   "relL2_vs_fp16": 0.0
+  },
+  "W8A8 MoDiff  a_hat fp32": {
+   "relL2_vs_fp16": 0.08793171495199203
+  },
+  "W8A8 I-MoDiff tensor": {
+   "relL2_vs_fp16": 0.4034736156463623,
+   "max_sat": 1.0,
+   "sat_frac": 0.012236391338559296,
+   "n_hooks": 70
+  },
+  "W8A8 I-MoDiff B=128": {
+   "relL2_vs_fp16": 0.4464719891548157,
+   "max_sat": 1.0,
+   "sat_frac": 0.017600495944585823,
+   "n_hooks": 70
+  },
+  "W8A8 I-MoDiff B=64": {
+   "relL2_vs_fp16": 0.4623183608055115,
+   "max_sat": 1.0,
+   "sat_frac": 0.02802115810024348,
+   "n_hooks": 70
+  },
+  "W8A8 I-MoDiff B=32": {
+   "relL2_vs_fp16": 0.4852372109889984,
+   "max_sat": 1.0,
+   "sat_frac": 0.04848195189088574,
+   "n_hooks": 70
+  },
+  "W4A4 MoDiff  a_hat fp32": {
+   "relL2_vs_fp16": 0.2993476986885071
+  },
+  "W4A4 I-MoDiff tensor": {
+   "relL2_vs_fp16": 0.44045230746269226,
+   "max_sat": 1.0,
+   "sat_frac": 0.018714110936664884,
+   "n_hooks": 70
+  },
+  "W4A4 I-MoDiff B=128": {
+   "relL2_vs_fp16": 0.47163909673690796,
+   "max_sat": 1.0,
+   "sat_frac": 0.028347614909011956,
+   "n_hooks": 70
+  },
+  "W4A4 I-MoDiff B=64": {
+   "relL2_vs_fp16": 0.49231573939323425,
+   "max_sat": 1.0,
+   "sat_frac": 0.04707353291187867,
+   "n_hooks": 70
+  },
+  "W4A4 I-MoDiff B=32": {
+   "relL2_vs_fp16": 0.5151492953300476,
+   "max_sat": 1.0,
+   "sat_frac": 0.07457533188858453,
+   "n_hooks": 70
+  }
+ },
+ "out": "docs/cache_schemes_report_2026-08-28/plots/imode_blockwise_grid.png"
+}

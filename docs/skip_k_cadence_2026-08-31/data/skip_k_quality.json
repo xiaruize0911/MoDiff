@@ -1,0 +1,46 @@
+{
+  "seed": 20260805,
+  "steps": 50,
+  "n": 6,
+  "K": [
+    1,
+    2,
+    5,
+    10
+  ],
+  "gpu": "NVIDIA A40",
+  "relL2": {
+    "fp16 reference": {
+      "relL2_vs_fp16": 0.0
+    },
+    "W8A8 skip-K=1": {
+      "relL2_vs_fp16": 0.12042148411273956,
+      "skip_k": 1,
+      "n_write": 3038,
+      "n_skip": 0,
+      "skip_frac": 0.0
+    },
+    "W8A8 skip-K=2": {
+      "relL2_vs_fp16": 0.1329178661108017,
+      "skip_k": 2,
+      "n_write": 1488,
+      "n_skip": 1550,
+      "skip_frac": 0.5102040816326531
+    },
+    "W8A8 skip-K=5": {
+      "relL2_vs_fp16": 0.1762906014919281,
+      "skip_k": 5,
+      "n_write": 558,
+      "n_skip": 2480,
+      "skip_frac": 0.8163265306122449
+    },
+    "W8A8 skip-K=10": {
+      "relL2_vs_fp16": 0.25360721349716187,
+      "skip_k": 10,
+      "n_write": 248,
+      "n_skip": 2790,
+      "skip_frac": 0.9183673469387755
+    }
+  },
+  "grid": "docs/skip_k_cadence_2026-08-31/plots/skip_k_grid.png"
+}

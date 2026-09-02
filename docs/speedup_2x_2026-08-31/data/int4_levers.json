@@ -1,0 +1,40 @@
+{
+  "gpu": "NVIDIA A40",
+  "fp16_ms_step": 102.53,
+  "target_ms": 51.265,
+  "arms": [
+    {
+      "arm": "int4_baseline",
+      "ms_step": 56.029545898437505,
+      "trials": [
+        56.099833984375,
+        55.9592578125
+      ],
+      "vs_fp16": 1.829927377706255
+    },
+    {
+      "arm": "int4_baseline_compile",
+      "error": "backend='inductor' raised:\nAttributeError: 'Or' object has no attribute 'expand'\n\nSet TORCH_LOGS=\"+dynamo\" and TORCHDYNAMO_VERBOSE=1 for more information\n\n\nYou can suppress this exception and fall back to eager by setting:\n    import torch._dynamo\n    torch._dynamo.config.suppress_errors = True\n"
+    },
+    {
+      "arm": "int4_replay_2",
+      "ms_step": 62.105266113281246,
+      "trials": [
+        62.055458984375,
+        62.1550732421875
+      ],
+      "vs_fp16": 1.6509067010997625,
+      "replay_k": 2
+    },
+    {
+      "arm": "int4_replay_4",
+      "ms_step": 54.0131396484375,
+      "trials": [
+        53.9735009765625,
+        54.0527783203125
+      ],
+      "vs_fp16": 1.8982418105548138,
+      "replay_k": 4
+    }
+  ]
+}

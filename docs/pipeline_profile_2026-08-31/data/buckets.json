@@ -1,0 +1,64 @@
+{
+  "protocol": {
+    "gpu": "NVIDIA A40",
+    "batch": 128,
+    "steps": 50,
+    "repeats": 2
+  },
+  "e2e": {
+    "fp16": {
+      "per_step_ms": 102.2254443359375,
+      "speedup_vs_fp16": 1.0,
+      "speedup_vs_ptq": 0.6336119887822617
+    },
+    "int8_baseline": {
+      "per_step_ms": 64.77126708984375,
+      "speedup_vs_fp16": 1.5782529650707826,
+      "speedup_vs_ptq": 1.0
+    },
+    "int8": {
+      "per_step_ms": 72.197646484375,
+      "speedup_vs_fp16": 1.415911034690876,
+      "speedup_vs_ptq": 0.8971382066292359
+    },
+    "int8_skip": {
+      "per_step_ms": 69.1337841796875,
+      "speedup_vs_fp16": 1.47866120087164,
+      "speedup_vs_ptq": 0.9368974642194471
+    }
+  },
+  "buckets_ms_per_step": {
+    "fp16": {
+      "GroupNorm+SiLU family": 20.898403621526874,
+      "GEMM / conv": 46.65603538064691,
+      "attention": 11.346765767063163,
+      "quantize (standalone)": 0,
+      "elementwise / copy": 19.594649044594423,
+      "other": 3.7295905221061303
+    },
+    "PTQ": {
+      "GroupNorm+SiLU family": 10.834968857603306,
+      "GEMM / conv": 37.13386947125166,
+      "attention": 9.010267483714529,
+      "quantize (standalone)": 0,
+      "elementwise / copy": 5.7660270007896,
+      "other": 2.0261342764846946
+    },
+    "MoDiff": {
+      "GroupNorm+SiLU family": 17.41415606044811,
+      "GEMM / conv": 37.81002904589343,
+      "attention": 8.860012466473748,
+      "quantize (standalone)": 0,
+      "elementwise / copy": 6.112870158170319,
+      "other": 2.0005787533894113
+    },
+    "skip K=5": {
+      "GroupNorm+SiLU family": 15.218965793714972,
+      "GEMM / conv": 37.074949909209636,
+      "attention": 8.785317022563207,
+      "quantize (standalone)": 0,
+      "elementwise / copy": 6.074182455840652,
+      "other": 1.980368998359045
+    }
+  }
+}

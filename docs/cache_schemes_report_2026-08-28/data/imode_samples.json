@@ -1,0 +1,57 @@
+{
+ "seed": 20260805,
+ "steps": 50,
+ "n": 6,
+ "relL2": {
+  "fp16": {
+   "relL2_vs_fp16": 0.0
+  },
+  "w8a8_full": {
+   "relL2_vs_fp16": 0.12074823677539825,
+   "n_int": 0,
+   "max_sat": 0.0,
+   "n_over": 0,
+   "ahat_dtype": [
+    "float16"
+   ]
+  },
+  "frozen_s": {
+   "relL2_vs_fp16": 0.12120142579078674,
+   "n_int": 0,
+   "max_sat": 0.0,
+   "n_over": 0,
+   "ahat_dtype": [
+    "float16"
+   ]
+  },
+  "imode16": {
+   "relL2_vs_fp16": 0.409726619720459,
+   "n_int": 70,
+   "max_sat": 0.19379253517258216,
+   "n_over": 0,
+   "ahat_dtype": [
+    "int16"
+   ]
+  },
+  "imode8": {
+   "relL2_vs_fp16": 0.4461309313774109,
+   "n_int": 70,
+   "max_sat": 1.0,
+   "n_over": 66,
+   "ahat_dtype": [
+    "int8"
+   ]
+  },
+  "imode4": {
+   "relL2_vs_fp16": 0.7552410960197449,
+   "n_int": 70,
+   "max_sat": 1.0,
+   "n_over": 70,
+   "ahat_dtype": [
+    "int8"
+   ]
+  }
+ },
+ "out": "docs/cache_schemes_report_2026-08-28/plots/imode_samples_grid.png",
+ "pngs": "docs/cache_schemes_report_2026-08-28/plots/imode_samples"
+}

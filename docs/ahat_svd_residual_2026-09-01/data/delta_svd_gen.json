@@ -1,0 +1,61 @@
+{
+  "seed": 20260805,
+  "n": 4,
+  "steps": 50,
+  "target_layers": [
+    "input_blocks.1.0.in_conv",
+    "input_blocks.4.0.in_conv",
+    "input_blocks.4.0.out_conv"
+  ],
+  "note": "Python GN+absmax on three layers; py_full isolates SVD from the quantizer swap. Codes still through C-channel INT8 conv. Quality only.",
+  "rows": [
+    {
+      "arm": "A",
+      "k": null,
+      "relL2_vs_fp16": 0.28432711958885193,
+      "relL2_vs_A": 0.0,
+      "hits": 0,
+      "layers": []
+    },
+    {
+      "arm": "py_full",
+      "k": null,
+      "svd": false,
+      "relL2_vs_fp16": 0.11165957897901535,
+      "relL2_vs_A": 0.2397458404302597,
+      "hits": 147,
+      "layers": [
+        "input_blocks.1.0.in_conv",
+        "input_blocks.4.0.in_conv",
+        "input_blocks.4.0.out_conv"
+      ]
+    },
+    {
+      "arm": "k64",
+      "k": 64,
+      "svd": true,
+      "relL2_vs_fp16": 0.10141514241695404,
+      "relL2_vs_A": 0.23830950260162354,
+      "hits": 147,
+      "layers": [
+        "input_blocks.1.0.in_conv",
+        "input_blocks.4.0.in_conv",
+        "input_blocks.4.0.out_conv"
+      ]
+    },
+    {
+      "arm": "k16",
+      "k": 16,
+      "svd": true,
+      "relL2_vs_fp16": 0.16477598249912262,
+      "relL2_vs_A": 0.2638733386993408,
+      "hits": 147,
+      "layers": [
+        "input_blocks.1.0.in_conv",
+        "input_blocks.4.0.in_conv",
+        "input_blocks.4.0.out_conv"
+      ]
+    }
+  ],
+  "png": "docs/ahat_svd_residual_2026-09-01/plots/delta_svd_grid.png"
+}

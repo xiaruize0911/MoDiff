@@ -1,0 +1,338 @@
+[
+  {
+    "layer": "input_blocks.1.0.in_conv",
+    "k": 16,
+    "mode": "UV",
+    "resid": 0.002471923828125,
+    "tgt_acc": 3.2312753200531006,
+    "prod_tgt_acc": 1.362842082977295
+  },
+  {
+    "layer": "input_blocks.1.0.in_conv",
+    "k": 16,
+    "mode": "U",
+    "resid": 0.003921389579772949,
+    "tgt_acc": 2.642897367477417,
+    "prod_tgt_acc": 1.362842082977295
+  },
+  {
+    "layer": "input_blocks.1.0.in_conv",
+    "k": 32,
+    "mode": "UV",
+    "resid": 0.0031931400299072266,
+    "tgt_acc": 2.99653697013855,
+    "prod_tgt_acc": 1.362842082977295
+  },
+  {
+    "layer": "input_blocks.1.0.in_conv",
+    "k": 32,
+    "mode": "U",
+    "resid": 0.003934323787689209,
+    "tgt_acc": 2.543971538543701,
+    "prod_tgt_acc": 1.362842082977295
+  },
+  {
+    "layer": "input_blocks.1.0.in_conv",
+    "k": 64,
+    "mode": "UV",
+    "resid": 0.0035697221755981445,
+    "tgt_acc": 2.973691463470459,
+    "prod_tgt_acc": 1.362842082977295
+  },
+  {
+    "layer": "input_blocks.1.0.in_conv",
+    "k": 64,
+    "mode": "U",
+    "resid": 0.0040547847747802734,
+    "tgt_acc": 2.431532859802246,
+    "prod_tgt_acc": 1.362842082977295
+  },
+  {
+    "layer": "input_blocks.1.0.in_conv",
+    "k": 80,
+    "mode": "UV",
+    "resid": 0.003724336624145508,
+    "tgt_acc": 3.002460241317749,
+    "prod_tgt_acc": 1.362842082977295
+  },
+  {
+    "layer": "input_blocks.1.0.in_conv",
+    "k": 80,
+    "mode": "U",
+    "resid": 0.00414431095123291,
+    "tgt_acc": 2.3973922729492188,
+    "prod_tgt_acc": 1.362842082977295
+  },
+  {
+    "layer": "input_blocks.1.0.in_conv",
+    "k": 96,
+    "mode": "UV",
+    "resid": 0.0039650797843933105,
+    "tgt_acc": 3.0049326419830322,
+    "prod_tgt_acc": 1.362842082977295
+  },
+  {
+    "layer": "input_blocks.1.0.in_conv",
+    "k": 96,
+    "mode": "U",
+    "resid": 0.004978299140930176,
+    "tgt_acc": 2.3260231018066406,
+    "prod_tgt_acc": 1.362842082977295
+  },
+  {
+    "layer": "input_blocks.1.0.in_conv",
+    "k": 128,
+    "mode": "UV",
+    "resid": 0.004264116287231445,
+    "tgt_acc": 2.9852256774902344,
+    "prod_tgt_acc": 1.362842082977295
+  },
+  {
+    "layer": "input_blocks.1.0.in_conv",
+    "k": 128,
+    "mode": "U",
+    "resid": 0.004993319511413574,
+    "tgt_acc": 2.133366584777832,
+    "prod_tgt_acc": 1.362842082977295
+  },
+  {
+    "layer": "input_blocks.1.0.in_conv",
+    "k": 160,
+    "mode": "UV",
+    "resid": 0.00428396463394165,
+    "tgt_acc": 2.896498918533325,
+    "prod_tgt_acc": 1.362842082977295
+  },
+  {
+    "layer": "input_blocks.1.0.in_conv",
+    "k": 160,
+    "mode": "U",
+    "resid": 0.005461931228637695,
+    "tgt_acc": 1.7636826038360596,
+    "prod_tgt_acc": 1.362842082977295
+  },
+  {
+    "layer": "input_blocks.4.0.in_conv",
+    "k": 16,
+    "mode": "UV",
+    "resid": 0.004095852375030518,
+    "tgt_acc": 3.937854290008545,
+    "prod_tgt_acc": 0.41363954544067383
+  },
+  {
+    "layer": "input_blocks.4.0.in_conv",
+    "k": 16,
+    "mode": "U",
+    "resid": 0.005207657814025879,
+    "tgt_acc": 3.6571855545043945,
+    "prod_tgt_acc": 0.41363954544067383
+  },
+  {
+    "layer": "input_blocks.4.0.in_conv",
+    "k": 32,
+    "mode": "UV",
+    "resid": 0.006294608116149902,
+    "tgt_acc": 3.6879260540008545,
+    "prod_tgt_acc": 0.41363954544067383
+  },
+  {
+    "layer": "input_blocks.4.0.in_conv",
+    "k": 32,
+    "mode": "U",
+    "resid": 0.005393326282501221,
+    "tgt_acc": 3.3811888694763184,
+    "prod_tgt_acc": 0.41363954544067383
+  },
+  {
+    "layer": "input_blocks.4.0.in_conv",
+    "k": 64,
+    "mode": "UV",
+    "resid": 0.006113290786743164,
+    "tgt_acc": 3.4536073207855225,
+    "prod_tgt_acc": 0.41363954544067383
+  },
+  {
+    "layer": "input_blocks.4.0.in_conv",
+    "k": 64,
+    "mode": "U",
+    "resid": 0.006129264831542969,
+    "tgt_acc": 2.9701478481292725,
+    "prod_tgt_acc": 0.41363954544067383
+  },
+  {
+    "layer": "input_blocks.4.0.in_conv",
+    "k": 80,
+    "mode": "UV",
+    "resid": 0.0056084394454956055,
+    "tgt_acc": 3.202894687652588,
+    "prod_tgt_acc": 0.41363954544067383
+  },
+  {
+    "layer": "input_blocks.4.0.in_conv",
+    "k": 80,
+    "mode": "U",
+    "resid": 0.006305143237113953,
+    "tgt_acc": 2.7675719261169434,
+    "prod_tgt_acc": 0.41363954544067383
+  },
+  {
+    "layer": "input_blocks.4.0.in_conv",
+    "k": 96,
+    "mode": "UV",
+    "resid": 0.005509614944458008,
+    "tgt_acc": 3.0825986862182617,
+    "prod_tgt_acc": 0.41363954544067383
+  },
+  {
+    "layer": "input_blocks.4.0.in_conv",
+    "k": 96,
+    "mode": "U",
+    "resid": 0.0072383880615234375,
+    "tgt_acc": 2.486513614654541,
+    "prod_tgt_acc": 0.41363954544067383
+  },
+  {
+    "layer": "input_blocks.4.0.in_conv",
+    "k": 128,
+    "mode": "UV",
+    "resid": 0.007869124412536621,
+    "tgt_acc": 2.671731948852539,
+    "prod_tgt_acc": 0.41363954544067383
+  },
+  {
+    "layer": "input_blocks.4.0.in_conv",
+    "k": 128,
+    "mode": "U",
+    "resid": 0.006718158721923828,
+    "tgt_acc": 1.923520565032959,
+    "prod_tgt_acc": 0.41363954544067383
+  },
+  {
+    "layer": "input_blocks.4.0.in_conv",
+    "k": 160,
+    "mode": "UV",
+    "resid": 0.0064544677734375,
+    "tgt_acc": 2.080303430557251,
+    "prod_tgt_acc": 0.41363954544067383
+  },
+  {
+    "layer": "input_blocks.4.0.in_conv",
+    "k": 160,
+    "mode": "U",
+    "resid": 0.006777524948120117,
+    "tgt_acc": 1.3428082466125488,
+    "prod_tgt_acc": 0.41363954544067383
+  },
+  {
+    "layer": "input_blocks.4.0.out_conv",
+    "k": 16,
+    "mode": "UV",
+    "resid": 0.0029109716415405273,
+    "tgt_acc": 3.9276163578033447,
+    "prod_tgt_acc": 0.7503657341003418
+  },
+  {
+    "layer": "input_blocks.4.0.out_conv",
+    "k": 16,
+    "mode": "U",
+    "resid": 0.0025648176670074463,
+    "tgt_acc": 3.9202325344085693,
+    "prod_tgt_acc": 0.7503657341003418
+  },
+  {
+    "layer": "input_blocks.4.0.out_conv",
+    "k": 32,
+    "mode": "UV",
+    "resid": 0.0030988752841949463,
+    "tgt_acc": 3.937384843826294,
+    "prod_tgt_acc": 0.7503657341003418
+  },
+  {
+    "layer": "input_blocks.4.0.out_conv",
+    "k": 32,
+    "mode": "U",
+    "resid": 0.0031120628118515015,
+    "tgt_acc": 3.901942491531372,
+    "prod_tgt_acc": 0.7503657341003418
+  },
+  {
+    "layer": "input_blocks.4.0.out_conv",
+    "k": 64,
+    "mode": "UV",
+    "resid": 0.003375619649887085,
+    "tgt_acc": 3.917881727218628,
+    "prod_tgt_acc": 0.7503657341003418
+  },
+  {
+    "layer": "input_blocks.4.0.out_conv",
+    "k": 64,
+    "mode": "U",
+    "resid": 0.0031073838472366333,
+    "tgt_acc": 3.9090211391448975,
+    "prod_tgt_acc": 0.7503657341003418
+  },
+  {
+    "layer": "input_blocks.4.0.out_conv",
+    "k": 80,
+    "mode": "UV",
+    "resid": 0.0034632980823516846,
+    "tgt_acc": 3.9289133548736572,
+    "prod_tgt_acc": 0.7503657341003418
+  },
+  {
+    "layer": "input_blocks.4.0.out_conv",
+    "k": 80,
+    "mode": "U",
+    "resid": 0.0027767717838287354,
+    "tgt_acc": 3.913161277770996,
+    "prod_tgt_acc": 0.7503657341003418
+  },
+  {
+    "layer": "input_blocks.4.0.out_conv",
+    "k": 96,
+    "mode": "UV",
+    "resid": 0.004525244235992432,
+    "tgt_acc": 3.962463617324829,
+    "prod_tgt_acc": 0.7503657341003418
+  },
+  {
+    "layer": "input_blocks.4.0.out_conv",
+    "k": 96,
+    "mode": "U",
+    "resid": 0.00313568115234375,
+    "tgt_acc": 3.938835382461548,
+    "prod_tgt_acc": 0.7503657341003418
+  },
+  {
+    "layer": "input_blocks.4.0.out_conv",
+    "k": 128,
+    "mode": "UV",
+    "resid": 0.0037314072251319885,
+    "tgt_acc": 3.9444057941436768,
+    "prod_tgt_acc": 0.7503657341003418
+  },
+  {
+    "layer": "input_blocks.4.0.out_conv",
+    "k": 128,
+    "mode": "U",
+    "resid": 0.003160625696182251,
+    "tgt_acc": 3.91339373588562,
+    "prod_tgt_acc": 0.7503657341003418
+  },
+  {
+    "layer": "input_blocks.4.0.out_conv",
+    "k": 160,
+    "mode": "UV",
+    "resid": 0.00441819429397583,
+    "tgt_acc": 3.8394553661346436,
+    "prod_tgt_acc": 0.7503657341003418
+  },
+  {
+    "layer": "input_blocks.4.0.out_conv",
+    "k": 160,
+    "mode": "U",
+    "resid": 0.003110051155090332,
+    "tgt_acc": 3.8143503665924072,
+    "prod_tgt_acc": 0.7503657341003418
+  }
+]

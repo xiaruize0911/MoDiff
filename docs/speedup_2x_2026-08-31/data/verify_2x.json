@@ -1,0 +1,86 @@
+{
+  "gpu": "NVIDIA A40",
+  "fp16_ms_step": 105.80469726562501,
+  "target_ms": 52.902348632812505,
+  "arms": [
+    {
+      "arm": "fp16",
+      "ms_step": 105.80469726562501,
+      "trials": [
+        105.62654296875,
+        105.9828515625
+      ],
+      "vs_fp16": 1.0
+    },
+    {
+      "arm": "int4_baseline",
+      "ms_step": 50.795649414062495,
+      "trials": [
+        50.7619287109375,
+        50.8293701171875
+      ],
+      "vs_fp16": 2.0829480179129978
+    },
+    {
+      "arm": "int4_baseline_skip_out_calib",
+      "ms_step": 54.252966308593756,
+      "trials": [
+        54.233896484375,
+        54.2720361328125
+      ],
+      "vs_fp16": 1.9502103657116603,
+      "leftover": [
+        "input_blocks.4.0.skip_connection",
+        "input_blocks.10.0.skip_connection",
+        "output_blocks.0.0.skip_connection",
+        "output_blocks.1.0.skip_connection",
+        "output_blocks.2.0.skip_connection",
+        "output_blocks.3.0.skip_connection",
+        "output_blocks.4.0.skip_connection",
+        "output_blocks.5.0.skip_connection",
+        "output_blocks.6.0.skip_connection",
+        "output_blocks.7.0.skip_connection",
+        "output_blocks.8.0.skip_connection",
+        "output_blocks.9.0.skip_connection",
+        "output_blocks.10.0.skip_connection",
+        "output_blocks.11.0.skip_connection",
+        "output_blocks.12.0.skip_connection",
+        "output_blocks.13.0.skip_connection",
+        "output_blocks.14.0.skip_connection",
+        "out.2"
+      ]
+    },
+    {
+      "arm": "int4_baseline_skip_out_calib_graph",
+      "ms_step": 53.491103515625,
+      "trials": [
+        53.4968359375,
+        53.48537109375
+      ],
+      "vs_fp16": 1.9779868111099814,
+      "stats": {
+        "num_graphs": 1,
+        "capture_count": 1,
+        "replay_count": 49,
+        "phases": [
+          "standard"
+        ],
+        "disabled": false,
+        "replay_k": 1
+      }
+    }
+  ],
+  "quality": {
+    "fp16": {
+      "relL2_vs_fp16": 0.0
+    },
+    "int4_baseline": {
+      "relL2_vs_fp16": 0.6353107690811157
+    },
+    "int4_baseline_skip_out_calib": {
+      "relL2_vs_fp16": 2.0113463401794434
+    }
+  },
+  "grid": "docs/speedup_2x_2026-08-31/plots/verify_2x_grid.png",
+  "hit_2x": true
+}

@@ -1,0 +1,89 @@
+{
+  "metric": "inception_v3_fid_dims2048",
+  "n": 2048,
+  "steps": 50,
+  "seed0": 20260805,
+  "note": "N=2048 ranking FID, not 10k-vs-real. Absolute values are biased low-N; compare arms at this N. Historical 10k-vs-real: fp16 7.803, W8A8+MoDiff 7.802, W8A8+MoDiff vs fp16 0.175.",
+  "arms": {
+    "fp16": {
+      "n": 2048,
+      "fid_vs_fp16": 0.0,
+      "fid_vs_w8a8_full": 0.9203298253233356,
+      "ms_step": null,
+      "speedup": null,
+      "relL2": 0.0
+    },
+    "w8a8_full": {
+      "n": 2048,
+      "fid_vs_fp16": 0.9203298739598154,
+      "fid_vs_w8a8_full": 0.0,
+      "ms_step": 93.4,
+      "speedup": 1.0,
+      "relL2": 0.12
+    },
+    "skip4": {
+      "n": 2048,
+      "fid_vs_fp16": 2.675111482179318,
+      "fid_vs_w8a8_full": 2.26939816004176,
+      "ms_step": 92.2,
+      "speedup": 1.01,
+      "relL2": 0.16
+    },
+    "skip8": {
+      "n": 2048,
+      "fid_vs_fp16": 7.974896922498601,
+      "fid_vs_w8a8_full": 7.563784603270676,
+      "ms_step": null,
+      "speedup": null,
+      "relL2": 0.33
+    },
+    "replay2": {
+      "n": 2048,
+      "fid_vs_fp16": 5.396568097849752,
+      "fid_vs_w8a8_full": 4.793709096611906,
+      "ms_step": 74.8,
+      "speedup": 1.25,
+      "relL2": 0.19
+    },
+    "replay4": {
+      "n": 2048,
+      "fid_vs_fp16": 16.346218773385715,
+      "fid_vs_w8a8_full": 15.222052804398146,
+      "ms_step": 66.0,
+      "speedup": 1.42,
+      "relL2": 0.29
+    },
+    "replay8": {
+      "n": 2048,
+      "fid_vs_fp16": 65.10555661687135,
+      "fid_vs_w8a8_full": 63.08621790209773,
+      "ms_step": 61.5,
+      "speedup": 1.52,
+      "relL2": 0.4
+    },
+    "int8held": {
+      "n": 2048,
+      "fid_vs_fp16": 121.31189788755893,
+      "fid_vs_w8a8_full": 120.18157049616065,
+      "ms_step": 94.4,
+      "speedup": 0.99,
+      "relL2": 0.69
+    },
+    "skip4_int8held": {
+      "n": 2048,
+      "fid_vs_fp16": 10.77475108782815,
+      "fid_vs_w8a8_full": 10.335973630384046,
+      "ms_step": 93.9,
+      "speedup": 1.0,
+      "relL2": 0.26
+    },
+    "replay4_int8held": {
+      "n": 2048,
+      "fid_vs_fp16": 24.026961021028484,
+      "fid_vs_w8a8_full": 22.70778293535767,
+      "ms_step": 67.8,
+      "speedup": 1.38,
+      "relL2": 0.34
+    }
+  }
+}

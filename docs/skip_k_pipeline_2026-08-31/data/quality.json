@@ -1,0 +1,82 @@
+{
+  "seed": 20260805,
+  "steps": 50,
+  "n": 6,
+  "K": [
+    1,
+    2,
+    4,
+    5,
+    10,
+    20,
+    50,
+    100
+  ],
+  "gpu": "NVIDIA A40",
+  "relL2": {
+    "fp16": {
+      "relL2_vs_fp16": 0.0
+    },
+    "PTQ": {
+      "relL2_vs_fp16": 0.32351186871528625,
+      "skip_k": null
+    },
+    "K=1": {
+      "relL2_vs_fp16": 0.10770638287067413,
+      "skip_k": 1,
+      "n_write": 3038,
+      "n_skip": 0,
+      "skip_frac": 0.0
+    },
+    "K=2": {
+      "relL2_vs_fp16": 0.12803710997104645,
+      "skip_k": 2,
+      "n_write": 1488,
+      "n_skip": 1550,
+      "skip_frac": 0.5102040816326531
+    },
+    "K=4": {
+      "relL2_vs_fp16": 0.15604887902736664,
+      "skip_k": 4,
+      "n_write": 744,
+      "n_skip": 2294,
+      "skip_frac": 0.7551020408163265
+    },
+    "K=5": {
+      "relL2_vs_fp16": 0.16471640765666962,
+      "skip_k": 5,
+      "n_write": 558,
+      "n_skip": 2480,
+      "skip_frac": 0.8163265306122449
+    },
+    "K=10": {
+      "relL2_vs_fp16": 0.2546311914920807,
+      "skip_k": 10,
+      "n_write": 248,
+      "n_skip": 2790,
+      "skip_frac": 0.9183673469387755
+    },
+    "K=20": {
+      "relL2_vs_fp16": 0.32220810651779175,
+      "skip_k": 20,
+      "n_write": 124,
+      "n_skip": 2914,
+      "skip_frac": 0.9591836734693877
+    },
+    "K=50": {
+      "relL2_vs_fp16": 0.3676639795303345,
+      "skip_k": 50,
+      "n_write": 0,
+      "n_skip": 3038,
+      "skip_frac": 1.0
+    },
+    "K=100": {
+      "relL2_vs_fp16": 0.3676639795303345,
+      "skip_k": 100,
+      "n_write": 0,
+      "n_skip": 3038,
+      "skip_frac": 1.0
+    }
+  },
+  "grid": "/workspace/MoDiff/docs/skip_k_pipeline_2026-08-31/plots/quality_grid_highk.png"
+}

@@ -1,0 +1,485 @@
+{
+  "gpu": "NVIDIA A40",
+  "seed": 20260805,
+  "n_quality": 4,
+  "batch_time": 128,
+  "steps": 50,
+  "note": "Native GN + fused delta_lowrank_fprop + Cin=k CUTLASS.",
+  "micro": [
+    {
+      "Cin": 192,
+      "Cout": 192,
+      "HW": 32,
+      "k": 64,
+      "fused_tax_ms": 2.1079,
+      "conv_k_ms": 0.4568,
+      "conv_full_ms": 0.7149,
+      "conv_save_ms": 0.2582,
+      "net_ms": 1.8498
+    },
+    {
+      "Cin": 192,
+      "Cout": 192,
+      "HW": 16,
+      "k": 64,
+      "fused_tax_ms": 0.7885,
+      "conv_k_ms": 0.1354,
+      "conv_full_ms": 0.21,
+      "conv_save_ms": 0.0746,
+      "net_ms": 0.7139
+    },
+    {
+      "Cin": 384,
+      "Cout": 384,
+      "HW": 16,
+      "k": 64,
+      "fused_tax_ms": 1.0649,
+      "conv_k_ms": 0.1915,
+      "conv_full_ms": 0.4099,
+      "conv_save_ms": 0.2184,
+      "net_ms": 0.8465
+    }
+  ],
+  "A_ms_step": 73.53700439453125,
+  "rows": [
+    {
+      "arm": "A",
+      "scope": null,
+      "retain": null,
+      "relL2_vs_fp16": 0.06419418752193451,
+      "relL2_vs_A": 0.0,
+      "ms_step": 73.53700439453125,
+      "trials": [
+        73.3671484375,
+        73.7068603515625
+      ],
+      "vs_A": 1.0,
+      "hits": 0,
+      "n_layers": 0
+    },
+    {
+      "arm": "three_f0.25",
+      "scope": "three",
+      "retain": 0.25,
+      "relL2_vs_fp16": 0.1074809581041336,
+      "relL2_vs_A": 0.061574045568704605,
+      "ms_step": 77.03183349609375,
+      "trials": [
+        77.243125,
+        76.8205419921875
+      ],
+      "vs_A": 0.9546313654634778,
+      "hits": 147,
+      "n_layers": 3,
+      "layers": {
+        "input_blocks.1.0.in_conv": {
+          "Cin": 192,
+          "k": 48,
+          "retain": 0.25
+        },
+        "input_blocks.4.0.in_conv": {
+          "Cin": 192,
+          "k": 48,
+          "retain": 0.25
+        },
+        "input_blocks.4.0.out_conv": {
+          "Cin": 384,
+          "k": 96,
+          "retain": 0.25
+        }
+      }
+    },
+    {
+      "arm": "three_f0.33",
+      "scope": "three",
+      "retain": 0.33,
+      "relL2_vs_fp16": 0.11779805272817612,
+      "relL2_vs_A": 0.07234272360801697,
+      "ms_step": 77.48568115234374,
+      "trials": [
+        77.451015625,
+        77.5203466796875
+      ],
+      "vs_A": 0.949039916806706,
+      "hits": 147,
+      "n_layers": 3,
+      "layers": {
+        "input_blocks.1.0.in_conv": {
+          "Cin": 192,
+          "k": 64,
+          "retain": 0.3333
+        },
+        "input_blocks.4.0.in_conv": {
+          "Cin": 192,
+          "k": 64,
+          "retain": 0.3333
+        },
+        "input_blocks.4.0.out_conv": {
+          "Cin": 384,
+          "k": 128,
+          "retain": 0.3333
+        }
+      }
+    },
+    {
+      "arm": "three_f0.50",
+      "scope": "three",
+      "retain": 0.5,
+      "relL2_vs_fp16": 0.101283960044384,
+      "relL2_vs_A": 0.049749016761779785,
+      "ms_step": 79.352880859375,
+      "trials": [
+        79.317646484375,
+        79.388115234375
+      ],
+      "vs_A": 0.9267086915829768,
+      "hits": 147,
+      "n_layers": 3,
+      "layers": {
+        "input_blocks.1.0.in_conv": {
+          "Cin": 192,
+          "k": 96,
+          "retain": 0.5
+        },
+        "input_blocks.4.0.in_conv": {
+          "Cin": 192,
+          "k": 96,
+          "retain": 0.5
+        },
+        "input_blocks.4.0.out_conv": {
+          "Cin": 384,
+          "k": 192,
+          "retain": 0.5
+        }
+      }
+    },
+    {
+      "arm": "all_f0.33",
+      "scope": "all",
+      "retain": 0.33,
+      "relL2_vs_fp16": 0.18143963813781738,
+      "relL2_vs_A": 0.15967576205730438,
+      "ms_step": 202.90314453125,
+      "trials": [
+        202.836640625,
+        202.9696484375
+      ],
+      "vs_A": 0.36242417319069936,
+      "hits": 3038,
+      "n_layers": 62,
+      "layers": {
+        "input_blocks.1.0.in_conv": {
+          "Cin": 192,
+          "k": 64,
+          "retain": 0.3333
+        },
+        "input_blocks.1.0.out_conv": {
+          "Cin": 192,
+          "k": 64,
+          "retain": 0.3333
+        },
+        "input_blocks.2.0.in_conv": {
+          "Cin": 192,
+          "k": 64,
+          "retain": 0.3333
+        },
+        "input_blocks.2.0.out_conv": {
+          "Cin": 192,
+          "k": 64,
+          "retain": 0.3333
+        },
+        "input_blocks.3.0.out_conv": {
+          "Cin": 192,
+          "k": 64,
+          "retain": 0.3333
+        },
+        "input_blocks.4.0.in_conv": {
+          "Cin": 192,
+          "k": 64,
+          "retain": 0.3333
+        },
+        "input_blocks.4.0.out_conv": {
+          "Cin": 384,
+          "k": 128,
+          "retain": 0.3333
+        },
+        "input_blocks.5.0.in_conv": {
+          "Cin": 384,
+          "k": 128,
+          "retain": 0.3333
+        },
+        "input_blocks.5.0.out_conv": {
+          "Cin": 384,
+          "k": 128,
+          "retain": 0.3333
+        },
+        "input_blocks.6.0.out_conv": {
+          "Cin": 384,
+          "k": 128,
+          "retain": 0.3333
+        },
+        "input_blocks.7.0.in_conv": {
+          "Cin": 384,
+          "k": 128,
+          "retain": 0.3333
+        },
+        "input_blocks.7.0.out_conv": {
+          "Cin": 384,
+          "k": 128,
+          "retain": 0.3333
+        },
+        "input_blocks.8.0.in_conv": {
+          "Cin": 384,
+          "k": 128,
+          "retain": 0.3333
+        },
+        "input_blocks.8.0.out_conv": {
+          "Cin": 384,
+          "k": 128,
+          "retain": 0.3333
+        },
+        "input_blocks.9.0.out_conv": {
+          "Cin": 384,
+          "k": 64,
+          "retain": 0.1667
+        },
+        "input_blocks.10.0.in_conv": {
+          "Cin": 384,
+          "k": 64,
+          "retain": 0.1667
+        },
+        "input_blocks.10.0.out_conv": {
+          "Cin": 768,
+          "k": 64,
+          "retain": 0.0833
+        },
+        "input_blocks.11.0.in_conv": {
+          "Cin": 768,
+          "k": 64,
+          "retain": 0.0833
+        },
+        "input_blocks.11.0.out_conv": {
+          "Cin": 768,
+          "k": 64,
+          "retain": 0.0833
+        },
+        "input_blocks.12.0.out_conv": {
+          "Cin": 768,
+          "k": 16,
+          "retain": 0.0208
+        },
+        "input_blocks.13.0.in_conv": {
+          "Cin": 768,
+          "k": 16,
+          "retain": 0.0208
+        },
+        "input_blocks.13.0.out_conv": {
+          "Cin": 768,
+          "k": 16,
+          "retain": 0.0208
+        },
+        "input_blocks.14.0.in_conv": {
+          "Cin": 768,
+          "k": 16,
+          "retain": 0.0208
+        },
+        "input_blocks.14.0.out_conv": {
+          "Cin": 768,
+          "k": 16,
+          "retain": 0.0208
+        },
+        "middle_block.0.in_conv": {
+          "Cin": 768,
+          "k": 16,
+          "retain": 0.0208
+        },
+        "middle_block.0.out_conv": {
+          "Cin": 768,
+          "k": 16,
+          "retain": 0.0208
+        },
+        "middle_block.2.in_conv": {
+          "Cin": 768,
+          "k": 16,
+          "retain": 0.0208
+        },
+        "middle_block.2.out_conv": {
+          "Cin": 768,
+          "k": 16,
+          "retain": 0.0208
+        },
+        "output_blocks.0.0.in_conv": {
+          "Cin": 1536,
+          "k": 16,
+          "retain": 0.0104
+        },
+        "output_blocks.0.0.out_conv": {
+          "Cin": 768,
+          "k": 16,
+          "retain": 0.0208
+        },
+        "output_blocks.1.0.in_conv": {
+          "Cin": 1536,
+          "k": 16,
+          "retain": 0.0104
+        },
+        "output_blocks.1.0.out_conv": {
+          "Cin": 768,
+          "k": 16,
+          "retain": 0.0208
+        },
+        "output_blocks.2.0.in_conv": {
+          "Cin": 1536,
+          "k": 16,
+          "retain": 0.0104
+        },
+        "output_blocks.2.0.out_conv": {
+          "Cin": 768,
+          "k": 16,
+          "retain": 0.0208
+        },
+        "output_blocks.2.1.out_conv": {
+          "Cin": 768,
+          "k": 64,
+          "retain": 0.0833
+        },
+        "output_blocks.3.0.in_conv": {
+          "Cin": 1536,
+          "k": 64,
+          "retain": 0.0417
+        },
+        "output_blocks.3.0.out_conv": {
+          "Cin": 768,
+          "k": 64,
+          "retain": 0.0833
+        },
+        "output_blocks.4.0.in_conv": {
+          "Cin": 1536,
+          "k": 64,
+          "retain": 0.0417
+        },
+        "output_blocks.4.0.out_conv": {
+          "Cin": 768,
+          "k": 64,
+          "retain": 0.0833
+        },
+        "output_blocks.5.0.in_conv": {
+          "Cin": 1152,
+          "k": 64,
+          "retain": 0.0556
+        },
+        "output_blocks.5.0.out_conv": {
+          "Cin": 768,
+          "k": 64,
+          "retain": 0.0833
+        },
+        "output_blocks.5.2.out_conv": {
+          "Cin": 768,
+          "k": 256,
+          "retain": 0.3333
+        },
+        "output_blocks.6.0.in_conv": {
+          "Cin": 1152,
+          "k": 256,
+          "retain": 0.2222
+        },
+        "output_blocks.6.0.out_conv": {
+          "Cin": 384,
+          "k": 128,
+          "retain": 0.3333
+        },
+        "output_blocks.7.0.in_conv": {
+          "Cin": 768,
+          "k": 256,
+          "retain": 0.3333
+        },
+        "output_blocks.7.0.out_conv": {
+          "Cin": 384,
+          "k": 128,
+          "retain": 0.3333
+        },
+        "output_blocks.8.0.in_conv": {
+          "Cin": 768,
+          "k": 256,
+          "retain": 0.3333
+        },
+        "output_blocks.8.0.out_conv": {
+          "Cin": 384,
+          "k": 128,
+          "retain": 0.3333
+        },
+        "output_blocks.8.2.out_conv": {
+          "Cin": 384,
+          "k": 128,
+          "retain": 0.3333
+        },
+        "output_blocks.9.0.in_conv": {
+          "Cin": 768,
+          "k": 256,
+          "retain": 0.3333
+        },
+        "output_blocks.9.0.out_conv": {
+          "Cin": 384,
+          "k": 128,
+          "retain": 0.3333
+        },
+        "output_blocks.10.0.in_conv": {
+          "Cin": 768,
+          "k": 256,
+          "retain": 0.3333
+        },
+        "output_blocks.10.0.out_conv": {
+          "Cin": 384,
+          "k": 128,
+          "retain": 0.3333
+        },
+        "output_blocks.11.0.in_conv": {
+          "Cin": 576,
+          "k": 192,
+          "retain": 0.3333
+        },
+        "output_blocks.11.0.out_conv": {
+          "Cin": 384,
+          "k": 128,
+          "retain": 0.3333
+        },
+        "output_blocks.11.2.out_conv": {
+          "Cin": 384,
+          "k": 128,
+          "retain": 0.3333
+        },
+        "output_blocks.12.0.in_conv": {
+          "Cin": 576,
+          "k": 192,
+          "retain": 0.3333
+        },
+        "output_blocks.12.0.out_conv": {
+          "Cin": 192,
+          "k": 64,
+          "retain": 0.3333
+        },
+        "output_blocks.13.0.in_conv": {
+          "Cin": 384,
+          "k": 128,
+          "retain": 0.3333
+        },
+        "output_blocks.13.0.out_conv": {
+          "Cin": 192,
+          "k": 64,
+          "retain": 0.3333
+        },
+        "output_blocks.14.0.in_conv": {
+          "Cin": 384,
+          "k": 128,
+          "retain": 0.3333
+        },
+        "output_blocks.14.0.out_conv": {
+          "Cin": 192,
+          "k": 64,
+          "retain": 0.3333
+        }
+      }
+    }
+  ],
+  "png": "docs/ahat_svd_residual_2026-09-01/plots/delta_svd_kconv_fused_grid.png"
+}

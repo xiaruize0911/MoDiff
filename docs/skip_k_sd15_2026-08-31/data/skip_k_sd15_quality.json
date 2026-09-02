@@ -1,0 +1,71 @@
+{
+  "model": "sd1.5",
+  "prompt": "a photograph of a church on a hill",
+  "seed": 20260805,
+  "steps": 50,
+  "n": 4,
+  "K": [
+    1,
+    2,
+    5,
+    10,
+    20,
+    50
+  ],
+  "gpu": "NVIDIA A40",
+  "relL2": {
+    "fp16 reference": {
+      "relL2_vs_fp16": 0.0
+    },
+    "W8A8 skip-K=1": {
+      "relL2_vs_fp16": 0.06265556812286377,
+      "skip_k": 1,
+      "n_write": 0,
+      "n_skip": 0,
+      "skip_frac": 0.0
+    },
+    "W8A8 skip-K=2": {
+      "relL2_vs_fp16": 0.06645233929157257,
+      "skip_k": 2,
+      "n_write": 0,
+      "n_skip": 0,
+      "skip_frac": 0.0
+    },
+    "W8A8 skip-K=5": {
+      "relL2_vs_fp16": 0.06873420625925064,
+      "skip_k": 5,
+      "n_write": 0,
+      "n_skip": 0,
+      "skip_frac": 0.0
+    },
+    "W8A8 skip-K=10": {
+      "relL2_vs_fp16": 0.07249363511800766,
+      "skip_k": 10,
+      "n_write": 0,
+      "n_skip": 0,
+      "skip_frac": 0.0
+    },
+    "W8A8 skip-K=20": {
+      "relL2_vs_fp16": 0.07477261126041412,
+      "skip_k": 20,
+      "n_write": 0,
+      "n_skip": 0,
+      "skip_frac": 0.0
+    },
+    "W8A8 skip-K=50": {
+      "relL2_vs_fp16": 0.09033681452274323,
+      "skip_k": 50,
+      "n_write": 0,
+      "n_skip": 0,
+      "skip_frac": 0.0
+    }
+  },
+  "grid": "docs/skip_k_sd15_2026-08-31/plots/skip_k_sd15_grid.png",
+  "shape": [
+    4,
+    64,
+    64
+  ],
+  "delta_mode": "static",
+  "quant_attn": "0"
+}

@@ -1,0 +1,4508 @@
+{
+  "gpu": "NVIDIA A40",
+  "seed": 20260805,
+  "n_quality": 4,
+  "batch_time": 128,
+  "steps": 50,
+  "three": [
+    "input_blocks.1.0.in_conv",
+    "input_blocks.4.0.in_conv",
+    "input_blocks.4.0.out_conv"
+  ],
+  "retain": [
+    0.25,
+    0.33,
+    0.5,
+    0.67
+  ],
+  "note": "Range-finder U + folded Cin=k CUTLASS. Quality n=4; timing batch 128 median of 2 after 1 warmup. Patched layers use Python GN+absmax.",
+  "census": {
+    "n_conv": 70,
+    "n_three": 3,
+    "n_eligible_3x3": 70,
+    "n_fuse_silu_3x3": 62,
+    "names": [
+      "input_blocks.1.0.in_conv",
+      "input_blocks.1.0.out_conv",
+      "input_blocks.2.0.in_conv",
+      "input_blocks.2.0.out_conv",
+      "input_blocks.3.0.in_conv",
+      "input_blocks.3.0.out_conv",
+      "input_blocks.4.0.in_conv",
+      "input_blocks.4.0.out_conv",
+      "input_blocks.5.0.in_conv",
+      "input_blocks.5.0.out_conv",
+      "input_blocks.6.0.in_conv",
+      "input_blocks.6.0.out_conv",
+      "input_blocks.7.0.in_conv",
+      "input_blocks.7.0.out_conv",
+      "input_blocks.8.0.in_conv",
+      "input_blocks.8.0.out_conv",
+      "input_blocks.9.0.in_conv",
+      "input_blocks.9.0.out_conv",
+      "input_blocks.10.0.in_conv",
+      "input_blocks.10.0.out_conv",
+      "input_blocks.11.0.in_conv",
+      "input_blocks.11.0.out_conv",
+      "input_blocks.12.0.in_conv",
+      "input_blocks.12.0.out_conv",
+      "input_blocks.13.0.in_conv",
+      "input_blocks.13.0.out_conv",
+      "input_blocks.14.0.in_conv",
+      "input_blocks.14.0.out_conv",
+      "middle_block.0.in_conv",
+      "middle_block.0.out_conv",
+      "middle_block.2.in_conv",
+      "middle_block.2.out_conv",
+      "output_blocks.0.0.in_conv",
+      "output_blocks.0.0.out_conv",
+      "output_blocks.1.0.in_conv",
+      "output_blocks.1.0.out_conv",
+      "output_blocks.2.0.in_conv",
+      "output_blocks.2.0.out_conv",
+      "output_blocks.2.1.in_conv",
+      "output_blocks.2.1.out_conv",
+      "output_blocks.3.0.in_conv",
+      "output_blocks.3.0.out_conv",
+      "output_blocks.4.0.in_conv",
+      "output_blocks.4.0.out_conv",
+      "output_blocks.5.0.in_conv",
+      "output_blocks.5.0.out_conv",
+      "output_blocks.5.2.in_conv",
+      "output_blocks.5.2.out_conv",
+      "output_blocks.6.0.in_conv",
+      "output_blocks.6.0.out_conv",
+      "output_blocks.7.0.in_conv",
+      "output_blocks.7.0.out_conv",
+      "output_blocks.8.0.in_conv",
+      "output_blocks.8.0.out_conv",
+      "output_blocks.8.2.in_conv",
+      "output_blocks.8.2.out_conv",
+      "output_blocks.9.0.in_conv",
+      "output_blocks.9.0.out_conv",
+      "output_blocks.10.0.in_conv",
+      "output_blocks.10.0.out_conv",
+      "output_blocks.11.0.in_conv",
+      "output_blocks.11.0.out_conv",
+      "output_blocks.11.2.in_conv",
+      "output_blocks.11.2.out_conv",
+      "output_blocks.12.0.in_conv",
+      "output_blocks.12.0.out_conv",
+      "output_blocks.13.0.in_conv",
+      "output_blocks.13.0.out_conv",
+      "output_blocks.14.0.in_conv",
+      "output_blocks.14.0.out_conv"
+    ]
+  },
+  "microbench": {
+    "conv": [
+      {
+        "Cin": 32,
+        "Cout": 192,
+        "HW": 32,
+        "ms": 0.458,
+        "full_Cin": 192,
+        "flop": 0.1667
+      },
+      {
+        "Cin": 48,
+        "Cout": 192,
+        "HW": 32,
+        "ms": 0.4607,
+        "full_Cin": 192,
+        "flop": 0.25
+      },
+      {
+        "Cin": 64,
+        "Cout": 192,
+        "HW": 32,
+        "ms": 0.4576,
+        "full_Cin": 192,
+        "flop": 0.3333
+      },
+      {
+        "Cin": 96,
+        "Cout": 192,
+        "HW": 32,
+        "ms": 0.4563,
+        "full_Cin": 192,
+        "flop": 0.5
+      },
+      {
+        "Cin": 128,
+        "Cout": 192,
+        "HW": 32,
+        "ms": 0.4548,
+        "full_Cin": 192,
+        "flop": 0.6667
+      },
+      {
+        "Cin": 192,
+        "Cout": 192,
+        "HW": 32,
+        "ms": 0.7259,
+        "full_Cin": 192,
+        "flop": 1.0
+      },
+      {
+        "Cin": 32,
+        "Cout": 192,
+        "HW": 16,
+        "ms": 0.1369,
+        "full_Cin": 192,
+        "flop": 0.1667
+      },
+      {
+        "Cin": 48,
+        "Cout": 192,
+        "HW": 16,
+        "ms": 0.1367,
+        "full_Cin": 192,
+        "flop": 0.25
+      },
+      {
+        "Cin": 64,
+        "Cout": 192,
+        "HW": 16,
+        "ms": 0.1352,
+        "full_Cin": 192,
+        "flop": 0.3333
+      },
+      {
+        "Cin": 96,
+        "Cout": 192,
+        "HW": 16,
+        "ms": 0.1354,
+        "full_Cin": 192,
+        "flop": 0.5
+      },
+      {
+        "Cin": 128,
+        "Cout": 192,
+        "HW": 16,
+        "ms": 0.134,
+        "full_Cin": 192,
+        "flop": 0.6667
+      },
+      {
+        "Cin": 192,
+        "Cout": 192,
+        "HW": 16,
+        "ms": 0.2089,
+        "full_Cin": 192,
+        "flop": 1.0
+      },
+      {
+        "Cin": 32,
+        "Cout": 384,
+        "HW": 16,
+        "ms": 0.19,
+        "full_Cin": 384,
+        "flop": 0.0833
+      },
+      {
+        "Cin": 48,
+        "Cout": 384,
+        "HW": 16,
+        "ms": 0.1908,
+        "full_Cin": 384,
+        "flop": 0.125
+      },
+      {
+        "Cin": 64,
+        "Cout": 384,
+        "HW": 16,
+        "ms": 0.1919,
+        "full_Cin": 384,
+        "flop": 0.1667
+      },
+      {
+        "Cin": 96,
+        "Cout": 384,
+        "HW": 16,
+        "ms": 0.193,
+        "full_Cin": 384,
+        "flop": 0.25
+      },
+      {
+        "Cin": 128,
+        "Cout": 384,
+        "HW": 16,
+        "ms": 0.1925,
+        "full_Cin": 384,
+        "flop": 0.3333
+      },
+      {
+        "Cin": 192,
+        "Cout": 384,
+        "HW": 16,
+        "ms": 0.2975,
+        "full_Cin": 384,
+        "flop": 0.5
+      },
+      {
+        "Cin": 256,
+        "Cout": 384,
+        "HW": 16,
+        "ms": 0.3028,
+        "full_Cin": 384,
+        "flop": 0.6667
+      }
+    ],
+    "tax": [
+      {
+        "Cin": 192,
+        "Cout": 192,
+        "HW": 32,
+        "k": 64,
+        "range_finder_fold_ms": 1.3423
+      },
+      {
+        "Cin": 192,
+        "Cout": 192,
+        "HW": 16,
+        "k": 64,
+        "range_finder_fold_ms": 0.575
+      },
+      {
+        "Cin": 384,
+        "Cout": 384,
+        "HW": 16,
+        "k": 64,
+        "range_finder_fold_ms": 0.8211
+      }
+    ]
+  },
+  "fp16_ms_step": null,
+  "A_ms_step": 73.65880126953124,
+  "rows": [
+    {
+      "arm": "A",
+      "scope": null,
+      "retain": null,
+      "kconv": false,
+      "relL2_vs_fp16": 0.055793315172195435,
+      "relL2_vs_A": 0.0,
+      "ms_step": 73.65880126953124,
+      "trials": [
+        73.6901220703125,
+        73.62748046875
+      ],
+      "vs_A": 1.0,
+      "hits": 0,
+      "n_layers": 0,
+      "layers": {}
+    },
+    {
+      "arm": "three_py",
+      "scope": "three",
+      "retain": 1.0,
+      "kconv": false,
+      "relL2_vs_fp16": 0.0843144878745079,
+      "relL2_vs_A": 0.03934379294514656,
+      "ms_step": 84.53919433593751,
+      "trials": [
+        84.5635546875,
+        84.514833984375
+      ],
+      "vs_A": 0.8712976489559349,
+      "hits": 147,
+      "n_layers": 3,
+      "layers": {
+        "input_blocks.1.0.in_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 192,
+          "retain": 1.0
+        },
+        "input_blocks.4.0.in_conv": {
+          "Cin": 192,
+          "Cout": 384,
+          "k": 192,
+          "retain": 1.0
+        },
+        "input_blocks.4.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 384,
+          "retain": 1.0
+        }
+      }
+    },
+    {
+      "arm": "three_r0.25",
+      "scope": "three",
+      "retain": 0.25,
+      "kconv": true,
+      "relL2_vs_fp16": 0.08288081735372543,
+      "relL2_vs_A": 0.07905329018831253,
+      "ms_step": 83.6026953125,
+      "trials": [
+        83.620224609375,
+        83.585166015625
+      ],
+      "vs_A": 0.8810577337752173,
+      "hits": 147,
+      "n_layers": 3,
+      "layers": {
+        "input_blocks.1.0.in_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 48,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.4.0.in_conv": {
+          "Cin": 192,
+          "Cout": 384,
+          "k": 48,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.4.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 96,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "arm": "three_r0.33",
+      "scope": "three",
+      "retain": 0.33,
+      "kconv": true,
+      "relL2_vs_fp16": 0.124961718916893,
+      "relL2_vs_A": 0.0897616520524025,
+      "ms_step": 84.4637353515625,
+      "trials": [
+        84.454306640625,
+        84.4731640625
+      ],
+      "vs_A": 0.8720760568182545,
+      "hits": 147,
+      "n_layers": 3,
+      "layers": {
+        "input_blocks.1.0.in_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 64,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.4.0.in_conv": {
+          "Cin": 192,
+          "Cout": 384,
+          "k": 64,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.4.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 128,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "arm": "three_r0.50",
+      "scope": "three",
+      "retain": 0.5,
+      "kconv": true,
+      "relL2_vs_fp16": 0.10467399656772614,
+      "relL2_vs_A": 0.06359759718179703,
+      "ms_step": 86.60615722656249,
+      "trials": [
+        86.5423828125,
+        86.669931640625
+      ],
+      "vs_A": 0.8505030546135323,
+      "hits": 147,
+      "n_layers": 3,
+      "layers": {
+        "input_blocks.1.0.in_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 96,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.4.0.in_conv": {
+          "Cin": 192,
+          "Cout": 384,
+          "k": 96,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.4.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 192,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "arm": "three_r0.67",
+      "scope": "three",
+      "retain": 0.67,
+      "kconv": true,
+      "relL2_vs_fp16": 0.11340204626321793,
+      "relL2_vs_A": 0.07573126256465912,
+      "ms_step": 88.3283349609375,
+      "trials": [
+        88.399267578125,
+        88.25740234375
+      ],
+      "vs_A": 0.8339204095957006,
+      "hits": 147,
+      "n_layers": 3,
+      "layers": {
+        "input_blocks.1.0.in_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 128,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.4.0.in_conv": {
+          "Cin": 192,
+          "Cout": 384,
+          "k": 128,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.4.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 256,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "arm": "all_py",
+      "scope": "all",
+      "retain": 1.0,
+      "kconv": false,
+      "relL2_vs_fp16": 0.06299536675214767,
+      "relL2_vs_A": 0.01490938663482666,
+      "ms_step": 238.196162109375,
+      "trials": [
+        236.8165234375,
+        239.57580078125
+      ],
+      "vs_A": 0.3092358861588566,
+      "hits": 3038,
+      "n_layers": 62,
+      "layers": {
+        "input_blocks.1.0.in_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 192,
+          "retain": 1.0
+        },
+        "input_blocks.1.0.out_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 192,
+          "retain": 1.0
+        },
+        "input_blocks.2.0.in_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 192,
+          "retain": 1.0
+        },
+        "input_blocks.2.0.out_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 192,
+          "retain": 1.0
+        },
+        "input_blocks.3.0.out_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 192,
+          "retain": 1.0
+        },
+        "input_blocks.4.0.in_conv": {
+          "Cin": 192,
+          "Cout": 384,
+          "k": 192,
+          "retain": 1.0
+        },
+        "input_blocks.4.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 384,
+          "retain": 1.0
+        },
+        "input_blocks.5.0.in_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 384,
+          "retain": 1.0
+        },
+        "input_blocks.5.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 384,
+          "retain": 1.0
+        },
+        "input_blocks.6.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 384,
+          "retain": 1.0
+        },
+        "input_blocks.7.0.in_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 384,
+          "retain": 1.0
+        },
+        "input_blocks.7.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 384,
+          "retain": 1.0
+        },
+        "input_blocks.8.0.in_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 384,
+          "retain": 1.0
+        },
+        "input_blocks.8.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 384,
+          "retain": 1.0
+        },
+        "input_blocks.9.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 384,
+          "retain": 1.0
+        },
+        "input_blocks.10.0.in_conv": {
+          "Cin": 384,
+          "Cout": 768,
+          "k": 384,
+          "retain": 1.0
+        },
+        "input_blocks.10.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 768,
+          "retain": 1.0
+        },
+        "input_blocks.11.0.in_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 768,
+          "retain": 1.0
+        },
+        "input_blocks.11.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 768,
+          "retain": 1.0
+        },
+        "input_blocks.12.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 768,
+          "retain": 1.0
+        },
+        "input_blocks.13.0.in_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 768,
+          "retain": 1.0
+        },
+        "input_blocks.13.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 768,
+          "retain": 1.0
+        },
+        "input_blocks.14.0.in_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 768,
+          "retain": 1.0
+        },
+        "input_blocks.14.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 768,
+          "retain": 1.0
+        },
+        "middle_block.0.in_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 768,
+          "retain": 1.0
+        },
+        "middle_block.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 768,
+          "retain": 1.0
+        },
+        "middle_block.2.in_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 768,
+          "retain": 1.0
+        },
+        "middle_block.2.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 768,
+          "retain": 1.0
+        },
+        "output_blocks.0.0.in_conv": {
+          "Cin": 1536,
+          "Cout": 768,
+          "k": 1536,
+          "retain": 1.0
+        },
+        "output_blocks.0.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 768,
+          "retain": 1.0
+        },
+        "output_blocks.1.0.in_conv": {
+          "Cin": 1536,
+          "Cout": 768,
+          "k": 1536,
+          "retain": 1.0
+        },
+        "output_blocks.1.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 768,
+          "retain": 1.0
+        },
+        "output_blocks.2.0.in_conv": {
+          "Cin": 1536,
+          "Cout": 768,
+          "k": 1536,
+          "retain": 1.0
+        },
+        "output_blocks.2.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 768,
+          "retain": 1.0
+        },
+        "output_blocks.2.1.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 768,
+          "retain": 1.0
+        },
+        "output_blocks.3.0.in_conv": {
+          "Cin": 1536,
+          "Cout": 768,
+          "k": 1536,
+          "retain": 1.0
+        },
+        "output_blocks.3.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 768,
+          "retain": 1.0
+        },
+        "output_blocks.4.0.in_conv": {
+          "Cin": 1536,
+          "Cout": 768,
+          "k": 1536,
+          "retain": 1.0
+        },
+        "output_blocks.4.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 768,
+          "retain": 1.0
+        },
+        "output_blocks.5.0.in_conv": {
+          "Cin": 1152,
+          "Cout": 768,
+          "k": 1152,
+          "retain": 1.0
+        },
+        "output_blocks.5.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 768,
+          "retain": 1.0
+        },
+        "output_blocks.5.2.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 768,
+          "retain": 1.0
+        },
+        "output_blocks.6.0.in_conv": {
+          "Cin": 1152,
+          "Cout": 384,
+          "k": 1152,
+          "retain": 1.0
+        },
+        "output_blocks.6.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 384,
+          "retain": 1.0
+        },
+        "output_blocks.7.0.in_conv": {
+          "Cin": 768,
+          "Cout": 384,
+          "k": 768,
+          "retain": 1.0
+        },
+        "output_blocks.7.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 384,
+          "retain": 1.0
+        },
+        "output_blocks.8.0.in_conv": {
+          "Cin": 768,
+          "Cout": 384,
+          "k": 768,
+          "retain": 1.0
+        },
+        "output_blocks.8.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 384,
+          "retain": 1.0
+        },
+        "output_blocks.8.2.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 384,
+          "retain": 1.0
+        },
+        "output_blocks.9.0.in_conv": {
+          "Cin": 768,
+          "Cout": 384,
+          "k": 768,
+          "retain": 1.0
+        },
+        "output_blocks.9.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 384,
+          "retain": 1.0
+        },
+        "output_blocks.10.0.in_conv": {
+          "Cin": 768,
+          "Cout": 384,
+          "k": 768,
+          "retain": 1.0
+        },
+        "output_blocks.10.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 384,
+          "retain": 1.0
+        },
+        "output_blocks.11.0.in_conv": {
+          "Cin": 576,
+          "Cout": 384,
+          "k": 576,
+          "retain": 1.0
+        },
+        "output_blocks.11.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 384,
+          "retain": 1.0
+        },
+        "output_blocks.11.2.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 384,
+          "retain": 1.0
+        },
+        "output_blocks.12.0.in_conv": {
+          "Cin": 576,
+          "Cout": 192,
+          "k": 576,
+          "retain": 1.0
+        },
+        "output_blocks.12.0.out_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 192,
+          "retain": 1.0
+        },
+        "output_blocks.13.0.in_conv": {
+          "Cin": 384,
+          "Cout": 192,
+          "k": 384,
+          "retain": 1.0
+        },
+        "output_blocks.13.0.out_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 192,
+          "retain": 1.0
+        },
+        "output_blocks.14.0.in_conv": {
+          "Cin": 384,
+          "Cout": 192,
+          "k": 384,
+          "retain": 1.0
+        },
+        "output_blocks.14.0.out_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 192,
+          "retain": 1.0
+        }
+      }
+    },
+    {
+      "arm": "all_r0.25",
+      "scope": "all",
+      "retain": 0.25,
+      "kconv": true,
+      "relL2_vs_fp16": 0.22494494915008545,
+      "relL2_vs_A": 0.21120585501194,
+      "ms_step": 282.92966796875,
+      "trials": [
+        282.96529296875,
+        282.89404296875
+      ],
+      "vs_A": 0.260343150997042,
+      "hits": 3038,
+      "n_layers": 62,
+      "layers": {
+        "input_blocks.1.0.in_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 48,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.1.0.out_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 48,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.2.0.in_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 48,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.2.0.out_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 48,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.3.0.out_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 48,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.4.0.in_conv": {
+          "Cin": 192,
+          "Cout": 384,
+          "k": 48,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.4.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 96,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.5.0.in_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 96,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.5.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 96,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.6.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 96,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.7.0.in_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 96,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.7.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 96,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.8.0.in_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 96,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.8.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 96,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.9.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 64,
+          "retain": 0.1667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.10.0.in_conv": {
+          "Cin": 384,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.1667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.10.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0833,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.11.0.in_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0833,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.11.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0833,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.12.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.13.0.in_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.13.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.14.0.in_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.14.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "middle_block.0.in_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "middle_block.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "middle_block.2.in_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "middle_block.2.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.0.0.in_conv": {
+          "Cin": 1536,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0104,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.0.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.1.0.in_conv": {
+          "Cin": 1536,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0104,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.1.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.2.0.in_conv": {
+          "Cin": 1536,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0104,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.2.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.2.1.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0833,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.3.0.in_conv": {
+          "Cin": 1536,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0417,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.3.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0833,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.4.0.in_conv": {
+          "Cin": 1536,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0417,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.4.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0833,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.5.0.in_conv": {
+          "Cin": 1152,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0556,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.5.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0833,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.5.2.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 192,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.6.0.in_conv": {
+          "Cin": 1152,
+          "Cout": 384,
+          "k": 256,
+          "retain": 0.2222,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.6.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 96,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.7.0.in_conv": {
+          "Cin": 768,
+          "Cout": 384,
+          "k": 192,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.7.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 96,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.8.0.in_conv": {
+          "Cin": 768,
+          "Cout": 384,
+          "k": 192,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.8.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 96,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.8.2.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 96,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.9.0.in_conv": {
+          "Cin": 768,
+          "Cout": 384,
+          "k": 192,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.9.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 96,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.10.0.in_conv": {
+          "Cin": 768,
+          "Cout": 384,
+          "k": 192,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.10.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 96,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.11.0.in_conv": {
+          "Cin": 576,
+          "Cout": 384,
+          "k": 144,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.11.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 96,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.11.2.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 96,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.12.0.in_conv": {
+          "Cin": 576,
+          "Cout": 192,
+          "k": 144,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.12.0.out_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 48,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.13.0.in_conv": {
+          "Cin": 384,
+          "Cout": 192,
+          "k": 96,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.13.0.out_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 48,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.14.0.in_conv": {
+          "Cin": 384,
+          "Cout": 192,
+          "k": 96,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.14.0.out_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 48,
+          "retain": 0.25,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "arm": "all_r0.33",
+      "scope": "all",
+      "retain": 0.33,
+      "kconv": true,
+      "relL2_vs_fp16": 0.18439729511737823,
+      "relL2_vs_A": 0.16622394323349,
+      "ms_step": 313.93755859375,
+      "trials": [
+        313.9723828125,
+        313.902734375
+      ],
+      "vs_A": 0.2346288274632638,
+      "hits": 3038,
+      "n_layers": 62,
+      "layers": {
+        "input_blocks.1.0.in_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 64,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.1.0.out_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 64,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.2.0.in_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 64,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.2.0.out_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 64,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.3.0.out_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 64,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.4.0.in_conv": {
+          "Cin": 192,
+          "Cout": 384,
+          "k": 64,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.4.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 128,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.5.0.in_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 128,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.5.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 128,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.6.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 128,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.7.0.in_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 128,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.7.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 128,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.8.0.in_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 128,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.8.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 128,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.9.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 64,
+          "retain": 0.1667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.10.0.in_conv": {
+          "Cin": 384,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.1667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.10.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0833,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.11.0.in_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0833,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.11.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0833,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.12.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.13.0.in_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.13.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.14.0.in_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.14.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "middle_block.0.in_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "middle_block.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "middle_block.2.in_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "middle_block.2.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.0.0.in_conv": {
+          "Cin": 1536,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0104,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.0.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.1.0.in_conv": {
+          "Cin": 1536,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0104,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.1.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.2.0.in_conv": {
+          "Cin": 1536,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0104,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.2.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.2.1.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0833,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.3.0.in_conv": {
+          "Cin": 1536,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0417,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.3.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0833,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.4.0.in_conv": {
+          "Cin": 1536,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0417,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.4.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0833,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.5.0.in_conv": {
+          "Cin": 1152,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0556,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.5.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0833,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.5.2.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 256,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.6.0.in_conv": {
+          "Cin": 1152,
+          "Cout": 384,
+          "k": 256,
+          "retain": 0.2222,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.6.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 128,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.7.0.in_conv": {
+          "Cin": 768,
+          "Cout": 384,
+          "k": 256,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.7.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 128,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.8.0.in_conv": {
+          "Cin": 768,
+          "Cout": 384,
+          "k": 256,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.8.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 128,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.8.2.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 128,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.9.0.in_conv": {
+          "Cin": 768,
+          "Cout": 384,
+          "k": 256,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.9.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 128,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.10.0.in_conv": {
+          "Cin": 768,
+          "Cout": 384,
+          "k": 256,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.10.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 128,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.11.0.in_conv": {
+          "Cin": 576,
+          "Cout": 384,
+          "k": 192,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.11.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 128,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.11.2.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 128,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.12.0.in_conv": {
+          "Cin": 576,
+          "Cout": 192,
+          "k": 192,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.12.0.out_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 64,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.13.0.in_conv": {
+          "Cin": 384,
+          "Cout": 192,
+          "k": 128,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.13.0.out_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 64,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.14.0.in_conv": {
+          "Cin": 384,
+          "Cout": 192,
+          "k": 128,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.14.0.out_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 64,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "arm": "all_r0.50",
+      "scope": "all",
+      "retain": 0.5,
+      "kconv": true,
+      "relL2_vs_fp16": 0.1413591504096985,
+      "relL2_vs_A": 0.11555258184671402,
+      "ms_step": 366.89203125,
+      "trials": [
+        366.9045703125,
+        366.8794921875
+      ],
+      "vs_A": 0.2007642439618433,
+      "hits": 3038,
+      "n_layers": 62,
+      "layers": {
+        "input_blocks.1.0.in_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 96,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.1.0.out_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 96,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.2.0.in_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 96,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.2.0.out_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 96,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.3.0.out_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 96,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.4.0.in_conv": {
+          "Cin": 192,
+          "Cout": 384,
+          "k": 96,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.4.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 192,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.5.0.in_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 192,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.5.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 192,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.6.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 192,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.7.0.in_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 192,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.7.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 192,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.8.0.in_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 192,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.8.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 192,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.9.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 64,
+          "retain": 0.1667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.10.0.in_conv": {
+          "Cin": 384,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.1667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.10.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0833,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.11.0.in_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0833,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.11.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0833,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.12.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.13.0.in_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.13.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.14.0.in_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.14.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "middle_block.0.in_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "middle_block.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "middle_block.2.in_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "middle_block.2.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.0.0.in_conv": {
+          "Cin": 1536,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0104,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.0.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.1.0.in_conv": {
+          "Cin": 1536,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0104,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.1.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.2.0.in_conv": {
+          "Cin": 1536,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0104,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.2.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.2.1.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0833,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.3.0.in_conv": {
+          "Cin": 1536,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0417,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.3.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0833,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.4.0.in_conv": {
+          "Cin": 1536,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0417,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.4.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0833,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.5.0.in_conv": {
+          "Cin": 1152,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0556,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.5.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0833,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.5.2.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 256,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.6.0.in_conv": {
+          "Cin": 1152,
+          "Cout": 384,
+          "k": 256,
+          "retain": 0.2222,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.6.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 192,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.7.0.in_conv": {
+          "Cin": 768,
+          "Cout": 384,
+          "k": 256,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.7.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 192,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.8.0.in_conv": {
+          "Cin": 768,
+          "Cout": 384,
+          "k": 256,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.8.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 192,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.8.2.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 192,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.9.0.in_conv": {
+          "Cin": 768,
+          "Cout": 384,
+          "k": 384,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.9.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 192,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.10.0.in_conv": {
+          "Cin": 768,
+          "Cout": 384,
+          "k": 384,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.10.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 192,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.11.0.in_conv": {
+          "Cin": 576,
+          "Cout": 384,
+          "k": 288,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.11.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 192,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.11.2.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 192,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.12.0.in_conv": {
+          "Cin": 576,
+          "Cout": 192,
+          "k": 288,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.12.0.out_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 96,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.13.0.in_conv": {
+          "Cin": 384,
+          "Cout": 192,
+          "k": 192,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.13.0.out_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 96,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.14.0.in_conv": {
+          "Cin": 384,
+          "Cout": 192,
+          "k": 192,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.14.0.out_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 96,
+          "retain": 0.5,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "arm": "all_r0.67",
+      "scope": "all",
+      "retain": 0.67,
+      "kconv": true,
+      "relL2_vs_fp16": 0.09848164021968842,
+      "relL2_vs_A": 0.06443091481924057,
+      "ms_step": 415.66599609375,
+      "trials": [
+        415.686953125,
+        415.6450390625
+      ],
+      "vs_A": 0.1772067043293051,
+      "hits": 3038,
+      "n_layers": 62,
+      "layers": {
+        "input_blocks.1.0.in_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 128,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.1.0.out_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 128,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.2.0.in_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 128,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.2.0.out_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 128,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.3.0.out_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 128,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.4.0.in_conv": {
+          "Cin": 192,
+          "Cout": 384,
+          "k": 128,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.4.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 256,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.5.0.in_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 256,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.5.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 256,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.6.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 256,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.7.0.in_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 256,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.7.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 256,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.8.0.in_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 256,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.8.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 256,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.9.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 64,
+          "retain": 0.1667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.10.0.in_conv": {
+          "Cin": 384,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.1667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.10.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0833,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.11.0.in_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0833,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.11.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0833,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.12.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.13.0.in_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.13.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.14.0.in_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "input_blocks.14.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "middle_block.0.in_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "middle_block.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "middle_block.2.in_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "middle_block.2.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.0.0.in_conv": {
+          "Cin": 1536,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0104,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.0.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.1.0.in_conv": {
+          "Cin": 1536,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0104,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.1.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.2.0.in_conv": {
+          "Cin": 1536,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0104,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.2.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 16,
+          "retain": 0.0208,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.2.1.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0833,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.3.0.in_conv": {
+          "Cin": 1536,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0417,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.3.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0833,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.4.0.in_conv": {
+          "Cin": 1536,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0417,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.4.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0833,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.5.0.in_conv": {
+          "Cin": 1152,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0556,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.5.0.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 64,
+          "retain": 0.0833,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.5.2.out_conv": {
+          "Cin": 768,
+          "Cout": 768,
+          "k": 256,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.6.0.in_conv": {
+          "Cin": 1152,
+          "Cout": 384,
+          "k": 256,
+          "retain": 0.2222,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.6.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 256,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.7.0.in_conv": {
+          "Cin": 768,
+          "Cout": 384,
+          "k": 256,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.7.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 256,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.8.0.in_conv": {
+          "Cin": 768,
+          "Cout": 384,
+          "k": 256,
+          "retain": 0.3333,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.8.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 256,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.8.2.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 256,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.9.0.in_conv": {
+          "Cin": 768,
+          "Cout": 384,
+          "k": 512,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.9.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 256,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.10.0.in_conv": {
+          "Cin": 768,
+          "Cout": 384,
+          "k": 512,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.10.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 256,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.11.0.in_conv": {
+          "Cin": 576,
+          "Cout": 384,
+          "k": 384,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.11.0.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 256,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.11.2.out_conv": {
+          "Cin": 384,
+          "Cout": 384,
+          "k": 256,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.12.0.in_conv": {
+          "Cin": 576,
+          "Cout": 192,
+          "k": 384,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.12.0.out_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 128,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.13.0.in_conv": {
+          "Cin": 384,
+          "Cout": 192,
+          "k": 256,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.13.0.out_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 128,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.14.0.in_conv": {
+          "Cin": 384,
+          "Cout": 192,
+          "k": 256,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        },
+        "output_blocks.14.0.out_conv": {
+          "Cin": 192,
+          "Cout": 192,
+          "k": 128,
+          "retain": 0.6667,
+          "ks": [
+            3,
+            3
+          ],
+          "stride": [
+            1,
+            1
+          ]
+        }
+      }
+    }
+  ],
+  "png": "docs/ahat_svd_residual_2026-09-01/plots/delta_svd_kconv_grid.png"
+}
