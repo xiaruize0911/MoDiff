@@ -2109,6 +2109,184 @@ __global__ void gn_apply_delta_quantize_flat_vec4_b32_kernel(
                            retire_count, Q_level, safety);
 }
 
+// -----------------------------------------------------------------------------
+// FUSED GN(+mod)(+SiLU) -> BLOCKWISE-along-C B=32 int8 quantize, for conv2d_int8_blockk.
+//
+// Why this kernel has to exist. The shipped fused kernels emit a PER-TENSOR scale, so wiring
+// blockwise meant running GN fused, then a separate blockwise quantize pass -- an extra full
+// read+write of every activation, measured at +21.1 ms/step (baseline) / +16.5 (MoDiff) in
+// docs/conv_blockk_e2e_2026-09-02. This folds the blockwise quantize back in.
+//
+// Why PAIR-major and not group-major. A B=32 along-C group does not nest inside a GN group:
+// this UNet has num_groups=32, so CPG is 6/12/18/24 and a B=32 block spans 5.33/2.67/1.78/1.33
+// GN groups. A group-major CTA only sees CPG channels and cannot take the B=32 amax at all.
+// Element-major with 16 lanes x 2 channels = exactly one B=32 group, which is the same shape
+// ahat_b32_update2 already uses, and it needs only CPG % 2 == 0 (true for every config here).
+//
+// MODIFF=false  baseline arm: codes = Q_blk(GN(x)),           no cache
+// MODIFF=true   MoDiff arm:   codes = Q_blk(GN(x) - a_hat),   a_hat += dequant(codes)
+// The a_hat update is fused here, which is what removes the eager dequant + add the first
+// wiring paid in Python.
+template <typename TIn, bool MODIFF, int BLK>
+__global__ void gn_silu_blockk_b32_vec2_kernel(
+    const TIn* __restrict__ X,
+    __half* __restrict__ a_hat,
+    int8_t* __restrict__ Yq,
+    float* __restrict__ qscale_out,
+    const TIn* __restrict__ gamma,
+    const TIn* __restrict__ beta,
+    const TIn* __restrict__ mod_scale,
+    const TIn* __restrict__ mod_shift,
+    const float* __restrict__ mean_in,
+    const float* __restrict__ inv_std_in,
+    const float* __restrict__ smooth_inv,
+    int C, int G, long sample_stride, long num_elements, bool apply_silu)
+{
+    const int CPG = C / G;
+    const long stride = (long)blockDim.x * gridDim.x;
+    for (long base = 2 * ((long)blockIdx.x * blockDim.x + threadIdx.x);
+         base < num_elements; base += 2 * stride) {
+        const int c0 = (int)(base % C);          // even; both channels share one GN group
+        const long n = base / sample_stride;
+        const long stats_idx = n * G + (c0 / CPG);
+        const float mean = mean_in[stats_idx];
+        const float inv_std = inv_std_in[stats_idx];
+
+        const float2 v = gn_load2(X, base);
+        const float2 w = gn_load2(gamma, c0);
+        const float2 b = gn_load2(beta, c0);
+        float o[2];
+        o[0] = (v.x - mean) * inv_std * w.x + b.x;
+        o[1] = (v.y - mean) * inv_std * w.y + b.y;
+        if (mod_scale != nullptr) {
+            const long midx = n * C + c0;
+            const float2 ms = gn_load2(mod_scale, midx);
+            const float2 sh = gn_load2(mod_shift, midx);
+            o[0] = o[0] * (1.0f + ms.x) + sh.x;
+            o[1] = o[1] * (1.0f + ms.y) + sh.y;
+        }
+#pragma unroll
+        for (int k = 0; k < 2; ++k) {
+            // Round to fp16 first, exactly as the shipped kernels do, so this path and the
+            // per-tensor one differ ONLY in the scale's granularity.
+            const float h = __half2float(__float2half(o[k]));
+            o[k] = apply_silu ? gns_silu(h) : h;
+        }
+        if (smooth_inv != nullptr) {
+            const float2 sm = *reinterpret_cast<const float2*>(smooth_inv + c0);
+            o[0] *= sm.x; o[1] *= sm.y;
+        }
+
+        float d[2];
+        __half2 ah;
+        if (MODIFF) {
+            ah = *reinterpret_cast<const __half2*>(a_hat + base);
+            d[0] = o[0] - __half2float(__low2half(ah));
+            d[1] = o[1] - __half2float(__high2half(ah));
+        } else {
+            d[0] = o[0]; d[1] = o[1];
+        }
+
+        // One group == (BLK/2) lanes x 2 channels: B=32 -> 16 lanes, B=64 -> a full warp.
+        // Only CPG % 2 == 0 is required either way, which every config here satisfies (CPG is
+        // 6/12/18/24) -- a 4-channel-per-thread variant would need CPG % 4 == 0 and 192/576 fail.
+        const float dm = fmaxf(fabsf(d[0]), fabsf(d[1]));
+        const float g = fmaxf(BLK == 32 ? ahat_group16_amax(dm) : ahat_group32_amax(dm), 1e-12f);
+        const float sc = g * (1.0f / 127.0f);
+        const float inv = __fdividef(127.0f, g);
+        float q[2];
+#pragma unroll
+        for (int k = 0; k < 2; ++k)
+            q[k] = fmaxf(-127.0f, fminf(127.0f, roundf(d[k] * inv)));
+
+        *reinterpret_cast<char2*>(Yq + base) =
+            make_char2((char)(int)q[0], (char)(int)q[1]);
+        if ((threadIdx.x & (BLK / 2 - 1)) == 0) qscale_out[base / BLK] = sc;
+        if (MODIFF) {
+            *reinterpret_cast<__half2*>(a_hat + base) = __halves2half2(
+                __float2half(__half2float(__low2half(ah)) + q[0] * sc),
+                __float2half(__half2float(__high2half(ah)) + q[1] * sc));
+        }
+    }
+}
+
+// Returns {int8 codes NHWC [N,C,H,W], fp32 scales [N,H,W,C/32]} -- exactly the pair
+// conv2d_int8_blockk consumes. a_hat_cache empty => baseline arm (no cache read/write).
+std::vector<torch::Tensor> gn_silu_blockk_quantize_b32(
+    torch::Tensor x, torch::Tensor weight, torch::Tensor bias,
+    torch::Tensor a_hat_cache, int64_t num_groups, double eps, bool apply_silu,
+    torch::Tensor smooth_inv, torch::Tensor mod_scale, torch::Tensor mod_shift, int64_t block)
+{
+    TORCH_CHECK(block == 32 || block == 64, "fused GN blockwise quantize supports B=32/64 only "
+                "(got ", block, "); larger B needs >2 channels per thread and CPG % 4 == 0, "
+                "which C=192/576 (CPG 6/18) do not satisfy.");
+    TORCH_CHECK(x.is_cuda() && x.dim() == 4, "x must be CUDA [N,C,H,W]");
+    const int N = x.size(0), C = x.size(1), H = x.size(2), W = x.size(3);
+    const int CPG = C / (int)num_groups;
+    TORCH_CHECK(C % block == 0, "needs C % block == 0, got C=", C, " block=", block);
+    TORCH_CHECK(CPG % 2 == 0, "needs even channels-per-group (CPG=", CPG, ")");
+    auto xc = x.contiguous(torch::MemoryFormat::ChannelsLast);
+    const bool modiff = a_hat_cache.numel() > 0;
+    if (modiff) {
+        TORCH_CHECK(a_hat_cache.dtype() == torch::kFloat16, "a_hat must be fp16");
+        TORCH_CHECK(a_hat_cache.sizes() == xc.sizes(), "a_hat shape must match x");
+    }
+    auto opts = torch::TensorOptions().device(x.device());
+    auto yq = torch::empty({N, C, H, W}, opts.dtype(torch::kInt8)
+                                             .memory_format(torch::MemoryFormat::ChannelsLast));
+    auto qscale = torch::empty({N, H, W, (int)(C / block)}, opts.dtype(torch::kFloat32));
+
+    const long HW = (long)H * W;
+    auto stats_opts = opts.dtype(torch::kFloat32);
+    auto mean = torch::empty({N * (int)num_groups}, stats_opts);
+    auto inv_std = torch::empty({N * (int)num_groups}, stats_opts);
+    gn_launch_group_stats(xc, N, C, HW, (int)num_groups, eps, mean, inv_std);
+
+    const long num_elements = (long)N * C * HW;
+    const long sample_stride = (long)C * HW;
+    const int ablock = 256;
+    const unsigned grid = (unsigned)std::min<long>(
+        65535, (num_elements / 2 + ablock - 1) / ablock);
+    const float* smooth_ptr = smooth_inv.numel() > 0 ? smooth_inv.data_ptr<float>() : nullptr;
+    const bool has_mod = mod_scale.numel() > 0;
+    __half* cache = modiff ? reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>()) : nullptr;
+    auto stream = at::cuda::getCurrentCUDAStream();
+
+#define GNBK_LAUNCH(TY, MD, XP, GP, BP, MSP, SHP)                                            \
+  if (block == 32)                                                                            \
+    gn_silu_blockk_b32_vec2_kernel<TY, MD, 32><<<grid, ablock, 0, stream>>>(                   \
+        XP, cache, yq.data_ptr<int8_t>(), qscale.data_ptr<float>(), GP, BP, MSP, SHP,          \
+        mean.data_ptr<float>(), inv_std.data_ptr<float>(), smooth_ptr,                        \
+        C, (int)num_groups, sample_stride, num_elements, apply_silu);                          \
+  else                                                                                        \
+    gn_silu_blockk_b32_vec2_kernel<TY, MD, 64><<<grid, ablock, 0, stream>>>(                   \
+        XP, cache, yq.data_ptr<int8_t>(), qscale.data_ptr<float>(), GP, BP, MSP, SHP,         \
+        mean.data_ptr<float>(), inv_std.data_ptr<float>(), smooth_ptr,                       \
+        C, (int)num_groups, sample_stride, num_elements, apply_silu)
+
+    if (xc.scalar_type() == torch::kFloat32) {
+        const float* xp = xc.data_ptr<float>();
+        const float* gp = weight.data_ptr<float>();
+        const float* bp = bias.data_ptr<float>();
+        const float* msp = has_mod ? mod_scale.data_ptr<float>() : nullptr;
+        const float* shp = has_mod ? mod_shift.data_ptr<float>() : nullptr;
+        if (modiff) { GNBK_LAUNCH(float, true, xp, gp, bp, msp, shp); }
+        else        { GNBK_LAUNCH(float, false, xp, gp, bp, msp, shp); }
+    } else {
+        TORCH_CHECK(xc.scalar_type() == torch::kFloat16, "x must be fp16 or fp32");
+        const __half* xp = reinterpret_cast<const __half*>(xc.data_ptr<at::Half>());
+        const __half* gp = reinterpret_cast<const __half*>(weight.data_ptr<at::Half>());
+        const __half* bp = reinterpret_cast<const __half*>(bias.data_ptr<at::Half>());
+        const __half* msp = has_mod ? reinterpret_cast<const __half*>(mod_scale.data_ptr<at::Half>()) : nullptr;
+        const __half* shp = has_mod ? reinterpret_cast<const __half*>(mod_shift.data_ptr<at::Half>()) : nullptr;
+        if (modiff) { GNBK_LAUNCH(__half, true, xp, gp, bp, msp, shp); }
+        else        { GNBK_LAUNCH(__half, false, xp, gp, bp, msp, shp); }
+    }
+#undef GNBK_LAUNCH
+    C10_CUDA_CHECK(cudaGetLastError());
+    return {yq, qscale};
+}
+
 // Host wrapper: MoDiff GN(+mod)+SiLU + int8 delta-quantize + a_hat update.
 // a_hat_cache is fp16 [N,C,H,W] channels_last, modified in place. Returns int8
 // [N,C,H,W] channels_last (the quantized delta the o_hat conv consumes).

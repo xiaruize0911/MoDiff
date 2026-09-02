@@ -147,6 +147,11 @@ class OptimizedInt8Conv2d(nn.Module):
         self.register_buffer('static_delta_alpha',      # 1/scale, the CUTLASS epilogue alpha
                              torch.zeros(MODIFF_MAX_STEPS, dtype=torch.float32))
         self.register_buffer('is_delta_calibrated', torch.tensor(False))
+        #: MODIFF_CONV_BLOCKK scratch (see _forward_conv_blockk); None until first use.
+        self._blockk_w = None
+        self._blockk_ws = None
+        self._blockk_bias = None
+        self._blockk_empty = None
         #: Host-side mirror of is_delta_calibrated. The hot path must not read the device buffer --
         #: see _delta_scale_args for the measured cost of that mistake.
         self._delta_cal = False
@@ -479,10 +484,16 @@ class OptimizedInt8Conv2d(nn.Module):
     # It is a measurement harness, NOT a fast path -- it bypasses every fused kernel.
     #
     #   MODIFF_ACT_BLOCK = 0   off (default): the real fused int8 kernels
+    #                     -3   sim, activations EXACT (no activation quantizer at all)
+    #                          -- the arm that isolates the OTHER error sources
     #                     -2   sim, per-tensor STATIC (calibrated scale / delta table)
     #                          -- the control that should reproduce the shipped relL2
     #                     -1   sim, per-tensor DYNAMIC absmax
     #                      N   sim, DYNAMIC blockwise, N consecutive channels per pixel
+    #
+    # Two companion knobs, both for the error budget in docs/act_budget_2026-09-02:
+    #   MODIFF_ACT_SIM_EXACT_W=1  exact instead of W8 conv weights (must be set pre-build)
+    #   MODIFF_ACT_SIM_QMAX=7     coarser activation grid, as a needle control
     #
     # -1 vs N is the honest granularity comparison (both dynamic); -2 validates the
     # harness against the numbers the real kernels produce.
@@ -495,13 +506,31 @@ class OptimizedInt8Conv2d(nn.Module):
 
     def _sim_guard(self, where: str) -> None:
         """Fused entry points must not run in sim mode -- they would quantize with the
-        real per-tensor kernels and silently report the wrong granularity."""
+        real per-tensor kernels and silently report the wrong granularity.
+
+        MODIFF_CONV_BLOCKK has the identical failure mode: the fused GN->quantize kernels
+        emit per-tensor codes and call the CUTLASS conv directly, so a fused entry point
+        firing under a blockwise label would report the SHIPPED path's number. Same hard
+        error rather than a silently wrong measurement."""
+        if self._conv_blockk() != 0:
+            raise RuntimeError(
+                f"MODIFF_CONV_BLOCKK reached fused entry point {where} on layer "
+                f"{getattr(self, 'layer_name', '?')}. All five fusion kill switches must be "
+                f"set so every conv goes through forward(): "
+                f"MODIFF_DISABLE_GN_MODIFF_FUSION=1 MODIFF_DISABLE_GN_INT8_FUSION=1 "
+                f"MODIFF_DISABLE_O_HAT_RESIDUAL_FUSION=1 "
+                f"MODIFF_DISABLE_UPSAMPLE_QUANTIZE_FUSION=1 "
+                f"MODIFF_DISABLE_AVGPOOL_QUANTIZE_FUSION=1 (read at fused_resblock import).")
         if self._act_block() != 0:
             raise RuntimeError(
                 f"MODIFF_ACT_BLOCK sim reached fused entry point {where} on layer "
-                f"{getattr(self, 'layer_name', '?')}. Disable the fusions "
-                f"(MODIFF_DISABLE_GN_MODIFF_FUSION=1 MODIFF_DISABLE_GN_INT8_FUSION=1) "
-                f"so every conv goes through forward().")
+                f"{getattr(self, 'layer_name', '?')}. ALL FIVE fusion kill switches must be "
+                f"set, not just the GN pair: MODIFF_DISABLE_GN_MODIFF_FUSION=1 "
+                f"MODIFF_DISABLE_GN_INT8_FUSION=1 MODIFF_DISABLE_O_HAT_RESIDUAL_FUSION=1 "
+                f"MODIFF_DISABLE_UPSAMPLE_QUANTIZE_FUSION=1 "
+                f"MODIFF_DISABLE_AVGPOOL_QUANTIZE_FUSION=1 -- so every conv goes through "
+                f"forward(). They are read at fused_resblock import time, so they must be "
+                f"set before it is imported.")
 
     @staticmethod
     def _fq_along_c(x: torch.Tensor, block: int, qmax: float = 127.0) -> torch.Tensor:
@@ -522,23 +551,96 @@ class OptimizedInt8Conv2d(nn.Module):
         return recon.permute(0, 3, 1, 2).to(x.dtype).contiguous(
             memory_format=torch.channels_last)
 
+    @staticmethod
+    def _sim_qmax() -> float:
+        """MODIFF_ACT_SIM_QMAX lowers the activation grid below int8. Its purpose is a
+        NEEDLE CONTROL: an error-budget sweep that comes out flat is only interpretable if
+        the same metric demonstrably responds to a coarser grid. qmax=7 is int4."""
+        try:
+            return float(os.environ.get("MODIFF_ACT_SIM_QMAX", "127"))
+        except (TypeError, ValueError):
+            return 127.0
+
     def _sim_fq(self, x: torch.Tensor, static_scale: Optional[torch.Tensor]) -> torch.Tensor:
         """Apply the sim-mode quantizer selected by MODIFF_ACT_BLOCK."""
         b = self._act_block()
+        if b == -3:
+            return x                      # activations EXACT: the weight/attention-only arm
+        qmax = self._sim_qmax()
         if b == -2 and static_scale is not None:
+            # The static scale is calibrated for the int8 grid, so a lowered qmax must clamp
+            # to the coarser range while keeping that scale -- this is clipping, which is
+            # exactly what the shipped static path already does on 49 of 70 layers.
             s = static_scale.detach().float().reshape(())
-            return ((x.float() * s).round_().clamp_(-127.0, 127.0) / s).to(x.dtype)
-        return self._fq_along_c(x, b if b > 0 else 0)
+            return ((x.float() * s).round_().clamp_(-qmax, qmax) / s).to(x.dtype)
+        return self._fq_along_c(x, b if b > 0 else 0, qmax=qmax)
+
+    @staticmethod
+    def _sim_wcfg():
+        """(wbits, wblock) for the sim's WEIGHT quantizer.
+
+        MODIFF_ACT_SIM_WBITS   0  the shipped path: dequantized W8, per-output-channel (default)
+                              -1  exact weights (with MODIFF_ACT_SIM_EXACT_W=1, same thing)
+                               b  quantize the ORIGINAL weight to b bits
+        MODIFF_ACT_SIM_WBLOCK  0  one scale per output channel, over all (C,R,S)  [the free axis]
+                               N  one scale per (output channel, N consecutive C)  [along K -- costs
+                                  a mainloop flush, which is the thing being priced]
+
+        Weight granularity is the axis DeepSeek-V3 blocks at 128x128 and we currently do not block
+        at all. Per-output-channel is the free axis (it factors out of the reduction); blocking
+        along C does not, so it only makes sense if it buys measurable error.
+        """
+        def _i(k, d):
+            try:
+                return int(os.environ.get(k, d))
+            except (TypeError, ValueError):
+                return int(d)
+        return _i("MODIFF_ACT_SIM_WBITS", "0"), _i("MODIFF_ACT_SIM_WBLOCK", "0")
 
     def _sim_weight(self) -> torch.Tensor:
-        """Dequantized per-output-channel int8 weight as [K,C,R,S] fp32, so the sim conv
-        is W8 -- the same weights the CUTLASS path uses, just not in integer form."""
+        """Weight as [K,C,R,S] fp32 for the sim conv, at the configured bit width/granularity.
+
+        Default (wbits=0) is the dequantized per-output-channel int8 the CUTLASS path uses, so the
+        default sim is W8 and only the activation quantizer varies.
+        """
         w = getattr(self, "_sim_w", None)
-        if w is None or w.device != self.weight_int8.device:
+        if w is not None and w.device == self.weight_int8.device:
+            return w
+        wbits, wblk = self._sim_wcfg()
+        exact_env = os.environ.get("MODIFF_ACT_SIM_EXACT_W") == "1"
+        if wbits == 0 and not exact_env:
             K = self.out_channels
-            wq = self.weight_int8.permute(0, 3, 1, 2).float()  # [K,R,S,C] -> [K,C,R,S]
+            wq = self.weight_int8.permute(0, 3, 1, 2).float()   # [K,R,S,C] -> [K,C,R,S]
             w = (wq * self.weight_scale_channel.reshape(K, 1, 1, 1).float()).contiguous()
             self._sim_w = w
+            return w
+        ow = getattr(self, "_orig_weight", None)
+        if ow is None:
+            raise RuntimeError(
+                f"the weight sim needs _orig_weight on layer {getattr(self, 'layer_name', '?')}, "
+                f"but apply_static_scales already freed it. MODIFF_ACT_SIM_WBITS / "
+                f"MODIFF_ACT_SIM_WBLOCK / MODIFF_ACT_SIM_EXACT_W must be set BEFORE the model "
+                f"is built.")
+        ow = ow.detach().float()
+        if exact_env or wbits < 0:
+            w = ow.contiguous()
+        else:
+            qmax = float(2 ** (wbits - 1) - 1)          # 8 -> 127, 4 -> 7
+            K, C = ow.shape[0], ow.shape[1]
+            if wblk <= 0:
+                sc = ow.reshape(K, -1).abs().amax(1).clamp_min(1e-12) / qmax
+                w = ((ow.reshape(K, -1) / sc[:, None]).round_().clamp_(-qmax, qmax)
+                     * sc[:, None]).reshape_as(ow).contiguous()
+            else:
+                b = min(wblk, C)
+                pad = (b - C % b) % b
+                t = F.pad(ow, (0, 0, 0, 0, 0, pad)) if pad else ow      # pad the C axis
+                g = t.shape[1] // b
+                t = t.reshape(K, g, b, *ow.shape[2:])
+                sc = t.abs().amax(dim=(2, 3, 4), keepdim=True).clamp_min(1e-12) / qmax
+                t = (t / sc).round_().clamp_(-qmax, qmax) * sc
+                w = t.reshape(K, t.shape[1] * b, *ow.shape[2:])[:, :C].contiguous()
+        self._sim_w = w
         return w
 
     def _sim_conv(self, x: torch.Tensor, with_bias: bool) -> torch.Tensor:
@@ -1513,6 +1615,15 @@ class OptimizedInt8Conv2d(nn.Module):
             profiler.stop("Layer: OptimizedInt8Conv2d.forward", fwd_start)
             return out
 
+        if self._conv_blockk() != 0:
+            xb = F.silu(x) if self.fuse_input_silu else x
+            if self._blockk_eligible(xb):
+                out = self._forward_conv_blockk(xb)
+                profiler.stop("Layer: OptimizedInt8Conv2d.forward", fwd_start)
+                return out
+            # Ineligible (C%64, odd Kout, uncalibrated, grouped/dilated): fall through to the
+            # shipped path. x, not xb -- the shipped path applies its own SiLU.
+
         if self.fuse_input_silu:
             if self._can_fuse_input_silu(x):
                 output = self._forward_modulated_static_fused_silu(x)
@@ -1550,6 +1661,197 @@ class OptimizedInt8Conv2d(nn.Module):
 
         profiler.stop("Layer: OptimizedInt8Conv2d.forward", fwd_start)
         return output
+
+    # ---- blockwise-along-C conv input, REAL kernels (MODIFF_CONV_BLOCKK) ---------
+    #
+    # Wires csrc/modiff/conv/conv2d_int8_blockk.cu into the model. Unlike MODIFF_ACT_BLOCK
+    # (a fp32 simulation harness), this is the real datapath: blockwise int8 codes from
+    # conv_quantize_block_nhwc, dequantized per K-block inside the conv mainloop.
+    #
+    #   MODIFF_CONV_BLOCKK = 0       off (default)
+    #                        32|64   block size along C
+    #   MODIFF_CONV_BLOCKK_CTRL=1    matched scalar-alpha control at the SAME tile config
+    #                                (same hand-written kernel, per-tensor static scale), which
+    #                                is what separates "hand tile vs CUTLASS" from "blockwise".
+    #
+    # READ THE COST HONESTLY. Two things here are NOT blockwise costs and must not be
+    # attributed to it:
+    #   1. The quantize is a SEPARATE pass. The shipped path fuses GN+SiLU+quantize into one
+    #      kernel; there is no blockwise-emitting variant of that kernel, so this path pays a
+    #      full extra read+write of the activation. docs/... fused-vs-separate measured that
+    #      fusion at 4.85x on the quantize step alone.
+    #   2. The MoDiff arm materializes the dequantized delta to update a_hat, which the shipped
+    #      path folds into its quantize kernel.
+    # The CTRL arm pays both of those too, so CTRL->blockwise is the clean blockwise delta.
+    @staticmethod
+    def _conv_blockk() -> int:
+        try:
+            return int(os.environ.get("MODIFF_CONV_BLOCKK", "0"))
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _conv_blockk_ctrl() -> bool:
+        return os.environ.get("MODIFF_CONV_BLOCKK_CTRL") == "1"
+
+    def _blockk_eligible(self, x: torch.Tensor) -> bool:
+        """The kernel's hard constraints. C%64 is BKC_CTA_K, not the block size -- so B=32 is
+        ALSO gated on C%64==0. Kout%2 is the epilogue's __half2 column pair. Everything that
+        fails here falls back to the shipped path, which is why the first conv (C=4) is fine."""
+        blk = self._conv_blockk()
+        if blk not in (32, 64, 128, 256):
+            return False
+        c = x.shape[1]
+        return (c % 64 == 0 and c % blk == 0 and self.out_channels % 2 == 0
+                and self.is_calibrated and self._smooth_is_identity
+                and self.dilation[0] == 1 and self.dilation[1] == 1
+                and self.groups == 1
+                and self.stride[0] == self.stride[1] and self.padding[0] == self.padding[1]
+                and x.dtype in (torch.float16, torch.float32))
+
+    def _blockk_args(self):
+        w = getattr(self, "_blockk_w", None)
+        if w is None:
+            self._blockk_w = self.weight_int8.contiguous()
+            self._blockk_ws = self.weight_scale_channel.reshape(-1).float().contiguous()
+            self._blockk_bias = (self.bias.reshape(-1).half().contiguous()
+                                 if self.bias is not None else None)
+        return self._blockk_w, self._blockk_ws, self._blockk_bias
+
+    def _blockk_quant(self, v: torch.Tensor, blk: int):
+        """(codes, block_scales_or_empty, scalar_dequant_scale). CTRL quantizes per-tensor on the
+        calibrated static scale -- the same grid the shipped path uses -- so the control differs
+        from the shipped arm only in which conv kernel runs."""
+        if not v.is_contiguous(memory_format=torch.channels_last):
+            v = v.contiguous(memory_format=torch.channels_last)
+        if self._conv_blockk_ctrl():
+            if self._empty_smooth is None or self._empty_smooth.device != v.device:
+                self._empty_smooth = torch.empty(0, device=v.device, dtype=torch.float32)
+            vh = v if v.dtype == torch.float16 else v.half()
+            q = modiff_cutlass.step1_static_quantize_noahat_fprop(
+                vh, self.static_input_scale.view(1), self._empty_smooth)
+            if self._blockk_empty is None or self._blockk_empty.device != v.device:
+                self._blockk_empty = torch.empty(0, device=v.device, dtype=torch.float32)
+            return q, self._blockk_empty, 1.0 / float(self.static_input_scale.item())
+        q, sb = modiff_cutlass.conv_quantize_block_nhwc(v, blk)
+        return q, sb, 0.0
+
+    @staticmethod
+    def _blockk_dequant(q: torch.Tensor, sb: torch.Tensor, blk: int) -> torch.Tensor:
+        """codes * per-(pixel, C-block) scale -> fp16 NHWC. Only the MoDiff arm needs this, to
+        keep a_hat equal to the value the conv actually consumed."""
+        n, c, h, w = q.shape
+        t = q.permute(0, 2, 3, 1).reshape(n, h, w, c // blk, blk).float()
+        out = (t * sb.reshape(n, h, w, c // blk, 1)).reshape(n, h, w, c)
+        return out.permute(0, 3, 1, 2).half().contiguous(memory_format=torch.channels_last)
+
+    def blockk_gn_fused(self, x, gn_w, gn_b, ng, eps, apply_silu, mod_scale, mod_shift,
+                        residual):
+        """FUSED GN(+mod)(+SiLU) -> blockwise B=32 quantize -> blockk conv. B=32 only: the fused
+        kernel's 16-lane x 2-channel group is exactly one B=32 block.
+
+        This is the path that removes the +21/+16 ms fusion loss the first wiring paid
+        (docs/conv_blockk_e2e_2026-09-02): one kernel for GN+SiLU+blockwise-quantize+a_hat,
+        then the conv. Returns None when not eligible so the caller keeps its own path.
+        """
+        blk = self._conv_blockk()
+        if blk not in (32, 64) or not self._blockk_eligible(x):
+            return None
+        c = x.shape[1]
+        if c % ng != 0 or (c // ng) % 2 != 0:
+            return None
+        wq, ws, bias = self._blockk_args()
+        st, pd = int(self.stride[0]), int(self.padding[0])
+        if self._blockk_empty is None or self._blockk_empty.device != x.device:
+            self._blockk_empty = torch.empty(0, device=x.device, dtype=torch.float32)
+        em = self._blockk_empty
+        eh = x.new_empty(0)
+        ms = mod_scale.reshape(x.shape[0], c).contiguous() if mod_scale is not None else eh
+        sh = mod_shift.reshape(x.shape[0], c).contiguous() if mod_shift is not None else eh
+        smooth = em if self._smooth_is_identity else self._smooth_inv.view(-1).float().contiguous()
+
+        if not self.modiff_enabled:
+            q, sb = modiff_cutlass.gn_silu_blockk_quantize_b32(
+                x, gn_w, gn_b, eh, ng, eps, apply_silu, smooth, ms, sh, blk)
+            rz = None if residual is None else residual.to(torch.float16).contiguous(
+                memory_format=torch.channels_last)
+            return modiff_cutlass.conv2d_int8_blockk(q, wq, ws, sb, 0.0, blk, st, pd,
+                                                     bias, None, rz)
+
+        # `is_first_step` is the authority, NOT the cache being None: reset_state() ZEROES
+        # a_hat/o_hat in place and sets is_first_step=True, it does not free them. An
+        # allocation-shaped check therefore reports "not first" on the first step of every
+        # sample after the first, which silently skips re-seeding o_hat and accumulates the
+        # whole sample with bias=None. That measured relL2 0.4888 instead of 0.0641.
+        if (self.a_hat_cache is None or self.a_hat_cache.shape != x.shape
+                or self.a_hat_cache.dtype != torch.float16):
+            self.is_first_step = True
+        first = self.is_first_step
+        if first:
+            # a_hat = 0 makes the MoDiff kernel compute delta = GN(x) - 0 = GN(x) and then
+            # a_hat += dequant(codes), which IS the t=T semantics -- no separate eager pass.
+            if (self.a_hat_cache is None or self.a_hat_cache.shape != x.shape
+                    or self.a_hat_cache.dtype != torch.float16):
+                self.a_hat_cache = torch.zeros_like(x, dtype=torch.float16,
+                                                    memory_format=torch.channels_last)
+            else:
+                self.a_hat_cache.zero_()
+            self.step_count = 0
+            self.is_first_step = False
+        q, sb = modiff_cutlass.gn_silu_blockk_quantize_b32(
+            x, gn_w, gn_b, self.a_hat_cache, ng, eps, apply_silu, smooth, ms, sh, blk)
+        if first:
+            # already channels_last out of the kernel; no re-contiguous
+            self.o_hat_cache = modiff_cutlass.conv2d_int8_blockk(
+                q, wq, ws, sb, 0.0, blk, st, pd, bias, None)
+        else:
+            self.step_count += 1
+            modiff_cutlass.conv2d_int8_blockk(q, wq, ws, sb, 0.0, blk, st, pd, None,
+                                              self.o_hat_cache)
+        out = self.o_hat_cache
+        return out if residual is None else out + residual
+
+    def _forward_conv_blockk(self, x: torch.Tensor) -> torch.Tensor:
+        blk = self._conv_blockk()
+        wq, ws, bias = self._blockk_args()
+        st, pd = int(self.stride[0]), int(self.padding[0])
+        if not x.is_contiguous(memory_format=torch.channels_last):
+            x = x.contiguous(memory_format=torch.channels_last)
+
+        if not self.modiff_enabled:
+            q, sb, a_s = self._blockk_quant(x, blk)
+            return modiff_cutlass.conv2d_int8_blockk(q, wq, ws, sb, a_s, blk, st, pd, bias, None)
+
+        if (self.a_hat_cache is None or self.a_hat_cache.shape != x.shape
+                or self.a_hat_cache.dtype != torch.float16):
+            self.is_first_step = True
+
+        if self.is_first_step:
+            q, sb, a_s = self._blockk_quant(x, blk)
+            o_hat = modiff_cutlass.conv2d_int8_blockk(q, wq, ws, sb, a_s, blk, st, pd, bias, None)
+            if self._conv_blockk_ctrl():
+                a_hat = (q.float() * a_s).half().contiguous(memory_format=torch.channels_last)
+            else:
+                a_hat = self._blockk_dequant(q, sb, blk)
+            self.a_hat_cache = a_hat
+            self.o_hat_cache = o_hat.contiguous(memory_format=torch.channels_last)
+            self.is_first_step = False
+            self.step_count = 0
+            return self.o_hat_cache
+
+        self.step_count += 1
+        d = x - self.a_hat_cache
+        q, sb, a_s = self._blockk_quant(d, blk)
+        if self._conv_blockk_ctrl():
+            dq = (q.float() * a_s).half().contiguous(memory_format=torch.channels_last)
+        else:
+            dq = self._blockk_dequant(q, sb, blk)
+        self.a_hat_cache = (self.a_hat_cache + dq).contiguous(memory_format=torch.channels_last)
+        # bias=None: the MoDiff modulated step accumulates the DELTA's contribution only; the
+        # bias is already in o_hat from t=T. o_hat_opt makes this an in-kernel RMW.
+        modiff_cutlass.conv2d_int8_blockk(q, wq, ws, sb, a_s, blk, st, pd, None,
+                                          self.o_hat_cache)
+        return self.o_hat_cache
 
     def _forward_standard(self, x: torch.Tensor) -> torch.Tensor:
         """Standard INT8 forward without MoDiff modulation.
@@ -1666,6 +1968,7 @@ class OptimizedInt8Conv2d(nn.Module):
         modulated step on its own. `alpha` must be the reciprocal of the scale that quantized
         x_int8, or o_hat is accumulated on the wrong scale for every remaining timestep.
         """
+        self._sim_guard('_conv_from_int8_o_hat')
         self._ensure_state_buffers_from_codes(x_int8)
         p = profiler.start("MoDiff INT8 Static Conv2d (from codes)")
         out = self._evt_ohat(x_int8, alpha)
@@ -2186,7 +2489,15 @@ class OptimizedInt8Conv2d(nn.Module):
             torch.ones_like(self._smooth_inv),
             atol=1e-6
         ))
-        self._orig_weight = None
+        # MODIFF_ACT_SIM_EXACT_W=1 keeps the original fp16 weight alive so the
+        # MODIFF_ACT_BLOCK sim can run an EXACT-weight conv, which is what isolates the
+        # activation quantizer from the W8 weight quantizer in an error budget. Off by
+        # default because this buffer is otherwise pure waste for the life of the model
+        # (see the note at its registration).
+        if not (os.environ.get("MODIFF_ACT_SIM_EXACT_W") == "1"
+                or os.environ.get("MODIFF_ACT_SIM_WBITS")
+                or os.environ.get("MODIFF_ACT_SIM_WBLOCK")):
+            self._orig_weight = None
 
     # ------------------------------------------------------------------
     # MoDiff delta calibration (two self-consistent rounds)

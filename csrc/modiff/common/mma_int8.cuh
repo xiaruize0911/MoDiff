@@ -152,6 +152,20 @@ __device__ __forceinline__ void modiff_mma_m16n8k32(void* C, void* A, void* B) {
         "r"(((int*)C)[0]), "r"(((int*)C)[1]), "r"(((int*)C)[2]), "r"(((int*)C)[3]));
 }
 
+// Same, but with a ZERO addend: D = A*B instead of C += A*B. Uses RZ for the C operand, so the
+// first mma of a blockwise group can OVERWRITE its int32 accumulator instead of the kernel first
+// zeroing it. That removes one MOV per accumulator per flush -- 64 MOVs per flush per thread in
+// the 128x128/8-warp config -- which is pure overhead on the blockwise path's hot loop.
+__device__ __forceinline__ void modiff_mma_m16n8k32_zero(void* C, void* A, void* B) {
+  asm volatile(
+      "mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32"
+      "{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%10,%10,%10,%10};"
+      : "=r"(((int*)C)[0]), "=r"(((int*)C)[1]), "=r"(((int*)C)[2]), "=r"(((int*)C)[3])
+      : "r"(((unsigned*)A)[0]), "r"(((unsigned*)A)[1]), "r"(((unsigned*)A)[2]),
+        "r"(((unsigned*)A)[3]), "r"(((unsigned*)B)[0]), "r"(((unsigned*)B)[1]),
+        "r"(0));   // ptxas folds a proven-zero addend to RZ
+}
+
 // m16n8k64.row.col.s32.s4.s4.s32 : C[16x8] += A[16x64] * B[8x64]^T  (A=4 regs, B=2 regs, each 8 int4/reg)
 __device__ __forceinline__ void modiff_mma_m16n8k64_s4(void* C, void* A, void* B) {
   asm volatile(

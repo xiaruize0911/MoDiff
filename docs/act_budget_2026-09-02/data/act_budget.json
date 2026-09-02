@@ -1,0 +1,116 @@
+{
+ "gpu": "NVIDIA A40",
+ "n_quality": 6,
+ "steps": 50,
+ "seed": 20260805,
+ "arms": [
+  {
+   "label": "fp16 reference",
+   "group": "ref",
+   "act_block": null,
+   "exact_w": false,
+   "attn_bits": 0,
+   "qmax": 127,
+   "relL2_vs_fp16": 0.0
+  },
+  {
+   "label": "exact A, exact W, fp16 attn  (FLOOR)",
+   "group": "floor",
+   "act_block": -3,
+   "exact_w": true,
+   "attn_bits": 0,
+   "qmax": 127,
+   "relL2_vs_fp16": 0.03522663936018944
+  },
+  {
+   "label": "exact A, W8,      fp16 attn",
+   "group": "solo",
+   "act_block": -3,
+   "exact_w": false,
+   "attn_bits": 0,
+   "qmax": 127,
+   "relL2_vs_fp16": 0.03438674286007881
+  },
+  {
+   "label": "exact A, exact W, W8A8 attn",
+   "group": "solo",
+   "act_block": -3,
+   "exact_w": true,
+   "attn_bits": 8,
+   "qmax": 127,
+   "relL2_vs_fp16": 0.10336373001337051
+  },
+  {
+   "label": "exact A, W8,      W8A8 attn",
+   "group": "solo",
+   "act_block": -3,
+   "exact_w": false,
+   "attn_bits": 8,
+   "qmax": 127,
+   "relL2_vs_fp16": 0.11071343719959259
+  },
+  {
+   "label": "A per-tensor static, exact W, fp16 attn",
+   "group": "sweep",
+   "act_block": -2,
+   "exact_w": true,
+   "attn_bits": 0,
+   "qmax": 127,
+   "relL2_vs_fp16": 0.03858722001314163
+  },
+  {
+   "label": "A per-tensor dyn,    exact W, fp16 attn",
+   "group": "sweep",
+   "act_block": -1,
+   "exact_w": true,
+   "attn_bits": 0,
+   "qmax": 127,
+   "relL2_vs_fp16": 0.03765407204627991
+  },
+  {
+   "label": "A blockwise B=64,    exact W, fp16 attn",
+   "group": "sweep",
+   "act_block": 64,
+   "exact_w": true,
+   "attn_bits": 0,
+   "qmax": 127,
+   "relL2_vs_fp16": 0.018908202648162842
+  },
+  {
+   "label": "A blockwise B=16,    exact W, fp16 attn",
+   "group": "sweep",
+   "act_block": 16,
+   "exact_w": true,
+   "attn_bits": 0,
+   "qmax": 127,
+   "relL2_vs_fp16": 0.022249719128012657
+  },
+  {
+   "label": "A static on INT4 grid, exact W, fp16 attn",
+   "group": "needle",
+   "act_block": -2,
+   "exact_w": true,
+   "attn_bits": 0,
+   "qmax": 7,
+   "relL2_vs_fp16": 0.5135170817375183
+  },
+  {
+   "label": "A per-tensor static, W8, W8A8 attn (shipped)",
+   "group": "full",
+   "act_block": -2,
+   "exact_w": false,
+   "attn_bits": 8,
+   "qmax": 127,
+   "relL2_vs_fp16": 0.1200328841805458
+  },
+  {
+   "label": "A blockwise B=64,    W8, W8A8 attn",
+   "group": "full",
+   "act_block": 64,
+   "exact_w": false,
+   "attn_bits": 8,
+   "qmax": 127,
+   "relL2_vs_fp16": 0.11352738738059998
+  }
+ ]
+}

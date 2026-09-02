@@ -1,5 +1,17 @@
 # Blockwise B=32 for the conv-input quantizer (baseline + MoDiff)
 
+> **SUPERSEDED ON THE ACCURACY ARGUMENT (2026-09-02).** The granularity table below is measured
+> in per-layer quantizer error, `||dequant(Q(v)) - v|| / ||v||`. `docs/act_budget_2026-09-02`
+> shows that is the wrong figure of merit here: the conv-input quantizer contributes *below the
+> measurement floor* to W8A8 latent relL2, the whole budget is quantized attention, and going
+> from per-tensor static to B=64 moves the full stack 0.1200 -> 0.1135 (inside noise) for 21-37%
+> of step time. Two independent checks agree that this metric does not transfer -- 3.5x
+> (static->dynamic, real kernels, `docs/delta_dynamic_2026-09-02`) and 16x (static->B=64, sim)
+> both bought zero. The kernels are built and correct; **do not wire them in at W8A8**. The
+> needle control in the budget doc shows granularity does become a dominant term at int4, which
+> is the setting to revisit them in. Everything below about the mainloop, its correctness, and
+> its cost stands.
+
 The `a_hat` work (`docs/ahat_blockwise_2026-09-01`) made the *cache* blockwise int8 and
 faster than fp16. This asks the same of the quantizer that feeds the conv: `Q(a_t)` in
 the baseline arm, `Q(a_t - a_hat_{t+1})` in MoDiff.

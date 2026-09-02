@@ -1,0 +1,15 @@
+{"arm": "fp16", "act_block": -3, "act_qmax": 127, "wbits": -1, "wblock": 0, "relL2_vs_fp16": 0.0}
+{"arm": "floor", "act_block": -3, "act_qmax": 127, "wbits": -1, "wblock": 0, "relL2_vs_fp16": 0.011273432523012161}
+{"arm": "w8_perchan", "act_block": -3, "act_qmax": 127, "wbits": 8, "wblock": 0, "relL2_vs_fp16": 0.03145819157361984}
+{"arm": "w8_block64", "act_block": -3, "act_qmax": 127, "wbits": 8, "wblock": 64, "relL2_vs_fp16": 0.03921806812286377}
+{"arm": "a8_pertensor", "act_block": -2, "act_qmax": 127, "wbits": -1, "wblock": 0, "relL2_vs_fp16": 0.03821155056357384}
+{"arm": "a8_block64", "act_block": 64, "act_qmax": 127, "wbits": -1, "wblock": 0, "relL2_vs_fp16": 0.009675773791968822}
+{"arm": "both8_coarse", "act_block": -2, "act_qmax": 127, "wbits": 8, "wblock": 0, "relL2_vs_fp16": 0.05602702125906944}
+{"arm": "both8_block64", "act_block": 64, "act_qmax": 127, "wbits": 8, "wblock": 64, "relL2_vs_fp16": 0.03738578408956528}
+{"arm": "w4_perchan", "act_block": -3, "act_qmax": 7, "wbits": 4, "wblock": 0, "relL2_vs_fp16": 0.2604489326477051}
+{"arm": "w4_block64", "act_block": -3, "act_qmax": 7, "wbits": 4, "wblock": 64, "relL2_vs_fp16": 0.2025827169418335}
+{"arm": "w4_block32", "act_block": -3, "act_qmax": 7, "wbits": 4, "wblock": 32, "relL2_vs_fp16": 0.191534623503685}
+{"arm": "a4_pertensor", "act_block": -2, "act_qmax": 7, "wbits": -1, "wblock": 0, "relL2_vs_fp16": 0.5181151628494263}
+{"arm": "a4_block64", "act_block": 64, "act_qmax": 7, "wbits": -1, "wblock": 0, "relL2_vs_fp16": 0.041479069739580154}
+{"arm": "both4_coarse", "act_block": -2, "act_qmax": 7, "wbits": 4, "wblock": 0, "relL2_vs_fp16": 0.5050746202468872}
+{"arm": "both4_block64", "act_block": 64, "act_qmax": 7, "wbits": 4, "wblock": 64, "relL2_vs_fp16": 0.20338647067546844}

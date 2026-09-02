@@ -445,13 +445,47 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "(one flush per blk of K), plus a scalar-alpha control at the same tile config",
           py::arg("A"), py::arg("Bm"), py::arg("w_scale"), py::arg("a_scale_blk"),
           py::arg("a_scale"), py::arg("blk"), py::arg("bias_opt") = c10::optional<torch::Tensor>());
+    m.def("conv2d_int4_blockk", &conv2d_int4_blockk,
+          "int4 NHWC conv2d with a BLOCKWISE-along-C activation scale dequantized in the mainloop; "
+          "x packed [N,H,W,C/2], weight packed [K,R,S,C/2], blk in {64,128,256}",
+          py::arg("x"), py::arg("weight"), py::arg("w_scale"), py::arg("a_scale_blk"),
+          py::arg("a_scale"), py::arg("blk"), py::arg("stride") = 1, py::arg("pad") = 1,
+          py::arg("bias_opt") = c10::optional<torch::Tensor>(),
+          py::arg("o_hat_opt") = c10::optional<torch::Tensor>(),
+          py::arg("resid_opt") = c10::optional<torch::Tensor>());
     m.def("conv2d_int8_blockk", &conv2d_int8_blockk,
           "int8 NHWC conv2d with a BLOCKWISE-along-C activation scale dequantized in the mainloop "
           "(indexed by the INPUT pixel, which is why it cannot live in the epilogue), plus a "
           "scalar-alpha control at the same tile config",
           py::arg("x"), py::arg("weight"), py::arg("w_scale"), py::arg("a_scale_blk"),
           py::arg("a_scale"), py::arg("blk"), py::arg("stride") = 1, py::arg("pad") = 1,
-          py::arg("bias_opt") = c10::optional<torch::Tensor>());
+          py::arg("bias_opt") = c10::optional<torch::Tensor>(),
+          py::arg("o_hat_opt") = c10::optional<torch::Tensor>(),
+          py::arg("resid_opt") = c10::optional<torch::Tensor>());
+    m.def("gn_silu_blockk_quantize_b32", &gn_silu_blockk_quantize_b32,
+          "FUSED GroupNorm(+mod)(+SiLU) -> blockwise-along-C B=32 int8 quantize; a_hat empty "
+          "= baseline arm, non-empty = MoDiff delta + in-place a_hat update. Returns "
+          "(int8 codes NHWC, fp32 scales [N,H,W,C/32]) for conv2d_int8_blockk",
+          pybind11::arg("x"), pybind11::arg("weight"), pybind11::arg("bias"),
+          pybind11::arg("a_hat_cache"), pybind11::arg("num_groups"), pybind11::arg("eps"),
+          pybind11::arg("apply_silu"), pybind11::arg("smooth_inv"),
+          pybind11::arg("mod_scale"), pybind11::arg("mod_shift"),
+          pybind11::arg("block") = 32);
+    m.def("conv2d_blockk_tune", &conv2d_blockk_tune,
+          "tunable blockwise conv (int8/int4); cfg indexes a curated tile table",
+          py::arg("x"), py::arg("weight"), py::arg("w_scale"), py::arg("a_scale_blk"),
+          py::arg("a_scale"), py::arg("cfg"), py::arg("int4"),
+          py::arg("stride") = 1, py::arg("pad") = 1);
+    m.def("blockk_tune_num_cfgs", &blockk_tune_num_cfgs, "number of tunable configs");
+    m.def("blockk_tune_cfg_name", &blockk_tune_cfg_name, "name of tunable config i");
+    m.def("conv_quantize_block_pack_int4", &conv_quantize_block_pack_int4,
+          "blockwise-along-C int4 quantize+pack of a conv input -> (packed [N,H,W,C/2] codes, "
+          "fp32 scales [N,H,W,C/block]); block in {64,128,256}",
+          pybind11::arg("x"), pybind11::arg("block"));
+    m.def("conv_quantize_block_nhwc", &conv_quantize_block_nhwc,
+          "blockwise-along-C int8 quantize of a live conv input -> (int8 codes NHWC, "
+          "fp32 scales [N,H,W,C/block]); block in {32,64}",
+          pybind11::arg("x"), pybind11::arg("block"));
     m.def("gemm_w8a8_awq_nout", &gemm_w8a8_awq_nout,
           "W8A8 Linear, unpadded output: B/w_scale padded to N%128==0 but writes [M,n_out] directly "
           "(n_out even), skipping padded cols -- removes the downstream slice+.contiguous() copy");

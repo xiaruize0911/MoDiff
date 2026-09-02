@@ -165,6 +165,11 @@ __device__ __forceinline__ int ahat_q8(float v) {
     return min(127, max(-127, __float2int_rn(v)));
 }
 
+// Same, with the saturation limit as a parameter -- int4 symmetric needs +-7.
+__device__ __forceinline__ int ahat_qn(float v, int lim) {
+    return min(lim, max(-lim, __float2int_rn(v)));
+}
+
 // int8 <-> float without the conversion pipe. I2F/F2I issue on the XU pipe at an
 // eighth of the FMA rate on GA10x and the fused B=32 update does four of them per
 // pair; PRMT/FADD are full rate. Both directions use 1.5*2^23, where a float's ulp

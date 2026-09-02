@@ -433,6 +433,21 @@ def _prequant_gn_conv(x, gn, conv, mod_scale=None, mod_shift=None, residual=None
     epilogue as a skip-add, removing the trailing aten::add. The quantize multiplier
     is conv.static_input_scale (=127/absmax); smooth_inv is identity (gated above).
     """
+    # MODIFF_CONV_BLOCKK=32: fuse GN(+mod)(+SiLU) into a BLOCKWISE-along-C quantize and run
+    # conv2d_int8_blockk. Injected before the per-tensor folds below because it replaces both of
+    # them; returns None when the layer or the env is not eligible, and then nothing changes.
+    # HAS_GN_SILU_* gate this too. Without it the hook fires above the kill-switch checks below,
+    # so a run asking for the UNFUSED or scalar-CTRL arm silently got the fused blockwise path --
+    # which made "unfused" and "fused" the same measurement and made CTRL impossible to measure.
+    if (x2 is None and hasattr(conv, 'blockk_gn_fused')
+            and not conv._conv_blockk_ctrl()
+            and (HAS_GN_SILU_DELTA_QUANTIZE if getattr(conv, 'modiff_enabled', False)
+                 else HAS_GN_SILU_QUANTIZE)):
+        bk = conv.blockk_gn_fused(x, *gn._cast_params(x.dtype), gn.num_groups, gn.eps, True,
+                                  mod_scale, mod_shift, residual)
+        if bk is not None:
+            return bk
+
     # MoDiff temporal-cache path: fuse GroupNorm(+mod)+SiLU into the delta-quantize
     # (+ a_hat update) kernel, replacing the standalone GN kernel + step1 two-kernel
     # pass. Bit-identical to that path; only kicks in once the layer is calibrated
@@ -582,6 +597,20 @@ def _delta_gn_dynamic_args_any(conv, device, is_int4):
 
 
 def _prequant_gn_resize_conv_modiff(x, gn, h_upd, conv, mod_scale=None, mod_shift=None):
+    # MODIFF_CONV_BLOCKK: this fold emits PER-TENSOR codes and accumulates o_hat through
+    # _conv_from_int8_o_hat with a scalar alpha. Under blockwise that mixes conventions on the
+    # 8 resize in_conv layers -- step 1 writes a_hat/o_hat blockwise, steps 2+ accumulate
+    # per-tensor on top -- which measured relL2 0.4951 instead of 0.0641 and raised no error,
+    # because _conv_from_int8_o_hat had no guard (it has one now). Disable the fold so those
+    # layers take one convention end to end.
+    # MODIFF_ACT_BLOCK is here too, not just CONV_BLOCKK. This fold reaches the conv through
+    # _conv_from_int8_o_hat with PER-TENSOR codes, so under either the sim or the blockwise path
+    # these 8 resize in_conv layers would run per-tensor no matter what granularity the arm asked
+    # for. docs/act_budget_2026-09-02 was measured before _conv_from_int8_o_hat had a guard and so
+    # had 8 of 70 layers silently excluded from its granularity sweep.
+    if (os.environ.get("MODIFF_CONV_BLOCKK", "0") not in ("0", "")
+            or os.environ.get("MODIFF_ACT_BLOCK", "0") not in ("0", "")):
+        return None
     """MoDiff twin of _prequant_gn_resize_conv: GN+SiLU+resize+delta-quantize+a_hat in ONE kernel.
 
     The eight updown ResBlocks previously got NO fusion under MoDiff -- the sibling below gates on

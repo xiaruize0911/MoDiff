@@ -1,0 +1,65 @@
+{
+ "gpu": "NVIDIA A40",
+ "batch": 128,
+ "steps": 50,
+ "seed": 20260805,
+ "n_quality": 6,
+ "arms": [
+  {
+   "label": "fp16",
+   "mode": "fp16",
+   "delta_mode": "static",
+   "ahat_block": 0,
+   "ms_step": 101.9240966796875,
+   "trials": [
+    101.7271484375,
+    102.121044921875
+   ],
+   "relL2_vs_fp16": 0.0,
+   "speedup_vs_fp16": 1.0,
+   "speedup_vs_shipped": 0.8011012714108495
+  },
+  {
+   "label": "W8A8 MoDiff  delta static",
+   "mode": "int8",
+   "delta_mode": "static",
+   "ahat_block": 0,
+   "ms_step": 81.6515234375,
+   "trials": [
+    81.591396484375,
+    81.711650390625
+   ],
+   "relL2_vs_fp16": 0.09987583756446838,
+   "speedup_vs_fp16": 1.2482816289117384,
+   "speedup_vs_shipped": 1.0
+  },
+  {
+   "label": "W8A8 MoDiff  delta dynamic",
+   "mode": "int8",
+   "delta_mode": "dynamic",
+   "ahat_block": 0,
+   "ms_step": 83.928876953125,
+   "trials": [
+    84.111552734375,
+    83.746201171875
+   ],
+   "relL2_vs_fp16": 0.10913507640361786,
+   "speedup_vs_fp16": 1.2144103481405213,
+   "speedup_vs_shipped": 0.972865673909864
+  },
+  {
+   "label": "W8A8 MoDiff  dynamic + aHat B=32",
+   "mode": "int8",
+   "delta_mode": "dynamic",
+   "ahat_block": 32,
+   "ms_step": 82.03041015625,
+   "trials": [
+    81.9961328125,
+    82.0646875
+   ],
+   "relL2_vs_fp16": 0.08360251039266586,
+   "speedup_vs_fp16": 1.2425159948066133,
+   "speedup_vs_shipped": 0.9953811431878946
+  }
+ ]
+}

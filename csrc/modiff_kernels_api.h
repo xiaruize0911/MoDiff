@@ -104,6 +104,26 @@ torch::Tensor step1_static_quantize_pack_int4_fprop(
 // Returns {int8 [N,C,H,W] channels_last, fp32 scales [N,H,W,C/block]}.
 // One coalesced pass, replacing the eight eager passes _pack_ahat_along_c used.
 std::vector<torch::Tensor> ahat_pack_block_nhwc(torch::Tensor a_hat, int64_t block);
+// Blockwise-along-C int8 quantize of a live conv input (block in {32,64}) ->
+// (int8 codes NHWC, fp32 scales [N,H,W,C/block]). Feeds conv2d_int8_blockk.
+std::vector<torch::Tensor> conv_quantize_block_nhwc(torch::Tensor x, int64_t block);
+// int4 twin: blockwise-along-C quantize AND pack -> (packed [N,H,W,C/2] int8 storage,
+// fp32 scales [N,H,W,C/block]). Feeds conv2d_int4_blockk. block in {64,128,256}.
+std::vector<torch::Tensor> conv_quantize_block_pack_int4(torch::Tensor x, int64_t block);
+// Tunable blockwise conv for the tile x B sweep (csrc/modiff/conv/conv2d_blockk_tune.cu).
+torch::Tensor conv2d_blockk_tune(torch::Tensor x, torch::Tensor weight, torch::Tensor w_scale,
+                                 torch::Tensor a_scale_blk, double a_scale,
+                                 int64_t cfg, bool int4, int64_t stride, int64_t pad);
+int64_t blockk_tune_num_cfgs();
+std::string blockk_tune_cfg_name(int64_t i);
+// FUSED GN(+mod)(+SiLU) -> blockwise-along-C B=32 int8 quantize. a_hat_cache empty => baseline
+// arm; non-empty => MoDiff (quantizes the delta and updates a_hat in place). Returns
+// {int8 codes NHWC, fp32 scales [N,H,W,C/32]} for conv2d_int8_blockk.
+std::vector<torch::Tensor> gn_silu_blockk_quantize_b32(
+    torch::Tensor x, torch::Tensor weight, torch::Tensor bias,
+    torch::Tensor a_hat_cache, int64_t num_groups, double eps, bool apply_silu,
+    torch::Tensor smooth_inv, torch::Tensor mod_scale, torch::Tensor mod_shift,
+    int64_t block);
 
 // cache-free static quantize (baseline conv, NO a_hat read/write)
 torch::Tensor step1_static_quantize_noahat_fprop(
@@ -505,10 +525,21 @@ torch::Tensor gemm_w8a8_blockk(torch::Tensor A, torch::Tensor Bm, torch::Tensor 
 
 // Conv twin of the above. x [N,C,H,W] channels_last int8, weight [K,R,S,C] int8,
 // a_scale_blk [N,H,W,C/blk] fp32 (empty -> scalar-alpha control).
+// int4 twin of conv2d_int8_blockk. x packed [N,H,W,C/2], weight packed [K,R,S,C/2] (int8
+// storage), blk in {64,128,256} -- one mma.m16n8k64.s4 reduces 64 K so 32 is not expressible.
+torch::Tensor conv2d_int4_blockk(torch::Tensor x, torch::Tensor weight, torch::Tensor w_scale,
+                                 torch::Tensor a_scale_blk, double a_scale, int64_t blk,
+                                 int64_t stride, int64_t pad,
+                                 c10::optional<torch::Tensor> bias_opt,
+                                 c10::optional<torch::Tensor> o_hat_opt,
+                                 c10::optional<torch::Tensor> resid_opt);
+
 torch::Tensor conv2d_int8_blockk(torch::Tensor x, torch::Tensor weight, torch::Tensor w_scale,
                                  torch::Tensor a_scale_blk, double a_scale, int64_t blk,
                                  int64_t stride, int64_t pad,
-                                 c10::optional<torch::Tensor> bias_opt);
+                                 c10::optional<torch::Tensor> bias_opt,
+                                 c10::optional<torch::Tensor> o_hat_opt,
+                                 c10::optional<torch::Tensor> resid_opt);
 torch::Tensor gemm_w8a8_awq_nout(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale, int64_t n_out);
 torch::Tensor gemm_w4a4_awq_nout(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale, int64_t K, int64_t n_out);
 // MoDiff o_hat accumulate in the Linear GEMM epilogue (Eq 9). No bias parameter: on a modulated

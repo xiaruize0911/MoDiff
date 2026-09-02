@@ -1,0 +1,13 @@
+{"arm": "fp16", "mode": "fp16", "fusions": "on", "blockk": 0, "ctrl": false, "ms_step": 101.8427001953125, "trials": [101.7230078125, 101.962392578125], "relL2_vs_fp16": 0.0}
+{"arm": "int8_baseline_shipped", "mode": "int8_baseline", "fusions": "on", "blockk": 0, "ctrl": false, "ms_step": 72.4477783203125, "trials": [72.392724609375, 72.50283203125], "relL2_vs_fp16": 0.32206353545188904}
+{"arm": "int8_baseline_unfused", "mode": "int8_baseline", "fusions": "off", "blockk": 0, "ctrl": false, "ms_step": 93.588271484375, "trials": [93.692978515625, 93.483564453125], "relL2_vs_fp16": 0.32186707854270935}
+{"arm": "int8_baseline_ctrl", "mode": "int8_baseline", "fusions": "off", "blockk": 64, "ctrl": true, "ms_step": 107.6686767578125, "trials": [107.85251953125, 107.484833984375], "relL2_vs_fp16": 0.3223574161529541}
+{"arm": "int8_baseline_b64", "mode": "int8_baseline", "fusions": "off", "blockk": 64, "ctrl": false, "ms_step": 119.65922363281251, "trials": [119.688955078125, 119.6294921875], "relL2_vs_fp16": 0.15493729710578918}
+{"arm": "int8_baseline_b32", "mode": "int8_baseline", "fusions": "off", "blockk": 32, "ctrl": false, "ms_step": 125.83495117187499, "trials": [125.8237890625, 125.84611328125], "relL2_vs_fp16": 0.15488915145397186}
+{"arm": "int8_shipped", "mode": "int8", "fusions": "on", "blockk": 0, "ctrl": false, "ms_step": 81.95125488281249, "trials": [82.06244140625, 81.840068359375], "relL2_vs_fp16": 0.08969438821077347}
+{"arm": "int8_unfused", "mode": "int8", "fusions": "off", "blockk": 0, "ctrl": false, "ms_step": 98.4065087890625, "trials": [98.51521484375, 98.297802734375], "relL2_vs_fp16": 0.09752792119979858}
+{"arm": "int8_ctrl", "mode": "int8", "fusions": "off", "blockk": 64, "ctrl": true, "ms_step": 142.3893212890625, "trials": [142.540908203125, 142.237734375], "relL2_vs_fp16": 0.08490456640720367}
+{"arm": "int8_b64", "mode": "int8", "fusions": "off", "blockk": 64, "ctrl": false, "ms_step": 154.8382470703125, "trials": [154.890732421875, 154.78576171875], "relL2_vs_fp16": 0.08798641711473465}
+{"arm": "int8_b32", "mode": "int8", "fusions": "off", "blockk": 32, "ctrl": false, "ms_step": 160.985537109375, "trials": [161.02345703125, 160.9476171875], "relL2_vs_fp16": 0.06410707533359528}
+{"arm": "int8_baseline_b32fused", "mode": "int8_baseline", "fusions": "gn", "blockk": 32, "ctrl": false, "ms_step": 108.22658203124999, "trials": [108.07677734375, 108.37638671875], "relL2_vs_fp16": 0.15450437366962433}
+{"arm": "int8_b32fused", "mode": "int8", "fusions": "gn", "blockk": 32, "ctrl": false, "ms_step": 123.12882812500001, "trials": [122.95447265625, 123.30318359375], "relL2_vs_fp16": 0.4894467294216156}

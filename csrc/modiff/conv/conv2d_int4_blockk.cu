@@ -1,32 +1,29 @@
 // ============================================================================================
-// int8 NHWC conv2d fprop with a BLOCKWISE-ALONG-C activation scale, plus a matched scalar-alpha
-// control. The conv twin of csrc/modiff/linear/gemm_blockk.cu -- read that file's header first;
-// the mainloop arithmetic, the register argument and the I2F-avoiding conversion are identical.
+// int4 NHWC conv2d fprop with a BLOCKWISE-ALONG-C activation scale, plus a matched scalar-alpha
+// control. Port of conv2d_int8_blockk.cu -- read that file's header first. Only three things
+// change; everything about the gather, the smem swizzle and the scale staging is identical.
 //
-// What the conv adds over the GEMM
-// --------------------------------
-// In implicit-GEMM terms M = N*P*Q, N_gemm = K_out, K_gemm = R*S*C. The weight is already
-// [K_out, R, S, C] contiguous, so B loads exactly as in the GEMM. Two things change:
+//   1. mma.m16n8k64.s4 instead of mma.m16n8k32.s8. One mma reduces 64 K, not 32.
+//   2. Operands are PACKED, 2 codes per byte, so a 64-BYTE smem row holds 128 elements. The
+//      loaders are byte arithmetic and are therefore unchanged; only the element<->byte
+//      conversions in the host and in the A gather differ.
+//   3. Overflow is a non-issue. A block accumulates BLK products of int4 codes, peaking at
+//      BLK*7*7 = 49*BLK, so bk4_i2f's 2^22 limit is not reached until BLK ~ 85000. Compare int8,
+//      where BLK=256 already sits at 1.5% margin.
 //
-//   1. A is gathered. Row m = (n,p,q), column (r,s,c) reads x[n, p*stride+r-pad, q*stride+s-pad, c].
-//      Out-of-bounds taps must contribute ZERO, so the A loader uses cp.async's src-size form
-//      (src-size 0 zero-fills the destination) rather than the predicated form the GEMM uses --
-//      there a masked row is simply never read, here a masked tap is part of the sum.
+// WHY int4 IS THE POINT. docs/wa_budget_2026-09-02: at 4 bits the activation quantizer IS the
+// error budget -- per-tensor 0.5181 vs blockwise B=64 0.0415, a 12.5x reduction, against 8 bits
+// where blockwise merely takes an already-small term to the floor. Weights stay
+// per-output-channel: blocking them measured 1.29x at 4 bits and 1.0x at 8, not worth moving the
+// weight scale off the free axis.
 //
-//   2. The block scale is indexed by the INPUT pixel, not by m. This is the whole reason the
-//      scale cannot live in the epilogue: for R,S>1 a single output pixel reads R*S different
-//      input pixels, so the scale depends on the reduction index (r,s) as well as on m. Nothing
-//      finer than per-tensor is an epilogue broadcast for a 3x3 conv.
+// COST WARNING. One mma covers 64 K here against 32 for int8, so at the same BLK the flush rate
+// per mma DOUBLES. B=64 int4 has the flush cadence of B=32 int8 (which measured +73%), and B=128
+// int4 matches B=64 int8 (+29%). Both are built; pick by measurement.
 //
-// Recomputing that gather per flush costs ~7 integer ops + 1 LDG per accumulator row, on top of
-// the 3 ops per accumulator the flush already does -- about +60%. Instead the CTA's BK_CTA_M row
-// scales are staged into smem on the SAME pipeline stage as the A/B cp.async, so the existing
-// per-tile __syncthreads covers them and the flush just does LDS. The (n,p,q) decomposition each
-// thread needs is hoisted out of the k-loop: a thread always stages the same CTA row, so the two
-// integer divisions happen once per kernel instead of once per tile.
-//
-// CONSTRAINTS: C % BK_CTA_K == 0 (so a 64-wide K_gemm tile never straddles two (r,s) taps),
-// dilation 1, groups 1. blk in {32, 64}.
+// CONSTRAINTS: C % BK4_CTA_KE == 0 (a 128-element K tile must not straddle two (r,s) taps), which
+// holds for C=384 and 768 but NOT 192 or 576 -- those fall back to the CUTLASS int4 conv. Full
+// coverage needs a 32-byte-row variant with a 1-bit swizzle. dilation 1, groups 1.
 // ============================================================================================
 #include <algorithm>
 #include <torch/extension.h>
@@ -39,41 +36,30 @@
 
 #include "../common/mma_int8.cuh"
 
-#define BKC_CTA_M 128
-#define BKC_CTA_N 128
-#define BKC_CTA_K 64
-#define BKC_NUM_WARPS 8
-#define BKC_WARP_N 16
-#define BKC_STAGES 2
-#define BKC_INTRIN_M 16
-#define BKC_INTRIN_N 16
-#define BKC_INTRIN_K 32
-#define BKC_PACK 16
-#define BKC_MI (BKC_CTA_M / BKC_INTRIN_M)   // 8
-#define BKC_NJ (BKC_WARP_N / BKC_INTRIN_N)  // 1
+#define BK4_CTA_M 128
+#define BK4_CTA_N 128
+#define BK4_CTA_K 64       // BYTES per smem row (unchanged from int8)
+#define BK4_CTA_KE 128     // ELEMENTS per K tile (2 codes/byte)
+#define BK4_NUM_WARPS 8
+#define BK4_WARP_N 16
+#define BK4_STAGES 2
+#define BK4_INTRIN_M 16
+#define BK4_INTRIN_N 16
+#define BK4_INTRIN_K 64    // ELEMENTS per mma (m16n8k64.s4)
+#define BK4_INTRIN_KB 32   // ...which is 32 BYTES; the smem loaders are byte-indexed
+#define BK4_PACK 16
+#define BK4_MI (BK4_CTA_M / BK4_INTRIN_M)   // 8
+#define BK4_NJ (BK4_WARP_N / BK4_INTRIN_N)  // 1
 
-// TWO REJECTED EXPERIMENTS, both measured freq-weighted over the 20 UNet conv shapes:
-//
-// STAGES=3. Helps the scalar control (1.300 -> 1.334x vs fp16) and HURTS blockwise
-// (1.012 -> 0.829x). Blockwise additionally allocates Ss = STAGES*NB*CTA_M*4; at STAGES=3,
-// B=64 that is 49152+1536 = 50688 B, and 2*50688 = 101376 is exactly the opt-in per-SM smem
-// limit -- so blockwise likely drops to 1 CTA/SM where the control (49152 B) keeps 2. A
-// 2-stage scale ring with a 3-stage A/B ring would test that; not tried. STAGES stays 2.
-//
-// REJECTED EXPERIMENT: replacing the per-flush `a[k]=0` with an mma that overwrites its
-// accumulator (modiff_mma_m16n8k32_zero, RZ addend) to save 64 MOVs/flush/thread measured
-// 34.92 -> 42.12 ms freq-weighted, 21% WORSE. Two mma variants in the inner loop cost more in
-// scheduling/register reuse than the MOVs they save. The helper is kept in mma_int8.cuh.
-
-#define BKC_MAGIC_I 0x4B400000
-#define BKC_MAGIC_F 12582912.0f
-__device__ __forceinline__ float bkc_i2f(int v) {
-    return __int_as_float(v + BKC_MAGIC_I) - BKC_MAGIC_F;
+#define BK4_MAGIC_I 0x4B400000
+#define BK4_MAGIC_F 12582912.0f
+__device__ __forceinline__ float bk4_i2f(int v) {
+    return __int_as_float(v + BK4_MAGIC_I) - BK4_MAGIC_F;
 }
 
 // cp.async with zero-fill. `src` must stay in-bounds even when !pred (src-size 0 reads nothing,
 // but the address is still formed), so callers clamp it.
-__device__ __forceinline__ void bkc_cp_async_zfill(uint32_t smem, const void* src, bool pred) {
+__device__ __forceinline__ void bk4_cp_async_zfill(uint32_t smem, const void* src, bool pred) {
     const int src_size = pred ? 16 : 0;
     asm volatile("cp.async.cg.shared.global [%0], [%1], %2, %3;\n" ::"r"(smem), "l"(src),
                  "n"(16), "r"(src_size));
@@ -86,7 +72,7 @@ struct BkcRow {
     int pix0, h0, w0;
     bool m_ok;
 };
-__device__ __forceinline__ BkcRow bkc_row(int m, int M, int H, int W, int P, int Q,
+__device__ __forceinline__ BkcRow bk4_row(int m, int M, int H, int W, int P, int Q,
                                           int stride, int pad) {
     BkcRow r;
     r.m_ok = m < M;
@@ -99,25 +85,25 @@ __device__ __forceinline__ BkcRow bkc_row(int m, int M, int H, int W, int P, int
     return r;
 }
 
-__device__ __forceinline__ void bkc_s2r_A(const int8_t* src, int8_t* dst, int lane, int k01) {
-    const int ld_col = (k01 * BKC_INTRIN_K + (lane / 16) * 16) / BKC_PACK;
+__device__ __forceinline__ void bk4_s2r_A(const int8_t* src, int8_t* dst, int lane, int k01) {
+    const int ld_col = (k01 * BK4_INTRIN_KB + (lane / 16) * 16) / BK4_PACK;
 #pragma unroll
-    for (int si = 0; si < BKC_MI; ++si) {
-        const int ld_row = si * BKC_INTRIN_M + (lane % 16);
+    for (int si = 0; si < BK4_MI; ++si) {
+        const int ld_row = si * BK4_INTRIN_M + (lane % 16);
         const int swz = ld_col ^ ((ld_row / 2) & 3);
         modiff_ldmatrix_x4(dst + si * 16,
-                           modiff_smem_ptr(src + ld_row * BKC_CTA_K + swz * BKC_PACK));
+                           modiff_smem_ptr(src + ld_row * BK4_CTA_K + swz * BK4_PACK));
     }
 }
-__device__ __forceinline__ void bkc_s2r_B(const int8_t* src, int8_t* dst, int lane,
+__device__ __forceinline__ void bk4_s2r_B(const int8_t* src, int8_t* dst, int lane,
                                           int warp_off_n, int k01) {
-    const int ld_col = (k01 * BKC_INTRIN_K + ((lane / 8) % 2) * 16) / BKC_PACK;
+    const int ld_col = (k01 * BK4_INTRIN_KB + ((lane / 8) % 2) * 16) / BK4_PACK;
 #pragma unroll
-    for (int si = 0; si < BKC_NJ; ++si) {
-        const int ld_row = warp_off_n + si * BKC_INTRIN_N + ((lane / 8 / 2) * 8 + lane % 8);
+    for (int si = 0; si < BK4_NJ; ++si) {
+        const int ld_row = warp_off_n + si * BK4_INTRIN_N + ((lane / 8 / 2) * 8 + lane % 8);
         const int swz = ld_col ^ ((ld_row / 2) & 3);
         modiff_ldmatrix_x4(dst + si * 16,
-                           modiff_smem_ptr(src + ld_row * BKC_CTA_K + swz * BKC_PACK));
+                           modiff_smem_ptr(src + ld_row * BK4_CTA_K + swz * BK4_PACK));
     }
 }
 
@@ -128,7 +114,7 @@ __device__ __forceinline__ void bkc_s2r_B(const int8_t* src, int8_t* dst, int la
 // -- a runtime branch leaves the unused datapath in the instance and the dead code costs registers,
 // which costs occupancy, which was the whole reason B=32 a_hat started out 4.3% SLOWER than fp16.
 template <int BLK, bool BLOCKWISE, bool ACCUM, bool RESID>
-// min-2-blocks-per-SM in the launch bounds is load-bearing, not a hint. At BKC_STAGES 3 the
+// min-2-blocks-per-SM in the launch bounds is load-bearing, not a hint. At BK4_STAGES 3 the
 // B=32 instance took 130 regs, which sm_86 rounds up to 136 -> 34816 regs per 8-warp CTA ->
 // 1 CTA/SM, while the scalar control at 125 (-> 128) got 2. Half the occupancy for 2
 // registers, and B=32 also crossed the smem half at 51.0 KiB. STAGES 2 fixed the smem half;
@@ -136,8 +122,8 @@ template <int BLK, bool BLOCKWISE, bool ACCUM, bool RESID>
 // min-blocks is 2 only for BLK <= CTA_K. For BLK > CTA_K the int32 accumulator lives across
 // tile boundaries, and forcing 128 regs then spills 160 B and costs 3.5x -- there, take 1
 // CTA/SM and the registers instead.
-static __global__ __launch_bounds__(BKC_NUM_WARPS * 32, (BLK <= BKC_CTA_K ? 2 : 1))
-void conv2d_int8_blockk_kernel(
+static __global__ __launch_bounds__(BK4_NUM_WARPS * 32, (BLK <= BK4_CTA_K ? 2 : 1))
+void conv2d_int4_blockk_kernel(
     const int8_t* __restrict__ X, const int8_t* __restrict__ Wt,
     const float* __restrict__ w_scale, const float* __restrict__ a_scale_blk, float a_scale,
     __half* __restrict__ Out, const __half* __restrict__ bias,
@@ -150,35 +136,35 @@ void conv2d_int8_blockk_kernel(
     // tiles and flushed once every TPB. That is the whole point of a larger B -- the flush
     // is what costs (measured: 0 flushes/tile 25.77 ms, 1 -> 33.21, 2 -> 44.56), so halving
     // the flush rate is the direct lever on it.
-    constexpr int NB  = (BKC_CTA_K / BLK) > 0 ? (BKC_CTA_K / BLK) : 1;
-    constexpr int TPB = (BLK / BKC_CTA_K) > 0 ? (BLK / BKC_CTA_K) : 1;
-    extern __shared__ char bkc_smem[];
-    int8_t* As = reinterpret_cast<int8_t*>(bkc_smem);
-    int8_t* Bs = As + BKC_STAGES * BKC_CTA_M * BKC_CTA_K;
-    float* Ss = reinterpret_cast<float*>(Bs + BKC_STAGES * BKC_CTA_N * BKC_CTA_K);
+    constexpr int NB  = (BK4_CTA_KE / BLK) > 0 ? (BK4_CTA_KE / BLK) : 1;
+    constexpr int TPB = (BLK / BK4_CTA_KE) > 0 ? (BLK / BK4_CTA_KE) : 1;
+    extern __shared__ char bk4_smem[];
+    int8_t* As = reinterpret_cast<int8_t*>(bk4_smem);
+    int8_t* Bs = As + BK4_STAGES * BK4_CTA_M * BK4_CTA_K;
+    float* Ss = reinterpret_cast<float*>(Bs + BK4_STAGES * BK4_CTA_N * BK4_CTA_K);
 
     const int t = threadIdx.x, warp = t >> 5, lane = t & 31, gid = lane >> 2, tig = lane & 3;
-    const int m0 = blockIdx.y * BKC_CTA_M, n0 = blockIdx.x * BKC_CTA_N;
-    const int warp_off_n = warp * BKC_WARP_N;
+    const int m0 = blockIdx.y * BK4_CTA_M, n0 = blockIdx.x * BK4_CTA_N;
+    const int warp_off_n = warp * BK4_WARP_N;
     const int nb_c = C / BLK;                        // scale blocks per pixel
     const size_t pix_max = (size_t)Nn * H * W;
 
     // Hoisted gather state. The A loader visits CTA rows t/4 and t/4+64 (256 threads, 4 chunks of
     // 16 B per row); the scale stager owns CTA row t%128. Two divisions each, once.
-    const BkcRow ra0 = bkc_row(m0 + (t >> 2), M, H, W, P, Q, stride, pad);
-    const BkcRow ra1 = bkc_row(m0 + (t >> 2) + 64, M, H, W, P, Q, stride, pad);
-    const BkcRow rs0 = bkc_row(m0 + (t & 127), M, H, W, P, Q, stride, pad);
+    const BkcRow ra0 = bk4_row(m0 + (t >> 2), M, H, W, P, Q, stride, pad);
+    const BkcRow ra1 = bk4_row(m0 + (t >> 2) + 64, M, H, W, P, Q, stride, pad);
+    const BkcRow rs0 = bk4_row(m0 + (t & 127), M, H, W, P, Q, stride, pad);
 
-    int acc[BKC_MI][BKC_NJ][8];
-    float accf[BKC_MI][BKC_NJ][8];
+    int acc[BK4_MI][BK4_NJ][8];
+    float accf[BK4_MI][BK4_NJ][8];
 #pragma unroll
-    for (int i = 0; i < BKC_MI; ++i)
+    for (int i = 0; i < BK4_MI; ++i)
 #pragma unroll
-        for (int j = 0; j < BKC_NJ; ++j)
+        for (int j = 0; j < BK4_NJ; ++j)
 #pragma unroll
             for (int k = 0; k < 8; ++k) { acc[i][j][k] = 0; accf[i][j][k] = 0.0f; }
 
-    const int nkt = Kg / BKC_CTA_K;
+    const int nkt = Kg / BK4_CTA_KE;
 
     // Stage `kt` (a K_gemm offset) of A, B and the block scales into buffer `buf`.
     auto load_tile = [&](int kt, int buf) {
@@ -193,18 +179,18 @@ void conv2d_int8_blockk_kernel(
             const int h = rr.h0 + ro, w = rr.w0 + so;
             const bool ok = rr.m_ok && (unsigned)h < (unsigned)H && (unsigned)w < (unsigned)W;
             const size_t pix = ok ? (size_t)(rr.pix0 + ro * W + so) : 0;
-            const int8_t* src = X + pix * C + c0 + off16 * 16;
+            const int8_t* src = X + pix * (C >> 1) + (c0 >> 1) + off16 * 16;   // packed bytes
             const int swz = (off16 ^ ((r / 2) & 3)) * 16;
-            bkc_cp_async_zfill(modiff_smem_ptr(&As[buf * BKC_CTA_M * BKC_CTA_K + r * BKC_CTA_K + swz]),
+            bk4_cp_async_zfill(modiff_smem_ptr(&As[buf * BK4_CTA_M * BK4_CTA_K + r * BK4_CTA_K + swz]),
                                src, ok);
         }
         // ---- B: weight rows are contiguous over (r,s,c), same as the GEMM ----
-        for (int c = t; c < BKC_CTA_N * (BKC_CTA_K / 16); c += BKC_NUM_WARPS * 32) {
-            const int r = c / (BKC_CTA_K / 16), off16 = c % (BKC_CTA_K / 16);
+        for (int c = t; c < BK4_CTA_N * (BK4_CTA_K / 16); c += BK4_NUM_WARPS * 32) {
+            const int r = c / (BK4_CTA_K / 16), off16 = c % (BK4_CTA_K / 16);
             const int swz = (off16 ^ ((r / 2) & 3)) * 16;
             modiff_cp_async_cg(
-                modiff_smem_ptr(&Bs[buf * BKC_CTA_N * BKC_CTA_K + r * BKC_CTA_K + swz]),
-                (const uint4*)(Wt + (size_t)(n0 + r) * Kg + kt + off16 * 16), (n0 + r) < Kout);
+                modiff_smem_ptr(&Bs[buf * BK4_CTA_N * BK4_CTA_K + r * BK4_CTA_K + swz]),
+                (const uint4*)(Wt + (size_t)(n0 + r) * (Kg >> 1) + (kt >> 1) + off16 * 16), (n0 + r) < Kout);
         }
         // ---- block scales for this tile's NB blocks, one CTA row per thread ----
         if (BLOCKWISE) {
@@ -216,76 +202,76 @@ void conv2d_int8_blockk_kernel(
             for (int b = 0; b < NB; ++b) {
                 if (NB == 1 && t >= 128) break;
                 if (NB == 2 && (t >> 7) != b) continue;
-                Ss[(buf * NB + b) * BKC_CTA_M + r] =
+                Ss[(buf * NB + b) * BK4_CTA_M + r] =
                     (ok && pix < pix_max) ? a_scale_blk[pix * nb_c + (c0 / BLK) + b] : 0.0f;
             }
         }
     };
 
 #pragma unroll
-    for (int s = 0; s < BKC_STAGES - 1; ++s) {
-        if (s < nkt) load_tile(s * BKC_CTA_K, s);
+    for (int s = 0; s < BK4_STAGES - 1; ++s) {
+        if (s < nkt) load_tile(s * BK4_CTA_KE, s);
         __pipeline_commit();
     }
-    __pipeline_wait_prior(BKC_STAGES - 2);
+    __pipeline_wait_prior(BK4_STAGES - 2);
     __syncthreads();
 
     for (int i = 0; i < nkt; ++i) {
-        const int buf = i % BKC_STAGES;
-        const int8_t* Ab = &As[buf * BKC_CTA_M * BKC_CTA_K];
-        const int8_t* Bb = &Bs[buf * BKC_CTA_N * BKC_CTA_K];
+        const int buf = i % BK4_STAGES;
+        const int8_t* Ab = &As[buf * BK4_CTA_M * BK4_CTA_K];
+        const int8_t* Bb = &Bs[buf * BK4_CTA_N * BK4_CTA_K];
 #pragma unroll
-        for (int k01 = 0; k01 < BKC_CTA_K / BKC_INTRIN_K; ++k01) {
-            int8_t Afrag[BKC_MI * 16], Bfrag[BKC_NJ * 16];
-            bkc_s2r_A(Ab, Afrag, lane, k01);
-            bkc_s2r_B(Bb, Bfrag, lane, warp_off_n, k01);
+        for (int k01 = 0; k01 < BK4_CTA_KE / BK4_INTRIN_K; ++k01) {
+            int8_t Afrag[BK4_MI * 16], Bfrag[BK4_NJ * 16];
+            bk4_s2r_A(Ab, Afrag, lane, k01);
+            bk4_s2r_B(Bb, Bfrag, lane, warp_off_n, k01);
 #pragma unroll
-            for (int ii = 0; ii < BKC_MI; ++ii)
+            for (int ii = 0; ii < BK4_MI; ++ii)
 #pragma unroll
-                for (int jj = 0; jj < BKC_NJ; ++jj) {
-                    modiff_mma_m16n8k32(acc[ii][jj], Afrag + ii * 16, Bfrag + jj * 16);
-                    modiff_mma_m16n8k32(acc[ii][jj] + 4, Afrag + ii * 16, Bfrag + jj * 16 + 8);
+                for (int jj = 0; jj < BK4_NJ; ++jj) {
+                    modiff_mma_m16n8k64_s4(acc[ii][jj], Afrag + ii * 16, Bfrag + jj * 16);
+                    modiff_mma_m16n8k64_s4(acc[ii][jj] + 4, Afrag + ii * 16, Bfrag + jj * 16 + 8);
                 }
             // Kg % BLK == 0 (host-checked via C % BLK == 0), so blocks never straddle the
             // end of the k-loop and no trailing partial-block flush is needed.
-            if (BLOCKWISE && (BLK == BKC_INTRIN_K || k01 == 1)
+            if (BLOCKWISE && (BLK == BK4_INTRIN_K || k01 == 1)
                 && (TPB == 1 || (i % TPB) == TPB - 1)) {
-                const float* sb = &Ss[(buf * NB + (NB == 2 ? k01 : 0)) * BKC_CTA_M];
+                const float* sb = &Ss[(buf * NB + (NB == 2 ? k01 : 0)) * BK4_CTA_M];
 #pragma unroll
-                for (int ii = 0; ii < BKC_MI; ++ii) {
-                    const int lr0 = ii * BKC_INTRIN_M + gid;   // CTA-local rows of this fragment
+                for (int ii = 0; ii < BK4_MI; ++ii) {
+                    const int lr0 = ii * BK4_INTRIN_M + gid;   // CTA-local rows of this fragment
                     const float s0 = sb[lr0], s1 = sb[lr0 + 8];
 #pragma unroll
-                    for (int jj = 0; jj < BKC_NJ; ++jj) {
+                    for (int jj = 0; jj < BK4_NJ; ++jj) {
                         int* a = acc[ii][jj];
                         float* f = accf[ii][jj];
-                        f[0] = fmaf(bkc_i2f(a[0]), s0, f[0]);
-                        f[1] = fmaf(bkc_i2f(a[1]), s0, f[1]);
-                        f[2] = fmaf(bkc_i2f(a[2]), s1, f[2]);
-                        f[3] = fmaf(bkc_i2f(a[3]), s1, f[3]);
-                        f[4] = fmaf(bkc_i2f(a[4]), s0, f[4]);
-                        f[5] = fmaf(bkc_i2f(a[5]), s0, f[5]);
-                        f[6] = fmaf(bkc_i2f(a[6]), s1, f[6]);
-                        f[7] = fmaf(bkc_i2f(a[7]), s1, f[7]);
+                        f[0] = fmaf(bk4_i2f(a[0]), s0, f[0]);
+                        f[1] = fmaf(bk4_i2f(a[1]), s0, f[1]);
+                        f[2] = fmaf(bk4_i2f(a[2]), s1, f[2]);
+                        f[3] = fmaf(bk4_i2f(a[3]), s1, f[3]);
+                        f[4] = fmaf(bk4_i2f(a[4]), s0, f[4]);
+                        f[5] = fmaf(bk4_i2f(a[5]), s0, f[5]);
+                        f[6] = fmaf(bk4_i2f(a[6]), s1, f[6]);
+                        f[7] = fmaf(bk4_i2f(a[7]), s1, f[7]);
 #pragma unroll
                         for (int k = 0; k < 8; ++k) a[k] = 0;
                     }
                 }
             }
         }
-        const int li = i + BKC_STAGES - 1;
-        if (li < nkt) load_tile(li * BKC_CTA_K, li % BKC_STAGES);
+        const int li = i + BK4_STAGES - 1;
+        if (li < nkt) load_tile(li * BK4_CTA_KE, li % BK4_STAGES);
         __pipeline_commit();
-        __pipeline_wait_prior(BKC_STAGES - 2);
+        __pipeline_wait_prior(BK4_STAGES - 2);
         __syncthreads();
     }
 
 #pragma unroll
-    for (int i = 0; i < BKC_MI; ++i) {
-        const int row0 = m0 + i * BKC_INTRIN_M + gid, row1 = row0 + 8;
+    for (int i = 0; i < BK4_MI; ++i) {
+        const int row0 = m0 + i * BK4_INTRIN_M + gid, row1 = row0 + 8;
 #pragma unroll
-        for (int j = 0; j < BKC_NJ; ++j) {
-            const int col0 = n0 + warp_off_n + j * BKC_INTRIN_N + tig * 2, col1 = col0 + 8;
+        for (int j = 0; j < BK4_NJ; ++j) {
+            const int col0 = n0 + warp_off_n + j * BK4_INTRIN_N + tig * 2, col1 = col0 + 8;
             const float as = BLOCKWISE ? 1.0f : a_scale;
             float v[8];
 #pragma unroll
@@ -337,7 +323,7 @@ void conv2d_int8_blockk_kernel(
     }
 }
 
-torch::Tensor conv2d_int8_blockk(torch::Tensor x, torch::Tensor weight, torch::Tensor w_scale,
+torch::Tensor conv2d_int4_blockk(torch::Tensor x, torch::Tensor weight, torch::Tensor w_scale,
                                  torch::Tensor a_scale_blk, double a_scale, int64_t blk,
                                  int64_t stride, int64_t pad,
                                  c10::optional<torch::Tensor> bias_opt,
@@ -345,20 +331,27 @@ torch::Tensor conv2d_int8_blockk(torch::Tensor x, torch::Tensor weight, torch::T
                                  c10::optional<torch::Tensor> resid_opt)
 {
     TORCH_CHECK(x.is_cuda() && weight.is_cuda(), "inputs must be CUDA");
-    TORCH_CHECK(x.dtype() == torch::kInt8 && weight.dtype() == torch::kInt8, "x,w must be int8");
-    TORCH_CHECK(x.dim() == 4 && weight.dim() == 4, "x [N,C,H,W] channels_last, w [K,R,S,C]");
-    const int Nn = x.size(0), C = x.size(1), H = x.size(2), W = x.size(3);
+    TORCH_CHECK(x.dtype() == torch::kInt8 && weight.dtype() == torch::kInt8,
+                "packed int4 operands are carried in int8 storage");
+    TORCH_CHECK(x.dim() == 4 && weight.dim() == 4,
+                "x packed [N,H,W,C/2] contiguous, w packed [K,R,S,C/2] -- same convention as "
+                "conv2d_int4_fprop");
+    const int Nn = x.size(0), H = x.size(1), W = x.size(2);
     const int Kout = weight.size(0), R = weight.size(1), S = weight.size(2);
-    TORCH_CHECK(weight.size(3) == C, "weight C mismatch");
-    TORCH_CHECK(C % BKC_CTA_K == 0, "C must be a multiple of ", BKC_CTA_K, " (got ", C, ")");
+    const int C = weight.size(3) * 2;
+    TORCH_CHECK(x.size(3) == C / 2, "x/weight packed channel mismatch");
+    TORCH_CHECK(C % BK4_CTA_KE == 0, "C must be a multiple of ", BK4_CTA_KE,
+                " (got ", C, "); C=192/576 need the 32-byte-row variant");
+    TORCH_CHECK(C % 2 == 0 && Kout % 2 == 0, "packed int4 needs even C and Kout");
     TORCH_CHECK(Kout % 2 == 0, "Kout must be even (the epilogue stores column pairs)");
     // 256 is the ceiling: a block accumulates BLK int8 products, peaking at BLK*127*127,
-    // and bkc_i2f (add into the mantissa of 1.5*2^23) is exact only below 2^22 = 4194304.
+    // and bk4_i2f (add into the mantissa of 1.5*2^23) is exact only below 2^22 = 4194304.
     // BLK=256 -> 4129024, a 1.5% margin. BLK=512 would overflow it silently.
-    TORCH_CHECK(blk == 32 || blk == 64 || blk == 128 || blk == 256,
-                "blk must be 32, 64, 128 or 256 (got ", blk, ")");
+    TORCH_CHECK(blk == 64 || blk == 128 || blk == 256,
+                "int4 blk must be 64, 128 or 256 -- one mma reduces 64 K, so a smaller block cannot "
+                "be read out of a single mma result (got ", blk, ")");
     TORCH_CHECK(C % blk == 0, "blk must divide C");
-    TORCH_CHECK(x.is_contiguous(at::MemoryFormat::ChannelsLast), "x must be channels_last");
+    TORCH_CHECK(x.is_contiguous(), "packed x must be contiguous [N,H,W,C/2]");
     TORCH_CHECK(weight.is_contiguous(), "weight must be contiguous [K,R,S,C]");
 
     const int P = (H + 2 * pad - R) / stride + 1, Q = (W + 2 * pad - S) / stride + 1;
@@ -405,16 +398,16 @@ torch::Tensor conv2d_int8_blockk(torch::Tensor x, torch::Tensor weight, torch::T
                                .memory_format(at::MemoryFormat::ChannelsLast));
     }
 
-    const int nb = std::max<int>(1, BKC_CTA_K / (int)blk);
-    const size_t smem = (size_t)BKC_STAGES * (BKC_CTA_M + BKC_CTA_N) * BKC_CTA_K
-                        + (blockwise ? (size_t)BKC_STAGES * nb * BKC_CTA_M * sizeof(float) : 0);
-    dim3 grid((Kout + BKC_CTA_N - 1) / BKC_CTA_N, (M + BKC_CTA_M - 1) / BKC_CTA_M);
-    dim3 block(BKC_NUM_WARPS * 32);
+    const int nb = std::max<int>(1, BK4_CTA_KE / (int)blk);
+    const size_t smem = (size_t)BK4_STAGES * (BK4_CTA_M + BK4_CTA_N) * BK4_CTA_K
+                        + (blockwise ? (size_t)BK4_STAGES * nb * BK4_CTA_M * sizeof(float) : 0);
+    dim3 grid((Kout + BK4_CTA_N - 1) / BK4_CTA_N, (M + BK4_CTA_M - 1) / BK4_CTA_M);
+    dim3 block(BK4_NUM_WARPS * 32);
     auto stream = at::cuda::getCurrentCUDAStream();
 
-#define BKC_LAUNCH(BLKV, BW, AC, RS)                                                                \
+#define BK4_LAUNCH(BLKV, BW, AC, RS)                                                                \
     do {                                                                                        \
-        auto kern = conv2d_int8_blockk_kernel<BLKV, BW, AC, RS>;                                    \
+        auto kern = conv2d_int4_blockk_kernel<BLKV, BW, AC, RS>;                                    \
         C10_CUDA_CHECK(cudaFuncSetAttribute(                                                    \
             kern, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem));                     \
         kern<<<grid, block, smem, stream>>>(                                                    \
@@ -423,28 +416,28 @@ torch::Tensor conv2d_int8_blockk(torch::Tensor x, torch::Tensor weight, torch::T
             reinterpret_cast<__half*>(out.data_ptr<at::Half>()), bias_p, resid_p,                        \
             Nn, H, W, C, Kout, R, S, P, Q, (int)stride, (int)pad, M, Kg);                       \
     } while (0)
-#define BKC_DISPATCH_B(BW, AC, RS)                                                            \
+#define BK4_DISPATCH_B(BW, AC, RS)                                                            \
     do {                                                                                      \
         switch (blk) {                                                                        \
-            case 32:  BKC_LAUNCH(32,  BW, AC, RS); break;                                     \
-            case 64:  BKC_LAUNCH(64,  BW, AC, RS); break;                                     \
-            case 128: BKC_LAUNCH(128, BW, AC, RS); break;                                     \
-            default:  BKC_LAUNCH(256, BW, AC, RS); break;                                     \
+            case 32:  BK4_LAUNCH(32,  BW, AC, RS); break;                                     \
+            case 64:  BK4_LAUNCH(64,  BW, AC, RS); break;                                     \
+            case 128: BK4_LAUNCH(128, BW, AC, RS); break;                                     \
+            default:  BK4_LAUNCH(256, BW, AC, RS); break;                                     \
         }                                                                                     \
     } while (0)
-#define BKC_DISPATCH(BW, AC)                                                                  \
+#define BK4_DISPATCH(BW, AC)                                                                  \
     do {                                                                                      \
-        if (resid_p) { BKC_DISPATCH_B(BW, AC, true); }                                        \
-        else         { BKC_DISPATCH_B(BW, AC, false); }                                       \
+        if (resid_p) { BK4_DISPATCH_B(BW, AC, true); }                                        \
+        else         { BK4_DISPATCH_B(BW, AC, false); }                                       \
     } while (0)
     if (accum) {
-        if (blockwise) { BKC_DISPATCH(true, true); } else { BKC_DISPATCH(false, true); }
+        if (blockwise) { BK4_DISPATCH(true, true); } else { BK4_DISPATCH(false, true); }
     } else {
-        if (blockwise) { BKC_DISPATCH(true, false); } else { BKC_DISPATCH(false, false); }
+        if (blockwise) { BK4_DISPATCH(true, false); } else { BK4_DISPATCH(false, false); }
     }
-#undef BKC_DISPATCH
-#undef BKC_DISPATCH_B
-#undef BKC_LAUNCH
+#undef BK4_DISPATCH
+#undef BK4_DISPATCH_B
+#undef BK4_LAUNCH
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     return out;
 }

@@ -1906,6 +1906,170 @@ __global__ void ahat_pack_block_b32_kernel(
     if ((threadIdx.x & 31) == 0) qscale[i >> 5] = g * (1.0f / 127.0f);
 }
 
+// -----------------------------------------------------------------------------
+// Blockwise-along-C quantize of a live conv INPUT (not the a_hat cache), for the
+// conv2d_int8_blockk path. Separate from ahat_pack_block_nhwc on purpose: that one is a
+// one-shot t=T pack of stored state, hard-wired to B=32, and it is on the a_hat hot path --
+// this runs every layer every step and needs B=64 too.
+//
+// One warp owns one group, so the amax is a single warp REDUX and both load and store stay
+// fully coalesced:
+//   BLK=32  1 element/thread, warp == group
+//   BLK=64  2 elements/thread at +0 and +32, warp == group (two coalesced 32-wide segments)
+// Scales come out as [N,H,W,C/BLK] fp32, which is exactly the layout conv2d_int8_blockk's
+// a_scale_blk expects.
+template <typename T, int BLK>
+__global__ void conv_quant_block_nhwc_kernel(
+    const T* __restrict__ src, int8_t* __restrict__ dst, float* __restrict__ qscale,
+    long ngroups)
+{
+    const long g = (long)blockIdx.x * (blockDim.x / 32) + (threadIdx.x / 32);
+    if (g >= ngroups) return;
+    const int lane = threadIdx.x & 31;
+    const long base = g * BLK;
+
+    float v[BLK / 32];
+#pragma unroll
+    for (int e = 0; e < BLK / 32; ++e) v[e] = (float)src[base + e * 32 + lane];
+
+    float m = fabsf(v[0]);
+#pragma unroll
+    for (int e = 1; e < BLK / 32; ++e) m = fmaxf(m, fabsf(v[e]));
+    // Full-warp reduce: every lane of this warp is live (the early return is warp-uniform
+    // because one warp owns exactly one group), so __activemask() is 0xffffffff here.
+    const float amax = fmaxf(ahat_group32_amax(m), 1e-12f);
+
+    const float inv = __fdividef(127.0f, amax);
+#pragma unroll
+    for (int e = 0; e < BLK / 32; ++e)
+        dst[base + e * 32 + lane] = (int8_t)ahat_q8(v[e] * inv);
+    if (lane == 0) qscale[g] = amax * (1.0f / 127.0f);
+}
+
+// -----------------------------------------------------------------------------
+// int4 twin of conv_quantize_block_nhwc: blockwise-along-C quantize AND pack, feeding
+// conv2d_int4_blockk. Output is packed [N,H,W,C/2] int8 storage + fp32 scales [N,H,W,C/BLK],
+// the exact pair that kernel consumes (and the same convention as conv2d_int4_fprop).
+//
+// The thread mapping falls out nicely: one warp owns one group, and each thread takes BLK/32
+// consecutive channels -- for BLK=64 that is exactly 2 channels, i.e. exactly ONE packed byte,
+// so the store is one byte per lane and fully coalesced. Larger BLK gives 2 or 4 bytes per lane.
+template <typename T, int BLK>
+__global__ void conv_quant_block_pack_int4_kernel(
+    const T* __restrict__ src, int8_t* __restrict__ dst, float* __restrict__ qscale,
+    int C, long ngroups)
+{
+    const long g = (long)blockIdx.x * (blockDim.x / 32) + (threadIdx.x / 32);
+    if (g >= ngroups) return;
+    const int lane = threadIdx.x & 31;
+    constexpr int EPT = BLK / 32;               // elements per thread (2, 4 or 8)
+    const int gpp = C / BLK;                    // groups per pixel
+    const long pix = g / gpp;
+    const int cb = (int)(g - pix * gpp) * BLK;  // first channel of this group
+
+    float v[EPT];
+    float m = 0.0f;
+#pragma unroll
+    for (int e = 0; e < EPT; ++e) {
+        v[e] = (float)src[pix * C + cb + lane * EPT + e];
+        m = fmaxf(m, fabsf(v[e]));
+    }
+    // Full-warp reduce: one warp owns exactly one group, so every lane here is live.
+    const float amax = fmaxf(ahat_group32_amax(m), 1e-12f);
+    const float inv = __fdividef(7.0f, amax);   // int4 symmetric: codes in [-7,7]
+
+    int8_t bytes[EPT / 2];
+#pragma unroll
+    for (int b = 0; b < EPT / 2; ++b) {
+        const int lo = ahat_qn(v[2 * b] * inv, 7) & 0xF;
+        const int hi = ahat_qn(v[2 * b + 1] * inv, 7) & 0xF;
+        bytes[b] = (int8_t)((hi << 4) | lo);
+    }
+    int8_t* out = dst + pix * (C >> 1) + (cb >> 1) + lane * (EPT / 2);
+#pragma unroll
+    for (int b = 0; b < EPT / 2; ++b) out[b] = bytes[b];
+    if (lane == 0) qscale[g] = amax * (1.0f / 7.0f);
+}
+
+std::vector<torch::Tensor> conv_quantize_block_pack_int4(torch::Tensor x, int64_t block) {
+    CHECK_CUDA(x);
+    TORCH_CHECK(x.dim() == 4, "expects [N,C,H,W] channels_last");
+    TORCH_CHECK(block == 64 || block == 128 || block == 256, "block must be 64/128/256");
+    const int N = x.size(0), C = x.size(1), H = x.size(2), W = x.size(3);
+    TORCH_CHECK(C % block == 0, "block must divide C (C=", C, ", block=", block, ")");
+    auto src = x.contiguous(torch::MemoryFormat::ChannelsLast);
+    TORCH_CHECK(src.scalar_type() == torch::kFloat16 || src.scalar_type() == torch::kFloat32,
+                "x must be fp16 or fp32");
+    auto opts = torch::TensorOptions().device(x.device());
+    auto dst = torch::empty({N, H, W, C / 2}, opts.dtype(torch::kInt8));   // packed, contiguous
+    auto qscale = torch::empty({N, H, W, (int)(C / block)}, opts.dtype(torch::kFloat32));
+    const long ngroups = (long)N * H * W * (C / block);
+    const int t = 256;
+    const long nb = (ngroups + (t / 32) - 1) / (t / 32);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+#define CQP_LAUNCH(TY, BL, PTR)                                                          \
+    conv_quant_block_pack_int4_kernel<TY, BL><<<(unsigned)nb, t, 0, stream>>>(            \
+        PTR, dst.data_ptr<int8_t>(), qscale.data_ptr<float>(), C, ngroups)
+#define CQP_DISPATCH(TY, PTR)                                                            \
+    do {                                                                                 \
+        switch (block) {                                                                  \
+            case 64:  CQP_LAUNCH(TY, 64,  PTR); break;                                    \
+            case 128: CQP_LAUNCH(TY, 128, PTR); break;                                    \
+            default:  CQP_LAUNCH(TY, 256, PTR); break;                                    \
+        }                                                                                 \
+    } while (0)
+    if (src.scalar_type() == torch::kFloat16) {
+        CQP_DISPATCH(__half, reinterpret_cast<const __half*>(src.data_ptr<at::Half>()));
+    } else {
+        CQP_DISPATCH(float, src.data_ptr<float>());
+    }
+#undef CQP_DISPATCH
+#undef CQP_LAUNCH
+    C10_CUDA_CHECK(cudaGetLastError());
+    return {dst, qscale};
+}
+
+std::vector<torch::Tensor> conv_quantize_block_nhwc(torch::Tensor x, int64_t block) {
+    CHECK_CUDA(x);
+    TORCH_CHECK(x.dim() == 4, "conv_quantize_block_nhwc expects [N,C,H,W]");
+    TORCH_CHECK(block == 32 || block == 64 || block == 128 || block == 256,
+                "block must be 32, 64, 128 or 256, got ", block);
+    const int N = x.size(0), C = x.size(1), H = x.size(2), W = x.size(3);
+    TORCH_CHECK(C % block == 0, "block must divide C (C=", C, ", block=", block, ")");
+    auto src = x.contiguous(torch::MemoryFormat::ChannelsLast);
+    TORCH_CHECK(src.scalar_type() == torch::kFloat16 || src.scalar_type() == torch::kFloat32,
+                "conv_quantize_block_nhwc: x must be fp16 or fp32");
+    auto opts = torch::TensorOptions().device(x.device());
+    auto dst = torch::empty({N, C, H, W}, opts.dtype(torch::kInt8)
+                                              .memory_format(torch::MemoryFormat::ChannelsLast));
+    auto qscale = torch::empty({N, H, W, C / block}, opts.dtype(torch::kFloat32));
+    const long ngroups = (long)N * H * W * (C / block);
+    const int t = 256;                              // 8 warps == 8 groups per block
+    const long nb = (ngroups + (t / 32) - 1) / (t / 32);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+#define CQB_LAUNCH(TY, BL, PTR)                                                             \
+    conv_quant_block_nhwc_kernel<TY, BL><<<(unsigned)nb, t, 0, stream>>>(                    \
+        PTR, dst.data_ptr<int8_t>(), qscale.data_ptr<float>(), ngroups)
+#define CQB_DISPATCH(TY, PTR)                                        \
+    do {                                                             \
+        switch (block) {                                             \
+            case 32:  CQB_LAUNCH(TY, 32,  PTR); break;               \
+            case 64:  CQB_LAUNCH(TY, 64,  PTR); break;               \
+            case 128: CQB_LAUNCH(TY, 128, PTR); break;               \
+            default:  CQB_LAUNCH(TY, 256, PTR); break;               \
+        }                                                            \
+    } while (0)
+    if (src.scalar_type() == torch::kFloat16) {
+        CQB_DISPATCH(__half, reinterpret_cast<const __half*>(src.data_ptr<at::Half>()));
+    } else {
+        CQB_DISPATCH(float, src.data_ptr<float>());
+    }
+#undef CQB_DISPATCH
+#undef CQB_LAUNCH
+    C10_CUDA_CHECK(cudaGetLastError());
+    return {dst, qscale};
+}
+
 std::vector<torch::Tensor> ahat_pack_block_nhwc(torch::Tensor a_hat, int64_t block) {
     CHECK_CUDA(a_hat);
     TORCH_CHECK(a_hat.dim() == 4, "ahat_pack_block_nhwc expects [N, C, H, W]");

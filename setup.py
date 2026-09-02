@@ -44,11 +44,14 @@ setup(
                 'csrc/modiff/conv/conv2d_evt.cu',
                 'csrc/modiff/conv/zpw_window_sum.cu',
                 'csrc/modiff/conv/conv2d_int8_blockk.cu',
+                'csrc/modiff/conv/conv2d_int4_blockk.cu',
+                'csrc/modiff/conv/conv2d_blockk_tune.cu',
                 # norm: GroupNorm(+SiLU)(+quantize) and fused GroupNorm->qkv
                 # family 3 of the csrc split (2026-08-12)
                 'csrc/baseline/norm/group_norm_silu.cu',
                 'csrc/baseline/norm/fused_gn_qkv.cu',
                 'csrc/modiff/norm/group_norm_silu.cu',
+                'csrc/modiff/norm/delta_lowrank.cu',
                 # linear: W8A8/W4A4 Linear GEMM (own AWQ-tiling port + vendored AWQ)
                 # family 2 of the csrc split (2026-08-12)
                 'csrc/baseline/linear/gemm_wxax.cu',
