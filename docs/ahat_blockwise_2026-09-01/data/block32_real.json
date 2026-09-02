@@ -1,0 +1,33 @@
+{
+ "gpu": "NVIDIA A40",
+ "batch": 128,
+ "steps": 50,
+ "seed": 20260805,
+ "n_quality": 6,
+ "arms": [
+  {
+   "label": "W8A8  a_hat fp16",
+   "ahat_block": 0,
+   "ms_step": 81.30226318359374,
+   "trials": [
+    81.23552734375,
+    81.3689990234375
+   ],
+   "relL2_vs_fp16_ahat": 0.0,
+   "speedup_vs_fp16_ahat": 1.0,
+   "pct_vs_fp16_ahat": 0.0
+  },
+  {
+   "label": "W8A8  a_hat along-C B=32 int8",
+   "ahat_block": 32,
+   "ms_step": 80.15047119140624,
+   "trials": [
+    80.2105224609375,
+    80.090419921875
+   ],
+   "relL2_vs_fp16_ahat": 0.10205279290676117,
+   "speedup_vs_fp16_ahat": 1.0143703708171212,
+   "pct_vs_fp16_ahat": 1.4166788808653015
+  }
+ ]
+}

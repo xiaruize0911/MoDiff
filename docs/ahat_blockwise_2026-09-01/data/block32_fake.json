@@ -1,0 +1,18 @@
+{
+ "seed": 20260805,
+ "steps": 50,
+ "n": 6,
+ "block": 32,
+ "relL2": {
+  "fp16 reference": {
+   "relL2_vs_fp16": 0.0
+  },
+  "W8A8  a_hat fp16": {
+   "relL2_vs_fp16": 0.12382525950670242
+  },
+  "W8A8  a_hat along-C B=32 fake": {
+   "relL2_vs_fp16": 0.1286574751138687
+  }
+ },
+ "out": "docs/ahat_blockwise_2026-09-01/plots/block32_fake.png"
+}

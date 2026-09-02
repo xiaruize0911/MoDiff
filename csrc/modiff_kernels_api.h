@@ -100,6 +100,11 @@ torch::Tensor step1_quantize_pack_int4_fprop(
 torch::Tensor step1_static_quantize_pack_int4_fprop(
     torch::Tensor x, torch::Tensor a_hat_cache, torch::Tensor scale_buf, torch::Tensor smooth_inv, bool write_ahat = true, torch::Tensor ahat_scale = {});
 
+// t=T pack of a float a_hat into along-C blockwise int8 storage.
+// Returns {int8 [N,C,H,W] channels_last, fp32 scales [N,H,W,C/block]}.
+// One coalesced pass, replacing the eight eager passes _pack_ahat_along_c used.
+std::vector<torch::Tensor> ahat_pack_block_nhwc(torch::Tensor a_hat, int64_t block);
+
 // cache-free static quantize (baseline conv, NO a_hat read/write)
 torch::Tensor step1_static_quantize_noahat_fprop(
     torch::Tensor x, torch::Tensor scale_buf, torch::Tensor smooth_inv);
@@ -491,6 +496,19 @@ torch::Tensor fused_gn_qkv_i8evt(
 // time. (The prior hand-written gemm_w8a8/gemm_w4a4[/_out_int8] family was retired
 // 2026-07-18; a non-compiled copy is at csrc/kernels/backup/.)
 torch::Tensor gemm_w8a8_awq(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale);
+
+// int8 GEMM with a blockwise-along-K activation scale applied INSIDE the mainloop, plus a matched
+// scalar-alpha control (pass an empty a_scale_blk). See csrc/modiff/linear/gemm_blockk.cu.
+torch::Tensor gemm_w8a8_blockk(torch::Tensor A, torch::Tensor Bm, torch::Tensor w_scale,
+                               torch::Tensor a_scale_blk, double a_scale, int64_t blk,
+                               c10::optional<torch::Tensor> bias_opt);
+
+// Conv twin of the above. x [N,C,H,W] channels_last int8, weight [K,R,S,C] int8,
+// a_scale_blk [N,H,W,C/blk] fp32 (empty -> scalar-alpha control).
+torch::Tensor conv2d_int8_blockk(torch::Tensor x, torch::Tensor weight, torch::Tensor w_scale,
+                                 torch::Tensor a_scale_blk, double a_scale, int64_t blk,
+                                 int64_t stride, int64_t pad,
+                                 c10::optional<torch::Tensor> bias_opt);
 torch::Tensor gemm_w8a8_awq_nout(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale, int64_t n_out);
 torch::Tensor gemm_w4a4_awq_nout(torch::Tensor A, torch::Tensor B, torch::Tensor w_scale, double a_scale, int64_t K, int64_t n_out);
 // MoDiff o_hat accumulate in the Linear GEMM epilogue (Eq 9). No bias parameter: on a modulated
@@ -646,3 +664,11 @@ std::vector<torch::Tensor> quantize_attn_qkv_from_i8(torch::Tensor qkv_i8, int64
 std::vector<torch::Tensor> quantize_attn_kv_from_i8(torch::Tensor qkv_i8, int64_t nh, int64_t T, int64_t hd, int64_t hp_qk, int64_t hp_av);
 // fp16 (reference) materialized softmax — used by the fp16-materialized attention path (not int8/int4)
 std::vector<torch::Tensor> attn_softmax_fp16(torch::Tensor S, bool static_c, double c);
+
+// Experimental fused rank-k residual: range-finder U, Z=U^T d, Q(Z), fold W U.
+// d, a_hat: fp16 channels_last [N,C,H,W]. w_fp: [Cout,C,R,S] float.
+// Updates a_hat in place with U @ dequant(Q(Z)).
+// Returns {z_int8 [N,k,H,W] channels_last, w_int8 [Cout,R,S,k], wscale [Cout], alpha [1]}.
+std::vector<torch::Tensor> delta_lowrank_fprop(
+    torch::Tensor d, torch::Tensor w_fp, torch::Tensor a_hat, int64_t k);
+

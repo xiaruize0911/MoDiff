@@ -1249,11 +1249,12 @@ __global__ void upsample2x_quantize_noahat_kernel(
     __half* __restrict__ a_hat_cache,
     bool write_ahat,
     bool ahat_i8 = false,
-    const float* ahat_qscale = nullptr) {
+    const float* ahat_qscale = nullptr, int ahat_ng = 0) {
     float scale = *scale_ptr;
     const float inv_scale = 1.0f / scale;
     float ahat_s, ahat_inv, ahat_lim;
-    ahat_qparams(ahat_i8, ahat_qscale, ahat_s, ahat_inv, ahat_lim);
+    ahat_qparams(ahat_i8, ahat_qscale, ahat_s, ahat_inv, ahat_lim, ahat_ng);
+    const bool b32 = ahat_is_b32(C, ahat_ng);
     const int Wo = W * 2, Ho = H * 2;
     long idx = (long)blockIdx.x * blockDim.x + threadIdx.x;
     for (long i = idx; i < num_elements_out; i += (long)blockDim.x * gridDim.x) {
@@ -1269,8 +1270,20 @@ __global__ void upsample2x_quantize_noahat_kernel(
         if (smooth_inv != nullptr) xval *= smooth_inv[c % num_channels];
         float q;
         if (a_hat_cache != nullptr) {
-            q = ahat_quant_update(a_hat_cache, i, xval, scale, inv_scale, 127.0f,
-                                  ahat_i8, ahat_s, ahat_inv, ahat_lim, write_ahat);
+            if (b32) {
+                float s, inv, lim;
+                ahat_resolve(ahat_i8, ahat_qscale, i, C, ahat_ng,
+                             ahat_s, ahat_inv, ahat_lim, s, inv, lim);
+                const float old_c = ahat_load(a_hat_cache, i, ahat_i8, s);
+                q = fmaxf(-127.0f, fminf(127.0f, roundf((xval - old_c) * scale)));
+                if (write_ahat)
+                    ahat_block_resnap1_b32(a_hat_cache, const_cast<float*>(ahat_qscale),
+                                           i, old_c + q * inv_scale);
+            } else {
+                q = ahat_quant_update(a_hat_cache, i, xval, scale, inv_scale, 127.0f,
+                                      ahat_i8, ahat_s, ahat_inv, ahat_lim, write_ahat,
+                                      ahat_qscale, C, ahat_ng);
+            }
         } else {
             q = fmaxf(-127.0f, fminf(127.0f, roundf(xval * scale)));
         }
@@ -1297,12 +1310,11 @@ __global__ void upsample2x_quantize_pack_noahat_kernel(
     // first. z == 0 reproduces the old kernel exactly in both.
     float zp = 0.0f,
     bool ahat_i8 = false,
-    const float* ahat_qscale = nullptr) {
+    const float* ahat_qscale = nullptr, int ahat_ng = 0) {
     float scale = *scale_ptr;
     const float inv_scale = 1.0f / scale;
-    const float ahat_s = ahat_i8 ? ahat_qscale[0] : 1.0f;
-    const float ahat_inv = ahat_i8 ? (1.0f / ahat_s) : 1.0f;
-    const float ahat_lim = ahat_i8 ? ahat_qscale[1] : 127.0f;
+    float ahat_s = 1.0f, ahat_inv = 1.0f, ahat_lim = 127.0f;
+    ahat_qparams(ahat_i8, ahat_qscale, ahat_s, ahat_inv, ahat_lim, ahat_ng);
     const int Wo = W * 2, Ho = H * 2;
     long idx = (long)blockIdx.x * blockDim.x + threadIdx.x;
     long stride = (long)blockDim.x * gridDim.x;
@@ -1318,37 +1330,30 @@ __global__ void upsample2x_quantize_pack_noahat_kernel(
         float x0 = load_as_float(x, (int)(pix_in * C + c0));
         if (smooth_inv != nullptr) x0 *= smooth_inv[c0 % num_channels];
         float c_0 = 0.0f;
+        float s0 = ahat_s, inv0 = ahat_inv, lim0 = ahat_lim;
         if (a_hat_cache != nullptr) {
-            c_0 = ahat_i8 ? (float)reinterpret_cast<const int8_t*>(a_hat_cache)[base] * ahat_s
-                          : __half2float(a_hat_cache[base]);
+            ahat_resolve(ahat_i8, ahat_qscale, base, C, ahat_ng,
+                         ahat_s, ahat_inv, ahat_lim, s0, inv0, lim0);
+            c_0 = ahat_load(a_hat_cache, base, ahat_i8, s0);
         }
         float q0 = fmaxf(-7.0f, fminf(7.0f, roundf((x0 - c_0) * scale) + zp));
         if (a_hat_cache != nullptr && write_ahat) {
-            float neu = c_0 + q0 * inv_scale;
-            if (ahat_i8)
-                reinterpret_cast<int8_t*>(a_hat_cache)[base] =
-                    (int8_t)fmaxf(-ahat_lim, fminf(ahat_lim, roundf(neu * ahat_inv)));
-            else
-                a_hat_cache[base] = __float2half_rn(neu);
+            ahat_store(a_hat_cache, base, c_0 + q0 * inv_scale, ahat_i8, inv0, lim0);
         }
         float q1 = 0.0f;
         if (base + 1 < num_elements_out) {
             float x1 = load_as_float(x, (int)(pix_in * C + c0 + 1));
             if (smooth_inv != nullptr) x1 *= smooth_inv[(c0 + 1) % num_channels];
             float c_1 = 0.0f;
+            float s1 = ahat_s, inv1 = ahat_inv, lim1 = ahat_lim;
             if (a_hat_cache != nullptr) {
-                c_1 = ahat_i8 ? (float)reinterpret_cast<const int8_t*>(a_hat_cache)[base + 1] * ahat_s
-                              : __half2float(a_hat_cache[base + 1]);
+                ahat_resolve(ahat_i8, ahat_qscale, base + 1, C, ahat_ng,
+                             ahat_s, ahat_inv, ahat_lim, s1, inv1, lim1);
+                c_1 = ahat_load(a_hat_cache, base + 1, ahat_i8, s1);
             }
             q1 = fmaxf(-7.0f, fminf(7.0f, roundf((x1 - c_1) * scale) + zp));
-            if (a_hat_cache != nullptr && write_ahat) {
-                float neu = c_1 + q1 * inv_scale;
-                if (ahat_i8)
-                    reinterpret_cast<int8_t*>(a_hat_cache)[base + 1] =
-                        (int8_t)fmaxf(-ahat_lim, fminf(ahat_lim, roundf(neu * ahat_inv)));
-                else
-                    a_hat_cache[base + 1] = __float2half_rn(neu);
-            }
+            if (a_hat_cache != nullptr && write_ahat)
+                ahat_store(a_hat_cache, base + 1, c_1 + q1 * inv_scale, ahat_i8, inv1, lim1);
         }
         output_packed[base / 2] = (static_cast<int8_t>(q0) & 0x0F) | ((static_cast<int8_t>(q1) & 0x0F) << 4);
     }
@@ -1375,23 +1380,31 @@ torch::Tensor upsample2x_quantize_noahat_fprop(
     __half* cache_ptr = nullptr;
     bool ahat_i8 = false;
     const float* ahat_qscale_ptr = nullptr;
+    int ahat_ng = 0;
     if (a_hat_cache.numel() > 0) {
         TORCH_CHECK(a_hat_cache.numel() == num_elements_out,
                     "upsample2x_quantize_noahat_fprop: a_hat_cache must be POST-upsample sized "
                     "(N*C*2H*2W)");
         bind_ahat_cache(a_hat_cache, ahat_scale, cache_ptr, ahat_i8, ahat_qscale_ptr,
-                        "upsample2x_quantize_noahat_fprop");
+                        "upsample2x_quantize_noahat_fprop", &ahat_ng);
     }
+    const bool fuse_up = ahat_is_b32(C, ahat_ng);
+    const bool wa = write_ahat && !(ahat_i8 && ahat_ng > 0 && !fuse_up);
     if (x.scalar_type() == torch::kHalf) {
         upsample2x_quantize_noahat_kernel<__half><<<grid_size, block_size, 0, stream>>>(
             reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), y.data_ptr<int8_t>(),
             scale_buf.data_ptr<float>(), smooth_ptr, C, H, W, num_channels, num_elements_out,
-            cache_ptr, write_ahat, ahat_i8, ahat_qscale_ptr);
+            cache_ptr, wa, ahat_i8, ahat_qscale_ptr, ahat_ng);
     } else {
         upsample2x_quantize_noahat_kernel<float><<<grid_size, block_size, 0, stream>>>(
             x.data_ptr<float>(), y.data_ptr<int8_t>(),
             scale_buf.data_ptr<float>(), smooth_ptr, C, H, W, num_channels, num_elements_out,
-            cache_ptr, write_ahat, ahat_i8, ahat_qscale_ptr);
+            cache_ptr, wa, ahat_i8, ahat_qscale_ptr, ahat_ng);
+    }
+    if (write_ahat && ahat_i8 && ahat_ng > 0 && cache_ptr != nullptr && !fuse_up) {
+        ahat_commit_block(cache_ptr, const_cast<float*>(ahat_qscale_ptr),
+                          y.data_ptr<int8_t>(), scale_buf.data_ptr<float>(),
+                          C, ahat_ng, num_elements_out, stream);
     }
     return y;
 }
@@ -1422,33 +1435,23 @@ static torch::Tensor upsample2x_quantize_pack_noahat_fprop_impl(
     __half* cache_ptr = nullptr;
     bool ahat_i8 = false;
     const float* ahat_qscale_ptr = nullptr;
+    int ahat_ng = 0;
     if (a_hat_cache.numel() > 0) {
-        TORCH_CHECK(a_hat_cache.scalar_type() == torch::kHalf
-                        || a_hat_cache.scalar_type() == torch::kInt8,
-                    "upsample2x_quantize_pack_noahat_fprop: a_hat_cache must be fp16 or int8");
         TORCH_CHECK(a_hat_cache.numel() == num_elements_out,
                     "upsample2x_quantize_pack_noahat_fprop: a_hat_cache must be POST-upsample sized");
-        if (a_hat_cache.scalar_type() == torch::kInt8) {
-            TORCH_CHECK(ahat_scale.defined() && ahat_scale.numel() >= 2
-                        && ahat_scale.scalar_type() == torch::kFloat32,
-                        "upsample2x_quantize_pack_noahat_fprop: int8 a_hat needs fp32 [scale, qmax]");
-            cache_ptr = reinterpret_cast<__half*>(a_hat_cache.data_ptr<int8_t>());
-            ahat_i8 = true;
-            ahat_qscale_ptr = ahat_scale.data_ptr<float>();
-        } else {
-            cache_ptr = reinterpret_cast<__half*>(a_hat_cache.data_ptr<at::Half>());
-        }
+        bind_ahat_cache(a_hat_cache, ahat_scale, cache_ptr, ahat_i8, ahat_qscale_ptr,
+                        "upsample2x_quantize_pack_noahat_fprop", &ahat_ng);
     }
     if (x.scalar_type() == torch::kHalf) {
         upsample2x_quantize_pack_noahat_kernel<__half><<<grid_size, block_size, 0, stream>>>(
             reinterpret_cast<const __half*>(x.data_ptr<at::Half>()), x_packed.data_ptr<int8_t>(),
             scale_buf.data_ptr<float>(), smooth_ptr, C, H, W, num_channels, num_elements_out, cache_ptr,
-            write_ahat, (float)zero_point, ahat_i8, ahat_qscale_ptr);
+            write_ahat, (float)zero_point, ahat_i8, ahat_qscale_ptr, ahat_ng);
     } else {
         upsample2x_quantize_pack_noahat_kernel<float><<<grid_size, block_size, 0, stream>>>(
             x.data_ptr<float>(), x_packed.data_ptr<int8_t>(),
             scale_buf.data_ptr<float>(), smooth_ptr, C, H, W, num_channels, num_elements_out, cache_ptr,
-            write_ahat, (float)zero_point, ahat_i8, ahat_qscale_ptr);
+            write_ahat, (float)zero_point, ahat_i8, ahat_qscale_ptr, ahat_ng);
     }
     return x_packed.view({N, H * 2, W * 2, C / 2});
 }

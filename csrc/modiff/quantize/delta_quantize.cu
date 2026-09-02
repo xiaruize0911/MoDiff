@@ -276,7 +276,7 @@ __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache(
     bool a4,
     bool write_ahat,
     bool ahat_i8 = false,
-    const float* ahat_qscale = nullptr
+    const float* ahat_qscale = nullptr, int ahat_ng = 0
 ) {
     float scale = *scale_ptr;
     float inv_scale = 1.0f / scale;
@@ -285,7 +285,7 @@ __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache(
     // ratio that used to be the other reason is retired -- see OptimizedInt8Conv2d.
     const float lim = a4 ? 7.0f : 127.0f;
     float ahat_s, ahat_inv, ahat_lim;
-    ahat_qparams(ahat_i8, ahat_qscale, ahat_s, ahat_inv, ahat_lim);
+    ahat_qparams(ahat_i8, ahat_qscale, ahat_s, ahat_inv, ahat_lim, ahat_ng);
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
     for (int i = idx; i < num_elements; i += blockDim.x * gridDim.x) {
@@ -294,7 +294,8 @@ __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache(
             xval *= smooth_inv[i % num_channels];
         }
         float q = ahat_quant_update(a_hat_cache, i, xval, scale, inv_scale, lim,
-                                    ahat_i8, ahat_s, ahat_inv, ahat_lim, write_ahat);
+                                    ahat_i8, ahat_s, ahat_inv, ahat_lim, write_ahat,
+                                    ahat_qscale, num_channels, ahat_ng);
         output_int8[i] = static_cast<int8_t>(q);
     }
 }
@@ -317,7 +318,7 @@ __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache_vec2(
     int num_elements,
     bool a4,
     bool ahat_i8 = false,
-    const float* ahat_qscale = nullptr
+    const float* ahat_qscale = nullptr, int ahat_ng = 0
 ) {
     float scale = *scale_ptr;
     float inv_scale = 1.0f / scale;
@@ -326,7 +327,8 @@ __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache_vec2(
     // ratio that used to be the other reason is retired -- see OptimizedInt8Conv2d.
     const float lim = a4 ? 7.0f : 127.0f;
     float ahat_s, ahat_inv, ahat_lim;
-    ahat_qparams(ahat_i8, ahat_qscale, ahat_s, ahat_inv, ahat_lim);
+    ahat_qparams(ahat_i8, ahat_qscale, ahat_s, ahat_inv, ahat_lim, ahat_ng);
+    const bool b32 = ahat_i8 && ahat_is_b32(num_channels, ahat_ng);
     const int stride = blockDim.x * gridDim.x;
 
     for (int base = 2 * (blockIdx.x * blockDim.x + threadIdx.x); base < num_elements; base += 2 * stride) {
@@ -337,17 +339,39 @@ __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache_vec2(
                 float2 sm = *reinterpret_cast<const float2*>(&smooth_inv[c0]);
                 xv.x *= sm.x; xv.y *= sm.y;
             }
-            float q0, q1;
-            ahat_quant_update2_w<WriteAhat>(a_hat_cache, base, xv.x, xv.y, scale, inv_scale, lim,
-                               ahat_i8, ahat_s, ahat_inv, ahat_lim, q0, q1);
+            float q0, q1, d0, d1;
+            if (b32) {
+                if constexpr (WriteAhat)
+                    ahat_b32_update2(reinterpret_cast<int8_t*>(a_hat_cache),
+                                     const_cast<float*>(ahat_qscale), (long)base,
+                                     xv.x, xv.y, scale, inv_scale, lim, q0, q1, d0, d1);
+                else
+                    ahat_b32_read2(reinterpret_cast<const int8_t*>(a_hat_cache), ahat_qscale,
+                                   (long)base, xv.x, xv.y, scale, lim, q0, q1, d0, d1);
+            } else if (ahat_i8 && ahat_ng > 0) {
+                // Blockwise but not B=32: quantize without storing, then resnap the group.
+                ahat_quant_update2_w<false>(a_hat_cache, base, xv.x, xv.y, scale, inv_scale, lim,
+                                   ahat_i8, ahat_s, ahat_inv, ahat_lim, q0, q1, d0, d1,
+                                   ahat_qscale, num_channels, ahat_ng);
+                if constexpr (WriteAhat)
+                    ahat_block_resnap2(a_hat_cache, const_cast<float*>(ahat_qscale), (long)base,
+                                       num_channels, ahat_ng,
+                                       (xv.x - d0) + q0 * inv_scale, (xv.y - d1) + q1 * inv_scale);
+            } else {
+                // fp16, per-tensor int8 and I-MoDiff store inside the helper; I-MoDiff has
+                // ahat_inv == 0, so an external ahat_store2 would write zeros.
+                ahat_quant_update2_w<WriteAhat>(a_hat_cache, base, xv.x, xv.y, scale, inv_scale, lim,
+                                   ahat_i8, ahat_s, ahat_inv, ahat_lim, q0, q1, d0, d1,
+                                   ahat_qscale, num_channels, ahat_ng);
+            }
             output_int8[base] = static_cast<int8_t>(q0);
             output_int8[base + 1] = static_cast<int8_t>(q1);
         } else {
-            // odd num_elements: single leftover element, same math as the scalar kernel.
             float xval = load_as_float(x, base);
             if (smooth_inv != nullptr) xval *= smooth_inv[base % num_channels];
             float q = ahat_quant_update_w<WriteAhat>(a_hat_cache, base, xval, scale, inv_scale, lim,
-                                        ahat_i8, ahat_s, ahat_inv, ahat_lim);
+                                        ahat_i8, ahat_s, ahat_inv, ahat_lim,
+                                        ahat_qscale, num_channels, ahat_ng);
             output_int8[base] = static_cast<int8_t>(q);
         }
     }
@@ -376,7 +400,7 @@ __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache_silu(
     bool a4,
     bool write_ahat,
     bool ahat_i8 = false,
-    const float* ahat_qscale = nullptr
+    const float* ahat_qscale = nullptr, int ahat_ng = 0
 ) {
     float scale = *scale_ptr;
     float inv_scale = 1.0f / scale;
@@ -385,7 +409,7 @@ __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache_silu(
     // ratio that used to be the other reason is retired -- see OptimizedInt8Conv2d.
     const float lim = a4 ? 7.0f : 127.0f;
     float ahat_s, ahat_inv, ahat_lim;
-    ahat_qparams(ahat_i8, ahat_qscale, ahat_s, ahat_inv, ahat_lim);
+    ahat_qparams(ahat_i8, ahat_qscale, ahat_s, ahat_inv, ahat_lim, ahat_ng);
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
     for (int i = idx; i < num_elements; i += blockDim.x * gridDim.x) {
@@ -394,7 +418,8 @@ __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache_silu(
             xval *= smooth_inv[i % num_channels];
         }
         float q = ahat_quant_update(a_hat_cache, i, xval, scale, inv_scale, lim,
-                                    ahat_i8, ahat_s, ahat_inv, ahat_lim, write_ahat);
+                                    ahat_i8, ahat_s, ahat_inv, ahat_lim, write_ahat,
+                                    ahat_qscale, num_channels, ahat_ng);
         output_int8[i] = static_cast<int8_t>(q);
     }
 }
@@ -413,7 +438,7 @@ __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache_silu_vec2
     int num_elements,
     bool a4,
     bool ahat_i8 = false,
-    const float* ahat_qscale = nullptr
+    const float* ahat_qscale = nullptr, int ahat_ng = 0
 ) {
     float scale = *scale_ptr;
     float inv_scale = 1.0f / scale;
@@ -422,7 +447,8 @@ __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache_silu_vec2
     // ratio that used to be the other reason is retired -- see OptimizedInt8Conv2d.
     const float lim = a4 ? 7.0f : 127.0f;
     float ahat_s, ahat_inv, ahat_lim;
-    ahat_qparams(ahat_i8, ahat_qscale, ahat_s, ahat_inv, ahat_lim);
+    ahat_qparams(ahat_i8, ahat_qscale, ahat_s, ahat_inv, ahat_lim, ahat_ng);
+    const bool b32 = ahat_i8 && ahat_is_b32(num_channels, ahat_ng);
     const int stride = blockDim.x * gridDim.x;
 
     for (int base = 2 * (blockIdx.x * blockDim.x + threadIdx.x); base < num_elements; base += 2 * stride) {
@@ -434,16 +460,39 @@ __global__ void static_quantize_and_update_ahat_kernel_int8_half_cache_silu_vec2
                 float2 sm = *reinterpret_cast<const float2*>(&smooth_inv[c0]);
                 xv.x *= sm.x; xv.y *= sm.y;
             }
-            float q0, q1;
-            ahat_quant_update2_w<WriteAhat>(a_hat_cache, base, xv.x, xv.y, scale, inv_scale, lim,
-                               ahat_i8, ahat_s, ahat_inv, ahat_lim, q0, q1);
+            float q0, q1, d0, d1;
+            if (b32) {
+                if constexpr (WriteAhat)
+                    ahat_b32_update2(reinterpret_cast<int8_t*>(a_hat_cache),
+                                     const_cast<float*>(ahat_qscale), (long)base,
+                                     xv.x, xv.y, scale, inv_scale, lim, q0, q1, d0, d1);
+                else
+                    ahat_b32_read2(reinterpret_cast<const int8_t*>(a_hat_cache), ahat_qscale,
+                                   (long)base, xv.x, xv.y, scale, lim, q0, q1, d0, d1);
+            } else if (ahat_i8 && ahat_ng > 0) {
+                // Blockwise but not B=32: quantize without storing, then resnap the group.
+                ahat_quant_update2_w<false>(a_hat_cache, base, xv.x, xv.y, scale, inv_scale, lim,
+                                   ahat_i8, ahat_s, ahat_inv, ahat_lim, q0, q1, d0, d1,
+                                   ahat_qscale, num_channels, ahat_ng);
+                if constexpr (WriteAhat)
+                    ahat_block_resnap2(a_hat_cache, const_cast<float*>(ahat_qscale), (long)base,
+                                       num_channels, ahat_ng,
+                                       (xv.x - d0) + q0 * inv_scale, (xv.y - d1) + q1 * inv_scale);
+            } else {
+                // fp16, per-tensor int8 and I-MoDiff store inside the helper; I-MoDiff has
+                // ahat_inv == 0, so an external ahat_store2 would write zeros.
+                ahat_quant_update2_w<WriteAhat>(a_hat_cache, base, xv.x, xv.y, scale, inv_scale, lim,
+                                   ahat_i8, ahat_s, ahat_inv, ahat_lim, q0, q1, d0, d1,
+                                   ahat_qscale, num_channels, ahat_ng);
+            }
             output_int8[base] = static_cast<int8_t>(q0);
             output_int8[base + 1] = static_cast<int8_t>(q1);
         } else {
             float xval = silu_f(load_as_float(x, base));
             if (smooth_inv != nullptr) xval *= smooth_inv[base % num_channels];
             float q = ahat_quant_update_w<WriteAhat>(a_hat_cache, base, xval, scale, inv_scale, lim,
-                                        ahat_i8, ahat_s, ahat_inv, ahat_lim);
+                                        ahat_i8, ahat_s, ahat_inv, ahat_lim,
+                                        ahat_qscale, num_channels, ahat_ng);
             output_int8[base] = static_cast<int8_t>(q);
         }
     }
@@ -540,12 +589,12 @@ __global__ void static_quantize_pack_and_update_ahat_kernel_int4_half_cache(
     int num_elements,
     bool write_ahat,
     bool ahat_i8 = false,
-    const float* ahat_qscale = nullptr
+    const float* ahat_qscale = nullptr, int ahat_ng = 0
 ) {
     float scale = *scale_ptr;
     float inv_scale = 1.0f / scale;
     float ahat_s, ahat_inv, ahat_lim;
-    ahat_qparams(ahat_i8, ahat_qscale, ahat_s, ahat_inv, ahat_lim);
+    ahat_qparams(ahat_i8, ahat_qscale, ahat_s, ahat_inv, ahat_lim, ahat_ng);
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
 
@@ -554,9 +603,9 @@ __global__ void static_quantize_pack_and_update_ahat_kernel_int4_half_cache(
         if (smooth_inv != nullptr) {
             x0 *= smooth_inv[base % num_channels];
         }
-        float c0 = ahat_load(a_hat_cache, base, ahat_i8, ahat_s);
-        float q0 = fmaxf(-7.0f, fminf(7.0f, roundf((x0 - c0) * scale)));
-        if (write_ahat) ahat_store(a_hat_cache, base, c0 + q0 * inv_scale, ahat_i8, ahat_inv, ahat_lim);
+        float q0 = ahat_quant_update(a_hat_cache, base, x0, scale, inv_scale, 7.0f,
+                                    ahat_i8, ahat_s, ahat_inv, ahat_lim, write_ahat,
+                                    ahat_qscale, num_channels, ahat_ng);
 
         float q1 = 0.0f;
         if (base + 1 < num_elements) {
@@ -564,9 +613,9 @@ __global__ void static_quantize_pack_and_update_ahat_kernel_int4_half_cache(
             if (smooth_inv != nullptr) {
                 x1 *= smooth_inv[(base + 1) % num_channels];
             }
-            float c1 = ahat_load(a_hat_cache, base + 1, ahat_i8, ahat_s);
-            q1 = fmaxf(-7.0f, fminf(7.0f, roundf((x1 - c1) * scale)));
-            if (write_ahat) ahat_store(a_hat_cache, base + 1, c1 + q1 * inv_scale, ahat_i8, ahat_inv, ahat_lim);
+            q1 = ahat_quant_update(a_hat_cache, base + 1, x1, scale, inv_scale, 7.0f,
+                                   ahat_i8, ahat_s, ahat_inv, ahat_lim, write_ahat,
+                                   ahat_qscale, num_channels, ahat_ng);
         }
 
         output_packed[base / 2] =
@@ -593,12 +642,12 @@ __global__ void static_quantize_pack_and_update_ahat_kernel_int4_half_cache_vec2
     int num_elements,
     bool write_ahat,
     bool ahat_i8 = false,
-    const float* ahat_qscale = nullptr
+    const float* ahat_qscale = nullptr, int ahat_ng = 0
 ) {
     float scale = *scale_ptr;
     float inv_scale = 1.0f / scale;
     float ahat_s, ahat_inv, ahat_lim;
-    ahat_qparams(ahat_i8, ahat_qscale, ahat_s, ahat_inv, ahat_lim);
+    ahat_qparams(ahat_i8, ahat_qscale, ahat_s, ahat_inv, ahat_lim, ahat_ng);
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
 
@@ -610,12 +659,10 @@ __global__ void static_quantize_pack_and_update_ahat_kernel_int4_half_cache_vec2
                 float2 sm = *reinterpret_cast<const float2*>(&smooth_inv[c0]);
                 xv.x *= sm.x; xv.y *= sm.y;
             }
-            float2 cache = ahat_load2(a_hat_cache, base, ahat_i8, ahat_s);
-            float q0 = fmaxf(-7.0f, fminf(7.0f, roundf((xv.x - cache.x) * scale)));
-            float q1 = fmaxf(-7.0f, fminf(7.0f, roundf((xv.y - cache.y) * scale)));
-            if (write_ahat)
-                ahat_store2(a_hat_cache, base, make_float2(cache.x + q0 * inv_scale, cache.y + q1 * inv_scale),
-                            ahat_i8, ahat_inv, ahat_lim);
+            float q0, q1;
+            ahat_quant_update2(a_hat_cache, base, xv.x, xv.y, scale, inv_scale, 7.0f,
+                               ahat_i8, ahat_s, ahat_inv, ahat_lim, write_ahat, q0, q1,
+                               ahat_qscale, num_channels, ahat_ng);
             output_packed[base / 2] =
                 (static_cast<int8_t>(q0) & 0x0F) |
                 ((static_cast<int8_t>(q1) & 0x0F) << 4);
@@ -623,9 +670,9 @@ __global__ void static_quantize_pack_and_update_ahat_kernel_int4_half_cache_vec2
             // odd num_elements: single leftover element, same math as the scalar kernel.
             float x0 = load_as_float(x, base);
             if (smooth_inv != nullptr) x0 *= smooth_inv[base % num_channels];
-            float c0 = ahat_load(a_hat_cache, base, ahat_i8, ahat_s);
-            float q0 = fmaxf(-7.0f, fminf(7.0f, roundf((x0 - c0) * scale)));
-            if (write_ahat) ahat_store(a_hat_cache, base, c0 + q0 * inv_scale, ahat_i8, ahat_inv, ahat_lim);
+            float q0 = ahat_quant_update(a_hat_cache, base, x0, scale, inv_scale, 7.0f,
+                                        ahat_i8, ahat_s, ahat_inv, ahat_lim, write_ahat,
+                                        ahat_qscale, num_channels, ahat_ng);
             output_packed[base / 2] = static_cast<int8_t>(q0) & 0x0F;
         }
     }
@@ -651,12 +698,12 @@ __global__ void static_quantize_pack_and_update_ahat_kernel_int4_half_cache_silu
     int num_elements,
     bool write_ahat,
     bool ahat_i8 = false,
-    const float* ahat_qscale = nullptr
+    const float* ahat_qscale = nullptr, int ahat_ng = 0
 ) {
     float scale = *scale_ptr;
     float inv_scale = 1.0f / scale;
     float ahat_s, ahat_inv, ahat_lim;
-    ahat_qparams(ahat_i8, ahat_qscale, ahat_s, ahat_inv, ahat_lim);
+    ahat_qparams(ahat_i8, ahat_qscale, ahat_s, ahat_inv, ahat_lim, ahat_ng);
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
 
@@ -665,9 +712,9 @@ __global__ void static_quantize_pack_and_update_ahat_kernel_int4_half_cache_silu
         if (smooth_inv != nullptr) {
             x0 *= smooth_inv[base % num_channels];
         }
-        float c0 = ahat_load(a_hat_cache, base, ahat_i8, ahat_s);
-        float q0 = fmaxf(-7.0f, fminf(7.0f, roundf((x0 - c0) * scale)));
-        if (write_ahat) ahat_store(a_hat_cache, base, c0 + q0 * inv_scale, ahat_i8, ahat_inv, ahat_lim);
+        float q0 = ahat_quant_update(a_hat_cache, base, x0, scale, inv_scale, 7.0f,
+                                    ahat_i8, ahat_s, ahat_inv, ahat_lim, write_ahat,
+                                    ahat_qscale, num_channels, ahat_ng);
 
         float q1 = 0.0f;
         if (base + 1 < num_elements) {
@@ -675,9 +722,9 @@ __global__ void static_quantize_pack_and_update_ahat_kernel_int4_half_cache_silu
             if (smooth_inv != nullptr) {
                 x1 *= smooth_inv[(base + 1) % num_channels];
             }
-            float c1 = ahat_load(a_hat_cache, base + 1, ahat_i8, ahat_s);
-            q1 = fmaxf(-7.0f, fminf(7.0f, roundf((x1 - c1) * scale)));
-            if (write_ahat) ahat_store(a_hat_cache, base + 1, c1 + q1 * inv_scale, ahat_i8, ahat_inv, ahat_lim);
+            q1 = ahat_quant_update(a_hat_cache, base + 1, x1, scale, inv_scale, 7.0f,
+                                   ahat_i8, ahat_s, ahat_inv, ahat_lim, write_ahat,
+                                   ahat_qscale, num_channels, ahat_ng);
         }
 
         output_packed[base / 2] =
@@ -700,12 +747,12 @@ __global__ void static_quantize_pack_and_update_ahat_kernel_int4_half_cache_silu
     int num_elements,
     bool write_ahat,
     bool ahat_i8 = false,
-    const float* ahat_qscale = nullptr
+    const float* ahat_qscale = nullptr, int ahat_ng = 0
 ) {
     float scale = *scale_ptr;
     float inv_scale = 1.0f / scale;
     float ahat_s, ahat_inv, ahat_lim;
-    ahat_qparams(ahat_i8, ahat_qscale, ahat_s, ahat_inv, ahat_lim);
+    ahat_qparams(ahat_i8, ahat_qscale, ahat_s, ahat_inv, ahat_lim, ahat_ng);
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
 
@@ -718,21 +765,19 @@ __global__ void static_quantize_pack_and_update_ahat_kernel_int4_half_cache_silu
                 float2 sm = *reinterpret_cast<const float2*>(&smooth_inv[c0]);
                 xv.x *= sm.x; xv.y *= sm.y;
             }
-            float2 cache = ahat_load2(a_hat_cache, base, ahat_i8, ahat_s);
-            float q0 = fmaxf(-7.0f, fminf(7.0f, roundf((xv.x - cache.x) * scale)));
-            float q1 = fmaxf(-7.0f, fminf(7.0f, roundf((xv.y - cache.y) * scale)));
-            if (write_ahat)
-                ahat_store2(a_hat_cache, base, make_float2(cache.x + q0 * inv_scale, cache.y + q1 * inv_scale),
-                            ahat_i8, ahat_inv, ahat_lim);
+            float q0, q1;
+            ahat_quant_update2(a_hat_cache, base, xv.x, xv.y, scale, inv_scale, 7.0f,
+                               ahat_i8, ahat_s, ahat_inv, ahat_lim, write_ahat, q0, q1,
+                               ahat_qscale, num_channels, ahat_ng);
             output_packed[base / 2] =
                 (static_cast<int8_t>(q0) & 0x0F) |
                 ((static_cast<int8_t>(q1) & 0x0F) << 4);
         } else {
             float x0 = silu_f(load_as_float(x, base));
             if (smooth_inv != nullptr) x0 *= smooth_inv[base % num_channels];
-            float c0 = ahat_load(a_hat_cache, base, ahat_i8, ahat_s);
-            float q0 = fmaxf(-7.0f, fminf(7.0f, roundf((x0 - c0) * scale)));
-            if (write_ahat) ahat_store(a_hat_cache, base, c0 + q0 * inv_scale, ahat_i8, ahat_inv, ahat_lim);
+            float q0 = ahat_quant_update(a_hat_cache, base, x0, scale, inv_scale, 7.0f,
+                                        ahat_i8, ahat_s, ahat_inv, ahat_lim, write_ahat,
+                                        ahat_qscale, num_channels, ahat_ng);
             output_packed[base / 2] = static_cast<int8_t>(q0) & 0x0F;
         }
     }
@@ -1310,14 +1355,17 @@ torch::Tensor step1_static_quantize_fprop(
             || a_hat_cache.scalar_type() == torch::kInt16) {
         bool ahat_i8 = false;
         const float* ahat_qscale_ptr = nullptr;
+        int ahat_ng = 0;
         __half* cache_ptr = nullptr;
         bind_ahat_cache(a_hat_cache, ahat_scale, cache_ptr, ahat_i8, ahat_qscale_ptr,
-                        "step1_static_quantize_fprop");
+                        "step1_static_quantize_fprop", &ahat_ng);
+        const bool use_vec2 = (num_channels % 2 == 0);
+        const bool fuse_block = use_vec2 && ahat_block_shuffle_ok((int)x.size(1), ahat_ng);
+        const bool wa = write_ahat && !(ahat_i8 && ahat_ng > 0 && !fuse_block);
         // Vec2 fast path requires num_channels % 2 == 0 for the smooth_inv half2 load
         // (same pre-existing, unenforced channels-last assumption the float4 kernels
         // already rely on for %4==0 -- not a new risk). Right-size the grid for the
         // 2-wide step rather than reusing the float4-sized `grid_size` above.
-        const bool use_vec2 = (num_channels % 2 == 0);
         const int num_work_items_vec2 = (num_elements + 1) / 2;
         const int grid_size_vec2 = (num_work_items_vec2 + block_size - 1) / block_size;
         if (x.scalar_type() == torch::kHalf) {
@@ -1332,10 +1380,10 @@ torch::Tensor step1_static_quantize_fprop(
                         smooth_ptr,
                         num_channels,
                         num_elements,
-                        a4, ahat_i8, ahat_qscale_ptr
+                        a4, ahat_i8, ahat_qscale_ptr, ahat_ng
                     );
                 };
-                if (write_ahat) launch(std::true_type{}); else launch(std::false_type{});
+                if (wa) launch(std::true_type{}); else launch(std::false_type{});
             } else {
                 static_quantize_and_update_ahat_kernel_int8_half_cache<__half><<<grid_size, block_size, 0, stream>>>(
                     reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
@@ -1345,7 +1393,7 @@ torch::Tensor step1_static_quantize_fprop(
                     smooth_ptr,
                     num_channels,
                     num_elements,
-                    a4, write_ahat, ahat_i8, ahat_qscale_ptr
+                    a4, wa, ahat_i8, ahat_qscale_ptr, ahat_ng
                 );
             }
         } else {
@@ -1360,10 +1408,10 @@ torch::Tensor step1_static_quantize_fprop(
                         smooth_ptr,
                         num_channels,
                         num_elements,
-                        a4, ahat_i8, ahat_qscale_ptr
+                        a4, ahat_i8, ahat_qscale_ptr, ahat_ng
                     );
                 };
-                if (write_ahat) launch(std::true_type{}); else launch(std::false_type{});
+                if (wa) launch(std::true_type{}); else launch(std::false_type{});
             } else {
                 static_quantize_and_update_ahat_kernel_int8_half_cache<float><<<grid_size, block_size, 0, stream>>>(
                     x.data_ptr<float>(),
@@ -1373,9 +1421,14 @@ torch::Tensor step1_static_quantize_fprop(
                     smooth_ptr,
                     num_channels,
                     num_elements,
-                    a4, write_ahat, ahat_i8, ahat_qscale_ptr
+                    a4, wa, ahat_i8, ahat_qscale_ptr, ahat_ng
                 );
             }
+        }
+        if (write_ahat && ahat_i8 && ahat_ng > 0 && !fuse_block) {
+            ahat_commit_block(cache_ptr, const_cast<float*>(ahat_qscale_ptr),
+                              x_int8.data_ptr<int8_t>(), scale_buf.data_ptr<float>(),
+                              (int)x.size(1), ahat_ng, (long)x.numel(), stream);
         }
     } else {
         static_quantize_and_update_ahat_kernel_int8<<<grid_size, block_size, 0, stream>>>(
@@ -1447,12 +1500,15 @@ torch::Tensor step1_static_quantize_fprop_silu(
 
     bool ahat_i8 = false;
     const float* ahat_qscale_ptr = nullptr;
+    int ahat_ng = 0;
     __half* cache_ptr = nullptr;
     bind_ahat_cache(a_hat_cache, ahat_scale, cache_ptr, ahat_i8, ahat_qscale_ptr,
-                    "step1_static_quantize_fprop_silu");
+                    "step1_static_quantize_fprop_silu", &ahat_ng);
+    const bool use_vec2 = (num_channels % 2 == 0);
+    const bool fuse_block = use_vec2 && ahat_block_shuffle_ok((int)x.size(1), ahat_ng);
+    const bool wa = write_ahat && !(ahat_i8 && ahat_ng > 0 && !fuse_block);
 
     // See step1_static_quantize_fprop for the use_vec2 gate rationale.
-    const bool use_vec2 = (num_channels % 2 == 0);
     const int num_work_items_vec2 = (num_elements + 1) / 2;
     const int grid_size_vec2 = (num_work_items_vec2 + block_size - 1) / block_size;
 
@@ -1468,10 +1524,10 @@ torch::Tensor step1_static_quantize_fprop_silu(
                     smooth_ptr,
                     num_channels,
                     num_elements,
-                    a4, ahat_i8, ahat_qscale_ptr
+                    a4, ahat_i8, ahat_qscale_ptr, ahat_ng
                 );
             };
-            if (write_ahat) launch(std::true_type{}); else launch(std::false_type{});
+            if (wa) launch(std::true_type{}); else launch(std::false_type{});
         } else {
             static_quantize_and_update_ahat_kernel_int8_half_cache_silu<__half><<<grid_size, block_size, 0, stream>>>(
                 reinterpret_cast<const __half*>(x.data_ptr<at::Half>()),
@@ -1481,7 +1537,7 @@ torch::Tensor step1_static_quantize_fprop_silu(
                 smooth_ptr,
                 num_channels,
                 num_elements,
-                a4, write_ahat, ahat_i8, ahat_qscale_ptr
+                a4, wa, ahat_i8, ahat_qscale_ptr, ahat_ng
             );
         }
     } else {
@@ -1496,10 +1552,10 @@ torch::Tensor step1_static_quantize_fprop_silu(
                     smooth_ptr,
                     num_channels,
                     num_elements,
-                    a4, ahat_i8, ahat_qscale_ptr
+                    a4, ahat_i8, ahat_qscale_ptr, ahat_ng
                 );
             };
-            if (write_ahat) launch(std::true_type{}); else launch(std::false_type{});
+            if (wa) launch(std::true_type{}); else launch(std::false_type{});
         } else {
             static_quantize_and_update_ahat_kernel_int8_half_cache_silu<float><<<grid_size, block_size, 0, stream>>>(
                 x.data_ptr<float>(),
@@ -1509,9 +1565,15 @@ torch::Tensor step1_static_quantize_fprop_silu(
                 smooth_ptr,
                 num_channels,
                 num_elements,
-                a4, write_ahat, ahat_i8, ahat_qscale_ptr
+                a4, wa, ahat_i8, ahat_qscale_ptr, ahat_ng
             );
         }
+    }
+
+    if (write_ahat && ahat_i8 && ahat_ng > 0 && !fuse_block) {
+        ahat_commit_block(cache_ptr, const_cast<float*>(ahat_qscale_ptr),
+                          x_int8.data_ptr<int8_t>(), scale_buf.data_ptr<float>(),
+                          (int)x.size(1), ahat_ng, (long)x.numel(), stream);
     }
 
     return x_int8;
@@ -1608,9 +1670,10 @@ torch::Tensor step1_static_quantize_pack_int4_fprop(
             || a_hat_cache.scalar_type() == torch::kInt16) {
         bool ahat_i8 = false;
         const float* ahat_qscale_ptr = nullptr;
+        int ahat_ng = 0;
         __half* cache_ptr = nullptr;
         bind_ahat_cache(a_hat_cache, ahat_scale, cache_ptr, ahat_i8, ahat_qscale_ptr,
-                        "step1_static_quantize_pack_int4_fprop");
+                        "step1_static_quantize_pack_int4_fprop", &ahat_ng);
         // Vec2 fast path requires num_channels % 2 == 0 for the smooth_inv half2 load -- see
         // step1_static_quantize_fprop's identical gate for the INT8 sibling. Right-size the grid
         // for the 2-wide step rather than reusing the float4-sized `grid_size` above.
@@ -1626,7 +1689,7 @@ torch::Tensor step1_static_quantize_pack_int4_fprop(
                     scale_buf.data_ptr<float>(),
                     smooth_ptr,
                     num_channels,
-                    num_input, write_ahat, ahat_i8, ahat_qscale_ptr
+                    num_input, write_ahat, ahat_i8, ahat_qscale_ptr, ahat_ng
                 );
             } else {
                 static_quantize_pack_and_update_ahat_kernel_int4_half_cache<__half><<<grid_size, block_size, 0, stream>>>(
@@ -1636,7 +1699,7 @@ torch::Tensor step1_static_quantize_pack_int4_fprop(
                     scale_buf.data_ptr<float>(),
                     smooth_ptr,
                     num_channels,
-                    num_input, write_ahat, ahat_i8, ahat_qscale_ptr
+                    num_input, write_ahat, ahat_i8, ahat_qscale_ptr, ahat_ng
                 );
             }
         } else {
@@ -1648,7 +1711,7 @@ torch::Tensor step1_static_quantize_pack_int4_fprop(
                     scale_buf.data_ptr<float>(),
                     smooth_ptr,
                     num_channels,
-                    num_input, write_ahat, ahat_i8, ahat_qscale_ptr
+                    num_input, write_ahat, ahat_i8, ahat_qscale_ptr, ahat_ng
                 );
             } else {
                 static_quantize_pack_and_update_ahat_kernel_int4_half_cache<float><<<grid_size, block_size, 0, stream>>>(
@@ -1658,7 +1721,7 @@ torch::Tensor step1_static_quantize_pack_int4_fprop(
                     scale_buf.data_ptr<float>(),
                     smooth_ptr,
                     num_channels,
-                    num_input, write_ahat, ahat_i8, ahat_qscale_ptr
+                    num_input, write_ahat, ahat_i8, ahat_qscale_ptr, ahat_ng
                 );
             }
         }
@@ -1756,9 +1819,10 @@ torch::Tensor step1_static_quantize_pack_int4_fprop_silu(
 
     bool ahat_i8 = false;
     const float* ahat_qscale_ptr = nullptr;
+    int ahat_ng = 0;
     __half* cache_ptr = nullptr;
     bind_ahat_cache(a_hat_cache, ahat_scale, cache_ptr, ahat_i8, ahat_qscale_ptr,
-                    "step1_static_quantize_pack_int4_fprop_silu");
+                    "step1_static_quantize_pack_int4_fprop_silu", &ahat_ng);
 
     // See step1_static_quantize_pack_int4_fprop for the use_vec2 gate rationale.
     const bool use_vec2 = (num_channels % 2 == 0);
@@ -1773,7 +1837,7 @@ torch::Tensor step1_static_quantize_pack_int4_fprop_silu(
                 scale_buf.data_ptr<float>(),
                 smooth_ptr,
                 num_channels,
-                num_input, write_ahat, ahat_i8, ahat_qscale_ptr
+                num_input, write_ahat, ahat_i8, ahat_qscale_ptr, ahat_ng
             );
         } else {
             static_quantize_pack_and_update_ahat_kernel_int4_half_cache_silu<__half><<<grid_size, block_size, 0, stream>>>(
@@ -1783,7 +1847,7 @@ torch::Tensor step1_static_quantize_pack_int4_fprop_silu(
                 scale_buf.data_ptr<float>(),
                 smooth_ptr,
                 num_channels,
-                num_input, write_ahat, ahat_i8, ahat_qscale_ptr
+                num_input, write_ahat, ahat_i8, ahat_qscale_ptr, ahat_ng
             );
         }
     } else {
@@ -1795,7 +1859,7 @@ torch::Tensor step1_static_quantize_pack_int4_fprop_silu(
                 scale_buf.data_ptr<float>(),
                 smooth_ptr,
                 num_channels,
-                num_input, write_ahat, ahat_i8, ahat_qscale_ptr
+                num_input, write_ahat, ahat_i8, ahat_qscale_ptr, ahat_ng
             );
         } else {
             static_quantize_pack_and_update_ahat_kernel_int4_half_cache_silu<float><<<grid_size, block_size, 0, stream>>>(
@@ -1805,7 +1869,7 @@ torch::Tensor step1_static_quantize_pack_int4_fprop_silu(
                 scale_buf.data_ptr<float>(),
                 smooth_ptr,
                 num_channels,
-                num_input, write_ahat, ahat_i8, ahat_qscale_ptr
+                num_input, write_ahat, ahat_i8, ahat_qscale_ptr, ahat_ng
             );
         }
     }
@@ -1818,3 +1882,57 @@ torch::Tensor step1_static_quantize_pack_int4_fprop_silu(
     return x_packed.view({N, H, W, C / 2});
 }
 
+
+// -----------------------------------------------------------------------------
+// t=T pack: float a_hat -> int8 codes + per-along-C-block fp32 scales.
+//
+// The Python version of this (OptimizedInt8Conv2d._pack_ahat_along_c) is eight
+// eager passes -- permute/float copy, abs, amax reduce, div, round, clamp, int8
+// cast, copy back -- over every calibrated layer's full a_hat at once. Measured
+// at batch 128 that is ~68 ms of one-time GPU work, which is 1.4 ms/step over a
+// 50-step sample. This is one coalesced pass: warp == one B=32 group, so the
+// amax is a single REDUX and the load and store are both fully coalesced.
+// -----------------------------------------------------------------------------
+template <typename T>
+__global__ void ahat_pack_block_b32_kernel(
+    const T* __restrict__ src, int8_t* __restrict__ dst, float* __restrict__ qscale,
+    long numel)
+{
+    const long i = (long)blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= numel) return;
+    const float v = (float)src[i];
+    const float g = fmaxf(ahat_group32_amax(fabsf(v)), 1e-12f);
+    dst[i] = (int8_t)ahat_q8(v * __fdividef(127.0f, g));
+    if ((threadIdx.x & 31) == 0) qscale[i >> 5] = g * (1.0f / 127.0f);
+}
+
+std::vector<torch::Tensor> ahat_pack_block_nhwc(torch::Tensor a_hat, int64_t block) {
+    CHECK_CUDA(a_hat);
+    TORCH_CHECK(a_hat.dim() == 4, "ahat_pack_block_nhwc expects [N, C, H, W]");
+    TORCH_CHECK(block == 32, "ahat_pack_block_nhwc: only along-C block 32 is fused");
+    const int N = a_hat.size(0), C = a_hat.size(1), H = a_hat.size(2), W = a_hat.size(3);
+    TORCH_CHECK(C % 32 == 0, "ahat_pack_block_nhwc: C must be a multiple of 32, got ", C);
+    auto src = a_hat.contiguous(torch::MemoryFormat::ChannelsLast);
+    TORCH_CHECK(src.scalar_type() == torch::kFloat16 || src.scalar_type() == torch::kFloat32,
+                "ahat_pack_block_nhwc: a_hat must be fp16 or fp32");
+    auto opts = torch::TensorOptions().device(a_hat.device());
+    auto dst = torch::empty({N, C, H, W}, opts.dtype(torch::kInt8)
+                                              .memory_format(torch::MemoryFormat::ChannelsLast));
+    auto qscale = torch::empty({N, H, W, C / 32}, opts.dtype(torch::kFloat32));
+    const long numel = (long)N * C * H * W;
+    // numel is a multiple of 32 (C is), so no warp ever straddles the tail and the
+    // early return above cannot split a group.
+    const int t = 256;
+    const long g = (numel + t - 1) / t;
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    if (src.scalar_type() == torch::kFloat16) {
+        ahat_pack_block_b32_kernel<__half><<<(unsigned)g, t, 0, stream>>>(
+            reinterpret_cast<const __half*>(src.data_ptr<at::Half>()),
+            dst.data_ptr<int8_t>(), qscale.data_ptr<float>(), numel);
+    } else {
+        ahat_pack_block_b32_kernel<float><<<(unsigned)g, t, 0, stream>>>(
+            src.data_ptr<float>(), dst.data_ptr<int8_t>(), qscale.data_ptr<float>(), numel);
+    }
+    C10_CUDA_CHECK(cudaGetLastError());
+    return {dst, qscale};
+}

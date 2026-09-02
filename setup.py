@@ -43,6 +43,7 @@ setup(
                 'csrc/modiff/conv/conv2d_int4.cu',
                 'csrc/modiff/conv/conv2d_evt.cu',
                 'csrc/modiff/conv/zpw_window_sum.cu',
+                'csrc/modiff/conv/conv2d_int8_blockk.cu',
                 # norm: GroupNorm(+SiLU)(+quantize) and fused GroupNorm->qkv
                 # family 3 of the csrc split (2026-08-12)
                 'csrc/baseline/norm/group_norm_silu.cu',
@@ -52,6 +53,7 @@ setup(
                 # family 2 of the csrc split (2026-08-12)
                 'csrc/baseline/linear/gemm_wxax.cu',
                 'csrc/modiff/linear/gemm_wxax.cu',
+                'csrc/modiff/linear/gemm_blockk.cu',
                 # attention: W8A8/W4A4 materialized attention + fused int8/int4 flash
                 # family 5 of the csrc split (2026-08-12): attention is stateless in both
                 # datapaths, so the whole family is baseline. See the file headers.

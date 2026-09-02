@@ -393,15 +393,19 @@ class OptimizedInt8Conv2d(nn.Module):
         return os.environ.get("MODIFF_IMODE", "0") == "1"
 
     def _ahat_want_int8(self) -> bool:
-        """True when a_hat is stored as int8 codes * per-tensor scale (MODIFF_AHAT_BITS=8 or 4).
+        """True when a_hat is stored as int8 codes + dequant scale, not I-MoDiff.
 
-        bits=4 uses the same 1-byte buffer with qmax=7 (unpacked 4-bit codes). Nibble packing
-        is not used: scalar kernels would race on a shared byte. I-MoDiff uses its own
-        integer buffers and never takes this pack/dequant path.
+        Per-tensor: MODIFF_AHAT_BITS=8 or 4 (qmax 127 / 7). Along-C block:
+        MODIFF_AHAT_BLOCK>0 (qmax 127, 4D scales [N,H,W,C/B]). Both skip
+        Python fake-quant; the kernel dequants on load and snaps on store.
         """
         if self._imode():
             return False
-        return self.is_calibrated and 0 < self._ahat_bits() < 16
+        if not self.is_calibrated:
+            return False
+        if self._ahat_block() > 0:
+            return True
+        return 0 < self._ahat_bits() < 16
 
     def _ahat_qmax(self) -> float:
         bits = self._ahat_bits()
@@ -418,16 +422,199 @@ class OptimizedInt8Conv2d(nn.Module):
     def _ahat_refresh() -> bool:
         return os.environ.get("MODIFF_AHAT_REFRESH", "0") == "1"
 
+    @staticmethod
+    def _ahat_block() -> int:
+        """Along-C group size for int8 a_hat. MODIFF_AHAT_BLOCK=32 → 32
+        consecutive channels at each (n,h,w) share a scale. 0 is off.
+        Storage is int8 NHWC + fp32 scales [N,H,W,C/B]. Scales start at t=T
+        pack and are refreshed in-kernel each write (per-block amax of new_c),
+        matching the Python along-C fake-quant snap.
+        """
+        try:
+            return int(os.environ.get("MODIFF_AHAT_BLOCK", "0"))
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _ahat_block_fake() -> bool:
+        """Also along-C fake-quant the fp16 a_hat of UNcalibrated layers.
+
+        Off by default: those layers have no int8 datapath, so the snap is pure
+        eager-kernel cost. See _maybe_quantize_ahat.
+        """
+        return os.environ.get("MODIFF_AHAT_BLOCK_FAKE", "0") == "1"
+
+    @staticmethod
+    def _snap_ahat_along_c_(a: torch.Tensor, block: int, qmax: float = 127.0) -> None:
+        """In-place int8 fake-quant of `a` (NCHW): groups of `block` channels / pixel."""
+        x = a.permute(0, 2, 3, 1).contiguous().float()
+        n, h, w, c = x.shape
+        bsz = min(int(block), c)
+        if bsz <= 0:
+            return
+        pad = (bsz - c % bsz) % bsz
+        xp = F.pad(x, (0, pad)) if pad else x
+        g = xp.shape[-1] // bsz
+        blk = xp.reshape(n, h, w, g, bsz)
+        amax = blk.abs().amax(-1, keepdim=True).clamp_min(1e-12)
+        s = amax / qmax
+        q = (blk / s).round().clamp_(-qmax, qmax)
+        recon = (q * s).reshape(n, h, w, -1)[..., :c]
+        a.copy_(recon.permute(0, 3, 1, 2).to(a.dtype))
+
+    # ---- blockwise activation-quantizer simulation (MODIFF_ACT_BLOCK) -------------
+    #
+    # The conv INPUT quantizer -- Q(a_t) in the baseline arm, Q(a_t - a_hat_{t+1}) in
+    # MoDiff -- is per-tensor today because its scale is the CUTLASS epilogue's scalar
+    # `alpha` (conv2d_evt.cu: E_MulA = Sm80EVT<Mul, Accum, Alpha>). A blockwise scale
+    # along C is a scale along the conv's REDUCTION axis, and by the time the epilogue
+    # sees the int32 accumulator the per-block structure has already been summed away.
+    # Expressing it for real needs a mainloop that promotes to fp32 every 32 K, which
+    # this CUTLASS 2.x sm80 int8 conv has no support for.
+    #
+    # So this path exists to price the accuracy first: it fake-quantizes (quantize ->
+    # dequantize) the same tensor the real kernels quantize and runs the conv in fp32
+    # on dequantized int8 weights. Weights stay W8 per-output-channel, both arms share
+    # this code, and the only variable is the activation quantizer's granularity.
+    # It is a measurement harness, NOT a fast path -- it bypasses every fused kernel.
+    #
+    #   MODIFF_ACT_BLOCK = 0   off (default): the real fused int8 kernels
+    #                     -2   sim, per-tensor STATIC (calibrated scale / delta table)
+    #                          -- the control that should reproduce the shipped relL2
+    #                     -1   sim, per-tensor DYNAMIC absmax
+    #                      N   sim, DYNAMIC blockwise, N consecutive channels per pixel
+    #
+    # -1 vs N is the honest granularity comparison (both dynamic); -2 validates the
+    # harness against the numbers the real kernels produce.
+    @staticmethod
+    def _act_block() -> int:
+        try:
+            return int(os.environ.get("MODIFF_ACT_BLOCK", "0"))
+        except (TypeError, ValueError):
+            return 0
+
+    def _sim_guard(self, where: str) -> None:
+        """Fused entry points must not run in sim mode -- they would quantize with the
+        real per-tensor kernels and silently report the wrong granularity."""
+        if self._act_block() != 0:
+            raise RuntimeError(
+                f"MODIFF_ACT_BLOCK sim reached fused entry point {where} on layer "
+                f"{getattr(self, 'layer_name', '?')}. Disable the fusions "
+                f"(MODIFF_DISABLE_GN_MODIFF_FUSION=1 MODIFF_DISABLE_GN_INT8_FUSION=1) "
+                f"so every conv goes through forward().")
+
+    @staticmethod
+    def _fq_along_c(x: torch.Tensor, block: int, qmax: float = 127.0) -> torch.Tensor:
+        """Fake-quantize NCHW `x`: `block` consecutive channels per pixel share a
+        dynamic absmax scale. block<=0 means one scale for the whole tensor. A C not
+        divisible by `block` leaves a short final group with its own scale."""
+        if block <= 0:
+            s = x.abs().amax().clamp_min(1e-12).float() / qmax
+            return ((x.float() / s).round_().clamp_(-qmax, qmax) * s).to(x.dtype)
+        t = x.permute(0, 2, 3, 1).float()
+        n, h, w, c = t.shape
+        bsz = min(block, c)
+        pad = (bsz - c % bsz) % bsz
+        tp = F.pad(t, (0, pad)) if pad else t
+        blk = tp.reshape(n, h, w, tp.shape[-1] // bsz, bsz)
+        s = blk.abs().amax(-1, keepdim=True).clamp_min(1e-12) / qmax
+        recon = ((blk / s).round_().clamp_(-qmax, qmax) * s).reshape(n, h, w, -1)[..., :c]
+        return recon.permute(0, 3, 1, 2).to(x.dtype).contiguous(
+            memory_format=torch.channels_last)
+
+    def _sim_fq(self, x: torch.Tensor, static_scale: Optional[torch.Tensor]) -> torch.Tensor:
+        """Apply the sim-mode quantizer selected by MODIFF_ACT_BLOCK."""
+        b = self._act_block()
+        if b == -2 and static_scale is not None:
+            s = static_scale.detach().float().reshape(())
+            return ((x.float() * s).round_().clamp_(-127.0, 127.0) / s).to(x.dtype)
+        return self._fq_along_c(x, b if b > 0 else 0)
+
+    def _sim_weight(self) -> torch.Tensor:
+        """Dequantized per-output-channel int8 weight as [K,C,R,S] fp32, so the sim conv
+        is W8 -- the same weights the CUTLASS path uses, just not in integer form."""
+        w = getattr(self, "_sim_w", None)
+        if w is None or w.device != self.weight_int8.device:
+            K = self.out_channels
+            wq = self.weight_int8.permute(0, 3, 1, 2).float()  # [K,R,S,C] -> [K,C,R,S]
+            w = (wq * self.weight_scale_channel.reshape(K, 1, 1, 1).float()).contiguous()
+            self._sim_w = w
+        return w
+
+    def _sim_conv(self, x: torch.Tensor, with_bias: bool) -> torch.Tensor:
+        b = (self.bias.reshape(-1).float() if (with_bias and self.bias is not None) else None)
+        return F.conv2d(x.float(), self._sim_weight(), b, self.stride, self.padding,
+                        self.dilation, self.groups)
+
+    def _forward_blockwise_sim(self, x: torch.Tensor) -> torch.Tensor:
+        """Measurement-only forward for MODIFF_ACT_BLOCK. Mirrors the real semantics:
+        baseline  out    = A(Q(a_t)) + bias
+        MoDiff  t=T      a_hat = Q(a_t),  o_hat = A(a_hat) + bias
+                t<T      a_hat += Q(a_t - a_hat),  o_hat += A(Q(a_t - a_hat))
+        """
+        if not self._smooth_is_identity:
+            raise RuntimeError("MODIFF_ACT_BLOCK sim does not model SmoothQuant "
+                               "(int8 churches calibration has none).")
+        if not x.is_contiguous(memory_format=torch.channels_last):
+            x = x.contiguous(memory_format=torch.channels_last)
+        static = self.static_input_scale if self.is_calibrated else None
+
+        if not self.modiff_enabled:
+            return self._sim_conv(self._sim_fq(x, static), with_bias=True).half()
+
+        if (self.a_hat_cache is None or self.a_hat_cache.shape != x.shape
+                or self.a_hat_cache.dtype != torch.float16):
+            self.is_first_step = True
+
+        if self.is_first_step:
+            a_hat = self._sim_fq(x, static)
+            o_hat = self._sim_conv(a_hat, with_bias=True)
+            self.a_hat_cache = a_hat.half().contiguous(memory_format=torch.channels_last)
+            self.o_hat_cache = o_hat.half().contiguous(memory_format=torch.channels_last)
+            self.is_first_step = False
+            self.step_count = 0
+        else:
+            self.step_count += 1
+            # MoDiff's modulated steps quantize the delta on the per-step table entry;
+            # -2 reproduces that, the dynamic modes derive their own scale from it.
+            d_static = (self.static_delta_scale[min(self.step_count - 1,
+                                                    self.static_delta_scale.numel() - 1)]
+                        if bool(self.is_delta_calibrated) else None)
+            dq = self._sim_fq(x - self.a_hat_cache, d_static)
+            self.a_hat_cache += dq.half()
+            self.o_hat_cache += self._sim_conv(dq, with_bias=False).half()
+
+        if self._ahat_block() > 0:
+            self._snap_ahat_along_c_(self.a_hat_cache, self._ahat_block(), 127.0)
+        return self.o_hat_cache
+
     def _ahat_scale_arg(self) -> torch.Tensor:
         s = getattr(self, "_ahat_qscale", None)
         if s is None:
             dev = self.a_hat_cache.device if self.a_hat_cache is not None else torch.device("cpu")
             return self._empty_f32_arg(dev)
+        if not s.is_contiguous():
+            s = s.contiguous()
+            self._ahat_qscale = s
         return s
 
+    def _ensure_block_qscale(self, n: int, c: int, h: int, w: int, device) -> None:
+        bsz = self._ahat_block()
+        if bsz <= 0 or c % bsz != 0:
+            return
+        g = c // bsz
+        shape = (n, h, w, g)
+        s = getattr(self, "_ahat_qscale", None)
+        if s is None or tuple(s.shape) != shape or s.device != device:
+            self._ahat_qscale = torch.ones(shape, device=device, dtype=torch.float32)
+
     def _ensure_ahat_qscale(self, device) -> None:
+        if self._ahat_block() > 0 and not self._imode():
+            return
         qmax = self._ahat_qmax()
         s = getattr(self, "_ahat_qscale", None)
+        if s is not None and s.dim() == 4:
+            return
         if s is None or s.numel() < 2 or s.device != device:
             scale0 = 0.0 if self._imode() else 1.0
             self._ahat_qscale = torch.tensor([scale0, qmax], device=device, dtype=torch.float32)
@@ -436,8 +623,51 @@ class OptimizedInt8Conv2d(nn.Module):
                 self._ahat_qscale[0] = 0.0
             self._ahat_qscale[1] = qmax
 
+    def _pack_ahat_along_c(self) -> None:
+        """Quantize a floating a_hat into int8 codes + per-block scales [N,H,W,C/B].
+
+        t=T pack only. Later writes refresh those scales in-kernel from the
+        new_c amax (same as `_snap_ahat_along_c_`).
+        """
+        a = self.a_hat_cache
+        if a is None or a.dtype == torch.int8:
+            return
+        bsz = self._ahat_block()
+        n, c, h, w = a.shape
+        if bsz <= 0 or c % bsz != 0:
+            raise RuntimeError(
+                f"MODIFF_AHAT_BLOCK={bsz} must divide C={c} for layer {getattr(self, 'layer_name', '?')}")
+        qmax = 127.0
+        g = c // bsz
+        if bsz == 32 and hasattr(modiff_cutlass, "ahat_pack_block_nhwc"):
+            q, scale = modiff_cutlass.ahat_pack_block_nhwc(a, 32)
+            s = getattr(self, "_ahat_qscale", None)
+            if (s is None or s.shape != scale.shape or s.dtype != torch.float32
+                    or s.device != scale.device):
+                self._ahat_qscale = scale
+            else:
+                s.copy_(scale)
+            self.a_hat_cache = q
+            return
+        x = a.permute(0, 2, 3, 1).contiguous().float()
+        blk = x.view(n, h, w, g, bsz)
+        amax = blk.abs().amax(-1).clamp_min(1e-12)
+        scale = (amax / qmax).contiguous()
+        q = (blk / scale.unsqueeze(-1)).round().clamp_(-qmax, qmax).to(torch.int8)
+        q = q.view(n, h, w, c).permute(0, 3, 1, 2).contiguous(memory_format=torch.channels_last)
+        s = getattr(self, "_ahat_qscale", None)
+        if (s is None or s.shape != scale.shape or s.dtype != torch.float32
+                or s.device != scale.device):
+            self._ahat_qscale = scale
+        else:
+            s.copy_(scale)
+        self.a_hat_cache = q
+
     def _pack_ahat_int8(self) -> None:
-        """Quantize a floating a_hat into int8 codes + per-tensor [scale, qmax]."""
+        """Quantize a floating a_hat into int8 codes + scale (per-tensor or along-C)."""
+        if self._ahat_block() > 0:
+            self._pack_ahat_along_c()
+            return
         a = self.a_hat_cache
         if a is None or a.dtype == torch.int8:
             return
@@ -453,8 +683,18 @@ class OptimizedInt8Conv2d(nn.Module):
         a = self.a_hat_cache
         if a is None or a.dtype != torch.int8:
             return
-        s = self._ahat_qscale[0]
-        self.a_hat_cache = (a.float() * s).to(torch.float16).contiguous(
+        s = self._ahat_qscale
+        if s is not None and s.dim() == 4:
+            n, c, h, w = a.shape
+            g = s.shape[-1]
+            bsz = c // g
+            q = a.permute(0, 2, 3, 1).reshape(n, h, w, g, bsz).float()
+            recon = (q * s.unsqueeze(-1)).reshape(n, h, w, c).permute(0, 3, 1, 2)
+            self.a_hat_cache = recon.to(torch.float16).contiguous(
+                memory_format=torch.channels_last)
+            return
+        scale0 = s[0] if s is not None else 1.0
+        self.a_hat_cache = (a.float() * scale0).to(torch.float16).contiguous(
             memory_format=torch.channels_last)
 
     def _begin_ahat_kernel(self, write_ahat: bool) -> None:
@@ -493,6 +733,9 @@ class OptimizedInt8Conv2d(nn.Module):
             ).contiguous(memory_format=torch.channels_last)
             if a_dtype in (torch.int8, torch.int16):
                 self._ensure_ahat_qscale(x.device)
+                if a_dtype == torch.int8 and self._ahat_block() > 0:
+                    n, c, h, w = x.shape
+                    self._ensure_block_qscale(n, c, h, w, x.device)
         elif self.a_hat_cache.dtype != a_dtype:
             if (not self._imode() and a_dtype == torch.int8
                     and self.a_hat_cache.dtype in (torch.float16, torch.float32)):
@@ -503,6 +746,9 @@ class OptimizedInt8Conv2d(nn.Module):
                 ).contiguous(memory_format=torch.channels_last)
                 if a_dtype in (torch.int8, torch.int16):
                     self._ensure_ahat_qscale(x.device)
+                    if a_dtype == torch.int8 and self._ahat_block() > 0:
+                        n, c, h, w = x.shape
+                        self._ensure_block_qscale(n, c, h, w, x.device)
         if (self.o_hat_cache is None or self.o_hat_cache.shape != output_shape
                 or self.o_hat_cache.dtype != o_dtype):
             self.o_hat_cache = torch.zeros(
@@ -832,11 +1078,17 @@ class OptimizedInt8Conv2d(nn.Module):
     def _maybe_quantize_ahat(self) -> None:
         """Snap a_hat onto an N-bit dynamic-absmax grid after a real cache write.
 
-        MODIFF_AHAT_BITS=16 (default) is a no-op. 8 or 4 fake-quant the fp16
-        buffer in place — same values as storing int8/int4 and dequantizing.
-        LSB is re-derived every commit (the refreshed grid in
-        docs/int8_ahat_cache_2026-08-26, not a flat schedule-wide grid).
-        Skip-K skip steps do not write, so they skip.
+        Real int8 storage (AHAT_BITS=8/4 or AHAT_BLOCK>0) already quantizes
+        in-kernel; this only fake-quants a still-fp16 buffer. Skip-K skip steps
+        do not write.
+
+        An AHAT_BLOCK layer only reaches the fp16 branch when it is UNcalibrated,
+        i.e. it has no int8 datapath at all -- blockwise a_hat is not a storage
+        change there, just eight eager kernels (abs/amax/div/round/clamp/copy)
+        per layer per step. That cost 3.3 ms/step of the 3.8 ms the B=32 arm was
+        losing to the fp16-a_hat arm, on layers the scheme does not even claim.
+        MODIFF_AHAT_BLOCK_FAKE=1 restores it, for reproducing the pre-kernel
+        fake-quant numbers in docs/ahat_blockwise_2026-09-01.
         """
         if self.calibrating or self.a_hat_cache is None:
             return
@@ -844,12 +1096,16 @@ class OptimizedInt8Conv2d(nn.Module):
         if self.a_hat_cache.dtype in (torch.int8, torch.int16):
             return
         bits = self._ahat_bits()
-        if bits >= 16:
+        block = self._ahat_block() if self._ahat_block_fake() else 0
+        if bits >= 16 and block <= 0:
             return
         if self.step_count > 0 and self._skip_cache_store():
             return
-        qmax = 127.0 if bits >= 8 else 7.0
         a = self.a_hat_cache
+        if block > 0:
+            self._snap_ahat_along_c_(a, block, 127.0)
+            return
+        qmax = 127.0 if bits >= 8 else 7.0
         scale = qmax / a.abs().amax().float().clamp_min(1e-6)
         a.mul_(scale).round_().clamp_(-qmax, qmax).div_(scale)
 
@@ -1089,6 +1345,7 @@ class OptimizedInt8Conv2d(nn.Module):
         step1_static_quantize_fprop_silu's CUDA kernel instead of a separate
         F.silu(x) Python call over the whole activation tensor beforehand.
         """
+        self._sim_guard('_forward_modulated_static_fused_silu')
         self.step_count += 1
         if not x.is_contiguous(memory_format=torch.channels_last):
             x = x.contiguous(memory_format=torch.channels_last)
@@ -1145,6 +1402,7 @@ class OptimizedInt8Conv2d(nn.Module):
         a_hat update `cache += q/scale` is unchanged). Caller must have verified
         can_gn_fuse_modiff(x). `mod_scale2d`/`mod_shift2d` are [N,C] (or empty)
         matching x.dtype; `residual` (fp16, or None) is added to the output."""
+        self._sim_guard('forward_gn_fused_modiff')
         self.step_count += 1
         if not x.is_contiguous(memory_format=torch.channels_last):
             x = x.contiguous(memory_format=torch.channels_last)
@@ -1220,6 +1478,7 @@ class OptimizedInt8Conv2d(nn.Module):
         write is byte-identical to the non-residual path). Caller must have verified
         _can_fuse_input_silu(x). `residual` is the ResBlock skip (cast to fp16
         channels_last here)."""
+        self._sim_guard('forward_modiff_fused_silu_residual')
         self.step_count += 1
         if not x.is_contiguous(memory_format=torch.channels_last):
             x = x.contiguous(memory_format=torch.channels_last)
@@ -1247,6 +1506,12 @@ class OptimizedInt8Conv2d(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         fwd_start = profiler.start("Layer: OptimizedInt8Conv2d.forward")
+
+        if self._act_block() != 0:
+            # Measurement harness, not a fast path -- see _forward_blockwise_sim.
+            out = self._forward_blockwise_sim(F.silu(x) if self.fuse_input_silu else x)
+            profiler.stop("Layer: OptimizedInt8Conv2d.forward", fwd_start)
+            return out
 
         if self.fuse_input_silu:
             if self._can_fuse_input_silu(x):
@@ -1529,6 +1794,7 @@ class OptimizedInt8Conv2d(nn.Module):
         the per-layer quantize (K1) and go straight to the conv. Only valid when
         calibrated + not modiff_enabled. Optional `residual` (fp16 channels_last) is
         fused into the store epilogue as the ResBlock skip-add."""
+        self._sim_guard('forward_from_int8')
         if not x_int8.is_contiguous(memory_format=torch.channels_last):
             x_int8 = x_int8.contiguous(memory_format=torch.channels_last)
         return self._conv_from_int8(x_int8, residual=residual)
@@ -1542,6 +1808,7 @@ class OptimizedInt8Conv2d(nn.Module):
         (the standalone per-block K1) into this conv3's epilogue. Returns
         (out_fp16, out_int8), both channels_last. Requires the deep-fuse dual kernel,
         out_channels%8==0, calibrated + standard_output_fp16."""
+        self._sim_guard('forward_from_int8_dual')
         assert self.standard_output_fp16, "dual store requires standard_output_fp16"
         assert hasattr(modiff_cutlass, "conv2d_int8_fprop_deepfuse_bias_residual_dual"), \
             "dual-store kernel unavailable (rebuild the extension)"
@@ -1602,6 +1869,7 @@ class OptimizedInt8Conv2d(nn.Module):
         by output_requant_scale (the next conv's input scale), in one fused kernel,
         so the next conv reads int8 directly. Requires output_requant_scale set,
         calibrated, use_cutlass. Returns a channels_last int8 tensor."""
+        self._sim_guard('forward_to_int8')
         self._ensure_conv_caches(x_int8.device)
         assert self.output_requant_scale is not None, "output_requant_scale not wired"
         if not x_int8.is_contiguous(memory_format=torch.channels_last):

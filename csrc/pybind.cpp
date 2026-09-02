@@ -253,6 +253,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "GN+SiLU+int4 quantize/pack with an activation ZERO POINT (fix #2); z=0 is exact");
     m.def("group_norm_silu_quantize_pack_nhwc_fast_zp", &group_norm_silu_quantize_pack_nhwc_fast_zp,
           "fast-reduce twin of group_norm_silu_quantize_pack_nhwc_zp");
+    m.def("ahat_pack_block_nhwc", &ahat_pack_block_nhwc,
+          "t=T pack of a float a_hat into along-C blockwise int8 codes + fp32 scales",
+          pybind11::arg("a_hat"), pybind11::arg("block") = 32);
     m.def("group_norm_silu_dequant_quantize_nhwc", &group_norm_silu_dequant_quantize_nhwc,
           "INT8-in GroupNorm(+SiLU): reads int8 activation + dequant scale (upstream conv's "
           "int8 output), computes GN from dequantized values, requantizes to int8 output");
@@ -434,6 +437,21 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("gemm_w8a8_awq", &gemm_w8a8_awq,
           "W8A8 Linear (production): AWQ-tiling-scheme GEMM (CTA_M/N=128, ldmatrix+swizzle) -- "
           "C[M,N] fp16 = (A[M,K] int8 . B[N,K]^T int8) * a_scale * w_scale[n]; requires N%128==0, K%64==0");
+    // Blockwise-along-K activation scale, applied inside the mainloop (the epilogue cannot express
+    // it -- see the file header). a_scale_blk [K/blk, M] fp32; pass an empty tensor for the matched
+    // scalar-alpha control. blk in {32, 64}.
+    m.def("gemm_w8a8_blockk", &gemm_w8a8_blockk,
+          "W8A8 Linear with a BLOCKWISE-along-K activation scale dequantized in the mainloop "
+          "(one flush per blk of K), plus a scalar-alpha control at the same tile config",
+          py::arg("A"), py::arg("Bm"), py::arg("w_scale"), py::arg("a_scale_blk"),
+          py::arg("a_scale"), py::arg("blk"), py::arg("bias_opt") = c10::optional<torch::Tensor>());
+    m.def("conv2d_int8_blockk", &conv2d_int8_blockk,
+          "int8 NHWC conv2d with a BLOCKWISE-along-C activation scale dequantized in the mainloop "
+          "(indexed by the INPUT pixel, which is why it cannot live in the epilogue), plus a "
+          "scalar-alpha control at the same tile config",
+          py::arg("x"), py::arg("weight"), py::arg("w_scale"), py::arg("a_scale_blk"),
+          py::arg("a_scale"), py::arg("blk"), py::arg("stride") = 1, py::arg("pad") = 1,
+          py::arg("bias_opt") = c10::optional<torch::Tensor>());
     m.def("gemm_w8a8_awq_nout", &gemm_w8a8_awq_nout,
           "W8A8 Linear, unpadded output: B/w_scale padded to N%128==0 but writes [M,n_out] directly "
           "(n_out even), skipping padded cols -- removes the downstream slice+.contiguous() copy");
@@ -503,4 +521,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     // (token_major_attention, MODIFF_FP16_MATERIALIZED; the static-vs-dynamic study). Not int8/int4.
     m.def("attn_softmax_fp16", &attn_softmax_fp16,
           "fp16 materialized softmax(S, static_c, c) -> {P fp16 unnormalized [BH,T,T], rowsum [BH,T]}");
+    m.def("delta_lowrank_fprop", &delta_lowrank_fprop,
+          "Fused range-finder + Z=U^T d + Q(Z) + fold WU. Updates a_hat in place. "
+          "Returns {z_int8 NHWC-k, w_int8 KRSC, wscale, alpha}.");
 }

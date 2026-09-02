@@ -1,0 +1,33 @@
+{
+ "seed": 20260805,
+ "steps": 50,
+ "n": 6,
+ "qmax": 127.0,
+ "relL2": {
+  "fp16 reference": {
+   "relL2_vs_fp16": 0.0
+  },
+  "W8A8  a_hat fp16": {
+   "relL2_vs_fp16": 0.12318313866853714
+  },
+  "W8A8  per-tensor int8": {
+   "relL2_vs_fp16": 0.28506556153297424
+  },
+  "W8A8  tokenwise": {
+   "relL2_vs_fp16": 0.1812199056148529
+  },
+  "W8A8  along-C B=8": {
+   "relL2_vs_fp16": 0.1329365223646164
+  },
+  "W8A8  along-C B=16": {
+   "relL2_vs_fp16": 0.14054889976978302
+  },
+  "W8A8  along-C B=32": {
+   "relL2_vs_fp16": 0.12834036350250244
+  },
+  "W8A8  per-channel": {
+   "relL2_vs_fp16": 0.15280316770076752
+  }
+ },
+ "out": "docs/ahat_blockwise_2026-09-01/plots/block_size_grid.png"
+}
