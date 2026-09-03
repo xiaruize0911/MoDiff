@@ -91,5 +91,80 @@
   "W8A8_peak_after": 6764,
   "W4A4_peak_now": 6703,
   "W4A4_peak_after": 6208
+ },
+ "block_sweep_8bit_SR": {
+  "note": "8 bit + stochastic rounding, block along K varied. -1 = one scale per pixel over all K. Granularity is nearly irrelevant: 32 -> per-pixel (6-48x coarser) moves image MSE from 1.71x to 2.26x of the floor, all indistinguishable. B=128 reads BETTER than B=32, which is noise -- the whole range is inside run-to-run variation.",
+  "rows": [
+   {
+    "block": 32,
+    "image_mse": 0.002655,
+    "x_floor": 1.71,
+    "latent_relL2": 0.10408,
+    "scale_bpe": 0.125
+   },
+   {
+    "block": 64,
+    "image_mse": 0.002779,
+    "x_floor": 1.79,
+    "latent_relL2": 0.10763,
+    "scale_bpe": 0.0625
+   },
+   {
+    "block": 128,
+    "image_mse": 0.002382,
+    "x_floor": 1.53,
+    "latent_relL2": 0.097,
+    "scale_bpe": 0.0312
+   },
+   {
+    "block": -1,
+    "image_mse": 0.003518,
+    "x_floor": 2.26,
+    "latent_relL2": 0.12231,
+    "scale_bpe": 0.0,
+    "label": "per pixel, all K"
+   }
+  ]
+ },
+ "implementation_prices": {
+  "note": "CUTLASS 4.6.1 EVT nodes are AccFetch/AuxLoad/AuxStore/Col+RowBroadcast/Col+RowReduction/Compute/ScalarBroadcast/ScalarReduction -- no blocked broadcast and no blocked reduction, and the visitor model is single-pass while a block amax must complete BEFORE the scaled store. Finer blocks are EASIER, not harder: B=32 fits inside one CTA's N tile while a per-pixel all-K amax spans CTAs.",
+  "measured_elementwise_ms_step": {
+   "quantize_real_kernel_conv_quantize_block_nhwc": 4.82,
+   "dequant_eager": 24.44,
+   "quantize_eager_with_SR": 74.67,
+   "both_passes_bandwidth_bound": 5.47
+  },
+  "options": [
+   {
+    "id": "a",
+    "what": "CUTLASS epilogue variant, in-tile blocked amax, two-phase",
+    "saving_MB": 565,
+    "speed_cost_ms_step": 0,
+    "effort": "day+ of CUDA"
+   },
+   {
+    "id": "b",
+    "what": "two elementwise passes around the existing conv2d_int8_evt_o_hat_skip",
+    "saving_MB": 565,
+    "speed_cost_ms_step": [
+     5.5,
+     10
+    ],
+    "effort": "half a day, existing kernels"
+   },
+   {
+    "id": "c",
+    "what": "use our own conv2d_int8_blockk ACCUM epilogue",
+    "saving_MB": 565,
+    "speed_cost_ms_step": 12,
+    "effort": "easy epilogue, worst speed"
+   }
+  ],
+  "projected_b": {
+   "peak_now_MB": 7259,
+   "peak_after_MB": 6694,
+   "vs_fp16_now": 1.69,
+   "vs_fp16_after": 1.56
+  }
  }
 }

@@ -734,6 +734,12 @@ class OptimizedInt4Conv2d(nn.Module):
         except (TypeError, ValueError):
             blk = 32
         n, k, h, w = oh.shape
+        # -1 = one scale per PIXEL over all K channels. That granularity is the one CUTLASS's EVT
+        # can express with the nodes it already has (ColBroadcast for the read, ColReduction for the
+        # new amax); anything blocked along K needs two custom visitor nodes plus a two-phase
+        # epilogue, so it is worth knowing whether -1 is good enough before building that.
+        if blk == -1:
+            blk = k
         if blk <= 0 or k % blk:
             return
         lim = float(2 ** (bits - 1) - 1)

@@ -175,9 +175,57 @@ o_hat 8-bit B=32 is 1.125 B/elem against fp16's 2.0, so **1131 → 636 MB, −49
 | W8A8 peak | 7259 MB | **6764 MB** | 1.69x → **1.57x** |
 | W4A4 peak | 6703 MB | **6208 MB** | 1.56x → **1.44x** |
 
-**What is left is the epilogue**: write int8 o_hat + a separate fp16 output (un-aliasing them takes
-epilogue traffic 4.0 → 4.25 B/elem, near neutral, and leaves every consumer unchanged), with
-stochastic rounding on the store. The accuracy risk is now retired; only the kernel work remains.
+## 6. Granularity is free, and the implementation is not near-neutral
+
+**Correction to §5's closing line.** I wrote that what remained was an epilogue tweak at
+"4.0 → 4.25 B/elem, near neutral". That was a traffic count, not an implementation plan. CUTLASS
+4.6.1's EVT node set is `AccFetch / AuxLoad / AuxStore / Row+ColBroadcast / Row+ColReduction /
+Compute / ScalarBroadcast / ScalarReduction` — **no blocked broadcast and no blocked reduction** —
+and the visitor model is single-pass while a block amax must complete *before* the scaled store.
+
+First, the granularity question, because it decides how hard the kernel is. 8 bit + SR, block along
+K varied (`-1` = one scale per pixel over all K):
+
+| block along K | image MSE | / floor | latent relL2 | / floor | scale B/elem |
+|---|---|---|---|---|---|
+| fp16 (floor) | 1.555e-03 | 1.00x | 0.08550 | 1.00x | — |
+| 32 | 2.655e-03 | 1.71x | 0.10408 | 1.22x | 0.1250 |
+| 64 | 2.779e-03 | 1.79x | 0.10763 | 1.26x | 0.0625 |
+| 128 | 2.382e-03 | **1.53x** | 0.09700 | 1.13x | 0.0312 |
+| per pixel, all K | 3.518e-03 | **2.26x** | 0.12231 | 1.43x | **≈0** |
+
+![block granularity](../ahat_conv_report_2026-09-02/plots/samples_ohat_block.png)
+
+**Granularity is nearly irrelevant.** Coarsening 6–48x (B=32 → per-pixel) moves image MSE from 1.71x
+to 2.26x of the floor, all indistinguishable; B=128 reads *better* than B=32, which is noise — the
+whole range sits inside run-to-run variation. This is the opposite of `a_hat`, where per-tensor is
+2.1x worse than B=32, and the reason is the mechanism: `o_hat`'s failure is **swallowing** (δ vs the
+increment), not range, and `o_hat` is a conv output already mixed across every input channel, so its
+channels are statistically alike (crest 4.4–6.0, uniform). `a_hat` is post-GN/SiLU, where per-channel
+scales differ a lot.
+
+So the scale overhead can go to zero: **o_hat at 1.0 B/elem, 1131 → 566 MB, −565 MB** (more than
+§5's −495 projection).
+
+**But finer blocks are EASIER for the epilogue, not harder** — B=32 fits inside one CTA's N tile,
+while a per-pixel all-K amax spans CTAs (CTA_N is 64 while K can be 1536). So the free granularity
+buys flexibility in the kernel design, not a shortcut past it.
+
+Three routes, all priced by measurement:
+
+| route | saving | speed cost | effort |
+|---|---|---|---|
+| **(a)** CUTLASS epilogue variant: in-tile blocked amax, two-phase | −565 MB | ≈0 | day+ of CUDA |
+| **(b)** two elementwise passes around the existing `conv2d_int8_evt_o_hat_skip` | −565 MB | **+5.5 to +10 ms/step** | half a day, existing kernels |
+| (c) our own `conv2d_int8_blockk` ACCUM epilogue | −565 MB | +12 ms/step (it runs at 65% of shipped conv) | easy epilogue, worst speed |
+
+The (b) bracket is measured, not estimated: `conv_quantize_block_nhwc` does the quantize half at
+**4.82 ms/step** frequency-weighted, and the bandwidth bound for both passes is **5.47**; eager
+versions are 24.44 (dequant) and 74.67 (quantize+SR) and are useless. (b) lands peak at
+**7259 → 6694 MB, 1.69x → 1.56x of fp16**, for 80 → ~85.5 ms/step.
+
+**This is a speed-for-memory trade, so it is a call about which constraint binds** — not something
+the measurement settles. The accuracy risk is retired either way.
 
 ## Reproduction
 
