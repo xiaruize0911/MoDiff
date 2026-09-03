@@ -245,6 +245,9 @@ the images provably cannot. **Rank by `eta_cum`; give samples veto power only ab
 | W4A4 PTQ (no MoDiff) | 59.99 | 1.698x | 4389 | 1.02x | — | collapsed (known) |
 | W4A4 MoDiff, a_hat fp16 | 79.98 | 1.274x | 7345 | 1.71x | 1403 | ok |
 | **W4A4 MoDiff, a_hat i8 B=32** | 80.42 | 1.267x | 6980 | 1.62x | 789 | ok |
+| **W4A4, same + `MODIFF_WARMUP_STEPS=2`** | **72.55** | **1.404x** | **6703** | **1.55x** | 789 | ok |
+
+The last row is the current default; §7a is why. Every other row predates that change.
 
 Blockwise vs its own fp16-`a_hat` arm: **W8A8 1.021x faster, −608 MB peak**; W4A4 0.994x, −365 MB.
 Decoded samples are indistinguishable from the fp16-`a_hat` reference at both precisions (image
@@ -477,6 +480,10 @@ Solving `total(S) = A + (S−1)·B` by wall clock at S=10 and S=50 separates the
 | **W4A4** | **+628.6 ms** | **+7.36 ms/step** | 70.22 (90% first) | 38.79 (81%) | **19.94 (63%)** |
 | **W8A8** | +109.1 ms | +7.00 ms/step | 17.92 (61%) | 12.46 (44%) | **9.19 (24%)** |
 
+**§7a closed most of the W4A4 row**: the 688 ms was 5 warm-up rounds against int8's 1, and the
+default is now 2 — first step 688.0 -> 302.4 ms, MoDiff overhead at S=50 **19.94 -> 12.43 ms/step**,
+first-step share 63% -> 39%. Steady state is untouched (66.94 -> 67.14, noise).
+
 The S=50 column reproduces the independently measured +19.99 / +9.37 to within 0.3%. Both PTQ arms
 have A/B = 1.0 — no first-step cost, as expected with no cache to prime.
 
@@ -500,6 +507,52 @@ arm-dependent (1.19x for PTQ, 2.29x for int4 MoDiff). It was not: that compared 
 a 50-step steady state. Against the matching 6-step wall clock `(A+5B)/6`, inflation is uniform —
 int4 PTQ 1.20x, int4 MoDiff 1.08x, int8 PTQ 1.18x, int8 MoDiff 1.16x. Only relative attribution was
 ever used, so no conclusion changes.
+
+### 7a. Most of that first step was a hyperparameter
+
+`MODIFF_WARMUP_STEPS` defaults to **1 in `int8_optimized.py:124`** and defaulted to **5 in
+`int4_optimized.py:238`**. The warm-up loop runs `warmup_steps - 1` times and each round is a full
+conv pass plus a dequantize, all eager, all at t=T. So int4's first step did **5 conv passes where
+int8 did 1** — that is the whole 688-vs-184 ms gap, not a missing fusion (the two
+`_forward_first_step` bodies are the same code).
+
+**What warm-up buys is small and does not compound.** It shrinks `|a_hat − x|` at t=T, but §1's
+identity says a_hat's error is absorbed *exactly* by the next step's delta (`d_t = o_t − â_{t−1}`).
+Only the t=T **`o_hat`** error survives — one uncorrected term, not an accumulation. Measured end to
+end (batch 128, 50 DDIM, seed 1234, `MODIFF_AHAT_BLOCK=32`, decoded-image MSE against warmup=5):
+
+| warmup | ms/step | peak MB | image MSE vs wu=5 | / floor | latent relL2 | resolvable? |
+|---|---|---|---|---|---|---|
+| 5 (old default) | 80.23 | 6992 | — | — | — | — |
+| **5, second run** | 80.92 | 6989 | **6.147e-04** | **1.00x — the floor** | 0.04395 | — |
+| 4 | 77.71 | 6990 | 6.705e-04 | 1.09x | 0.04608 | no |
+| 3 | 75.85 | 6990 | 6.800e-04 | 1.11x | 0.04789 | no |
+| **2 (new default)** | **73.72** | **6704** | 9.472e-04 | **1.54x** | 0.06272 | **no** |
+| 1 | 70.44 | 6015 | 1.797e-03 | 2.92x | 0.09322 | edge |
+
+![warm-up sweep](plots/samples_warmup.png)
+
+*Rows top to bottom: warmup 5, 4, 3, 2, 1. Visually indistinguishable.*
+
+The floor is measured for **this arm** (two processes, same seed, warmup=5): 6.147e-04, smaller than
+the 1.705e-03 §5 calibrated on the int8 arm, so it is the stricter bar and the one used here.
+
+**Default set to 2**, worth **6.51 ms/step and −288 MB** at 1.54x the floor — indistinguishable, and
+still more conservative than int8's shipped 1. **warmup=1** is worth 9.79 ms/step and −977 MB but
+sits at 2.92x, right at the edge of the 3x resolvability bar this project uses, so it stays behind
+the env var rather than becoming the default. Verified at the new default: **72.55 ms/step,
+6703 MB** (from 80.42 / 6980).
+
+A/B decomposition confirms the mechanism — the change is entirely in `A`, not `B`:
+
+| arm | A first | B steady | A/B | overhead vs PTQ at S=50 |
+|---|---|---|---|---|
+| int4 warmup=5 | 688.0 | 66.94 | 10.3x | 19.94 ms/step (63% first) |
+| **int4 warmup=2** | **302.4** | 67.14 | **4.5x** | **12.43 ms/step (39% first)** |
+| int8 warmup=1 | 184.1 | 79.58 | 2.3x | 9.19 ms/step (24% first) |
+
+`(688.0 − 302.4)/50 = 7.71 ms/step` predicted, 7.87 measured directly. Nothing in the steady state
+moved, which is what §7 said should happen.
 
 ## 8. Kernel work done during this investigation
 
@@ -637,3 +690,4 @@ is 6.4x past threshold; only if 6-bit is ever revisited.
 | E2E per (mode, block) with peak memory | `.../e2e_block.py` |
 | MoDiff-vs-PTQ profile diff | `docs/modiff_profile_diff_2026-09-03/scripts/prof_mode.py`, `.../diff.py` |
 | first-step vs steady-state split | `docs/modiff_profile_diff_2026-09-03/scripts/steps.py` |
+| warm-up sweep (E2E + decode) | `docs/ahat_only_conv_2026-09-02/scripts/e2e_warmup.py`, `.../decode_warmup.py` |

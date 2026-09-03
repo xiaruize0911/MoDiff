@@ -1,0 +1,50 @@
+{
+ "note": "int4 MODIFF_WARMUP_STEPS sweep, batch 128, 50 DDIM, seed 1234, MODIFF_AHAT_BLOCK=32. image MSE against warmup=5; the floor row is a second warmup=5 process at the same seed.",
+ "floor_image_mse": 0.0006147,
+ "floor_latent_relL2": 0.04395,
+ "rows": [
+  {
+   "warmup": 5,
+   "ms_step": 80.23,
+   "peak_alloc_MB": 6992,
+   "image_mse": null,
+   "latent_relL2": null
+  },
+  {
+   "warmup": 5,
+   "ms_step": 80.92,
+   "peak_alloc_MB": 6989,
+   "image_mse": 0.0006147,
+   "latent_relL2": 0.04395,
+   "note": "floor"
+  },
+  {
+   "warmup": 4,
+   "ms_step": 77.71,
+   "peak_alloc_MB": 6990,
+   "image_mse": 0.0006705,
+   "latent_relL2": 0.04608
+  },
+  {
+   "warmup": 3,
+   "ms_step": 75.85,
+   "peak_alloc_MB": 6990,
+   "image_mse": 0.00068,
+   "latent_relL2": 0.04789
+  },
+  {
+   "warmup": 2,
+   "ms_step": 73.72,
+   "peak_alloc_MB": 6704,
+   "image_mse": 0.0009472,
+   "latent_relL2": 0.06272
+  },
+  {
+   "warmup": 1,
+   "ms_step": 70.44,
+   "peak_alloc_MB": 6015,
+   "image_mse": 0.001797,
+   "latent_relL2": 0.09322
+  }
+ ]
+}

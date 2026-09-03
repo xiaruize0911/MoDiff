@@ -235,7 +235,30 @@ class OptimizedInt4Conv2d(nn.Module):
         #: 5 rounds, per the paper's Appendix D.5 warm-up. See OptimizedInt8Conv2d.warmup_steps for
         #: the measured contraction; at 4 bits it is 0.4006 -> 0.00001 over 5 rounds, and 0 over any
         #: number of rounds with the static grid this used to pass.
-        self.warmup_steps = max(1, int(os.environ.get("MODIFF_WARMUP_STEPS", "5")))
+        # DEFAULT 2, was 5. The warm-up loop runs warmup_steps-1 times, and each round is a
+        # full conv pass plus a dequantize, all eager and all at t=T -- so 5 rounds made int4's
+        # FIRST STEP cost 688 ms against its own 66.94 ms steady step (10.3x) and against int8's
+        # 184 ms, which is the entire reason W4A4 MoDiff's per-step overhead looked unattributable
+        # (docs/modiff_profile_diff_2026-09-03). int8 has shipped at 1 all along.
+        #
+        # What warm-up actually buys is small and does not compound: it shrinks |a_hat - x| at
+        # t=T, but a_hat's error is absorbed EXACTLY by the next step's delta (d_t = o_t - a_hat),
+        # so only the t=T o_hat error survives -- one uncorrected term, not an accumulation.
+        # Measured end to end (batch 128, 50 DDIM, seed 1234, decoded-image MSE against warmup=5;
+        # this arm's own run-to-run floor is 6.147e-04, measured as two processes at warmup=5):
+        #
+        #   warmup   ms/step   peak MB   image MSE vs wu=5   / floor
+        #     5        80.23     6992          --              --
+        #     4        77.71     6990        6.705e-04       1.09x
+        #     3        75.85     6990        6.800e-04       1.11x
+        #     2        73.72     6704        9.472e-04       1.54x   <- default
+        #     1        70.44     6015        1.797e-03       2.92x
+        #
+        # 2 is indistinguishable (1.54x of the floor) for 6.51 ms/step and -288 MB. 1 is worth
+        # 9.79 ms/step and -977 MB but sits at 2.92x, right at the edge of the 3x resolvability
+        # bar this project uses, so it is available via the env var rather than the default.
+        # Samples for all five: docs/ahat_conv_report_2026-09-02/plots/samples_warmup.png
+        self.warmup_steps = max(1, int(os.environ.get("MODIFF_WARMUP_STEPS", "2")))
 
         # --- Calibration state ---
         self.calibrating = False

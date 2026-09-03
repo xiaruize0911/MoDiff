@@ -81,12 +81,30 @@ the matching 6-step wall clock `(A+5B)/6`, inflation is uniform:
 
 1.08–1.20x, no arm dependence. The 183.43 figure is a real cost — it is just mostly step 1.
 
+## Resolved: it was `MODIFF_WARMUP_STEPS`
+
+**Followed up and mostly closed.** The target was `_forward_first_step`, but not because it lacked a
+fusion — the int4 and int8 bodies are the *same code*. `MODIFF_WARMUP_STEPS` defaulted to **5 in
+`int4_optimized.py:238`** and **1 in `int8_optimized.py:124`**, and the loop runs `warmup_steps - 1`
+full conv passes at t=T. Five passes against one *is* the 688-vs-184 ms gap.
+
+Default now 2. First step **688.0 → 302.4 ms**, steady state untouched (66.94 → 67.14):
+
+| arm | A first | B steady | A/B | overhead vs PTQ at S=50 |
+|---|---|---|---|---|
+| int4 warmup=5 | 688.0 | 66.94 | 10.3x | 19.94 ms/step (63% first) |
+| **int4 warmup=2** | **302.4** | 67.14 | **4.5x** | **12.43 ms/step (39% first)** |
+| int8 warmup=1 | 184.1 | 79.58 | 2.3x | 9.19 ms/step (24% first) |
+
+End to end 80.42 → **72.55 ms/step** and 6980 → **6703 MB**. Quality: decoded-image MSE 9.472e-04
+against a 6.147e-04 same-config run-to-run floor — 1.54x, indistinguishable. Full sweep and the
+mechanism (warm-up only shrinks the t=T `o_hat` error, because a_hat's is absorbed by the next
+delta) in `REPORT.md` §7a.
+
 ## Consequences
 
-1. **The target is `OptimizedInt4Conv2d._forward_first_step`**, not any steady-state kernel. It runs
-   the eager chain per layer: `_compute_activation_scale` (abs + amax reduce), `_dequantize_activation`,
-   `a_hat + r_dq`, `o_hat + conv_r`. int8's first step is 184.1 ms doing the same job, so **688 → ~180 ms
-   is a demonstrated-achievable target**, worth ~10 ms/step at S=50 — 6x the blockwise-`a_hat` win.
+1. ~~The target is `_forward_first_step`~~ — done, see above. What remains of int4's first step is
+   302 ms against int8's 184, i.e. one warm-up round is still ~118 ms of eager work per pass.
 2. **MoDiff's overhead is inversely proportional to step count.** int4 MoDiff is 2.17x PTQ at S=10 and
    1.33x at S=50. Any low-step-count sampling scenario weights this term much more heavily, and any
    quoted MoDiff overhead is meaningless without its S.
