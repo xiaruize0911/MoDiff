@@ -586,19 +586,33 @@ class OptimizedInt4Conv2d(nn.Module):
                 f"MODIFF_AHAT_BLOCK={bsz} must divide C={c} for layer "
                 f"{getattr(self, 'layer_name', '?')}")
         qmax, g = 127.0, c // bsz
+        # See the int8 twin: fused pack for B=32 and B>=64 so the t=T conversion never
+        # materializes an fp32 copy of the whole cache; chunked fp16 fallback below B=32.
+        fused = None
         if bsz == 32 and hasattr(modiff_cutlass, "ahat_pack_block_nhwc"):
-            q, scale = modiff_cutlass.ahat_pack_block_nhwc(a, 32)
+            fused = modiff_cutlass.ahat_pack_block_nhwc(a, 32)
+        elif bsz in (64, 128, 256) and hasattr(modiff_cutlass, "conv_quantize_block_nhwc"):
+            fused = modiff_cutlass.conv_quantize_block_nhwc(a, bsz)
+        if fused is not None:
+            q, scale = fused
             self._ahat_qscale = scale
             self.a_hat_cache = q
             return
-        x = a.permute(0, 2, 3, 1).contiguous().float()
-        blk = x.view(n, h, w, g, bsz)
-        amax = blk.abs().amax(-1).clamp_min(1e-12)
-        scale = (amax / qmax).contiguous()
-        q = (blk / scale.unsqueeze(-1)).round().clamp_(-qmax, qmax).to(torch.int8)
+        q = torch.empty((n, h, w, c), device=a.device, dtype=torch.int8)
+        scale = torch.empty((n, h, w, g), device=a.device, dtype=torch.float32)
+        # 8 chunks: caps the fp32 transient at an eighth of the cache while keeping the launch
+        # count low -- one chunk per sample was 1.14x slower end to end than the unchunked copy.
+        step = max(1, (n + 7) // 8)
+        for i in range(0, n, step):
+            j = min(n, i + step)
+            xi = a[i:j].permute(0, 2, 3, 1).contiguous().view(j - i, h, w, g, bsz)
+            si = (xi.abs().amax(-1).float().clamp_min(1e-12)) / qmax
+            scale[i:j] = si
+            q[i:j] = ((xi.float() / si.unsqueeze(-1)).round()
+                      .clamp_(-qmax, qmax).to(torch.int8).view(j - i, h, w, c))
         self.a_hat_cache = q.view(n, h, w, c).permute(0, 3, 1, 2).contiguous(
             memory_format=torch.channels_last)
-        self._ahat_qscale = scale
+        self._ahat_qscale = scale.contiguous()
 
     def _pack_ahat_int8(self) -> None:
         a = self.a_hat_cache

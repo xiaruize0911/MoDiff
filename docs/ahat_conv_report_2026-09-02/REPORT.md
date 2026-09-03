@@ -260,12 +260,96 @@ only block size where the scheme pays. Swept end to end:
 | 64 | 90.20 | 0.908x | **+24 MB** | 745 | 0.0625 | 0.60x |
 
 W4A4 has the same shape: B=16 86.40 / +234 MB, **B=32 79.89 / −371 MB**, B=64 87.74 / +77 MB.
-B=16 and B=64 have a SMALLER cache and yet a peak equal to or worse than fp16 `a_hat`, because
-the compile-time fast path exists only at 32 -- B=16 misses `ahat_is_b32` and takes the generic
-`c/B` divide; at B=64 `ahat_block_shuffle_ok` fails, so the host disables the in-kernel write and
-runs a separate `ahat_commit_block`, which keeps the delta codes live for an extra allocation plus
-a launch. Accuracy does not discriminate: all three sit 5-7x inside the 0.30 threshold and all
-three decode inside the image-MSE floor.
+Accuracy does not discriminate: all three sit 5-7x inside the 0.30 threshold and all three decode
+inside the image-MSE floor.
+
+**Both halves of that were implementation, not a trade-off, and both are now fixed — see §6a.**
+An earlier version of this section explained the B!=32 penalty as "B=16 misses `ahat_is_b32` and
+takes the generic `c/B` divide; at B=64 `ahat_block_shuffle_ok` fails, so the host disables the
+in-kernel write and runs a separate `ahat_commit_block`." **The second half is wrong** —
+`ahat_block_shuffle_ok` (`ahat_cache.cuh:122`) accepts `B <= 64`, so B=64 takes the same in-kernel
+write path as B=16. Both are simply the one generic path, which §6a measures and then removes.
+
+### 6a. The B!=32 penalty was implementation, and removing it
+
+The B-sweep above reads as a trade-off curve with an optimum at 32. It is not: it is a step
+function, and both halves of it (time and peak) were fixable.
+
+**Measurement 1 — the penalty does not depend on B.** Kernel-1 ms at four shapes, ratio to B=32:
+
+| shape | B=2 | B=4 | B=8 | B=16 | B=32 | B=64 |
+|---|---|---|---|---|---|---|
+| C384 32x32 | 1.719x | 1.722x | 1.721x | 1.725x | **1.000x** | 1.752x |
+| C768 16x16 | 1.720x | 1.704x | 1.712x | 1.718x | **1.000x** | 1.733x |
+| C192 32x32 | 1.446x | 1.432x | 1.449x | 1.445x | **1.000x** | 1.464x |
+| C1536 4x4 | 1.318x | 1.319x | 1.318x | 1.324x | **1.000x** | 1.328x |
+
+B from 2 to 64 lands within 1.5%, and only 32 is fast. Across that range the scale-tensor traffic
+swings 2.2x (2.375 -> 1.0625 B/elem) and the reduction width swings 32x (1 lane -> 32 lanes), with
+**no effect on time**. So it is neither traffic nor reduction width — it is purely whether the
+compile-time B=32 path exists. With `write_ahat=False` the gap is still 1.47-1.49x, so most of it
+is the **read**, not the write (log-split: read 74%).
+
+**Cause.** Both `ahat_resolve` and `ahat_block_resnap2` computed the `[N,H,W,ng]` scale index as
+`nhw*ng + c/B` with `c = i % C`, `nhw = i / C` — **three 64-bit integer div/mods by runtime values
+per channel pair**, and Ampere has no integer divide unit. But `B | C` and `i = nhw*C + c`, so
+
+```
+nhw*ng + c/B = nhw*(C/B) + c/B = (nhw*C + c)/B = i/B
+```
+
+exactly — the index IS `i/B`, one shift for power-of-two B. That identity was already in the code
+for B=32 (`ahat_cache.cuh:59`, `q[i>>5]`); it was simply never generalised.
+
+**Fix**, three parts, `a_hat_cache.cuh`, B=32 path untouched:
+1. `ahat_block_qindex(i, C, ng)` — the index in one shift for any B.
+2. `ahat_load2_i8` now uses the `__byte_perm` magic-number decode (`ahat_byte_to_f`) that
+   `ahat_b32_read2` has had since 2026-09-01, instead of two I2F conversions on the XU pipe.
+3. `ahat_block_resnap2` issues `__reduce_max_sync` only at a full warp. **A sub-warp REDUX is a
+   trap**: with 32/16 distinct lane masks the hardware serialises it, measured **1.54x slower than
+   the shuffle loop it replaced** at B=2 and no gain at B=4. Below a full warp, take the loop.
+
+**Correctness gate** (`scripts/b_correctness.py`): delta codes bit-identical to an exact fp32
+per-block reference at every B in {2,4,8,16,32,64}; a_hat relL2 <= 8.4e-05 (int8 store ties),
+block scales to 4.4e-08.
+
+**Result — kernel 1, frequency-weighted:**
+
+| | B=16 before | after | B=32 | B=64 before | after |
+|---|---|---|---|---|---|
+| W8A8 | 16.3395 | **13.7911** (1.185x) | 10.7835 | 16.5759 | **12.9904** (1.276x) |
+| W4A4 | 17.0397 | **14.2408** (1.197x) | 11.8708 | 17.1420 | **13.3845** (1.281x) |
+
+The excess over B=32 drops from 1.52-1.54x to 1.21-1.28x. What remains is the store
+(`ahat_store2_i8`'s `roundf` + F2I, deliberately left alone — its `lim` is a runtime value the
+per-tensor path reads from the scale tensor, so it cannot be hard-clamped to 127) plus the fully
+fused `ahat_b32_update2`.
+
+**Measurement 2 — the peak-memory anomaly had a different cause, in Python.** B=16 and B=64 have
+*smaller* steady-state caches than B=32 and yet peaked *higher* (+793 / +634 MB). Cause:
+`_pack_ahat_int8` (`int8_optimized.py`) had a fused CUDA pack for B=32 only, and every other B fell
+through to an eager chain starting with `a.permute(...).contiguous().float()` — **an fp32 copy of
+the entire cache**, plus a same-sized intermediate, per layer. Fix: route B>=64 through
+`conv_quantize_block_nhwc`, which is the same math with the same `[N,H,W,C/B]` fp32 scale layout
+and already supports 32/64/128/256 (it exists because the conv-input quantizer needed B=64);
+below 32 there is no fused pack, so chunk the fallback 8 ways. (One chunk per sample also fixes the
+memory but is 1.14x slower end to end -- 100.08 vs 87.47 ms/step -- so the chunk count matters.)
+
+**End to end, W8A8, batch 128, 50 DDIM:**
+
+| B | ms/step before | after | peak MB before | **after** | cache MB |
+|---|---|---|---|---|---|
+| 16 | 87.47 | 86.11 | 8040 | **7344** (−696) | 877 |
+| **32** | 79.82 | 80.42 | 7245 | 7259 | 789 |
+| 64 | 90.20 | **85.78** (1.051x) | 7877 | **7214** (−663) | 745 |
+
+**B=64 now has the lowest peak of the three**, which is what the byte count always said it should
+be. The anomaly is gone.
+
+**But B=32 still wins end to end** — 80.42 vs 85.78 ms/step, because kernel 1 is only ~13% of a
+step, so its 1.28x becomes 1.05x overall, and the remaining store/update fusion still favours 32.
+So the recommendation does not change; what changes is *why*: B=32 is now ahead by 1.07x on time
+and behind by 45 MB on peak, a real trade-off, where before it was ahead on both by an artifact.
 
 ![sample grid](plots/samples_blocks.png)
 
@@ -548,5 +632,8 @@ is 6.4x past threshold; only if 6-bit is ever revisited.
 | kernel-1 speed/memory | `.../kernel1_table.py`, `.../kernel1_axis_sweep.py` |
 | kernel-1 speed **and** quality joined | `.../kernel1_quality.py` |
 | why i4 is slower than i8 (per-shape, vec4 split) | `.../i4_vs_i8_pershape.py` |
+| the B!=32 step function, and write_ahat toggle | `.../b_stepfunction.py` |
+| per-B correctness gate | `.../b_correctness.py` |
+| E2E per (mode, block) with peak memory | `.../e2e_block.py` |
 | MoDiff-vs-PTQ profile diff | `docs/modiff_profile_diff_2026-09-03/scripts/prof_mode.py`, `.../diff.py` |
 | first-step vs steady-state split | `docs/modiff_profile_diff_2026-09-03/scripts/steps.py` |

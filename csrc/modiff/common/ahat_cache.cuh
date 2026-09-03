@@ -20,9 +20,29 @@
 __device__ __forceinline__ float ahat_load_i8(const int8_t* p, long i, float s) {
     return (float)p[i] * s;
 }
+// int8 <-> float without the conversion pipe. I2F/F2I issue on the XU pipe at an
+// eighth of the FMA rate on GA10x and the fused B=32 update does four of them per
+// pair; PRMT/FADD are full rate. Both directions use 1.5*2^23, where a float's ulp
+// is exactly 1, so the low mantissa byte of the sum IS the two's-complement integer
+// and the rounding is round-to-nearest-even, same as cvt.rni.
+#define AHAT_F2I_MAGIC 12582912.0f  // 1.5 * 2^23 == 0x4B400000
+
+// Byte `sel` of `packed` as a float. `packed` must already be XORed with 0x8080 so
+// the codes are unsigned; the subtraction is exact (both operands sit next to 2^23).
+__device__ __forceinline__ float ahat_byte_to_f(unsigned packed, unsigned sel) {
+    return __uint_as_float(__byte_perm(packed, 0x4B400000u, sel)) - (AHAT_F2I_MAGIC + 128.0f);
+}
+__device__ __forceinline__ unsigned ahat_f_to_byte(float v) {
+    return __float_as_uint(fminf(127.0f, fmaxf(-127.0f, v)) + AHAT_F2I_MAGIC);
+}
+
+// Two int8 channels -> float2, without the conversion pipe: one PRMT + one FADD per channel
+// instead of I2F, which issues on the XU pipe at an eighth of the FMA rate on GA10x. This is the
+// same decode ahat_b32_read2 has used since 2026-09-01; the generic path never got it, and it is
+// the remaining half of the B != 32 gap after the index fix.
 __device__ __forceinline__ float2 ahat_load2_i8(const int8_t* p, long i, float s) {
-    const char2 v = *reinterpret_cast<const char2*>(p + i);
-    return make_float2((float)v.x * s, (float)v.y * s);
+    const unsigned a = (unsigned)*reinterpret_cast<const unsigned short*>(p + i) ^ 0x8080u;
+    return make_float2(ahat_byte_to_f(a, 0x7640u) * s, ahat_byte_to_f(a, 0x7641u) * s);
 }
 __device__ __forceinline__ void ahat_store_i8(int8_t* p, long i, float v, float inv_s, float lim) {
     p[i] = (int8_t)fmaxf(-lim, fminf(lim, roundf(v * inv_s)));
@@ -55,6 +75,19 @@ __host__ __device__ inline bool ahat_is_b32(int C, int ng) {
     return ng > 0 && C > 0 && (C & 31) == 0 && ng == (C >> 5);
 }
 
+// Along-C block scale index, for ANY block size, in one shift.
+//   B = C/ng divides C, and i = nhw*C + c with 0 <= c < C, so
+//     nhw*ng + c/B = nhw*(C/B) + c/B = (nhw*C + c)/B = i/B
+//   exactly -- the [N,H,W,ng] scale index IS i/B. B is a power of two on every path that reaches
+// here (ahat_block_shuffle_ok), so it is `i >> log2(B)`. The generic path used to spend three
+// 64-bit integer div/mods (i%C, i/C, c/B) computing this, and Ampere has no integer divide unit:
+// that alone made every B != 32 run 1.32-1.75x slower than B=32, flat in B (measured).
+__device__ __forceinline__ long ahat_block_qindex(long i, int C, int ng) {
+    const int B = C / ng;                              // uniform in i, hoisted out of the loop
+    if ((B & (B - 1)) == 0) return (long)((unsigned long long)i >> (__ffs(B) - 1));
+    return i / (long)B;                                // non-power-of-two B: still one divide
+}
+
 // Blockwise int8: q is fp32 NHWC [N,H,W,ng], ng = C/B. Per-tensor: ng==0, use s0 from q[0].
 // B=32: q[i>>5] because i = nhw*C + c and C%32==0 ⇒ nhw*(C/32) + c/32.
 __device__ __forceinline__ void ahat_resolve(
@@ -63,17 +96,8 @@ __device__ __forceinline__ void ahat_resolve(
     float& s, float& inv, float& lim)
 {
     if (ng > 0 && i8 && q != nullptr && C > 0) {
-        if (ahat_is_b32(C, ng)) {
-            s = q[(unsigned long long)i >> 5];
-            inv = 1.0f / fmaxf(s, 1e-12f);
-            lim = 127.0f;
-            return;
-        }
-        const int B = C / ng;
-        const long c = i % (long)C;
-        const long nhw = i / (long)C;
-        s = q[nhw * (long)ng + c / B];
-        inv = 1.0f / fmaxf(s, 1e-12f);
+        s = q[ahat_block_qindex(i, C, ng)];
+        inv = __fdividef(1.0f, fmaxf(s, 1e-12f));
         lim = 127.0f;
         return;
     }
@@ -129,27 +153,29 @@ __device__ __forceinline__ void ahat_block_resnap2(
     float nc0, float nc1)
 {
     if (qscale == nullptr) return;
-    const unsigned mask = __activemask();
+    const unsigned am = __activemask();
     float gmax = fmaxf(fabsf(nc0), fabsf(nc1));
-    const int B = ahat_is_b32(C, ng) ? 32 : (C / ng);
-    const int np = B >> 1;
-#pragma unroll
-    for (int off = 1; off < 32; off <<= 1) {
-        if (off < np) {
-            const float o = __shfl_xor_sync(mask, gmax, off);
-            gmax = fmaxf(gmax, o);
-        }
-    }
-    const float s = fmaxf(gmax, 1e-12f) / 127.f;
-    ahat_store2_i8(reinterpret_cast<int8_t*>(cache), i, make_float2(nc0, nc1), 1.f / s, 127.f);
-    if ((threadIdx.x & (np - 1)) == 0) {
-        if (B == 32) qscale[(unsigned long long)i >> 5] = s;
-        else {
-            const long c = i % (long)C;
-            const long nhw = i / (long)C;
-            qscale[nhw * (long)ng + c / B] = s;
-        }
-    }
+    const int np = (C / ng) >> 1;                      // threads owning one along-C block
+    // gmax >= 0, so IEEE bit order is magnitude order and REDUX.MAX on the raw bits is exact --
+    // the same trick ahat_group16_amax uses, generalised to any group width. One instruction
+    // instead of five predicated shuffles.
+    // REDUX is warp-wide, so it only pays when the whole warp shares ONE mask (np == 32). With
+    // 32/16/8 distinct sub-warp masks the hardware serialises it: measured 1.54x SLOWER than a
+    // shuffle loop at np == 1 and no gain at all at np == 2. Below a full warp, take the loop --
+    // it is log2(np) shuffles (0 to 4), not the 5 predicated ones the old code always issued.
+    const unsigned gm = (np >= 32) ? 0xFFFFFFFFu
+                                   : (((1u << np) - 1u) << (threadIdx.x & 31u & ~(unsigned)(np - 1)));
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+    if (np >= 32) gmax = __uint_as_float(__reduce_max_sync(am, __float_as_uint(gmax)));
+    else
+#endif
+    for (int off = 1; off < np; off <<= 1)
+        gmax = fmaxf(gmax, __shfl_xor_sync(am & gm, gmax, off));
+    const float g = fmaxf(gmax, 1e-12f);
+    const float s = g * (1.0f / 127.f);
+    ahat_store2_i8(reinterpret_cast<int8_t*>(cache), i, make_float2(nc0, nc1),
+                   __fdividef(127.0f, g), 127.f);
+    if ((threadIdx.x & (unsigned)(np - 1)) == 0) qscale[ahat_block_qindex(i, C, ng)] = s;
 }
 
 // ---------------------------------------------------------------------------
@@ -172,21 +198,7 @@ __device__ __forceinline__ int ahat_qn(float v, int lim) {
     return min(lim, max(-lim, __float2int_rn(v)));
 }
 
-// int8 <-> float without the conversion pipe. I2F/F2I issue on the XU pipe at an
-// eighth of the FMA rate on GA10x and the fused B=32 update does four of them per
-// pair; PRMT/FADD are full rate. Both directions use 1.5*2^23, where a float's ulp
-// is exactly 1, so the low mantissa byte of the sum IS the two's-complement integer
-// and the rounding is round-to-nearest-even, same as cvt.rni.
-#define AHAT_F2I_MAGIC 12582912.0f  // 1.5 * 2^23 == 0x4B400000
 
-// Byte `sel` of `packed` as a float. `packed` must already be XORed with 0x8080 so
-// the codes are unsigned; the subtraction is exact (both operands sit next to 2^23).
-__device__ __forceinline__ float ahat_byte_to_f(unsigned packed, unsigned sel) {
-    return __uint_as_float(__byte_perm(packed, 0x4B400000u, sel)) - (AHAT_F2I_MAGIC + 128.0f);
-}
-__device__ __forceinline__ unsigned ahat_f_to_byte(float v) {
-    return __float_as_uint(fminf(127.0f, fmaxf(-127.0f, v)) + AHAT_F2I_MAGIC);
-}
 
 // amax over the 16 lanes that own one B=32 along-C group. IEEE bit order equals
 // magnitude order for non-negative floats, so REDUX.MAX on the raw bits is exact.
