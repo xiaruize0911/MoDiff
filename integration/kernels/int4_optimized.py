@@ -472,8 +472,7 @@ class OptimizedInt4Conv2d(nn.Module):
         except (TypeError, ValueError):
             return 16
 
-    @staticmethod
-    def _ahat_block() -> int:
+    def _ahat_block(self) -> int:
         """Along-C group size for int8 a_hat, W4A4 twin of OptimizedInt8Conv2d._ahat_block.
 
         MODIFF_AHAT_BLOCK=32 => 32 consecutive channels at each (n,h,w) share one fp32
@@ -487,9 +486,18 @@ class OptimizedInt4Conv2d(nn.Module):
         warp), so 64 is rejected at the C++ boundary, not here.
         """
         try:
-            return int(os.environ.get("MODIFF_AHAT_BLOCK", "0"))
+            b = int(os.environ.get("MODIFF_AHAT_BLOCK", "32"))
         except (TypeError, ValueError):
             return 0
+        if b <= 0:
+            return 0
+        # See the int8 twin for why 32 is the default and why this degrades rather than raises.
+        # W4A4 measured: B=16 86.40 ms / +234 MB, B=32 79.89 / -371 MB, B=64 87.74 / +77 MB.
+        if self._conv_blockk() != 0:
+            return 0
+        a = getattr(self, "a_hat_cache", None)
+        c = a.shape[1] if a is not None and a.dim() == 4 else getattr(self, "in_channels", None)
+        return b if (c is not None and c % b == 0) else 0
 
     @staticmethod
     def _ahat_sim_bits() -> int:

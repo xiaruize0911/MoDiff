@@ -427,18 +427,51 @@ class OptimizedInt8Conv2d(nn.Module):
     def _ahat_refresh() -> bool:
         return os.environ.get("MODIFF_AHAT_REFRESH", "0") == "1"
 
-    @staticmethod
-    def _ahat_block() -> int:
-        """Along-C group size for int8 a_hat. MODIFF_AHAT_BLOCK=32 → 32
-        consecutive channels at each (n,h,w) share a scale. 0 is off.
-        Storage is int8 NHWC + fp32 scales [N,H,W,C/B]. Scales start at t=T
-        pack and are refreshed in-kernel each write (per-block amax of new_c),
-        matching the Python along-C fake-quant snap.
+    def _ahat_block(self) -> int:
+        """Along-C group size for int8 a_hat. 32 consecutive channels at each (n,h,w) share a
+        scale; storage is int8 NHWC + fp32 scales [N,H,W,C/B], refreshed in-kernel on every write
+        from the new per-block amax. 0 is off.
+
+        DEFAULT 32, and 32 specifically -- it is the only block size where this pays. Measured
+        end to end (batch 128, 50 DDIM, seed 1234, against the same arm with fp16 a_hat):
+
+            B    W8A8 ms   vs fp16 a_hat   peak delta   cache    eta_cum
+            16    87.47       0.936x         +187 MB    877 MB    0.0432
+            32    79.82       1.026x         -608 MB    789 MB    0.0531
+            64    90.20       0.908x          +24 MB    745 MB    0.0625
+
+        B=16 and B=64 have a SMALLER cache and yet a peak equal to or worse than fp16 a_hat,
+        because the compile-time fast path exists only at 32: B=16 misses ahat_is_b32 and takes
+        the generic c/B divide, and at B=64 ahat_block_shuffle_ok fails so the host disables the
+        in-kernel write and runs a separate ahat_commit_block pass, which keeps the delta codes
+        live for an extra allocation plus a launch. Accuracy does not discriminate -- all three
+        sit 5-7x inside the sample-anchored eta_cum threshold of 0.30 and all three decode to
+        within the run-to-run image-MSE floor. See docs/ahat_conv_report_2026-09-02.
+
+        Instance method, not static, for the two guards below: as a DEFAULT this has to degrade
+        rather than raise.
         """
         try:
-            return int(os.environ.get("MODIFF_AHAT_BLOCK", "0"))
+            b = int(os.environ.get("MODIFF_AHAT_BLOCK", "32"))
         except (TypeError, ValueError):
             return 0
+        if b <= 0:
+            return 0
+        # Mutually exclusive with the blockwise CONV. Both of its routes keep a_hat in fp16
+        # (_blockk_dequant returns fp16, `d = x - a_hat` is an fp16 subtract) and both decide
+        # is_first_step from `a_hat_cache.dtype != torch.float16`, so an int8 a_hat would force
+        # the first-step branch on EVERY step and silently disable the temporal accumulation.
+        # Measured symptom: with MODIFF_CONV_BLOCKK=64 the AHAT_BLOCK=32 arm had byte-identical
+        # peak allocation to AHAT_BLOCK=0 (7734 MB both) -- the setting did nothing. Return 0 so
+        # that is explicit instead of silent.
+        if self._conv_blockk() != 0:
+            return 0
+        # Degrade for a channel count 32 does not divide, instead of raising from
+        # _pack_ahat_along_c. As an opt-in that only affected whoever set the env; as the default
+        # it would break any model with a channel count off the 32-grid.
+        a = getattr(self, "a_hat_cache", None)
+        c = a.shape[1] if a is not None and a.dim() == 4 else getattr(self, "in_channels", None)
+        return b if (c is not None and c % b == 0) else 0
 
     @staticmethod
     def _ahat_block_fake() -> bool:

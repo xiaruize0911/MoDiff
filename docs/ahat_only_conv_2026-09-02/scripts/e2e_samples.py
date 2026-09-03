@@ -23,7 +23,15 @@ AHAT_BITS = _b.group(1) if _b else "16"
 os.environ.update({
     "MODIFF_LINEAR": "0", "MODIFF_CACHE_SKIP_K": "1", "MODIFF_REPLAY_K": "1",
     "MODIFF_AHAT_BITS": AHAT_BITS, "MODIFF_AHAT_REFRESH": "0", "MODIFF_IMODE": "0",
-    "MODIFF_DELTA_MODE": "static", "MODIFF_CONV_BLOCKK": "0", "MODIFF_ACT_BLOCK": "0",
+    "MODIFF_DELTA_MODE": "static", "MODIFF_ACT_BLOCK": "0",
+    # blockk<N> in the arm name enables the blockwise CONV (MODIFF_CONV_BLOCKK), and gnonly
+    # additionally sets MODIFF_CONV_BLOCKK_GN_ONLY so ineligible layers stay unfused.
+    # MODIFF_CONV_BLOCKK is the BLOCK SIZE, not a flag: _blockk_eligible rejects anything
+    # outside {32,64,128,256}, so "1" silently disabled blockwise on every layer.
+    "MODIFF_CONV_BLOCKK": ((_re.search(r"blockk(\d+)", ARM).group(1)
+                            if _re.search(r"blockk(\d+)", ARM) else "64")
+                           if "blockk" in ARM else "0"),
+    "MODIFF_CONV_BLOCKK_GN_ONLY": ("1" if "gnonly" in ARM else "0"),
     "MODIFF_AHAT_BLOCK": BLOCK,
     # sim(\d+) in the arm name => MODIFF_AHAT_SIM_BITS, the fp16-storage blockwise N-bit
     # SIMULATION. Quality-only: no memory saving, and the ms/step is not meaningful.

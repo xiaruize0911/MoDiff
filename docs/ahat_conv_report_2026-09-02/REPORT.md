@@ -237,16 +237,34 @@ the images provably cannot. **Rank by `eta_cum`; give samples veto power only ab
 
 | arm | ms/step | vs fp16 | peak alloc MB | vs fp16 | a_hat cache MB | samples |
 |---|---|---|---|---|---|---|
-| fp16 | 102.63 | 1.000x | 4306 | 1.00x | — | ok |
-| W8A8 PTQ (no MoDiff) | 72.90 | 1.408x | 4573 | 1.06x | — | ok |
-| W8A8 MoDiff, a_hat fp16 | 81.57 | 1.258x | 7854 | 1.82x | 1403 | ok |
-| **W8A8 MoDiff, a_hat i8 B=32** | **80.25** | **1.279x** | **7241** | 1.68x | 789 | ok |
-| W4A4 PTQ (no MoDiff) | 59.94 | 1.712x | 4386 | 1.02x | — | collapsed (known) |
-| W4A4 MoDiff, a_hat fp16 | 79.50 | 1.290x | 7339 | 1.70x | 1403 | ok |
-| **W4A4 MoDiff, a_hat i8 B=32** | **79.88** | **1.285x** | **6980** | 1.62x | 789 | ok |
+| fp16 | 101.87 | 1.000x | 4306 | 1.00x | — | ok |
+| W8A8 PTQ (no MoDiff) | 72.50 | 1.405x | 4575 | 1.06x | — | ok |
+| W8A8 MoDiff, a_hat fp16 | 81.87 | 1.244x | 7853 | 1.82x | 1403 | ok |
+| **W8A8 MoDiff, a_hat i8 B=32** | 80.22 | 1.270x | 7245 | 1.68x | 789 | ok |
+| W4A4 PTQ (no MoDiff) | 59.99 | 1.698x | 4389 | 1.02x | — | collapsed (known) |
+| W4A4 MoDiff, a_hat fp16 | 79.98 | 1.274x | 7345 | 1.71x | 1403 | ok |
+| **W4A4 MoDiff, a_hat i8 B=32** | 80.42 | 1.267x | 6980 | 1.62x | 789 | ok |
 
-Blockwise vs its own fp16-`a_hat` arm: **W8A8 1.016x faster, −612 MB peak**; W4A4 0.996x, −366 MB.
-W4A4's apparent parity is the resize fusion, not the scheme — see §7.
+Blockwise vs its own fp16-`a_hat` arm: **W8A8 1.021x faster, −608 MB peak**; W4A4 0.994x, −365 MB.
+Decoded samples are indistinguishable from the fp16-`a_hat` reference at both precisions (image
+MSE 9.32e-04 / 8.61e-04, i.e. 0.55x / 0.50x of the 1.705e-03 run-to-run floor).
+
+**`MODIFF_AHAT_BLOCK` defaults to 32 as of this measurement**, and 32 specifically -- it is the
+only block size where the scheme pays. Swept end to end:
+
+| B | W8A8 ms/step | vs fp16 a_hat | peak delta | cache MB | eta_cum | image MSE / floor |
+|---|---|---|---|---|---|---|
+| 16 | 87.47 | 0.936x | **+187 MB** | 877 | 0.0432 | 0.45x |
+| **32** | **79.82** | **1.026x** | **−608 MB** | 789 | 0.0531 | 0.56x |
+| 64 | 90.20 | 0.908x | **+24 MB** | 745 | 0.0625 | 0.60x |
+
+W4A4 has the same shape: B=16 86.40 / +234 MB, **B=32 79.89 / −371 MB**, B=64 87.74 / +77 MB.
+B=16 and B=64 have a SMALLER cache and yet a peak equal to or worse than fp16 `a_hat`, because
+the compile-time fast path exists only at 32 -- B=16 misses `ahat_is_b32` and takes the generic
+`c/B` divide; at B=64 `ahat_block_shuffle_ok` fails, so the host disables the in-kernel write and
+runs a separate `ahat_commit_block`, which keeps the delta codes live for an extra allocation plus
+a launch. Accuracy does not discriminate: all three sit 5-7x inside the 0.30 threshold and all
+three decode inside the image-MSE floor.
 
 ![sample grid](plots/samples_blocks.png)
 
