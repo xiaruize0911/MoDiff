@@ -129,10 +129,55 @@ D_t  = (Σ q'/s) − â_t                             stored at R bits of one a_
    K + stochastic rounding, B pinned to 32 to match the next layer's `a_hat` blocking**, for
    −495 MB at near-neutral epilogue traffic.
 
-**Still a model, not a measurement:** `Σζ` (o_hat's own quantization error) cannot be measured in
-this harness — it needs the conv in the loop. The estimate is 0.043 at int8 B=32 with stochastic
-rounding (δ/rms = 5.6/127/2.08, rms rounding δ/√12, √50 random walk), which combines with a_hat's
-0.053 in quadrature to 0.068 — 4.4x inside the 0.30 threshold. That is the next thing to measure.
+## 5. `Σζ` measured: 8-bit o_hat works, and stochastic rounding matters where predicted
+
+§4 left `Σζ` as a model (0.043) because the kernel-1 harness has no conv in the loop. It does not
+need one: `o_hat_cache` is a Python tensor, so **snapping it in place after every conv is a faithful
+simulation** — the next step's read-modify-write reads exactly that value. `_snap_ohat_()` in
+`int8_optimized.py` / `int4_optimized.py`, off by default, gated on `MODIFF_OHAT_SIM_BITS`.
+
+W8A8 MoDiff, batch 128, 50 DDIM, seed 1234, **`MODIFF_AHAT_BLOCK=32` throughout — so a_hat is also
+8-bit B=32 in every row and these are the combined numbers.** Block 32 along K.
+
+| o_hat format | image MSE vs fp16 o_hat | / floor | PSNR dB | latent relL2 | / floor | resolvable? |
+|---|---|---|---|---|---|---|
+| fp16, second run | 1.555e-03 | **1.00x — floor** | 28.08 | 0.08550 | **1.00x** | — |
+| 10 bit + SR | 1.725e-03 | 1.11x | 27.63 | 0.08408 | 0.98x | no |
+| **8 bit + SR** | **2.655e-03** | **1.71x** | 25.76 | 0.10408 | 1.22x | **no** |
+| 8 bit, no SR | 2.935e-03 | 1.89x | 25.32 | 0.11524 | 1.35x | no |
+| 6 bit + SR | 9.585e-03 | 6.16x | 20.18 | 0.22718 | 2.66x | **yes** |
+| 6 bit, no SR | 1.530e-02 | 9.84x | 18.15 | 0.34093 | 3.99x | yes |
+| 4 bit + SR | 4.989e-02 | 32.1x | 13.02 | 0.70577 | 8.25x | yes |
+| 4 bit, no SR | 5.941e-02 | 38.2x | 12.26 | 0.76065 | 8.90x | yes |
+
+![o_hat sim samples](../ahat_conv_report_2026-09-02/plots/samples_ohat.png)
+
+*Rows: fp16, 10b+SR, 8b+SR, 8b no-SR, 6b+SR, 6b no-SR. The first four are indistinguishable.*
+
+1. **8-bit blockwise o_hat is indistinguishable** — 1.71x of the run-to-run floor, and the sample
+   grid agrees. §4's model predicted this (0.043 combining with a_hat's 0.053 to 0.068, 4.4x inside
+   threshold); the measurement confirms it. **The one unknown in this direction is now closed.**
+2. **Stochastic rounding matters exactly where §2 predicted.** It is worth 1.11x at 8 bits (not
+   decisive), **1.60x at 6 bits** (6.16x vs 9.84x of the floor — decisive), and 1.08x at 4 bits
+   (both destroyed). Latent-domain gain: 1.02x / 1.11x / **1.50x** / 1.08x at 10/8/6/4 bits. That is
+   the signature of the swallowing mechanism: at 10 bits the step is well below the increment so
+   there is nothing to swallow; at 4 bits everything is lost regardless; the middle is where an
+   unbiased rounding decides the outcome.
+3. **6 bits is not viable** (6.16x, visible degradation), so **o_hat's answer is 8 bits — the same
+   as a_hat's**, and for a different reason: a_hat stops at 8 because its error falls below the
+   delta quantizer's floor, o_hat stops at 8 because below that the increment is swallowed.
+
+**Projected memory** (the sim allocates fp32 temporaries, so its own peak is meaningless):
+o_hat 8-bit B=32 is 1.125 B/elem against fp16's 2.0, so **1131 → 636 MB, −495 MB**.
+
+| | now | after | vs fp16 |
+|---|---|---|---|
+| W8A8 peak | 7259 MB | **6764 MB** | 1.69x → **1.57x** |
+| W4A4 peak | 6703 MB | **6208 MB** | 1.56x → **1.44x** |
+
+**What is left is the epilogue**: write int8 o_hat + a separate fp16 output (un-aliasing them takes
+epilogue traffic 4.0 → 4.25 B/elem, near neutral, and leaves every consumer unchanged), with
+stochastic rounding on the store. The accuracy risk is now retired; only the kernel work remains.
 
 ## Reproduction
 

@@ -1,0 +1,95 @@
+{
+ "note": "o_hat fake-quantize sim, W8A8 MoDiff, batch 128, 50 DDIM, seed 1234, MODIFF_AHAT_BLOCK=32 (so a_hat is ALSO 8-bit B=32 in every row -- these are combined numbers). MODIFF_OHAT_SIM_BLOCK=32 along K. image MSE vs the fp16-o_hat reference; the floor row is a second fp16-o_hat process at the same seed. peak memory in the sim is meaningless (fp32 temps).",
+ "floor_image_mse": 0.001555,
+ "floor_latent_relL2": 0.0855,
+ "rows": [
+  {
+   "bits": 0,
+   "sr": null,
+   "tag": "ref",
+   "image_mse": null,
+   "latent_relL2": null,
+   "std": 1.0255
+  },
+  {
+   "bits": 0,
+   "sr": null,
+   "tag": "refb",
+   "image_mse": 0.001555,
+   "latent_relL2": 0.0855,
+   "std": 1.0256,
+   "note": "floor"
+  },
+  {
+   "bits": 10,
+   "sr": 1,
+   "image_mse": 0.001725,
+   "latent_relL2": 0.08408,
+   "std": 1.0249
+  },
+  {
+   "bits": 8,
+   "sr": 1,
+   "image_mse": 0.002655,
+   "latent_relL2": 0.10408,
+   "std": 1.0256
+  },
+  {
+   "bits": 6,
+   "sr": 1,
+   "image_mse": 0.009585,
+   "latent_relL2": 0.22718,
+   "std": 1.0199
+  },
+  {
+   "bits": 4,
+   "sr": 1,
+   "image_mse": 0.04989,
+   "latent_relL2": 0.70577,
+   "std": 0.7129
+  },
+  {
+   "bits": 10,
+   "sr": 0,
+   "image_mse": null,
+   "latent_relL2": 0.0855,
+   "std": 1.0252
+  },
+  {
+   "bits": 8,
+   "sr": 0,
+   "image_mse": 0.002935,
+   "latent_relL2": 0.11524,
+   "std": 1.0276
+  },
+  {
+   "bits": 6,
+   "sr": 0,
+   "image_mse": 0.0153,
+   "latent_relL2": 0.34093,
+   "std": 0.9595
+  },
+  {
+   "bits": 4,
+   "sr": 0,
+   "image_mse": 0.05941,
+   "latent_relL2": 0.76065,
+   "std": 0.3854
+  }
+ ],
+ "sr_gain_latent": {
+  "10": 1.02,
+  "8": 1.11,
+  "6": 1.5,
+  "4": 1.08
+ },
+ "projected_memory": {
+  "ohat_fp16_MB": 1131,
+  "ohat_i8_B32_MB": 636,
+  "saving_MB": 495,
+  "W8A8_peak_now": 7259,
+  "W8A8_peak_after": 6764,
+  "W4A4_peak_now": 6703,
+  "W4A4_peak_after": 6208
+ }
+}

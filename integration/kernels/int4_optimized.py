@@ -697,18 +697,68 @@ class OptimizedInt4Conv2d(nn.Module):
         scale = qmax / a.abs().amax().float().clamp_min(1e-6)
         a.mul_(scale).round_().clamp_(-qmax, qmax).div_(scale)
 
+
+    def _snap_ohat_(self) -> None:
+        """SIM ONLY: fake-quantize o_hat in place, blockwise along K, to price compressing it.
+
+        o_hat is the LARGER cache (1131 MB vs a_hat's 702 at batch 128, measured) and has no
+        low-precision path at all -- o_dtype is hard-wired fp16. Unlike a_hat, its error has no
+        self-correction: the delta references a_hat, so a_hat's rounding is absorbed exactly by the
+        next step, while nothing ever recomputes the true conv output. Its failure mode is also
+        different -- the per-step increment is only 1.6-9.2% of the accumulator (measured), so at
+        int8 B=32 the quantization step is 0.43-2.71 LSB of the update and plain rounding DROPS it.
+        Hence MODIFF_OHAT_SIM_SR, on by default here: stochastic rounding preserves the update in
+        expectation, and in the real epilogue it is free (the exact fp32 value is already in
+        registers).
+
+        Snapping the cache in place is a faithful simulation because the next step's read-modify-
+        write reads exactly this value. What it does NOT simulate is memory or speed: this path
+        allocates fp32 temporaries, so peak here is meaningless -- the point is Sum(zeta), the one
+        quantity the kernel-1 harness cannot reach because it has no conv in the loop.
+
+        MODIFF_OHAT_SIM_BITS  0 = off (default).  MODIFF_OHAT_SIM_BLOCK  along-K block, default 32
+        -- and 32 specifically: layer L's o_hat channel axis IS layer L+1's a_hat axis, so 32
+        aligns them.  MODIFF_OHAT_SIM_SR  1 = stochastic rounding (default), 0 = round-to-nearest.
+        """
+        try:
+            bits = int(os.environ.get("MODIFF_OHAT_SIM_BITS", "0"))
+        except (TypeError, ValueError):
+            return
+        if bits <= 0:
+            return
+        oh = self.o_hat_cache
+        if oh is None or oh.dim() != 4:
+            return
+        try:
+            blk = int(os.environ.get("MODIFF_OHAT_SIM_BLOCK", "32"))
+        except (TypeError, ValueError):
+            blk = 32
+        n, k, h, w = oh.shape
+        if blk <= 0 or k % blk:
+            return
+        lim = float(2 ** (bits - 1) - 1)
+        v = oh.permute(0, 2, 3, 1).reshape(n, h, w, k // blk, blk).float()
+        s = v.abs().amax(-1, keepdim=True).clamp_min(1e-12) / lim
+        q = v / s
+        if os.environ.get("MODIFF_OHAT_SIM_SR", "1") != "0":
+            q = torch.floor(q + torch.rand_like(q))      # unbiased: E[q] is the exact value
+        else:
+            q = torch.round(q)
+        v = (q.clamp_(-lim, lim) * s).reshape(n, h, w, k).permute(0, 3, 1, 2)
+        oh.copy_(v)
+
     def _after_ahat_write(self, out):
         sb = self._ahat_sim_bits()
         if sb > 0 and self.a_hat_cache is not None and self.a_hat_cache.dtype == torch.float16:
             blk = self._ahat_block()
             if blk > 0 and not self._skip_cache_store():
                 self._snap_ahat_along_c_(self.a_hat_cache, blk, float(2 ** (sb - 1) - 1))
-            return out
         if (self._ahat_want_int8() and self.a_hat_cache is not None
                 and self.a_hat_cache.dtype != torch.int8):
             self._pack_ahat_int8()
         else:
             self._maybe_quantize_ahat()
+        self._snap_ohat_()
         return out
 
     def _skip_out_buf(self) -> torch.Tensor:
