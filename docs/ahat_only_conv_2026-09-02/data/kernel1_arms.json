@@ -1,0 +1,1146 @@
+{
+ "gpu": "NVIDIA A40",
+ "shapes": [
+  {
+   "C": 768,
+   "H": 2,
+   "W": 2,
+   "B": 128,
+   "freq": 12,
+   "arms": {
+    "int8/baseline": [
+     0.0180479995906353,
+     1.12841796875
+    ],
+    "int8/baseline_generic": [
+     0.02022399939596653,
+     1.12841796875
+    ],
+    "int8/MoDiff a_hat fp16": [
+     0.028192000463604927,
+     2.03466796875
+    ],
+    "int8/MoDiff a_hat i8 B=16": [
+     0.029823999851942062,
+     1.75341796875
+    ],
+    "int8/MoDiff a_hat i8 B=32": [
+     0.027904000133275986,
+     1.70654296875
+    ],
+    "int8/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ],
+    "int4/baseline": [
+     0.018239999189972878,
+     0.94091796875
+    ],
+    "int4/baseline_generic": [
+     0.02054399996995926,
+     0.94091796875
+    ],
+    "int4/MoDiff a_hat fp16": [
+     0.026464000344276428,
+     1.84716796875
+    ],
+    "int4/MoDiff a_hat i8 B=16": [
+     0.02672000043094158,
+     1.56591796875
+    ],
+    "int4/MoDiff a_hat i8 B=32": [
+     0.02598400041460991,
+     1.51904296875
+    ],
+    "int4/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_pack_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ]
+   }
+  },
+  {
+   "C": 384,
+   "H": 8,
+   "W": 8,
+   "B": 128,
+   "freq": 8,
+   "arms": {
+    "int8/baseline": [
+     0.03782400116324425,
+     9.00244140625
+    ],
+    "int8/baseline_generic": [
+     0.17334400117397308,
+     9.00244140625
+    ],
+    "int8/MoDiff a_hat fp16": [
+     0.0772479996085167,
+     16.03369140625
+    ],
+    "int8/MoDiff a_hat i8 B=16": [
+     0.09932799637317657,
+     13.78369140625
+    ],
+    "int8/MoDiff a_hat i8 B=32": [
+     0.06876800209283829,
+     13.40869140625
+    ],
+    "int8/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ],
+    "int4/baseline": [
+     0.03807999938726425,
+     7.50244140625
+    ],
+    "int4/baseline_generic": [
+     0.1876160055398941,
+     7.50244140625
+    ],
+    "int4/MoDiff a_hat fp16": [
+     0.07523199915885925,
+     14.53369140625
+    ],
+    "int4/MoDiff a_hat i8 B=16": [
+     0.08399999886751175,
+     12.28369140625
+    ],
+    "int4/MoDiff a_hat i8 B=32": [
+     0.0769599974155426,
+     11.90869140625
+    ],
+    "int4/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_pack_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ]
+   }
+  },
+  {
+   "C": 192,
+   "H": 32,
+   "W": 32,
+   "B": 128,
+   "freq": 7,
+   "arms": {
+    "int8/baseline": [
+     0.255295991897583,
+     72.00146484375
+    ],
+    "int8/baseline_generic": [
+     0.453247994184494,
+     72.00146484375
+    ],
+    "int8/MoDiff a_hat fp16": [
+     0.41702398657798767,
+     121.03271484375
+    ],
+    "int8/MoDiff a_hat i8 B=16": [
+     0.5845119953155518,
+     103.03271484375
+    ],
+    "int8/MoDiff a_hat i8 B=32": [
+     0.4065279960632324,
+     100.03271484375
+    ],
+    "int8/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ],
+    "int4/baseline": [
+     0.24288000166416168,
+     60.00146484375
+    ],
+    "int4/baseline_generic": [
+     0.4636799991130829,
+     60.00146484375
+    ],
+    "int4/MoDiff a_hat fp16": [
+     0.4002560079097748,
+     109.03271484375
+    ],
+    "int4/MoDiff a_hat i8 B=16": [
+     0.4676479995250702,
+     91.03271484375
+    ],
+    "int4/MoDiff a_hat i8 B=32": [
+     0.4122239947319031,
+     88.03271484375
+    ],
+    "int4/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_pack_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ]
+   }
+  },
+  {
+   "C": 384,
+   "H": 16,
+   "W": 16,
+   "B": 128,
+   "freq": 7,
+   "arms": {
+    "int8/baseline": [
+     0.11148799955844879,
+     36.00244140625
+    ],
+    "int8/baseline_generic": [
+     0.284960001707077,
+     36.00244140625
+    ],
+    "int8/MoDiff a_hat fp16": [
+     0.2231680005788803,
+     61.03369140625
+    ],
+    "int8/MoDiff a_hat i8 B=16": [
+     0.3067519962787628,
+     52.03369140625
+    ],
+    "int8/MoDiff a_hat i8 B=32": [
+     0.18505600094795227,
+     50.53369140625
+    ],
+    "int8/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ],
+    "int4/baseline": [
+     0.1120000034570694,
+     30.00244140625
+    ],
+    "int4/baseline_generic": [
+     0.29926401376724243,
+     30.00244140625
+    ],
+    "int4/MoDiff a_hat fp16": [
+     0.21488000452518463,
+     55.03369140625
+    ],
+    "int4/MoDiff a_hat i8 B=16": [
+     0.247871994972229,
+     46.03369140625
+    ],
+    "int4/MoDiff a_hat i8 B=32": [
+     0.21987199783325195,
+     44.53369140625
+    ],
+    "int4/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_pack_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ]
+   }
+  },
+  {
+   "C": 768,
+   "H": 4,
+   "W": 4,
+   "B": 128,
+   "freq": 7,
+   "arms": {
+    "int8/baseline": [
+     0.02486399933695793,
+     4.50341796875
+    ],
+    "int8/baseline_generic": [
+     0.06006399914622307,
+     4.50341796875
+    ],
+    "int8/MoDiff a_hat fp16": [
+     0.05180799961090088,
+     8.03466796875
+    ],
+    "int8/MoDiff a_hat i8 B=16": [
+     0.06249599903821945,
+     6.90966796875
+    ],
+    "int8/MoDiff a_hat i8 B=32": [
+     0.046271998435258865,
+     6.72216796875
+    ],
+    "int8/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ],
+    "int4/baseline": [
+     0.025248000398278236,
+     3.75341796875
+    ],
+    "int4/baseline_generic": [
+     0.06095999851822853,
+     3.75341796875
+    ],
+    "int4/MoDiff a_hat fp16": [
+     0.049247998744249344,
+     7.28466796875
+    ],
+    "int4/MoDiff a_hat i8 B=16": [
+     0.053568001836538315,
+     6.15966796875
+    ],
+    "int4/MoDiff a_hat i8 B=32": [
+     0.04960000142455101,
+     5.97216796875
+    ],
+    "int4/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_pack_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ]
+   }
+  },
+  {
+   "C": 1536,
+   "H": 2,
+   "W": 2,
+   "B": 128,
+   "freq": 3,
+   "arms": {
+    "int8/baseline": [
+     0.01929599978029728,
+     2.25634765625
+    ],
+    "int8/baseline_generic": [
+     0.031136000528931618,
+     2.25634765625
+    ],
+    "int8/MoDiff a_hat fp16": [
+     0.03782400116324425,
+     3.91259765625
+    ],
+    "int8/MoDiff a_hat i8 B=16": [
+     0.045471999794244766,
+     3.35009765625
+    ],
+    "int8/MoDiff a_hat i8 B=32": [
+     0.037087999284267426,
+     3.25634765625
+    ],
+    "int8/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ],
+    "int4/baseline": [
+     0.019392000511288643,
+     1.88134765625
+    ],
+    "int4/baseline_generic": [
+     0.03187200054526329,
+     1.88134765625
+    ],
+    "int4/MoDiff a_hat fp16": [
+     0.03743999823927879,
+     3.53759765625
+    ],
+    "int4/MoDiff a_hat i8 B=16": [
+     0.04073600098490715,
+     2.97509765625
+    ],
+    "int4/MoDiff a_hat i8 B=32": [
+     0.03872000053524971,
+     2.88134765625
+    ],
+    "int4/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_pack_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ]
+   }
+  },
+  {
+   "C": 1536,
+   "H": 4,
+   "W": 4,
+   "B": 128,
+   "freq": 2,
+   "arms": {
+    "int8/baseline": [
+     0.037151999771595,
+     9.00634765625
+    ],
+    "int8/baseline_generic": [
+     0.1687999963760376,
+     9.00634765625
+    ],
+    "int8/MoDiff a_hat fp16": [
+     0.10387200117111206,
+     15.53759765625
+    ],
+    "int8/MoDiff a_hat i8 B=16": [
+     0.12652799487113953,
+     13.28759765625
+    ],
+    "int8/MoDiff a_hat i8 B=32": [
+     0.095551997423172,
+     12.91259765625
+    ],
+    "int8/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ],
+    "int4/baseline": [
+     0.03766399994492531,
+     7.50634765625
+    ],
+    "int4/baseline_generic": [
+     0.18534399569034576,
+     7.50634765625
+    ],
+    "int4/MoDiff a_hat fp16": [
+     0.10204800218343735,
+     14.03759765625
+    ],
+    "int4/MoDiff a_hat i8 B=16": [
+     0.11132799834012985,
+     11.78759765625
+    ],
+    "int4/MoDiff a_hat i8 B=32": [
+     0.10416000336408615,
+     11.41259765625
+    ],
+    "int4/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_pack_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ]
+   }
+  },
+  {
+   "C": 768,
+   "H": 8,
+   "W": 8,
+   "B": 128,
+   "freq": 2,
+   "arms": {
+    "int8/baseline": [
+     0.06323199719190598,
+     18.00341796875
+    ],
+    "int8/baseline_generic": [
+     0.2091519981622696,
+     18.00341796875
+    ],
+    "int8/MoDiff a_hat fp16": [
+     0.13235199451446533,
+     31.03466796875
+    ],
+    "int8/MoDiff a_hat i8 B=16": [
+     0.17475199699401855,
+     26.53466796875
+    ],
+    "int8/MoDiff a_hat i8 B=32": [
+     0.11350400000810623,
+     25.78466796875
+    ],
+    "int8/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ],
+    "int4/baseline": [
+     0.06361600011587143,
+     15.00341796875
+    ],
+    "int4/baseline_generic": [
+     0.22473600506782532,
+     15.00341796875
+    ],
+    "int4/MoDiff a_hat fp16": [
+     0.12828800082206726,
+     28.03466796875
+    ],
+    "int4/MoDiff a_hat i8 B=16": [
+     0.14444799721240997,
+     23.53466796875
+    ],
+    "int4/MoDiff a_hat i8 B=32": [
+     0.13014400005340576,
+     22.78466796875
+    ],
+    "int4/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_pack_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ]
+   }
+  },
+  {
+   "C": 768,
+   "H": 16,
+   "W": 16,
+   "B": 128,
+   "freq": 2,
+   "arms": {
+    "int8/baseline": [
+     0.20652799308300018,
+     72.00341796875
+    ],
+    "int8/baseline_generic": [
+     0.40854400396347046,
+     72.00341796875
+    ],
+    "int8/MoDiff a_hat fp16": [
+     0.4104959964752197,
+     121.03466796875
+    ],
+    "int8/MoDiff a_hat i8 B=16": [
+     0.5773760080337524,
+     103.03466796875
+    ],
+    "int8/MoDiff a_hat i8 B=32": [
+     0.340256005525589,
+     100.03466796875
+    ],
+    "int8/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ],
+    "int4/baseline": [
+     0.2094080001115799,
+     60.00341796875
+    ],
+    "int4/baseline_generic": [
+     0.4277760088443756,
+     60.00341796875
+    ],
+    "int4/MoDiff a_hat fp16": [
+     0.39904001355171204,
+     109.03466796875
+    ],
+    "int4/MoDiff a_hat i8 B=16": [
+     0.46137601137161255,
+     91.03466796875
+    ],
+    "int4/MoDiff a_hat i8 B=32": [
+     0.4065279960632324,
+     88.03466796875
+    ],
+    "int4/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_pack_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ]
+   }
+  },
+  {
+   "C": 384,
+   "H": 32,
+   "W": 32,
+   "B": 128,
+   "freq": 2,
+   "arms": {
+    "int8/baseline": [
+     0.5193279981613159,
+     144.00244140625
+    ],
+    "int8/baseline_generic": [
+     0.7185279726982117,
+     144.00244140625
+    ],
+    "int8/MoDiff a_hat fp16": [
+     0.7966399788856506,
+     241.03369140625
+    ],
+    "int8/MoDiff a_hat i8 B=16": [
+     1.1257920265197754,
+     205.03369140625
+    ],
+    "int8/MoDiff a_hat i8 B=32": [
+     0.6476799845695496,
+     199.03369140625
+    ],
+    "int8/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ],
+    "int4/baseline": [
+     0.4612480103969574,
+     120.00244140625
+    ],
+    "int4/baseline_generic": [
+     0.7536640167236328,
+     120.00244140625
+    ],
+    "int4/MoDiff a_hat fp16": [
+     0.7703999876976013,
+     217.03369140625
+    ],
+    "int4/MoDiff a_hat i8 B=16": [
+     0.9016960263252258,
+     181.03369140625
+    ],
+    "int4/MoDiff a_hat i8 B=32": [
+     0.7890880107879639,
+     175.03369140625
+    ],
+    "int4/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_pack_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ]
+   }
+  },
+  {
+   "C": 192,
+   "H": 16,
+   "W": 16,
+   "B": 128,
+   "freq": 1,
+   "arms": {
+    "int8/baseline": [
+     0.07795199751853943,
+     18.00146484375
+    ],
+    "int8/baseline_generic": [
+     0.22431999444961548,
+     18.00146484375
+    ],
+    "int8/MoDiff a_hat fp16": [
+     0.12694400548934937,
+     31.03271484375
+    ],
+    "int8/MoDiff a_hat i8 B=16": [
+     0.1695680022239685,
+     26.53271484375
+    ],
+    "int8/MoDiff a_hat i8 B=32": [
+     0.12492799758911133,
+     25.78271484375
+    ],
+    "int8/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ],
+    "int4/baseline": [
+     0.0732479989528656,
+     15.00146484375
+    ],
+    "int4/baseline_generic": [
+     0.23558400571346283,
+     15.00146484375
+    ],
+    "int4/MoDiff a_hat fp16": [
+     0.12294399738311768,
+     28.03271484375
+    ],
+    "int4/MoDiff a_hat i8 B=16": [
+     0.1391039937734604,
+     23.53271484375
+    ],
+    "int4/MoDiff a_hat i8 B=32": [
+     0.12531200051307678,
+     22.78271484375
+    ],
+    "int4/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_pack_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ]
+   }
+  },
+  {
+   "C": 192,
+   "H": 16,
+   "W": 16,
+   "B": 128,
+   "freq": 1,
+   "arms": {
+    "int8/baseline": [
+     0.07878399640321732,
+     18.00146484375
+    ],
+    "int8/baseline_generic": [
+     0.22393600642681122,
+     18.00146484375
+    ],
+    "int8/MoDiff a_hat fp16": [
+     0.1266240030527115,
+     31.03271484375
+    ],
+    "int8/MoDiff a_hat i8 B=16": [
+     0.16944000124931335,
+     26.53271484375
+    ],
+    "int8/MoDiff a_hat i8 B=32": [
+     0.12454400211572647,
+     25.78271484375
+    ],
+    "int8/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ],
+    "int4/baseline": [
+     0.07308799773454666,
+     15.00146484375
+    ],
+    "int4/baseline_generic": [
+     0.23555199801921844,
+     15.00146484375
+    ],
+    "int4/MoDiff a_hat fp16": [
+     0.12294399738311768,
+     28.03271484375
+    ],
+    "int4/MoDiff a_hat i8 B=16": [
+     0.1390720009803772,
+     23.53271484375
+    ],
+    "int4/MoDiff a_hat i8 B=32": [
+     0.12451200187206268,
+     22.78271484375
+    ],
+    "int4/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_pack_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ]
+   }
+  },
+  {
+   "C": 384,
+   "H": 4,
+   "W": 4,
+   "B": 128,
+   "freq": 1,
+   "arms": {
+    "int8/baseline": [
+     0.01926399953663349,
+     2.25244140625
+    ],
+    "int8/baseline_generic": [
+     0.03129599988460541,
+     2.25244140625
+    ],
+    "int8/MoDiff a_hat fp16": [
+     0.03167999908328056,
+     4.28369140625
+    ],
+    "int8/MoDiff a_hat i8 B=16": [
+     0.03923200070858002,
+     3.72119140625
+    ],
+    "int8/MoDiff a_hat i8 B=32": [
+     0.031039999797940254,
+     3.62744140625
+    ],
+    "int8/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ],
+    "int4/baseline": [
+     0.01958400011062622,
+     1.87744140625
+    ],
+    "int4/baseline_generic": [
+     0.03206399828195572,
+     1.87744140625
+    ],
+    "int4/MoDiff a_hat fp16": [
+     0.03097599931061268,
+     3.90869140625
+    ],
+    "int4/MoDiff a_hat i8 B=16": [
+     0.03446400165557861,
+     3.34619140625
+    ],
+    "int4/MoDiff a_hat i8 B=32": [
+     0.032416000962257385,
+     3.25244140625
+    ],
+    "int4/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_pack_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ]
+   }
+  },
+  {
+   "C": 384,
+   "H": 4,
+   "W": 4,
+   "B": 128,
+   "freq": 1,
+   "arms": {
+    "int8/baseline": [
+     0.019392000511288643,
+     2.25244140625
+    ],
+    "int8/baseline_generic": [
+     0.03142400085926056,
+     2.25244140625
+    ],
+    "int8/MoDiff a_hat fp16": [
+     0.03171199932694435,
+     4.28369140625
+    ],
+    "int8/MoDiff a_hat i8 B=16": [
+     0.03951999917626381,
+     3.72119140625
+    ],
+    "int8/MoDiff a_hat i8 B=32": [
+     0.03094400092959404,
+     3.62744140625
+    ],
+    "int8/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ],
+    "int4/baseline": [
+     0.019551999866962433,
+     1.87744140625
+    ],
+    "int4/baseline_generic": [
+     0.03251200169324875,
+     1.87744140625
+    ],
+    "int4/MoDiff a_hat fp16": [
+     0.031199999153614044,
+     3.90869140625
+    ],
+    "int4/MoDiff a_hat i8 B=16": [
+     0.034591998904943466,
+     3.34619140625
+    ],
+    "int4/MoDiff a_hat i8 B=32": [
+     0.0323840007185936,
+     3.25244140625
+    ],
+    "int4/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_pack_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ]
+   }
+  },
+  {
+   "C": 1152,
+   "H": 4,
+   "W": 4,
+   "B": 128,
+   "freq": 1,
+   "arms": {
+    "int8/baseline": [
+     0.0331839993596077,
+     6.75537109375
+    ],
+    "int8/baseline_generic": [
+     0.1658560037612915,
+     6.75537109375
+    ],
+    "int8/MoDiff a_hat fp16": [
+     0.06966400146484375,
+     11.78662109375
+    ],
+    "int8/MoDiff a_hat i8 B=16": [
+     0.08662399649620056,
+     10.09912109375
+    ],
+    "int8/MoDiff a_hat i8 B=32": [
+     0.06272000074386597,
+     9.81787109375
+    ],
+    "int8/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ],
+    "int4/baseline": [
+     0.0307839997112751,
+     5.63037109375
+    ],
+    "int4/baseline_generic": [
+     0.17078399658203125,
+     5.63037109375
+    ],
+    "int4/MoDiff a_hat fp16": [
+     0.06774400174617767,
+     10.66162109375
+    ],
+    "int4/MoDiff a_hat i8 B=16": [
+     0.07462400197982788,
+     8.97412109375
+    ],
+    "int4/MoDiff a_hat i8 B=32": [
+     0.06911999732255936,
+     8.69287109375
+    ],
+    "int4/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_pack_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ]
+   }
+  },
+  {
+   "C": 768,
+   "H": 8,
+   "W": 8,
+   "B": 128,
+   "freq": 1,
+   "arms": {
+    "int8/baseline": [
+     0.06310400366783142,
+     18.00341796875
+    ],
+    "int8/baseline_generic": [
+     0.20880000293254852,
+     18.00341796875
+    ],
+    "int8/MoDiff a_hat fp16": [
+     0.13184000551700592,
+     31.03466796875
+    ],
+    "int8/MoDiff a_hat i8 B=16": [
+     0.17392000555992126,
+     26.53466796875
+    ],
+    "int8/MoDiff a_hat i8 B=32": [
+     0.11340799927711487,
+     25.78466796875
+    ],
+    "int8/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ],
+    "int4/baseline": [
+     0.06332799792289734,
+     15.00341796875
+    ],
+    "int4/baseline_generic": [
+     0.22457599639892578,
+     15.00341796875
+    ],
+    "int4/MoDiff a_hat fp16": [
+     0.12800000607967377,
+     28.03466796875
+    ],
+    "int4/MoDiff a_hat i8 B=16": [
+     0.1438719928264618,
+     23.53466796875
+    ],
+    "int4/MoDiff a_hat i8 B=32": [
+     0.13020800054073334,
+     22.78466796875
+    ],
+    "int4/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_pack_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ]
+   }
+  },
+  {
+   "C": 1152,
+   "H": 8,
+   "W": 8,
+   "B": 128,
+   "freq": 1,
+   "arms": {
+    "int8/baseline": [
+     0.08860799670219421,
+     27.00537109375
+    ],
+    "int8/baseline_generic": [
+     0.25894400477409363,
+     27.00537109375
+    ],
+    "int8/MoDiff a_hat fp16": [
+     0.19094400107860565,
+     46.03662109375
+    ],
+    "int8/MoDiff a_hat i8 B=16": [
+     0.2542400062084198,
+     39.28662109375
+    ],
+    "int8/MoDiff a_hat i8 B=32": [
+     0.1634880006313324,
+     39.03662109375
+    ],
+    "int8/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ],
+    "int4/baseline": [
+     0.08940800279378891,
+     22.50537109375
+    ],
+    "int4/baseline_generic": [
+     0.27715200185775757,
+     22.50537109375
+    ],
+    "int4/MoDiff a_hat fp16": [
+     0.1852159947156906,
+     41.53662109375
+    ],
+    "int4/MoDiff a_hat i8 B=16": [
+     0.21033599972724915,
+     34.78662109375
+    ],
+    "int4/MoDiff a_hat i8 B=32": [
+     0.18937599658966064,
+     33.66162109375
+    ],
+    "int4/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_pack_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ]
+   }
+  },
+  {
+   "C": 576,
+   "H": 16,
+   "W": 16,
+   "B": 128,
+   "freq": 1,
+   "arms": {
+    "int8/baseline": [
+     0.1693439930677414,
+     54.00341796875
+    ],
+    "int8/baseline_generic": [
+     0.3670400083065033,
+     54.00341796875
+    ],
+    "int8/MoDiff a_hat fp16": [
+     0.31724798679351807,
+     91.03466796875
+    ],
+    "int8/MoDiff a_hat i8 B=16": [
+     0.4413760006427765,
+     77.53466796875
+    ],
+    "int8/MoDiff a_hat i8 B=32": [
+     0.3089599907398224,
+     75.28466796875
+    ],
+    "int8/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ],
+    "int4/baseline": [
+     0.1695999950170517,
+     45.00341796875
+    ],
+    "int4/baseline_generic": [
+     0.38335999846458435,
+     45.00341796875
+    ],
+    "int4/MoDiff a_hat fp16": [
+     0.30640000104904175,
+     82.03466796875
+    ],
+    "int4/MoDiff a_hat i8 B=16": [
+     0.3546240031719208,
+     68.53466796875
+    ],
+    "int4/MoDiff a_hat i8 B=32": [
+     0.31273600459098816,
+     66.28466796875
+    ],
+    "int4/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_pack_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ]
+   }
+  },
+  {
+   "C": 384,
+   "H": 32,
+   "W": 32,
+   "B": 128,
+   "freq": 1,
+   "arms": {
+    "int8/baseline": [
+     0.5192959904670715,
+     144.00244140625
+    ],
+    "int8/baseline_generic": [
+     0.7201279997825623,
+     144.00244140625
+    ],
+    "int8/MoDiff a_hat fp16": [
+     0.7967039942741394,
+     241.03369140625
+    ],
+    "int8/MoDiff a_hat i8 B=16": [
+     1.1248960494995117,
+     205.03369140625
+    ],
+    "int8/MoDiff a_hat i8 B=32": [
+     0.6532160043716431,
+     199.03369140625
+    ],
+    "int8/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ],
+    "int4/baseline": [
+     0.45871999859809875,
+     120.00244140625
+    ],
+    "int4/baseline_generic": [
+     0.7595199942588806,
+     120.00244140625
+    ],
+    "int4/MoDiff a_hat fp16": [
+     0.7698240280151367,
+     217.03369140625
+    ],
+    "int4/MoDiff a_hat i8 B=16": [
+     0.9008319973945618,
+     181.03369140625
+    ],
+    "int4/MoDiff a_hat i8 B=32": [
+     0.7890239953994751,
+     175.03369140625
+    ],
+    "int4/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_pack_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ]
+   }
+  },
+  {
+   "C": 576,
+   "H": 32,
+   "W": 32,
+   "B": 128,
+   "freq": 1,
+   "arms": {
+    "int8/baseline": [
+     0.8170560002326965,
+     216.00341796875
+    ],
+    "int8/baseline_generic": [
+     1.0166399478912354,
+     216.00341796875
+    ],
+    "int8/MoDiff a_hat fp16": [
+     1.1788159608840942,
+     361.03466796875
+    ],
+    "int8/MoDiff a_hat i8 B=16": [
+     1.692736029624939,
+     307.03466796875
+    ],
+    "int8/MoDiff a_hat i8 B=32": [
+     1.1554880142211914,
+     298.03466796875
+    ],
+    "int8/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ],
+    "int4/baseline": [
+     0.7464320063591003,
+     180.00341796875
+    ],
+    "int4/baseline_generic": [
+     1.0488640069961548,
+     180.00341796875
+    ],
+    "int4/MoDiff a_hat fp16": [
+     1.1376639604568481,
+     325.03466796875
+    ],
+    "int4/MoDiff a_hat i8 B=16": [
+     1.3340480327606201,
+     271.03466796875
+    ],
+    "int4/MoDiff a_hat i8 B=32": [
+     1.1680959463119507,
+     262.03466796875
+    ],
+    "int4/MoDiff a_hat i8 B=64": [
+     null,
+     "group_norm_silu_delta_quantize_pack_nhwc: along-C block size C/ng must be even and in [2,32]"
+    ]
+   }
+  }
+ ],
+ "method": "CUDA events, median of 25 after 8 warmup; peak = max_memory_allocated over arm-state allocation + one launch"
+}

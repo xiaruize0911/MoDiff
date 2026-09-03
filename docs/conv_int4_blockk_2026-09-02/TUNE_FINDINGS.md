@@ -104,3 +104,132 @@ tile selection. That is "match CUTLASS at implicit GEMM", which is open-ended ra
 sweep. Two smaller, bounded items also remain: FFMA interleaving (DeepGEMM reports 10%+, and
 CUDA 12.4 here does not do it automatically) and split-K for the low-occupancy 2x2/4x4 shapes
 (measured ceiling +4%).
+
+
+---
+
+# Addendum: asymmetric A/B rings — the last candidate, and it fails
+
+The ceiling argument above said the trade is mediated by shared memory: removing the accumulator
+carry needs TK=128, and 2 CTA/SM then forces `CTA_M+CTA_N <= 192`, so the full 128x128 tile (where
+the tile quality is) and TK==BLK (where the low tax is) cannot co-exist. There was one mechanism
+left that the argument did not cover: **give A and B separate ring depths.**
+
+smem is `SA*TM*TK + SB*TN*TK`, so SA=2 / SB=1 puts a full 128x128 tile at TK=128 into
+**50176 B -> 2 CTA/SM**, where SA=SB=2 needs 66560 B and gets 1. That is exactly the missing
+combination, so it was implemented (configs 16-18) and correctness-gated (relL2 3.61-3.66e-04).
+
+**It fails badly.** Best asymmetric result: W8A8 cfg18 at **18.9%** of shipped (tax **3.62x**),
+W4A4 cfg16 at **46.2%** (tax 1.52x) -- against 63.5% and 64.4% for the best symmetric configs.
+
+The reason is the price the asymmetry charges: with SB=1, B has no load/compute overlap and every
+tile needs a `__syncthreads()` before its reload. That serialises half the tile traffic against
+the mma stream. It also does not deliver the hoped-for tile: configs 16/17 measure a 68-70% tile,
+not the 80-84% the 128x128 configs reach at TK=64, because the extra barrier costs the scalar
+control too.
+
+**So the design space is closed.** Both operands need real double buffering, that fixes smem at
+`2*(CTA_M+CTA_N)*TK`, and from there the tile-vs-tax trade is forced. 80% of shipped is not
+reachable by any (CTA_M, CTA_N, CTA_K, warp tile, stages, B) setting of this kernel; it requires
+the tile itself to reach ~95% of CUTLASS while paying a >=1.19x tax, and it is at 65-82%.
+
+## Final benchmark, all 19 configs
+
+Same protocol as above. Run-to-run spread on `% of shipped` is 1-2 points, so read the top few as
+a tie.
+
+### W8A8
+
+| cfg | config | cov | blockwise vs fp16 | % of shipped | tax | tile alone |
+|---:|---|---:|---:|---:|---:|---:|
+| 0 | `M128N128K64_W128x16_S2_B64` | 100% | 1.010x | **63.5%** | 1.26x | 79.8% |
+| 5 | `M128N64K128_W32x32_S2_B128` | 82% | 1.125x | **63.2%** | 1.07x | 67.5% |
+| 8 | `M64N128K128_W64x16_S2_B256` | 47% | 1.121x | **62.5%** | 1.05x | 65.7% |
+| 4 | `M64N128K128_W64x16_S2_B128` | 82% | 1.030x | **57.9%** | 1.11x | 64.2% |
+| 2 | `M128N128K64_W64x32_S2_B64` | 100% | 0.902x | **56.8%** | 1.44x | 81.6% |
+| 7 | `M128N64K128_W64x16_S2_B256` | 47% | 0.989x | **55.1%** | 1.22x | 67.4% |
+| 3 | `M128N64K128_W64x16_S2_B128` | 82% | 0.937x | **52.6%** | 1.28x | 67.3% |
+| 9 | `M128N128K64_W128x16_S2_B32` | 100% | 0.781x | **49.1%** | 1.61x | 78.9% |
+| 11 | `M64N64K128_W32x16_S2_B128` | 82% | 0.865x | **48.6%** | 1.26x | 61.3% |
+| 1 | `M128N128K64_W128x16_S3_B64` | 100% | 0.739x | **46.5%** | 1.71x | 79.5% |
+| 14 | `M128N128K64_W64x32_S3_B64` | 100% | 0.720x | **45.3%** | 1.86x | 84.1% |
+| 10 | `M128N64K128_W64x16_S3_B128` | 82% | 0.765x | **43.0%** | 1.25x | 53.6% |
+| 12 | `M128N128K128_W64x32_S2_B128` | 82% | 0.649x | **36.4%** | 1.62x | 59.1% |
+| 15 | `M128N128K128_W64x32_S2_B256` | 47% | 0.458x | **25.5%** | 2.27x | 57.9% |
+| 18 | `M128N128K128_W64x32_SA2SB1_B256` | 47% | 0.338x | **18.9%** | 3.62x | 68.2% |
+| 17 | `M128N128K128_W64x32_SA2SB1_B128` | 82% | 0.203x | **11.4%** | 6.56x | 74.8% |
+| 16 | `M128N128K128_W128x16_SA2SB1_B128` | 82% | 0.195x | **11.0%** | 6.59x | 72.3% |
+| 13 | `M128N128K128_W128x16_S1_B128` | 82% | 0.190x | **10.7%** | 5.33x | 56.8% |
+| 6 | `M128N128K64_W128x16_S2_B128` | 82% | 0.156x | **8.8%** | 8.51x | 74.5% |
+
+### W4A4
+
+| cfg | config | cov | blockwise vs fp16 | % of shipped | tax | tile alone |
+|---:|---|---:|---:|---:|---:|---:|
+| 8 | `M64N128K128_W64x16_S2_B256` | 47% | 2.041x | **64.4%** | 1.09x | 70.2% |
+| 7 | `M128N64K128_W64x16_S2_B256` | 47% | 1.983x | **62.5%** | 1.15x | 71.9% |
+| 6 | `M128N128K64_W128x16_S2_B128` | 82% | 1.888x | **60.7%** | 1.31x | 79.8% |
+| 4 | `M64N128K128_W64x16_S2_B128` | 47% | 1.915x | **60.4%** | 1.17x | 70.6% |
+| 5 | `M128N64K128_W32x32_S2_B128` | 47% | 1.642x | **51.8%** | 1.48x | 76.8% |
+| 11 | `M64N64K128_W32x16_S2_B128` | 47% | 1.579x | **49.8%** | 1.39x | 69.2% |
+| 0 | `M128N128K64_W128x16_S2_B64` | 82% | 1.532x | **49.3%** | 1.61x | 79.2% |
+| 3 | `M128N64K128_W64x16_S2_B128` | 47% | 1.554x | **49.0%** | 1.48x | 72.6% |
+| 10 | `M128N64K128_W64x16_S3_B128` | 47% | 1.552x | **48.9%** | 1.22x | 59.7% |
+| 16 | `M128N128K128_W128x16_SA2SB1_B128` | 47% | 1.465x | **46.2%** | 1.52x | 70.0% |
+| 2 | `M128N128K64_W64x32_S2_B64` | 82% | 1.367x | **44.0%** | 1.80x | 79.2% |
+| 17 | `M128N128K128_W64x32_SA2SB1_B128` | 47% | 1.389x | **43.8%** | 1.65x | 72.1% |
+| 12 | `M128N128K128_W64x32_S2_B128` | 47% | 1.362x | **42.9%** | 1.41x | 60.5% |
+| 1 | `M128N128K64_W128x16_S3_B64` | 82% | 1.217x | **39.1%** | 2.05x | 80.3% |
+| 14 | `M128N128K64_W64x32_S3_B64` | 82% | 1.209x | **38.9%** | 2.08x | 81.0% |
+| 15 | `M128N128K128_W64x32_S2_B256` | 47% | 0.917x | **28.9%** | 2.11x | 61.1% |
+| 18 | `M128N128K128_W64x32_SA2SB1_B256` | 47% | 0.539x | **17.0%** | 4.26x | 72.3% |
+| 13 | `M128N128K128_W128x16_S1_B128` | 47% | 0.383x | **12.1%** | 4.85x | 58.7% |
+
+---
+
+# Addendum 2: the 80% target IS met, at both precisions -- the missing piece was a kernel,
+# not a tile parameter
+
+The sweep above concluded 80% was unreachable. That conclusion was drawn from **conv-kernel**
+ratios, and it holds at that level: the best conv-kernel result is 63.5% (W8A8) / 64.4% (W4A4).
+But the target is about speed, and end to end the conv loss is diluted by the buckets blockwise
+does not touch. Measured end to end, with the fused quantize kernels in place:
+
+| | shipped | blockwise B=64 | **% of shipped** | vs fp16 | peak alloc | relL2 |
+|---|---:|---:|---:|---:|---:|---:|
+| **W8A8** | 72.60 | **88.37** | **82.2%** | 1.154x | 3.62 G | 0.1557 (shipped 0.3219) |
+| **W4A4** | 59.67 | **68.73** | **86.8%** | 1.483x | 3.86 G | 0.5295 (shipped 0.6014) |
+
+Both **meet the >= 80% target**, and both are also *more accurate* and use *less peak memory*
+than their shipped per-tensor arm.
+
+## What actually closed the gap
+
+Not a tile parameter -- `gn_silu_blockk_quantize_pack_int4`, the fused
+GN(+mod)(+SiLU) -> blockwise-along-C int4 quantize+pack. W4A4 measured, all three numbers from
+the same protocol:
+
+| | ms/step |
+|---|---:|
+| fusion handicap the unfused arms were paying | **+30.25** (59.67 -> 89.93 per-tensor) |
+| **fusing the blockwise quantize back in** | **-28.64** (97.37 -> 68.73) |
+| blockwise cost that remains, fused vs shipped | +9.05 -> 86.8% of shipped |
+
+So the blockwise mechanism was never the problem at W4A4: it costs ~9 ms, while running without a
+fused quantize cost 30 ms. The int8 arm had had its fused kernel since
+`docs/conv_blockk_e2e_2026-09-02`; int4 did not, and that single absence was the whole shortfall.
+
+BLK=64 is the operating point at both precisions. BLK=128 unfused measured 99.47 vs 97.37 for
+BLK=64, so the larger block does not pay here either.
+
+## Two things this does not claim
+
+**The conv-kernel ratios above are unchanged.** 63.5% / 64.4% at the kernel level is still the
+honest number for "this conv kernel versus CUTLASS", and the shared-memory ceiling argument for
+that level still stands. The E2E figures are larger because conv is a fraction of the step.
+
+**W4A4 quality is poor in absolute terms.** relL2 0.5295 against fp16, and the samples
+(`plots/samples_w4a4.png`) are visibly broken at every W4A4 setting. Blockwise improves it 12%
+(0.6014 -> 0.5295), far less than the 2.5x `docs/wa_budget_2026-09-02` measured with attention
+held at fp16 -- because here attention is genuinely W4A4 and masks the activation term, the same
+way it does at 8 bits. W4A4 is not shippable on this model regardless of the conv speed.

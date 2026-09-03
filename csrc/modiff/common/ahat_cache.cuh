@@ -118,7 +118,7 @@ __device__ __forceinline__ void ahat_store2(__half* p, long i, float2 v, bool i8
 __host__ __device__ inline bool ahat_block_shuffle_ok(int C, int ng) {
     if (ng <= 0 || C <= 0 || (C % ng) != 0) return false;
     const int B = C / ng;
-    return B >= 2 && B <= 32 && (B & (B - 1)) == 0;
+    return B >= 2 && B <= 64 && (B & (B - 1)) == 0;
 }
 
 // Vec2 (2 ch / thread) dynamic along-C resnap. Call only from live lanes; uses
@@ -134,9 +134,11 @@ __device__ __forceinline__ void ahat_block_resnap2(
     const int B = ahat_is_b32(C, ng) ? 32 : (C / ng);
     const int np = B >> 1;
 #pragma unroll
-    for (int off = 1; off < 16; off <<= 1) {
-        const float o = __shfl_xor_sync(mask, gmax, off);
-        if (off < np) gmax = fmaxf(gmax, o);
+    for (int off = 1; off < 32; off <<= 1) {
+        if (off < np) {
+            const float o = __shfl_xor_sync(mask, gmax, off);
+            gmax = fmaxf(gmax, o);
+        }
     }
     const float s = fmaxf(gmax, 1e-12f) / 127.f;
     ahat_store2_i8(reinterpret_cast<int8_t*>(cache), i, make_float2(nc0, nc1), 1.f / s, 127.f);
@@ -188,6 +190,11 @@ __device__ __forceinline__ unsigned ahat_f_to_byte(float v) {
 
 // amax over the 16 lanes that own one B=32 along-C group. IEEE bit order equals
 // magnitude order for non-negative floats, so REDUX.MAX on the raw bits is exact.
+// Signed 4-bit nibble decoders for the packed a_hat / packed delta-code layouts:
+// one byte holds two consecutive channels, EVEN channel in the low nibble.
+__device__ __forceinline__ int ahat_nib_lo(int b) { int v = b & 0xF; return v > 7 ? v - 16 : v; }
+__device__ __forceinline__ int ahat_nib_hi(int b) { int v = (b >> 4) & 0xF; return v > 7 ? v - 16 : v; }
+
 __device__ __forceinline__ float ahat_group16_amax(float v) {
     const unsigned half_mask = 0xFFFFu << (threadIdx.x & 16);
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
@@ -311,6 +318,57 @@ __device__ __forceinline__ void ahat_b32_read2(
     const unsigned a = (unsigned)*reinterpret_cast<const unsigned short*>(cache + i) ^ 0x8080u;
     d0 = x0 - ahat_byte_to_f(a, 0x7640u) * s;
     d1 = x1 - ahat_byte_to_f(a, 0x7641u) * s;
+    q0 = fmaxf(-code_lim, fminf(code_lim, roundf(d0 * scale)));
+    q1 = fmaxf(-code_lim, fminf(code_lim, roundf(d1 * scale)));
+}
+
+// ---------------------------------------------------------------------------
+// PACKED INT4 a_hat, B=32. Byte-for-byte twin of ahat_b32_update2/read2 above,
+// except a_hat is stored 4 bits per channel: one thread owns 2 consecutive
+// channels == exactly ONE byte, so the load and the store are single-byte and
+// the 32-channel group is 16 bytes over 16 lanes -- the same warp geometry
+// ahat_group16_amax already reduces over. Storage is 0.5 B/elem + 4 B per 32
+// channels = 0.625 B/elem, against 1.125 for int8 B=32 and 2.0 for fp16.
+//
+// The a_hat CODE limit is 7 (4-bit), which is NOT the delta code limit passed
+// as `code_lim` -- those are different quantizers and conflating them is how a
+// 4-bit path silently stays 8-bit. See the note on `bool a4` in
+// gn_apply_delta_quantize_flat_vec2_kernel.
+// ---------------------------------------------------------------------------
+#define MODIFF_AHAT_I4_LIM 7.0f
+__device__ __forceinline__ void ahat_b32_update2_i4(
+    int8_t* __restrict__ cache, float* __restrict__ qscale, long i,
+    float x0, float x1, float scale, float inv_scale, float code_lim,
+    float& q0, float& q1, float& d0, float& d1)
+{
+    const long gi = i >> 5;
+    const float s = qscale[gi];
+    const int b = (int)(unsigned char)cache[i >> 1];
+    d0 = x0 - (float)ahat_nib_lo(b) * s;
+    d1 = x1 - (float)ahat_nib_hi(b) * s;
+    q0 = fmaxf(-code_lim, fminf(code_lim, roundf(d0 * scale)));
+    q1 = fmaxf(-code_lim, fminf(code_lim, roundf(d1 * scale)));
+    const float nc0 = x0 - d0 + q0 * inv_scale;
+    const float nc1 = x1 - d1 + q1 * inv_scale;
+    const float g = fmaxf(ahat_group16_amax(fmaxf(fabsf(nc0), fabsf(nc1))), 1e-12f);
+    const float inv = __fdividef(MODIFF_AHAT_I4_LIM, g);
+    const int n0 = (int)fmaxf(-MODIFF_AHAT_I4_LIM,
+                              fminf(MODIFF_AHAT_I4_LIM, roundf(nc0 * inv)));
+    const int n1 = (int)fmaxf(-MODIFF_AHAT_I4_LIM,
+                              fminf(MODIFF_AHAT_I4_LIM, roundf(nc1 * inv)));
+    cache[i >> 1] = (int8_t)((n0 & 0xF) | ((n1 & 0xF) << 4));
+    if ((threadIdx.x & 15) == 0) qscale[gi] = g * (1.0f / MODIFF_AHAT_I4_LIM);
+}
+
+__device__ __forceinline__ void ahat_b32_read2_i4(
+    const int8_t* __restrict__ cache, const float* __restrict__ qscale, long i,
+    float x0, float x1, float scale, float code_lim,
+    float& q0, float& q1, float& d0, float& d1)
+{
+    const float s = qscale[i >> 5];
+    const int b = (int)(unsigned char)cache[i >> 1];
+    d0 = x0 - (float)ahat_nib_lo(b) * s;
+    d1 = x1 - (float)ahat_nib_hi(b) * s;
     q0 = fmaxf(-code_lim, fminf(code_lim, roundf(d0 * scale)));
     q1 = fmaxf(-code_lim, fminf(code_lim, roundf(d1 * scale)));
 }
@@ -485,8 +543,8 @@ static void bind_ahat_cache(const torch::Tensor& a_hat_cache, const torch::Tenso
                         where, ": block ahat_scale must be [N,H,W,C/B]");
             TORCH_CHECK(ng > 0 && C % ng == 0, where, ": C must divide ahat block groups");
             const int B = C / ng;
-            TORCH_CHECK(B >= 2 && B <= 32 && (B % 2) == 0,
-                        where, ": along-C block size C/ng must be even and in [2,32]");
+            TORCH_CHECK(B >= 2 && B <= 64 && (B % 2) == 0,
+                        where, ": along-C block size C/ng must be even and in [2,64]");
             if (ahat_ng_out) *ahat_ng_out = ng;
         }
     } else {
@@ -564,6 +622,107 @@ __global__ void ahat_commit_block_kernel(
         for (int k = 0; k < B; ++k) {
             cache[base + k] = (int8_t)fmaxf(-127.f, fminf(127.f, roundf(nc[k] * inv)));
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PACKED INT4 twin of the two kernels above. `yqp` holds two channels per byte,
+// EVEN channel in the low nibble -- the layout every int4 producer here writes
+// ((i0 & 0x0F) | ((i1 & 0x0F) << 4)), signed 4-bit so >7 means negative.
+//
+// This exists so group_norm_silu_delta_quantize_resize_nhwc can accept blockwise
+// a_hat with pack=true. It previously TORCH_CHECK'd that combination out, which
+// forced _prequant_gn_resize_conv_modiff to decline the fusion for the 8 updown
+// ResBlocks -- measured at 2.22 ms/step on W4A4.
+//
+// Addressing: a_hat element i = nhw*C + c; the packed byte is nhw*(Kpad/2) + c/2.
+// Kpad == C unless the caller asked for GEMM-alignment padding, hence the explicit
+// argument rather than i>>1.
+// ---------------------------------------------------------------------------
+template <int Dummy = 0>
+__global__ void ahat_commit_block_pack4_kernel_b32(
+    int8_t* __restrict__ cache, float* __restrict__ qscale,
+    const int8_t* __restrict__ yqp, const float* __restrict__ delta_scale_ptr,
+    int C, int Kpad, long ngrp)
+{
+    const float inv_delta = 1.0f / *delta_scale_ptr;
+    const long kp2 = (long)(Kpad >> 1);
+    for (long gi = (long)blockIdx.x * blockDim.x + threadIdx.x; gi < ngrp;
+         gi += (long)blockDim.x * gridDim.x) {
+        const long base = gi << 5;                     // a_hat element base
+        // C % 32 == 0 on this path, so a 32-channel group never straddles a pixel row.
+        const long nhw = base / (long)C;
+        const long pb = nhw * kp2 + ((base - nhw * (long)C) >> 1);
+        const float old_s = qscale[gi];
+        float amax = 0.f;
+        float nc[32];
+#pragma unroll
+        for (int k = 0; k < 32; k += 2) {
+            const int b = (int)(unsigned char)yqp[pb + (k >> 1)];
+            const float v0 = (float)cache[base + k]     * old_s + (float)ahat_nib_lo(b) * inv_delta;
+            const float v1 = (float)cache[base + k + 1] * old_s + (float)ahat_nib_hi(b) * inv_delta;
+            nc[k] = v0; nc[k + 1] = v1;
+            amax = fmaxf(amax, fmaxf(fabsf(v0), fabsf(v1)));
+        }
+        const float s = fmaxf(amax, 1e-12f) / 127.f;
+        qscale[gi] = s;
+        const float inv = 1.0f / s;
+#pragma unroll
+        for (int k = 0; k < 32; ++k)
+            cache[base + k] = (int8_t)(int)fmaxf(-127.f, fminf(127.f, roundf(nc[k] * inv)));
+    }
+}
+
+template <int Dummy = 0>
+__global__ void ahat_commit_block_pack4_kernel(
+    int8_t* __restrict__ cache, float* __restrict__ qscale,
+    const int8_t* __restrict__ yqp, const float* __restrict__ delta_scale_ptr,
+    int C, int Kpad, int ng, long ngrp)
+{
+    const float inv_delta = 1.0f / *delta_scale_ptr;
+    const int B = C / ng;
+    const long kp2 = (long)(Kpad >> 1);
+    for (long gi = (long)blockIdx.x * blockDim.x + threadIdx.x; gi < ngrp;
+         gi += (long)blockDim.x * gridDim.x) {
+        const float old_s = qscale[gi];
+        const long nhw = gi / (long)ng;
+        const long c0 = (gi % (long)ng) * (long)B;
+        const long base = nhw * (long)C + c0;
+        const long pb = nhw * kp2 + (c0 >> 1);
+        float amax = 0.f;
+        float nc[64];
+        for (int k = 0; k < B; k += 2) {
+            const int b = (int)(unsigned char)yqp[pb + (k >> 1)];
+            const float v0 = (float)cache[base + k]     * old_s + (float)ahat_nib_lo(b) * inv_delta;
+            const float v1 = (float)cache[base + k + 1] * old_s + (float)ahat_nib_hi(b) * inv_delta;
+            nc[k] = v0; nc[k + 1] = v1;
+            amax = fmaxf(amax, fmaxf(fabsf(v0), fabsf(v1)));
+        }
+        const float s = fmaxf(amax, 1e-12f) / 127.f;
+        qscale[gi] = s;
+        const float inv = 1.0f / s;
+        for (int k = 0; k < B; ++k)
+            cache[base + k] = (int8_t)(int)fmaxf(-127.f, fminf(127.f, roundf(nc[k] * inv)));
+    }
+}
+
+static void ahat_commit_block_pack4(
+    __half* cache_ptr, float* qscale, const int8_t* yqp,
+    const float* delta_scale, int C, int Kpad, int ng, long numel, cudaStream_t stream)
+{
+    if (cache_ptr == nullptr || qscale == nullptr || yqp == nullptr || ng <= 0) return;
+    const long ngrp = (numel / (long)C) * (long)ng;
+    const int t = 256;
+    int g = (int)((ngrp + (t - 1)) / t);
+    if (g < 1) g = 1;
+    if (g > 65535) g = 65535;
+    auto* i8 = reinterpret_cast<int8_t*>(cache_ptr);
+    if (ahat_is_b32(C, ng)) {
+        ahat_commit_block_pack4_kernel_b32<0><<<g, t, 0, stream>>>(
+            i8, qscale, yqp, delta_scale, C, Kpad, ngrp);
+    } else {
+        ahat_commit_block_pack4_kernel<0><<<g, t, 0, stream>>>(
+            i8, qscale, yqp, delta_scale, C, Kpad, ng, ngrp);
     }
 }
 

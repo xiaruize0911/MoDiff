@@ -472,8 +472,62 @@ class OptimizedInt4Conv2d(nn.Module):
         except (TypeError, ValueError):
             return 16
 
+    @staticmethod
+    def _ahat_block() -> int:
+        """Along-C group size for int8 a_hat, W4A4 twin of OptimizedInt8Conv2d._ahat_block.
+
+        MODIFF_AHAT_BLOCK=32 => 32 consecutive channels at each (n,h,w) share one fp32
+        scale; storage is int8 NHWC + scales [N,H,W,C/B]. 0 is off.
+
+        The C++ side already supports this on the int4 path: gn_delta_pack_impl passes
+        ahat_ng straight through to the apply kernels (group_norm_silu.cu:3275/3291), and
+        bind_ahat_cache derives B from the 4D scale shape. Only this Python wiring was
+        missing, which is why the W4A4 blockwise-a_hat arm did not exist before.
+        bind_ahat_cache caps B at 32 (the in-kernel resnap reduces over B/2 lanes of ONE
+        warp), so 64 is rejected at the C++ boundary, not here.
+        """
+        try:
+            return int(os.environ.get("MODIFF_AHAT_BLOCK", "0"))
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _ahat_sim_bits() -> int:
+        """MODIFF_AHAT_SIM_BITS=4 => SIMULATE blockwise 4-bit a_hat.
+
+        Storage stays fp16 (so there is NO memory saving and the timing is meaningless); after
+        every write a_hat is snapped along C in groups of MODIFF_AHAT_BLOCK with qmax = 2^(b-1)-1.
+        That is exactly the arithmetic real packed-int4 storage would do -- each write resnaps
+        from the new per-group amax -- so it answers the quality question before the nibble
+        datapath (ahat_b32_update2_i4, a [N,C/2,H,W] cache, and the shape checks that implies)
+        is worth building. 0 = off.
+        """
+        try:
+            return int(os.environ.get("MODIFF_AHAT_SIM_BITS", "0"))
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _snap_ahat_along_c_(a: torch.Tensor, block: int, qmax: float) -> None:
+        """In-place blockwise fake-quant of a (NCHW): groups of `block` channels per pixel."""
+        x = a.permute(0, 2, 3, 1).contiguous().float()
+        n, h, w, c = x.shape
+        bsz = min(int(block), c)
+        if bsz <= 0 or c % bsz:
+            return
+        blk = x.view(n, h, w, c // bsz, bsz)
+        s = blk.abs().amax(-1, keepdim=True).clamp_min(1e-12) / qmax
+        recon = ((blk / s).round().clamp_(-qmax, qmax) * s).view(n, h, w, c)
+        a.copy_(recon.permute(0, 3, 1, 2).to(a.dtype))
+
     def _ahat_want_int8(self) -> bool:
-        return self.is_calibrated and 0 < self._ahat_bits() < 16
+        if not self.is_calibrated:
+            return False
+        if self._ahat_sim_bits() > 0:
+            return False        # simulation keeps the fp16 buffer so it can be snapped in Python
+        if self._ahat_block() > 0:
+            return True
+        return 0 < self._ahat_bits() < 16
 
     def _ahat_qmax(self) -> float:
         return 127.0 if self._ahat_bits() >= 8 else 7.0
@@ -495,16 +549,55 @@ class OptimizedInt4Conv2d(nn.Module):
         return s
 
     def _ensure_ahat_qscale(self, device) -> None:
-        qmax = self._ahat_qmax()
+        # A blockwise scale is 4D [N,H,W,C/B] and is owned by _pack_ahat_along_c / the
+        # kernel's in-place resnap; the per-tensor [scale, qmax] pair must not overwrite it.
         s = getattr(self, "_ahat_qscale", None)
-        if s is None or s.numel() < 2 or s.device != device:
+        if self._ahat_block() > 0:
+            if s is not None and s.dim() == 4:
+                return
+        qmax = self._ahat_qmax()
+        if s is None or s.dim() == 4 or s.numel() < 2 or s.device != device:
             self._ahat_qscale = torch.tensor([1.0, qmax], device=device, dtype=torch.float32)
         else:
             self._ahat_qscale[1] = qmax
 
+    def _pack_ahat_along_c(self) -> None:
+        """Quantize a floating a_hat into int8 codes + per-block scales [N,H,W,C/B].
+
+        t=T pack only; later writes refresh the scales in-kernel from the new_c amax.
+        Mirrors OptimizedInt8Conv2d._pack_ahat_along_c, including its use of the
+        ahat_pack_block_nhwc kernel at B=32.
+        """
+        a = self.a_hat_cache
+        if a is None or a.dtype == torch.int8:
+            return
+        bsz = self._ahat_block()
+        n, c, h, w = a.shape
+        if bsz <= 0 or c % bsz != 0:
+            raise RuntimeError(
+                f"MODIFF_AHAT_BLOCK={bsz} must divide C={c} for layer "
+                f"{getattr(self, 'layer_name', '?')}")
+        qmax, g = 127.0, c // bsz
+        if bsz == 32 and hasattr(modiff_cutlass, "ahat_pack_block_nhwc"):
+            q, scale = modiff_cutlass.ahat_pack_block_nhwc(a, 32)
+            self._ahat_qscale = scale
+            self.a_hat_cache = q
+            return
+        x = a.permute(0, 2, 3, 1).contiguous().float()
+        blk = x.view(n, h, w, g, bsz)
+        amax = blk.abs().amax(-1).clamp_min(1e-12)
+        scale = (amax / qmax).contiguous()
+        q = (blk / scale.unsqueeze(-1)).round().clamp_(-qmax, qmax).to(torch.int8)
+        self.a_hat_cache = q.view(n, h, w, c).permute(0, 3, 1, 2).contiguous(
+            memory_format=torch.channels_last)
+        self._ahat_qscale = scale
+
     def _pack_ahat_int8(self) -> None:
         a = self.a_hat_cache
         if a is None or a.dtype == torch.int8:
+            return
+        if self._ahat_block() > 0:
+            self._pack_ahat_along_c()
             return
         qmax = self._ahat_qmax()
         a_f = a.float()
@@ -518,6 +611,11 @@ class OptimizedInt4Conv2d(nn.Module):
         a = self.a_hat_cache
         if a is None or a.dtype != torch.int8:
             return
+        if self._ahat_qscale is not None and self._ahat_qscale.dim() == 4:
+            # Blockwise: qscale[0] is not a scalar dequant factor. MODIFF_AHAT_REFRESH is
+            # off in every blockwise measurement; fail loudly rather than silently rescale.
+            raise RuntimeError("MODIFF_AHAT_REFRESH=1 is not supported with "
+                               "MODIFF_AHAT_BLOCK>0 on the int4 path")
         s = self._ahat_qscale[0]
         self.a_hat_cache = (a.float() * s).to(torch.float16).contiguous(
             memory_format=torch.channels_last)
@@ -542,6 +640,8 @@ class OptimizedInt4Conv2d(nn.Module):
             return
         if self.a_hat_cache.dtype == torch.int8:
             return
+        if self._ahat_block() > 0:
+            return          # real blockwise int8 storage; the kernel snaps on store
         bits = self._ahat_bits()
         if bits >= 16:
             return
@@ -553,6 +653,12 @@ class OptimizedInt4Conv2d(nn.Module):
         a.mul_(scale).round_().clamp_(-qmax, qmax).div_(scale)
 
     def _after_ahat_write(self, out):
+        sb = self._ahat_sim_bits()
+        if sb > 0 and self.a_hat_cache is not None and self.a_hat_cache.dtype == torch.float16:
+            blk = self._ahat_block()
+            if blk > 0 and not self._skip_cache_store():
+                self._snap_ahat_along_c_(self.a_hat_cache, blk, float(2 ** (sb - 1) - 1))
+            return out
         if (self._ahat_want_int8() and self.a_hat_cache is not None
                 and self.a_hat_cache.dtype != torch.int8):
             self._pack_ahat_int8()
@@ -1372,7 +1478,10 @@ class OptimizedInt4Conv2d(nn.Module):
             # SmoothQuant: equalize per-channel activation ranges
             if not self._smooth_is_identity:
                 x = x * self._smooth_inv
-            output = self._forward_standard(x)
+            if self._conv_blockk() != 0 and self._blockk_eligible(x):
+                output = self._forward_conv_blockk(x)
+            else:
+                output = self._forward_standard(x)
         elif self.is_first_step:
             if not self._smooth_is_identity:
                 x = x * self._smooth_inv
@@ -1384,6 +1493,104 @@ class OptimizedInt4Conv2d(nn.Module):
 
         profiler.stop("Layer: OptimizedInt4Conv2d.forward", fwd_start)
         return output
+
+    # ---- blockwise-along-C conv input, int4 (MODIFF_CONV_BLOCKK) -------------------------
+    #
+    # The int4 twin of OptimizedInt8Conv2d's path. This is where the granularity actually
+    # matters: docs/wa_budget_2026-09-02 measures the activation-quantizer term at per-tensor
+    # 0.5181 vs blockwise B=64 0.0415 at 4 bits -- 12.5x -- against something at the measurement
+    # floor at 8 bits.
+    #
+    # BASELINE ARM ONLY. The MoDiff arm needs the o_hat accumulate, and the int8 fused MoDiff
+    # path still has an open relL2 defect (docs/conv_blockk_e2e_2026-09-02 Addendum 3); wiring the
+    # same shape here would just reproduce it. A MoDiff layer falls through to the shipped path.
+    #
+    # Symmetric only. This checkpoint's int4 calibration carries no zero point (weight_zp and
+    # static_input_zp are both zero), so the symmetric kernel is exact here -- but a calibration
+    # that did set one would be silently wrong, hence the explicit guard in _blockk_eligible.
+    @staticmethod
+    def _conv_blockk() -> int:
+        try:
+            return int(os.environ.get("MODIFF_CONV_BLOCKK", "0"))
+        except (TypeError, ValueError):
+            return 0
+
+    def _blockk_eligible(self, x: torch.Tensor) -> bool:
+        blk = self._conv_blockk()
+        if blk not in (64, 128, 256) or self.modiff_enabled:
+            return False
+        c = x.shape[1]
+        # No _smooth_is_identity requirement: unlike the int8 calibration, the churches int4
+        # calibration DOES carry SmoothQuant, but forward() has already applied `x * _smooth_inv`
+        # eagerly by the time this runs, so the scale is folded into x and the blockwise quantizer
+        # sees an already-equalized activation. Requiring identity here disabled the path on every
+        # layer of this checkpoint.
+        return (c % 128 == 0 and c % blk == 0 and self.out_channels % 2 == 0
+                and self.is_calibrated
+                and not self._has_weight_zp and float(getattr(self, "_zp_float", 0.0)) == 0.0
+                and self.weight_packed.numel() > 0
+                and self.dilation[0] == 1 and self.dilation[1] == 1 and self.groups == 1
+                and self.stride[0] == self.stride[1] and self.padding[0] == self.padding[1]
+                and x.dtype in (torch.float16, torch.float32))
+
+    def _blockk_args(self):
+        if getattr(self, "_blockk_ws", None) is None:
+            self._blockk_ws = self.weight_scale_channel.reshape(-1).float().contiguous()
+            self._blockk_bias = (self.bias.reshape(-1).half().contiguous()
+                                 if self.bias is not None else None)
+        return self._blockk_ws, self._blockk_bias
+
+    @staticmethod
+    def _conv_blockk_ctrl() -> bool:
+        return os.environ.get("MODIFF_CONV_BLOCKK_CTRL") == "1"
+
+    def blockk_gn_fused(self, x, gn_w, gn_b, ng, eps, apply_silu, mod_scale, mod_shift,
+                        residual):
+        """FUSED GN(+mod)(+SiLU) -> blockwise int4 quantize+pack -> blockk conv. BLK=64 only.
+
+        This is what removes the +30.25 ms/step the unfused int4 blockwise arm was paying
+        (docs/conv_int4_blockk_2026-09-02): a separate GN pass plus a separate quantize pass, four
+        times the blockwise cost itself. Returns None when not eligible so the caller keeps its
+        own path.
+        """
+        if self._conv_blockk() != 64 or not self._blockk_eligible(x):
+            return None
+        c = x.shape[1]
+        if c % ng != 0 or (c // ng) % 2 != 0:
+            return None
+        ws, bias = self._blockk_args()
+        eh = x.new_empty(0)
+        ms = mod_scale.reshape(x.shape[0], c).contiguous() if mod_scale is not None else eh
+        sh = mod_shift.reshape(x.shape[0], c).contiguous() if mod_shift is not None else eh
+        # SmoothQuant must be folded into the fused kernel here: on this path forward() never
+        # runs, so the eager `x * _smooth_inv` that _blockk_eligible relies on has NOT happened.
+        if self._smooth_is_identity:
+            smooth = self._empty_smooth if self._empty_smooth is not None else torch.empty(
+                0, device=x.device, dtype=torch.float32)
+            if smooth.device != x.device:
+                smooth = torch.empty(0, device=x.device, dtype=torch.float32)
+        else:
+            smooth = self._smooth_inv.reshape(-1).float().contiguous()
+        q, sb = modiff_cutlass.gn_silu_blockk_quantize_pack_int4(
+            x, gn_w, gn_b, ng, eps, apply_silu, smooth, ms, sh, 64)
+        rz = None if residual is None else residual.to(torch.float16).contiguous(
+            memory_format=torch.channels_last)
+        return modiff_cutlass.conv2d_int4_blockk(
+            q, self.weight_packed, ws, sb, 0.0, 64,
+            int(self.stride[0]), int(self.padding[0]), bias, None, rz)
+
+    def _forward_conv_blockk(self, x: torch.Tensor,
+                             residual: Optional[torch.Tensor] = None) -> torch.Tensor:
+        blk = self._conv_blockk()
+        ws, bias = self._blockk_args()
+        if not x.is_contiguous(memory_format=torch.channels_last):
+            x = x.contiguous(memory_format=torch.channels_last)
+        q, sb = modiff_cutlass.conv_quantize_block_pack_int4(x, blk)
+        rz = None if residual is None else residual.to(torch.float16).contiguous(
+            memory_format=torch.channels_last)
+        return modiff_cutlass.conv2d_int4_blockk(
+            q, self.weight_packed, ws, sb, 0.0, blk,
+            int(self.stride[0]), int(self.padding[0]), bias, None, rz)
 
     def _forward_standard(self, x: torch.Tensor) -> torch.Tensor:
         """Standard INT4 forward without MoDiff modulation.

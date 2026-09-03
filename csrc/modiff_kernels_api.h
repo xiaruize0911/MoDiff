@@ -110,6 +110,13 @@ std::vector<torch::Tensor> conv_quantize_block_nhwc(torch::Tensor x, int64_t blo
 // int4 twin: blockwise-along-C quantize AND pack -> (packed [N,H,W,C/2] int8 storage,
 // fp32 scales [N,H,W,C/block]). Feeds conv2d_int4_blockk. block in {64,128,256}.
 std::vector<torch::Tensor> conv_quantize_block_pack_int4(torch::Tensor x, int64_t block);
+// FUSED GN(+mod)(+SiLU) -> blockwise-along-C int4 quantize+pack (BLK=64). Returns
+// {packed [N,H,W,C/2] codes, fp32 scales [N,H,W,C/64]} for conv2d_int4_blockk.
+std::vector<torch::Tensor> gn_silu_blockk_quantize_pack_int4(
+    torch::Tensor x, torch::Tensor weight, torch::Tensor bias,
+    int64_t num_groups, double eps, bool apply_silu,
+    torch::Tensor smooth_inv, torch::Tensor mod_scale, torch::Tensor mod_shift,
+    int64_t block);
 // Tunable blockwise conv for the tile x B sweep (csrc/modiff/conv/conv2d_blockk_tune.cu).
 torch::Tensor conv2d_blockk_tune(torch::Tensor x, torch::Tensor weight, torch::Tensor w_scale,
                                  torch::Tensor a_scale_blk, double a_scale,

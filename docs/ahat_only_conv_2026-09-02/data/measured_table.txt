@@ -1,0 +1,13 @@
+ALL MEASURED -- batch 128, 50 DDIM, CUDA events median of 3; peak mem from the same runs
+arm                                 ms/step  spread  vs fp16  % of PTQ  peak alloc  peak resv   relL2
+fp16                                 102.00    0.64   1.000x     71.2%       4.21G      5.01G  0.0000
+W8A8 PTQ (shipped baseline)           72.60    0.23   1.405x    100.0%       4.47G      4.79G  0.3219
+W8A8 MoDiff, fp16 a_hat               81.96    0.29   1.244x     88.6%       7.67G      9.43G  0.0898
+W8A8 MoDiff, a_hat B=32 int8          80.12    0.42   1.273x     90.6%       7.07G      8.74G  0.1026
+W8A8 PTQ + blockwise conv B=64        88.37    0.53   1.154x     82.2%       3.62G      3.86G  0.1557
+
+a_hat B=32 vs fp16 a_hat (MEASURED, same protocol):
+  ms/step        81.96 -> 80.12   +1.84 ms  (+2.24%)
+  peak allocated 7.668 -> 7.072 GB  -0.596 GB (+7.8%)
+  peak reserved  9.428 -> 8.736 GB  -0.691 GB
+  relL2          0.0898 -> 0.1026

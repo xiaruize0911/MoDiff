@@ -96,7 +96,7 @@ __device__ __forceinline__ void tu_s2r_B(const int8_t* src, int8_t* dst, int lan
 // both datapaths (int32 acc and fp32 accf) stay live and the flush branch sits in the innermost
 // loop; measured 6x slower than the production kernel at the identical config. Same lesson as
 // docs/ahat_blockwise_2026-09-01: dead code in the instance costs registers costs occupancy.
-template <int TM, int TN, int TK, int WM, int WN, int TS, int BLK, bool I4, bool BW>
+template <int TM, int TN, int TK, int WM, int WN, int SA, int SB, int BLK, bool I4, bool BW>
 static __global__ __launch_bounds__(TU_THREADS, 2) void blockk_tune_kernel(
     const int8_t* __restrict__ X, const int8_t* __restrict__ Wt,
     const float* __restrict__ w_scale, const float* __restrict__ a_scale_blk, float a_scale,
@@ -116,14 +116,19 @@ static __global__ __launch_bounds__(TU_THREADS, 2) void blockk_tune_kernel(
     // the host refuses the combination.
     constexpr int SPB = (BLK / EPM) > 0 ? (BLK / EPM) : 1;
     constexpr int NB  = (SPT >= SPB) ? (SPT / SPB) : 1;   // scale slots to stage per tile
-    constexpr int SLOTS = TM * CPR / TU_THREADS;          // A-loader chunk slots per thread
+    constexpr int SLOTS = TM * CPR / TU_THREADS;
+    static_assert(SA >= 1 && SB >= 1, "stage counts >= 1");          // A-loader chunk slots per thread
     static_assert((TM / WM) * WPN == TU_NW, "warp tiling must cover the CTA with 8 warps");
     static_assert(TM * CPR % TU_THREADS == 0, "A loader needs whole slots per thread");
 
     extern __shared__ char tu_smem[];
     int8_t* As = reinterpret_cast<int8_t*>(tu_smem);
-    int8_t* Bs = As + TS * TM * TK;
-    float* Ss = reinterpret_cast<float*>(Bs + TS * TN * TK);
+    // Asymmetric rings. smem = SA*TM*TK + SB*TN*TK, so SA=2/SB=1 fits a FULL 128x128 tile at
+    // TK=128 in 50176 B -> 2 CTA/SM, which SA=SB=2 (66560 B) cannot. That is the one combination
+    // the sweep was missing: the tile quality lives at 128x128 and the low tax needs TK==BLK.
+    // The price is that B loses its load/compute overlap and needs a barrier before each reload.
+    int8_t* Bs = As + SA * TM * TK;
+    float* Ss = reinterpret_cast<float*>(Bs + SB * TN * TK);
 
     const int t = threadIdx.x, warp = t >> 5, lane = t & 31, gid = lane >> 2, tig = lane & 3;
     const int m0 = blockIdx.y * TM, n0 = blockIdx.x * TN;
@@ -141,7 +146,7 @@ static __global__ __launch_bounds__(TU_THREADS, 2) void blockk_tune_kernel(
         ra[s] = tu_row(m0 + ((t + s * TU_THREADS) / CPR), M, H, W, P, Q, stride, pad);
     const TuRow rs0 = tu_row(m0 + (t % TM), M, H, W, P, Q, stride, pad);
 
-    auto load_tile = [&](int kt, int buf) {
+    auto load_A = [&](int kt, int buf) {
         const int rs = kt / C, c0 = kt - rs * C;      // kt, c0 in ELEMENTS
         const int ro = rs / S, so = rs - ro * S;
 #pragma unroll
@@ -157,6 +162,8 @@ static __global__ __launch_bounds__(TU_THREADS, 2) void blockk_tune_kernel(
             tu_cp_async_zfill(modiff_smem_ptr(&As[buf * TM * TK + r * TK + swz]),
                               src, ok);
         }
+    };
+    auto load_B = [&](int kt, int buf) {
         for (int c = t; c < TN * CPR; c += TU_THREADS) {
             const int r = c / CPR, off16 = c % CPR;
             const int swz = (off16 ^ ((r / 2) & (CPR - 1))) * 16;
@@ -165,6 +172,10 @@ static __global__ __launch_bounds__(TU_THREADS, 2) void blockk_tune_kernel(
                 (const uint4*)(Wt + (size_t)(n0 + r) * (Kg / EPB) + (kt / EPB) + off16 * 16),
                 (n0 + r) < Kout);
         }
+    };
+    auto load_S = [&](int kt, int buf) {
+        const int rs = kt / C, c0 = kt - rs * C;
+        const int ro = rs / S, so = rs - ro * S;
         if (BW) {
             const int h = rs0.h0 + ro, w = rs0.w0 + so;
             const bool ok = rs0.m_ok && (unsigned)h < (unsigned)H && (unsigned)w < (unsigned)W;
@@ -178,6 +189,9 @@ static __global__ __launch_bounds__(TU_THREADS, 2) void blockk_tune_kernel(
                             ? a_scale_blk[pix * nb_c + (c0 / BLK) + b] : 0.0f;
         }
     };
+    auto load_tile = [&](int kt, int bufA, int bufB) {
+        load_A(kt, bufA); load_B(kt, bufB); load_S(kt, bufA);
+    };
 
     int acc[MI][NJ][8];
     float accf[MI][NJ][8];
@@ -188,20 +202,20 @@ static __global__ __launch_bounds__(TU_THREADS, 2) void blockk_tune_kernel(
 #pragma unroll
             for (int k = 0; k < 8; ++k) { acc[i][j][k] = 0; accf[i][j][k] = 0.f; }
 
-    // TS==1 has no prologue: the loop below loads tile i itself before using it.
+    // Prologue: fill tile 0 in both rings, plus SA-1 further A tiles.
+    if (nkt > 0) { load_tile(0, 0, 0); __pipeline_commit(); }
 #pragma unroll
-    for (int s = 0; s < TS - 1; ++s) {
-        if (s < nkt) load_tile(s * CTA_KE, s);
+    for (int s = 1; s < SA; ++s) {
+        if (s < nkt) { load_A(s * CTA_KE, s % SA); load_S(s * CTA_KE, s % SA); }
         __pipeline_commit();
     }
-    if (TS == 1 && nkt > 0) { load_tile(0, 0); __pipeline_commit(); }
-    __pipeline_wait_prior(TS - 2 >= 0 ? TS - 2 : 0);
+    __pipeline_wait_prior(0);
     __syncthreads();
 
     for (int i = 0; i < nkt; ++i) {
-        const int buf = i % TS;
-        const int8_t* Ab = &As[buf * TM * TK];
-        const int8_t* Bb = &Bs[buf * TN * TK];
+        const int buf = i % SA;
+        const int8_t* Ab = &As[(i % SA) * TM * TK];
+        const int8_t* Bb = &Bs[(i % SB) * TN * TK];
 #pragma unroll
         for (int k01 = 0; k01 < SPT; ++k01) {
             int8_t Afrag[MI * 16], Bfrag[NJ * 16];
@@ -248,12 +262,20 @@ static __global__ __launch_bounds__(TU_THREADS, 2) void blockk_tune_kernel(
                 }
             }
         }
-        const int li = i + TS - 1;
-        // TS==1: prefetch the NEXT tile into the same buffer only after this one is consumed.
-        if (TS == 1) { __syncthreads(); if (i + 1 < nkt) load_tile((i + 1) * CTA_KE, 0); }
-        else if (li < nkt) load_tile(li * CTA_KE, li % TS);
+        // A prefetches SA-1 ahead into a buffer nobody is reading. B, when single-buffered,
+        // can only be reloaded after every warp has finished reading it -- hence the barrier.
+        const int la = i + SA - 1;
+        if (SA > 1) { if (la < nkt) { load_A(la * CTA_KE, la % SA); load_S(la * CTA_KE, la % SA); } }
+        if (SB > 1) {
+            const int lb = i + SB - 1;
+            if (lb < nkt) load_B(lb * CTA_KE, lb % SB);
+        } else {
+            __syncthreads();
+            if (i + 1 < nkt) load_B((i + 1) * CTA_KE, 0);
+            if (SA == 1) { load_A((i + 1) * CTA_KE, 0); load_S((i + 1) * CTA_KE, 0); }
+        }
         __pipeline_commit();
-        __pipeline_wait_prior(TS - 2 >= 0 ? TS - 2 : 0);
+        __pipeline_wait_prior(0);
         __syncthreads();
     }
 
@@ -297,28 +319,48 @@ static __global__ __launch_bounds__(TU_THREADS, 2) void blockk_tune_kernel(
 // live across them, which is what made large BLK lose on registers. Setting TK*EPB == BLK gives
 // exactly one flush per tile and no carry -- that is configs 3/4/5 (int8 B=128) and, for int4
 // where one byte is two elements, config 4 reaches B=256 with no carry.
-struct TuCfg { int tm, tn, tk, wm, wn, ts, blk; const char* name; };
+struct TuCfg { int tm, tn, tk, wm, wn, sa, sb, blk; const char* name; };
 static const TuCfg TU_CFGS[] = {
-    {128, 128,  64, 128, 16, 2,  64, "M128N128K64_W128x16_S2_B64"},   // 0 production equivalent
-    {128, 128,  64, 128, 16, 3,  64, "M128N128K64_W128x16_S3_B64"},   // 1
-    {128, 128,  64,  64, 32, 2,  64, "M128N128K64_W64x32_S2_B64"},    // 2 warp tiling variant
-    {128,  64, 128,  64, 16, 2, 128, "M128N64K128_W64x16_S2_B128"},   // 3 TK==BLK, no carry
-    { 64, 128, 128,  64, 16, 2, 128, "M64N128K128_W64x16_S2_B128"},   // 4 TK==BLK, no carry
-    {128,  64, 128,  32, 32, 2, 128, "M128N64K128_W32x32_S2_B128"},   // 5 TK==BLK, other warps
-    {128, 128,  64, 128, 16, 2, 128, "M128N128K64_W128x16_S2_B128"},  // 6 carry over 2 tiles
-    {128,  64, 128,  64, 16, 2, 256, "M128N64K128_W64x16_S2_B256"},   // 7 int8: carry; int4: none
-    { 64, 128, 128,  64, 16, 2, 256, "M64N128K128_W64x16_S2_B256"},   // 8
-    {128, 128,  64, 128, 16, 2,  32, "M128N128K64_W128x16_S2_B32"},   // 9 int8 only
-    {128,  64, 128,  64, 16, 3, 128, "M128N64K128_W64x16_S3_B128"},   // 10 smem 75264 -> 1 CTA/SM
-    { 64,  64, 128,  32, 16, 2, 128, "M64N64K128_W32x16_S2_B128"},    // 11 small tile
+    {128, 128, 64, 128, 16, 2, 2, 64, "M128N128K64_W128x16_S2_B64"},   // 0 production equivalent
+    {128, 128, 64, 128, 16, 3, 3, 64, "M128N128K64_W128x16_S3_B64"},   // 1
+    {128, 128, 64, 64, 32, 2, 2, 64, "M128N128K64_W64x32_S2_B64"},    // 2 warp tiling variant
+    {128, 64, 128, 64, 16, 2, 2, 128, "M128N64K128_W64x16_S2_B128"},   // 3 TK==BLK, no carry
+    {64, 128, 128, 64, 16, 2, 2, 128, "M64N128K128_W64x16_S2_B128"},   // 4 TK==BLK, no carry
+    {128, 64, 128, 32, 32, 2, 2, 128, "M128N64K128_W32x32_S2_B128"},   // 5 TK==BLK, other warps
+    {128, 128, 64, 128, 16, 2, 2, 128, "M128N128K64_W128x16_S2_B128"},  // 6 carry over 2 tiles
+    {128, 64, 128, 64, 16, 2, 2, 256, "M128N64K128_W64x16_S2_B256"},   // 7 int8: carry; int4: none
+    {64, 128, 128, 64, 16, 2, 2, 256, "M64N128K128_W64x16_S2_B256"},   // 8
+    {128, 128, 64, 128, 16, 2, 2, 32, "M128N128K64_W128x16_S2_B32"},   // 9 int8 only
+    {128, 64, 128, 64, 16, 3, 3, 128, "M128N64K128_W64x16_S3_B128"},   // 10 smem 75264 -> 1 CTA/SM
+    {64, 64, 128, 32, 16, 2, 2, 128, "M64N64K128_W32x16_S2_B128"},    // 11 small tile
     // The combination missing above: keep the FULL 128x128 tile (which is where the tile
     // quality is -- cfgs 0/1/2/6 have the best scalar numbers) AND set TK==BLK so there is no
     // cross-tile carry. That costs smem: 2*(128+128)*128 = 64 KiB -> 1 CTA/SM. cfg 13 buys the
     // occupancy back by dropping to a single stage instead.
-    {128, 128, 128,  64, 32, 2, 128, "M128N128K128_W64x32_S2_B128"},  // 12 full tile, 1 CTA/SM
-    {128, 128, 128, 128, 16, 1, 128, "M128N128K128_W128x16_S1_B128"}, // 13 S1 -> 3 CTA/SM
-    {128, 128,  64,  64, 32, 3,  64, "M128N128K64_W64x32_S3_B64"},    // 14 best-tile candidate
-    {128, 128, 128,  64, 32, 2, 256, "M128N128K128_W64x32_S2_B256"},  // 15 int4: TK*2==BLK
+    {128, 128, 128, 64, 32, 2, 2, 128, "M128N128K128_W64x32_S2_B128"},  // 12 full tile, 1 CTA/SM
+    {128, 128, 128, 128, 16, 1, 1, 128, "M128N128K128_W128x16_S1_B128"}, // 13 S1 -> 3 CTA/SM
+    {128, 128, 64, 64, 32, 3, 3, 64, "M128N128K64_W64x32_S3_B64"},    // 14 best-tile candidate
+    {128, 128, 128, 64, 32, 2, 2, 256, "M128N128K128_W64x32_S2_B256"},  // 15 int4: TK*2==BLK
+    // Asymmetric rings: SA=2 / SB=1 fits the FULL 128x128 tile at TK=128 into 50176 B, i.e.
+    // 2 CTA/SM, which SA=SB=2 cannot (66560 B -> 1 CTA/SM, cfg 12). This is the combination the
+    // rest of the table cannot express: 128x128 tile quality AND TK==BLK (no accumulator carry).
+    // The price is that B loses load/compute overlap and needs a barrier before each reload.
+    {128, 128, 128, 128, 16, 2, 1, 128, "M128N128K128_W128x16_SA2SB1_B128"},  // 16
+    {128, 128, 128, 64, 32, 2, 1, 128, "M128N128K128_W64x32_SA2SB1_B128"},    // 17
+    {128, 128, 128, 64, 32, 2, 1, 256, "M128N128K128_W64x32_SA2SB1_B256"},    // 18 int4: no carry
+    // ---- TK=32 BYTES. The point is ELIGIBILITY, not tax. int4 at TK=128 needs C%256==0 and
+    // at TK=64 needs C%128==0, which 12 of the UNet's 70 conv layers (C=192, C=576) fail --
+    // they fall back to per-tensor and make any W4A4 blockwise attribution impure. TK=32 needs
+    // only C%64==0, which ALL six channel counts (192/384/576/768/1152/1536) satisfy.
+    // TK*EPB == BLK at BLK=64, so there is still exactly one flush per tile and no carry.
+    // Cost: SPT=1, i.e. one mma step per tile, so there is much less compute to hide the tile
+    // load behind -- which is why the deeper rings (SA=SB=3/4) are swept here and not above.
+    // smem is tiny (17408 B at S2), so depth is affordable: S4 is still 34816 -> 2 CTA/SM.
+    {128, 128, 32, 128, 16, 2, 2, 64, "M128N128K32_W128x16_S2_B64"},      // 19 int4: all C
+    {128, 128, 32, 64, 32, 2, 2, 64, "M128N128K32_W64x32_S2_B64"},       // 20 warp variant
+    {128, 128, 32, 128, 16, 3, 3, 64, "M128N128K32_W128x16_S3_B64"},      // 21 deeper ring
+    {128, 128, 32, 128, 16, 4, 4, 64, "M128N128K32_W128x16_S4_B64"},      // 22 deeper still
+    {128, 128, 32, 128, 16, 4, 4, 128, "M128N128K32_W128x16_S4_B128"},     // 23 carry over 2 tiles
 };
 int64_t blockk_tune_num_cfgs() { return (int64_t)(sizeof(TU_CFGS) / sizeof(TuCfg)); }
 std::string blockk_tune_cfg_name(int64_t i) {
@@ -361,17 +403,17 @@ torch::Tensor conv2d_blockk_tune(torch::Tensor x, torch::Tensor weight, torch::T
                                 .memory_format(at::MemoryFormat::ChannelsLast));
     const int SPT = K.tk / TU_INTRIN_KB, SPB = K.blk / EPM;
     const int NB = (SPT >= SPB) ? (SPT / SPB) : 1;
-    const size_t smem = (size_t)K.ts * (K.tm + K.tn) * K.tk
-                        + (bw ? (size_t)K.ts * NB * K.tm * sizeof(float) : 0);
+    const size_t smem = (size_t)K.sa * K.tm * K.tk + (size_t)K.sb * K.tn * K.tk
+                        + (bw ? (size_t)K.sa * NB * K.tm * sizeof(float) : 0);
     dim3 grid((Kout + K.tn - 1) / K.tn, (M + K.tm - 1) / K.tm);
     dim3 block(TU_THREADS);
     auto stream = at::cuda::getCurrentCUDAStream();
     const float* sbp = bw ? a_scale_blk.data_ptr<float>() : nullptr;
 
-#define TU_LAUNCH(TM, TN, TK, WM, WN, TS, BL, I4)                                          \
+#define TU_LAUNCH(TM, TN, TK, WM, WN, SA, SB, BL, I4)                                          \
     do {                                                                                    \
-        auto kf = bw ? blockk_tune_kernel<TM, TN, TK, WM, WN, TS, BL, I4, true>              \
-                     : blockk_tune_kernel<TM, TN, TK, WM, WN, TS, BL, I4, false>;            \
+        auto kf = bw ? blockk_tune_kernel<TM, TN, TK, WM, WN, SA, SB, BL, I4, true>              \
+                     : blockk_tune_kernel<TM, TN, TK, WM, WN, SA, SB, BL, I4, false>;            \
         C10_CUDA_CHECK(cudaFuncSetAttribute(                                                \
             kf, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem));                    \
         kf<<<grid, block, smem, stream>>>(                                                  \
@@ -382,26 +424,34 @@ torch::Tensor conv2d_blockk_tune(torch::Tensor x, torch::Tensor weight, torch::T
         C10_CUDA_KERNEL_LAUNCH_CHECK();                                                     \
         return out;                                                                          \
     } while (0)
-#define TU_CASE(IDX, TM, TN, TK, WM, WN, TS, BL)                                           \
-    if (cfg == IDX) { if (int4) TU_LAUNCH(TM, TN, TK, WM, WN, TS, BL, true);                \
-                      else      TU_LAUNCH(TM, TN, TK, WM, WN, TS, BL, false); }
+#define TU_CASE(IDX, TM, TN, TK, WM, WN, SA, SB, BL)                                           \
+    if (cfg == IDX) { if (int4) TU_LAUNCH(TM, TN, TK, WM, WN, SA, SB, BL, true);            \
+                      else      TU_LAUNCH(TM, TN, TK, WM, WN, SA, SB, BL, false); }
 
-    TU_CASE(0, 128, 128,  64, 128, 16, 2,  64)
-    TU_CASE(1, 128, 128,  64, 128, 16, 3,  64)
-    TU_CASE(2, 128, 128,  64,  64, 32, 2,  64)
-    TU_CASE(3, 128,  64, 128,  64, 16, 2, 128)
-    TU_CASE(4,  64, 128, 128,  64, 16, 2, 128)
-    TU_CASE(5, 128,  64, 128,  32, 32, 2, 128)
-    TU_CASE(6, 128, 128,  64, 128, 16, 2, 128)
-    TU_CASE(7, 128,  64, 128,  64, 16, 2, 256)
-    TU_CASE(8,  64, 128, 128,  64, 16, 2, 256)
-    TU_CASE(9, 128, 128,  64, 128, 16, 2,  32)
-    TU_CASE(10,128,  64, 128,  64, 16, 3, 128)
-    TU_CASE(11, 64,  64, 128,  32, 16, 2, 128)
-    TU_CASE(12,128, 128, 128,  64, 32, 2, 128)
-    TU_CASE(13,128, 128, 128, 128, 16, 1, 128)
-    TU_CASE(14,128, 128,  64,  64, 32, 3,  64)
-    TU_CASE(15,128, 128, 128,  64, 32, 2, 256)
+    TU_CASE(0,128, 128, 64, 128, 16, 2, 2, 64)
+    TU_CASE(1,128, 128, 64, 128, 16, 3, 3, 64)
+    TU_CASE(2,128, 128, 64, 64, 32, 2, 2, 64)
+    TU_CASE(3,128, 64, 128, 64, 16, 2, 2, 128)
+    TU_CASE(4,64, 128, 128, 64, 16, 2, 2, 128)
+    TU_CASE(5,128, 64, 128, 32, 32, 2, 2, 128)
+    TU_CASE(6,128, 128, 64, 128, 16, 2, 2, 128)
+    TU_CASE(7,128, 64, 128, 64, 16, 2, 2, 256)
+    TU_CASE(8,64, 128, 128, 64, 16, 2, 2, 256)
+    TU_CASE(9,128, 128, 64, 128, 16, 2, 2, 32)
+    TU_CASE(10,128, 64, 128, 64, 16, 3, 3, 128)
+    TU_CASE(11,64, 64, 128, 32, 16, 2, 2, 128)
+    TU_CASE(12,128, 128, 128, 64, 32, 2, 2, 128)
+    TU_CASE(13,128, 128, 128, 128, 16, 1, 1, 128)
+    TU_CASE(14,128, 128, 64, 64, 32, 3, 3, 64)
+    TU_CASE(15,128, 128, 128, 64, 32, 2, 2, 256)
+    TU_CASE(16,128, 128, 128, 128, 16, 2, 1, 128)
+    TU_CASE(17,128, 128, 128, 64, 32, 2, 1, 128)
+    TU_CASE(18,128, 128, 128, 64, 32, 2, 1, 256)
+    TU_CASE(19,128, 128, 32, 128, 16, 2, 2, 64)
+    TU_CASE(20,128, 128, 32, 64, 32, 2, 2, 64)
+    TU_CASE(21,128, 128, 32, 128, 16, 3, 3, 64)
+    TU_CASE(22,128, 128, 32, 128, 16, 4, 4, 64)
+    TU_CASE(23,128, 128, 32, 128, 16, 4, 4, 128)
 #undef TU_CASE
 #undef TU_LAUNCH
     TORCH_CHECK(false, "unreachable cfg ", cfg);

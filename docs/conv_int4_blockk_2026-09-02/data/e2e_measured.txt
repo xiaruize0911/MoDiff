@@ -1,0 +1,13 @@
+W4A4 END-TO-END, ALL MEASURED -- A40, batch 128, 50 DDIM, CUDA events median of 3
+arm                                                       ms/step  vs fp16  % of ship     peak   relL2
+fp16 baseline                                              101.95   1.000x      58.5%    4.21G  0.0000
+W4A4 shipped (per-tensor, fused)                            59.67   1.708x     100.0%    4.28G  0.6014  <== >=80%
+W4A4 per-tensor, all fusions OFF                            89.93   1.134x      66.4%    5.24G  0.6021
+W4A4 blockwise B=128, all fusions OFF                       99.47   1.025x      60.0%    4.72G  0.5229
+W4A4 blockwise B=64, all fusions OFF                        97.37   1.047x      61.3%    4.72G  0.5284
+W4A4 blockwise B=64, ONLY the norm kernel fused             79.13   1.288x      75.4%    4.21G  0.5280
+W4A4 blockwise B=64, + shipped folds on fallback layers     68.73   1.483x      86.8%    3.86G  0.5295  <== >=80%
+
+Attribution (measured):
+  the blockwise norm kernel alone            : -18.24 ms  (97.37 -> 79.13)  -> 75.4% of shipped
+  shipped per-tensor folds on the 12 fallback layers : -10.40 ms  (79.13 -> 68.73)  -> 86.8% of shipped

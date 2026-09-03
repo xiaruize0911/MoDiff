@@ -478,6 +478,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           py::arg("stride") = 1, py::arg("pad") = 1);
     m.def("blockk_tune_num_cfgs", &blockk_tune_num_cfgs, "number of tunable configs");
     m.def("blockk_tune_cfg_name", &blockk_tune_cfg_name, "name of tunable config i");
+    m.def("gn_silu_blockk_quantize_pack_int4", &gn_silu_blockk_quantize_pack_int4,
+          "FUSED GroupNorm(+mod)(+SiLU) -> blockwise-along-C int4 quantize+pack (BLK=64)",
+          pybind11::arg("x"), pybind11::arg("weight"), pybind11::arg("bias"),
+          pybind11::arg("num_groups"), pybind11::arg("eps"), pybind11::arg("apply_silu"),
+          pybind11::arg("smooth_inv"), pybind11::arg("mod_scale"),
+          pybind11::arg("mod_shift"), pybind11::arg("block") = 64);
     m.def("conv_quantize_block_pack_int4", &conv_quantize_block_pack_int4,
           "blockwise-along-C int4 quantize+pack of a conv input -> (packed [N,H,W,C/2] codes, "
           "fp32 scales [N,H,W,C/block]); block in {64,128,256}",

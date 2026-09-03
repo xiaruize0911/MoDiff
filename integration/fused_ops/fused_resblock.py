@@ -447,6 +447,12 @@ def _prequant_gn_conv(x, gn, conv, mod_scale=None, mod_shift=None, residual=None
                                   mod_scale, mod_shift, residual)
         if bk is not None:
             return bk
+        # MODIFF_CONV_BLOCKK_GN_ONLY=1 isolates the blockwise GN->quantize kernel: layers it
+        # cannot serve fall to the UNFUSED path instead of the shipped per-tensor fold below.
+        # Without this, a "fused blockwise" arm also gets the shipped fusion on every ineligible
+        # layer, and its number is then not an attribution of the blockwise kernel alone.
+        if os.environ.get("MODIFF_CONV_BLOCKK_GN_ONLY") == "1":
+            return None
 
     # MoDiff temporal-cache path: fuse GroupNorm(+mod)+SiLU into the delta-quantize
     # (+ a_hat update) kernel, replacing the standalone GN kernel + step1 two-kernel
@@ -695,6 +701,14 @@ def _prequant_gn_resize_conv_modiff(x, gn, h_upd, conv, mod_scale=None, mod_shif
     ah = getattr(conv, 'a_hat_cache', None)
     if (ah is None or ah.dtype not in (torch.float16, torch.int8)
             or ah.numel() != N * C * Ho * Wo):
+        return None
+    # int4 + blockwise a_hat used to be declined here: the resize kernel is group-major and
+    # cannot resnap a_hat inline, and its separate ahat_commit_block pass could only read int8
+    # codes, not packed nibbles. ahat_commit_block_pack4 now reads the nibble layout, so the
+    # fusion applies at both precisions and the 8 updown ResBlocks keep it (2.22 ms/step on W4A4).
+    # Measurement knob only: forces the SAME decline for every arm, so the cost of the
+    # int4-blockwise decline above can be attributed instead of inferred. Default off.
+    if os.environ.get("MODIFF_NO_RESIZE_FUSE", "0") == "1":
         return None
 
     conv.step_count += 1

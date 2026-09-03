@@ -1,0 +1,21 @@
+=== a_hat cache footprint (70 layers, batch 128) ===
+  fp16 a_hat             codes 1.370 GB + scales 0.0000 GB = 1.370 GB   (2.00 B/elem, dtype torch.float16)
+  blockwise int8 a_hat   codes 0.685 GB + scales 0.0856 GB = 0.771 GB   (1.00 B/elem, dtype torch.int8)
+  -> 1.78x smaller cache  (claimed 1.78x)
+
+=== peak memory ===
+                             alloc  reserved
+  fp16 a_hat                6.390G    7.701G
+  blockwise int8            5.983G    7.344G
+  delta                    -0.407G   -0.357G  (6.4% of peak alloc)
+
+=== a_hat traffic per step (read + write, every step, all 70 layers) ===
+  fp16                   2.741 GB/step
+  blockwise int8         1.542 GB/step
+  saving 1.199 GB/step -> 1.72 ms/step at 696 GB/s  (A40 peak)
+  saving 1.199 GB/step -> 2.07 ms/step at 580 GB/s  (~83% achievable)
+
+=== predicted vs measured ===
+  predicted from a_hat traffic alone : ~2.07 ms/step
+  measured WALL CLOCK E2E            : -1.93 ms/step  (81.64 -> 79.71)
+  my GN/quant bucket delta           : -1.28 ms/step  <-- under-counted

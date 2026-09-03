@@ -1,0 +1,32 @@
+ALL MEASURED -- A40, batch 128, 50 DDIM, CUDA events median of 3;
+peak memory from torch.cuda.max_memory_* over the same timed runs.
+
+SPEED (x faster; >1 = faster than the reference)
+arm                                 ms/stepvs fp16 baselinevs W8A8 baseline  vs W8A8 MoDiff
+fp16 baseline                        102.00          1.000x          0.712x          0.804x
+W8A8 baseline (PTQ)                   72.60          1.405x          1.000x          1.129x
+W8A8 MoDiff (fp16 a_hat)              81.96          1.244x          0.886x          1.000x
+W8A8 MoDiff + a_hat B=32              80.12          1.273x          0.906x          1.023x
+W8A8 PTQ + blockwise conv B=64        88.37          1.154x          0.822x          0.927x
+
+PEAK ALLOCATED MEMORY (GB; delta vs reference, negative = less memory)
+arm                                 peak GBvs fp16 baselinevs W8A8 baseline  vs W8A8 MoDiff
+fp16 baseline                          4.21      +0.00G         -0.26G         -3.46G   
+W8A8 baseline (PTQ)                    4.47      +0.26G         +0.00G         -3.20G   
+W8A8 MoDiff (fp16 a_hat)               7.67      +3.46G         +3.20G         +0.00G   
+W8A8 MoDiff + a_hat B=32               7.07      +2.86G         +2.60G         -0.60G   
+W8A8 PTQ + blockwise conv B=64         3.62      -0.59G         -0.85G         -4.05G   
+
+PEAK RESERVED MEMORY (GB)
+  fp16 baseline                         5.01G
+  W8A8 baseline (PTQ)                   4.79G
+  W8A8 MoDiff (fp16 a_hat)              9.43G
+  W8A8 MoDiff + a_hat B=32              8.74G
+  W8A8 PTQ + blockwise conv B=64        3.86G
+
+QUALITY (latent relL2 vs fp16, n=6, seed 20260805)
+  fp16 baseline                       0.0000
+  W8A8 baseline (PTQ)                 0.3219
+  W8A8 MoDiff (fp16 a_hat)            0.0898
+  W8A8 MoDiff + a_hat B=32            0.1026
+  W8A8 PTQ + blockwise conv B=64      0.1557

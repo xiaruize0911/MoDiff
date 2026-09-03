@@ -1,0 +1,7 @@
+arm                               conv ms  conv vs fp16  GN/quant   E2E ms  E2E vs fp16
+fp16                                42.54        1.000x     19.62   101.93       1.000x
+W8A8 PTQ (no a_hat)                 32.03        1.328x     14.36    72.31       1.410x
+W8A8 MoDiff, fp16 a_hat             32.71        1.301x     21.52    81.64       1.249x
+W8A8 MoDiff, a_hat B=32 int8        32.94        1.291x     20.24    79.71       1.279x
+
+a_hat B=32 vs fp16 a_hat:  conv +0.23 ms   GN/quant -1.28 ms   E2E -1.93 ms (+2.36%)
