@@ -288,6 +288,15 @@ torch::Tensor conv2d_int8_evt_o_hat_q8r(
     torch::Tensor input, torch::Tensor weight, torch::Tensor inv_scale, torch::Tensor weight_scales,
     torch::Tensor o_hat_q, torch::Tensor s_read, torch::Tensor s_write_inv, torch::Tensor amax_out,
     int sh, int sw, int ph, int pw, int dh, int dw);
+torch::Tensor conv2d_int8_evt_o_hat_q8_out(
+    torch::Tensor input, torch::Tensor weight, torch::Tensor inv_scale, torch::Tensor weight_scales,
+    torch::Tensor o_hat_q, torch::Tensor s_read, torch::Tensor s_write_inv, torch::Tensor amax_out,
+    torch::Tensor output, int sh, int sw, int ph, int pw, int dh, int dw);
+torch::Tensor conv2d_int8_evt_o_hat_q8_residual(
+    torch::Tensor input, torch::Tensor weight, torch::Tensor inv_scale, torch::Tensor weight_scales,
+    torch::Tensor o_hat_q, torch::Tensor s_read, torch::Tensor s_write_inv, torch::Tensor s_write,
+    torch::Tensor amax_out, torch::Tensor residual, torch::Tensor output,
+    int sh, int sw, int ph, int pw, int dh, int dw);
 torch::Tensor conv2d_int8_evt_o_hat_skip(
     torch::Tensor input, torch::Tensor weight, torch::Tensor inv_scale, torch::Tensor weight_scales,
     torch::Tensor o_hat, torch::Tensor output, int sh, int sw, int ph, int pw, int dh, int dw);

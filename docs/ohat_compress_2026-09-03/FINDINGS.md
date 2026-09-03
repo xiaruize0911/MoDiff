@@ -312,3 +312,62 @@ The Python wiring: `o_hat_cache` becomes int8 `[N,K,H,W]` channels_last plus two
 buffers, `_forward_modulated` routes to `_q8r`, `_forward_first_step` seeds the scale from the
 fp32 o_hat it already computes, and the skip-K / residual variants need the same treatment. The
 kernel and the accuracy are both settled; this is plumbing.
+
+
+## 8. Wired end to end: 70/70 layers on int8 o_hat, +1.84 ms/step, −485 MB
+
+`MODIFF_OHAT_Q8=1`. **Default 0** — see the caveat below.
+
+Four things had to be found by instrumenting rather than reading, and each was a silent fallback:
+
+| symptom | cause |
+|---|---|
+| latent absmax 19.4 vs 7.16 | `_ensure_state_buffers` treated int8 as a dtype *mismatch* and replaced the seeded cache with a **zeroed fp16** one — dropping the codes and resetting the accumulator |
+| `"GroupNormKernelImpl" not implemented for 'Char'` | `_module_output()` returns the cache, and t=T is the one path that reaches it without the kernel's fp16 `out` |
+| `"out must be fp16"` | `_layer_out_buf` / `_skip_out_buf` size themselves from `o_hat_cache.dtype`, so they made int8 output buffers |
+| 8 of 70 layers stuck on fp16 | a *second* allocation site (`_ensure_ohat_shape`, the from-codes path the 8 updown ResBlocks take) with the same guard |
+
+After all four: `_ohat_q8_seed` 70, `_evt_ohat_q8` 210/210, `_evt_ohat_residual` 210/210, **int8 layers 70, fp16 0**.
+
+### Where the time went, and the one fix worth making
+
+| variant | ms/step | delta |
+|---|---|---|
+| fp16 o_hat (baseline) | 80.41 | — |
+| q8 kernel only | 81.46 | **+1.05** (matches the standalone bench's +1.0 exactly) |
+| + `out.add_(residual)` in Python | 84.56 | **+2.58** |
+| + `_ohat_q8_advance` | 84.76 | +0.20 |
+
+The Python skip-add was 2.5x the kernel's own cost, so it went into the tree: store int8 codes,
+multiply the **passed-through** code value back by `s_write` to recover `o_hat_new`, add the
+residual, store fp16 (`conv2d_int8_evt_o_hat_q8_residual`). That recovered 2.95 ms. My guess that
+the per-step scale update would dominate on launch overhead was wrong — it costs 0.20 ms.
+
+### Final
+
+| | ms/step | peak MB | int8 layers |
+|---|---|---|---|
+| fp16 o_hat | 80.41 | 7257 | 0 |
+| **int8 o_hat** | **82.25** | **6772** | **70** |
+| | **+1.84 (1.023x)** | **−485 (−6.7%)** | |
+
+### Quality, and an honest caveat about the floor
+
+Decoded-image MSE against the fp16-o_hat arm: **4.306e-03**. The sim predicted **4.330e-03** for
+per-channel per-step *without* stochastic rounding, which is what this kernel does — **a match to
+0.6%.** The sim predicted the kernel.
+
+![real kernel vs fp16](../ahat_conv_report_2026-09-02/plots/samples_ohat_kernel.png)
+
+*Top: fp16 o_hat. Bottom: int8 o_hat, real kernel. Same scenes, same quality.*
+
+**But the run-to-run floor estimate itself varies about 2x between measurements** — 1.555e-03 in §5
+and 7.732e-04 here, both from a pair of same-seed processes. So `4.306e-03 / floor` is **2.77x**
+against the conservative floor and **5.57x** against this run's, i.e. it straddles the 3x
+resolvability bar depending on which estimate you use. That is a limitation of the metric, not of
+the kernel, and it is why the default stays 0.
+
+**The lever, if more margin is wanted, is stochastic rounding** — the sim measured it at 1.14x
+(4.330e-03 → 3.799e-03). It needs a counter-based RNG in a custom `VisitorCompute`, which is the
+one piece of this that is not a native node. Worth doing before flipping the default; and the floor
+deserves several pairs rather than one.

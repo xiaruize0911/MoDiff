@@ -906,8 +906,13 @@ class OptimizedInt8Conv2d(nn.Module):
                     if a_dtype == torch.int8 and self._ahat_block() > 0:
                         n, c, h, w = x.shape
                         self._ensure_block_qscale(n, c, h, w, x.device)
-        if (self.o_hat_cache is None or self.o_hat_cache.shape != output_shape
-                or self.o_hat_cache.dtype != o_dtype):
+        # An int8 o_hat is a deliberate dtype, not a mismatch: without this guard the next step
+        # replaced the seeded int8 cache with a ZEROED fp16 one, which both dropped the codes and
+        # reset the accumulator (observed as latent absmax 19.4 vs 7.16).
+        ohat_ok = (self.o_hat_cache is not None and self.o_hat_cache.shape == output_shape
+                   and (self.o_hat_cache.dtype == o_dtype
+                        or (self.o_hat_cache.dtype == torch.int8 and self._ohat_q8())))
+        if not ohat_ok:
             self.o_hat_cache = torch.zeros(
                 output_shape, device=x.device, dtype=o_dtype
             ).contiguous(memory_format=torch.channels_last)
@@ -1203,6 +1208,16 @@ class OptimizedInt8Conv2d(nn.Module):
         return w * self.weight_scale_channel.view(-1, 1, 1, 1).float()
 
     def _module_output(self) -> torch.Tensor:
+        # int8 o_hat: the cache is no longer the layer output. Only the t=T path gets here without
+        # the kernel's own fp16 `out`, and _ohat_q8_seed left the value it computed.
+        if self.o_hat_cache is not None and self.o_hat_cache.dtype == torch.int8:
+            o = getattr(self, "_ohat_q8_first_out", None)
+            if o is not None:
+                self._ohat_q8_first_out = None
+                return o
+            n, k, h, w = self.o_hat_cache.shape
+            return (self.o_hat_cache.float() * self._ohat_q_sread.view(1, k, 1, 1)).half()
+
         # Used to force-cast a fp16 o_hat_cache up to fp32 here, which meant every
         # calibrated MoDiff conv call materialized a full extra fp32 copy of its
         # output on the way out -- only for the very next op (autocast-managed
@@ -1266,6 +1281,65 @@ class OptimizedInt8Conv2d(nn.Module):
         scale = qmax / a.abs().amax().float().clamp_min(1e-6)
         a.mul_(scale).round_().clamp_(-qmax, qmax).div_(scale)
 
+
+    def _ohat_q8(self) -> bool:
+        """int8 o_hat with per-output-channel scales, via conv2d_int8_evt_o_hat_q8_out.
+
+        o_hat is the larger cache (1131 MB against a_hat's 702 at batch 128) and was fp16 with no
+        low-precision path. 8-bit is indistinguishable -- decoded-image MSE 2.44x of this arm's
+        run-to-run floor at per-channel per-step granularity, against a 3x resolvability bar
+        (docs/ohat_compress_2026-09-03). Granularity turned out to be nearly free: coarsening from
+        B=32-along-K-per-pixel to per-channel moves 1.71x -> 2.44x, all indistinguishable, which is
+        what let the epilogue use only native CUTLASS EVT nodes.
+
+        The scale is per-step and self-sourced: the kernel's VisitorRowReduction writes the
+        per-channel abs-max of the NEW o_hat as a side effect, so step t hands step t+1 its scale.
+        A scale frozen at t=T measures 4.50x and fails -- not from growth but from shrinkage, since
+        some layers decay to 0.63x over the trajectory and a fixed margin then wastes the range.
+        """
+        if os.environ.get("MODIFF_OHAT_Q8", "0") == "0":
+            return False
+        return (self.is_calibrated and not self._imode() and self.use_cutlass
+                and hasattr(modiff_cutlass, "conv2d_int8_evt_o_hat_q8_out"))
+
+    #: Safety factor on the previous step's abs-max when it becomes this step's store scale. The
+    #: increment is 1.6-9.2% of the accumulator (measured), so a few percent of headroom covers the
+    #: step-to-step move; anything past it saturates in cvt.rni.sat.s8.f32, which is bounded.
+    OHAT_Q8_SAFETY = 1.10
+
+    def _ensure_ohat_q8(self, k: int, device) -> None:
+        """s_read: the scale the stored codes were written with. s_write_inv: 1/scale for this
+        step's store. amax: where the kernel leaves max|o_hat_new| per channel."""
+        for name in ("_ohat_q_sread", "_ohat_q_swinv", "_ohat_q_swrite", "_ohat_q_amax"):
+            t = getattr(self, name, None)
+            if t is None or t.numel() != k or t.device != device:
+                setattr(self, name, torch.ones(k, device=device, dtype=torch.float32))
+
+    def _ohat_q8_seed(self, o_hat: torch.Tensor) -> None:
+        """t=T: quantize the eagerly computed fp32/fp16 o_hat into int8 + set both scales."""
+        n, k, h, w = o_hat.shape
+        self._ensure_ohat_q8(k, o_hat.device)
+        amax = o_hat.float().abs().amax(dim=(0, 2, 3)).clamp_min(1e-12)
+        s = amax / 127.0
+        q = torch.clamp(torch.round(o_hat.float() / s.view(1, k, 1, 1)), -127, 127)
+        self.o_hat_cache = q.to(torch.int8).contiguous(memory_format=torch.channels_last)
+        # _module_output() returns the cache, and t=T is the one path that reaches it without a
+        # separate fp16 `out` from the kernel. Hand it the value we already have rather than
+        # dequantizing the codes back.
+        self._ohat_q8_first_out = o_hat.half().contiguous(memory_format=torch.channels_last)
+        self._ohat_q_sread.copy_(s)
+        self._ohat_q_swrite.copy_(amax * self.OHAT_Q8_SAFETY / 127.0)
+        self._ohat_q_swinv.copy_(127.0 / (amax * self.OHAT_Q8_SAFETY))
+        self._ohat_q_amax.zero_()
+
+    def _ohat_q8_advance(self) -> None:
+        """After a step: the codes now live on the scale we just wrote with, and the kernel left
+        this step's abs-max, which sets the next store scale."""
+        torch.reciprocal(self._ohat_q_swinv, out=self._ohat_q_sread)
+        am = self._ohat_q_amax.clamp_min(1e-12) * self.OHAT_Q8_SAFETY
+        self._ohat_q_swrite.copy_(am / 127.0)
+        self._ohat_q_swinv.copy_(127.0 / am)
+        self._ohat_q_amax.zero_()
 
     def _snap_ohat_(self) -> None:
         """SIM ONLY: fake-quantize o_hat in place, blockwise along K, to price compressing it.
@@ -1402,18 +1476,26 @@ class OptimizedInt8Conv2d(nn.Module):
     def _skip_out_buf(self) -> torch.Tensor:
         buf = getattr(self, "_skip_ohat_out", None)
         oh = self.o_hat_cache
-        if (buf is None or buf.shape != oh.shape or buf.dtype != oh.dtype
+        dt_want = torch.float16 if oh.dtype == torch.int8 else oh.dtype
+        if (buf is None or buf.shape != oh.shape or buf.dtype != dt_want
                 or buf.device != oh.device):
-            self._skip_ohat_out = torch.empty_like(oh)
+            # An int8 o_hat is the CACHE dtype; the layer output stays fp16.
+            dt = torch.float16 if oh.dtype == torch.int8 else oh.dtype
+            self._skip_ohat_out = torch.empty(oh.shape, device=oh.device, dtype=dt
+                                  ).contiguous(memory_format=torch.channels_last)
         return self._skip_ohat_out
 
     def _layer_out_buf(self) -> torch.Tensor:
         """Persistent fp16 output for residual EVT (commit and skip). Avoids empty_like per step."""
         oh = self.o_hat_cache
         buf = getattr(self, "_fused_out_buf", None)
-        if (buf is None or buf.shape != oh.shape or buf.dtype != oh.dtype
+        dt_want = torch.float16 if oh.dtype == torch.int8 else oh.dtype
+        if (buf is None or buf.shape != oh.shape or buf.dtype != dt_want
                 or buf.device != oh.device):
-            self._fused_out_buf = torch.empty_like(oh)
+            # An int8 o_hat is the CACHE dtype; the layer output stays fp16.
+            dt = torch.float16 if oh.dtype == torch.int8 else oh.dtype
+            self._fused_out_buf = torch.empty(oh.shape, device=oh.device, dtype=dt
+                                  ).contiguous(memory_format=torch.channels_last)
         return self._fused_out_buf
 
     def _evt_ohat(self, x_q: torch.Tensor, alpha: torch.Tensor) -> torch.Tensor:
@@ -1421,6 +1503,18 @@ class OptimizedInt8Conv2d(nn.Module):
         strides = (self.stride[0], self.stride[1], self.padding[0], self.padding[1],
                    self.dilation[0], self.dilation[1])
         wscale = self.weight_scale_channel.view(-1)
+        if self.o_hat_cache is not None and self.o_hat_cache.dtype == torch.int8:
+            # int8 o_hat: the cache and the layer output are no longer the same tensor, so the
+            # kernel writes both (plus the next step's amax) in one pass.
+            n, k, h, w = self.o_hat_cache.shape
+            out = torch.empty(n, k, h, w, device=x_q.device, dtype=torch.float16,
+                              memory_format=torch.channels_last)
+            modiff_cutlass.conv2d_int8_evt_o_hat_q8_out(
+                x_q, self.weight_int8, alpha, wscale, self.o_hat_cache,
+                self._ohat_q_sread, self._ohat_q_swinv, self._ohat_q_amax, out, *strides)
+            if not self._skip_cache_store():
+                self._ohat_q8_advance()
+            return out
         if self._skip_cache_store():
             out = self._skip_out_buf()
             if (self.o_hat_cache.dtype == torch.float16
@@ -1443,6 +1537,17 @@ class OptimizedInt8Conv2d(nn.Module):
                            residual: torch.Tensor, out: torch.Tensor) -> torch.Tensor:
         strides = (self.stride[0], self.stride[1], self.padding[0], self.padding[1],
                    self.dilation[0], self.dilation[1])
+        if self.o_hat_cache is not None and self.o_hat_cache.dtype == torch.int8:
+            # Skip-add folded into the tree: store int8 codes, multiply the passed-through code
+            # value back by s_write to recover o_hat_new, add the residual, store fp16. Doing the
+            # add in Python instead measured 2.58 ms/step against 1.05 for the kernel itself.
+            modiff_cutlass.conv2d_int8_evt_o_hat_q8_residual(
+                x_q, self.weight_int8, alpha, self.weight_scale_channel.view(-1),
+                self.o_hat_cache, self._ohat_q_sread, self._ohat_q_swinv, self._ohat_q_swrite,
+                self._ohat_q_amax, residual, out, *strides)
+            if not self._skip_cache_store():
+                self._ohat_q8_advance()
+            return out
         skip = (self._skip_cache_store()
                 and hasattr(modiff_cutlass, "conv2d_int8_evt_o_hat_residual_skip"))
         fn = (modiff_cutlass.conv2d_int8_evt_o_hat_residual_skip if skip
@@ -2156,8 +2261,12 @@ class OptimizedInt8Conv2d(nn.Module):
                  // self.stride[1]) + 1
         shape = (n, self.out_channels, h_out, w_out)
         dtype = torch.float16 if self.is_calibrated else torch.float32
+        # Same guard as _ensure_state_buffers: an int8 o_hat is intentional, not a mismatch. This
+        # site is the from-codes path taken by the 8 updown ResBlocks, which is why 8 of 70 layers
+        # kept reverting to fp16 before this.
         if (self.o_hat_cache is None or self.o_hat_cache.shape != shape
-                or self.o_hat_cache.dtype != dtype):
+                or not (self.o_hat_cache.dtype == dtype
+                        or (self.o_hat_cache.dtype == torch.int8 and self._ohat_q8()))):
             self.o_hat_cache = torch.zeros(shape, device=x_int8.device, dtype=dtype
                                            ).contiguous(memory_format=torch.channels_last)
 
@@ -2426,7 +2535,9 @@ class OptimizedInt8Conv2d(nn.Module):
             else:
                 self.a_hat_cache = a_hat.to(cache_dtype).contiguous(
                     memory_format=torch.channels_last)
-        if o_hat is not None:
+        if o_hat is not None and self._ohat_q8():
+            self._ohat_q8_seed(o_hat)
+        elif o_hat is not None:
             oh = getattr(self, "o_hat_cache", None)
             if (oh is not None and oh.shape == o_hat.shape and oh.device == o_hat.device
                     and oh.dtype == cache_dtype):

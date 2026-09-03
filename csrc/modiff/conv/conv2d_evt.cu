@@ -123,6 +123,23 @@ struct Evt {
   using E_RedQ   = ct::Sm80EVT<RowRed, E_NewQ>;
   using E_CodeQR = ct::Sm80EVT<Mul, E_RedQ, RowVec>;
   using EVTD2qr  = ct::Sm80EVT<AuxStQ, E_CodeQR>;
+  // D2qo: the variant the model needs. o_hat_cache is the LAYER OUTPUT today (_module_output
+  // returns it), so making the cache int8 forces the two apart: store the fp16 value for
+  // downstream, then scale and store the int8 codes, then the amax for the next step. AuxStore is
+  // a pass-through node, which is what lets one tree carry three stores -- the same trick the D2
+  // tree already uses to write o_hat and then out.
+  using E_StOutQ = ct::Sm80EVT<AuxSt, E_NewQ>;        // fp16 out, passes the value through
+  using E_RedQO  = ct::Sm80EVT<RowRed, E_StOutQ>;     // per-channel amax for step t+1
+  using E_CodeQO = ct::Sm80EVT<Mul, E_RedQO, RowVec>; // * (1/s_write)
+  using EVTD2qo  = ct::Sm80EVT<AuxStQ, E_CodeQO>;     // -> int8 codes
+  // D2qro: as D2qo but the skip-add is folded in, which needs the int8 store to come FIRST and the
+  // value multiplied back into the value domain afterwards -- AuxStore passes its input through
+  // unconverted, so `codes * s_write` recovers o_hat_new. Doing this add in Python instead cost
+  // 2.58 ms/step measured, against 1.05 for the kernel itself.
+  using E_StQ_r   = ct::Sm80EVT<AuxStQ, E_CodeQO>;      // store int8, pass the code value on
+  using E_BackQ_r = ct::Sm80EVT<Mul, E_StQ_r, RowVec>;  // * s_write -> value domain
+  using E_ResQ_r  = ct::Sm80EVT<Add, E_BackQ_r, AuxLd>; // + residual
+  using EVTD2qro  = ct::Sm80EVT<AuxSt, E_ResQ_r>;       // -> fp16 out
   // Skip-K: read o_hat_old, write only `out` (no o_hat store). Residual:
   //   out = o_hat_old + conv + residual. No-residual reuses EVTD2nr with AuxSt -> out.
   using E_AddResSkip = ct::Sm80EVT<Add, E_OhatNew, AuxLd>;
@@ -135,6 +152,8 @@ struct Evt {
   using EpiD2skip = ct::EpilogueWithVisitorCallbacks<DefaultEpi, EVTD2skip, 1>;
   using EpiD2q = ct::EpilogueWithVisitorCallbacks<DefaultEpi, EVTD2q, 1>;
   using EpiD2qr = ct::EpilogueWithVisitorCallbacks<DefaultEpi, EVTD2qr, 1>;
+  using EpiD2qo = ct::EpilogueWithVisitorCallbacks<DefaultEpi, EVTD2qo, 1>;
+  using EpiD2qro = ct::EpilogueWithVisitorCallbacks<DefaultEpi, EVTD2qro, 1>;
   using KernelD1   = modiff::ImplicitGemmConvolutionEVT<Mma, EpiD1,   Swizzle, cutlass::conv::Operator::kFprop>;
   using KernelD1nr = modiff::ImplicitGemmConvolutionEVT<Mma, EpiD1nr, Swizzle, cutlass::conv::Operator::kFprop>;
   using KernelD2   = modiff::ImplicitGemmConvolutionEVT<Mma, EpiD2,   Swizzle, cutlass::conv::Operator::kFprop>;
@@ -142,6 +161,8 @@ struct Evt {
   using KernelD2skip = modiff::ImplicitGemmConvolutionEVT<Mma, EpiD2skip, Swizzle, cutlass::conv::Operator::kFprop>;
   using KernelD2q = modiff::ImplicitGemmConvolutionEVT<Mma, EpiD2q, Swizzle, cutlass::conv::Operator::kFprop>;
   using KernelD2qr = modiff::ImplicitGemmConvolutionEVT<Mma, EpiD2qr, Swizzle, cutlass::conv::Operator::kFprop>;
+  using KernelD2qo = modiff::ImplicitGemmConvolutionEVT<Mma, EpiD2qo, Swizzle, cutlass::conv::Operator::kFprop>;
+  using KernelD2qro = modiff::ImplicitGemmConvolutionEVT<Mma, EpiD2qro, Swizzle, cutlass::conv::Operator::kFprop>;
   using OpD1   = cutlass::conv::device::ImplicitGemmConvolution<KernelD1>;
   using OpD1nr = cutlass::conv::device::ImplicitGemmConvolution<KernelD1nr>;
   using OpD2   = cutlass::conv::device::ImplicitGemmConvolution<KernelD2>;
@@ -149,6 +170,8 @@ struct Evt {
   using OpD2skip = cutlass::conv::device::ImplicitGemmConvolution<KernelD2skip>;
   using OpD2q = cutlass::conv::device::ImplicitGemmConvolution<KernelD2q>;
   using OpD2qr = cutlass::conv::device::ImplicitGemmConvolution<KernelD2qr>;
+  using OpD2qo = cutlass::conv::device::ImplicitGemmConvolution<KernelD2qo>;
+  using OpD2qro = cutlass::conv::device::ImplicitGemmConvolution<KernelD2qro>;
 };
 
 // int8 conv config (matches Conv2dInt8DequantFp16Kernel in conv2d_int8.cu)
@@ -262,6 +285,81 @@ void run_d2qr(ElemAB* xp, ElemAB* wp, const float* alpha_ptr, ES* wsp,
   auto ws = torch::empty({(long)op.get_workspace_size(args)}, torch::TensorOptions().dtype(torch::kByte).device(torch::kCUDA));
   TORCH_CHECK(op.initialize(args, ws.data_ptr(), stream) == cutlass::Status::kSuccess, "evt d2qr init");
   TORCH_CHECK(op(stream) == cutlass::Status::kSuccess, "evt d2qr run");
+}
+
+// D2qo: int8 o_hat RMW + fp16 `out` + per-channel amax. The one the model uses.
+template <class EvtT, class ElemAB>
+void run_d2qo(ElemAB* xp, ElemAB* wp, const float* alpha_ptr, ES* wsp,
+              int8_t* qp, const ES* s_read, const ES* s_winv, ES* amax_out, EC* outp,
+              cutlass::conv::Conv2dProblemSize const& problem, int C, int R, int S, int K,
+              int64_t M, int64_t ldK, cudaStream_t stream) {
+  ES z(0); int8_t zq(0); int64_t MK = M * K;
+  typename EvtT::EVTD2qo::Arguments ep{
+    {                                                              // E_CodeQO
+      {                                                            //   E_RedQO
+        {                                                          //     E_StOutQ
+          {                                                        //       E_NewQ
+            {                                                      //         E_DeqQ
+              {qp, zq, {ldK, cute::_1{}, MK}},
+              {const_cast<ES*>(s_read), z, {cute::_0{}, cute::_1{}, (int32_t)K}}, {} },
+            { { {}, {{ECompute(0)}, {alpha_ptr}, {}}, {} },
+              {wsp, z, {cute::_0{}, cute::_1{}, (int32_t)K}}, {} },
+            {} },
+          {outp, {ldK, cute::_1{}, MK}} },                         //       AuxSt -> fp16 out
+        {amax_out, ECompute(0), {cute::_0{}, cute::_1{}, (int32_t)K}} },
+      {const_cast<ES*>(s_winv), z, {cute::_0{}, cute::_1{}, (int32_t)K}}, {} },
+    {qp, {ldK, cute::_1{}, MK}}
+  };
+  using LN = TensorNHWC;
+  typename EvtT::KernelD2qo::TensorRefA refA{xp, LN({C, problem.W*C, problem.H*problem.W*C})};
+  typename EvtT::KernelD2qo::TensorRefB refB{wp, LN({C, S*C, R*S*C})};
+  typename EvtT::OpD2qo::Arguments args{problem, refA, refB, ep};
+  typename EvtT::OpD2qo op;
+  TORCH_CHECK(op.can_implement(args) == cutlass::Status::kSuccess, "evt d2qo can_implement");
+  auto ws = torch::empty({(long)op.get_workspace_size(args)}, torch::TensorOptions().dtype(torch::kByte).device(torch::kCUDA));
+  TORCH_CHECK(op.initialize(args, ws.data_ptr(), stream) == cutlass::Status::kSuccess, "evt d2qo init");
+  TORCH_CHECK(op(stream) == cutlass::Status::kSuccess, "evt d2qo run");
+}
+
+// D2qro: int8 o_hat RMW + amax + (o_hat_new + residual) -> fp16 out, all in one pass.
+template <class EvtT, class ElemAB>
+void run_d2qro(ElemAB* xp, ElemAB* wp, const float* alpha_ptr, ES* wsp,
+               int8_t* qp, const ES* s_read, const ES* s_winv, const ES* s_write,
+               ES* amax_out, EC* resp, EC* outp,
+               cutlass::conv::Conv2dProblemSize const& problem, int C, int R, int S, int K,
+               int64_t M, int64_t ldK, cudaStream_t stream) {
+  ES z(0); EC ze(0); int8_t zq(0); int64_t MK = M * K;
+  typename EvtT::EVTD2qro::Arguments ep{
+    {                                                                  // E_ResQ_r
+      {                                                                //   E_BackQ_r
+        {                                                              //     E_StQ_r
+          {                                                            //       E_CodeQO
+            {                                                          //         E_RedQO
+              {                                                        //           E_StOutQ
+                {                                                      //             E_NewQ
+                  {                                                    //               E_DeqQ
+                    {qp, zq, {ldK, cute::_1{}, MK}},
+                    {const_cast<ES*>(s_read), z, {cute::_0{}, cute::_1{}, (int32_t)K}}, {} },
+                  { { {}, {{ECompute(0)}, {alpha_ptr}, {}}, {} },
+                    {wsp, z, {cute::_0{}, cute::_1{}, (int32_t)K}}, {} },
+                  {} },
+                {outp, {ldK, cute::_1{}, MK}} },                       //             (unused store)
+              {amax_out, ECompute(0), {cute::_0{}, cute::_1{}, (int32_t)K}} },
+            {const_cast<ES*>(s_winv), z, {cute::_0{}, cute::_1{}, (int32_t)K}}, {} },
+          {qp, {ldK, cute::_1{}, MK}} },                               //       AuxStQ -> codes
+        {const_cast<ES*>(s_write), z, {cute::_0{}, cute::_1{}, (int32_t)K}}, {} },
+      {resp, ze, {ldK, cute::_1{}, MK}}, {} },                         //   + residual
+    {outp, {ldK, cute::_1{}, MK}}                                      // AuxSt -> fp16 out
+  };
+  using LN = TensorNHWC;
+  typename EvtT::KernelD2qro::TensorRefA refA{xp, LN({C, problem.W*C, problem.H*problem.W*C})};
+  typename EvtT::KernelD2qro::TensorRefB refB{wp, LN({C, S*C, R*S*C})};
+  typename EvtT::OpD2qro::Arguments args{problem, refA, refB, ep};
+  typename EvtT::OpD2qro op;
+  TORCH_CHECK(op.can_implement(args) == cutlass::Status::kSuccess, "evt d2qro can_implement");
+  auto ws = torch::empty({(long)op.get_workspace_size(args)}, torch::TensorOptions().dtype(torch::kByte).device(torch::kCUDA));
+  TORCH_CHECK(op.initialize(args, ws.data_ptr(), stream) == cutlass::Status::kSuccess, "evt d2qro init");
+  TORCH_CHECK(op(stream) == cutlass::Status::kSuccess, "evt d2qro run");
 }
 
 // D2 no-residual: o_hat[elem] += acc*alpha*weight_scale[k] (in place, single store). No `out`.
@@ -481,6 +579,49 @@ torch::Tensor conv2d_int8_evt_o_hat_q8r(
       s_read.data_ptr<float>(), s_write_inv.data_ptr<float>(), amax_out.data_ptr<float>(),
       problem, C,R,S,K,M,ldK, at::cuda::getCurrentCUDAStream());
   return o_hat_q;
+}
+
+torch::Tensor conv2d_int8_evt_o_hat_q8_out(
+    torch::Tensor input, torch::Tensor weight, torch::Tensor inv_scale, torch::Tensor weight_scales,
+    torch::Tensor o_hat_q, torch::Tensor s_read, torch::Tensor s_write_inv, torch::Tensor amax_out,
+    torch::Tensor output, int sh, int sw, int ph, int pw, int dh, int dw) {
+  CHECK_CUDA(o_hat_q);
+  TORCH_CHECK(o_hat_q.scalar_type()==torch::kChar, "o_hat_q must be int8");
+  TORCH_CHECK(output.scalar_type()==torch::kFloat16, "out must be fp16");
+  int N=input.size(0),C=input.size(1),H=input.size(2),W=input.size(3),K=weight.size(0),R=weight.size(1),S=weight.size(2);
+  TORCH_CHECK(s_read.numel()==K && s_write_inv.numel()==K && amax_out.numel()==K, "scales must be [K]");
+  int P,Q; auto problem = make_problem(N,H,W,C,K,R,S,sh,sw,ph,pw,dh,dw,P,Q);
+  int64_t M=(int64_t)N*P*Q, ldK=K;
+  run_d2qo<I8,int8_t>(
+      input.data_ptr<int8_t>(), weight.data_ptr<int8_t>(), inv_scale.data_ptr<float>(),
+      weight_scales.data_ptr<float>(), o_hat_q.data_ptr<int8_t>(),
+      s_read.data_ptr<float>(), s_write_inv.data_ptr<float>(), amax_out.data_ptr<float>(),
+      reinterpret_cast<EC*>(output.data_ptr<at::Half>()),
+      problem, C,R,S,K,M,ldK, at::cuda::getCurrentCUDAStream());
+  return output;
+}
+
+torch::Tensor conv2d_int8_evt_o_hat_q8_residual(
+    torch::Tensor input, torch::Tensor weight, torch::Tensor inv_scale, torch::Tensor weight_scales,
+    torch::Tensor o_hat_q, torch::Tensor s_read, torch::Tensor s_write_inv, torch::Tensor s_write,
+    torch::Tensor amax_out, torch::Tensor residual, torch::Tensor output,
+    int sh, int sw, int ph, int pw, int dh, int dw) {
+  CHECK_CUDA(o_hat_q);
+  TORCH_CHECK(o_hat_q.scalar_type()==torch::kChar, "o_hat_q must be int8");
+  TORCH_CHECK(output.scalar_type()==torch::kFloat16 && residual.scalar_type()==torch::kFloat16,
+              "out/residual fp16");
+  int N=input.size(0),C=input.size(1),H=input.size(2),W=input.size(3),K=weight.size(0),R=weight.size(1),S=weight.size(2);
+  int P,Q; auto problem = make_problem(N,H,W,C,K,R,S,sh,sw,ph,pw,dh,dw,P,Q);
+  int64_t M=(int64_t)N*P*Q, ldK=K;
+  run_d2qro<I8,int8_t>(
+      input.data_ptr<int8_t>(), weight.data_ptr<int8_t>(), inv_scale.data_ptr<float>(),
+      weight_scales.data_ptr<float>(), o_hat_q.data_ptr<int8_t>(),
+      s_read.data_ptr<float>(), s_write_inv.data_ptr<float>(), s_write.data_ptr<float>(),
+      amax_out.data_ptr<float>(),
+      reinterpret_cast<EC*>(residual.data_ptr<at::Half>()),
+      reinterpret_cast<EC*>(output.data_ptr<at::Half>()),
+      problem, C,R,S,K,M,ldK, at::cuda::getCurrentCUDAStream());
+  return output;
 }
 
 // Skip-K: out = o_hat_old + conv, no o_hat store.
