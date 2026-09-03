@@ -168,6 +168,24 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           "EVT INT8 conv: o_hat[elem] += acc*alpha*weight_scale[k] (in place, no residual, no fp32 round-trip)");
     m.def("conv2d_int4_evt_o_hat", &conv2d_int4_evt_o_hat,
           "EVT INT4 conv: o_hat[elem] += acc*alpha*weight_scale[k] (in place, no residual, no fp32 round-trip)");
+    m.def("conv2d_int8_evt_o_hat_q8", &conv2d_int8_evt_o_hat_q8,
+          "int8 conv, int8 o_hat RMW with per-output-channel read/write scales",
+          py::arg("input"), py::arg("weight"), py::arg("inv_scale"), py::arg("weight_scales"),
+          py::arg("o_hat_q"), py::arg("s_read"), py::arg("s_write_inv"),
+          py::arg("sh")=1, py::arg("sw")=1, py::arg("ph")=1, py::arg("pw")=1,
+          py::arg("dh")=1, py::arg("dw")=1);
+    m.def("conv2d_int4_evt_o_hat_q8", &conv2d_int4_evt_o_hat_q8,
+          "int4 conv, int8 o_hat RMW with per-output-channel read/write scales",
+          py::arg("input"), py::arg("weight_packed"), py::arg("inv_scale"), py::arg("weight_scales"),
+          py::arg("o_hat_q"), py::arg("s_read"), py::arg("s_write_inv"),
+          py::arg("sh")=1, py::arg("sw")=1, py::arg("ph")=1, py::arg("pw")=1,
+          py::arg("dh")=1, py::arg("dw")=1);
+    m.def("conv2d_int8_evt_o_hat_q8r", &conv2d_int8_evt_o_hat_q8r,
+          "int8 conv, int8 o_hat RMW + per-channel amax of the new o_hat (zero amax_out first)",
+          py::arg("input"), py::arg("weight"), py::arg("inv_scale"), py::arg("weight_scales"),
+          py::arg("o_hat_q"), py::arg("s_read"), py::arg("s_write_inv"), py::arg("amax_out"),
+          py::arg("sh")=1, py::arg("sw")=1, py::arg("ph")=1, py::arg("pw")=1,
+          py::arg("dh")=1, py::arg("dw")=1);
     m.def("conv2d_int8_evt_o_hat_skip", &conv2d_int8_evt_o_hat_skip,
           "EVT INT8 skip-K: out = o_hat_old + conv (no o_hat store)");
     m.def("conv2d_int4_evt_o_hat_skip", &conv2d_int4_evt_o_hat_skip,

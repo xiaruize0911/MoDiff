@@ -237,3 +237,78 @@ python docs/ohat_compress_2026-09-03/scripts/sim_aligned2.py # + carry + headroo
 python docs/ohat_compress_2026-09-03/scripts/sim_sd.py       # sigma-delta vs buying bits
 python docs/ohat_compress_2026-09-03/scripts/plot_sim.py
 ```
+
+
+## 7. The kernel: route (a), built and verified
+
+`conv2d_int8_evt_o_hat_q8` and `_q8r` in `csrc/modiff/conv/conv2d_evt.cu`. **All native CUTLASS EVT
+nodes** — the blocked-broadcast problem in §6 dissolved once the granularity sweep showed that
+per-output-channel is enough (2.28x dynamic / 2.44x from a table, against a 3x bar).
+
+### Getting to a scheme the epilogue can express
+
+The store needs a scale known **before** the pass, because a dynamic amax over all pixels would
+need every CTA to finish first. Three candidates, measured:
+
+| scale scheme | image MSE | / floor | single-pass expressible? |
+|---|---|---|---|
+| B=32 along K, per pixel, dynamic | 2.655e-03 | 1.71x | no |
+| per channel, dynamic | 3.553e-03 | 2.28x | no |
+| **per channel, per-step (table or side-effect) + SR** | 3.799e-03 | **2.44x** | **yes** |
+| per channel, per-step, no SR | 4.330e-03 | 2.78x | yes |
+| per channel, frozen at t=T, margin 2.0 + SR | 6.997e-03 | **4.50x** | yes |
+| per channel, frozen at t=T, margin 2.0, no SR | 1.180e-02 | 7.59x | yes |
+
+**Freezing the scale at t=T fails** (4.50x, resolvable) — not from growth but from *shrinkage*:
+`‖o_hat‖` over 50 steps is 1.00–1.02x its first-step value on 5 of 6 probed layers, 1.66x on one,
+and 0.63x on another, so a fixed margin wastes the range where the layer decays. A per-step scale
+is required, and it works at 2.44x.
+
+### The tree
+
+```
+E_DeqQ  = Mul(AuxLoad<int8> codes, RowBroadcast s_read)     # dequantize last step's o_hat
+E_NewQ  = Add(E_DeqQ, acc * alpha * RowBroadcast weight_scale)
+E_CodeQ = Mul(E_NewQ, RowBroadcast s_write_inv)
+EVTD2q  = AuxStore<int8>(E_CodeQ)
+```
+
+Two details that made it small: `VisitorAuxLoad`/`AuxStore` are **element-generic**
+(`vec_bits = kElementsPerAccess * sizeof_bits<Element>`, so int8 gives a 64-bit vector access and the
+same 8 elements/thread as the fp16 twin), and `float -> int8` goes through `cvt.rni.sat.s8.f32`,
+which **saturates** — so no clamp nodes are needed.
+
+`_q8r` adds `VisitorRowReduction<AbsMaxReduce, cutlass::atomic_maximum>` on `E_NewQ`, so step t
+writes the per-channel abs-max that step t+1 needs as a **side effect of the same pass**. That makes
+the scale self-contained: no calibration table. (`RegReduceFn` must be `template <class> class`, and
+`cutlass::maximum_absolute_value_reduction` takes two parameters, so `AbsMaxReduce` wraps it.)
+
+### Correctness
+
+Codes **bit-exact** against an fp32 torch reference on 5 shapes (mismatch 0, max |Δcode| 0);
+`_q8r` identical to `_q8`; the amax output correct to 1.2e-07 relative.
+`scripts/kernel_q8_correctness.py`, `scripts/kernel_q8r_correctness.py`.
+
+### Speed and memory
+
+Frequency-weighted over the 20 UNet conv shapes, batch 128:
+
+| | ms | vs fp16 | o_hat bytes |
+|---|---|---|---|
+| fp16 o_hat (shipped) | 21.949 | 1.000x | 1.00x |
+| **`_q8`** | **21.948** | **1.000x — free** | **2.00x** |
+| **`_q8r`** | 22.976 | 0.955x | 2.00x |
+
+**`_q8` is exactly free.** `_q8r`'s reduction costs 1.047x on the conv bucket, i.e. **+1.0 ms/step**,
+in exchange for dropping the calibration table. Against route (b)'s +5.5 to +10 ms/step for the same
+−565 MB, either is a much better trade.
+
+**Recommendation: `_q8r`.** +1.0 ms/step is cheap for removing a calibration dependency, which would
+otherwise have to transfer across models and schedules.
+
+### What is left
+
+The Python wiring: `o_hat_cache` becomes int8 `[N,K,H,W]` channels_last plus two `[K]` fp32 scale
+buffers, `_forward_modulated` routes to `_q8r`, `_forward_first_step` seeds the scale from the
+fp32 o_hat it already computes, and the skip-K / residual variants need the same treatment. The
+kernel and the accuracy are both settled; this is plumbing.

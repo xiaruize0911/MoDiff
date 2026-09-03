@@ -166,5 +166,67 @@
    "vs_fp16_now": 1.69,
    "vs_fp16_after": 1.56
   }
+ },
+ "scale_scheme_sweep": {
+  "note": "8 bit, per-output-channel, various ways of sourcing the scale. The store needs a scale known BEFORE the pass, so a dynamic amax over all pixels is not expressible in a single-pass epilogue. image MSE vs the fp16-o_hat reference, floor 1.555e-03.",
+  "rows": [
+   {
+    "scheme": "B=32 along K, per pixel, dynamic",
+    "image_mse": 0.002655,
+    "x_floor": 1.71,
+    "expressible": false
+   },
+   {
+    "scheme": "per channel, dynamic + SR",
+    "image_mse": 0.003553,
+    "x_floor": 2.28,
+    "expressible": false
+   },
+   {
+    "scheme": "per channel, per-step table + SR",
+    "image_mse": 0.003799,
+    "x_floor": 2.44,
+    "expressible": true
+   },
+   {
+    "scheme": "per channel, per-step table, no SR",
+    "image_mse": 0.00433,
+    "x_floor": 2.78,
+    "expressible": true
+   },
+   {
+    "scheme": "per channel, frozen at t=T, margin 2.0 + SR",
+    "image_mse": 0.006997,
+    "x_floor": 4.5,
+    "expressible": true
+   },
+   {
+    "scheme": "per channel, frozen at t=T, margin 2.0, no SR",
+    "image_mse": 0.0118,
+    "x_floor": 7.59,
+    "expressible": true
+   },
+   {
+    "scheme": "per channel, frozen at t=T, margin 1.5 + SR",
+    "image_mse": 0.008273,
+    "x_floor": 5.32,
+    "expressible": true
+   }
+  ]
+ },
+ "kernel": {
+  "note": "conv2d_int8_evt_o_hat_q8 / _q8r in csrc/modiff/conv/conv2d_evt.cu. All native CUTLASS EVT nodes: AuxLoad<int8> * RowBroadcast(s_read) + acc*alpha*weight_scale, * RowBroadcast(1/s_write), AuxStore<int8>. float->int8 goes through cvt.rni.sat.s8.f32 which SATURATES, so no clamp nodes. _q8r adds VisitorRowReduction<AbsMaxReduce, atomic_maximum> so step t writes the per-channel amax step t+1 needs -- self-contained, no calibration table.",
+  "correctness": "codes bit-exact vs an fp32 torch reference on 5 shapes (mismatch 0, max|dcode| 0); _q8r identical to _q8; amax output correct to 1.2e-07 relative.",
+  "bench_freq_weighted_ms": {
+   "fp16_ohat": 21.949,
+   "q8": 21.948,
+   "q8r": 22.976
+  },
+  "speed": {
+   "q8_vs_fp16": 1.0,
+   "q8r_vs_fp16": 0.955,
+   "reduction_cost": 1.047
+  },
+  "ohat_bytes_ratio": 2.0
  }
 }

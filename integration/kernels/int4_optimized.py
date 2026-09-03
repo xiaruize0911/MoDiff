@@ -743,6 +743,64 @@ class OptimizedInt4Conv2d(nn.Module):
         if blk <= 0 or k % blk:
             return
         lim = float(2 ** (bits - 1) - 1)
+        if os.environ.get("MODIFF_OHAT_SIM_PREV") == "1":
+            # PER-STEP per-channel scale, proxied by the PREVIOUS step's amax times a safety factor.
+            # This is the scheme the EVT can actually express: the store needs a scale known BEFORE
+            # the pass (a dynamic amax over all pixels would need every CTA to finish first), and a
+            # frozen-at-t=T scale fails because some layers shrink 0.63x over the trajectory and
+            # waste the range (measured: 4.50x of the floor). A calibrated per-(layer, step,
+            # channel) table gives the right scale each step and is two RowBroadcast nodes -- read
+            # on s[t-1], write on s[t]. The repo already ships exactly this shape of table for the
+            # delta scale (int8_delta_calibration.pt, 70 layers x steps). Using the previous step's
+            # amax is a conservative stand-in: a real table would be at least this good.
+            sf = float(os.environ.get("MODIFF_OHAT_SIM_SAFETY", "1.05"))
+            cur = oh.float().abs().amax(dim=(0, 2, 3), keepdim=True).clamp_min(1e-12)
+            prev = getattr(self, "_ohat_sim_prev_amax", None)
+            use = cur if (prev is None or prev.shape != cur.shape) else prev
+            self._ohat_sim_prev_amax = cur
+            s = use * sf / lim
+            q = oh.float() / s
+            if os.environ.get("MODIFF_OHAT_SIM_SR", "1") != "0":
+                q = torch.floor(q + torch.rand_like(q))
+            else:
+                q = torch.round(q)
+            oh.copy_(q.clamp_(-lim, lim) * s)
+            return
+        if os.environ.get("MODIFF_OHAT_SIM_STATIC") == "1":
+            # STATIC per-output-channel scale, frozen at the first step with a margin. This is the
+            # scheme the CUTLASS EVT can express with nothing but existing nodes -- AuxLoad<int8>
+            # for the codes, RowBroadcast for the scale, AuxStore<int8> for the store -- because a
+            # frozen scale needs no reduction, no two-phase epilogue and no rescale between steps
+            # (codes must be read on the scale they were stored with). Justified by measurement:
+            # ||o_hat|| over 50 DDIM steps is 1.00-1.02x its first-step value on 5 of 6 probed
+            # layers and 1.66x on the sixth, so a fixed margin covers the trajectory.
+            mg = float(os.environ.get("MODIFF_OHAT_SIM_MARGIN", "2.0"))
+            s = getattr(self, "_ohat_sim_static_s", None)
+            if s is None or s.shape[1] != k:
+                s = (oh.float().abs().amax(dim=(0, 2, 3), keepdim=True).clamp_min(1e-12)
+                     * mg / lim)
+                self._ohat_sim_static_s = s
+            q = oh.float() / s
+            if os.environ.get("MODIFF_OHAT_SIM_SR", "1") != "0":
+                q = torch.floor(q + torch.rand_like(q))
+            else:
+                q = torch.round(q)
+            oh.copy_(q.clamp_(-lim, lim) * s)
+            return
+        if os.environ.get("MODIFF_OHAT_SIM_PERK") == "1":
+            # One scale per OUTPUT CHANNEL, pooled over every pixel -- the transpose of the blocked
+            # scheme. This is the granularity CUTLASS's EVT expresses with nodes it already has:
+            # VisitorRowBroadcast for the dequant scale on the read, VisitorRowReduction for the
+            # new amax. Nothing blocked along K, no two-phase epilogue, no custom visitor.
+            v = oh.float()
+            s = v.abs().amax(dim=(0, 2, 3), keepdim=True).clamp_min(1e-12) / lim
+            q = v / s
+            if os.environ.get("MODIFF_OHAT_SIM_SR", "1") != "0":
+                q = torch.floor(q + torch.rand_like(q))
+            else:
+                q = torch.round(q)
+            oh.copy_(q.clamp_(-lim, lim) * s)
+            return
         v = oh.permute(0, 2, 3, 1).reshape(n, h, w, k // blk, blk).float()
         s = v.abs().amax(-1, keepdim=True).clamp_min(1e-12) / lim
         q = v / s
