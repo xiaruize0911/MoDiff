@@ -284,6 +284,52 @@ Frequency-weighted over the 20 UNet conv shapes, batch 128:
 | **W4A4 a_hat i8 B=32** | **11.8373** | **1.794x** | 262 | 1.456x | 702 | 1.125 |
 | W4A4 a_hat i4 B=32 | 12.1102 | 1.836x | **226** | **1.256x** | **390** | 0.625 |
 
+### Kernel 1: speed and quality in one table
+
+The same frequency-weighted sweep extended to every `a_hat` format that has a measured `eta_cum`,
+so the speed/quality trade is on one row each. **Both speed columns have same-precision
+denominators — nothing here is compared against fp16 *precision*.** `x PTQ` = `t_arm / t_PTQ` of
+that precision (6.9011 for W8A8, 6.5673 for W4A4), so it is a time multiple and >1 is slower;
+MoDiff necessarily loses it. `speedup vs own a_hat fp16` = `t_(a_hat fp16, that precision) / t_arm`
+(11.9033 for W8A8, 12.0275 for W4A4) — same kernel, only the `a_hat` storage format differs, so
+this is the single-variable measure of what blockwise buys, and it is the actual decision. `eta_cum` is
+the 5-layer median at t=48 from §3; image MSE is `0.0145·eta_cum` from §5, and the run-to-run floor
+is 1.705e-03.
+
+| arm | ms | x PTQ (same prec) | speedup vs own `a_hat` fp16 | peak MB | cache MB | B/elem | `eta_cum` | x margin to 0.30 | image MSE | verdict |
+|---|---|---|---|---|---|---|---|---|---|---|
+| W8A8 PTQ | 6.9011 | 1.000x | — | 216 | — | — | — | — | — | no cache |
+| W8A8 a_hat fp16 | 11.9033 | 1.725x | 1.000x | 361 | 583 | 2.0000 | 0.0015 | 196x | 2.2e-05 | reference |
+| W8A8 a_hat i8 B=16 | 16.3395 | 2.368x | 0.728x | 307 | 364 | 1.2500 | 0.0412 | 7.3x | 6.0e-04 | slow |
+| **W8A8 a_hat i8 B=32** | **10.7419** | **1.557x** | **1.108x** | 298 | 328 | 1.1250 | 0.0508 | 5.9x | 7.4e-04 | **shipped** |
+| W8A8 a_hat i8 B=64 | 16.5759 | 2.402x | 0.718x | 294 | 310 | 1.0625 | 0.0607 | 4.9x | 8.8e-04 | slow |
+| W8A8 a_hat i4 B=32 | 11.9114 | 1.726x | 0.999x | 262 | 182 | 0.6250 | 1.9247 | **0.2x** | 2.8e-02 | **broken** |
+| W4A4 PTQ | 6.5673 | 1.000x | — | 180 | — | — | — | — | — | no cache |
+| W4A4 a_hat fp16 | 12.0275 | 1.831x | 1.000x | 325 | 583 | 2.0000 | 0.0015 | 196x | 2.2e-05 | reference |
+| W4A4 a_hat i8 B=16 | 17.0397 | 2.595x | 0.706x | 271 | 364 | 1.2500 | 0.0412 | 7.3x | 6.0e-04 | slow |
+| **W4A4 a_hat i8 B=32** | **11.7831** | **1.794x** | **1.021x** | 262 | 328 | 1.1250 | 0.0508 | 5.9x | 7.4e-04 | **shipped** |
+| W4A4 a_hat i8 B=64 | 17.1420 | 2.610x | 0.702x | 258 | 310 | 1.0625 | 0.0607 | 4.9x | 8.8e-04 | slow |
+| W4A4 a_hat i4 B=32 | 12.0262 | 1.831x | 1.000x | 226 | 182 | 0.6250 | 1.9247 | **0.2x** | 2.8e-02 | **broken** |
+
+Reproduces the run above to 0.4% (PTQ 6.9011 vs 6.9295, i8 B=32 10.7419 vs 10.7600).
+
+Four things this table settles that neither half settles alone:
+
+- **B=32 is a cliff, not an optimum on a curve.** B=16 and B=64 are **1.52x and 1.54x slower than
+  B=32** at the kernel, even though B=64 moves *fewer* bytes (1.0625 vs 1.125 B/elem) — the
+  `ahat_is_b32` compile-time specialisation (index `i>>5`, no `C/ng` divide) exists only at 32. The
+  kernel-level ratio matches the E2E B-sweep in §6 (87.47 / 79.82 / 90.20 ms/step), so the E2E shape
+  is entirely this kernel.
+- **Quality across the three int8 blocks spans 1.5x** (0.0412 → 0.0607) and all three sit 4.9–7.3x
+  inside the 0.30 threshold, with image MSE 0.35–0.52x of the reproducibility floor. **Accuracy does
+  not discriminate; speed does, by 1.5x.** So B=32 wins on the axis that has resolution.
+- **i4 B=32 is the only row that is fast enough and still disqualified**: it ties fp16 `a_hat` on
+  time (0.999x / 1.000x) and is the smallest cache by 1.8x, but `eta_cum` 1.92 is 6.4x *past* the
+  threshold — a 0.2x margin. It is the one row where the quality column overrides everything else.
+- **i4 B=32 is slower than i8 B=32 while moving 13.8% fewer bytes**, and §9a attributes it: 84% is
+  exclusion from `blk32_vec4` (2 channels/thread instead of 4), the rest is the nibble decode,
+  which leaves i4 at 51–53% of peak bandwidth where i8 reaches 72–74%.
+
 MoDiff necessarily loses at kernel 1 and the loss is exactly the byte count: baseline moves
 5 B/elem (read x twice across two passes + write int8), fp16 `a_hat` 9, int8 B=32 `a_hat` 7.25.
 Predicted 1.80x / 1.45x against measured 1.72x / 1.55x. MoDiff buys accuracy and pays here.
@@ -392,12 +438,59 @@ warp geometry `ahat_group16_amax` already reduces over.
 
 - **Memory: real.** cache 1248 → 702 (i8) → **390 MB**; peak at the largest layer 361 → 298 →
   **262 MB**.
-- **Speed: no.** i4 is 1.023–1.112x *slower* than i8 B=32 and lands back at fp16-`a_hat` level,
-  despite moving 6.25 vs 7.25 B/elem. Two causes: no vec4 variant (i4 is vec2-only while int8
-  B=32 has `blk32_vec4`), and single-byte access plus branchy nibble sign-extension versus int8's
-  2-byte access with the magic-number `ahat_byte_to_f`. Both would be fixed by the same unbuilt
-  kernel: 4 int4 channels = exactly 2 bytes, so a vec4 i4 kernel would have int8-vec2's
-  transaction size *and* vec4's 4 channels/thread.
+- **Speed: no**, and the cause is now attributed rather than guessed — see §9a.
+### 9a. Why int4 `a_hat` is *slower* than int8 despite moving fewer bytes
+
+i4 B=32 moves 6.25 B/elem against i8 B=32's 7.25 — 13.8% less traffic — and is nevertheless
+1.109x slower freq-weighted. Two causes, separated by a decisive experiment rather than inspection:
+`blk32_vec4` requires `CPG % 4 == 0`, and only C=192 (CPG 6) and C=576 (CPG 18) fail it, so on
+exactly those shapes the int8 arm also drops to vec2. Split the sweep on that predicate
+(`docs/ahat_only_conv_2026-09-02/scripts/i4_vs_i8_pershape.py`):
+
+| group | i8 B=32 ms | i4 B=32 ms | **i4 / i8** | freq |
+|---|---|---|---|---|
+| CPG%4==0 — int8 gets `blk32_vec4` | 6.2545 | 7.2618 | **1.161** | 51 |
+| CPG%4!=0 — both arms on vec2 | 4.5664 | 4.6831 | **1.026** | 11 |
+
+**Removing the vec4 variable collapses the gap from 1.161 to 1.026, so vectorization is 84% of it**
+(`(1.161−1.026)/(1.161−1)`).
+
+**Cause 1 (84%): i4 is excluded from the fast path by construction.** `group_norm_silu.cu:2631`:
+
+```cpp
+const bool blk32      = use_vec2 && ahat_i8 && !ahat_pack4 && ahat_is_b32(C, ahat_ng);
+const bool blk32_vec4 = blk32 && !ahat_pack4 && (CPG % 4 == 0);
+```
+
+`ahat_pack4` negates both, so i4 runs the vec2-only packed branch at **2 channels/thread against
+int8 B=32's 4** — twice the threads and twice the instruction count, which is more than enough to
+spend the byte saving.
+
+**Cause 2 (the residual 2.6%): the nibble datapath, and i4 is no longer bandwidth-bound.**
+Achieved bandwidth against the A40's ~696 GB/s:
+
+| shape | i8 GB/s (% peak) | i4 GB/s (% peak) |
+|---|---|---|
+| C=384 32x32 | 517 (**74%**) | 366 (53%) |
+| C=768 16x16 | 499 (**72%**) | 356 (51%) |
+| C=576 32x32 (no vec4) | 443 (64%) | 370 (53%) |
+| C=192 32x32 (no vec4) | 417 (60%) | 351 (50%) |
+
+int8 runs at 72–74% of peak — genuinely bandwidth-bound — while i4 reaches only 51–53% and leaves
+its saved bandwidth unused. The decode is why: `ahat_nib_lo/hi` (`ahat_cache.cuh:195`) is
+mask + compare + select per channel, ~6 integer ops for two channels, against int8's single
+`__byte_perm` magic-number `ahat_byte_to_f` which decodes **both** channels in one instruction plus
+a subtract. Single-byte access compounds it — 32 lanes touch 32 B, one sector, so i4 does not
+reduce the transaction count, only the bytes inside it.
+
+**Confirming counter-example:** C=768 2x2 is the one shape where i4 is *faster* (0.884x). It is the
+launch-bound shape (both arms at 10% of peak), so with bandwidth no longer the constraint the
+smaller footprint becomes an advantage — which is the same mechanism read in reverse.
+
+**Fix:** a vec4 packed-int4 kernel — 4 int4 channels are exactly 2 bytes, giving int8-vec2's
+transaction size *and* vec4's 4 channels/thread. Not worth building for i4, whose `eta_cum` of 1.92
+is 6.4x past threshold; only if 6-bit is ever revisited.
+
 - **Accuracy: no.** `eta_cum` 1.982 vs 0.053, i.e. 37x, far past the 0.30 threshold; the samples
   collapse into shard texture.
 - **Finer blocks do not rescue it.** B=2 is 4.6x better than B=32 and still 18x worse than 8-bit
@@ -453,5 +546,7 @@ warp geometry `ahat_group16_amax` already reduces over.
 | single layer, random input | `.../single_layer_sweep.py` |
 | E2E + samples | `docs/ahat_only_conv_2026-09-02/scripts/e2e_samples.py` |
 | kernel-1 speed/memory | `.../kernel1_table.py`, `.../kernel1_axis_sweep.py` |
+| kernel-1 speed **and** quality joined | `.../kernel1_quality.py` |
+| why i4 is slower than i8 (per-shape, vec4 split) | `.../i4_vs_i8_pershape.py` |
 | MoDiff-vs-PTQ profile diff | `docs/modiff_profile_diff_2026-09-03/scripts/prof_mode.py`, `.../diff.py` |
 | first-step vs steady-state split | `docs/modiff_profile_diff_2026-09-03/scripts/steps.py` |
