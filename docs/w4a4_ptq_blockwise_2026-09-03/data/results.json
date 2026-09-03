@@ -1,0 +1,46 @@
+{
+ "note": "Can blockwise activations + migration make W4A4 PTQ viable, i.e. replace MoDiff? Pure-accuracy sim in fp16 mode: every 3x3 conv's weight and input fake-quantized to 4 bits, with the activation granularity and SmoothQuant-style migration as knobs. 71 of 72 convs get blockwise (C=4 input conv does not divide 64). Migration lambda = amax_X^0.5 / amax_W^0.5 from a captured per-input-channel activation amax. batch 32, 50 DDIM, seed 1234. Attention and linear stay fp16, so this is OPTIMISTIC relative to the real W4A4 arm, which quantizes attention too.",
+ "rows": [
+  {
+   "arm": "fp16 (reference)",
+   "image_mse": 0.0,
+   "psnr": null,
+   "latent_relL2": 0.0,
+   "std": 0.9669
+  },
+  {
+   "arm": "W4A4 per-tensor, no migration",
+   "image_mse": 0.1827,
+   "psnr": 7.38,
+   "latent_relL2": 8.07158,
+   "std": 8.3492,
+   "verdict": "pure noise"
+  },
+  {
+   "arm": "W4A4 per-tensor, + migration",
+   "image_mse": 0.1764,
+   "psnr": 7.54,
+   "latent_relL2": 2.40185,
+   "std": 2.7861,
+   "verdict": "pure noise"
+  },
+  {
+   "arm": "W4A4 blockwise B=64, no migration",
+   "image_mse": 0.0804,
+   "psnr": 10.95,
+   "latent_relL2": 0.74095,
+   "std": 1.1836,
+   "verdict": "structure, heavy streaking"
+  },
+  {
+   "arm": "W4A4 blockwise B=64, + migration",
+   "image_mse": 0.03656,
+   "psnr": 14.37,
+   "latent_relL2": 0.53602,
+   "std": 0.9662,
+   "verdict": "recognizable but clearly degraded"
+  }
+ ],
+ "verdict": "Does NOT beat W4A4 MoDiff. Blockwise activations are the dominant term (pure noise -> recognizable, one variable) and migration adds 2.2x on top (8.04e-02 -> 3.66e-02), but the total is still ~36x the image-MSE run-to-run floor. This matches what docs/wa_budget_2026-09-02 already reported and I mis-read: its A4-only row is 0.5181 -> 0.0415 (12.5x), but its BOTTOM row is 'W4A4 both blockwise B=64  0.2034  18.04x' plus the note that the residual 'is essentially W4'. The bottleneck moves to the weight quantizer, and every weight lever measured is too small -- SVDQuant low-rank 1.035x, blockwise weights 1.29x, against the ~4x needed.",
+ "lesson": "I read a component gain (12.5x) as promise without checking the composed total in the same table (18.04x of the floor). Third or fourth instance this session."
+}
