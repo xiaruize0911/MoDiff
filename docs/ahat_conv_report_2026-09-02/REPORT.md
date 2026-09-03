@@ -7,7 +7,8 @@ the kernel first. Figures and decoded-sample grids are all in `plots/` (the repo
 Scope: the MoDiff `a_hat` cache on the **conv** path — its storage format (bit width x along-C
 block size), its cost in time and memory, and its accuracy. The conv-input activation quantizer
 (`MODIFF_CONV_BLOCKK`) is a separate axis and is covered in
-`docs/conv_blockk_goal_2026-09-02/FINDINGS.md`.
+`docs/conv_blockk_goal_2026-09-02/FINDINGS.md`; §7's attribution of MoDiff's *total* per-step
+overhead is written up in full in `docs/modiff_profile_diff_2026-09-03/FINDINGS.md`.
 
 ---
 
@@ -315,7 +316,62 @@ elsewhere) so halving `a_hat` bytes changes nothing; at C=192 (CPG 6) and C=576 
 Those two channel counts are ~39% of kernel-1 time, so relaxing that gate to CPG%2==0 is the
 highest-value remaining item on this kernel.
 
-## 7. Kernel work done during this investigation
+## 7. Where MoDiff's overhead actually is (profile-diff vs PTQ)
+
+Full write-up: `docs/modiff_profile_diff_2026-09-03/FINDINGS.md`.
+
+Blockwise `a_hat` recovers 1.66 ms/step, but MoDiff as a whole costs **+19.99 ms/step at W4A4** and
+**+9.37 at W8A8** over same-precision PTQ, of which §6's byte model explained only +5.45 (kernel 1)
+and +1.03 (`o_hat` accumulate). ~13.5 ms was unattributed — 8x the size of the win this report is
+about — so it was measured before any further kernel work.
+
+A per-kernel profile diff showed int4 MoDiff carrying 103.79 ms/step of eager `at::native::*`
+kernels (56.6% of its total) against int8 MoDiff's 30.42 — `CUDAFunctor_add` 35.35 vs 6.18,
+`round_kernel` 8.63 vs 1.72, `AbsFunctor<float>` 6.90 vs 0.00, `reduce_kernel` 3.90 vs 0.29: the
+`abs → amax reduce → round → add` signature of an eager quantizer. The natural reading — int4 falls
+off the fused path — is **wrong**; instrumentation shows 372 `forward_gn_fused_modiff` calls over 62
+layers. Those kernels are the **t=T first step**, which a 6-step profile amplifies 6x into the
+per-step average.
+
+Solving `total(S) = A + (S−1)·B` by wall clock at S=10 and S=50 separates the two:
+
+| arm | S=10 total ms | S=50 total ms | **A** first step | **B** steady | A/B |
+|---|---|---|---|---|---|
+| int4 PTQ | 595.6 | 2978.8 | 59.4 | 59.58 | 1.0x |
+| **int4 MoDiff** | 1290.4 | 3968.2 | **688.0** | 66.94 | **10.3x** |
+| int8 PTQ | 728.1 | 3631.1 | 74.9 | 72.57 | 1.0x |
+| **int8 MoDiff** | 900.3 | 4083.5 | **184.1** | 79.58 | **2.3x** |
+
+| precision | first step (one-time) | steady state | S=10 | S=20 | S=50 |
+|---|---|---|---|---|---|
+| **W4A4** | **+628.6 ms** | **+7.36 ms/step** | 70.22 (90% first) | 38.79 (81%) | **19.94 (63%)** |
+| **W8A8** | +109.1 ms | +7.00 ms/step | 17.92 (61%) | 12.46 (44%) | **9.19 (24%)** |
+
+The S=50 column reproduces the independently measured +19.99 / +9.37 to within 0.3%. Both PTQ arms
+have A/B = 1.0 — no first-step cost, as expected with no cache to prime.
+
+![first step vs steady state](../modiff_profile_diff_2026-09-03/plots/first_step_vs_steady.png)
+
+**63% of W4A4's MoDiff overhead at 50 steps is a single step.** The steady state is nearly
+precision-independent (+7.36 vs +7.00 ms/step) and is already fully explained by §6's byte model
+(5.4 + 1.0 ≈ 6.4, leaving <1 ms). **There is no unattributed steady-state overhead** — the 13.5 ms
+was a one-time cost divided by too few steps.
+
+Two consequences for this report's numbers. First, the target for further work is
+`OptimizedInt4Conv2d._forward_first_step` (per-layer eager `_compute_activation_scale` /
+`_dequantize_activation` / `a_hat + r_dq` / `o_hat + conv_r`), not any steady-state kernel; int8's
+first step does the same job in 184.1 ms, so 688 → ~180 is a demonstrated-achievable target worth
+~10 ms/step at S=50, 6x the blockwise-`a_hat` win. Second, **MoDiff's overhead is inversely
+proportional to step count** — int4 MoDiff is 2.17x PTQ at S=10 and 1.33x at S=50 — so every §6
+figure is specific to S=50 and low-step-count sampling weights this term far more heavily.
+
+**Correction.** An earlier note in this session recorded torch.profiler/CUPTI inflation as
+arm-dependent (1.19x for PTQ, 2.29x for int4 MoDiff). It was not: that compared a 6-step profile to
+a 50-step steady state. Against the matching 6-step wall clock `(A+5B)/6`, inflation is uniform —
+int4 PTQ 1.20x, int4 MoDiff 1.08x, int8 PTQ 1.18x, int8 MoDiff 1.16x. Only relative attribution was
+ever used, so no conclusion changes.
+
+## 8. Kernel work done during this investigation
 
 | item | file | effect |
 |---|---|---|
@@ -323,9 +379,9 @@ highest-value remaining item on this kernel.
 | int4 apply kernel was **re-storing on the stale load-time block scale** | `group_norm_silu.cu` `gn_apply_delta_quantize_pack_flat_vec2_kernel` | fixed with `ahat_block_resnap2`; this was the documented "do not hold a_hat scales" failure preserved in a never-executed path, and it produced finite-but-garbage images |
 | `AhatB32` compile-time tag missing on the int4 apply kernel | same | 83.98 → 81.07 ms/step |
 | `ahat_commit_block_pack4` — packed-nibble commit so the resize kernel accepts blockwise `a_hat` | `ahat_cache.cuh` | restored the resize fusion for the 8 updown ResBlocks; 81.07 → 79.88 ms/step (the fusion is worth 2.22 ms, the commit pass costs ~1.03 back) |
-| `AhatI4` — packed-int4 `a_hat` (0.625 B/elem) | `ahat_cache.cuh` + both apply kernels | works, validated; see §8 |
+| `AhatI4` — packed-int4 `a_hat` (0.625 B/elem) | `ahat_cache.cuh` + both apply kernels | works, validated; see §9 |
 
-## 8. int4 `a_hat`: built, measured, not recommended
+## 9. int4 `a_hat`: built, measured, not recommended
 
 ![4-bit at three block sizes](plots/samples_i4_blocks.png)
 ![Pareto](plots/ahat_pareto.png)
@@ -352,7 +408,7 @@ warp geometry `ahat_group16_amax` already reduces over.
   3.7% at B=32). At 4 bits there are 15 levels, so at B=2 half the stored codes carry no
   information while the scales alone cost 2 B/elem.
 
-## 9. Conclusions
+## 10. Conclusions
 
 1. **`eta_cum` — the accumulated storage error `‖Σ η_k‖/‖signal‖` — is the metric.** It is the
    only quantity in this kernel that grows with t, it is what the conv output actually carries,
@@ -369,11 +425,16 @@ warp geometry `ahat_group16_amax` already reduces over.
    one grid serves the whole model.
 6. **4-bit `a_hat` is dead at every block size** — worse accuracy and slower, better only on
    memory.
+7. **MoDiff's remaining overhead is a one-time first step, not a kernel.** 63% of W4A4's
+   +19.94 ms/step at S=50 is the t=T priming step (688 ms, 10.3x its own steady step); the steady
+   state is +7.36 ms/step and matches the byte model to <1 ms. The next 10 ms/step is in
+   `_forward_first_step`, and any quoted MoDiff overhead is meaningless without its step count.
 
 ### Remaining items, in value order
 
 | item | expected | cost |
 |---|---|---|
+| **Fuse `_forward_first_step` in `int4_optimized.py`** | **688 → ~180 ms first step ⇒ ~10 ms/step at S=50** (int8 already does this) | Python + existing kernels |
 | Relax `blk32_vec4` from CPG%4==0 to CPG%2==0 | 8 of 70 layers (~39% of kernel-1 time) move from 0.97x to 0.83x | kernel variant |
 | fp16 block scales instead of fp32 | 1.125 → 1.0625 B/elem at unchanged accuracy; strictly dominates 8-bit B=64 | small, no new datapath |
 | Split the resize kernel into stats + pair-major apply | the last ~1.03 ms of the commit pass, both precisions | flagged as open since 2026-09-01 |
@@ -392,3 +453,5 @@ warp geometry `ahat_group16_amax` already reduces over.
 | single layer, random input | `.../single_layer_sweep.py` |
 | E2E + samples | `docs/ahat_only_conv_2026-09-02/scripts/e2e_samples.py` |
 | kernel-1 speed/memory | `.../kernel1_table.py`, `.../kernel1_axis_sweep.py` |
+| MoDiff-vs-PTQ profile diff | `docs/modiff_profile_diff_2026-09-03/scripts/prof_mode.py`, `.../diff.py` |
+| first-step vs steady-state split | `docs/modiff_profile_diff_2026-09-03/scripts/steps.py` |

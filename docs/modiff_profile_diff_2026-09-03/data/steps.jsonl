@@ -1,0 +1,8 @@
+{"mode": "int4", "S": 10, "total_ms": 1290.4479370117188}
+{"mode": "int4", "S": 50, "total_ms": 3968.173828125}
+{"mode": "int4_baseline", "S": 10, "total_ms": 595.6025695800781}
+{"mode": "int4_baseline", "S": 50, "total_ms": 2978.7568359375}
+{"mode": "int8", "S": 10, "total_ms": 900.2860717773438}
+{"mode": "int8", "S": 50, "total_ms": 4083.4510498046875}
+{"mode": "int8_baseline", "S": 10, "total_ms": 728.1063842773438}
+{"mode": "int8_baseline", "S": 50, "total_ms": 3631.0855712890625}
