@@ -42,5 +42,79 @@
   }
  ],
  "verdict": "Does NOT beat W4A4 MoDiff. Blockwise activations are the dominant term (pure noise -> recognizable, one variable) and migration adds 2.2x on top (8.04e-02 -> 3.66e-02), but the total is still ~36x the image-MSE run-to-run floor. This matches what docs/wa_budget_2026-09-02 already reported and I mis-read: its A4-only row is 0.5181 -> 0.0415 (12.5x), but its BOTTOM row is 'W4A4 both blockwise B=64  0.2034  18.04x' plus the note that the residual 'is essentially W4'. The bottleneck moves to the weight quantizer, and every weight lever measured is too small -- SVDQuant low-rank 1.035x, blockwise weights 1.29x, against the ~4x needed.",
- "lesson": "I read a component gain (12.5x) as promise without checking the composed total in the same table (18.04x of the floor). Third or fourth instance this session."
+ "lesson": "I read a component gain (12.5x) as promise without checking the composed total in the same table (18.04x of the floor). Third or fourth instance this session.",
+ "conv_vs_linear_split": {
+  "note": "Which family carries the W4A4 error? Same fake-quant sim, restricted to Conv2d 3x3 or to Linear. 72 convs / 79 linears. Weights per-output-row, activations per-tensor, no migration.",
+  "rows": [
+   {
+    "arm": "W4A4 LINEAR only",
+    "image_mse": 0.008922,
+    "psnr": 20.5,
+    "latent_relL2": 0.24244,
+    "std": 0.9576,
+    "verdict": "clean churches, quality intact"
+   },
+   {
+    "arm": "W4A4 CONV only",
+    "image_mse": 0.1829,
+    "psnr": 7.38,
+    "latent_relL2": 8.01757,
+    "std": 8.2963,
+    "verdict": "pure noise"
+   },
+   {
+    "arm": "W4A4 both",
+    "image_mse": null,
+    "latent_relL2": null,
+    "std": 8.4399
+   },
+   {
+    "arm": "W4A4 conv blockwise + migration (best conv treatment)",
+    "image_mse": 0.03656,
+    "psnr": 14.37
+   }
+  ],
+  "verdict": "The convs carry the entire W4A4 collapse. Linear-only is 20x smaller than conv-only (8.922e-03 vs 1.829e-01) and 4x smaller than the BEST-CASE conv residual (3.656e-02), so even a perfect linear fix cannot move the total."
+ },
+ "linear_layer_shapes": {
+  "note": "rank-32 branch cost = r*(1/out + 1/in). This UNet's linears are 768-wide at most, so the branch is the same order as on its convs (median 8.9%), not FLUX's 2.1%.",
+  "rows": [
+   {
+    "count": 15,
+    "shape": [
+     1536,
+     768
+    ],
+    "branch_pct": 6.25
+   },
+   {
+    "count": 15,
+    "shape": [
+     768,
+     768
+    ],
+    "branch_pct": 8.33
+   },
+   {
+    "count": 6,
+    "shape": [
+     384,
+     768
+    ],
+    "branch_pct": 12.5
+   },
+   {
+    "count": 1,
+    "shape": [
+     768,
+     192
+    ],
+    "branch_pct": 20.83
+   }
+  ]
+ },
+ "modiff_on_linear_prior": {
+  "source": "docs/attn_modiff_2026-08-13/FINDINGS.md",
+  "note": "MODIFF_LINEAR=1 modulates the 42 attention qkv/proj Linears. Measured and REJECTED: int4_linmodiff relL2 0.2835 vs int4 0.3095 (8.4% better) for 90.34 vs 60.53 ms/step (+49%), strictly dominated -- both W8A8 arms are faster AND more accurate. The cost is UN-FUSING, not a missing epilogue: the standalone-quantize bucket goes 0 -> 2890 and fused int8-output epilogues go 21/21 -> 0/21. Default is 0, so the linears are NOT on the MoDiff residual path in the shipped config."
+ }
 }

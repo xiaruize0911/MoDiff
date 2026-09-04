@@ -77,3 +77,67 @@ claiming migration was switched off (it ships on int4), and as calling the o_hat
 So W4A4 PTQ is not reachable by these means, and **MoDiff's temporal delta remains the only thing
 measured that works at 4 bits** — which is also the strongest positive statement about MoDiff this
 session produced, since it now rests on a refuted alternative rather than an untested one.
+
+---
+
+# Addendum: SVDQuant on the LINEAR layers, on top of MoDiff?
+
+Asked because SVDQuant implements linear layers exclusively, so our conv shapes were the mismatch.
+Three measurements say no, and the first one invalidates the premise.
+
+## 1. The linears are not on the MoDiff residual path, and that is deliberate
+
+`docs/attn_modiff_2026-08-13` measured `MODIFF_LINEAR=1` (modulating the 42 attention qkv/proj
+Linears):
+
+| arm | relL2 | ms/step |
+|---|---|---|
+| `int4` shipped (conv + emb modulated) | 0.3095 | 60.53 |
+| `int4_linmodiff` (+42 projections) | **0.2835** (8.4% better) | **90.34** (+49%) |
+
+**Strictly dominated** — both W8A8 arms are faster *and* more accurate. And the cost is **un-fusing**,
+not a missing epilogue (the GEMM already has an o_hat-accumulate one): the standalone-quantize bucket
+goes **0 → 2890** and fused int8-output epilogues go **21/21 → 0/21**, because in the shipped path
+every quantize is folded into a GroupNorm kernel.
+
+**This is bad specifically for SVDQuant**, whose entire performance claim rests on *fusing* its
+low-rank branch (unfused it costs ~50% of the 4-bit branch latency, their own number). Stacking a
+fusion-hungry method on a path whose problem is fusion breakage makes it worse, not better.
+
+## 2. Even keeping fusion, the linear term is 20x below the conv term
+
+So take the other reading: SVDQuant the *statically* quantized, still-fused linears. Which family
+carries the W4A4 error? Same sim, restricted to one family at a time:
+
+| arm | image MSE vs fp16 | PSNR dB | latent relL2 | latent std | verdict |
+|---|---|---|---|---|---|
+| fp16 | — | — | — | 0.9669 | clean |
+| **W4A4 LINEAR only** | **8.922e-03** | 20.50 | 0.242 | 0.9576 | **clean churches** |
+| **W4A4 CONV only** | **1.829e-01** | 7.38 | 8.018 | 8.2963 | **pure noise** |
+| W4A4 conv blockwise + migration (best conv treatment) | 3.656e-02 | 14.37 | 0.536 | 0.9662 | degraded |
+
+![conv vs linear](plots/samples_split.png)
+
+*Rows: fp16, linear-only W4A4, conv-only W4A4.*
+
+**The convs carry the entire collapse.** Linear-only is **20x** smaller than conv-only and **4x**
+smaller than the *best-case* conv residual, so a perfect linear fix cannot move the total.
+
+## 3. And the branch is not cheap on these shapes either
+
+| linear shape | count | rank-32 branch = `r(1/out + 1/in)` |
+|---|---|---|
+| [1536, 768] | 15 | **6.25%** |
+| [768, 768] | 15 | **8.33%** |
+| [384, 768] | 6 | 12.50% |
+| [768, 192] | 1 | 20.83% |
+
+**It was never conv-vs-linear — it is width.** This UNet's linears top out at 768 in, so the branch
+costs the same order as on its convs (median 8.9%), against FLUX's 2.1% at 3072 wide.
+
+## Where the door is actually open
+
+On a wide DiT the calculus inverts on all three counts: linears **are** the model (essentially no
+convs), widths are 3072+ so rank-32 is ~1% of the rank, and there is no GroupNorm-folded quantize
+to un-fuse. SVDQuant is right for the architecture it was built for. **None of the numbers here
+transfer to that setting** — if the target becomes a DiT, this whole analysis restarts.
